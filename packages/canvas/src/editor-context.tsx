@@ -1,13 +1,20 @@
 import { createContext, type ReactNode, useContext } from "react"
 import type { CanvasDocument, CanvasSelection } from "./types"
 
+export interface CanvasConnectionNodeType {
+  label: string
+  type: string
+}
+
 export interface CanvasEditorController {
   document: CanvasDocument
   selection: CanvasSelection
   readOnly: boolean
+  connectionNodeTypes: readonly CanvasConnectionNodeType[]
   beginGesture: () => void
   endGesture: () => void
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
+  quickConnect: (nodeId: string, side: "left" | "right", nodeType: string) => void
   selectNodes: (nodeIds: readonly string[]) => void
 }
 
@@ -22,4 +29,3 @@ export function useCanvasEditor() {
   if (editor) return editor
   throw new Error("CanvasEditorProvider is missing")
 }
-

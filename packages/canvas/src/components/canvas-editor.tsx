@@ -27,6 +27,10 @@ import {
   cn,
 } from "@convax/ui"
 import {
+  AlignLeft,
+  Check,
+  ChevronUp,
+  ClipboardPaste,
   Copy,
   Download,
   FileUp,
@@ -34,6 +38,8 @@ import {
   Group,
   LayoutGrid,
   LoaderCircle,
+  Magnet,
+  MapPinned,
   MousePointer2,
   Redo2,
   Search,
@@ -164,6 +170,8 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [miniMapVisible, setMiniMapVisible] = useState(true)
+  const [snapToGrid, setSnapToGrid] = useState(true)
   const [prompt, setPrompt] = useState("")
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
@@ -223,6 +231,13 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       }),
     ) as NodeTypes
   }, [history.document.nodes.map((node) => node.type).sort().join(","), props.nodeRegistry, registryVersion])
+  const connectionNodeTypes = useMemo(
+    () => props.nodeRegistry
+      .list()
+      .filter((definition) => !definition.hidden && definition.type !== "group")
+      .map((definition) => ({ label: definition.label, type: definition.type })),
+    [props.nodeRegistry, registryVersion],
+  )
 
   const updateSelection = useCallback((nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
     setSelection((current) => {
@@ -326,6 +341,46 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
   }, [history.document, selectedNodeIds, selectNodes])
+  const quickConnect = useCallback(
+    (nodeId: string, side: "left" | "right", nodeType: string) => {
+      const anchor = history.document.nodes.find((node) => node.id === nodeId)
+      const definition = props.nodeRegistry.get(nodeType)
+      if (!anchor || !definition || readOnly) return
+      const anchorSize = getCanvasNodeSize(anchor)
+      const created = definition.create({ position: anchor.position })
+      const createdSize = getCanvasNodeSize(created)
+      const node = {
+        ...created,
+        parentId: anchor.parentId,
+        position: {
+          x: side === "right"
+            ? anchor.position.x + anchorSize.width + 160
+            : anchor.position.x - createdSize.width - 160,
+          y: anchor.position.y + (anchorSize.height - createdSize.height) / 2,
+        },
+      }
+      const withNode = addCanvasNodes(history.document, [node]).document
+      dispatch({
+        type: "commit",
+        document: connectCanvasNodes(withNode, side === "right"
+          ? {
+              source: anchor.id,
+              sourceHandle: "source-right",
+              target: node.id,
+              targetHandle: "target-left",
+            }
+          : {
+              source: node.id,
+              sourceHandle: "source-right",
+              target: anchor.id,
+              targetHandle: "target-left",
+            }),
+      })
+      selectNodes([node.id])
+      telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
+    },
+    [history.document, props.nodeRegistry, readOnly, selectNodes, telemetryService],
+  )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
     updateSelection([])
@@ -491,12 +546,14 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       document: history.document,
       selection,
       readOnly,
+      connectionNodeTypes,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
       endGesture: () => dispatch({ type: "end-gesture" }),
       commit,
+      quickConnect,
       selectNodes,
     }),
-    [commit, history.document, readOnly, selectNodes, selection],
+    [commit, connectionNodeTypes, history.document, quickConnect, readOnly, selectNodes, selection],
   )
   const searchResults = query.trim()
     ? history.document.nodes.filter((node) => `${node.data.label} ${"text" in node.data ? node.data.text : ""}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
@@ -554,7 +611,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                 selectionOnDrag
                 selectionMode={SelectionMode.Partial}
                 snapGrid={[8, 8]}
-                snapToGrid
+                snapToGrid={snapToGrid}
                 zoomActivationKeyCode={["Meta", "Control"]}
                 zoomOnDoubleClick={false}
                 zoomOnPinch
@@ -630,13 +687,15 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                 }}
               >
                 <Background color="var(--canvas-grid)" gap={24} size={1.2} variant={BackgroundVariant.Dots} />
-                <MiniMap
-                  className="!bottom-4 !right-4 !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
-                  maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
-                  nodeColor="var(--muted-foreground)"
-                  pannable
-                  zoomable
-                />
+                {miniMapVisible ? (
+                  <MiniMap
+                    className="!bottom-4 !right-4 !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
+                    maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
+                    nodeColor="var(--muted-foreground)"
+                    pannable
+                    zoomable
+                  />
+                ) : null}
               </ReactFlow>
 
               <CanvasHeader
@@ -672,9 +731,13 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
               ) : null}
 
               <ViewportToolbar
+                miniMapVisible={miniMapVisible}
                 onFit={() => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 })}
+                onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
+                onSnapChange={() => setSnapToGrid((enabled) => !enabled)}
                 onZoomIn={() => void reactFlow.zoomIn({ duration: 140 })}
                 onZoomOut={() => void reactFlow.zoomOut({ duration: 140 })}
+                snapToGrid={snapToGrid}
               />
 
               {nodeMenuOpen ? (
@@ -749,8 +812,13 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
             </div>
           </ContextMenuTrigger>
           <CanvasContextMenu
+            canArrange={selectedNodeIds.length > 1}
             canGroup={selectedNodeIds.length > 1}
+            canRedo={history.future.length > 0}
             canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))}
+            canUndo={history.past.length > 0}
+            canUpload={Boolean(uploadService)}
+            hasNodeSelection={selectedNodeIds.length > 0}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
             onAddNote={() => addNode("note")}
             onAddText={() => addNode("text")}
@@ -763,7 +831,10 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
             onGroup={group}
             onLayout={layout}
             onPaste={paste}
+            onRedo={() => dispatch({ type: "redo" })}
             onUngroup={ungroup}
+            onUndo={() => dispatch({ type: "undo" })}
+            onUpload={() => uploadInputRef.current?.click()}
             readOnly={readOnly}
           />
         </ContextMenu>
@@ -772,10 +843,18 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   )
 }
 
-function IconButton(props: { disabled?: boolean; icon: ReactNode; label: string; onClick: () => void; shortcut?: string }) {
+function IconButton(props: { disabled?: boolean; icon: ReactNode; label: string; onClick: () => void; pressed?: boolean; shortcut?: string }) {
   return (
     <Tooltip content={<span className="flex items-center gap-3">{props.label}{props.shortcut ? <Shortcut>{props.shortcut}</Shortcut> : null}</span>}>
-      <Button aria-label={props.label} disabled={props.disabled} onClick={props.onClick} size="icon-sm" variant="ghost">
+      <Button
+        aria-label={props.label}
+        aria-pressed={props.pressed}
+        className={cn(props.pressed && "bg-accent text-accent-foreground")}
+        disabled={props.disabled}
+        onClick={props.onClick}
+        size="icon-sm"
+        variant="ghost"
+      >
         {props.icon}
       </Button>
     </Tooltip>
@@ -846,7 +925,7 @@ function SelectionToolbar(props: {
   onUngroup: () => void
 }) {
   return (
-    <ToolSurface className="bottom-5 left-1/2 -translate-x-1/2 gap-0.5">
+    <ToolSurface className="convax-selection-toolbar bottom-5 left-1/2 -translate-x-1/2 gap-0.5 max-[760px]:bottom-16">
       <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" />
       <IconButton disabled={!props.canGroup} icon={<Group />} label="Group" onClick={props.onGroup} shortcut="⌘G" />
       <IconButton disabled={!props.canUngroup} icon={<Ungroup />} label="Ungroup" onClick={props.onUngroup} shortcut="⇧⌘G" />
@@ -857,21 +936,85 @@ function SelectionToolbar(props: {
   )
 }
 
-function ViewportToolbar(props: { onFit: () => void; onZoomIn: () => void; onZoomOut: () => void }) {
+const zoomPresets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const
+
+function ViewportToolbar(props: {
+  miniMapVisible: boolean
+  onFit: () => void
+  onMiniMapChange: () => void
+  onSnapChange: () => void
+  onZoomIn: () => void
+  onZoomOut: () => void
+  snapToGrid: boolean
+}) {
   const viewport = useViewport()
+  const reactFlow = useReactFlow<CanvasNode>()
+  const [zoomMenuOpen, setZoomMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!zoomMenuOpen) return
+    const closeMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && menuRef.current?.contains(event.target)) return
+      setZoomMenuOpen(false)
+    }
+    window.addEventListener("pointerdown", closeMenu)
+    return () => window.removeEventListener("pointerdown", closeMenu)
+  }, [zoomMenuOpen])
   return (
-    <ToolSurface className="bottom-4 left-4 gap-0.5">
+    <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
       <IconButton icon={<ZoomOut />} label="Zoom out" onClick={props.onZoomOut} shortcut="⌘−" />
-      <span className="w-12 text-center text-xs tabular-nums text-muted-foreground">{Math.round(viewport.zoom * 100)}%</span>
+      <div ref={menuRef} className="relative">
+        <Tooltip content="Zoom presets">
+          <Button
+            aria-expanded={zoomMenuOpen}
+            aria-haspopup="menu"
+            className="convax-zoom-trigger"
+            onClick={() => setZoomMenuOpen((open) => !open)}
+            size="sm"
+            variant="ghost"
+          >
+            <span>{Math.round(viewport.zoom * 100)}%</span>
+            <ChevronUp className={cn("transition-transform", zoomMenuOpen && "rotate-180")} />
+          </Button>
+        </Tooltip>
+        {zoomMenuOpen ? (
+          <div className="convax-zoom-menu" role="menu">
+            <div className="convax-zoom-menu__title">Zoom</div>
+            {zoomPresets.map((zoom) => (
+              <button
+                key={zoom}
+                className="convax-zoom-menu__item"
+                onClick={() => {
+                  void reactFlow.zoomTo(zoom, { duration: 160 })
+                  setZoomMenuOpen(false)
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <span>{Math.round(zoom * 100)}%</span>
+                {Math.abs(viewport.zoom - zoom) < 0.01 ? <Check /> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
       <IconButton icon={<ZoomIn />} label="Zoom in" onClick={props.onZoomIn} shortcut="⌘+" />
+      <span className="mx-1 h-5 w-px bg-border" />
       <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" />
+      <IconButton icon={<Magnet />} label="Snap to grid" onClick={props.onSnapChange} pressed={props.snapToGrid} />
+      <IconButton icon={<MapPinned />} label="Minimap" onClick={props.onMiniMapChange} pressed={props.miniMapVisible} />
     </ToolSurface>
   )
 }
 
 function CanvasContextMenu(props: {
+  canArrange: boolean
   canGroup: boolean
+  canRedo: boolean
   canUngroup: boolean
+  canUndo: boolean
+  canUpload: boolean
+  hasNodeSelection: boolean
   hasSelection: boolean
   onAddNote: () => void
   onAddText: () => void
@@ -884,24 +1027,33 @@ function CanvasContextMenu(props: {
   onGroup: () => void
   onLayout: () => void
   onPaste: () => void
+  onRedo: () => void
   onUngroup: () => void
+  onUndo: () => void
+  onUpload: () => void
   readOnly: boolean
 }) {
   return (
-    <ContextMenuContent>
-      <ContextMenuLabel>Canvas</ContextMenuLabel>
+    <ContextMenuContent className="w-60">
+      {!props.readOnly ? <ContextMenuLabel>Create</ContextMenuLabel> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddText}><Type />Add text</ContextMenuItem> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddNote}><StickyNote />Add note</ContextMenuItem> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onPaste}>Paste<Shortcut>⌘V</Shortcut></ContextMenuItem> : null}
+      {props.canUpload && !props.readOnly ? <ContextMenuItem onSelect={props.onUpload}><FileUp />Upload files</ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuSeparator /> : null}
+      <ContextMenuLabel>Canvas</ContextMenuLabel>
+      {!props.readOnly ? <ContextMenuItem onSelect={props.onPaste}><ClipboardPaste />Paste<Shortcut>⌘V</Shortcut></ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuItem disabled={!props.canUndo} onSelect={props.onUndo}><Undo2 />Undo<Shortcut>⌘Z</Shortcut></ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuItem disabled={!props.canRedo} onSelect={props.onRedo}><Redo2 />Redo<Shortcut>⇧⌘Z</Shortcut></ContextMenuItem> : null}
       <ContextMenuItem onSelect={props.onFit}><Focus />Fit view<Shortcut>⌘0</Shortcut></ContextMenuItem>
       {props.hasSelection ? <ContextMenuSeparator /> : null}
-      {props.hasSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onCopy}>Copy<Shortcut>⌘C</Shortcut></ContextMenuItem> : null}
-      {props.hasSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onDuplicate}><Copy />Duplicate<Shortcut>⌘D</Shortcut></ContextMenuItem> : null}
+      {props.hasSelection ? <ContextMenuLabel>Selection</ContextMenuLabel> : null}
+      {props.hasNodeSelection ? <ContextMenuItem onSelect={props.onCopy}><Copy />Copy<Shortcut>⌘C</Shortcut></ContextMenuItem> : null}
+      {props.hasNodeSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onDuplicate}><Copy />Duplicate<Shortcut>⌘D</Shortcut></ContextMenuItem> : null}
       {props.canGroup && !props.readOnly ? <ContextMenuItem onSelect={props.onGroup}><Group />Group<Shortcut>⌘G</Shortcut></ContextMenuItem> : null}
       {props.canUngroup && !props.readOnly ? <ContextMenuItem onSelect={props.onUngroup}><Ungroup />Ungroup<Shortcut>⇧⌘G</Shortcut></ContextMenuItem> : null}
-      {props.hasSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onLayout}><LayoutGrid />Auto layout<Shortcut>⌥⇧F</Shortcut></ContextMenuItem> : null}
-      {props.hasSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onAlign}>Align left</ContextMenuItem> : null}
-      {props.hasSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onDistribute}>Distribute horizontally</ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onLayout}><LayoutGrid />Auto layout<Shortcut>⌥⇧F</Shortcut></ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onAlign}><AlignLeft />Align left</ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onDistribute}><LayoutGrid />Distribute horizontally</ContextMenuItem> : null}
       {props.hasSelection && !props.readOnly ? <ContextMenuSeparator /> : null}
       {props.hasSelection && !props.readOnly ? <ContextMenuItem className="text-destructive" onSelect={props.onDelete}><Trash2 />Delete<Shortcut>⌫</Shortcut></ContextMenuItem> : null}
     </ContextMenuContent>

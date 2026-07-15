@@ -1,6 +1,6 @@
-import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react"
-import { File, Image, LoaderCircle, Music2, Play, StickyNote, Type } from "lucide-react"
-import { useState } from "react"
+import { Handle, NodeResizer, NodeToolbar, Position, type NodeProps } from "@xyflow/react"
+import { File, Image, LoaderCircle, Music2, Play, Plus, StickyNote, Type } from "lucide-react"
+import { useEffect, useState } from "react"
 import { cn } from "@convax/ui"
 import { updateCanvasNodeData } from "../commands"
 import { useCanvasEditor } from "../editor-context"
@@ -27,6 +27,11 @@ function NodeChrome(props: {
   node: NodeProps<CanvasNode>
 }) {
   const editor = useCanvasEditor()
+  const [connectMenuSide, setConnectMenuSide] = useState<"left" | "right" | null>(null)
+  useEffect(() => {
+    if (props.node.selected) return
+    setConnectMenuSide(null)
+  }, [props.node.selected])
   return (
     <div
       className={cn(
@@ -50,30 +55,68 @@ function NodeChrome(props: {
       <div className={cn("convax-node__surface size-full overflow-hidden border bg-card", props.className)}>
         {props.children}
       </div>
-      <Handle
-        id="target-left"
-        className="convax-node__handle convax-node__handle--target"
-        type="target"
-        position={Position.Left}
-      />
-      <Handle
-        id="target-top"
-        className="convax-node__handle convax-node__handle--target"
-        type="target"
-        position={Position.Top}
-      />
-      <Handle
-        id="source-right"
-        className="convax-node__handle convax-node__handle--source"
-        type="source"
-        position={Position.Right}
-      />
-      <Handle
-        id="source-bottom"
-        className="convax-node__handle convax-node__handle--source"
-        type="source"
-        position={Position.Bottom}
-      />
+      {!editor.readOnly ? (
+        <>
+          <Handle
+            aria-expanded={connectMenuSide === "left"}
+            aria-label="Connect on left"
+            className="convax-node__connection convax-node__connection--left"
+            id="target-left"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setConnectMenuSide((current) => current === "left" ? null : "left")
+            }}
+            position={Position.Left}
+            type="target"
+          >
+            <span className="convax-node__connection-icon"><Plus /></span>
+          </Handle>
+          <Handle
+            aria-expanded={connectMenuSide === "right"}
+            aria-label="Connect on right"
+            className="convax-node__connection convax-node__connection--right"
+            id="source-right"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setConnectMenuSide((current) => current === "right" ? null : "right")
+            }}
+            position={Position.Right}
+            type="source"
+          >
+            <span className="convax-node__connection-icon"><Plus /></span>
+          </Handle>
+          {connectMenuSide ? (
+            <NodeToolbar
+              className="convax-connect-menu nodrag nowheel"
+              isVisible
+              offset={50}
+              position={connectMenuSide === "left" ? Position.Left : Position.Right}
+            >
+              <div className="convax-connect-menu__title">Add and connect</div>
+              <div className="convax-connect-menu__items">
+                {editor.connectionNodeTypes.map((item) => (
+                  <button
+                    key={item.type}
+                    className="convax-connect-menu__item"
+                    onClick={() => {
+                      editor.quickConnect(props.node.id, connectMenuSide, item.type)
+                      setConnectMenuSide(null)
+                    }}
+                    type="button"
+                  >
+                    <span className="convax-connect-menu__icon">
+                      {item.type === "note" ? <StickyNote /> : item.type === "text" ? <Type /> : <File />}
+                    </span>
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </NodeToolbar>
+          ) : null}
+        </>
+      ) : null}
     </div>
   )
 }
