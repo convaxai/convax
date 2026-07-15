@@ -1,0 +1,41 @@
+@import "@xyflow/react/dist/style.css";
+
+.convax-canvas .react-flow__pane {
+  cursor: default;
+}
+
+.convax-canvas .react-flow__pane.dragging,
+.convax-canvas .react-flow__pane.selection {
+  cursor: crosshair;
+}
+
+.convax-canvas .react-flow__node {
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.convax-canvas .react-flow__node-group {
+  z-index: -1 !important;
+}
+
+.convax-canvas .react-flow__selection,
+.convax-canvas .react-flow__nodesselection-rect {
+  border: 1px solid var(--ring);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--ring) 9%, transparent);
+}
+
+.convax-canvas .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+  stroke-width: 1.5;
+}
+
+.convax-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--ring);
+  stroke-width: 2;
+}
+
+.convax-canvas .react-flow__attribution {
+  display: none;
+}
