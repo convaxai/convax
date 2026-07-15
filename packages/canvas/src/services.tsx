@@ -10,6 +10,10 @@ export interface CanvasServiceContext {
 export interface CanvasUploadRequest {
   files: readonly File[]
   position?: CanvasPoint
+  transfer?: {
+    data: Readonly<Record<string, string>>
+    types: readonly string[]
+  }
   context: CanvasServiceContext
   signal: AbortSignal
 }
@@ -158,4 +162,3 @@ export function useCanvasService<K extends keyof CanvasServiceMap>(key: K) {
   useSyncExternalStore(services.subscribe, services.getVersion, services.getVersion)
   return services.get(key)
 }
-

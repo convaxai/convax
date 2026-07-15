@@ -54,6 +54,7 @@ import {
   Search,
   Sparkles,
   StickyNote,
+  TriangleAlert,
   Trash2,
   Type,
   Undo2,
@@ -64,10 +65,14 @@ import {
 } from "lucide-react"
 import {
   type ChangeEvent,
+  type ForwardedRef,
   type FormEvent,
   type ReactNode,
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -91,13 +96,13 @@ import {
 import {
   createCanvasClipboardPayload,
   parseCanvasClipboard,
-  pasteCanvasClipboard,
+  prepareCanvasClipboardPaste,
   serializeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
-import { canvasHistoryReducer, createCanvasHistory } from "../history"
+import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
 import {
   CanvasServicesProvider,
@@ -161,26 +166,36 @@ function findOpenCanvasPoint(document: CanvasDocument, preferred: CanvasPoint) {
 
 export interface CanvasEditorProps {
   className?: string
+  clipboardScope?: string
   initialDocument: CanvasDocument
   nodeRegistry?: CanvasNodeRegistry
   onlyRenderVisibleElements?: boolean
   onDocumentChange?: (document: CanvasDocument) => void
   readOnly?: boolean
   services: CanvasServices
+  title?: string
 }
 
-export function CanvasEditor(props: CanvasEditorProps) {
+export interface CanvasEditorHandle {
+  prepareToLeave: () => Promise<void>
+  resumeAfterLeaveCanceled: () => void
+}
+
+export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(function CanvasEditor(props, ref) {
   return (
     <CanvasServicesProvider services={props.services}>
       <ReactFlowProvider>
-        <CanvasEditorContent {...props} nodeRegistry={props.nodeRegistry ?? defaultNodeRegistry} />
+        <CanvasEditorContent {...props} editorRef={ref} nodeRegistry={props.nodeRegistry ?? defaultNodeRegistry} />
       </ReactFlowProvider>
     </CanvasServicesProvider>
   )
-}
+})
 
-function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNodeRegistry }) {
-  const [history, dispatch] = useReducer(canvasHistoryReducer, props.initialDocument, createCanvasHistory)
+function CanvasEditorContent(props: CanvasEditorProps & {
+  editorRef: ForwardedRef<CanvasEditorHandle>
+  nodeRegistry: CanvasNodeRegistry
+}) {
+  const [history, reduce] = useReducer(canvasHistoryReducer, props.initialDocument, createCanvasHistory)
   const [selection, setSelection] = useState<CanvasSelection>(() => ({ nodeIds: new Set(), edgeIds: new Set() }))
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
@@ -192,12 +207,27 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveAttempt, setSaveAttempt] = useState(0)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [leaving, setLeaving] = useState(false)
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
   const spacePanning = useSpacePanning()
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
   const altDragRef = useRef<{ nodeIds: string[]; positions: Map<string, CanvasPoint> } | null>(null)
+  const documentRef = useRef(history.document)
+  const historyRef = useRef(history)
+  const hasLocalEditsRef = useRef(false)
+  const saveErrorRef = useRef<string | null>(null)
+  const leavingRef = useRef(false)
+  const saveControllerRef = useRef<AbortController | undefined>(undefined)
+  const savePromiseRef = useRef<Promise<void> | undefined>(undefined)
+  const saveRevisionRef = useRef<number | undefined>(undefined)
+  const savedRevisionRef = useRef(history.document.revision)
+  const operationControllersRef = useRef(new Set<AbortController>())
   const reactFlow = useReactFlow<CanvasNode>()
   const uploadService = useCanvasService("upload")
   const generateService = useCanvasService("generate")
@@ -205,13 +235,22 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const exportService = useCanvasService("export")
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
+  const [hydrating, setHydrating] = useState(Boolean(persistenceService))
+  documentRef.current = history.document
+  historyRef.current = history
+  saveErrorRef.current = saveError
+  const dispatch = useCallback((action: CanvasHistoryAction) => {
+    if (leavingRef.current) return
+    if (action.type !== "replace" && action.type !== "replace-update") hasLocalEditsRef.current = true
+    reduce(action)
+  }, [])
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
     props.nodeRegistry.getVersion,
     props.nodeRegistry.getVersion,
   )
 
-  const readOnly = props.readOnly ?? false
+  const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
   const selectedNodeIds = [...selection.nodeIds]
   const selectedEdgeIds = [...selection.edgeIds]
   const nodeById = useMemo(
@@ -238,9 +277,11 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   )
   const canLayoutCanvas = canvasNodeIds.length >= 2
   const nodes = useMemo(() => {
-    const depth = (node: CanvasNode): number => {
+    const depth = (node: CanvasNode, visited = new Set<string>()): number => {
+      if (visited.has(node.id)) return 0
+      visited.add(node.id)
       const parent = node.parentId ? nodeById.get(node.parentId) : undefined
-      return parent ? depth(parent) + 1 : 0
+      return parent ? depth(parent, visited) + 1 : 0
     }
     return history.document.nodes
       .map((node) => node.selected === selection.nodeIds.has(node.id)
@@ -289,9 +330,9 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const commit = useCallback(
     (update: (document: CanvasDocument) => CanvasDocument) => {
       if (readOnly) return
-      dispatch({ type: "commit", document: update(history.document) })
+      dispatch({ type: "commit-update", update })
     },
-    [history.document, readOnly],
+    [dispatch, readOnly],
   )
   const pointAtCenter = useCallback(() => {
     const bounds = rootRef.current?.getBoundingClientRect()
@@ -317,7 +358,71 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     },
     [notificationService],
   )
+  const startSave = useCallback((document: CanvasDocument) => {
+    if (!persistenceService || loadError || document.revision === 0) {
+      savedRevisionRef.current = document.revision
+      return Promise.resolve()
+    }
+    if (!saveErrorRef.current && savedRevisionRef.current === document.revision) return Promise.resolve()
+    if (saveRevisionRef.current === document.revision && savePromiseRef.current) return savePromiseRef.current
 
+    saveControllerRef.current?.abort()
+    setSaveState("saving")
+    const controller = new AbortController()
+    saveControllerRef.current = controller
+    saveRevisionRef.current = document.revision
+    const pending = persistenceService.save(document, controller.signal).then(
+      () => {
+        if (controller.signal.aborted) return
+        savedRevisionRef.current = document.revision
+        saveErrorRef.current = null
+        setSaveError(null)
+        setSaveState("saved")
+      },
+      (error) => {
+        if (controller.signal.aborted) return
+        const message = error instanceof Error ? error.message : String(error)
+        saveErrorRef.current = message
+        setSaveError(message)
+        setSaveState("idle")
+        notifyError("Could not save canvas", error)
+        throw error
+      },
+    )
+    savePromiseRef.current = pending
+    const clearPending = () => {
+      if (savePromiseRef.current === pending) {
+        savePromiseRef.current = undefined
+        saveRevisionRef.current = undefined
+      }
+      if (saveControllerRef.current === controller) saveControllerRef.current = undefined
+    }
+    void pending.then(clearPending, clearPending)
+    return pending
+  }, [loadError, notifyError, persistenceService])
+  useImperativeHandle(props.editorRef, () => ({
+    async prepareToLeave() {
+      leavingRef.current = true
+      setLeaving(true)
+      for (const controller of operationControllersRef.current) controller.abort()
+      operationControllersRef.current.clear()
+
+      const current = historyRef.current
+      const finalized = current.gestureStart
+        ? canvasHistoryReducer(current, { type: "end-gesture" })
+        : current
+      if (finalized !== current) {
+        historyRef.current = finalized
+        documentRef.current = finalized.document
+        reduce({ type: "end-gesture" })
+      }
+      await startSave(finalized.document)
+    },
+    resumeAfterLeaveCanceled() {
+      leavingRef.current = false
+      setLeaving(false)
+    },
+  }), [props.editorRef, startSave])
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
@@ -332,35 +437,55 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     })
   }, [history.document.edges, history.document.nodes])
   useEffect(() => {
-    if (!persistenceService) return
+    if (!persistenceService) {
+      setHydrating(false)
+      setLoadError(null)
+      return
+    }
+    setHydrating(true)
+    setLoadError(null)
     const controller = new AbortController()
-    void persistenceService.load(history.document.id, controller.signal).then(
+    const documentId = history.document.id
+    void persistenceService.load(documentId, controller.signal).then(
       (document) => {
-        if (document) dispatch({ type: "replace", document })
+        if (!controller.signal.aborted
+          && document
+          && documentRef.current.id === documentId
+          && documentRef.current.revision === 0
+          && !hasLocalEditsRef.current) {
+          if (!leavingRef.current) reduce({ type: "replace", document })
+        }
+        if (!controller.signal.aborted) setHydrating(false)
       },
-      (error) => notifyError("Could not load canvas", error),
+      (error) => {
+        if (!controller.signal.aborted) {
+          setHydrating(false)
+          setLoadError(error instanceof Error ? error.message : String(error))
+          notifyError("Could not load canvas", error)
+        }
+      },
     )
     return () => controller.abort()
-  }, [history.document.id, persistenceService, notifyError])
+  }, [history.document.id, loadAttempt, persistenceService, notifyError])
+  useLayoutEffect(() => {
+    void startSave(history.document).catch(() => undefined)
+  }, [history.document.revision, saveAttempt, startSave])
   useEffect(() => {
-    if (!persistenceService || history.document.revision === 0) return
-    setSaveState("saving")
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => {
-      void persistenceService.save(history.document, controller.signal).then(
-        () => setSaveState("saved"),
-        (error) => {
-          setSaveState("idle")
-          notifyError("Could not save canvas", error)
-        },
-      )
-    }, 500)
-    return () => {
-      window.clearTimeout(timeout)
-      controller.abort()
+    const preventUnsavedClose = (event: BeforeUnloadEvent) => {
+      const hasUnsavedRevision = documentRef.current.revision !== savedRevisionRef.current
+      if (!saveErrorRef.current && !saveControllerRef.current && !historyRef.current.gestureStart && !hasUnsavedRevision) return
+      event.preventDefault()
+      event.returnValue = ""
     }
-  }, [history.document, persistenceService, notifyError])
-
+    window.addEventListener("beforeunload", preventUnsavedClose)
+    return () => window.removeEventListener("beforeunload", preventUnsavedClose)
+  }, [])
+  useEffect(() => () => {
+    leavingRef.current = true
+    for (const controller of operationControllersRef.current) controller.abort()
+    operationControllersRef.current.clear()
+    saveControllerRef.current?.abort()
+  }, [])
   const addNode = useCallback(
     (type: string, position?: CanvasPoint) => {
       const definition = props.nodeRegistry.get(type)
@@ -454,18 +579,27 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     fitAfterRender()
   }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterRender])
   const copy = useCallback(() => {
-    const payload = createCanvasClipboardPayload(history.document, selectedNodeIds)
+    const payload = createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
     if (!payload) return
     void navigator.clipboard.writeText(serializeCanvasClipboard(payload)).then(
       () => notificationService?.show({ kind: "info", title: "Copied to clipboard" }),
       (error) => notifyError("Could not copy selection", error),
     )
-  }, [history.document, notificationService, notifyError, selectedNodeIds])
+  }, [history.document, notificationService, notifyError, props.clipboardScope, selectedNodeIds])
   const paste = useCallback(() => {
     void navigator.clipboard.readText().then(
       (value) => {
         const payload = parseCanvasClipboard(value)
         if (!payload) return
+        const containsMedia = payload.nodes.some((node) => ["image", "video", "audio", "file"].includes(node.data.kind))
+        if (containsMedia && payload.scope !== props.clipboardScope) {
+          notificationService?.show({
+            kind: "warning",
+            title: "Media cannot be pasted between projects",
+            description: "Add the source file to this project instead so Convax can create a local asset reference.",
+          })
+          return
+        }
         const roots = payload.nodes.filter((node) => !node.parentId)
         const target = insertPoint ?? pointerRef.current
         const offset = target && roots.length
@@ -474,43 +608,69 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
               y: target.y - Math.min(...roots.map((node) => node.position.y)),
             }
           : undefined
-        const result = pasteCanvasClipboard(history.document, payload, offset)
-        dispatch({ type: "commit", document: result.document })
-        selectNodes(result.selectedNodeIds)
+        const prepared = prepareCanvasClipboardPaste(payload, offset)
+        dispatch({
+          type: "commit-update",
+          update: (document) => ({
+            ...document,
+            edges: [...document.edges, ...prepared.edges],
+            nodes: [...document.nodes, ...prepared.nodes],
+          }),
+        })
+        selectNodes(prepared.selectedNodeIds)
       },
       (error) => notifyError("Could not read clipboard", error),
     )
-  }, [history.document, insertPoint, notifyError, selectNodes])
+  }, [dispatch, insertPoint, notificationService, notifyError, props.clipboardScope, selectNodes])
 
   const uploadFiles = useCallback(
-    (files: readonly File[], position?: CanvasPoint) => {
-      if (!uploadService || files.length === 0 || readOnly) return
+    (
+      files: readonly File[],
+      position?: CanvasPoint,
+      transfer?: { data: Readonly<Record<string, string>>; types: readonly string[] },
+    ) => {
+      if (!uploadService || (files.length === 0 && !transfer) || readOnly) return
       const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      const documentId = documentRef.current.id
+      const anchor = position ?? pointerRef.current ?? pointAtCenter()
       void uploadService
         .upload({
           files,
           position,
-          context: { documentId: history.document.id, selectedNodeIds, source: "canvas" },
+          transfer,
+          context: { documentId, selectedNodeIds, source: "canvas" },
           signal: controller.signal,
         })
         .then(
           (resources) => {
-            const point = position ?? nextInsertPoint()
-            const result = addCanvasNodes(
-              history.document,
-              resources.map((resource, index) =>
-                createMediaNode({ position: { x: point.x + index * 36, y: point.y + index * 36 }, resource }),
-              ),
-            )
-            dispatch({ type: "commit", document: result.document })
-            selectNodes(result.selectedNodeIds)
+            if (controller.signal.aborted || documentRef.current.id !== documentId) return
+            if (resources.length === 0) {
+              notificationService?.show({ kind: "warning", title: "No supported files to add" })
+              return
+            }
+            const nodes = resources.map((resource) => createMediaNode({ position: anchor, resource }))
+            dispatch({
+              type: "commit-update",
+              update: (document) => {
+                const point = findOpenCanvasPoint(document, anchor)
+                return addCanvasNodes(document, nodes.map((node, index) => ({
+                  ...node,
+                  position: { x: point.x + index * 36, y: point.y + index * 36 },
+                }))).document
+              },
+            })
+            selectNodes(nodes.map((node) => node.id))
             fitAfterRender()
             notificationService?.show({ kind: "success", title: `${resources.length} item${resources.length === 1 ? "" : "s"} added` })
           },
-          (error) => notifyError("Upload failed", error),
+          (error) => {
+            if (!controller.signal.aborted) notifyError("Upload failed", error)
+          },
         )
+        .finally(() => operationControllersRef.current.delete(controller))
     },
-    [fitAfterRender, history.document, nextInsertPoint, notificationService, notifyError, readOnly, selectedNodeIds, selectNodes, uploadService],
+    [dispatch, fitAfterRender, notificationService, notifyError, pointAtCenter, readOnly, selectedNodeIds, selectNodes, uploadService],
   )
   const runGenerate = useCallback(() => {
     if (!generateService || readOnly) return
@@ -520,7 +680,12 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     }
     setGenerating(true)
     const controller = new AbortController()
-    const references = history.document.nodes
+    operationControllersRef.current.add(controller)
+    const document = documentRef.current
+    const documentId = document.id
+    const requestPrompt = prompt.trim()
+    const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
+    const references = document.nodes
       .filter((node) => selection.nodeIds.has(node.id))
       .map((node) => ({
         nodeId: node.id,
@@ -530,34 +695,48 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       }))
     void generateService
       .generate({
-        prompt: prompt.trim(),
+        prompt: requestPrompt,
         references,
-        context: { documentId: history.document.id, selectedNodeIds, source: "canvas" },
+        context: { documentId, selectedNodeIds, source: "canvas" },
         signal: controller.signal,
       })
       .then(
         (items) => {
+          if (controller.signal.aborted || documentRef.current.id !== documentId) return
           const nodes = items.flatMap((item, index) => {
-            const position = nextInsertPoint(index)
+            const position = { x: anchor.x + index * 36, y: anchor.y + index * 36 }
             if (item.resource) return [createMediaNode({ label: item.title, position, resource: item.resource })]
             if (!item.nodeType || item.nodeType === "text") {
-              return [createTextNode({ label: item.title ?? "Generated", position, text: item.text ?? prompt.trim() })]
+              return [createTextNode({ label: item.title ?? "Generated", position, text: item.text ?? requestPrompt })]
             }
             const definition = props.nodeRegistry.get(item.nodeType)
             return definition ? [definition.create({ position, data: { ...item.metadata, label: item.title, text: item.text } })] : []
           })
-          const result = addCanvasNodes(history.document, nodes)
-          dispatch({ type: "commit", document: result.document })
-          selectNodes(result.selectedNodeIds)
+          dispatch({
+            type: "commit-update",
+            update: (current) => {
+              const point = findOpenCanvasPoint(current, anchor)
+              return addCanvasNodes(current, nodes.map((node, index) => ({
+                ...node,
+                position: { x: point.x + index * 36, y: point.y + index * 36 },
+              }))).document
+            },
+          })
+          selectNodes(nodes.map((node) => node.id))
           fitAfterRender()
           setGenerateOpen(false)
           setPrompt("")
           notificationService?.show({ kind: "success", title: "Generation complete" })
         },
-        (error) => notifyError("Generation failed", error),
+        (error) => {
+          if (!controller.signal.aborted) notifyError("Generation failed", error)
+        },
       )
-      .finally(() => setGenerating(false))
-  }, [fitAfterRender, generateService, history.document, nextInsertPoint, notificationService, notifyError, prompt, props.nodeRegistry, readOnly, selectedNodeIds, selectNodes, selection.nodeIds])
+      .finally(() => {
+        operationControllersRef.current.delete(controller)
+        if (!controller.signal.aborted) setGenerating(false)
+      })
+  }, [dispatch, fitAfterRender, generateService, insertPoint, notificationService, notifyError, pointAtCenter, prompt, props.nodeRegistry, readOnly, selectedNodeIds, selectNodes, selection.nodeIds])
   const exportCanvas = useCallback(() => {
     if (!exportService) return
     const controller = new AbortController()
@@ -601,6 +780,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       readOnly,
       connectionNodeTypes,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
+      cancelGesture: () => dispatch({ type: "cancel-gesture" }),
       endGesture: () => dispatch({ type: "end-gesture" }),
       commit,
       quickConnect,
@@ -632,7 +812,15 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
               onDrop={(event) => {
                 if (!uploadService || readOnly) return
                 event.preventDefault()
-                uploadFiles([...event.dataTransfer.files], reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
+                const types = Array.from(event.dataTransfer.types)
+                uploadFiles(
+                  [...event.dataTransfer.files],
+                  reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+                  {
+                    data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
+                    types,
+                  },
+                )
               }}
               onDoubleClick={(event) => {
                 if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("react-flow__pane")) return
@@ -708,12 +896,18 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                   if (altDragRef.current) {
                     const duplicated = duplicateCanvasSelection(history.document, altDragRef.current.nodeIds, { x: 0, y: 0 })
                     const positions = altDragRef.current.positions
+                    const appendedNodes = duplicated.document.nodes.slice(history.document.nodes.length)
+                    const appendedEdges = duplicated.document.edges.slice(history.document.edges.length)
                     dispatch({
-                      type: "replace",
-                      document: {
-                        ...duplicated.document,
-                        nodes: duplicated.document.nodes.map((node) => positions.has(node.id) ? { ...node, position: positions.get(node.id) ?? node.position } : node),
-                      },
+                      type: "replace-update",
+                      update: (document) => ({
+                        ...document,
+                        edges: [...document.edges, ...appendedEdges],
+                        nodes: [
+                          ...document.nodes.map((node) => positions.has(node.id) ? { ...node, position: positions.get(node.id) ?? node.position } : node),
+                          ...appendedNodes,
+                        ],
+                      }),
                     })
                     selectNodes(duplicated.selectedNodeIds)
                     altDragRef.current = null
@@ -732,9 +926,26 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                   }
                   const documentChanges = changes.filter((change) => change.type !== "select" && change.type !== "remove")
                   if (documentChanges.length === 0) return
-                  const nextNodes = applyNodeChanges(documentChanges, history.document.nodes)
-                  if (equalCanvasNodes(history.document.nodes, nextNodes)) return
-                  dispatch({ type: "replace", document: { ...history.document, nodes: nextNodes } })
+                  const measurementChanges = documentChanges.filter((change) => change.type === "dimensions")
+                  const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
+                  if (measurementChanges.length > 0) {
+                    dispatch({
+                      type: "replace-update",
+                      update: (document) => {
+                        const nextNodes = applyNodeChanges(measurementChanges, document.nodes)
+                        return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
+                      },
+                    })
+                  }
+                  if (committedChanges.length > 0) {
+                    dispatch({
+                      type: "preview-or-commit-update",
+                      update: (document) => {
+                        const nextNodes = applyNodeChanges(committedChanges, document.nodes)
+                        return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
+                      },
+                    })
+                  }
                 }}
                 onPaneClick={() => {
                   updateSelection([])
@@ -775,7 +986,57 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                 onUpload={() => uploadInputRef.current?.click()}
                 readOnly={readOnly}
                 saveState={saveState}
+                title={props.title}
               />
+
+              {hydrating || loadError ? (
+                <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
+                  <div className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm">
+                    {loadError ? (
+                      <>
+                        <TriangleAlert className="size-5 text-destructive" />
+                        <div>
+                          <div className="font-medium text-foreground">Canvas could not be loaded</div>
+                          <div className="mt-1 text-xs">{loadError}</div>
+                        </div>
+                        <Button onClick={() => setLoadAttempt((attempt) => attempt + 1)} size="sm" variant="outline">Retry</Button>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <LoaderCircle className="size-4 animate-spin" />
+                        Loading canvas…
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {saveError ? (
+                <div className="fixed inset-0 z-[100] grid place-items-center bg-background/80 backdrop-blur-[2px]">
+                  <div className="flex max-w-md flex-col items-center gap-3 rounded-md border border-destructive/30 bg-card px-6 py-5 text-center text-sm shadow-lg">
+                    <TriangleAlert className="size-6 text-destructive" />
+                    <div>
+                      <div className="font-medium text-foreground">Canvas has unsaved changes</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{saveError}</div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button onClick={() => setSaveAttempt((attempt) => attempt + 1)} size="sm">Retry save</Button>
+                      <Button
+                        disabled={!history.gestureStart && history.past.length === 0}
+                        onClick={() => {
+                          setSaveError(null)
+                          dispatch({ type: history.gestureStart ? "cancel-gesture" : "undo" })
+                        }}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Revert last change
+                      </Button>
+                    </div>
+                    <div className="text-xs text-muted-foreground">Convax will keep this window open until the canvas is saved or the last change is reverted.</div>
+                  </div>
+                </div>
+              ) : null}
 
               {selectedNodeIds.length > 0 && !readOnly ? (
                 <SelectionToolbar
@@ -968,6 +1229,7 @@ function CanvasHeader(props: {
   onUpload: () => void
   readOnly: boolean
   saveState: "idle" | "saving" | "saved"
+  title?: string
 }) {
   return (
     <>
@@ -975,7 +1237,7 @@ function CanvasHeader(props: {
         <div className="grid size-5 grid-cols-2 gap-0.5" aria-hidden="true">
           <span className="bg-foreground" /><span className="bg-emerald-500" /><span className="bg-emerald-500" /><span className="bg-foreground" />
         </div>
-        <span className="truncate text-sm font-semibold">{props.document.metadata.title}</span>
+        <span className="truncate text-sm font-semibold">{props.title ?? props.document.metadata.title}</span>
         {props.saveState !== "idle" ? <span className="text-xs text-muted-foreground">{props.saveState === "saving" ? "Saving..." : "Saved"}</span> : null}
       </ToolSurface>
       <ToolSurface className="left-1/2 top-4 -translate-x-1/2 gap-0.5 max-[820px]:top-16">

@@ -9,7 +9,10 @@ export interface CanvasHistoryState {
 
 export type CanvasHistoryAction =
   | { type: "commit"; document: CanvasDocument }
+  | { type: "commit-update"; update: (document: CanvasDocument) => CanvasDocument }
+  | { type: "preview-or-commit-update"; update: (document: CanvasDocument) => CanvasDocument }
   | { type: "replace"; document: CanvasDocument }
+  | { type: "replace-update"; update: (document: CanvasDocument) => CanvasDocument }
   | { type: "begin-gesture" }
   | { type: "end-gesture" }
   | { type: "cancel-gesture" }
@@ -35,11 +38,24 @@ function pushPast(past: CanvasDocument[], document: CanvasDocument) {
 }
 
 export function canvasHistoryReducer(state: CanvasHistoryState, action: CanvasHistoryAction): CanvasHistoryState {
+  if (action.type === "commit-update") {
+    return canvasHistoryReducer(state, { type: "commit", document: action.update(state.document) })
+  }
+  if (action.type === "replace-update") {
+    return canvasHistoryReducer(state, { type: "replace", document: action.update(state.document) })
+  }
+  if (action.type === "preview-or-commit-update") {
+    const document = action.update(state.document)
+    return canvasHistoryReducer(state, { type: state.gestureStart ? "replace" : "commit", document })
+  }
   if (action.type === "replace") {
     return { ...state, document: nextRevision(action.document, state.document.revision) }
   }
   if (action.type === "commit") {
     if (!changed(state.document, action.document)) return state
+    if (state.gestureStart) {
+      return { ...state, document: nextRevision(action.document, state.document.revision + 1), future: [] }
+    }
     return {
       document: nextRevision(action.document, state.document.revision + 1),
       past: pushPast(state.past, state.document),
@@ -52,7 +68,11 @@ export function canvasHistoryReducer(state: CanvasHistoryState, action: CanvasHi
   }
   if (action.type === "cancel-gesture") {
     if (!state.gestureStart) return state
-    return { ...state, document: state.gestureStart, gestureStart: undefined }
+    return {
+      ...state,
+      document: nextRevision(state.gestureStart, state.document.revision + 1),
+      gestureStart: undefined,
+    }
   }
   if (action.type === "end-gesture") {
     if (!state.gestureStart) return state
@@ -80,4 +100,3 @@ export function canvasHistoryReducer(state: CanvasHistoryState, action: CanvasHi
     future: state.future.slice(1),
   }
 }
-

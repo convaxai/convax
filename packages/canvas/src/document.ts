@@ -35,6 +35,35 @@ export function createCanvasDocument(input?: {
   }
 }
 
+export function parseCanvasDocument(value: unknown, expectedId?: string): CanvasDocument | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || (expectedId !== undefined && value.id !== expectedId)
+    || typeof value.revision !== "number"
+    || !Number.isFinite(value.revision)
+    || value.revision < 0
+    || !isRecord(value.metadata)
+    || typeof value.metadata.title !== "string"
+    || !Array.isArray(value.nodes)
+    || !value.nodes.every(isCanvasNode)
+    || !Array.isArray(value.edges)
+    || !value.edges.every(isCanvasEdge)) {
+    return null
+  }
+  const nodes = value.nodes as unknown as CanvasNode[]
+  const edges = value.edges as unknown as CanvasEdge[]
+  const nodeIds = new Set(nodes.map((node) => node.id))
+  const edgeIds = new Set(edges.map((edge) => edge.id))
+  if (nodeIds.size !== nodes.length
+    || edgeIds.size !== edges.length
+    || nodes.some((node) => node.parentId !== undefined && !nodeIds.has(node.parentId))
+    || edges.some((edge) => !nodeIds.has(edge.source) || !nodeIds.has(edge.target))
+    || hasParentCycle(nodes)) {
+    return null
+  }
+  return value as unknown as CanvasDocument
+}
+
 export function createTextNode(input: {
   id?: string
   label?: string
@@ -141,3 +170,51 @@ export function getCanvasNodeSize(node: CanvasNode) {
   }
 }
 
+function isCanvasNode(value: unknown) {
+  if (!(isRecord(value)
+    && typeof value.id === "string"
+    && (value.type === undefined || typeof value.type === "string")
+    && (value.parentId === undefined || typeof value.parentId === "string")
+    && isRecord(value.position)
+    && typeof value.position.x === "number"
+    && Number.isFinite(value.position.x)
+    && typeof value.position.y === "number"
+    && Number.isFinite(value.position.y)
+    && isRecord(value.data)
+    && typeof value.data.kind === "string"
+    && typeof value.data.label === "string")) return false
+  if ((value.data.kind === "text" || value.data.kind === "note") && typeof value.data.text !== "string") return false
+  if (value.data.kind === "note" && !["neutral", "yellow", "green", "blue", "rose"].includes(String(value.data.tone))) return false
+  if (["image", "video", "audio", "file"].includes(value.data.kind) && typeof value.data.url !== "string") return false
+  return true
+}
+
+function isCanvasEdge(value: unknown) {
+  return isRecord(value)
+    && typeof value.id === "string"
+    && typeof value.source === "string"
+    && typeof value.target === "string"
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function hasParentCycle(nodes: readonly CanvasNode[]) {
+  const parents = new Map(nodes.map((node) => [node.id, node.parentId]))
+  const states = new Map<string, "visiting" | "resolved">()
+  for (const node of nodes) {
+    const trail: string[] = []
+    let current: string | undefined = node.id
+    while (current) {
+      const state = states.get(current)
+      if (state === "visiting") return true
+      if (state === "resolved") break
+      states.set(current, "visiting")
+      trail.push(current)
+      current = parents.get(current)
+    }
+    for (const id of trail) states.set(id, "resolved")
+  }
+  return false
+}

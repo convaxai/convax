@@ -126,12 +126,13 @@ function TextNode(props: NodeProps<CanvasNode>) {
   const data = props.data as CanvasTextNodeData
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(data.text)
+  const initialValueRef = useRef(data.text)
+  useEffect(() => {
+    if (!editing) setValue(data.text)
+  }, [data.text, editing])
   const finishEditing = () => {
     setEditing(false)
-    if (value === data.text) return
-    editor.commit((document) =>
-      updateCanvasNodeData(document, props.id, (current) => ({ ...current, text: value })),
-    )
+    editor.endGesture()
   }
   return (
     <NodeChrome icon={<Type />} label={data.label} node={props}>
@@ -142,17 +143,29 @@ function TextNode(props: NodeProps<CanvasNode>) {
           className="nodrag nowheel size-full resize-none bg-transparent p-4 text-sm leading-6 outline-none"
           value={value}
           onBlur={finishEditing}
-          onChange={(event) => setValue(event.currentTarget.value)}
+          onChange={(event) => {
+            const nextValue = event.currentTarget.value
+            setValue(nextValue)
+            editor.commit((document) =>
+              updateCanvasNodeData(document, props.id, (current) => ({ ...current, text: nextValue })),
+            )
+          }}
           onKeyDown={(event) => {
             if (event.key !== "Escape") return
-            setValue(data.text)
+            setValue(initialValueRef.current)
             setEditing(false)
+            editor.cancelGesture()
           }}
         />
       ) : (
         <div
           className="size-full whitespace-pre-wrap p-4 text-sm leading-6"
-          onDoubleClick={() => setEditing(true)}
+          onDoubleClick={() => {
+            initialValueRef.current = data.text
+            setValue(data.text)
+            setEditing(true)
+            editor.beginGesture()
+          }}
         >
           {data.text}
         </div>

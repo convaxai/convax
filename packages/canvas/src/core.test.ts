@@ -11,11 +11,19 @@ import {
   ungroupCanvasNode,
 } from "./commands"
 import { createCanvasClipboardPayload, parseCanvasClipboard, pasteCanvasClipboard, serializeCanvasClipboard } from "./clipboard"
-import { createCanvasDocument, createGroupNode, createTextNode } from "./document"
+import { createCanvasDocument, createGroupNode, createTextNode, parseCanvasDocument } from "./document"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
 describe("canvas history", () => {
+  test("rejects malformed persisted documents before they reach the editor", () => {
+    expect(parseCanvasDocument({})).toBeNull()
+    expect(parseCanvasDocument(createCanvasDocument({ id: "one" }), "two")).toBeNull()
+    expect(parseCanvasDocument(createCanvasDocument({ id: "one" }), "one")?.id).toBe("one")
+    const first = createGroupNode({ id: "first", label: "First", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "second" })
+    const second = createGroupNode({ id: "second", label: "Second", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "first" })
+    expect(parseCanvasDocument(createCanvasDocument({ id: "cycle", nodes: [first, second] }))).toBeNull()
+  })
   test("undoes and redoes committed documents", () => {
     const initial = createCanvasDocument({ id: "canvas_test" })
     const node = createTextNode({ id: "node_a", position: { x: 20, y: 30 } })
@@ -52,9 +60,62 @@ describe("canvas history", () => {
     expect(finished.document.nodes[0].position).toEqual({ x: 80, y: 40 })
     expect(canvasHistoryReducer(finished, { type: "undo" }).document.nodes[0].position).toEqual({ x: 0, y: 0 })
   })
+
+  test("persists committed gesture previews while keeping one undo entry", () => {
+    const initial = createCanvasDocument({ id: "canvas_typing" })
+    const first = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
+    const withNode = addCanvasNodes(first.document, [createTextNode({ id: "typed", position: { x: 0, y: 0 } })]).document
+    const previewed = canvasHistoryReducer(first, { type: "commit", document: withNode })
+    expect(previewed.document.revision).toBe(1)
+    expect(previewed.past).toHaveLength(0)
+    const finished = canvasHistoryReducer(previewed, { type: "end-gesture" })
+    expect(finished.past).toHaveLength(1)
+    expect(canvasHistoryReducer(finished, { type: "undo" }).document.nodes).toEqual([])
+  })
+
+  test("commits keyboard-style position changes outside a gesture", () => {
+    const initial = createCanvasDocument({ nodes: [createTextNode({ id: "a", position: { x: 0, y: 0 }, text: "A" })] })
+    const committed = canvasHistoryReducer(createCanvasHistory(initial), {
+      type: "preview-or-commit-update",
+      update: (document) => ({
+        ...document,
+        nodes: document.nodes.map((node) => node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node),
+      }),
+    })
+    expect(committed.document.revision).toBe(1)
+    expect(committed.past).toHaveLength(1)
+
+    let previewed = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
+    previewed = canvasHistoryReducer(previewed, {
+      type: "preview-or-commit-update",
+      update: (document) => ({
+        ...document,
+        nodes: document.nodes.map((node) => node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node),
+      }),
+    })
+    expect(previewed.document.revision).toBe(0)
+    previewed = canvasHistoryReducer(previewed, { type: "end-gesture" })
+    expect(previewed.document.revision).toBe(1)
+    expect(previewed.past).toHaveLength(1)
+  })
 })
 
 describe("canvas commands", () => {
+  test("applies async-style updates to the latest history document", () => {
+    const initial = createCanvasDocument({ id: "canvas_async" })
+    const concurrent = createTextNode({ id: "concurrent", position: { x: 0, y: 0 } })
+    const uploaded = createTextNode({ id: "uploaded", position: { x: 20, y: 20 } })
+    const afterEdit = canvasHistoryReducer(createCanvasHistory(initial), {
+      type: "commit",
+      document: addCanvasNodes(initial, [concurrent]).document,
+    })
+    const afterUpload = canvasHistoryReducer(afterEdit, {
+      type: "commit-update",
+      update: (document) => addCanvasNodes(document, [uploaded]).document,
+    })
+
+    expect(afterUpload.document.nodes.map((node) => node.id)).toEqual(["concurrent", "uploaded"])
+  })
   test("groups and ungroups without changing world positions", () => {
     const first = createTextNode({ id: "node_a", position: { x: 20, y: 50 } })
     const second = createTextNode({ id: "node_b", position: { x: 360, y: 90 } })
@@ -181,6 +242,7 @@ describe("canvas clipboard", () => {
   test("rejects unrelated clipboard data", () => {
     expect(parseCanvasClipboard("plain text")).toBeNull()
     expect(parseCanvasClipboard('{"version":2,"nodes":[],"edges":[]}')).toBeNull()
+    expect(parseCanvasClipboard('{"version":1,"nodes":[{}],"edges":[]}')).toBeNull()
   })
 })
 

@@ -1,4 +1,5 @@
 import { duplicateCanvasSelection } from "./commands"
+import { parseCanvasDocument } from "./document"
 import type { CanvasClipboardPayload, CanvasDocument } from "./types"
 
 export const CANVAS_CLIPBOARD_MIME_TYPE = "application/x-convax-canvas+json"
@@ -20,11 +21,13 @@ function collectClipboardNodeIds(document: CanvasDocument, selectedNodeIds: read
 export function createCanvasClipboardPayload(
   document: CanvasDocument,
   selectedNodeIds: readonly string[],
+  scope?: string,
 ): CanvasClipboardPayload | null {
   const ids = collectClipboardNodeIds(document, selectedNodeIds)
   if (ids.size === 0) return null
   return {
     version: 1,
+    scope,
     nodes: structuredClone(document.nodes.filter((node) => ids.has(node.id))),
     edges: structuredClone(document.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target))),
   }
@@ -35,13 +38,27 @@ export function serializeCanvasClipboard(payload: CanvasClipboardPayload) {
 }
 
 export function parseCanvasClipboard(value: string): CanvasClipboardPayload | null {
+  if (value.length > 5 * 1024 * 1024) return null
   try {
     const input: unknown = JSON.parse(value)
     if (!input || typeof input !== "object") return null
     if (!("version" in input) || input.version !== 1) return null
     if (!("nodes" in input) || !Array.isArray(input.nodes)) return null
     if (!("edges" in input) || !Array.isArray(input.edges)) return null
-    return input as CanvasClipboardPayload
+    if ("scope" in input && input.scope !== undefined && typeof input.scope !== "string") return null
+    const document = parseCanvasDocument({
+      id: "clipboard",
+      revision: 0,
+      metadata: { title: "Clipboard" },
+      nodes: input.nodes,
+      edges: input.edges,
+    })
+    return document ? {
+      version: 1,
+      scope: "scope" in input && typeof input.scope === "string" ? input.scope : undefined,
+      nodes: document.nodes,
+      edges: document.edges,
+    } : null
   } catch {
     return null
   }
@@ -66,22 +83,33 @@ export function pasteCanvasClipboard(
   payload: CanvasClipboardPayload,
   offset = { x: 32, y: 32 },
 ) {
+  const prepared = prepareCanvasClipboardPaste(payload, offset)
+  return {
+    document: {
+      ...document,
+      nodes: [...document.nodes, ...prepared.nodes],
+      edges: [...document.edges, ...prepared.edges],
+    },
+    selectedNodeIds: prepared.selectedNodeIds,
+  }
+}
+
+export function prepareCanvasClipboardPaste(
+  payload: CanvasClipboardPayload,
+  offset = { x: 32, y: 32 },
+) {
   const source: CanvasDocument = {
-    id: document.id,
-    revision: document.revision,
-    metadata: document.metadata,
+    id: "clipboard",
+    revision: 0,
+    metadata: { title: "Clipboard" },
     nodes: payload.nodes,
     edges: payload.edges,
   }
   const roots = payload.nodes.filter((node) => !node.parentId).map((node) => node.id)
   const duplicated = duplicateCanvasSelection(source, roots, offset)
   return {
-    document: {
-      ...document,
-      nodes: [...document.nodes, ...duplicated.document.nodes.slice(payload.nodes.length)],
-      edges: [...document.edges, ...duplicated.document.edges.slice(payload.edges.length)],
-    },
+    edges: duplicated.document.edges.slice(payload.edges.length),
+    nodes: duplicated.document.nodes.slice(payload.nodes.length),
     selectedNodeIds: duplicated.selectedNodeIds,
   }
 }
-

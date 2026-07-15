@@ -100,7 +100,7 @@ export interface CanvasResource {
 
 export interface CanvasClipboardPayload {
   version: 1
+  scope?: string
   nodes: CanvasNode[]
   edges: CanvasEdge[]
 }
-

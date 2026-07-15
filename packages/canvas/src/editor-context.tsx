@@ -12,6 +12,7 @@ export interface CanvasEditorController {
   readOnly: boolean
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
   beginGesture: () => void
+  cancelGesture: () => void
   endGesture: () => void
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string) => void
