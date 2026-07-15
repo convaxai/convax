@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test"
 
-import { prepareAgentResources } from "./agent-resource-preparation"
+import { prepareAgentCanvasContext, prepareAgentResources } from "./agent-resource-preparation"
+
+describe("prepareAgentCanvasContext", () => {
+  test("normalizes the host-provided active Canvas identity", () => {
+    expect(prepareAgentCanvasContext({ canvasId: " canvas-main ", name: " Canvas 1 " })).toEqual({
+      canvasId: "canvas-main",
+      name: "Canvas 1",
+    })
+  })
+
+  test("rejects an invalid active Canvas id", () => {
+    expect(() => prepareAgentCanvasContext({ canvasId: "../document.json" })).toThrow("canvas reference is invalid")
+  })
+})
 
 describe("prepareAgentResources", () => {
   test("resolves Canvas references through the snapshot port without reading a project path", async () => {

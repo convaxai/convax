@@ -1,4 +1,4 @@
-import type { AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
+import type { AgentCanvasContext, AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
 import { isAbsolute, win32 } from "node:path"
 
 export interface AgentProjectResolver {
@@ -26,6 +26,15 @@ function validateCanvasId(canvasId: string) {
     throw new Error("Agent canvas reference is invalid")
   }
   return value
+}
+
+export function prepareAgentCanvasContext(context: AgentCanvasContext | undefined): AgentCanvasContext | undefined {
+  if (!context) return undefined
+  const name = context.name?.trim()
+  return {
+    canvasId: validateCanvasId(context.canvasId),
+    ...(name ? { name } : {}),
+  }
 }
 
 function validateProjectPath(path: string) {

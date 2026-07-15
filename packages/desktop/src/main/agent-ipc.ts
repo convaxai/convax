@@ -3,6 +3,7 @@ import type { AgentRuntime } from "@convax/agent-runtime"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 
 import {
+  prepareAgentCanvasContext,
   prepareAgentResources,
   type AgentCanvasSnapshotResolver,
   type AgentProjectResolver,
@@ -75,6 +76,7 @@ export function registerAgentIpc(
       agentIpcChannels.prompt,
       options.isTrustedSender,
       async (input) => runtime.prompt({
+        activeCanvas: prepareAgentCanvasContext(input.activeCanvas),
         agent: input.agent,
         directory: await directoryFor(input.projectId),
         model: input.model,

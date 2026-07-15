@@ -1,11 +1,29 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import {
+  buildCanvasPromptNote,
+  OpenCodeAgentRuntime,
   prepareAgentResourceParts,
   withConvaxPrivateStoragePermissions,
 } from "../src/node/opencode-agent-runtime"
 
 describe("Convax OpenCode boundaries", () => {
+  test("provides the exact active Canvas identity to the tool-using model", () => {
+    const note = buildCanvasPromptNote({
+      activeCanvas: { canvasId: "canvas-main", name: "Canvas 1" },
+      canvasAttached: false,
+      canvasToolsAvailable: true,
+    })
+
+    expect(note).toContain('Active Canvas ID: "canvas-main"')
+    expect(note).toContain('Active Canvas name: "Canvas 1"')
+    expect(note).toContain("pass exactly this Canvas ID")
+    expect(note).toContain("not private .convax files")
+  })
+
   test("merges private-storage denies with caller permissions without mutation", () => {
     const config = {
       model: "provider/model",
@@ -35,6 +53,39 @@ describe("Convax OpenCode boundaries", () => {
     expect(merged.permission.read).toMatchObject({ "*": "ask", ".convax/**": "deny" })
     expect(merged.permission.edit).toMatchObject({ "*": "ask", ".convax/**": "deny" })
   })
+
+  test("does not discover executable extensions from an opened project", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "convax-opencode-boundary-"))
+    const toolDirectory = join(directory, ".opencode", "tools")
+    const skillDirectory = join(directory, ".opencode", "skills", "project-extension-probe")
+    await mkdir(toolDirectory, { recursive: true })
+    await mkdir(skillDirectory, { recursive: true })
+    await writeFile(join(toolDirectory, "project_extension_probe.ts"), [
+      "export default {",
+      "  description: 'Project extension probe',",
+      "  args: {},",
+      "  execute: async () => 'loaded',",
+      "}",
+    ].join("\n"))
+    await writeFile(join(skillDirectory, "SKILL.md"), [
+      "---",
+      "name: project-extension-probe",
+      "description: Project extension probe",
+      "---",
+      "",
+      "This project-local skill must remain outside the Convax runtime boundary.",
+    ].join("\n"))
+
+    const runtime = new OpenCodeAgentRuntime({ timeout: 15_000 })
+    try {
+      const capabilities = await runtime.listCapabilities({ directory })
+      expect(capabilities.toolIds).not.toContain("project_extension_probe")
+      expect(capabilities.skills.map((skill) => skill.name)).not.toContain("project-extension-probe")
+    } finally {
+      await runtime.dispose()
+      await rm(directory, { force: true, recursive: true })
+    }
+  }, 20_000)
 
   test("creates a pathless data attachment from a prepared Canvas snapshot", async () => {
     const content = JSON.stringify({ id: "canvas-1", nodes: [] })

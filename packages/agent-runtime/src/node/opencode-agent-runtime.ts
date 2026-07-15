@@ -20,6 +20,7 @@ import {
 
 import type {
   AgentCapabilities,
+  AgentCanvasContext,
   AgentMessage,
   AgentMessagePart,
   AgentPermissionRequest,
@@ -171,15 +172,21 @@ function restoreEnvironment(name: string, value: string | undefined) {
 function startAuthenticatedServer(options: ServerOptions, username: string, password: string) {
   const previousUsername = process.env.OPENCODE_SERVER_USERNAME
   const previousPassword = process.env.OPENCODE_SERVER_PASSWORD
+  const previousDisableProjectConfig = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
   process.env.OPENCODE_SERVER_USERNAME = username
   process.env.OPENCODE_SERVER_PASSWORD = password
+  // Convax owns executable host capabilities through its scoped MCP server. Keep
+  // global OpenCode provider/auth config, but do not import executable extensions
+  // or instructions from an opened project's .opencode directory.
+  process.env.OPENCODE_DISABLE_PROJECT_CONFIG = "1"
   try {
     // createOpencodeServer launches the child synchronously before returning its startup promise,
-    // so the child receives the private credentials while the parent environment is restored immediately.
+    // so the child receives the private credentials and project boundary while the parent environment is restored immediately.
     return createOpencodeServer(options)
   } finally {
     restoreEnvironment("OPENCODE_SERVER_USERNAME", previousUsername)
     restoreEnvironment("OPENCODE_SERVER_PASSWORD", previousPassword)
+    restoreEnvironment("OPENCODE_DISABLE_PROJECT_CONFIG", previousDisableProjectConfig)
   }
 }
 
@@ -448,6 +455,27 @@ export async function prepareAgentResourceParts(
   return result
 }
 
+export function buildCanvasPromptNote(input: {
+  activeCanvas?: AgentCanvasContext
+  canvasAttached: boolean
+  canvasToolsAvailable: boolean
+}) {
+  const context = input.activeCanvas
+    ? [
+        "Convax host context (authoritative):",
+        `- Active Canvas ID: ${JSON.stringify(input.activeCanvas.canvasId)}`,
+        ...(input.activeCanvas.name ? [`- Active Canvas name: ${JSON.stringify(input.activeCanvas.name)}`] : []),
+        "When a Convax Canvas tool needs the active canvas, pass exactly this Canvas ID. Do not guess it from the Canvas name, project ID, or view ID.",
+      ].join("\n")
+    : ""
+  const guidance = input.canvasAttached
+    ? "Convax Canvas attachments are read-only snapshots. Use Convax Canvas tools for changes, selection, and viewport actions; do not read or edit files under .convax directly."
+    : input.canvasToolsAvailable
+      ? "Use Convax Canvas tools—not private .convax files—when the request involves a canvas. Prefer business tools; use primitive tools only for precise low-level edits."
+      : ""
+  return [context, guidance].filter(Boolean).join("\n\n")
+}
+
 export class OpenCodeAgentRuntime implements AgentRuntime {
   private readonly controller = new AbortController()
   private readonly options: OpenCodeAgentRuntimeOptions
@@ -627,11 +655,11 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     await this.ensureToolScope(client, directory, input.scopeId)
     const attachments = await prepareAgentResourceParts(directory, resources)
     const skills = [...new Set(selectedSkills)].filter(Boolean)
-    const canvasNote = resources.some((item) => item.kind === "canvas")
-      ? "Convax Canvas attachments are read-only snapshots. Use Convax Canvas tools for changes, selection, and viewport actions; do not read or edit files under .convax directly."
-      : this.toolServer
-        ? "Use Convax Canvas tools—not private .convax files—when the request involves a canvas. Prefer business tools; use primitive tools only for precise low-level edits."
-        : ""
+    const canvasNote = buildCanvasPromptNote({
+      activeCanvas: input.activeCanvas,
+      canvasAttached: resources.some((item) => item.kind === "canvas"),
+      canvasToolsAvailable: Boolean(this.toolServer),
+    })
 
     let useSkillTool = skills.length > 1
     if (skills.length === 1) {

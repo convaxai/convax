@@ -303,7 +303,7 @@ function App() {
         )}
       </section>
       <AgentPanel
-        activeCanvasId={activeCanvasId}
+        activeCanvas={activeCanvas}
         beforePrompt={flushCanvasForAgent}
         canvases={projectSnapshot.canvases}
         projectId={activeProjectId}

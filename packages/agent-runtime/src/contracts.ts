@@ -118,6 +118,12 @@ export interface AgentCanvasResource {
   name?: string
 }
 
+/** Authoritative Canvas identity supplied by the host for the current prompt. */
+export interface AgentCanvasContext {
+  canvasId: string
+  name?: string
+}
+
 export type AgentResource =
   | (AgentPathResource & { kind: "file" })
   | (AgentPathResource & { kind: "directory" })
@@ -146,6 +152,7 @@ interface AgentPromptFields<Resource> {
   sessionId: string
   text: string
   resources?: Resource[]
+  activeCanvas?: AgentCanvasContext
   agent?: string
   model?: AgentModel
   variant?: string

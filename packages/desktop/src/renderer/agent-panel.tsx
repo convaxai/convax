@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { getAgentToolPresentation } from "./agent-tool-presentation"
 
 const resourceDragType = "application/x-convax-agent-resource"
 const panelOpenKey = "convax:agent-panel:open"
@@ -113,7 +114,7 @@ function initialPanelWidth() {
 }
 
 export function AgentPanel(props: {
-  activeCanvasId?: string
+  activeCanvas?: Pick<ProjectCanvas, "id" | "name">
   beforePrompt?: () => Promise<void>
   canvases: ProjectCanvas[]
   projectId?: string
@@ -321,6 +322,7 @@ export function AgentPanel(props: {
     const projectId = props.projectId
     const submittedResources = resources
     const submittedDraft = draft
+    const submittedActiveCanvas = props.activeCanvas
     let cleared = false
     let targetSessionId = sessionId
     setError(undefined)
@@ -328,12 +330,18 @@ export function AgentPanel(props: {
     try {
       if (!targetSessionId) targetSessionId = (await createSession())?.id
       if (!targetSessionId || activeProjectRef.current !== projectId) return
-      if (submittedResources.some((resource) => resource.kind === "canvas")) await props.beforePrompt?.()
+      if (submittedActiveCanvas || submittedResources.some((resource) => resource.kind === "canvas")) {
+        await props.beforePrompt?.()
+      }
+      if (activeProjectRef.current !== projectId) return
       setDraft("")
       setResources([])
       stickToBottomRef.current = true
       cleared = true
       await window.convax.agent.prompt({
+        activeCanvas: submittedActiveCanvas
+          ? { canvasId: submittedActiveCanvas.id, name: submittedActiveCanvas.name }
+          : undefined,
         projectId,
         resources: submittedResources,
         sessionId: targetSessionId,
@@ -352,7 +360,7 @@ export function AgentPanel(props: {
     } finally {
       if (activeProjectRef.current === projectId) setSending(false)
     }
-  }, [createSession, draft, interactionDisabled, props.beforePrompt, props.projectId, refreshSessionState, refreshSessions, resources, sessionId])
+  }, [createSession, draft, interactionDisabled, props.activeCanvas, props.beforePrompt, props.projectId, refreshSessionState, refreshSessions, resources, sessionId])
 
   const abort = useCallback(async () => {
     if (!props.projectId || !sessionId) return
@@ -486,7 +494,7 @@ export function AgentPanel(props: {
               {error ? <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive"><span className="min-w-0 flex-1">{error}</span><button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button"><X className="size-3.5" /></button></div> : null}
               {resourcePickerOpen ? (
                 <ResourcePicker
-                  activeCanvasId={props.activeCanvasId}
+                  activeCanvasId={props.activeCanvas?.id}
                   canvases={props.canvases}
                   capabilities={capabilities}
                   loading={capabilitiesLoading}
@@ -622,17 +630,17 @@ function MessagePartView({ part }: { part: AgentMessage["parts"][number] }) {
   if (part.type === "file") return <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"><FileText className="size-3.5" /><span className="truncate">{part.filename ?? "File"}</span></div>
   if (part.type === "tool") {
     const state = part.state
-    const status = state.status
-    const detail = status === "completed" ? state.output : status === "error" ? state.error : undefined
+    const presentation = getAgentToolPresentation(part)
+    const pending = presentation.outcome === "pending" || presentation.outcome === "running"
     return (
       <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs">
         <summary className="flex cursor-pointer list-none items-center gap-2">
-          {status === "pending" || status === "running" ? <LoaderCircle className="size-3.5 animate-spin text-primary" /> : status === "completed" ? <Check className="size-3.5 text-emerald-600" /> : <X className="size-3.5 text-destructive" />}
+          {pending ? <LoaderCircle className="size-3.5 animate-spin text-primary" /> : presentation.outcome === "success" ? <Check className="size-3.5 text-emerald-600" /> : <X className="size-3.5 text-destructive" />}
           <Wrench className="size-3.5 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{"title" in state && state.title ? state.title : part.tool}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </summary>
-        {detail ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border pt-2 font-mono text-[11px] leading-4">{detail}</pre> : null}
+        {presentation.detail ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border pt-2 font-mono text-[11px] leading-4">{presentation.detail}</pre> : null}
       </details>
     )
   }
