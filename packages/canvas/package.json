@@ -6,7 +6,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./styles.css": "./src/styles.css"
+    "./application": "./src/application/index.ts",
+    "./core": "./src/core.ts",
+    "./styles.css": "./src/styles.css",
+    "./view": "./src/view.ts"
   },
   "scripts": {
     "test": "bun test",
