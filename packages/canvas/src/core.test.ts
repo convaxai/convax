@@ -17,6 +17,23 @@ import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
 describe("canvas history", () => {
+  test("hydrates a persisted revision without turning it into an undoable edit", () => {
+    const initial = createCanvasDocument({ id: "canvas_hydrate" })
+    const hydrated = canvasHistoryReducer(createCanvasHistory(initial), {
+      type: "hydrate",
+      document: {
+        ...initial,
+        revision: 7,
+        nodes: [createTextNode({ id: "persisted", position: { x: 0, y: 0 }, text: "Saved" })],
+      },
+    })
+
+    expect(hydrated.document.revision).toBe(7)
+    expect(hydrated.document.nodes.map((node) => node.id)).toEqual(["persisted"])
+    expect(hydrated.past).toEqual([])
+    expect(hydrated.future).toEqual([])
+  })
+
   test("keeps a single built-in text node type", () => {
     expect(createDefaultCanvasNodeRegistry().list().map((definition) => definition.type)).toEqual([
       "text",

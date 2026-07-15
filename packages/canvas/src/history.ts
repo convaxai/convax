@@ -10,6 +10,7 @@ export interface CanvasHistoryState {
 export type CanvasHistoryAction =
   | { type: "commit"; document: CanvasDocument }
   | { type: "commit-update"; update: (document: CanvasDocument) => CanvasDocument }
+  | { type: "hydrate"; document: CanvasDocument }
   | { type: "preview-or-commit-update"; update: (document: CanvasDocument) => CanvasDocument }
   | { type: "replace"; document: CanvasDocument }
   | { type: "replace-update"; update: (document: CanvasDocument) => CanvasDocument }
@@ -38,6 +39,7 @@ function pushPast(past: CanvasDocument[], document: CanvasDocument) {
 }
 
 export function canvasHistoryReducer(state: CanvasHistoryState, action: CanvasHistoryAction): CanvasHistoryState {
+  if (action.type === "hydrate") return createCanvasHistory(action.document)
   if (action.type === "commit-update") {
     return canvasHistoryReducer(state, { type: "commit", document: action.update(state.document) })
   }

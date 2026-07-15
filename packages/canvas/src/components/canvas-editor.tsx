@@ -81,6 +81,12 @@ import {
   useSyncExternalStore,
 } from "react"
 import {
+  applyCanvasBusinessCommand,
+  createAddCanvasResourcesCommand,
+  findOpenCanvasPoint,
+  queryCanvasNodes,
+} from "../application"
+import {
   addCanvasNodes,
   alignCanvasNodes,
   type CanvasAlign,
@@ -113,11 +119,38 @@ import {
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import { createCanvasShortcutHandler } from "../use-canvas-shortcuts"
 import { useSpacePanning } from "../use-space-panning"
+import {
+  assertCanvasViewGuard,
+  type CanvasViewCommand,
+  type CanvasViewCommandResult,
+  type CanvasViewExecutionGuard,
+  type CanvasViewRegistry,
+  type CanvasViewSession,
+  type CanvasViewSnapshot,
+} from "../view"
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { PendingConnectionMenu } from "./connection-node-menu"
 
 const defaultNodeRegistry = createDefaultCanvasNodeRegistry()
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
+
+interface CanvasLoadBarrier {
+  promise: Promise<void>
+  reject(error: unknown): void
+  resolve(): void
+}
+
+function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
+  if (resolved) return { promise: Promise.resolve(), reject: () => undefined, resolve: () => undefined }
+  let rejectPromise: (error: unknown) => void = () => undefined
+  let resolvePromise: () => void = () => undefined
+  const promise = new Promise<void>((resolve, reject) => {
+    rejectPromise = reject
+    resolvePromise = resolve
+  })
+  void promise.catch(() => undefined)
+  return { promise, reject: rejectPromise, resolve: resolvePromise }
+}
 
 function equalIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
   return left.size === right.size && [...left].every((id) => right.has(id))
@@ -142,28 +175,6 @@ function equalCanvasNodes(left: readonly CanvasNode[], right: readonly CanvasNod
       && node.data === next.data
       && node.style === next.style
   })
-}
-
-function findOpenCanvasPoint(document: CanvasDocument, preferred: CanvasPoint) {
-  const candidates = [
-    { x: 0, y: 0 },
-    { x: 340, y: 0 },
-    { x: -340, y: 0 },
-    { x: 0, y: 240 },
-    { x: 340, y: 240 },
-    { x: -340, y: 240 },
-    { x: 0, y: -240 },
-    { x: 340, y: -240 },
-    { x: -340, y: -240 },
-  ].map((offset) => ({ x: preferred.x + offset.x, y: preferred.y + offset.y }))
-  return candidates.find((candidate) => !document.nodes.some((node) => {
-    if (node.parentId) return false
-    const size = getCanvasNodeSize(node)
-    return candidate.x < node.position.x + size.width + 24
-      && candidate.x + 320 + 24 > node.position.x
-      && candidate.y < node.position.y + size.height + 24
-      && candidate.y + 200 + 24 > node.position.y
-  })) ?? candidates[0]
 }
 
 interface PendingConnection {
@@ -211,10 +222,15 @@ export interface CanvasEditorProps {
   readOnly?: boolean
   services: CanvasServices
   title?: string
+  viewId?: string
+  viewRegistry?: CanvasViewRegistry
+  viewScopeId?: string
 }
 
 export interface CanvasEditorHandle {
+  flush: () => Promise<void>
   prepareToLeave: () => Promise<void>
+  reload: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
 }
 
@@ -255,6 +271,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
+  const selectionRef = useRef(selection)
   const connectionStartRef = useRef<ConnectionStart | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ nodeIds: string[]; positions: Map<string, CanvasPoint> } | null>(null)
@@ -267,6 +284,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const savePromiseRef = useRef<Promise<void> | undefined>(undefined)
   const saveRevisionRef = useRef<number | undefined>(undefined)
   const savedRevisionRef = useRef(history.document.revision)
+  const reloadPromiseRef = useRef<Promise<void> | undefined>(undefined)
   const operationControllersRef = useRef(new Set<AbortController>())
   const reactFlow = useReactFlow<CanvasNode>()
   const uploadService = useCanvasService("upload")
@@ -276,12 +294,17 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
   const [hydrating, setHydrating] = useState(Boolean(persistenceService))
+  const hydratingRef = useRef(Boolean(persistenceService))
+  const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
   documentRef.current = history.document
   historyRef.current = history
   saveErrorRef.current = saveError
+  selectionRef.current = selection
   const dispatch = useCallback((action: CanvasHistoryAction) => {
-    if (leavingRef.current) return
-    if (action.type !== "replace" && action.type !== "replace-update") hasLocalEditsRef.current = true
+    if (leavingRef.current || hydratingRef.current) return
+    if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
+      hasLocalEditsRef.current = true
+    }
     reduce(action)
   }, [])
   const registryVersion = useSyncExternalStore(
@@ -361,12 +384,117 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   )
 
   const updateSelection = useCallback((nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
+    const next = { nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) }
+    selectionRef.current = next
     setSelection((current) => {
-      const next = { nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) }
       if (equalIds(current.nodeIds, next.nodeIds) && equalIds(current.edgeIds, next.edgeIds)) return current
       return next
     })
   }, [])
+  const getViewSnapshot = useCallback((): CanvasViewSnapshot => ({
+    documentId: documentRef.current.id,
+    revision: documentRef.current.revision,
+    scopeId: props.viewScopeId ?? "",
+    selectedEdgeIds: [...selectionRef.current.edgeIds],
+    selectedNodeIds: [...selectionRef.current.nodeIds],
+    viewId: props.viewId ?? "",
+    viewport: reactFlow.getViewport(),
+  }), [props.viewId, props.viewScopeId, reactFlow])
+  const executeViewCommand = useCallback(async (
+    command: CanvasViewCommand,
+    guard?: CanvasViewExecutionGuard,
+  ): Promise<CanvasViewCommandResult> => {
+    while (true) {
+      const barrier = loadBarrierRef.current
+      await barrier.promise
+      if (barrier === loadBarrierRef.current && !hydratingRef.current) break
+    }
+    if (guard) assertCanvasViewGuard(getViewSnapshot(), guard)
+    const document = documentRef.current
+    const existingNodeIds = new Set(document.nodes.map((node) => node.id))
+    const resolveNodeIds = (nodeIds: readonly string[]) => ({
+      foundNodeIds: [...new Set(nodeIds.filter((nodeId) => existingNodeIds.has(nodeId)))],
+      missingNodeIds: [...new Set(nodeIds.filter((nodeId) => !existingNodeIds.has(nodeId)))],
+    })
+    let foundNodeIds: string[] = []
+    let missingNodeIds: string[] = []
+    const duration = "animation" in command && command.animation === "smooth" ? 220 : 0
+
+    if (command.type === "selection.clear") updateSelection([])
+    if (command.type === "selection.set") {
+      const resolved = resolveNodeIds(command.nodeIds ?? [])
+      foundNodeIds = resolved.foundNodeIds
+      missingNodeIds = resolved.missingNodeIds
+      const existingEdgeIds = new Set(document.edges.map((edge) => edge.id))
+      updateSelection(foundNodeIds, (command.edgeIds ?? []).filter((edgeId) => existingEdgeIds.has(edgeId)))
+    }
+    if (command.type === "nodes.reveal") {
+      const resolved = resolveNodeIds(command.nodeIds)
+      foundNodeIds = resolved.foundNodeIds
+      missingNodeIds = resolved.missingNodeIds
+      if (command.select) updateSelection(foundNodeIds)
+      if ((command.fit ?? "contain") !== "none" && foundNodeIds.length > 0) {
+        const ids = new Set(foundNodeIds)
+        const renderedNodes = reactFlow.getNodes().filter((node) => ids.has(node.id))
+        if (renderedNodes.length > 0) {
+          await reactFlow.fitView({
+            duration,
+            maxZoom: (command.fit ?? "contain") === "center" ? 1.2 : 1.1,
+            nodes: renderedNodes,
+            padding: (command.fit ?? "contain") === "center" ? 0.8 : 0.3,
+          })
+        }
+      }
+    }
+    if (command.type === "viewport.fit") {
+      const requested = command.nodeIds ?? document.nodes.map((node) => node.id)
+      const resolved = resolveNodeIds(requested)
+      foundNodeIds = resolved.foundNodeIds
+      missingNodeIds = resolved.missingNodeIds
+      const ids = new Set(foundNodeIds)
+      const renderedNodes = reactFlow.getNodes().filter((node) => ids.has(node.id))
+      if (command.nodeIds && renderedNodes.length === 0) {
+        return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
+      }
+      await reactFlow.fitView({
+        duration,
+        maxZoom: command.maxZoom ?? 1.2,
+        nodes: command.nodeIds ? renderedNodes : undefined,
+        padding: command.padding ?? 0.3,
+      })
+    }
+    if (command.type === "viewport.center") {
+      if (!Number.isFinite(command.position.x) || !Number.isFinite(command.position.y)) {
+        throw new Error("Canvas viewport center must contain finite coordinates")
+      }
+      await reactFlow.setCenter(command.position.x, command.position.y, {
+        duration,
+        zoom: command.zoom,
+      })
+    }
+    if (command.type === "viewport.zoom") {
+      if (!Number.isFinite(command.zoom) || command.zoom <= 0) throw new Error("Canvas viewport zoom must be positive")
+      await reactFlow.zoomTo(command.zoom, { duration })
+    }
+    if (command.type === "notification.show") {
+      notificationService?.show({
+        description: command.description,
+        kind: command.kind,
+        title: command.title,
+      })
+    }
+    return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
+  }, [getViewSnapshot, notificationService, reactFlow, updateSelection])
+  const viewSession = useMemo<CanvasViewSession | null>(() => props.viewId ? {
+    execute: executeViewCommand,
+    getSnapshot: getViewSnapshot,
+    whenReady: () => loadBarrierRef.current.promise,
+    viewId: props.viewId,
+  } : null, [executeViewCommand, getViewSnapshot, props.viewId])
+  useEffect(() => {
+    if (!props.viewRegistry || !viewSession) return
+    return props.viewRegistry.register(viewSession)
+  }, [props.viewRegistry, viewSession])
   const selectNodes = useCallback((nodeIds: readonly string[]) => updateSelection(nodeIds), [updateSelection])
   const commit = useCallback(
     (update: (document: CanvasDocument) => CanvasDocument) => {
@@ -441,8 +569,60 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     void pending.then(clearPending, clearPending)
     return pending
   }, [loadError, notifyError, persistenceService])
+  const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
+    hasLocalEditsRef.current = false
+    savedRevisionRef.current = document.revision
+    const hydrated = canvasHistoryReducer(historyRef.current, { type: "hydrate", document })
+    historyRef.current = hydrated
+    documentRef.current = hydrated.document
+    reduce({ type: "hydrate", document })
+  }, [])
+  const reloadDocument = useCallback(() => {
+    if (!persistenceService) return Promise.resolve()
+    if (reloadPromiseRef.current) return reloadPromiseRef.current
+    const reload = (async () => {
+      await loadBarrierRef.current.promise
+      if (loadError) throw new Error(loadError)
+      const loadBarrier = createCanvasLoadBarrier()
+      loadBarrierRef.current = loadBarrier
+      hydratingRef.current = true
+      setHydrating(true)
+      setLoadError(null)
+      const controller = new AbortController()
+      try {
+        await startSave(historyRef.current.document)
+        const documentId = documentRef.current.id
+        const document = await persistenceService.load(documentId, controller.signal)
+        if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
+        if (document.id !== documentId || documentRef.current.id !== documentId) {
+          throw new Error("Canvas changed while reloading")
+        }
+        acceptHydratedDocument(document)
+        loadBarrier.resolve()
+      } catch (error) {
+        loadBarrier.reject(error)
+        setLoadError(error instanceof Error ? error.message : String(error))
+        notifyError("Could not reload canvas", error)
+        throw error
+      } finally {
+        hydratingRef.current = false
+        setHydrating(false)
+      }
+    })()
+    reloadPromiseRef.current = reload
+    const clear = () => {
+      if (reloadPromiseRef.current === reload) reloadPromiseRef.current = undefined
+    }
+    void reload.then(clear, clear)
+    return reload
+  }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave])
   useImperativeHandle(props.editorRef, () => ({
+    async flush() {
+      await loadBarrierRef.current.promise
+      await startSave(historyRef.current.document)
+    },
     async prepareToLeave() {
+      await loadBarrierRef.current.promise
       leavingRef.current = true
       setLeaving(true)
       for (const controller of operationControllersRef.current) controller.abort()
@@ -459,11 +639,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       }
       await startSave(finalized.document)
     },
+    reload: reloadDocument,
     resumeAfterLeaveCanceled() {
       leavingRef.current = false
       setLeaving(false)
     },
-  }), [props.editorRef, startSave])
+  }), [props.editorRef, reloadDocument, startSave])
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
@@ -479,13 +660,17 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   }, [history.document.edges, history.document.nodes])
   useEffect(() => {
     if (!persistenceService) {
+      hydratingRef.current = false
       setHydrating(false)
       setLoadError(null)
+      loadBarrierRef.current.resolve()
       return
     }
     setHydrating(true)
+    hydratingRef.current = true
     setLoadError(null)
     const controller = new AbortController()
+    const loadBarrier = loadBarrierRef.current
     const documentId = history.document.id
     void persistenceService.load(documentId, controller.signal).then(
       (document) => {
@@ -494,20 +679,31 @@ function CanvasEditorContent(props: CanvasEditorProps & {
           && documentRef.current.id === documentId
           && documentRef.current.revision === 0
           && !hasLocalEditsRef.current) {
-          if (!leavingRef.current) reduce({ type: "replace", document })
+          if (!leavingRef.current) {
+            acceptHydratedDocument(document)
+          }
         }
-        if (!controller.signal.aborted) setHydrating(false)
+        if (!controller.signal.aborted) {
+          setHydrating(false)
+          hydratingRef.current = false
+          loadBarrier.resolve()
+        }
       },
       (error) => {
         if (!controller.signal.aborted) {
           setHydrating(false)
+          hydratingRef.current = false
           setLoadError(error instanceof Error ? error.message : String(error))
+          loadBarrier.reject(error)
           notifyError("Could not load canvas", error)
         }
       },
     )
-    return () => controller.abort()
-  }, [history.document.id, loadAttempt, persistenceService, notifyError])
+    return () => {
+      controller.abort()
+      loadBarrier.reject(new Error("Canvas load was canceled"))
+    }
+  }, [acceptHydratedDocument, history.document.id, loadAttempt, persistenceService, notifyError])
   useLayoutEffect(() => {
     void startSave(history.document).catch(() => undefined)
   }, [history.document.revision, saveAttempt, startSave])
@@ -726,25 +922,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
               notificationService?.show({ kind: "warning", title: "No supported files to add" })
               return
             }
-            const nodes = items.map((item) => item.kind === "text"
-              ? createTextNode({
-                  format: item.format,
-                  label: item.name,
-                  position: anchor,
-                  text: item.text,
-                })
-              : createMediaNode({ position: anchor, resource: item }))
+            const command = createAddCanvasResourcesCommand({ anchor, items })
+            const nodeIds = command.items.map((item) => item.nodeId)
             dispatch({
               type: "commit-update",
-              update: (document) => {
-                const point = findOpenCanvasPoint(document, anchor)
-                return addCanvasNodes(document, nodes.map((node, index) => ({
-                  ...node,
-                  position: { x: point.x + index * 36, y: point.y + index * 36 },
-                }))).document
-              },
+              update: (document) => applyCanvasBusinessCommand(document, command).document,
             })
-            selectNodes(nodes.map((node) => node.id))
+            selectNodes(nodeIds)
             fitAfterRender()
             notificationService?.show({ kind: "success", title: `${items.length} item${items.length === 1 ? "" : "s"} added` })
           },
@@ -924,9 +1108,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     }),
     [commit, connectionNodeTypes, duplicateNode, history.document, quickConnect, readOnly, removeNode, replaceNodeMedia, selectNodes, selection, uploadService],
   )
-  const searchResults = query.trim()
-    ? history.document.nodes.filter((node) => `${node.data.label} ${"text" in node.data ? node.data.text : ""}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
-    : history.document.nodes.slice(0, 8)
+  const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
 
   return (
     <CanvasEditorProvider controller={controller}>
@@ -1208,7 +1390,10 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                           <div className="font-medium text-foreground">Canvas could not be loaded</div>
                           <div className="mt-1 text-xs">{loadError}</div>
                         </div>
-                        <Button onClick={() => setLoadAttempt((attempt) => attempt + 1)} size="sm" variant="outline">Retry</Button>
+                        <Button onClick={() => {
+                          loadBarrierRef.current = createCanvasLoadBarrier()
+                          setLoadAttempt((attempt) => attempt + 1)
+                        }} size="sm" variant="outline">Retry</Button>
                       </>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -1321,15 +1506,20 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                         key={node.id}
                         className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
                         onClick={() => {
-                          selectNodes([node.id])
                           setSearchOpen(false)
-                          void reactFlow.fitView({ duration: 220, nodes: [node], padding: 0.7 })
+                          void executeViewCommand({
+                            animation: "smooth",
+                            fit: "center",
+                            nodeIds: [node.id],
+                            select: true,
+                            type: "nodes.reveal",
+                          })
                         }}
                         type="button"
                       >
                         <span className="size-2 rounded-full bg-muted-foreground" />
-                        <span className="truncate">{node.data.label}</span>
-                        <span className="ml-auto text-xs text-muted-foreground">{node.data.kind}</span>
+                        <span className="truncate">{node.label}</span>
+                        <span className="ml-auto text-xs text-muted-foreground">{node.kind}</span>
                       </button>
                     ))}
                   </div>
