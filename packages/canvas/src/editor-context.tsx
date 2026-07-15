@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useContext } from "react"
-import type { CanvasDocument, CanvasSelection } from "./types"
+import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
 
 export interface CanvasConnectionNodeType {
   label: string
@@ -10,12 +10,16 @@ export interface CanvasEditorController {
   document: CanvasDocument
   selection: CanvasSelection
   readOnly: boolean
+  canUpload: boolean
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
   beginGesture: () => void
   cancelGesture: () => void
   endGesture: () => void
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
-  quickConnect: (nodeId: string, side: "left" | "right", nodeType: string) => void
+  duplicateNode: (nodeId: string) => void
+  quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
+  removeNode: (nodeId: string) => void
+  replaceNodeMedia: (nodeId: string, file: File) => void
   selectNodes: (nodeIds: readonly string[]) => void
 }
 
