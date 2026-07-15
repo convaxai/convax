@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@convax/canvas/styles.css";
 @source "../../../canvas/src";
+@source "../../../project/src";
 @source "../../../ui/src";
 
 @theme inline {

@@ -34,6 +34,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@convax/canvas": "workspace:*",
+        "@convax/project": "workspace:*",
         "@convax/ui": "workspace:*",
         "lucide-react": "catalog:",
         "react": "catalog:",
@@ -41,6 +42,7 @@
       },
       "devDependencies": {
         "@tailwindcss/vite": "catalog:",
+        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
@@ -50,6 +52,27 @@
         "tailwindcss": "catalog:",
         "typescript": "catalog:",
         "vite": "catalog:",
+      },
+    },
+    "packages/project": {
+      "name": "@convax/project",
+      "version": "0.0.0",
+      "dependencies": {
+        "@convax/ui": "workspace:*",
+        "lucide-react": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:",
+        "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "react": "catalog:",
+        "react-dom": "catalog:",
       },
     },
     "packages/ui": {
@@ -145,6 +168,8 @@
     "@convax/canvas": ["@convax/canvas@workspace:packages/canvas"],
 
     "@convax/desktop": ["@convax/desktop@workspace:packages/desktop"],
+
+    "@convax/project": ["@convax/project@workspace:packages/project"],
 
     "@convax/ui": ["@convax/ui@workspace:packages/ui"],
 

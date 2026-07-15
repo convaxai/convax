@@ -1,72 +1,169 @@
 import {
   CanvasEditor,
-  connectCanvasNodes,
-  createCanvasDocument,
   createCanvasServices,
-  createNoteNode,
-  createTextNode,
+  parseCanvasDocument,
   type CanvasDocument,
+  type CanvasEditorHandle,
   type CanvasMediaKind,
   type CanvasNotification,
 } from "@convax/canvas"
+import {
+  parseProjectEntryDrag,
+  PROJECT_ENTRY_DRAG_TYPE,
+  ProjectController,
+  ProjectSidebar,
+  type ProjectFileInfo,
+} from "@convax/project"
 import { CheckCircle2, Info, TriangleAlert, XCircle } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
+import { createInitialCanvasDocument } from "./canvas-document"
 import "./styles.css"
 
-function createStarterDocument(id = "convax-starter-v1") {
-  const brief = createTextNode({
-    id: "node_brief",
-    label: "Creative brief",
-    position: { x: 80, y: 150 },
-    text: "Build an open canvas where ideas, media, and agent output can stay connected.",
-  })
-  const principle = createNoteNode({
-    id: "node_principle",
-    label: "Architecture",
-    position: { x: 460, y: 100 },
-    text: "Canvas behavior lives in the SDK. Upload, generation, storage, and export come from the host.",
-    tone: "blue",
-  })
-  const next = createTextNode({
-    id: "node_next",
-    label: "Try it",
-    position: { x: 470, y: 390 },
-    text: "Double-click the canvas, press Tab, drag in a file, or open Generate from the toolbar.",
-  })
-  const document = createCanvasDocument({
-    id,
-    title: "Convax workspace",
-    description: "Generic canvas host example",
-    nodes: [brief, principle, next],
-  })
-  return [
-    { source: brief.id, target: principle.id },
-    { source: principle.id, target: next.id },
-  ].reduce(connectCanvasNodes, document)
-}
-
-function readFile(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.addEventListener("load", () => resolve(String(reader.result)))
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("File could not be read")))
-    reader.readAsDataURL(file)
-  })
-}
-
-function mediaKind(file: File): CanvasMediaKind {
-  if (file.type.startsWith("image/")) return "image"
-  if (file.type.startsWith("video/")) return "video"
-  if (file.type.startsWith("audio/")) return "audio"
+function mediaKindFromMime(mimeType: string): CanvasMediaKind {
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("video/")) return "video"
+  if (mimeType.startsWith("audio/")) return "audio"
   return "file"
+}
+
+const projectFileReferenceKey = "convaxProjectFile"
+
+interface ProjectFileReference {
+  path: string
+}
+
+function getProjectFileReference(metadata: unknown): ProjectFileReference | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
+  const value = (metadata as Record<string, unknown>)[projectFileReferenceKey]
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const reference = value as Record<string, unknown>
+  return typeof reference.path === "string"
+    ? { path: reference.path }
+    : null
+}
+
+function projectAssetUrl(projectId: string, path: string) {
+  const url = new URL(`convax-asset://${projectId}/file`)
+  url.searchParams.set("path", path)
+  return url.href
+}
+
+function projectFileResource(file: ProjectFileInfo, projectId: string) {
+  return {
+    kind: mediaKindFromMime(file.mimeType),
+    metadata: { [projectFileReferenceKey]: { path: file.path } },
+    mimeType: file.mimeType,
+    name: file.name,
+    url: projectAssetUrl(projectId, file.path),
+  }
+}
+
+function documentForProjectStorage(document: CanvasDocument) {
+  return {
+    ...document,
+    nodes: document.nodes.map((node) => {
+      const metadata = "metadata" in node.data ? node.data.metadata : undefined
+      if (!getProjectFileReference(metadata)) return node
+      return { ...node, data: { ...node.data, url: "" } }
+    }),
+  }
+}
+
+async function hydrateProjectFileUrls(document: CanvasDocument, projectId: string, signal: AbortSignal) {
+  if (signal.aborted) throw signal.reason
+  return {
+    ...document,
+    nodes: document.nodes.map((node) => {
+      const metadata = "metadata" in node.data ? node.data.metadata : undefined
+      const reference = getProjectFileReference(metadata)
+      if (!reference) return node
+      return { ...node, data: { ...node.data, url: projectAssetUrl(projectId, reference.path) } }
+    }),
+  }
+}
+
+async function ensureProjectAssetsDirectory(projectId: string) {
+  await window.convax.projects.writeTextFile({
+    content: "",
+    createParents: true,
+    path: ".convax/assets/.keep",
+    projectId,
+  })
+}
+
+async function importCanvasFiles(files: readonly File[], projectId: string, signal: AbortSignal) {
+  if (files.length === 0) return []
+  await ensureProjectAssetsDirectory(projectId)
+  const sourceTokens = files.map((file) => window.convax.projects.createImportToken(file))
+  if (sourceTokens.some((token) => !token)) throw new Error("Only files from the local disk can be added to a project canvas")
+  const imported = await window.convax.projects.importEntries({
+    destinationPath: ".convax/assets",
+    projectId,
+    sourceTokens,
+  })
+  const projectFiles = await Promise.all((imported.targetPaths ?? []).map((path) => window.convax.projects.readFileInfo({ path, projectId })))
+  if (signal.aborted) throw signal.reason
+  return projectFiles
+}
+
+async function copyCanvasProjectFiles(paths: string[], projectId: string, signal: AbortSignal) {
+  if (paths.length === 0) return []
+  await ensureProjectAssetsDirectory(projectId)
+  const copied = await window.convax.projects.copyEntries({ destinationPath: ".convax/assets", paths, projectId })
+  const projectFiles = await Promise.all((copied.targetPaths ?? []).map((path) => window.convax.projects.readFileInfo({ path, projectId })))
+  if (signal.aborted) throw signal.reason
+  return projectFiles
 }
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
+  const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
+  const drainCanvasSaves = useCallback(async () => {
+    while (true) {
+      const pending = latestCanvasSaveRef.current
+      if (!pending) return
+      try {
+        await pending
+      } catch (error) {
+        if (latestCanvasSaveRef.current !== pending) continue
+        throw error
+      }
+      if (latestCanvasSaveRef.current === pending) return
+    }
+  }, [])
+  const projectController = useMemo(() => new ProjectController(window.convax.projects, {
+    beforeActiveProjectChange: async () => {
+      await canvasEditorRef.current?.prepareToLeave()
+      await drainCanvasSaves()
+    },
+    beforeActiveCanvasChange: async () => {
+      await canvasEditorRef.current?.prepareToLeave()
+      await drainCanvasSaves()
+    },
+    onActiveCanvasChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
+    onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
+  }), [drainCanvasSaves])
+  const projectSnapshot = useSyncExternalStore(
+    projectController.subscribe,
+    projectController.getSnapshot,
+    projectController.getSnapshot,
+  )
+  useEffect(() => () => projectController.dispose(), [projectController])
+  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
+  const activeProjectId = activeProject?.id
+  const activeCanvas = projectSnapshot.canvases.find((canvas) => canvas.id === projectSnapshot.activeCanvasId)
+  const activeCanvasId = activeCanvas?.id
+  const activeCanvasNameRef = useRef(activeCanvas?.name)
+  activeCanvasNameRef.current = activeCanvas?.name
   const initialDocument = useMemo(
-    () => createStarterDocument(new URL(window.location.href).searchParams.get("document") ?? undefined),
-    [],
+    () => createInitialCanvasDocument({
+      canvasId: activeCanvasId ?? new URL(window.location.href).searchParams.get("document") ?? "convax-welcome",
+      canvasName: activeCanvas?.name,
+      projectName: activeProject?.name,
+    }),
+    [activeCanvas?.name, activeCanvasId, activeProject?.name],
   )
   const services = useMemo(
     () =>
@@ -74,15 +171,26 @@ function App() {
         upload: {
           async upload(request) {
             if (request.signal.aborted) throw request.signal.reason
-            return Promise.all(
-              request.files.map(async (file, index) => ({
+            if (!activeProjectId && request.files.length > 0) throw new Error("Open a project before adding files to the canvas")
+            const importedFiles = activeProjectId
+              ? await importCanvasFiles(request.files, activeProjectId, request.signal)
+              : []
+            const dragged = parseProjectEntryDrag(request.transfer?.data[PROJECT_ENTRY_DRAG_TYPE] ?? "")
+            const projectFiles = dragged && dragged.projectId === activeProjectId
+              ? await copyCanvasProjectFiles(
+                  dragged.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+                  activeProjectId,
+                  request.signal,
+                )
+              : []
+            const files = [
+              ...importedFiles.map((file) => projectFileResource(file, activeProjectId!)),
+              ...projectFiles.map((file) => projectFileResource(file, activeProjectId!)),
+            ]
+            return files.map((file, index) => ({
                 id: `resource_${Date.now()}_${index}`,
-                kind: mediaKind(file),
-                url: await readFile(file),
-                name: file.name,
-                mimeType: file.type,
-              })),
-            )
+                ...file,
+              }))
           },
         },
         generate: {
@@ -108,12 +216,44 @@ function App() {
         persistence: {
           async load(documentId, signal) {
             if (signal.aborted) throw signal.reason
+            if (activeProjectId && activeCanvasId) {
+              const result = await window.convax.projects.readCanvasDocument({
+                canvasId: activeCanvasId,
+                projectId: activeProjectId,
+              })
+              if (!result.exists) return null
+              const document = parseCanvasDocument(JSON.parse(result.content))
+              if (!document) throw new Error("Stored canvas document is invalid")
+              return hydrateProjectFileUrls({
+                ...document,
+                id: documentId,
+                metadata: { ...document.metadata, title: activeCanvasNameRef.current ?? document.metadata.title },
+              }, activeProjectId, signal)
+            }
             const value = localStorage.getItem(`convax:canvas:${documentId}`)
-            return value ? JSON.parse(value) as CanvasDocument : null
+            if (!value) return null
+            const document = parseCanvasDocument(JSON.parse(value), documentId)
+            if (!document) throw new Error("Stored canvas document is invalid")
+            return document
           },
           async save(document, signal) {
-            if (signal.aborted) throw signal.reason
-            localStorage.setItem(`convax:canvas:${document.id}`, JSON.stringify(document))
+            const save = (async () => {
+              if (signal.aborted) throw signal.reason
+              if (activeProjectId && activeCanvasId) {
+                const storedDocument = documentForProjectStorage(document)
+                await window.convax.projects.writeCanvasDocument({
+                  canvasId: activeCanvasId,
+                  content: `${JSON.stringify(storedDocument, null, 2)}\n`,
+                  projectId: activeProjectId,
+                })
+                return
+              }
+              const serialized = JSON.stringify(document)
+              if (serialized.length > 4 * 1024 * 1024) throw new Error("Canvas is too large for local storage; open a project to keep large files by reference")
+              localStorage.setItem(`convax:canvas:${document.id}`, serialized)
+            })()
+            latestCanvasSaveRef.current = save
+            return save
           },
         },
         export: {
@@ -135,7 +275,7 @@ function App() {
           },
         },
       }),
-    [],
+    [activeCanvasId, activeProjectId],
   )
 
   useEffect(() => {
@@ -145,8 +285,22 @@ function App() {
   }, [notification])
 
   return (
-    <main className="relative size-full">
-      <CanvasEditor initialDocument={initialDocument} services={services} />
+    <main className="relative flex size-full overflow-hidden bg-background">
+      <ProjectSidebar
+        controller={projectController}
+        resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
+      />
+      <section className="relative min-w-0 flex-1">
+        <CanvasEditor
+          key={activeProjectId && activeCanvasId ? `${activeProjectId}:${activeCanvasId}` : "welcome"}
+          clipboardScope={activeProjectId ?? "welcome"}
+          initialDocument={initialDocument}
+          readOnly={projectSnapshot.changingActiveCanvas || projectSnapshot.changingActiveProject}
+          ref={canvasEditorRef}
+          services={services}
+          title={activeCanvas?.name}
+        />
+      </section>
       {notification ? <Toast notification={notification} /> : null}
     </main>
   )
