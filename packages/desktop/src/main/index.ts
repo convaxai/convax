@@ -3,11 +3,11 @@ import { app, BrowserWindow } from "electron"
 
 function createWindow() {
   const window = new BrowserWindow({
-    width: 1120,
-    height: 760,
+    width: 1280,
+    height: 820,
     minWidth: 720,
     minHeight: 520,
-    backgroundColor: "#f4f4ef",
+    backgroundColor: "#f7f8f7",
     webPreferences: {
       preload: join(import.meta.dirname, "../preload/index.js"),
       contextIsolation: true,

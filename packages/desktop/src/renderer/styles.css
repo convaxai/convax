@@ -1,6 +1,54 @@
+@import "tailwindcss";
+@import "@convax/canvas/styles.css";
+@source "../../../canvas/src";
+@source "../../../ui/src";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
 :root {
-  color: #171815;
-  background: #f4f4ef;
+  --radius: 6px;
+  --background: #f7f8f7;
+  --foreground: #171a18;
+  --card: #ffffff;
+  --card-foreground: #171a18;
+  --popover: #ffffff;
+  --popover-foreground: #171a18;
+  --primary: #1d6d4d;
+  --primary-foreground: #ffffff;
+  --secondary: #e8eeeb;
+  --secondary-foreground: #24342d;
+  --muted: #edf0ee;
+  --muted-foreground: #68716c;
+  --accent: #e4ece8;
+  --accent-foreground: #1b362a;
+  --destructive: #c43d49;
+  --border: #d9ddda;
+  --input: #ccd2ce;
+  --ring: #22815c;
+  color: var(--foreground);
+  background: var(--background);
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -19,68 +67,13 @@ body,
 }
 
 body {
-  min-width: 320px;
-  min-height: 480px;
+  min-width: 720px;
+  min-height: 520px;
   overflow: hidden;
 }
 
-.workspace {
-  display: grid;
-  height: 100%;
-  place-content: center;
-  justify-items: center;
-  padding: 32px;
-  border: 12px solid #ffffff;
+button,
+input,
+textarea {
+  font: inherit;
 }
-
-.mark {
-  display: grid;
-  grid-template-columns: repeat(2, 18px);
-  width: 44px;
-  height: 44px;
-  gap: 4px;
-  margin-bottom: 30px;
-}
-
-.mark span {
-  background: #171815;
-}
-
-.mark span:nth-child(2),
-.mark span:nth-child(3) {
-  background: #35a66f;
-}
-
-.eyebrow {
-  margin: 0 0 12px;
-  color: #62655d;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0;
-  font-size: clamp(42px, 8vh, 72px);
-  font-weight: 650;
-  letter-spacing: 0;
-  line-height: 1;
-}
-
-.status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 24px 0 0;
-  color: #62655d;
-  font-size: 13px;
-}
-
-.status span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #35a66f;
-}
-
