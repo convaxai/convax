@@ -1,9 +1,15 @@
 import { Content, Portal, Provider, Root, Trigger } from "@radix-ui/react-tooltip"
-import type { ComponentProps, ReactElement, ReactNode } from "react"
+import { createContext, useContext, type ComponentProps, type ReactElement, type ReactNode } from "react"
 import { cn } from "../lib/utils"
 
+const TooltipProviderContext = createContext(false)
+
 export function TooltipProvider(props: ComponentProps<typeof Provider>) {
-  return <Provider delayDuration={300} skipDelayDuration={100} {...props} />
+  return (
+    <TooltipProviderContext value>
+      <Provider delayDuration={300} skipDelayDuration={100} {...props} />
+    </TooltipProviderContext>
+  )
 }
 
 export function Tooltip({
@@ -15,7 +21,7 @@ export function Tooltip({
   content: ReactNode
   side?: "bottom" | "left" | "right" | "top"
 }) {
-  return (
+  const tooltip = (
     <Root>
       <Trigger asChild>{children}</Trigger>
       <Portal>
@@ -30,6 +36,8 @@ export function Tooltip({
       </Portal>
     </Root>
   )
+  if (useContext(TooltipProviderContext)) return tooltip
+  return <Provider delayDuration={300} skipDelayDuration={100}>{tooltip}</Provider>
 }
 
 export function Shortcut({ className, ...props }: ComponentProps<"kbd">) {

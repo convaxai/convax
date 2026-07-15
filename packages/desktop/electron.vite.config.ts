@@ -5,6 +5,9 @@ import { defineConfig } from "electron-vite"
 export default defineConfig({
   main: {
     build: {
+      externalizeDeps: {
+        exclude: ["@convax/project"],
+      },
       rollupOptions: {
         input: "src/main/index.ts",
       },
