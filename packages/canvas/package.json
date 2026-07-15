@@ -14,6 +14,13 @@
   },
   "dependencies": {
     "@convax/ui": "workspace:*",
+    "@tiptap/core": "catalog:",
+    "@tiptap/extension-placeholder": "catalog:",
+    "@tiptap/extension-table": "catalog:",
+    "@tiptap/extension-text-align": "catalog:",
+    "@tiptap/markdown": "catalog:",
+    "@tiptap/react": "catalog:",
+    "@tiptap/starter-kit": "catalog:",
     "@xyflow/react": "catalog:",
     "lucide-react": "catalog:"
   },

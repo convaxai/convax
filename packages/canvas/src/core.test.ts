@@ -10,12 +10,24 @@ import {
   removeCanvasElements,
   ungroupCanvasNode,
 } from "./commands"
+import { createDefaultCanvasNodeRegistry } from "./builtin-registry"
 import { createCanvasClipboardPayload, parseCanvasClipboard, pasteCanvasClipboard, serializeCanvasClipboard } from "./clipboard"
-import { createCanvasDocument, createGroupNode, createTextNode, parseCanvasDocument } from "./document"
+import { createCanvasDocument, createGroupNode, createMediaNode, createTextNode, parseCanvasDocument } from "./document"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
 describe("canvas history", () => {
+  test("keeps a single built-in text node type", () => {
+    expect(createDefaultCanvasNodeRegistry().list().map((definition) => definition.type)).toEqual([
+      "text",
+      "image",
+      "video",
+      "audio",
+      "file",
+      "group",
+    ])
+  })
+
   test("rejects malformed persisted documents before they reach the editor", () => {
     expect(parseCanvasDocument({})).toBeNull()
     expect(parseCanvasDocument(createCanvasDocument({ id: "one" }), "two")).toBeNull()
@@ -23,6 +35,55 @@ describe("canvas history", () => {
     const first = createGroupNode({ id: "first", label: "First", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "second" })
     const second = createGroupNode({ id: "second", label: "Second", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "first" })
     expect(parseCanvasDocument(createCanvasDocument({ id: "cycle", nodes: [first, second] }))).toBeNull()
+    const text = createTextNode({ id: "text", position: { x: 0, y: 0 } })
+    expect(parseCanvasDocument({
+      ...createCanvasDocument({ id: "rich-text", nodes: [text] }),
+      nodes: [{ ...text, data: { ...text.data, richText: { type: "doc", content: "invalid" } } }],
+    })).toBeNull()
+  })
+  test("migrates legacy notes into text nodes", () => {
+    const legacy = createCanvasDocument({
+      id: "legacy",
+      nodes: [{
+        id: "legacy_note",
+        type: "note",
+        position: { x: 20, y: 30 },
+        data: { kind: "note", label: "Note", text: "Keep this thought", tone: "yellow" },
+      }],
+    })
+    const parsed = parseCanvasDocument(legacy)
+
+    expect(parsed?.nodes[0]).toMatchObject({
+      data: { kind: "text", label: "Text", text: "Keep this thought" },
+      type: "text",
+    })
+    expect(parsed?.nodes[0].data).not.toHaveProperty("tone")
+    const media = createMediaNode({
+      position: { x: 0, y: 0 },
+      resource: { id: "empty-video", kind: "video", url: "" },
+    })
+    expect(parseCanvasDocument(createCanvasDocument({
+      nodes: [{ ...media, data: { ...media.data, label: "Media" } }],
+    }))?.nodes[0].data.label).toBe("Video")
+  })
+
+  test("preserves imported text formats", () => {
+    const node = createTextNode({
+      format: "markdown",
+      label: "brief.md",
+      position: { x: 0, y: 0 },
+      text: "# Brief",
+    })
+    expect(parseCanvasDocument(createCanvasDocument({ nodes: [node] }))?.nodes[0].data).toMatchObject({
+      format: "markdown",
+      text: "# Brief",
+    })
+    expect(node.style).toEqual({ width: 360, height: 240 })
+    expect(createTextNode({ position: { x: 0, y: 0 } }).data).toMatchObject({ text: "" })
+    expect(createMediaNode({
+      position: { x: 0, y: 0 },
+      resource: { id: "empty", kind: "video", url: "" },
+    }).data).toMatchObject({ label: "Video" })
   })
   test("undoes and redoes committed documents", () => {
     const initial = createCanvasDocument({ id: "canvas_test" })

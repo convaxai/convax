@@ -6,6 +6,7 @@ export type CanvasDocumentId = string
 
 export type CanvasNodeStatus = "idle" | "pending" | "error"
 export type CanvasMediaKind = "image" | "video" | "audio" | "file"
+export type CanvasTextFormat = "plain" | "markdown"
 
 export interface CanvasBaseNodeData extends Record<string, unknown> {
   kind: string
@@ -15,22 +16,25 @@ export interface CanvasBaseNodeData extends Record<string, unknown> {
   error?: string
 }
 
+export interface CanvasRichTextContent {
+  type: string
+  attrs?: Record<string, unknown>
+  content?: CanvasRichTextContent[]
+  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>
+  text?: string
+}
+
 export interface CanvasTextNodeData extends CanvasBaseNodeData {
   kind: "text"
   text: string
-}
-
-export type CanvasNoteTone = "neutral" | "yellow" | "green" | "blue" | "rose"
-
-export interface CanvasNoteNodeData extends CanvasBaseNodeData {
-  kind: "note"
-  text: string
-  tone: CanvasNoteTone
+  format?: CanvasTextFormat
+  richText?: CanvasRichTextContent
 }
 
 export interface CanvasMediaNodeData extends CanvasBaseNodeData {
   kind: CanvasMediaKind
   url: string
+  fit?: "contain" | "cover"
   name?: string
   mimeType?: string
   posterUrl?: string
@@ -46,7 +50,6 @@ export interface CanvasGroupNodeData extends CanvasBaseNodeData {
 
 export type CanvasNodeData =
   | CanvasTextNodeData
-  | CanvasNoteNodeData
   | CanvasMediaNodeData
   | CanvasGroupNodeData
   | CanvasBaseNodeData
@@ -97,6 +100,18 @@ export interface CanvasResource {
   durationMs?: number
   metadata?: Record<string, unknown>
 }
+
+export interface CanvasTextResource {
+  id: string
+  kind: "text"
+  text: string
+  format?: CanvasTextFormat
+  name?: string
+  mimeType?: string
+  metadata?: Record<string, unknown>
+}
+
+export type CanvasUploadItem = CanvasResource | CanvasTextResource
 
 export interface CanvasClipboardPayload {
   version: 1

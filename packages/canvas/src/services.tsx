@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
-import type { CanvasDocument, CanvasPoint, CanvasResource } from "./types"
+import type { CanvasDocument, CanvasPoint, CanvasResource, CanvasUploadItem } from "./types"
 
 export interface CanvasServiceContext {
   documentId: string
@@ -19,7 +19,7 @@ export interface CanvasUploadRequest {
 }
 
 export interface CanvasUploadService {
-  upload: (request: CanvasUploadRequest) => Promise<readonly CanvasResource[]>
+  upload: (request: CanvasUploadRequest) => Promise<readonly CanvasUploadItem[]>
 }
 
 export interface CanvasGenerationReference {

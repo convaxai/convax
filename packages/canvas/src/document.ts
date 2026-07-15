@@ -4,10 +4,9 @@ import type {
   CanvasGroupNodeData,
   CanvasMediaNodeData,
   CanvasNode,
-  CanvasNoteNodeData,
-  CanvasNoteTone,
   CanvasPoint,
   CanvasResource,
+  CanvasTextFormat,
   CanvasTextNodeData,
 } from "./types"
 
@@ -61,48 +60,31 @@ export function parseCanvasDocument(value: unknown, expectedId?: string): Canvas
     || hasParentCycle(nodes)) {
     return null
   }
-  return value as unknown as CanvasDocument
+  return {
+    ...(value as unknown as CanvasDocument),
+    nodes: nodes.map(migrateCanvasNode),
+  }
 }
 
 export function createTextNode(input: {
   id?: string
   label?: string
   text?: string
+  format?: CanvasTextFormat
   position: CanvasPoint
 }): CanvasNode {
   const data: CanvasTextNodeData = {
     kind: "text",
     label: input.label ?? "Text",
-    text: input.text ?? "Start typing...",
+    text: input.text ?? "",
+    format: input.format,
   }
   return {
     id: input.id ?? createCanvasId("node"),
     type: "text",
     position: input.position,
     data,
-    style: { width: 280, height: 160 },
-  }
-}
-
-export function createNoteNode(input: {
-  id?: string
-  label?: string
-  text?: string
-  tone?: CanvasNoteTone
-  position: CanvasPoint
-}): CanvasNode {
-  const data: CanvasNoteNodeData = {
-    kind: "note",
-    label: input.label ?? "Note",
-    text: input.text ?? "Add a thought",
-    tone: input.tone ?? "yellow",
-  }
-  return {
-    id: input.id ?? createCanvasId("node"),
-    type: "note",
-    position: input.position,
-    data,
-    style: { width: 240, height: 180 },
+    style: input.format ? { width: 360, height: 240 } : { width: 280, height: 160 },
   }
 }
 
@@ -112,9 +94,10 @@ export function createMediaNode(input: {
   position: CanvasPoint
   resource: CanvasResource
 }): CanvasNode {
+  const kindLabel = input.resource.kind[0].toUpperCase() + input.resource.kind.slice(1)
   const data: CanvasMediaNodeData = {
     kind: input.resource.kind,
-    label: input.label ?? input.resource.name ?? "Media",
+    label: input.label ?? input.resource.name ?? kindLabel,
     url: input.resource.url,
     name: input.resource.name,
     mimeType: input.resource.mimeType,
@@ -184,9 +167,50 @@ function isCanvasNode(value: unknown) {
     && typeof value.data.kind === "string"
     && typeof value.data.label === "string")) return false
   if ((value.data.kind === "text" || value.data.kind === "note") && typeof value.data.text !== "string") return false
-  if (value.data.kind === "note" && !["neutral", "yellow", "green", "blue", "rose"].includes(String(value.data.tone))) return false
+  if (value.data.kind === "text" && value.data.format !== undefined && !["plain", "markdown"].includes(String(value.data.format))) return false
+  if (value.data.kind === "text" && value.data.richText !== undefined && !isCanvasRichTextContent(value.data.richText)) return false
   if (["image", "video", "audio", "file"].includes(value.data.kind) && typeof value.data.url !== "string") return false
+  if (["image", "video", "audio", "file"].includes(value.data.kind)
+    && value.data.fit !== undefined
+    && !["contain", "cover"].includes(String(value.data.fit))) return false
   return true
+}
+
+function isCanvasRichTextContent(value: unknown, depth = 0): boolean {
+  if (!isRecord(value) || depth > 100) return false
+  if (typeof value.type !== "string") return false
+  if (value.text !== undefined && typeof value.text !== "string") return false
+  if (value.attrs !== undefined && !isRecord(value.attrs)) return false
+  if (value.content !== undefined
+    && (!Array.isArray(value.content) || !value.content.every((child) => isCanvasRichTextContent(child, depth + 1)))) return false
+  if (value.marks !== undefined && (!Array.isArray(value.marks) || !value.marks.every((mark) =>
+    isRecord(mark)
+    && typeof mark.type === "string"
+    && (mark.attrs === undefined || isRecord(mark.attrs))))) return false
+  return true
+}
+
+function migrateCanvasNode(node: CanvasNode): CanvasNode {
+  if (node.data.kind === "note") {
+    const { tone: _tone, ...legacyData } = node.data
+    return {
+      ...node,
+      type: "text",
+      data: {
+        ...legacyData,
+        kind: "text",
+        label: legacyData.label === "Note" ? "Text" : legacyData.label,
+        text: typeof legacyData.text === "string" ? legacyData.text : "",
+      },
+    }
+  }
+  if (["image", "video", "audio", "file"].includes(node.data.kind)
+    && node.data.label === "Media"
+    && typeof node.data.name !== "string") {
+    const kindLabel = node.data.kind[0].toUpperCase() + node.data.kind.slice(1)
+    return { ...node, data: { ...node.data, label: kindLabel } }
+  }
+  return node
 }
 
 function isCanvasEdge(value: unknown) {

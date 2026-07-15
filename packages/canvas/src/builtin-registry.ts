@@ -1,5 +1,5 @@
 import { BuiltinCanvasNode } from "./components/builtin-node"
-import { createMediaNode, createNoteNode, createTextNode } from "./document"
+import { createMediaNode, createTextNode } from "./document"
 import { createCanvasNodeRegistry } from "./node-registry"
 import type { CanvasNodeDefinition } from "./node-registry"
 import type { CanvasMediaKind, CanvasResource } from "./types"
@@ -29,12 +29,6 @@ export function createDefaultCanvasNodeRegistry() {
       component: BuiltinCanvasNode,
       create: (input) => createTextNode({ id: input.id, position: input.position }),
     },
-    {
-      type: "note",
-      label: "Note",
-      component: BuiltinCanvasNode,
-      create: (input) => createNoteNode({ id: input.id, position: input.position }),
-    },
     mediaDefinition("image"),
     mediaDefinition("video"),
     mediaDefinition("audio"),
@@ -53,4 +47,3 @@ export function createDefaultCanvasNodeRegistry() {
     },
   ])
 }
-
