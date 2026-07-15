@@ -143,5 +143,7 @@ function startApplication() {
   })
 }
 
-if (app.requestSingleInstanceLock()) startApplication()
+const allowMultipleInstances = !app.isPackaged && process.env.CONVAX_ALLOW_MULTIPLE_INSTANCES === "1"
+
+if (allowMultipleInstances || app.requestSingleInstanceLock()) startApplication()
 else app.quit()
