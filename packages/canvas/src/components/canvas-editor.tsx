@@ -106,6 +106,7 @@ import {
 } from "../services"
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import { createCanvasShortcutHandler } from "../use-canvas-shortcuts"
+import { useSpacePanning } from "../use-space-panning"
 import { CanvasConnectionLine, CanvasEdgeView } from "./canvas-edge"
 
 const defaultNodeRegistry = createDefaultCanvasNodeRegistry()
@@ -192,6 +193,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const [generating, setGenerating] = useState(false)
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
+  const spacePanning = useSpacePanning()
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
@@ -617,7 +619,11 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
           <ContextMenuTrigger asChild>
             <div
               ref={rootRef}
-              className={cn("convax-canvas relative size-full overflow-hidden bg-background text-foreground outline-none", props.className)}
+              className={cn(
+                "convax-canvas relative size-full overflow-hidden bg-background text-foreground outline-none",
+                spacePanning && "is-space-panning",
+                props.className,
+              )}
               onDragOver={(event) => {
                 if (!uploadService || readOnly) return
                 event.preventDefault()
@@ -653,14 +659,15 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                 nodeTypes={nodeTypes}
                 nodes={nodes}
                 nodesConnectable={!readOnly}
-                nodesDraggable={!readOnly}
+                nodesDraggable={!readOnly && !spacePanning}
                 nodesFocusable
                 nodeDragThreshold={4}
                 onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
+                autoPanOnNodeFocus={false}
                 panActivationKeyCode="Space"
-                panOnDrag={[1]}
+                panOnDrag={[0, 1]}
                 panOnScroll
-                selectionOnDrag
+                selectionOnDrag={false}
                 selectionMode={SelectionMode.Partial}
                 snapGrid={[8, 8]}
                 snapToGrid={snapToGrid}

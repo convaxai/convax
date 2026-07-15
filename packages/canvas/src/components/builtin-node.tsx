@@ -1,6 +1,6 @@
 import { Handle, NodeResizer, NodeToolbar, Position, type NodeProps } from "@xyflow/react"
-import { File, Image, LoaderCircle, Music2, Play, Plus, StickyNote, Type } from "lucide-react"
-import { useEffect, useState } from "react"
+import { File, Image, LoaderCircle, Music2, Pause, Play, Plus, StickyNote, Type, Volume2, VolumeX } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 import { cn } from "@convax/ui"
 import { updateCanvasNodeData } from "../commands"
 import { useCanvasEditor } from "../editor-context"
@@ -170,7 +170,105 @@ function NoteNode(props: NodeProps<CanvasNode>) {
   )
 }
 
-function MediaBody({ data }: { data: CanvasMediaNodeData }) {
+function VideoBody({ data, selected }: { data: CanvasMediaNodeData; selected: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const playbackIntentRef = useRef<"idle" | "hover" | "manual" | "paused">("idle")
+  const [hovered, setHovered] = useState(false)
+  const [playing, setPlaying] = useState(false)
+  const [muted, setMuted] = useState(true)
+
+  useEffect(() => {
+    playbackIntentRef.current = "idle"
+    setHovered(false)
+    setPlaying(false)
+    setMuted(true)
+    return () => videoRef.current?.pause()
+  }, [data.url])
+
+  const requestPlayback = (intent: "hover" | "manual", forceMuted = false) => {
+    const video = videoRef.current
+    if (!video) return
+    if (forceMuted) {
+      video.muted = true
+      setMuted(true)
+    }
+    playbackIntentRef.current = intent
+    void video.play().catch(() => {
+      if (playbackIntentRef.current === intent) playbackIntentRef.current = "idle"
+      setPlaying(false)
+    })
+  }
+
+  return (
+    <div
+      className="convax-video relative size-full bg-black"
+      onPointerEnter={() => {
+        setHovered(true)
+        if (playbackIntentRef.current === "idle") requestPlayback("hover", true)
+      }}
+      onPointerLeave={() => {
+        setHovered(false)
+        if (playbackIntentRef.current === "hover") {
+          playbackIntentRef.current = "idle"
+          videoRef.current?.pause()
+        } else if (playbackIntentRef.current === "paused") {
+          playbackIntentRef.current = "idle"
+        }
+      }}
+    >
+      <video
+        ref={videoRef}
+        aria-label={data.label}
+        className="convax-video__media size-full object-contain"
+        loop
+        muted={muted}
+        onPause={() => setPlaying(false)}
+        onPlay={() => setPlaying(true)}
+        playsInline
+        poster={data.posterUrl}
+        preload="metadata"
+        src={data.url}
+      />
+      <div className={cn("convax-video__controls", (hovered || playing || selected) && "is-visible")}>
+        <button
+          aria-label={playing ? "Pause video" : "Play video"}
+          className="convax-video__control nodrag"
+          onClick={(event) => {
+            event.stopPropagation()
+            const video = videoRef.current
+            if (!video) return
+            if (video.paused) requestPlayback("manual")
+            else {
+              playbackIntentRef.current = "paused"
+              video.pause()
+            }
+          }}
+          title={playing ? "Pause video" : "Play video"}
+          type="button"
+        >
+          {playing ? <Pause /> : <Play />}
+        </button>
+        <button
+          aria-label={muted ? "Unmute video" : "Mute video"}
+          className="convax-video__control nodrag"
+          onClick={(event) => {
+            event.stopPropagation()
+            const video = videoRef.current
+            if (!video) return
+            video.muted = !video.muted
+            setMuted(video.muted)
+          }}
+          title={muted ? "Unmute video" : "Mute video"}
+          type="button"
+        >
+          {muted ? <VolumeX /> : <Volume2 />}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function MediaBody({ data, selected }: { data: CanvasMediaNodeData; selected: boolean }) {
   if (data.kind === "image") {
     return (
       <img
@@ -184,15 +282,7 @@ function MediaBody({ data }: { data: CanvasMediaNodeData }) {
     )
   }
   if (data.kind === "video") {
-    return (
-      <video
-        className="nodrag nowheel size-full bg-black object-contain"
-        controls
-        poster={data.posterUrl}
-        preload="metadata"
-        src={data.url}
-      />
-    )
+    return <VideoBody data={data} selected={selected} />
   }
   if (data.kind === "audio") {
     return (
@@ -215,7 +305,7 @@ function MediaNode(props: NodeProps<CanvasNode>) {
   const icon = data.kind === "image" ? <Image /> : data.kind === "video" ? <Play /> : data.kind === "audio" ? <Music2 /> : <File />
   return (
     <NodeChrome icon={icon} label={data.label} node={props}>
-      <MediaBody data={data} />
+      <MediaBody data={data} selected={props.selected} />
     </NodeChrome>
   )
 }

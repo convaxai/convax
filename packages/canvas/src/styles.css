@@ -14,12 +14,19 @@
 }
 
 .convax-canvas .react-flow__pane {
-  cursor: default;
+  cursor: grab;
 }
 
-.convax-canvas .react-flow__pane.dragging,
+.convax-canvas .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
 .convax-canvas .react-flow__pane.selection {
   cursor: crosshair;
+}
+
+.convax-canvas.is-space-panning .react-flow__node {
+  cursor: grab;
 }
 
 .convax-canvas .react-flow__node {
@@ -74,6 +81,61 @@
   box-shadow:
     0 0 0 2px var(--canvas-accent-soft),
     0 14px 32px -14px rgb(73 52 151 / 34%);
+}
+
+.convax-canvas .convax-video__media {
+  display: block;
+  background: #050506;
+  pointer-events: none;
+  user-select: none;
+}
+
+.convax-canvas .convax-video__controls {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.convax-canvas .convax-video__controls.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.convax-canvas .convax-video__control {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 50%;
+  background: rgb(18 19 22 / 76%);
+  color: white;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 5px 14px rgb(0 0 0 / 24%);
+  backdrop-filter: blur(8px);
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.convax-canvas .convax-video__control:hover,
+.convax-canvas .convax-video__control:focus-visible {
+  border-color: rgb(255 255 255 / 42%);
+  background: rgb(18 19 22 / 92%);
+  outline: none;
+  transform: scale(1.04);
+}
+
+.convax-canvas .convax-video__control svg {
+  width: 16px;
+  height: 16px;
 }
 
 .convax-canvas .convax-node__connection {
