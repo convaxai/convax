@@ -12,12 +12,14 @@
   },
   "dependencies": {
     "@convax/canvas": "workspace:*",
+    "@convax/project": "workspace:*",
     "@convax/ui": "workspace:*",
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@types/bun": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
