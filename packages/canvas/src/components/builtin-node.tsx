@@ -172,7 +172,16 @@ function NoteNode(props: NodeProps<CanvasNode>) {
 
 function MediaBody({ data }: { data: CanvasMediaNodeData }) {
   if (data.kind === "image") {
-    return <img alt={data.label} className="size-full object-contain" draggable={false} src={data.url} />
+    return (
+      <img
+        alt={data.label}
+        className="size-full object-contain"
+        decoding="async"
+        draggable={false}
+        loading="lazy"
+        src={data.url}
+      />
+    )
   }
   if (data.kind === "video") {
     return (
@@ -180,6 +189,7 @@ function MediaBody({ data }: { data: CanvasMediaNodeData }) {
         className="nodrag nowheel size-full bg-black object-contain"
         controls
         poster={data.posterUrl}
+        preload="metadata"
         src={data.url}
       />
     )
@@ -188,7 +198,7 @@ function MediaBody({ data }: { data: CanvasMediaNodeData }) {
     return (
       <div className="flex size-full flex-col items-center justify-center gap-4 p-5">
         <Music2 className="size-8 text-muted-foreground" />
-        <audio className="nodrag nowheel w-full" controls src={data.url} />
+        <audio className="nodrag nowheel w-full" controls preload="metadata" src={data.url} />
       </div>
     )
   }

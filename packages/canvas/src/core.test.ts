@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   addCanvasNodes,
+  alignCanvasNodes,
   connectCanvasNodes,
+  distributeCanvasNodes,
   duplicateCanvasSelection,
   groupCanvasNodes,
+  layoutCanvasNodes,
   removeCanvasElements,
   ungroupCanvasNode,
 } from "./commands"
@@ -99,6 +102,40 @@ describe("canvas commands", () => {
 
     expect(removed.nodes).toHaveLength(0)
     expect(removed.edges).toHaveLength(0)
+  })
+
+  test("aligns nodes against shared horizontal and vertical centers", () => {
+    const first = { ...createTextNode({ id: "node_a", position: { x: 40, y: 30 } }), style: { width: 100, height: 80 } }
+    const second = { ...createTextNode({ id: "node_b", position: { x: 300, y: 250 } }), style: { width: 200, height: 120 } }
+    const initial = createCanvasDocument({ nodes: [first, second] })
+    const centered = alignCanvasNodes(initial, [first.id, second.id], "center")
+    const aligned = alignCanvasNodes(centered, [first.id, second.id], "middle")
+
+    expect(aligned.nodes.map((node) => node.position)).toEqual([
+      { x: 220, y: 160 },
+      { x: 170, y: 140 },
+    ])
+  })
+
+  test("distributes and lays out selected nodes on both axes", () => {
+    const first = { ...createTextNode({ id: "node_a", position: { x: 0, y: 0 } }), style: { width: 100, height: 80 } }
+    const second = { ...createTextNode({ id: "node_b", position: { x: 160, y: 120 } }), style: { width: 80, height: 60 } }
+    const third = { ...createTextNode({ id: "node_c", position: { x: 400, y: 320 } }), style: { width: 100, height: 80 } }
+    const initial = createCanvasDocument({ nodes: [first, second, third] })
+    const horizontal = distributeCanvasNodes(initial, [first.id, second.id, third.id], "horizontal")
+    const distributed = distributeCanvasNodes(horizontal, [first.id, second.id, third.id], "vertical")
+
+    expect(distributed.nodes[1].position).toEqual({ x: 210, y: 170 })
+    expect(layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "horizontal", gap: 20 }).nodes.map((node) => node.position)).toEqual([
+      { x: 0, y: 0 },
+      { x: 120, y: 0 },
+      { x: 240, y: 0 },
+    ])
+    expect(layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "vertical", gap: 20 }).nodes.map((node) => node.position)).toEqual([
+      { x: 0, y: 0 },
+      { x: 0, y: 100 },
+      { x: 0, y: 200 },
+    ])
   })
 })
 

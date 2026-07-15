@@ -27,10 +27,18 @@ import {
   cn,
 } from "@convax/ui"
 import {
-  AlignLeft,
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalSpaceBetween,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalSpaceBetween,
   Check,
   ChevronUp,
   ClipboardPaste,
+  Columns3,
   Copy,
   Download,
   FileUp,
@@ -42,6 +50,7 @@ import {
   MapPinned,
   MousePointer2,
   Redo2,
+  Rows3,
   Search,
   Sparkles,
   StickyNote,
@@ -67,6 +76,9 @@ import {
 import {
   addCanvasNodes,
   alignCanvasNodes,
+  type CanvasAlign,
+  type CanvasDistribute,
+  type CanvasLayout,
   connectCanvasNodes,
   distributeCanvasNodes,
   duplicateCanvasSelection,
@@ -149,6 +161,7 @@ export interface CanvasEditorProps {
   className?: string
   initialDocument: CanvasDocument
   nodeRegistry?: CanvasNodeRegistry
+  onlyRenderVisibleElements?: boolean
   onDocumentChange?: (document: CanvasDocument) => void
   readOnly?: boolean
   services: CanvasServices
@@ -197,10 +210,27 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const readOnly = props.readOnly ?? false
   const selectedNodeIds = [...selection.nodeIds]
   const selectedEdgeIds = [...selection.edgeIds]
+  const nodeById = useMemo(
+    () => new Map(history.document.nodes.map((node) => [node.id, node])),
+    [history.document.nodes],
+  )
+  const arrangeNodeIds = useMemo(() => {
+    const ids = [...selection.nodeIds]
+    if (ids.length !== 1) return ids
+    const selected = nodeById.get(ids[0])
+    if (selected?.type !== "group") return ids
+    return history.document.nodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
+  }, [history.document.nodes, nodeById, selection.nodeIds])
+  const arrangeNodes = arrangeNodeIds.flatMap((id) => {
+    const node = nodeById.get(id)
+    return node ? [node] : []
+  })
+  const canArrangeSelection = arrangeNodes.length >= 2
+    && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId)
+  const canDistributeSelection = canArrangeSelection && arrangeNodes.length >= 3
   const nodes = useMemo(() => {
-    const byId = new Map(history.document.nodes.map((node) => [node.id, node]))
     const depth = (node: CanvasNode): number => {
-      const parent = node.parentId ? byId.get(node.parentId) : undefined
+      const parent = node.parentId ? nodeById.get(node.parentId) : undefined
       return parent ? depth(parent) + 1 : 0
     }
     return history.document.nodes
@@ -208,7 +238,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
         ? node
         : { ...node, selected: selection.nodeIds.has(node.id) })
       .sort((left, right) => depth(left) - depth(right))
-  }, [history.document.nodes, selection.nodeIds])
+  }, [history.document.nodes, nodeById, selection.nodeIds])
   const edges = useMemo(
     () => history.document.edges.map((edge) => ({
       ...edge,
@@ -397,9 +427,18 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
   }, [history.document, selectedNodeIds, selectNodes])
-  const layout = useCallback(() => {
-    commit((document) => layoutCanvasNodes(document, { nodeIds: selectedNodeIds }))
-  }, [commit, selectedNodeIds])
+  const align = useCallback((direction: CanvasAlign) => {
+    if (!canArrangeSelection) return
+    commit((document) => alignCanvasNodes(document, arrangeNodeIds, direction))
+  }, [arrangeNodeIds, canArrangeSelection, commit])
+  const distribute = useCallback((axis: CanvasDistribute) => {
+    if (!canDistributeSelection) return
+    commit((document) => distributeCanvasNodes(document, arrangeNodeIds, axis))
+  }, [arrangeNodeIds, canDistributeSelection, commit])
+  const layout = useCallback((value: CanvasLayout = "grid") => {
+    if (!canArrangeSelection) return
+    commit((document) => layoutCanvasNodes(document, { nodeIds: arrangeNodeIds, layout: value }))
+  }, [arrangeNodeIds, canArrangeSelection, commit])
   const copy = useCallback(() => {
     const payload = createCanvasClipboardPayload(history.document, selectedNodeIds)
     if (!payload) return
@@ -605,6 +644,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                 nodesDraggable={!readOnly}
                 nodesFocusable
                 nodeDragThreshold={4}
+                onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                 panActivationKeyCode="Space"
                 panOnDrag={[1]}
                 panOnScroll
@@ -720,9 +760,13 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
 
               {selectedNodeIds.length > 0 && !readOnly ? (
                 <SelectionToolbar
+                  canArrange={canArrangeSelection}
+                  canDistribute={canDistributeSelection}
                   canGroup={selectedNodeIds.length > 1}
                   canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))}
+                  onAlign={align}
                   onDelete={remove}
+                  onDistribute={distribute}
                   onDuplicate={duplicate}
                   onGroup={group}
                   onLayout={layout}
@@ -812,7 +856,8 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
             </div>
           </ContextMenuTrigger>
           <CanvasContextMenu
-            canArrange={selectedNodeIds.length > 1}
+            canArrange={canArrangeSelection}
+            canDistribute={canDistributeSelection}
             canGroup={selectedNodeIds.length > 1}
             canRedo={history.future.length > 0}
             canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))}
@@ -822,14 +867,14 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
             onAddNote={() => addNode("note")}
             onAddText={() => addNode("text")}
-            onAlign={() => commit((document) => alignCanvasNodes(document, selectedNodeIds, "left"))}
+            onAlign={align}
             onCopy={copy}
             onDelete={remove}
-            onDistribute={() => commit((document) => distributeCanvasNodes(document, selectedNodeIds, "horizontal"))}
+            onDistribute={distribute}
             onDuplicate={duplicate}
             onFit={() => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 })}
             onGroup={group}
-            onLayout={layout}
+            onLayout={() => layout("grid")}
             onPaste={paste}
             onRedo={() => dispatch({ type: "redo" })}
             onUngroup={ungroup}
@@ -843,20 +888,33 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   )
 }
 
-function IconButton(props: { disabled?: boolean; icon: ReactNode; label: string; onClick: () => void; pressed?: boolean; shortcut?: string }) {
+function IconButton(props: {
+  disabled?: boolean
+  icon: ReactNode
+  label: string
+  onClick: () => void
+  pressed?: boolean
+  shortcut?: string
+  tooltipSide?: "bottom" | "left" | "right" | "top"
+}) {
   return (
-    <Tooltip content={<span className="flex items-center gap-3">{props.label}{props.shortcut ? <Shortcut>{props.shortcut}</Shortcut> : null}</span>}>
-      <Button
-        aria-label={props.label}
-        aria-pressed={props.pressed}
-        className={cn(props.pressed && "bg-accent text-accent-foreground")}
-        disabled={props.disabled}
-        onClick={props.onClick}
-        size="icon-sm"
-        variant="ghost"
-      >
-        {props.icon}
-      </Button>
+    <Tooltip
+      content={<span className="flex items-center gap-3">{props.label}{props.shortcut ? <Shortcut>{props.shortcut}</Shortcut> : null}</span>}
+      side={props.tooltipSide}
+    >
+      <span className="inline-flex">
+        <Button
+          aria-label={props.label}
+          aria-pressed={props.pressed}
+          className={cn(props.pressed && "bg-accent text-accent-foreground")}
+          disabled={props.disabled}
+          onClick={props.onClick}
+          size="icon-sm"
+          variant="ghost"
+        >
+          {props.icon}
+        </Button>
+      </span>
     </Tooltip>
   )
 }
@@ -915,23 +973,139 @@ function CanvasHeader(props: {
   )
 }
 
+const selectionAlignActions = [
+  { direction: "left", icon: <AlignStartVertical />, label: "Left" },
+  { direction: "center", icon: <AlignCenterVertical />, label: "Center" },
+  { direction: "right", icon: <AlignEndVertical />, label: "Right" },
+  { direction: "top", icon: <AlignStartHorizontal />, label: "Top" },
+  { direction: "middle", icon: <AlignCenterHorizontal />, label: "Middle" },
+  { direction: "bottom", icon: <AlignEndHorizontal />, label: "Bottom" },
+] satisfies readonly { direction: CanvasAlign; icon: ReactNode; label: string }[]
+
+const selectionDistributeActions = [
+  { axis: "horizontal", icon: <AlignHorizontalSpaceBetween />, label: "Horizontal" },
+  { axis: "vertical", icon: <AlignVerticalSpaceBetween />, label: "Vertical" },
+] satisfies readonly { axis: CanvasDistribute; icon: ReactNode; label: string }[]
+
+const selectionLayoutActions = [
+  { layout: "horizontal", icon: <Columns3 />, label: "Horizontal" },
+  { layout: "vertical", icon: <Rows3 />, label: "Vertical" },
+  { layout: "grid", icon: <LayoutGrid />, label: "Grid" },
+] satisfies readonly { layout: CanvasLayout; icon: ReactNode; label: string }[]
+
 function SelectionToolbar(props: {
+  canArrange: boolean
+  canDistribute: boolean
   canGroup: boolean
   canUngroup: boolean
+  onAlign: (direction: CanvasAlign) => void
   onDelete: () => void
+  onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
   onGroup: () => void
-  onLayout: () => void
+  onLayout: (layout: CanvasLayout) => void
   onUngroup: () => void
 }) {
+  const [arrangeMenuOpen, setArrangeMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!arrangeMenuOpen) return
+    const closeMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && menuRef.current?.contains(event.target)) return
+      setArrangeMenuOpen(false)
+    }
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setArrangeMenuOpen(false)
+    }
+    window.addEventListener("pointerdown", closeMenu)
+    window.addEventListener("keydown", closeMenuOnEscape)
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu)
+      window.removeEventListener("keydown", closeMenuOnEscape)
+    }
+  }, [arrangeMenuOpen])
+  useEffect(() => {
+    if (props.canArrange) return
+    setArrangeMenuOpen(false)
+  }, [props.canArrange])
   return (
     <ToolSurface className="convax-selection-toolbar bottom-5 left-1/2 -translate-x-1/2 gap-0.5 max-[760px]:bottom-16">
-      <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" />
-      <IconButton disabled={!props.canGroup} icon={<Group />} label="Group" onClick={props.onGroup} shortcut="⌘G" />
-      <IconButton disabled={!props.canUngroup} icon={<Ungroup />} label="Ungroup" onClick={props.onUngroup} shortcut="⇧⌘G" />
-      <IconButton icon={<LayoutGrid />} label="Auto layout" onClick={props.onLayout} shortcut="⌥⇧F" />
+      <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" tooltipSide="top" />
+      <IconButton disabled={!props.canGroup} icon={<Group />} label="Group" onClick={props.onGroup} shortcut="⌘G" tooltipSide="top" />
+      <IconButton disabled={!props.canUngroup} icon={<Ungroup />} label="Ungroup" onClick={props.onUngroup} shortcut="⇧⌘G" tooltipSide="top" />
       <span className="mx-1 h-5 w-px bg-border" />
-      <IconButton icon={<Trash2 />} label="Delete" onClick={props.onDelete} shortcut="⌫" />
+      <div ref={menuRef} className="relative">
+        <IconButton
+          disabled={!props.canArrange}
+          icon={<AlignStartVertical />}
+          label="Align and arrange"
+          onClick={() => setArrangeMenuOpen((open) => !open)}
+          pressed={arrangeMenuOpen}
+          tooltipSide="top"
+        />
+        {arrangeMenuOpen ? (
+          <div className="convax-arrange-menu" data-canvas-shortcuts="ignore" role="menu">
+            <div className="convax-arrange-menu__title">Align</div>
+            <div className="convax-arrange-menu__grid" role="group">
+              {selectionAlignActions.map((action) => (
+                <button
+                  key={action.direction}
+                  className="convax-arrange-menu__action"
+                  onClick={() => {
+                    props.onAlign(action.direction)
+                    setArrangeMenuOpen(false)
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  {action.icon}
+                  <span>{action.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="convax-arrange-menu__title">Distribute</div>
+            <div className="convax-arrange-menu__grid convax-arrange-menu__grid--two" role="group">
+              {selectionDistributeActions.map((action) => (
+                <button
+                  key={action.axis}
+                  className="convax-arrange-menu__action"
+                  disabled={!props.canDistribute}
+                  onClick={() => {
+                    props.onDistribute(action.axis)
+                    setArrangeMenuOpen(false)
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  {action.icon}
+                  <span>{action.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className="convax-arrange-menu__title">Layout</div>
+            <div className="convax-arrange-menu__grid" role="group">
+              {selectionLayoutActions.map((action) => (
+                <button
+                  key={action.layout}
+                  className="convax-arrange-menu__action"
+                  onClick={() => {
+                    props.onLayout(action.layout)
+                    setArrangeMenuOpen(false)
+                  }}
+                  role="menuitem"
+                  type="button"
+                >
+                  {action.icon}
+                  <span>{action.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+      <IconButton disabled={!props.canArrange} icon={<LayoutGrid />} label="Tidy up" onClick={() => props.onLayout("grid")} shortcut="⌥⇧F" tooltipSide="top" />
+      <span className="mx-1 h-5 w-px bg-border" />
+      <IconButton icon={<Trash2 />} label="Delete" onClick={props.onDelete} shortcut="⌫" tooltipSide="top" />
     </ToolSurface>
   )
 }
@@ -962,9 +1136,9 @@ function ViewportToolbar(props: {
   }, [zoomMenuOpen])
   return (
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
-      <IconButton icon={<ZoomOut />} label="Zoom out" onClick={props.onZoomOut} shortcut="⌘−" />
+      <IconButton icon={<ZoomOut />} label="Zoom out" onClick={props.onZoomOut} shortcut="⌘−" tooltipSide="top" />
       <div ref={menuRef} className="relative">
-        <Tooltip content="Zoom presets">
+        <Tooltip content="Zoom presets" side="top">
           <Button
             aria-expanded={zoomMenuOpen}
             aria-haspopup="menu"
@@ -978,7 +1152,7 @@ function ViewportToolbar(props: {
           </Button>
         </Tooltip>
         {zoomMenuOpen ? (
-          <div className="convax-zoom-menu" role="menu">
+          <div className="convax-zoom-menu" data-canvas-shortcuts="ignore" role="menu">
             <div className="convax-zoom-menu__title">Zoom</div>
             {zoomPresets.map((zoom) => (
               <button
@@ -998,17 +1172,18 @@ function ViewportToolbar(props: {
           </div>
         ) : null}
       </div>
-      <IconButton icon={<ZoomIn />} label="Zoom in" onClick={props.onZoomIn} shortcut="⌘+" />
+      <IconButton icon={<ZoomIn />} label="Zoom in" onClick={props.onZoomIn} shortcut="⌘+" tooltipSide="top" />
       <span className="mx-1 h-5 w-px bg-border" />
-      <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" />
-      <IconButton icon={<Magnet />} label="Snap to grid" onClick={props.onSnapChange} pressed={props.snapToGrid} />
-      <IconButton icon={<MapPinned />} label="Minimap" onClick={props.onMiniMapChange} pressed={props.miniMapVisible} />
+      <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
+      <IconButton icon={<Magnet />} label="Snap to grid" onClick={props.onSnapChange} pressed={props.snapToGrid} tooltipSide="top" />
+      <IconButton icon={<MapPinned />} label="Minimap" onClick={props.onMiniMapChange} pressed={props.miniMapVisible} tooltipSide="top" />
     </ToolSurface>
   )
 }
 
 function CanvasContextMenu(props: {
   canArrange: boolean
+  canDistribute: boolean
   canGroup: boolean
   canRedo: boolean
   canUngroup: boolean
@@ -1018,10 +1193,10 @@ function CanvasContextMenu(props: {
   hasSelection: boolean
   onAddNote: () => void
   onAddText: () => void
-  onAlign: () => void
+  onAlign: (direction: CanvasAlign) => void
   onCopy: () => void
   onDelete: () => void
-  onDistribute: () => void
+  onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
   onFit: () => void
   onGroup: () => void
@@ -1051,9 +1226,11 @@ function CanvasContextMenu(props: {
       {props.hasNodeSelection && !props.readOnly ? <ContextMenuItem onSelect={props.onDuplicate}><Copy />Duplicate<Shortcut>⌘D</Shortcut></ContextMenuItem> : null}
       {props.canGroup && !props.readOnly ? <ContextMenuItem onSelect={props.onGroup}><Group />Group<Shortcut>⌘G</Shortcut></ContextMenuItem> : null}
       {props.canUngroup && !props.readOnly ? <ContextMenuItem onSelect={props.onUngroup}><Ungroup />Ungroup<Shortcut>⇧⌘G</Shortcut></ContextMenuItem> : null}
-      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onLayout}><LayoutGrid />Auto layout<Shortcut>⌥⇧F</Shortcut></ContextMenuItem> : null}
-      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onAlign}><AlignLeft />Align left</ContextMenuItem> : null}
-      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onDistribute}><LayoutGrid />Distribute horizontally</ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={props.onLayout}><LayoutGrid />Tidy up<Shortcut>⌥⇧F</Shortcut></ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={() => props.onAlign("left")}><AlignStartVertical />Align left</ContextMenuItem> : null}
+      {props.canArrange && !props.readOnly ? <ContextMenuItem onSelect={() => props.onAlign("top")}><AlignStartHorizontal />Align top</ContextMenuItem> : null}
+      {props.canDistribute && !props.readOnly ? <ContextMenuItem onSelect={() => props.onDistribute("horizontal")}><AlignHorizontalSpaceBetween />Distribute horizontally</ContextMenuItem> : null}
+      {props.canDistribute && !props.readOnly ? <ContextMenuItem onSelect={() => props.onDistribute("vertical")}><AlignVerticalSpaceBetween />Distribute vertically</ContextMenuItem> : null}
       {props.hasSelection && !props.readOnly ? <ContextMenuSeparator /> : null}
       {props.hasSelection && !props.readOnly ? <ContextMenuItem className="text-destructive" onSelect={props.onDelete}><Trash2 />Delete<Shortcut>⌫</Shortcut></ContextMenuItem> : null}
     </ContextMenuContent>

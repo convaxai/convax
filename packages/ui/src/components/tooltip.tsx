@@ -1,8 +1,9 @@
-import type { ComponentProps, ReactNode } from "react"
+import { Content, Portal, Provider, Root, Trigger } from "@radix-ui/react-tooltip"
+import type { ComponentProps, ReactElement, ReactNode } from "react"
 import { cn } from "../lib/utils"
 
-export function TooltipProvider({ children }: { children: ReactNode }) {
-  return children
+export function TooltipProvider(props: ComponentProps<typeof Provider>) {
+  return <Provider delayDuration={300} skipDelayDuration={100} {...props} />
 }
 
 export function Tooltip({
@@ -10,30 +11,24 @@ export function Tooltip({
   content,
   side = "bottom",
 }: {
-  children: ReactNode
+  children: ReactElement
   content: ReactNode
   side?: "bottom" | "left" | "right" | "top"
 }) {
-  const position = side === "top"
-    ? "bottom-full left-1/2 mb-1.5 -translate-x-1/2"
-    : side === "left"
-      ? "right-full top-1/2 mr-1.5 -translate-y-1/2"
-      : side === "right"
-        ? "left-full top-1/2 ml-1.5 -translate-y-1/2"
-        : "left-1/2 top-full mt-1.5 -translate-x-1/2"
   return (
-    <span className="group relative inline-flex">
-      {children}
-      <span
-        role="tooltip"
-        className={cn(
-          "pointer-events-none absolute z-50 hidden w-max max-w-64 rounded-md bg-foreground px-2.5 py-1.5 text-xs text-background shadow-md group-hover:block group-focus-within:block",
-          position,
-        )}
-      >
-        {content}
-      </span>
-    </span>
+    <Root>
+      <Trigger asChild>{children}</Trigger>
+      <Portal>
+        <Content
+          className="z-[100] w-max max-w-64 select-none rounded-md bg-foreground px-2.5 py-1.5 text-xs text-background shadow-lg [&_[data-slot=shortcut]]:text-background/70"
+          collisionPadding={8}
+          side={side}
+          sideOffset={8}
+        >
+          {content}
+        </Content>
+      </Portal>
+    </Root>
   )
 }
 
