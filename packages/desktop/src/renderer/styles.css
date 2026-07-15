@@ -1,0 +1,86 @@
+:root {
+  color: #171815;
+  background: #f4f4ef;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  min-width: 320px;
+  min-height: 480px;
+  overflow: hidden;
+}
+
+.workspace {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  padding: 32px;
+  border: 12px solid #ffffff;
+}
+
+.mark {
+  display: grid;
+  grid-template-columns: repeat(2, 18px);
+  width: 44px;
+  height: 44px;
+  gap: 4px;
+  margin-bottom: 30px;
+}
+
+.mark span {
+  background: #171815;
+}
+
+.mark span:nth-child(2),
+.mark span:nth-child(3) {
+  background: #35a66f;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #62655d;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(42px, 8vh, 72px);
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 0;
+  color: #62655d;
+  font-size: 13px;
+}
+
+.status span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #35a66f;
+}
+
