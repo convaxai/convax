@@ -8,7 +8,7 @@ import {
   type EdgeProps,
 } from "@xyflow/react"
 import type { CSSProperties } from "react"
-import type { CanvasEdge, CanvasNode } from "../types"
+import type { CanvasEdge, CanvasNode, CanvasSelection } from "../types"
 
 const METEOR_DURATION_SECONDS = 1
 
@@ -31,17 +31,20 @@ export function CanvasEdgeView(props: EdgeProps<CanvasEdge>) {
         height: targetNode.measured.height ?? targetNode.height ?? 0,
       }
     : undefined
-  const geometry =
-    !props.sourceHandleId && !props.targetHandleId && sourceBounds && targetBounds
-      ? getAdaptiveEdgeGeometry(sourceBounds, targetBounds)
-      : {
-          sourceX: props.sourceX,
-          sourceY: props.sourceY,
-          sourcePosition: props.sourcePosition,
-          targetX: props.targetX,
-          targetY: props.targetY,
-          targetPosition: props.targetPosition,
-        }
+  const geometry = resolveCanvasEdgeGeometry({
+    sourceBounds,
+    sourceHandleId: props.sourceHandleId,
+    targetBounds,
+    targetHandleId: props.targetHandleId,
+    fallback: {
+      sourceX: props.sourceX,
+      sourceY: props.sourceY,
+      sourcePosition: props.sourcePosition,
+      targetX: props.targetX,
+      targetY: props.targetY,
+      targetPosition: props.targetPosition,
+    },
+  })
   const [path, labelX, labelY] = getBezierPath({
     sourceX: geometry.sourceX,
     sourceY: geometry.sourceY,
@@ -127,10 +130,71 @@ function getAnimationPhase(id: string) {
   )
 }
 
+interface CanvasNodeBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface CanvasEdgeGeometry {
+  sourceX: number
+  sourceY: number
+  sourcePosition: Position
+  targetX: number
+  targetY: number
+  targetPosition: Position
+}
+
+export function shouldAnimateCanvasEdge(edge: CanvasEdge, selection: CanvasSelection) {
+  if (edge.animated === false || selection.nodeIds.size !== 1 || selection.edgeIds.has(edge.id)) return false
+  const [activeNodeId] = selection.nodeIds
+  return activeNodeId === edge.source || activeNodeId === edge.target
+}
+
+export function resolveCanvasEdgeGeometry(input: {
+  sourceBounds?: CanvasNodeBounds
+  sourceHandleId?: string | null
+  targetBounds?: CanvasNodeBounds
+  targetHandleId?: string | null
+  fallback: CanvasEdgeGeometry
+}): CanvasEdgeGeometry {
+  if (!input.sourceBounds || !input.targetBounds) return input.fallback
+  const adaptive = getAdaptiveEdgeGeometry(input.sourceBounds, input.targetBounds)
+  if (!input.sourceHandleId && !input.targetHandleId) return adaptive
+  const source = getNodeHandleEndpoint(input.sourceBounds, input.sourceHandleId, adaptive.sourcePosition)
+  const target = getNodeHandleEndpoint(input.targetBounds, input.targetHandleId, adaptive.targetPosition)
+  return {
+    sourceX: source.x,
+    sourceY: source.y,
+    sourcePosition: source.position,
+    targetX: target.x,
+    targetY: target.y,
+    targetPosition: target.position,
+  }
+}
+
+function getNodeHandleEndpoint(bounds: CanvasNodeBounds, handleId: string | null | undefined, fallback: Position) {
+  const position = getHandlePosition(handleId, fallback)
+  if (position === Position.Left) return { x: bounds.x, y: bounds.y + bounds.height / 2, position }
+  if (position === Position.Right) return { x: bounds.x + bounds.width, y: bounds.y + bounds.height / 2, position }
+  if (position === Position.Top) return { x: bounds.x + bounds.width / 2, y: bounds.y, position }
+  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height, position }
+}
+
+function getHandlePosition(handleId: string | null | undefined, fallback: Position) {
+  const normalized = handleId?.toLowerCase()
+  if (normalized?.includes("left")) return Position.Left
+  if (normalized?.includes("right")) return Position.Right
+  if (normalized?.includes("top")) return Position.Top
+  if (normalized?.includes("bottom")) return Position.Bottom
+  return fallback
+}
+
 function getAdaptiveEdgeGeometry(
   source: { x: number; y: number; width: number; height: number },
   target: { x: number; y: number; width: number; height: number },
-) {
+): CanvasEdgeGeometry {
   const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 }
   const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 }
   const delta = { x: targetCenter.x - sourceCenter.x, y: targetCenter.y - sourceCenter.y }

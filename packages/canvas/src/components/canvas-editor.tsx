@@ -44,6 +44,7 @@ import {
   FileUp,
   Focus,
   Group,
+  ImagePlus,
   LayoutGrid,
   LoaderCircle,
   Magnet,
@@ -53,12 +54,12 @@ import {
   Rows3,
   Search,
   Sparkles,
-  StickyNote,
   TriangleAlert,
   Trash2,
   Type,
   Undo2,
   Ungroup,
+  Video,
   Workflow,
   ZoomIn,
   ZoomOut,
@@ -112,7 +113,8 @@ import {
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import { createCanvasShortcutHandler } from "../use-canvas-shortcuts"
 import { useSpacePanning } from "../use-space-panning"
-import { CanvasConnectionLine, CanvasEdgeView } from "./canvas-edge"
+import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
+import { PendingConnectionMenu } from "./connection-node-menu"
 
 const defaultNodeRegistry = createDefaultCanvasNodeRegistry()
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
@@ -164,6 +166,41 @@ function findOpenCanvasPoint(document: CanvasDocument, preferred: CanvasPoint) {
   })) ?? candidates[0]
 }
 
+interface PendingConnection {
+  nodeId: string
+  side: "left" | "right"
+  sourceScreen: CanvasPoint
+  targetPosition: CanvasPoint
+  targetScreen: CanvasPoint
+}
+
+interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side" | "sourceScreen"> {
+  pointerScreen: CanvasPoint
+}
+
+function getEventClientPoint(event: MouseEvent | TouchEvent): CanvasPoint | null {
+  if ("changedTouches" in event) {
+    const touch = event.changedTouches[0]
+    return touch ? { x: touch.clientX, y: touch.clientY } : null
+  }
+  return { x: event.clientX, y: event.clientY }
+}
+
+function getNodeWorldPosition(document: CanvasDocument, nodeId: string): CanvasPoint {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const visited = new Set<string>()
+  let current = nodes.get(nodeId)
+  let x = 0
+  let y = 0
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    x += current.position.x
+    y += current.position.y
+    current = current.parentId ? nodes.get(current.parentId) : undefined
+  }
+  return { x, y }
+}
+
 export interface CanvasEditorProps {
   className?: string
   clipboardScope?: string
@@ -213,10 +250,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [leaving, setLeaving] = useState(false)
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
+  const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const spacePanning = useSpacePanning()
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
+  const connectionStartRef = useRef<ConnectionStart | null>(null)
+  const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ nodeIds: string[]; positions: Map<string, CanvasPoint> } | null>(null)
   const documentRef = useRef(history.document)
   const historyRef = useRef(history)
@@ -293,10 +333,11 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     if (edgesHidden) return []
     return history.document.edges.map((edge) => ({
       ...edge,
+      animated: shouldAnimateCanvasEdge(edge, selection),
       selected: selection.edgeIds.has(edge.id),
       type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
     }))
-  }, [edgesHidden, history.document.edges, selection.edgeIds])
+  }, [edgesHidden, history.document.edges, selection])
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
     const definitions = props.nodeRegistry.list()
@@ -486,6 +527,20 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     operationControllersRef.current.clear()
     saveControllerRef.current?.abort()
   }, [])
+  useEffect(() => {
+    if (!pendingConnection) return
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-convax-connect-menu='true']")) return
+      setPendingConnection(null)
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown, true)
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointerDown, true)
+  }, [pendingConnection])
+  useEffect(() => {
+    if (pendingConnection && !history.document.nodes.some((node) => node.id === pendingConnection.nodeId)) {
+      setPendingConnection(null)
+    }
+  }, [history.document.nodes, pendingConnection])
   const addNode = useCallback(
     (type: string, position?: CanvasPoint) => {
       const definition = props.nodeRegistry.get(type)
@@ -505,28 +560,46 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
   }, [history.document, selectedNodeIds, selectNodes])
+  const duplicateNode = useCallback((nodeId: string) => {
+    const result = duplicateCanvasSelection(documentRef.current, [nodeId])
+    if (result.selectedNodeIds.length === 0) return
+    dispatch({ type: "commit", document: result.document })
+    selectNodes(result.selectedNodeIds)
+  }, [selectNodes])
   const quickConnect = useCallback(
-    (nodeId: string, side: "left" | "right", nodeType: string) => {
-      const anchor = history.document.nodes.find((node) => node.id === nodeId)
+    (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
       const definition = props.nodeRegistry.get(nodeType)
-      if (!anchor || !definition || readOnly) return
-      const anchorSize = getCanvasNodeSize(anchor)
-      const created = definition.create({ position: anchor.position })
-      const createdSize = getCanvasNodeSize(created)
-      const node = {
-        ...created,
-        parentId: anchor.parentId,
-        position: {
-          x: side === "right"
-            ? anchor.position.x + anchorSize.width + 160
-            : anchor.position.x - createdSize.width - 160,
-          y: anchor.position.y + (anchorSize.height - createdSize.height) / 2,
-        },
-      }
-      const withNode = addCanvasNodes(history.document, [node]).document
-      dispatch({
-        type: "commit",
-        document: connectCanvasNodes(withNode, side === "right"
+      if (!definition || readOnly) return
+      const created = definition.create({ position: targetPosition ?? { x: 0, y: 0 } })
+      commit((document) => {
+        const anchor = document.nodes.find((node) => node.id === nodeId)
+        if (!anchor) return document
+        const anchorSize = getCanvasNodeSize(anchor)
+        const createdSize = getCanvasNodeSize(created)
+        const parentPosition = anchor.parentId
+          ? getNodeWorldPosition(document, anchor.parentId)
+          : { x: 0, y: 0 }
+        const localTarget = targetPosition
+          ? { x: targetPosition.x - parentPosition.x, y: targetPosition.y - parentPosition.y }
+          : null
+        const node: CanvasNode = {
+          ...created,
+          extent: anchor.parentId ? "parent" : created.extent,
+          parentId: anchor.parentId,
+          position: localTarget
+            ? {
+                x: side === "right" ? localTarget.x : localTarget.x - createdSize.width,
+                y: localTarget.y - createdSize.height / 2,
+              }
+            : {
+                x: side === "right"
+                  ? anchor.position.x + anchorSize.width + 160
+                  : anchor.position.x - createdSize.width - 160,
+                y: anchor.position.y + (anchorSize.height - createdSize.height) / 2,
+              },
+        }
+        const withNode = addCanvasNodes(document, [node]).document
+        return connectCanvasNodes(withNode, side === "right"
           ? {
               source: anchor.id,
               sourceHandle: "source-right",
@@ -538,17 +611,21 @@ function CanvasEditorContent(props: CanvasEditorProps & {
               sourceHandle: "source-right",
               target: anchor.id,
               targetHandle: "target-left",
-            }),
+            })
       })
-      selectNodes([node.id])
+      selectNodes([created.id])
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
-    [history.document, props.nodeRegistry, readOnly, selectNodes, telemetryService],
+    [commit, props.nodeRegistry, readOnly, selectNodes, telemetryService],
   )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
     updateSelection([])
   }, [commit, selectedEdgeIds, selectedNodeIds, updateSelection])
+  const removeNode = useCallback((nodeId: string) => {
+    commit((document) => removeCanvasElements(document, { nodeIds: [nodeId] }))
+    updateSelection([])
+  }, [commit, updateSelection])
   const group = useCallback(() => {
     const result = groupCanvasNodes(history.document, selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
@@ -643,13 +720,20 @@ function CanvasEditorContent(props: CanvasEditorProps & {
           signal: controller.signal,
         })
         .then(
-          (resources) => {
+          (items) => {
             if (controller.signal.aborted || documentRef.current.id !== documentId) return
-            if (resources.length === 0) {
+            if (items.length === 0) {
               notificationService?.show({ kind: "warning", title: "No supported files to add" })
               return
             }
-            const nodes = resources.map((resource) => createMediaNode({ position: anchor, resource }))
+            const nodes = items.map((item) => item.kind === "text"
+              ? createTextNode({
+                  format: item.format,
+                  label: item.name,
+                  position: anchor,
+                  text: item.text,
+                })
+              : createMediaNode({ position: anchor, resource: item }))
             dispatch({
               type: "commit-update",
               update: (document) => {
@@ -662,7 +746,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             })
             selectNodes(nodes.map((node) => node.id))
             fitAfterRender()
-            notificationService?.show({ kind: "success", title: `${resources.length} item${resources.length === 1 ? "" : "s"} added` })
+            notificationService?.show({ kind: "success", title: `${items.length} item${items.length === 1 ? "" : "s"} added` })
           },
           (error) => {
             if (!controller.signal.aborted) notifyError("Upload failed", error)
@@ -672,6 +756,53 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     },
     [dispatch, fitAfterRender, notificationService, notifyError, pointAtCenter, readOnly, selectedNodeIds, selectNodes, uploadService],
   )
+  const replaceNodeMedia = useCallback((nodeId: string, file: File) => {
+    if (!uploadService || readOnly) return
+    const sourceNode = documentRef.current.nodes.find((node) => node.id === nodeId)
+    if (!sourceNode || !["image", "video", "audio", "file"].includes(sourceNode.data.kind)) return
+    const expectedKind = sourceNode.data.kind
+    const documentId = documentRef.current.id
+    const operationController = new AbortController()
+    operationControllersRef.current.add(operationController)
+    void uploadService.upload({
+      files: [file],
+      context: { documentId, selectedNodeIds: [nodeId], source: "node" },
+      signal: operationController.signal,
+    }).then(
+      (items) => {
+        if (operationController.signal.aborted || documentRef.current.id !== documentId) return
+        const resource = items.find((item) => item.kind !== "text" && item.kind === expectedKind)
+        if (!resource || resource.kind === "text") {
+          notificationService?.show({
+            kind: "warning",
+            title: `Choose a ${expectedKind} file`,
+            description: "The selected file did not match this node type.",
+          })
+          return
+        }
+        commit((document) => {
+          const current = document.nodes.find((node) => node.id === nodeId)
+          if (!current) return document
+          const replacement = createMediaNode({ position: current.position, resource })
+          return {
+            ...document,
+            nodes: document.nodes.map((node) => node.id === nodeId
+              ? {
+                  ...node,
+                  data: replacement.data,
+                  type: replacement.type,
+                }
+              : node),
+          }
+        })
+        selectNodes([nodeId])
+        notificationService?.show({ kind: "success", title: `${resource.name ?? resource.kind} replaced` })
+      },
+      (error) => {
+        if (!operationController.signal.aborted) notifyError("Could not replace media", error)
+      },
+    ).finally(() => operationControllersRef.current.delete(operationController))
+  }, [commit, notificationService, notifyError, readOnly, selectNodes, uploadService])
   const runGenerate = useCallback(() => {
     if (!generateService || readOnly) return
     if (!prompt.trim()) {
@@ -747,6 +878,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
 
   const clearOverlays = useCallback(() => {
     updateSelection([])
+    setPendingConnection(null)
     setNodeMenuOpen(false)
     setGenerateOpen(false)
     setSearchOpen(false)
@@ -778,15 +910,19 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       document: history.document,
       selection,
       readOnly,
+      canUpload: Boolean(uploadService),
       connectionNodeTypes,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
       cancelGesture: () => dispatch({ type: "cancel-gesture" }),
       endGesture: () => dispatch({ type: "end-gesture" }),
       commit,
+      duplicateNode,
       quickConnect,
+      removeNode,
+      replaceNodeMedia,
       selectNodes,
     }),
-    [commit, connectionNodeTypes, history.document, quickConnect, readOnly, selectNodes, selection],
+    [commit, connectionNodeTypes, duplicateNode, history.document, quickConnect, readOnly, removeNode, replaceNodeMedia, selectNodes, selection, uploadService],
   )
   const searchResults = query.trim()
     ? history.document.nodes.filter((node) => `${node.data.label} ${"text" in node.data ? node.data.text : ""}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
@@ -835,6 +971,8 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             >
               <ReactFlow
                 colorMode="light"
+                connectOnClick={false}
+                connectionDragThreshold={4}
                 connectionLineComponent={CanvasConnectionLine}
                 deleteKeyCode={null}
                 edgeTypes={edgeTypes}
@@ -864,6 +1002,54 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 zoomOnPinch
                 zoomOnScroll={false}
                 onConnect={(connection) => commit((document) => connectCanvasNodes(document, connection))}
+                onConnectEnd={(event, connectionState) => {
+                  const start = connectionStartRef.current
+                  connectionStartRef.current = null
+                  const targetScreen = getEventClientPoint(event)
+                  if (!start || !targetScreen) return
+                  if (Math.hypot(
+                    targetScreen.x - start.pointerScreen.x,
+                    targetScreen.y - start.pointerScreen.y,
+                  ) <= 4) return
+                  if (connectionState.isValid || connectionState.toNode || !connectionState.fromNode) return
+                  const bounds = rootRef.current?.getBoundingClientRect()
+                  if (!bounds
+                    || targetScreen.x < bounds.left
+                    || targetScreen.x > bounds.right
+                    || targetScreen.y < bounds.top
+                    || targetScreen.y > bounds.bottom) return
+                  ignoreConnectionPaneClickRef.current = true
+                  window.setTimeout(() => {
+                    ignoreConnectionPaneClickRef.current = false
+                  }, 250)
+                  setPendingConnection({
+                    nodeId: start.nodeId,
+                    side: start.side,
+                    sourceScreen: start.sourceScreen,
+                    targetPosition: reactFlow.screenToFlowPosition(targetScreen),
+                    targetScreen,
+                  })
+                }}
+                onConnectStart={(event, params) => {
+                  setPendingConnection(null)
+                  const pointerScreen = getEventClientPoint(event)
+                  if (!params.nodeId || !params.handleId || !pointerScreen) {
+                    connectionStartRef.current = null
+                    return
+                  }
+                  const handle = event.target instanceof Element
+                    ? event.target.closest(".react-flow__handle")
+                    : null
+                  const bounds = handle?.getBoundingClientRect()
+                  connectionStartRef.current = {
+                    nodeId: params.nodeId,
+                    pointerScreen,
+                    side: params.handleId.includes("left") ? "left" : "right",
+                    sourceScreen: bounds
+                      ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+                      : pointerScreen,
+                  }
+                }}
                 onEdgesChange={(changes) => {
                   const selectionChanges = changes.filter((change) => change.type === "select")
                   if (selectionChanges.length > 0) {
@@ -948,7 +1134,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                   }
                 }}
                 onPaneClick={() => {
+                  if (ignoreConnectionPaneClickRef.current) {
+                    ignoreConnectionPaneClickRef.current = false
+                    return
+                  }
                   updateSelection([])
+                  setPendingConnection(null)
                   rootRef.current?.focus()
                 }}
                 onPaneContextMenu={(event) => {
@@ -968,6 +1159,25 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 ) : null}
               </ReactFlow>
 
+              {pendingConnection ? (
+                <PendingConnectionMenu
+                  items={connectionNodeTypes}
+                  onSelect={(type) => {
+                    const connection = pendingConnection
+                    setPendingConnection(null)
+                    quickConnect(
+                      connection.nodeId,
+                      connection.side,
+                      type,
+                      connection.targetPosition,
+                    )
+                  }}
+                  side={pendingConnection.side}
+                  sourceScreen={pendingConnection.sourceScreen}
+                  targetScreen={pendingConnection.targetScreen}
+                />
+              ) : null}
+
               <CanvasHeader
                 canExport={Boolean(exportService)}
                 canGenerate={Boolean(generateService)}
@@ -976,7 +1186,6 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 canUpload={Boolean(uploadService)}
                 document={history.document}
                 generating={generating}
-                onAddNote={() => addNode("note")}
                 onAddText={() => addNode("text")}
                 onExport={exportCanvas}
                 onGenerate={() => setGenerateOpen(true)}
@@ -1038,7 +1247,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 </div>
               ) : null}
 
-              {selectedNodeIds.length > 0 && !readOnly ? (
+              {(selectedNodeIds.length > 1 || selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))) && !readOnly ? (
                 <SelectionToolbar
                   canArrange={canArrangeSelection}
                   canDistribute={canDistributeSelection}
@@ -1074,7 +1283,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                   <div className="grid grid-cols-2 gap-1">
                     {props.nodeRegistry.list().filter((definition) => !definition.hidden && definition.type !== "group").map((definition) => (
                       <Button key={definition.type} className="justify-start" onClick={() => addNode(definition.type)} size="sm" variant="ghost">
-                        {definition.type === "note" ? <StickyNote /> : <Type />}
+                        {definition.type === "text" ? <Type /> : <FileUp />}
                         {definition.label}
                       </Button>
                     ))}
@@ -1149,8 +1358,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             canUpload={Boolean(uploadService)}
             hasNodeSelection={selectedNodeIds.length > 0}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
-            onAddNote={() => addNode("note")}
             onAddText={() => addNode("text")}
+            onAddImage={() => addNode("image")}
+            onAddVideo={() => addNode("video")}
             onAlign={align}
             onCopy={copy}
             onDelete={remove}
@@ -1219,7 +1429,6 @@ function CanvasHeader(props: {
   canUpload: boolean
   document: CanvasDocument
   generating: boolean
-  onAddNote: () => void
   onAddText: () => void
   onExport: () => void
   onGenerate: () => void
@@ -1244,7 +1453,6 @@ function CanvasHeader(props: {
         <IconButton icon={<MousePointer2 />} label="Select" onClick={() => undefined} shortcut="V" />
         <span className="mx-1 h-5 w-px bg-border" />
         <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
-        <IconButton disabled={props.readOnly} icon={<StickyNote />} label="Note" onClick={props.onAddNote} />
         {props.canUpload ? <IconButton disabled={props.readOnly} icon={<FileUp />} label="Upload" onClick={props.onUpload} /> : null}
         {props.canGenerate ? <IconButton disabled={props.readOnly || props.generating} icon={props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />} label="Generate" onClick={props.onGenerate} shortcut="⌘↵" /> : null}
       </ToolSurface>
@@ -1495,8 +1703,9 @@ function CanvasContextMenu(props: {
   canUpload: boolean
   hasNodeSelection: boolean
   hasSelection: boolean
-  onAddNote: () => void
+  onAddImage: () => void
   onAddText: () => void
+  onAddVideo: () => void
   onAlign: (direction: CanvasAlign) => void
   onCopy: () => void
   onDelete: () => void
@@ -1516,7 +1725,8 @@ function CanvasContextMenu(props: {
     <ContextMenuContent className="w-60">
       {!props.readOnly ? <ContextMenuLabel>Create</ContextMenuLabel> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddText}><Type />Add text</ContextMenuItem> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddNote}><StickyNote />Add note</ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddImage}><ImagePlus />Add image</ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddVideo}><Video />Add video</ContextMenuItem> : null}
       {props.canUpload && !props.readOnly ? <ContextMenuItem onSelect={props.onUpload}><FileUp />Upload files</ContextMenuItem> : null}
       {!props.readOnly ? <ContextMenuSeparator /> : null}
       <ContextMenuLabel>Canvas</ContextMenuLabel>
