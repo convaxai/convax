@@ -1,0 +1,954 @@
+import { randomUUID } from "node:crypto"
+import { watch as watchFileSystem, type FSWatcher } from "node:fs"
+import fs from "node:fs/promises"
+import path from "node:path"
+import type {
+  ProjectCanvas,
+  ProjectChangeEvent,
+  ProjectDirectoryListing,
+  ProjectEntry,
+  ProjectFileContents,
+  ProjectFileInfo,
+  ProjectMutationResult,
+  ProjectTextFileContents,
+  ProjectTextPreviewContents,
+  ProjectWorkspace,
+} from "../contracts"
+import {
+  assertCanvasExists,
+  assertCopyOrImportTarget,
+  assertNoSymlinkSegments,
+  assertNotProjectRoot,
+  assertPortableTree,
+  assertUserMutationPath,
+  canvasDirectory,
+  canvasDocumentPath,
+  canvasDocumentRelativePath,
+  collisionKey,
+  compareEntries,
+  compareProjects,
+  copyPath,
+  createCanvasId,
+  ensureInside,
+  exists,
+  existsPortable,
+  isDirectory,
+  isIgnoredName,
+  isInsidePath,
+  isManagedAssetPath,
+  isNodeError,
+  isProjectRecord,
+  isSafeProjectRoot,
+  joinRelative,
+  legacyCanvasDocumentPath,
+  managedAssetDirectory,
+  mimeTypeForPath,
+  movePath,
+  mutation,
+  nextAvailablePath,
+  normalizeRelativePath,
+  normalizeSelectionRoots,
+  parentOf,
+  parseProjectManifest,
+  projectIdForPath,
+  projectManifestPath,
+  replaceFile,
+  removePathWithRetries,
+  requireCanvasId,
+  requireEntryPath,
+  requireProjectId,
+  sameNativePath,
+  textFileKey,
+  textPreviewBytes,
+  toProjectRecord,
+  validActiveCanvasId,
+  validateCanvasName,
+  validateName,
+  workspaceFromManifest,
+  writeFileReplacing,
+  type ProjectManifest,
+  type ProjectRegistryFile,
+  type ProjectRegistryRecord,
+} from "./project-manager-helpers"
+
+export interface NodeProjectManagerOptions {
+  caseInsensitivePaths?: boolean
+  maxReadableFileBytes?: number
+  maxTextFileBytes?: number
+  now?: () => number
+  registryFile: string
+  trash?: (targetPath: string) => Promise<void>
+  watchDebounceMs?: number
+}
+
+export class NodeProjectManager {
+  private readonly now: () => number
+  private registryQueue: Promise<unknown> = Promise.resolve()
+  private readonly projectMutationQueues = new Map<string, Promise<void>>()
+  private readonly textWriteQueues = new Map<string, Promise<void>>()
+
+  constructor(private readonly options: NodeProjectManagerOptions) {
+    this.now = options.now ?? Date.now
+  }
+
+  list() {
+    return this.listProjects()
+  }
+
+  add(rootPath: string) {
+    return this.addProject(rootPath)
+  }
+
+  create(parentPath: string, name: string) {
+    return this.createProject({ name, parentPath })
+  }
+
+  rename(projectId: string, name: string) {
+    return this.renameProject(projectId, name)
+  }
+
+  forget(projectId: string) {
+    return this.forgetProject(projectId)
+  }
+
+  async flushPendingWrites() {
+    const failures: unknown[] = []
+    while (true) {
+      const registry = this.registryQueue
+      const results = await Promise.allSettled([...this.textWriteQueues.values(), ...this.projectMutationQueues.values()])
+      failures.push(...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []))
+      await registry
+      if (this.textWriteQueues.size === 0
+        && this.projectMutationQueues.size === 0
+        && registry === this.registryQueue) break
+    }
+    if (failures.length > 0) throw new AggregateError(failures, "Project files could not be saved")
+  }
+
+  async listProjects() {
+    const projects = await this.readStableRegistry()
+    return Promise.all(projects.map(async (project) => {
+      const safe = await isSafeProjectRoot(project.rootPath)
+      return { ...toProjectRecord(project), missing: !safe }
+    })).then((records) => records.sort(compareProjects))
+  }
+
+  async addProject(rootPath: string) {
+    const realRoot = await fs.realpath(path.resolve(rootPath))
+    const stat = await fs.stat(realRoot)
+    if (!stat.isDirectory()) throw new Error(`Project root is not a directory: ${rootPath}`)
+    const registeredProjects = await this.readStableRegistry()
+    const existingByRoot = registeredProjects.find((project) => sameNativePath(project.rootPath, realRoot))
+    const manifest = await this.ensureProjectManifest(realRoot, existingByRoot?.id ?? projectIdForPath(realRoot))
+    const id = manifest.projectId
+    const existingById = registeredProjects.find((project) => project.id === id)
+    let rebindFromRoot: string | undefined
+    if (existingById && !sameNativePath(existingById.rootPath, realRoot)) {
+      if (await isSafeProjectRoot(existingById.rootPath)) {
+        throw new Error(`Project id is already bound to another folder: ${existingById.rootPath}`)
+      }
+      rebindFromRoot = existingById.rootPath
+    }
+    return this.mutateRegistry((projects) => {
+      const conflicting = projects.find((project) => project.id === id && !sameNativePath(project.rootPath, realRoot))
+      if (conflicting && (!rebindFromRoot || !sameNativePath(conflicting.rootPath, rebindFromRoot))) {
+        throw new Error(`Project id is already bound to another folder: ${conflicting.rootPath}`)
+      }
+      const existing = projects.find((project) => project.id === id || sameNativePath(project.rootPath, realRoot))
+      const timestamp = this.now()
+      const activeCanvasId = existing?.activeCanvasId && manifest.canvases.some((canvas) => canvas.id === existing.activeCanvasId)
+        ? existing.activeCanvasId
+        : manifest.canvases[0]!.id
+      const project: ProjectRegistryRecord = existing
+        ? { ...existing, activeCanvasId, id, lastOpenedAt: timestamp, missing: false, rootPath: realRoot }
+        : {
+            activeCanvasId,
+            createdAt: timestamp,
+            id,
+            lastOpenedAt: timestamp,
+            name: path.basename(realRoot) || "Project",
+            rootPath: realRoot,
+          }
+      return {
+        projects: [...projects.filter((candidate) => candidate.id !== id && !sameNativePath(candidate.rootPath, realRoot)), project],
+        value: toProjectRecord(project),
+      }
+    })
+  }
+
+  async createProject(input: { name: string; parentPath: string }) {
+    const name = validateName(input.name)
+    const parentRoot = await fs.realpath(path.resolve(input.parentPath))
+    if (!(await fs.stat(parentRoot)).isDirectory()) throw new Error(`Project parent is not a directory: ${input.parentPath}`)
+    const rootPath = path.join(parentRoot, name)
+    if (await existsPortable(rootPath, true)) throw new Error(`Project already exists: ${name}`)
+    await fs.mkdir(rootPath)
+    return this.addProject(rootPath)
+  }
+
+  renameProject(projectId: string, name: string) {
+    const normalizedName = validateName(name)
+    return this.mutateRegistry((projects) => {
+      const current = projects.find((project) => project.id === projectId)
+      if (!current) throw new Error(`Project was not found: ${projectId}`)
+      const project: ProjectRegistryRecord = { ...current, name: normalizedName }
+      return {
+        projects: projects.map((candidate) => candidate.id === projectId ? project : candidate),
+        value: toProjectRecord(project),
+      }
+    })
+  }
+
+  async forgetProject(projectId: string) {
+    await this.waitForProjectTextWrites(projectId)
+    return this.queueProjectMutation(projectId, () => this.mutateRegistry((projects) => ({
+      projects: projects.filter((project) => project.id !== projectId),
+      value: projects.some((project) => project.id === projectId),
+    })))
+  }
+
+  async listDirectory(input: { path?: string; projectId: string }): Promise<ProjectDirectoryListing> {
+    const relativePath = normalizeRelativePath(input.path)
+    const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
+    const stat = await fs.stat(absolutePath)
+    if (!stat.isDirectory()) throw new Error(`Project path is not a directory: ${relativePath}`)
+    const dirents = await fs.readdir(absolutePath, { withFileTypes: true })
+    const entries = await Promise.all(dirents
+      .filter((dirent) => !dirent.isSymbolicLink() && !isIgnoredName(dirent.name) && (dirent.isDirectory() || dirent.isFile()))
+      .map(async (dirent): Promise<ProjectEntry> => {
+        const entryPath = joinRelative(relativePath, dirent.name)
+        const entryStat = await fs.stat(path.join(absolutePath, dirent.name))
+        return {
+          kind: dirent.isDirectory() ? "directory" : "file",
+          modifiedAt: entryStat.mtimeMs,
+          name: dirent.name,
+          parentPath: relativePath,
+          path: entryPath,
+          size: dirent.isFile() ? entryStat.size : undefined,
+        }
+      }))
+    entries.sort(compareEntries)
+    return { entries, path: relativePath, projectId: input.projectId }
+  }
+
+  createEntry(input: {
+    content?: string
+    kind: "directory" | "file"
+    name: string
+    parentPath?: string
+    projectId: string
+  }) {
+    return this.queueProjectMutation(input.projectId, () => this.createEntryUnlocked(input))
+  }
+
+  private async createEntryUnlocked(input: {
+    content?: string
+    kind: "directory" | "file"
+    name: string
+    parentPath?: string
+    projectId: string
+  }): Promise<ProjectMutationResult> {
+    const parentPath = normalizeRelativePath(input.parentPath)
+    const name = validateName(input.name)
+    assertUserMutationPath(parentPath)
+    const { absolutePath: parent } = await this.resolveExisting(input.projectId, parentPath)
+    if (!(await fs.stat(parent)).isDirectory()) throw new Error(`Project path is not a directory: ${parentPath}`)
+    const targetPath = joinRelative(parentPath, name)
+    assertUserMutationPath(targetPath)
+    const target = path.join(parent, name)
+    if (await existsPortable(target, this.caseInsensitivePaths)) throw new Error(`Project entry already exists: ${targetPath}`)
+    if (input.kind === "directory") await fs.mkdir(target)
+    else await fs.writeFile(target, input.content ?? "", { encoding: "utf8", flag: "wx" })
+    return mutation("create", input.projectId, [targetPath], undefined, [targetPath])
+  }
+
+  renameEntry(input: { name: string; path: string; projectId: string }) {
+    return this.queueProjectMutation(input.projectId, () => this.renameEntryUnlocked(input))
+  }
+
+  private async renameEntryUnlocked(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult> {
+    const sourcePath = requireEntryPath(input.path)
+    assertUserMutationPath(sourcePath)
+    const name = validateName(input.name)
+    const { absolutePath: source, rootPath } = await this.resolveExisting(input.projectId, sourcePath)
+    assertNotProjectRoot(source, rootPath)
+    const targetPath = joinRelative(parentOf(sourcePath), name)
+    assertUserMutationPath(targetPath)
+    const { absolutePath: target } = await this.resolveOutput(input.projectId, targetPath)
+    if (sourcePath === targetPath) return mutation("rename", input.projectId, [sourcePath], [sourcePath], [targetPath])
+    const caseOnlyRename = sourcePath.toLowerCase() === targetPath.toLowerCase()
+    const targetStat = await fs.lstat(target).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return null
+      throw error
+    })
+    if (caseOnlyRename && (!targetStat || sameNativePath(await fs.realpath(source), await fs.realpath(target)))) {
+      const temporary = path.join(path.dirname(source), `.${path.basename(source)}.${randomUUID()}.rename`)
+      await fs.rename(source, temporary)
+      try {
+        await fs.rename(temporary, target)
+      } catch (error) {
+        await fs.rename(temporary, source)
+        throw error
+      }
+      return mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath])
+    }
+    if (targetStat || await existsPortable(target, this.caseInsensitivePaths)) {
+      throw new Error(`Project entry already exists: ${targetPath}`)
+    }
+    await fs.rename(source, target)
+    return mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath])
+  }
+
+  moveEntries(input: { destinationPath?: string; paths: string[]; projectId: string }) {
+    return this.queueProjectMutation(input.projectId, () => this.moveEntriesUnlocked(input))
+  }
+
+  private async moveEntriesUnlocked(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
+    const destinationPath = normalizeRelativePath(input.destinationPath)
+    assertUserMutationPath(destinationPath)
+    const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
+    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Move destination is not a directory: ${destinationPath}`)
+    const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
+    const moves: Array<{ source: string; sourcePath: string; target: string; targetPath: string }> = []
+    const plannedTargets = new Set<string>()
+    for (const sourcePath of sourcePaths) {
+      assertUserMutationPath(sourcePath)
+      const { absolutePath: source, rootPath } = await this.resolveExisting(input.projectId, sourcePath)
+      assertNotProjectRoot(source, rootPath)
+      const sourceStat = await fs.stat(source)
+      validateName(path.posix.basename(sourcePath))
+      await assertPortableTree(source)
+      if (sourceStat.isDirectory() && (destinationPath === sourcePath || destinationPath.startsWith(`${sourcePath}/`))) {
+        throw new Error(`Cannot move a directory into itself: ${sourcePath}`)
+      }
+      const targetPath = joinRelative(destinationPath, path.posix.basename(sourcePath))
+      if (targetPath === sourcePath) continue
+      const { absolutePath: target } = await this.resolveOutput(input.projectId, targetPath)
+      const targetKey = collisionKey(targetPath, this.caseInsensitivePaths)
+      if (await existsPortable(target, this.caseInsensitivePaths) || plannedTargets.has(targetKey)) {
+        throw new Error(`Project entry already exists: ${targetPath}`)
+      }
+      plannedTargets.add(targetKey)
+      moves.push({ source, sourcePath, target, targetPath })
+    }
+    for (const move of moves) await movePath(move.source, move.target)
+    const targetPaths = moves.map((move) => move.targetPath)
+    return mutation("move", input.projectId, [...sourcePaths, ...targetPaths], sourcePaths, targetPaths)
+  }
+
+  copyEntries(input: { destinationPath?: string; paths: string[]; projectId: string }) {
+    return this.queueProjectMutation(input.projectId, () => this.copyEntriesUnlocked(input))
+  }
+
+  private async copyEntriesUnlocked(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
+    const destinationPath = normalizeRelativePath(input.destinationPath)
+    const managedAssetCopy = destinationPath === managedAssetDirectory
+    if (!managedAssetCopy) assertUserMutationPath(destinationPath)
+    const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
+    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Copy destination is not a directory: ${destinationPath}`)
+    const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
+    const copies: Array<{ source: string; target: string; targetPath: string }> = []
+    const reservedTargets = new Set<string>()
+    for (const sourcePath of sourcePaths) {
+      assertUserMutationPath(sourcePath)
+      const { absolutePath: source } = await this.resolveExisting(input.projectId, sourcePath)
+      const sourceStat = await fs.stat(source)
+      if (sourceStat.isDirectory() && isInsidePath(destination, source)) {
+        throw new Error(`Cannot copy a directory into itself: ${sourcePath}`)
+      }
+      const sourceName = validateName(path.posix.basename(sourcePath))
+      await assertPortableTree(source)
+      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetCopy)
+      const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
+      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetCopy)
+      reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
+      copies.push({ source, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
+    }
+    for (const item of copies) await copyPath(item.source, item.target)
+    const targetPaths = copies.map((item) => item.targetPath)
+    return mutation("copy", input.projectId, targetPaths, sourcePaths, targetPaths)
+  }
+
+  deleteEntries(input: { paths: string[]; projectId: string }) {
+    return this.queueProjectMutation(input.projectId, () => this.deleteEntriesUnlocked(input))
+  }
+
+  private async deleteEntriesUnlocked(input: { paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
+    const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
+    sourcePaths.forEach(assertUserMutationPath)
+    const resolved = await Promise.all(sourcePaths.map((relativePath) => this.resolveExisting(input.projectId, relativePath)))
+    for (const item of resolved) {
+      assertNotProjectRoot(item.absolutePath, item.rootPath)
+      if (this.options.trash) await this.options.trash(item.absolutePath)
+      else await fs.rm(item.absolutePath, { recursive: true })
+    }
+    return mutation("delete", input.projectId, sourcePaths, sourcePaths)
+  }
+
+  importEntries(input: {
+    destinationPath?: string
+    projectId: string
+    sourcePaths: string[]
+  }) {
+    return this.queueProjectMutation(input.projectId, () => this.importEntriesUnlocked(input))
+  }
+
+  private async importEntriesUnlocked(input: {
+    destinationPath?: string
+    projectId: string
+    sourcePaths: string[]
+  }): Promise<ProjectMutationResult> {
+    const destinationPath = normalizeRelativePath(input.destinationPath)
+    const managedAssetImport = destinationPath === managedAssetDirectory
+    if (!managedAssetImport) assertUserMutationPath(destinationPath)
+    const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
+    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Import destination is not a directory: ${destinationPath}`)
+    const sourcePaths = [...new Set(input.sourcePaths.map((sourcePath) => {
+      if (!sourcePath.trim()) throw new Error("Import source path is empty")
+      return path.resolve(sourcePath)
+    }))]
+    const imports: Array<{ source: string; target: string; targetPath: string }> = []
+    const reservedTargets = new Set<string>()
+    for (const sourcePath of sourcePaths) {
+      const sourceStat = await fs.lstat(sourcePath)
+      if (sourceStat.isSymbolicLink() || (!sourceStat.isDirectory() && !sourceStat.isFile())) {
+        throw new Error(`Import source is not supported: ${sourcePath}`)
+      }
+      const realSource = await fs.realpath(sourcePath)
+      if (sourceStat.isDirectory() && isInsidePath(destination, realSource)) {
+        throw new Error(`Cannot import a directory into itself: ${sourcePath}`)
+      }
+      const sourceName = validateName(path.basename(sourcePath))
+      await assertPortableTree(sourcePath)
+      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetImport)
+      const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
+      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetImport)
+      reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
+      imports.push({ source: sourcePath, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
+    }
+    for (const item of imports) await copyPath(item.source, item.target)
+    const targetPaths = imports.map((item) => item.targetPath)
+    return mutation("import", input.projectId, targetPaths, sourcePaths, targetPaths)
+  }
+
+  getWorkspace(input: { projectId: string }): Promise<ProjectWorkspace> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const activeCanvasId = project.activeCanvasId && manifest.canvases.some((canvas) => canvas.id === project.activeCanvasId)
+        ? project.activeCanvasId
+        : manifest.canvases[0]!.id
+      await this.setActiveCanvasInRegistry(input.projectId, activeCanvasId, true)
+      return workspaceFromManifest(manifest, activeCanvasId)
+    })
+  }
+
+  createCanvas(input: { name?: string; projectId: string }): Promise<{ canvas: ProjectCanvas; workspace: ProjectWorkspace }> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const timestamp = this.now()
+      let canvasId = createCanvasId()
+      while (manifest.canvases.some((canvas) => canvas.id === canvasId)) canvasId = createCanvasId()
+      const canvas: ProjectCanvas = {
+        createdAt: timestamp,
+        id: canvasId,
+        name: validateCanvasName(input.name ?? `Canvas ${manifest.canvases.length + 1}`),
+        updatedAt: timestamp,
+      }
+      const next = { ...manifest, canvases: [...manifest.canvases, canvas] }
+      await fs.mkdir(canvasDirectory(project.rootPath, canvas.id), { recursive: true })
+      await this.writeProjectManifest(project.rootPath, next)
+      const activeCanvasId = validActiveCanvasId(project.activeCanvasId, next)
+      return { canvas, workspace: workspaceFromManifest(next, activeCanvasId) }
+    })
+  }
+
+  renameCanvas(input: { canvasId: string; name: string; projectId: string }): Promise<{ canvas: ProjectCanvas; workspace: ProjectWorkspace }> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      const current = manifest.canvases.find((canvas) => canvas.id === canvasId)
+      if (!current) throw new Error(`Canvas was not found: ${input.canvasId}`)
+      const canvas = { ...current, name: validateCanvasName(input.name), updatedAt: this.now() }
+      const next = {
+        ...manifest,
+        canvases: manifest.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
+      }
+      await this.writeProjectManifest(project.rootPath, next)
+      return { canvas, workspace: workspaceFromManifest(next, validActiveCanvasId(project.activeCanvasId, next)) }
+    })
+  }
+
+  deleteCanvas(input: { canvasId: string; projectId: string }): Promise<{ deleted: boolean; workspace: ProjectWorkspace }> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      if (!manifest.canvases.some((canvas) => canvas.id === canvasId)) {
+        return { deleted: false, workspace: workspaceFromManifest(manifest, validActiveCanvasId(project.activeCanvasId, manifest)) }
+      }
+      if (manifest.canvases.length === 1) throw new Error("The last canvas in a project cannot be deleted")
+      const next = { ...manifest, canvases: manifest.canvases.filter((canvas) => canvas.id !== canvasId) }
+      const previousActiveCanvasId = validActiveCanvasId(project.activeCanvasId, manifest)
+      const activeCanvasId = previousActiveCanvasId === canvasId
+        ? next.canvases[0]!.id
+        : validActiveCanvasId(previousActiveCanvasId, next)
+      const changesActiveCanvas = activeCanvasId !== previousActiveCanvasId
+      if (changesActiveCanvas) await this.setActiveCanvasInRegistry(input.projectId, activeCanvasId)
+
+      const sourceDirectory = canvasDirectory(project.rootPath, canvasId)
+      const tombstoneRoot = path.join(project.rootPath, ".convax", "deleted-canvases")
+      const tombstone = path.join(tombstoneRoot, `${canvasId}-${randomUUID()}`)
+      let movedToTombstone = false
+      try {
+        const sourceStat = await fs.lstat(sourceDirectory).catch((error: unknown) => {
+          if (isNodeError(error) && error.code === "ENOENT") return null
+          throw error
+        })
+        if (sourceStat) {
+          if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+            throw new Error(`Canvas storage is not a directory: ${canvasId}`)
+          }
+          await fs.mkdir(tombstoneRoot, { recursive: true })
+          await fs.rename(sourceDirectory, tombstone)
+          movedToTombstone = true
+        }
+        await this.writeProjectManifest(project.rootPath, next)
+      } catch (error) {
+        const rollbackErrors: unknown[] = []
+        if (movedToTombstone) {
+          try {
+            await fs.rename(tombstone, sourceDirectory)
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError)
+          }
+        }
+        if (changesActiveCanvas) {
+          try {
+            await this.setActiveCanvasInRegistry(input.projectId, previousActiveCanvasId)
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError)
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          throw new AggregateError([error, ...rollbackErrors], "Canvas deletion could not be rolled back")
+        }
+        throw error
+      }
+      if (movedToTombstone) await removePathWithRetries(tombstone).catch(() => undefined)
+      return { deleted: true, workspace: workspaceFromManifest(next, activeCanvasId) }
+    })
+  }
+
+  activateCanvas(input: { canvasId: string; projectId: string }): Promise<ProjectWorkspace> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      if (!manifest.canvases.some((canvas) => canvas.id === canvasId)) {
+        throw new Error(`Canvas was not found: ${input.canvasId}`)
+      }
+      await this.setActiveCanvasInRegistry(input.projectId, canvasId, true)
+      return workspaceFromManifest(manifest, canvasId)
+    })
+  }
+
+  async readCanvasDocument(input: { canvasId: string; projectId: string }): Promise<ProjectTextFileContents> {
+    const canvasId = requireCanvasId(input.canvasId)
+    const relativePath = canvasDocumentRelativePath(canvasId)
+    await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
+    const project = await this.getProject(input.projectId)
+    const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+    assertCanvasExists(manifest, canvasId)
+    const absolutePath = canvasDocumentPath(project.rootPath, canvasId)
+    try {
+      const stat = await fs.stat(absolutePath)
+      if (!stat.isFile()) throw new Error(`Canvas document is not a file: ${canvasId}`)
+      if (stat.size > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+        throw new Error(`Canvas document is too large to read: ${canvasId}`)
+      }
+      return { content: await fs.readFile(absolutePath, "utf8"), exists: true, path: relativePath }
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return { content: "", exists: false, path: relativePath }
+      throw error
+    }
+  }
+
+  async writeCanvasDocument(input: { canvasId: string; content: string; projectId: string }): Promise<ProjectMutationResult> {
+    const canvasId = requireCanvasId(input.canvasId)
+    const relativePath = canvasDocumentRelativePath(canvasId)
+    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
+      if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+        throw new Error(`Canvas document is too large to write: ${canvasId}`)
+      }
+      await this.queueProjectMutation(input.projectId, async () => {
+        const project = await this.getProject(input.projectId)
+        const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+        assertCanvasExists(manifest, canvasId)
+        const absolutePath = canvasDocumentPath(project.rootPath, canvasId)
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+        await writeFileReplacing(absolutePath, input.content)
+        const timestamp = this.now()
+        await this.writeProjectManifest(project.rootPath, {
+          ...manifest,
+          canvases: manifest.canvases.map((canvas) => canvas.id === canvasId ? { ...canvas, updatedAt: timestamp } : canvas),
+        })
+      })
+    })
+    return mutation("write", input.projectId, [relativePath], undefined, [relativePath])
+  }
+
+  async readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents> {
+    const relativePath = requireEntryPath(input.path)
+    await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
+    const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
+    const stat = await fs.stat(absolutePath)
+    if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
+    const length = Math.min(stat.size, textPreviewBytes)
+    const buffer = Buffer.allocUnsafe(length)
+    const handle = await fs.open(absolutePath, "r")
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, length, 0)
+      return {
+        content: buffer.subarray(0, bytesRead).toString("utf8"),
+        path: relativePath,
+        truncated: stat.size > bytesRead,
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
+    const info = await this.readFileInfo(input)
+    const { absolutePath } = await this.resolveExisting(input.projectId, info.path)
+    const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
+    if (info.size > maxBytes) throw new Error(`Project file is too large to preview: ${info.path}`)
+    const content = await fs.readFile(absolutePath)
+    return {
+      ...info,
+      dataUrl: `data:${info.mimeType};base64,${content.toString("base64")}`,
+    }
+  }
+
+  async readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo> {
+    const relativePath = requireEntryPath(input.path)
+    const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
+    const stat = await fs.stat(absolutePath)
+    if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
+    const mimeType = mimeTypeForPath(relativePath)
+    return {
+      mimeType,
+      name: path.basename(absolutePath),
+      path: relativePath,
+      size: stat.size,
+    }
+  }
+
+  async readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents> {
+    const relativePath = requireEntryPath(input.path)
+    await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
+    const output = await this.resolveOutput(input.projectId, relativePath)
+    try {
+      const existing = await this.resolveExisting(input.projectId, relativePath)
+      const stat = await fs.stat(existing.absolutePath)
+      if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
+      if (stat.size > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+        throw new Error(`Project text file is too large to read: ${relativePath}`)
+      }
+      return { content: await fs.readFile(existing.absolutePath, "utf8"), exists: true, path: relativePath }
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return { content: "", exists: false, path: relativePath }
+      if (!(await exists(output.absolutePath))) return { content: "", exists: false, path: relativePath }
+      throw error
+    }
+  }
+
+  async writeTextFile(input: {
+    content: string
+    createParents?: boolean
+    path: string
+    projectId: string
+  }): Promise<ProjectMutationResult> {
+    const relativePath = requireEntryPath(input.path)
+    assertCopyOrImportTarget(relativePath, isManagedAssetPath(relativePath))
+    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
+      if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+        throw new Error(`Project text file is too large to write: ${relativePath}`)
+      }
+      await this.queueProjectMutation(input.projectId, async () => {
+        const { absolutePath } = await this.resolveOutput(input.projectId, relativePath)
+        const parent = path.dirname(absolutePath)
+        if (input.createParents) await fs.mkdir(parent, { recursive: true })
+        else if (!(await isDirectory(parent))) throw new Error(`Project parent directory was not found: ${parentOf(relativePath)}`)
+        await writeFileReplacing(absolutePath, input.content)
+      })
+    })
+    return mutation("write", input.projectId, [relativePath], undefined, [relativePath])
+  }
+
+  async resolveEntryPath(input: { path?: string; projectId: string }) {
+    return (await this.resolveExisting(input.projectId, normalizeRelativePath(input.path))).absolutePath
+  }
+
+  async watchProject(projectId: string, listener: (event: ProjectChangeEvent) => void) {
+    const project = await this.getProject(projectId)
+    const rootPath = await fs.realpath(project.rootPath)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let restartTimer: ReturnType<typeof setTimeout> | undefined
+    let latestPath: string | undefined
+    let restartAttempts = 0
+    let stopped = false
+    let watcher: FSWatcher | undefined
+    const notify = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = undefined
+        listener({ kind: "filesystem", path: latestPath, projectId })
+      }, this.options.watchDebounceMs ?? 120)
+    }
+    const onChange = (_eventType: string, filename: string | Buffer | null) => {
+      restartAttempts = 0
+      const relativePath = filename ? String(filename).replaceAll("\\", "/").replace(/^\/+/, "") : undefined
+      if (relativePath && isIgnoredName(relativePath.split("/")[0] ?? "")) return
+      latestPath = relativePath
+      notify()
+    }
+    const scheduleRestart = () => {
+      if (stopped || restartTimer || restartAttempts >= 5) return
+      const delay = Math.min(2_000, 100 * (2 ** restartAttempts))
+      restartAttempts += 1
+      restartTimer = setTimeout(() => {
+        restartTimer = undefined
+        startWatcher()
+      }, delay)
+    }
+    const startWatcher = () => {
+      if (stopped) return
+      try {
+        try {
+          watcher = watchFileSystem(rootPath, { persistent: false, recursive: true }, onChange)
+        } catch {
+          watcher = watchFileSystem(rootPath, { persistent: false }, onChange)
+        }
+        watcher.once("error", () => {
+          watcher?.close()
+          watcher = undefined
+          latestPath = undefined
+          notify()
+          scheduleRestart()
+        })
+      } catch {
+        watcher = undefined
+        latestPath = undefined
+        notify()
+        scheduleRestart()
+      }
+    }
+    startWatcher()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      if (restartTimer) clearTimeout(restartTimer)
+      watcher?.close()
+    }
+  }
+
+  private async getProject(projectId: string) {
+    const project = (await this.readStableRegistry()).find((candidate) => candidate.id === projectId)
+    if (!project) throw new Error(`Project was not found: ${projectId}`)
+    if (!(await isSafeProjectRoot(project.rootPath))) throw new Error(`Project folder is unavailable: ${project.rootPath}`)
+    return project
+  }
+
+  private get caseInsensitivePaths() {
+    return this.options.caseInsensitivePaths ?? true
+  }
+
+  private async ensureProjectManifest(rootPath: string, preferredProjectId: string): Promise<ProjectManifest> {
+    const manifestFile = path.join(rootPath, ...projectManifestPath.split("/"))
+    let manifest: ProjectManifest
+    let manifestChanged = false
+    try {
+      manifest = parseProjectManifest(JSON.parse(await fs.readFile(manifestFile, "utf8")))
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") throw error
+      const timestamp = this.now()
+      manifest = {
+        canvases: [{ createdAt: timestamp, id: "canvas-main", name: "Canvas 1", updatedAt: timestamp }],
+        projectId: requireProjectId(preferredProjectId),
+        schemaVersion: "convax.project/1",
+      }
+      manifestChanged = true
+    }
+    if (manifest.projectId !== preferredProjectId && await this.registryContainsProject(preferredProjectId)) {
+      throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
+    }
+
+    if (manifest.canvases.length === 0) {
+      const timestamp = this.now()
+      manifest = {
+        ...manifest,
+        canvases: [{ createdAt: timestamp, id: "canvas-main", name: "Canvas 1", updatedAt: timestamp }],
+      }
+      manifestChanged = true
+    }
+
+    const legacyPath = path.join(rootPath, ...legacyCanvasDocumentPath.split("/"))
+    const documentPath = canvasDocumentPath(rootPath, manifest.canvases[0]!.id)
+    const legacyExists = await exists(legacyPath)
+    if (legacyExists && !(await exists(documentPath))) {
+      const stat = await fs.lstat(legacyPath)
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Legacy canvas document is not a regular file")
+      await fs.mkdir(path.dirname(documentPath), { recursive: true })
+      const temporary = path.join(path.dirname(documentPath), `.${path.basename(documentPath)}.${randomUUID()}.tmp`)
+      try {
+        await fs.copyFile(legacyPath, temporary, fs.constants.COPYFILE_EXCL)
+        await replaceFile(temporary, documentPath)
+        manifestChanged = true
+      } finally {
+        await fs.rm(temporary, { force: true })
+      }
+    }
+    await fs.mkdir(path.join(rootPath, ".convax", "assets"), { recursive: true })
+    await fs.mkdir(canvasDirectory(rootPath, manifest.canvases[0]!.id), { recursive: true })
+    if (manifestChanged) await this.writeProjectManifest(rootPath, manifest)
+    if (legacyExists && await exists(documentPath)) await fs.rm(legacyPath)
+    return manifest
+  }
+
+  private async writeProjectManifest(rootPath: string, manifest: ProjectManifest) {
+    const target = path.join(rootPath, ...projectManifestPath.split("/"))
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await writeFileReplacing(target, `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+
+  private async registryContainsProject(projectId: string) {
+    return (await this.readStableRegistry()).some((project) => project.id === projectId)
+  }
+
+  private setActiveCanvasInRegistry(projectId: string, activeCanvasId: string, touchLastOpened = false) {
+    return this.mutateRegistry((projects) => {
+      const current = projects.find((project) => project.id === projectId)
+      if (!current) throw new Error(`Project was not found: ${projectId}`)
+      return {
+        projects: projects.map((project) => project.id === projectId
+          ? { ...project, activeCanvasId, lastOpenedAt: touchLastOpened ? this.now() : project.lastOpenedAt }
+          : project),
+        value: undefined,
+      }
+    })
+  }
+
+  private async resolveExisting(projectId: string, relativePath: string) {
+    const project = await this.getProject(projectId)
+    const rootPath = await fs.realpath(project.rootPath)
+    const candidate = path.resolve(rootPath, ...relativePath.split("/").filter(Boolean))
+    ensureInside(candidate, rootPath, relativePath)
+    await assertNoSymlinkSegments(rootPath, relativePath)
+    if ((await fs.lstat(candidate)).isSymbolicLink()) {
+      throw new Error(`Symbolic links are not supported project entries: ${relativePath}`)
+    }
+    const absolutePath = await fs.realpath(candidate)
+    ensureInside(absolutePath, rootPath, relativePath)
+    return { absolutePath, rootPath }
+  }
+
+  private async resolveOutput(projectId: string, relativePath: string) {
+    const project = await this.getProject(projectId)
+    const rootPath = await fs.realpath(project.rootPath)
+    const absolutePath = path.resolve(rootPath, ...relativePath.split("/").filter(Boolean))
+    ensureInside(absolutePath, rootPath, relativePath)
+    await assertNoSymlinkSegments(rootPath, relativePath)
+    let ancestor = path.dirname(absolutePath)
+    while (!(await exists(ancestor))) {
+      const parent = path.dirname(ancestor)
+      if (parent === ancestor) break
+      ancestor = parent
+    }
+    const realAncestor = await fs.realpath(ancestor)
+    ensureInside(realAncestor, rootPath, relativePath)
+    const targetStat = await fs.lstat(absolutePath).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return null
+      throw error
+    })
+    if (targetStat?.isSymbolicLink()) {
+      throw new Error(`Symbolic links are not supported project entries: ${relativePath}`)
+    }
+    if (targetStat) ensureInside(await fs.realpath(absolutePath), rootPath, relativePath)
+    return { absolutePath, rootPath }
+  }
+
+  private async readStableRegistry() {
+    await this.registryQueue
+    return this.readRegistry()
+  }
+
+  private async queueTextWrite(key: string, write: () => Promise<void>) {
+    const previous = this.textWriteQueues.get(key) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(write)
+    this.textWriteQueues.set(key, current)
+    try {
+      await current
+    } finally {
+      if (this.textWriteQueues.get(key) === current) this.textWriteQueues.delete(key)
+    }
+  }
+
+  private async queueProjectMutation<T>(projectId: string, mutate: () => Promise<T>) {
+    const previous = this.projectMutationQueues.get(projectId) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(mutate)
+    const settled = result.then(() => undefined, () => undefined)
+    this.projectMutationQueues.set(projectId, settled)
+    try {
+      return await result
+    } finally {
+      if (this.projectMutationQueues.get(projectId) === settled) this.projectMutationQueues.delete(projectId)
+    }
+  }
+
+  private async waitForTextWrite(key: string) {
+    await this.textWriteQueues.get(key)
+  }
+
+  private async waitForProjectTextWrites(projectId: string) {
+    const prefix = `${projectId}:`
+    while (true) {
+      const writes = [...this.textWriteQueues].filter(([key]) => key.startsWith(prefix)).map(([, write]) => write)
+      if (writes.length === 0) return
+      await Promise.all(writes)
+    }
+  }
+
+  private mutateRegistry<T>(mutate: (projects: ProjectRegistryRecord[]) => { projects: ProjectRegistryRecord[]; value: T }) {
+    const result = this.registryQueue.then(async () => {
+      const current = await this.readRegistry()
+      const next = mutate(current)
+      await this.writeRegistry(next.projects)
+      return next.value
+    })
+    this.registryQueue = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  private async readRegistry(): Promise<ProjectRegistryRecord[]> {
+    try {
+      const parsed = JSON.parse(await fs.readFile(this.options.registryFile, "utf8")) as Partial<ProjectRegistryFile>
+      if (parsed.version !== 1 || !Array.isArray(parsed.projects)) return []
+      return parsed.projects.filter(isProjectRecord)
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return []
+      throw error
+    }
+  }
+
+  private async writeRegistry(projects: ProjectRegistryRecord[]) {
+    await fs.mkdir(path.dirname(this.options.registryFile), { recursive: true })
+    await writeFileReplacing(
+      this.options.registryFile,
+      `${JSON.stringify({ projects, version: 1 } satisfies ProjectRegistryFile, null, 2)}\n`,
+    )
+  }
+}
