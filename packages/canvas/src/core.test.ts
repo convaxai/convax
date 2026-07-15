@@ -11,7 +11,7 @@ import {
   ungroupCanvasNode,
 } from "./commands"
 import { createCanvasClipboardPayload, parseCanvasClipboard, pasteCanvasClipboard, serializeCanvasClipboard } from "./clipboard"
-import { createCanvasDocument, createTextNode } from "./document"
+import { createCanvasDocument, createGroupNode, createTextNode } from "./document"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
@@ -135,6 +135,26 @@ describe("canvas commands", () => {
       { x: 0, y: 0 },
       { x: 0, y: 100 },
       { x: 0, y: 200 },
+    ])
+  })
+
+  test("lays out every root node while preserving nested positions", () => {
+    const standalone = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
+    const group = createGroupNode({ id: "group_a", position: { x: 500, y: 120 }, width: 400, height: 300 })
+    const child = {
+      ...createTextNode({ id: "node_b", position: { x: 40, y: 50 } }),
+      extent: "parent" as const,
+      parentId: group.id,
+    }
+    const arranged = layoutCanvasNodes(
+      createCanvasDocument({ nodes: [standalone, group, child] }),
+      { layout: "horizontal", gap: 20 },
+    )
+
+    expect(arranged.nodes.map((node) => node.position)).toEqual([
+      { x: 0, y: 0 },
+      { x: 420, y: 0 },
+      { x: 40, y: 50 },
     ])
   })
 })

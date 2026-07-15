@@ -234,7 +234,7 @@ export function layoutCanvasNodes(
   const candidates = input?.nodeIds?.length
     ? document.nodes.filter((node) => input.nodeIds?.includes(node.id))
     : document.nodes.filter((node) => !node.parentId)
-  const selected = candidates.filter((node) => node.type !== "group" || !document.nodes.some((item) => item.parentId === node.id))
+  const selected = candidates
   if (selected.length < 2) return document
   const ids = new Set(selected.map((node) => node.id))
   const gap = input?.gap ?? 80

@@ -58,6 +58,7 @@ import {
   Type,
   Undo2,
   Ungroup,
+  Workflow,
   ZoomIn,
   ZoomOut,
 } from "lucide-react"
@@ -183,6 +184,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [edgesHidden, setEdgesHidden] = useState(false)
   const [miniMapVisible, setMiniMapVisible] = useState(true)
   const [snapToGrid, setSnapToGrid] = useState(true)
   const [prompt, setPrompt] = useState("")
@@ -228,6 +230,11 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
   const canArrangeSelection = arrangeNodes.length >= 2
     && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId)
   const canDistributeSelection = canArrangeSelection && arrangeNodes.length >= 3
+  const canvasNodeIds = useMemo(
+    () => history.document.nodes.filter((node) => !node.parentId).map((node) => node.id),
+    [history.document.nodes],
+  )
+  const canLayoutCanvas = canvasNodeIds.length >= 2
   const nodes = useMemo(() => {
     const depth = (node: CanvasNode): number => {
       const parent = node.parentId ? nodeById.get(node.parentId) : undefined
@@ -239,14 +246,14 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
         : { ...node, selected: selection.nodeIds.has(node.id) })
       .sort((left, right) => depth(left) - depth(right))
   }, [history.document.nodes, nodeById, selection.nodeIds])
-  const edges = useMemo(
-    () => history.document.edges.map((edge) => ({
+  const edges = useMemo(() => {
+    if (edgesHidden) return []
+    return history.document.edges.map((edge) => ({
       ...edge,
       selected: selection.edgeIds.has(edge.id),
       type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
-    })),
-    [history.document.edges, selection.edgeIds],
-  )
+    }))
+  }, [edgesHidden, history.document.edges, selection.edgeIds])
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
     const definitions = props.nodeRegistry.list()
@@ -439,6 +446,11 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
     if (!canArrangeSelection) return
     commit((document) => layoutCanvasNodes(document, { nodeIds: arrangeNodeIds, layout: value }))
   }, [arrangeNodeIds, canArrangeSelection, commit])
+  const layoutCanvas = useCallback(() => {
+    if (!canLayoutCanvas) return
+    commit((document) => layoutCanvasNodes(document, { nodeIds: canvasNodeIds, layout: "grid" }))
+    fitAfterRender()
+  }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterRender])
   const copy = useCallback(() => {
     const payload = createCanvasClipboardPayload(history.document, selectedNodeIds)
     if (!payload) return
@@ -568,7 +580,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       fitView: () => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 }),
       generate: runGenerate,
       group,
-      layout,
+      layout: () => selectedNodeIds.length > 0 ? layout() : layoutCanvas(),
       openSearch: () => setSearchOpen(true),
       paste,
       redo: () => dispatch({ type: "redo" }),
@@ -775,8 +787,12 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
               ) : null}
 
               <ViewportToolbar
+                canLayout={canLayoutCanvas}
+                edgesHidden={edgesHidden}
                 miniMapVisible={miniMapVisible}
+                onEdgesHiddenChange={() => setEdgesHidden((hidden) => !hidden)}
                 onFit={() => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 })}
+                onLayout={layoutCanvas}
                 onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
                 onSnapChange={() => setSnapToGrid((enabled) => !enabled)}
                 onZoomIn={() => void reactFlow.zoomIn({ duration: 140 })}
@@ -1113,8 +1129,12 @@ function SelectionToolbar(props: {
 const zoomPresets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const
 
 function ViewportToolbar(props: {
+  canLayout: boolean
+  edgesHidden: boolean
   miniMapVisible: boolean
+  onEdgesHiddenChange: () => void
   onFit: () => void
+  onLayout: () => void
   onMiniMapChange: () => void
   onSnapChange: () => void
   onZoomIn: () => void
@@ -1136,6 +1156,25 @@ function ViewportToolbar(props: {
   }, [zoomMenuOpen])
   return (
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
+      <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
+      <IconButton
+        icon={<Workflow />}
+        label={props.edgesHidden ? "Show edges" : "Hide edges"}
+        onClick={props.onEdgesHiddenChange}
+        pressed={props.edgesHidden}
+        tooltipSide="top"
+      />
+      <IconButton
+        disabled={!props.canLayout}
+        icon={<LayoutGrid />}
+        label="Tidy canvas"
+        onClick={props.onLayout}
+        shortcut="⌥⇧F"
+        tooltipSide="top"
+      />
+      <IconButton icon={<Magnet />} label="Snap to grid" onClick={props.onSnapChange} pressed={props.snapToGrid} tooltipSide="top" />
+      <IconButton icon={<MapPinned />} label="Minimap" onClick={props.onMiniMapChange} pressed={props.miniMapVisible} tooltipSide="top" />
+      <span className="mx-1 h-5 w-px bg-border" />
       <IconButton icon={<ZoomOut />} label="Zoom out" onClick={props.onZoomOut} shortcut="⌘−" tooltipSide="top" />
       <div ref={menuRef} className="relative">
         <Tooltip content="Zoom presets" side="top">
@@ -1173,10 +1212,6 @@ function ViewportToolbar(props: {
         ) : null}
       </div>
       <IconButton icon={<ZoomIn />} label="Zoom in" onClick={props.onZoomIn} shortcut="⌘+" tooltipSide="top" />
-      <span className="mx-1 h-5 w-px bg-border" />
-      <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
-      <IconButton icon={<Magnet />} label="Snap to grid" onClick={props.onSnapChange} pressed={props.snapToGrid} tooltipSide="top" />
-      <IconButton icon={<MapPinned />} label="Minimap" onClick={props.onMiniMapChange} pressed={props.miniMapVisible} tooltipSide="top" />
     </ToolSurface>
   )
 }
