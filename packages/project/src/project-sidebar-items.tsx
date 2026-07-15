@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import type { ProjectCanvas, ProjectEntry, ProjectTextPreviewContents } from "./contracts"
 import type { ProjectController } from "./controller"
+import { PROJECT_CANVAS_DRAG_TYPE, serializeProjectCanvasDrag } from "./drag"
 
 export type FilePreviewKind = "audio" | "image" | "markdown" | "text" | "video"
 
@@ -47,6 +48,7 @@ export function CanvasList(props: {
   onCommitEdit: () => Promise<void>
   onDelete: (canvas: ProjectCanvas) => void
   onRename: (canvas: ProjectCanvas) => void
+  projectId: string
 }) {
   if (props.canvases.length === 0) {
     return (
@@ -72,6 +74,7 @@ export function CanvasList(props: {
               active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
             )}
             data-project-canvas-id={canvas.id}
+            draggable={!editing}
             onClick={() => { if (!editing) void props.controller.activateCanvas(canvas.id) }}
             onDoubleClick={(event) => {
               event.stopPropagation()
@@ -91,6 +94,15 @@ export function CanvasList(props: {
                 event.preventDefault()
                 if (canDelete) props.onDelete(canvas)
               }
+            }}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = "copy"
+              event.dataTransfer.setData(PROJECT_CANVAS_DRAG_TYPE, serializeProjectCanvasDrag({
+                canvas: { id: canvas.id, name: canvas.name },
+                projectId: props.projectId,
+                version: 1,
+              }))
+              event.dataTransfer.setData("text/plain", canvas.name)
             }}
             role="option"
             tabIndex={active || (!props.activeCanvasId && props.canvases[0]?.id === canvas.id) ? 0 : -1}

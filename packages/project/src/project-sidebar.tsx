@@ -431,6 +431,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
                   onCommitEdit={commitCanvasEditor}
                   onDelete={setConfirmDeleteCanvas}
                   onRename={(canvas) => setCanvasEditor({ canvasId: canvas.id, name: canvas.name })}
+                  projectId={activeProject.id}
                 />
               ) : null}
             </section>
