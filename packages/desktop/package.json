@@ -8,12 +8,15 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@convax/agent-runtime": "workspace:*",
     "@convax/canvas": "workspace:*",
     "@convax/project": "workspace:*",
     "@convax/ui": "workspace:*",
+    "@convax/workspace": "workspace:*",
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
