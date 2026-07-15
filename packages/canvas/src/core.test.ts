@@ -81,6 +81,7 @@ describe("canvas commands", () => {
     const clones = result.document.nodes.filter((node) => ![first.id, second.id].includes(node.id))
     const cloneEdge = result.document.edges.find((edge) => edge.id !== "edge_a")
 
+    expect(initial.edges[0]?.type).toBe("canvas")
     expect(clones).toHaveLength(2)
     if (!cloneEdge) throw new Error("Cloned edge was not created")
     expect(result.selectedNodeIds).toEqual(clones.map((node) => node.id))

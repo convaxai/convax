@@ -30,9 +30,8 @@ function NodeChrome(props: {
   return (
     <div
       className={cn(
-        "group relative size-full overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm transition-shadow",
-        props.node.selected ? "border-ring shadow-md ring-2 ring-ring/20" : "border-border hover:shadow-md",
-        props.className,
+        "convax-node group relative size-full text-card-foreground",
+        props.node.selected && "is-selected",
       )}
     >
       <NodeResizer
@@ -43,14 +42,38 @@ function NodeChrome(props: {
         onResizeStart={editor.beginGesture}
         onResizeEnd={editor.endGesture}
       />
-      <div className="flex h-9 items-center gap-2 border-b border-border/70 px-3 text-xs font-medium text-muted-foreground">
-        {props.icon}
+      <div className="convax-node__title flex items-center gap-1.5">
+        <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
         <span className="truncate">{props.label}</span>
         {props.node.data.status === "pending" ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
       </div>
-      {props.children}
-      <Handle className="!size-2.5 !border-2 !border-card !bg-muted-foreground" type="target" position={Position.Left} />
-      <Handle className="!size-2.5 !border-2 !border-card !bg-muted-foreground" type="source" position={Position.Right} />
+      <div className={cn("convax-node__surface size-full overflow-hidden border bg-card", props.className)}>
+        {props.children}
+      </div>
+      <Handle
+        id="target-left"
+        className="convax-node__handle convax-node__handle--target"
+        type="target"
+        position={Position.Left}
+      />
+      <Handle
+        id="target-top"
+        className="convax-node__handle convax-node__handle--target"
+        type="target"
+        position={Position.Top}
+      />
+      <Handle
+        id="source-right"
+        className="convax-node__handle convax-node__handle--source"
+        type="source"
+        position={Position.Right}
+      />
+      <Handle
+        id="source-bottom"
+        className="convax-node__handle convax-node__handle--source"
+        type="source"
+        position={Position.Bottom}
+      />
     </div>
   )
 }
@@ -179,4 +202,3 @@ export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
     </NodeChrome>
   )
 }
-

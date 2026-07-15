@@ -72,7 +72,8 @@ export function connectCanvasNodes(
     target: connection.target,
     sourceHandle: connection.sourceHandle,
     targetHandle: connection.targetHandle,
-    type: connection.type ?? "smoothstep",
+    animated: connection.animated,
+    type: connection.type ?? "canvas",
     data: connection.data,
   }
   return { ...document, edges: [...document.edges, edge] }
@@ -316,4 +317,3 @@ export function distributeCanvasNodes(
     }
   })
 }
-

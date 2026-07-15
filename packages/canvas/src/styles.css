@@ -1,5 +1,18 @@
 @import "@xyflow/react/dist/style.css";
 
+.convax-canvas {
+  --canvas-accent: #7657e8;
+  --canvas-accent-soft: color-mix(in oklab, var(--canvas-accent) 12%, transparent);
+  --canvas-edge: #b8bcc4;
+  --canvas-edge-active: #8c72ed;
+  --canvas-edge-flow: #7958ee;
+  --canvas-grid: #d9dce1;
+  --canvas-success: #23a665;
+  --canvas-wash: #f7f8fa;
+  --canvas-floating-shadow: 0 10px 26px -12px rgb(24 28 38 / 22%);
+  background: var(--canvas-wash);
+}
+
 .convax-canvas .react-flow__pane {
   cursor: default;
 }
@@ -13,6 +26,7 @@
   border: 0;
   background: transparent;
   font: inherit;
+  overflow: visible;
 }
 
 .convax-canvas .react-flow__node-group {
@@ -21,21 +35,274 @@
 
 .convax-canvas .react-flow__selection,
 .convax-canvas .react-flow__nodesselection-rect {
-  border: 1px solid var(--ring);
+  border: 1px dashed var(--canvas-accent);
   border-radius: 6px;
-  background: color-mix(in oklab, var(--ring) 9%, transparent);
+  background: var(--canvas-accent-soft);
 }
 
-.convax-canvas .react-flow__edge-path {
-  stroke: var(--muted-foreground);
-  stroke-width: 1.5;
+.convax-canvas .convax-node__title {
+  position: absolute;
+  right: 2px;
+  bottom: calc(100% + 7px);
+  left: 2px;
+  height: 20px;
+  color: #656b76;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 20px;
+  pointer-events: none;
 }
 
-.convax-canvas .react-flow__edge.selected .react-flow__edge-path {
-  stroke: var(--ring);
+.convax-canvas .convax-node__surface {
+  border-color: #e1e3e7;
+  border-radius: 8px;
+  box-shadow: var(--canvas-floating-shadow);
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.convax-canvas .convax-node:hover .convax-node__surface {
+  border-color: var(--canvas-edge-active);
+  box-shadow: 0 13px 30px -13px rgb(64 48 121 / 28%);
+}
+
+.convax-canvas .convax-node.is-selected .convax-node__surface {
+  border-color: var(--canvas-accent);
+  box-shadow:
+    0 0 0 2px var(--canvas-accent-soft),
+    0 14px 32px -14px rgb(73 52 151 / 34%);
+}
+
+.convax-canvas .convax-node__handle {
+  width: 10px !important;
+  height: 10px !important;
+  border: 2px solid white !important;
+  opacity: 0;
+  scale: 0.72;
+  transition: opacity 120ms ease, scale 120ms ease;
+  box-shadow: 0 0 0 1px rgb(20 24 32 / 14%);
+}
+
+.convax-canvas .convax-node__handle--target {
+  background: var(--canvas-success) !important;
+}
+
+.convax-canvas .convax-node__handle--source {
+  background: var(--canvas-accent) !important;
+}
+
+.convax-canvas .convax-node:hover .convax-node__handle,
+.convax-canvas .convax-node.is-selected .convax-node__handle,
+.convax-canvas .convax-node__handle.connecting,
+.convax-canvas .convax-node__handle.valid {
+  opacity: 1;
+  scale: 1;
+}
+
+.convax-canvas .convax-edge__line {
+  fill: none;
+  stroke: var(--canvas-edge);
+  stroke-width: 1.15;
+  transition: stroke 140ms ease, stroke-width 140ms ease;
+}
+
+.convax-canvas .react-flow__edge:hover .convax-edge__line {
+  stroke: var(--canvas-edge-active);
+  stroke-width: 1.6;
+}
+
+.convax-canvas .react-flow__edge.selected .convax-edge__line {
+  stroke: var(--canvas-accent);
+  stroke-width: 1.6;
+  stroke-dasharray: 8 7;
+}
+
+.convax-canvas .react-flow__edge.animated .convax-edge__line {
+  stroke-dasharray: none;
+  animation: none;
+}
+
+.convax-canvas .react-flow__edge.animated.selected .convax-edge__line {
+  stroke-dasharray: 8 7;
+}
+
+.convax-canvas .convax-edge__motion path {
+  pointer-events: none;
+}
+
+.convax-canvas .convax-edge__meteor-glow,
+.convax-canvas .convax-edge__meteor-tail,
+.convax-canvas .convax-edge__meteor-core {
+  fill: none;
+  stroke: var(--canvas-edge-flow);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dashoffset: 240;
+  animation: convax-edge-travel 1s linear infinite;
+}
+
+.convax-canvas .convax-edge__meteor-glow {
+  --canvas-meteor-opacity: 0.28;
+  stroke-width: 5.55;
+  stroke-dasharray: 100 140;
+  filter: blur(1.4px);
+}
+
+.convax-canvas .convax-edge__meteor-tail {
+  --canvas-meteor-opacity: 0.78;
+  stroke-width: 1.45;
+  stroke-dasharray: 100 140;
+}
+
+.convax-canvas .convax-edge__meteor-core {
+  --canvas-meteor-opacity: 1;
+  stroke-width: 3;
+  stroke-dasharray: 18 222;
+}
+
+.convax-canvas .react-flow__edge.animated .convax-edge__meteor-glow {
+  stroke-dasharray: 100 140;
+  animation: convax-edge-travel 1s linear infinite;
+}
+
+.convax-canvas .react-flow__edge.animated .convax-edge__meteor-tail {
+  stroke-dasharray: 100 140;
+  animation: convax-edge-travel 1s linear infinite;
+}
+
+.convax-canvas .react-flow__edge.animated .convax-edge__meteor-core {
+  stroke-dasharray: 18 222;
+  animation: convax-edge-travel 1s linear infinite;
+}
+
+.convax-canvas .convax-edge__endpoint {
+  fill: white;
   stroke-width: 2;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.convax-canvas .convax-edge__endpoint--source {
+  stroke: var(--canvas-success);
+}
+
+.convax-canvas .convax-edge__endpoint--target {
+  stroke: var(--canvas-accent);
+}
+
+.convax-canvas .react-flow__edge:hover .convax-edge__endpoint,
+.convax-canvas .react-flow__edge.selected .convax-edge__endpoint {
+  opacity: 1;
+}
+
+.convax-canvas .convax-edge__label {
+  position: absolute;
+  max-width: 220px;
+  padding: 5px 9px;
+  overflow: hidden;
+  border: 1px solid #e1e3e7;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  color: #626975;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 18px -10px rgb(24 28 38 / 28%);
+  backdrop-filter: blur(8px);
+}
+
+.convax-canvas .convax-connection__line,
+.convax-canvas .convax-connection__flow {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.convax-canvas .convax-connection__line {
+  stroke: var(--canvas-edge-active);
+  stroke-width: 1.4;
+}
+
+.convax-canvas .convax-connection__flow {
+  stroke: var(--canvas-accent);
+  stroke-width: 3;
+  stroke-dasharray: 4.5 95.5;
+  animation: convax-connection-travel 1.1s linear infinite;
+}
+
+.convax-canvas .convax-connection__target {
+  fill: white;
+  stroke: var(--canvas-accent);
+  stroke-width: 2;
+  animation: convax-target-pulse 1.1s ease-out infinite;
+}
+
+.convax-canvas .convax-connection--invalid .convax-connection__line,
+.convax-canvas .convax-connection--invalid .convax-connection__flow,
+.convax-canvas .convax-connection--invalid .convax-connection__target {
+  stroke: var(--destructive);
+}
+
+.convax-canvas .convax-tool-surface,
+.convax-canvas .convax-floating-panel {
+  border-color: rgb(225 227 231 / 92%);
+  background: rgb(255 255 255 / 92%);
+  box-shadow: var(--canvas-floating-shadow);
+  backdrop-filter: blur(12px);
+}
+
+.convax-canvas .convax-floating-panel {
+  box-shadow: 0 18px 42px -18px rgb(26 29 39 / 32%);
+}
+
+@keyframes convax-edge-travel {
+  0% {
+    stroke-dashoffset: 240;
+    opacity: 0;
+  }
+  8%,
+  84% {
+    opacity: var(--canvas-meteor-opacity);
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes convax-connection-travel {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes convax-target-pulse {
+  0%,
+  100% {
+    r: 4;
+    opacity: 0.65;
+  }
+  45% {
+    r: 6;
+    opacity: 1;
+  }
 }
 
 .convax-canvas .react-flow__attribution {
   display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .convax-canvas .convax-edge__motion {
+    display: none;
+  }
+
+  .convax-canvas .convax-connection__flow,
+  .convax-canvas .convax-connection__target {
+    animation: none;
+  }
 }

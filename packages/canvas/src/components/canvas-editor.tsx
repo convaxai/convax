@@ -9,6 +9,7 @@ import {
   applyNodeChanges,
   useReactFlow,
   useViewport,
+  type EdgeTypes,
   type NodeTypes,
 } from "@xyflow/react"
 import {
@@ -86,8 +87,10 @@ import {
 } from "../services"
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import { createCanvasShortcutHandler } from "../use-canvas-shortcuts"
+import { CanvasConnectionLine, CanvasEdgeView } from "./canvas-edge"
 
 const defaultNodeRegistry = createDefaultCanvasNodeRegistry()
+const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
 
 function equalIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
   return left.size === right.size && [...left].every((id) => right.has(id))
@@ -199,7 +202,11 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
       .sort((left, right) => depth(left) - depth(right))
   }, [history.document.nodes, selection.nodeIds])
   const edges = useMemo(
-    () => history.document.edges.map((edge) => ({ ...edge, selected: selection.edgeIds.has(edge.id) })),
+    () => history.document.edges.map((edge) => ({
+      ...edge,
+      selected: selection.edgeIds.has(edge.id),
+      type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
+    })),
     [history.document.edges, selection.edgeIds],
   )
   const nodeTypes = useMemo(() => {
@@ -526,8 +533,9 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
             >
               <ReactFlow
                 colorMode="light"
-                connectionLineStyle={{ stroke: "var(--ring)", strokeWidth: 1.5 }}
+                connectionLineComponent={CanvasConnectionLine}
                 deleteKeyCode={null}
+                edgeTypes={edgeTypes}
                 edges={edges}
                 elementsSelectable={!readOnly}
                 fitView
@@ -621,7 +629,7 @@ function CanvasEditorContent(props: CanvasEditorProps & { nodeRegistry: CanvasNo
                   rootRef.current?.focus()
                 }}
               >
-                <Background color="var(--border)" gap={24} size={1.2} variant={BackgroundVariant.Dots} />
+                <Background color="var(--canvas-grid)" gap={24} size={1.2} variant={BackgroundVariant.Dots} />
                 <MiniMap
                   className="!bottom-4 !right-4 !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
                   maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
@@ -775,11 +783,11 @@ function IconButton(props: { disabled?: boolean; icon: ReactNode; label: string;
 }
 
 function ToolSurface(props: { children: ReactNode; className?: string }) {
-  return <div className={cn("absolute z-20 flex items-center rounded-md border border-border bg-card/95 p-1 text-card-foreground shadow-sm backdrop-blur", props.className)}>{props.children}</div>
+  return <div className={cn("convax-tool-surface absolute z-20 flex items-center rounded-md border p-1 text-card-foreground", props.className)}>{props.children}</div>
 }
 
 function FloatingPanel(props: { children: ReactNode; className?: string }) {
-  return <div className={cn("absolute z-30 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-lg", props.className)}>{props.children}</div>
+  return <div className={cn("convax-floating-panel absolute z-30 rounded-md border p-3 text-popover-foreground", props.className)}>{props.children}</div>
 }
 
 function CanvasHeader(props: {
