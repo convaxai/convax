@@ -6,7 +6,13 @@ export default defineConfig({
   main: {
     build: {
       externalizeDeps: {
-        exclude: ["@convax/project"],
+        exclude: [
+          "@convax/agent-runtime",
+          "@convax/canvas",
+          "@convax/project",
+          "@convax/workspace",
+          "@opencode-ai/sdk",
+        ],
       },
       rollupOptions: {
         input: "src/main/index.ts",

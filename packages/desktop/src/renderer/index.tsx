@@ -1,8 +1,7 @@
 import {
   CanvasEditor,
+  createCanvasViewRegistry,
   createCanvasServices,
-  parseCanvasDocument,
-  type CanvasDocument,
   type CanvasEditorHandle,
   type CanvasMediaKind,
   type CanvasNotification,
@@ -12,9 +11,14 @@ import {
   ProjectSidebar,
   type ProjectFileInfo,
 } from "@convax/project"
+import {
+  hydrateProjectCanvasDocument,
+  projectFileReferenceKey,
+} from "@convax/workspace"
 import { CheckCircle2, Info, TriangleAlert, XCircle } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
+import { AgentPanel } from "./agent-panel"
 import { createInitialCanvasDocument } from "./canvas-document"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { ProjectEmptyWorkspace, ProjectWorkspaceLoading } from "./project-empty-workspace"
@@ -25,22 +29,6 @@ function mediaKindFromMime(mimeType: string): CanvasMediaKind {
   if (mimeType.startsWith("video/")) return "video"
   if (mimeType.startsWith("audio/")) return "audio"
   return "file"
-}
-
-const projectFileReferenceKey = "convaxProjectFile"
-
-interface ProjectFileReference {
-  path: string
-}
-
-function getProjectFileReference(metadata: unknown): ProjectFileReference | null {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
-  const value = (metadata as Record<string, unknown>)[projectFileReferenceKey]
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null
-  const reference = value as Record<string, unknown>
-  return typeof reference.path === "string"
-    ? { path: reference.path }
-    : null
 }
 
 function projectAssetUrl(projectId: string, path: string) {
@@ -59,28 +47,8 @@ function projectFileResource(file: ProjectFileInfo, projectId: string) {
   }
 }
 
-function documentForProjectStorage(document: CanvasDocument) {
-  return {
-    ...document,
-    nodes: document.nodes.map((node) => {
-      const metadata = "metadata" in node.data ? node.data.metadata : undefined
-      if (!getProjectFileReference(metadata)) return node
-      return { ...node, data: { ...node.data, url: "" } }
-    }),
-  }
-}
-
-async function hydrateProjectFileUrls(document: CanvasDocument, projectId: string, signal: AbortSignal) {
-  if (signal.aborted) throw signal.reason
-  return {
-    ...document,
-    nodes: document.nodes.map((node) => {
-      const metadata = "metadata" in node.data ? node.data.metadata : undefined
-      const reference = getProjectFileReference(metadata)
-      if (!reference) return node
-      return { ...node, data: { ...node.data, url: projectAssetUrl(projectId, reference.path) } }
-    }),
-  }
+function uploadItemId(scope: "local" | "project", index: number) {
+  return `resource_${scope}_${Date.now()}_${index}`
 }
 
 async function ensureProjectAssetsDirectory(projectId: string) {
@@ -116,13 +84,10 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
   return projectFiles
 }
 
-function uploadItemId(scope: "local" | "project", index: number) {
-  return `resource_${scope}_${Date.now()}_${index}`
-}
-
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
   const drainCanvasSaves = useCallback(async () => {
     while (true) {
@@ -137,6 +102,10 @@ function App() {
       if (latestCanvasSaveRef.current === pending) return
     }
   }, [])
+  const flushCanvasForAgent = useCallback(async () => {
+    await canvasEditorRef.current?.flush()
+    await drainCanvasSaves()
+  }, [drainCanvasSaves])
   const projectController = useMemo(() => new ProjectController(window.convax.projects, {
     beforeActiveProjectChange: async () => {
       await canvasEditorRef.current?.prepareToLeave()
@@ -159,6 +128,19 @@ function App() {
   const activeProjectId = activeProject?.id
   const activeCanvas = projectSnapshot.canvases.find((canvas) => canvas.id === projectSnapshot.activeCanvasId)
   const activeCanvasId = activeCanvas?.id
+  useEffect(() => window.convax.canvas.renderer.onRequest(async (request) => {
+    if (request.type === "document.reload") {
+      if (request.ref.projectId !== activeProjectId || request.ref.canvasId !== activeCanvasId) {
+        return { type: "document.reload", reloaded: false }
+      }
+      const editor = canvasEditorRef.current
+      if (!editor) return { type: "document.reload", reloaded: false }
+      await editor.reload()
+      return { type: "document.reload", reloaded: true }
+    }
+    const result = await canvasViewRegistry.execute(request.input)
+    return { type: "view.execute", result }
+  }), [activeCanvasId, activeProjectId, canvasViewRegistry])
   const activeCanvasNameRef = useRef(activeCanvas?.name)
   activeCanvasNameRef.current = activeCanvas?.name
   const initialDocument = useMemo(() => {
@@ -170,8 +152,10 @@ function App() {
     })
   }, [activeCanvas, activeProject])
   const services = useMemo(
-    () =>
-      createCanvasServices({
+    () => {
+      let storageVersion: string | null | undefined
+      let saveQueue = Promise.resolve()
+      return createCanvasServices({
         upload: {
           async upload(request) {
             if (request.signal.aborted) throw request.signal.reason
@@ -223,43 +207,41 @@ function App() {
         },
         persistence: {
           async load(documentId, signal) {
-            if (signal.aborted) throw signal.reason
-            if (activeProjectId && activeCanvasId) {
-              const result = await window.convax.projects.readCanvasDocument({
-                canvasId: activeCanvasId,
-                projectId: activeProjectId,
-              })
-              if (!result.exists) return null
-              const document = parseCanvasDocument(JSON.parse(result.content))
-              if (!document) throw new Error("Stored canvas document is invalid")
-              return hydrateProjectFileUrls({
-                ...document,
-                id: documentId,
-                metadata: { ...document.metadata, title: activeCanvasNameRef.current ?? document.metadata.title },
-              }, activeProjectId, signal)
+            if (!activeProjectId || !activeCanvasId) {
+              throw new Error("An active project and canvas are required to load a canvas document")
             }
-            const value = localStorage.getItem(`convax:canvas:${documentId}`)
-            if (!value) return null
-            const document = parseCanvasDocument(JSON.parse(value), documentId)
-            if (!document) throw new Error("Stored canvas document is invalid")
-            return document
+            if (signal.aborted) throw signal.reason
+            const result = await window.convax.canvas.documents.load({
+              canvasId: activeCanvasId,
+              projectId: activeProjectId,
+            })
+            storageVersion = result.storageVersion
+            if (!result.document) return null
+            if (result.document.id !== documentId) throw new Error("Loaded the wrong canvas document")
+            if (signal.aborted) throw signal.reason
+            return hydrateProjectCanvasDocument({
+              ...result.document,
+              metadata: {
+                ...result.document.metadata,
+                title: activeCanvasNameRef.current ?? result.document.metadata.title,
+              },
+            }, ({ path }) => projectAssetUrl(activeProjectId, path))
           },
           async save(document, signal) {
-            const save = (async () => {
-              if (signal.aborted) throw signal.reason
-              if (activeProjectId && activeCanvasId) {
-                const storedDocument = documentForProjectStorage(document)
-                await window.convax.projects.writeCanvasDocument({
-                  canvasId: activeCanvasId,
-                  content: `${JSON.stringify(storedDocument, null, 2)}\n`,
-                  projectId: activeProjectId,
-                })
-                return
+            const save = saveQueue.catch(() => undefined).then(async () => {
+              if (!activeProjectId || !activeCanvasId) {
+                throw new Error("An active project and canvas are required to save a canvas document")
               }
-              const serialized = JSON.stringify(document)
-              if (serialized.length > 4 * 1024 * 1024) throw new Error("Canvas is too large for local storage; open a project to keep large files by reference")
-              localStorage.setItem(`convax:canvas:${document.id}`, serialized)
-            })()
+              if (signal.aborted) throw signal.reason
+              if (storageVersion === undefined) throw new Error("Canvas must be loaded before it can be saved")
+              const result = await window.convax.canvas.documents.save({
+                document,
+                expectedStorageVersion: storageVersion,
+                ref: { canvasId: activeCanvasId, projectId: activeProjectId },
+              })
+              storageVersion = result.storageVersion
+            })
+            saveQueue = save
             latestCanvasSaveRef.current = save
             return save
           },
@@ -282,7 +264,8 @@ function App() {
             console.info("[convax]", event.name, event.properties ?? {})
           },
         },
-      }),
+      })
+    },
     [activeCanvasId, activeProjectId],
   )
 
@@ -313,9 +296,19 @@ function App() {
             ref={canvasEditorRef}
             services={services}
             title={activeCanvas.name}
+            viewId="desktop-main"
+            viewRegistry={canvasViewRegistry}
+            viewScopeId={activeProject.id}
           />
         )}
       </section>
+      <AgentPanel
+        activeCanvasId={activeCanvasId}
+        beforePrompt={flushCanvasForAgent}
+        canvases={projectSnapshot.canvases}
+        projectId={activeProjectId}
+        projectName={activeProject?.name}
+      />
       {notification ? <Toast notification={notification} /> : null}
     </main>
   )

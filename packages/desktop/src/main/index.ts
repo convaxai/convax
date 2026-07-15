@@ -1,7 +1,22 @@
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
+import { OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
+import {
+  CanvasApplicationService,
+  CanvasResourceBusinessService,
+  serializeCanvasDocument,
+} from "@convax/canvas/application"
 import { NodeProjectManager } from "@convax/project/node"
-import { app, BrowserWindow, net, protocol, shell } from "electron"
+import {
+  ProjectCanvasDocumentRepository,
+  ProjectCanvasDocumentService,
+  ProjectCanvasResourcePreparation,
+} from "@convax/workspace/node"
+import { app, BrowserWindow, net, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
+import { registerAgentIpc } from "./agent-ipc"
+import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
+import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
+import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { registerProjectIpc } from "./project-ipc"
 
 const trustedWebContents = new Set<number>()
@@ -96,9 +111,46 @@ function startApplication() {
       registryFile: join(app.getPath("userData"), "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
-    const disposeProjectIpc = await registerProjectIpc(projectManager, {
-      isTrustedSender: (event) => trustedWebContents.has(event.sender.id)
+    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectManager)
+    const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectManager)
+    const canvasApplication = new CanvasApplicationService(canvasDocumentRepository)
+    const canvasResources = new CanvasResourceBusinessService(
+      new ProjectCanvasResourcePreparation(projectManager),
+      canvasApplication,
+    )
+    const ipcSecurity = {
+      isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) => trustedWebContents.has(event.sender.id)
         && Boolean(event.senderFrame && isTrustedRendererUrl(event.senderFrame.url)),
+    }
+    const canvasRenderer = createCanvasRendererBridge({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      isTrustedWebContentsId: (id) => trustedWebContents.has(id),
+    })
+    const agentRuntime = new OpenCodeAgentRuntime({
+      toolProvider: createCanvasAgentToolProvider({
+        application: canvasApplication,
+        renderer: canvasRenderer,
+        resources: canvasResources,
+      }),
+    })
+    const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
+    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
+      ...ipcSecurity,
+      canvasSnapshots: {
+        async resolveCanvasSnapshot(ref) {
+          const [snapshot, workspace] = await Promise.all([
+            canvasDocuments.load(ref),
+            projectManager.getWorkspace({ projectId: ref.projectId }),
+          ])
+          if (!snapshot.document) throw new Error(`Canvas document was not found: ${ref.canvasId}`)
+          const canvas = workspace.canvases.find((candidate) => candidate.id === ref.canvasId)
+          return {
+            content: serializeCanvasDocument(snapshot.document),
+            name: canvas?.name ?? snapshot.document.metadata.title,
+          }
+        },
+      },
     })
     protocol.handle("convax-asset", async (request) => {
       try {
@@ -113,21 +165,22 @@ function startApplication() {
     })
     app.once("will-quit", () => protocol.unhandle("convax-asset"))
     app.once("will-quit", disposeProjectIpc)
+    app.once("will-quit", disposeCanvasDocumentIpc)
+    app.once("will-quit", disposeAgentIpc)
+    app.once("will-quit", () => canvasRenderer.dispose())
     app.on("before-quit", (event) => {
       if (quitGate === "approved") return
       event.preventDefault()
       if (quitGate === "flushing") return
       quitGate = "flushing"
-      void projectManager.flushPendingWrites().then(
-        () => {
-          quitGate = "approved"
-          app.quit()
-        },
-        (error) => {
-          quitGate = "idle"
-          console.error("Convax stayed open because project files could not be saved", error)
-        },
-      )
+      void projectManager.flushPendingWrites().then(async () => {
+        await agentRuntime.dispose()
+        quitGate = "approved"
+        app.quit()
+      }).catch((error) => {
+        quitGate = "idle"
+        console.error("Convax stayed open because project files could not be saved", error)
+      })
     })
 
     createWindow(projectManager)

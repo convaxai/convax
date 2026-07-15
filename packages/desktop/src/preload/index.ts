@@ -1,5 +1,13 @@
+import type { AgentClient } from "@convax/agent-runtime"
+import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { ProjectClient, ProjectChangeEvent } from "@convax/project"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
+import {
+  canvasRendererChannels,
+  type CanvasRendererClient,
+  type CanvasRendererRequestEnvelope,
+  type CanvasRendererResponseEnvelope,
+} from "../canvas-renderer-contracts"
 
 const channels = {
   activateCanvas: "project:canvas-activate",
@@ -20,7 +28,6 @@ const channels = {
   openProject: "project:open",
   readFile: "project:read-file",
   readFileInfo: "project:read-file-info",
-  readCanvasDocument: "project:canvas-read-document",
   readTextPreview: "project:read-text-preview",
   readTextFile: "project:read-text-file",
   renameEntry: "project:rename-entry",
@@ -28,7 +35,24 @@ const channels = {
   renameProject: "project:rename",
   revealEntry: "project:reveal-entry",
   writeTextFile: "project:write-text-file",
-  writeCanvasDocument: "project:canvas-write-document",
+} as const
+
+const agentChannels = {
+  abort: "agent:abort",
+  createSession: "agent:session-create",
+  getSessionState: "agent:session-state",
+  getStatus: "agent:status",
+  listCapabilities: "agent:capabilities",
+  listSessions: "agent:session-list",
+  prompt: "agent:prompt",
+  rejectQuestion: "agent:question-reject",
+  replyPermission: "agent:permission-reply",
+  replyQuestion: "agent:question-reply",
+} as const
+
+const canvasDocumentChannels = {
+  load: "canvas:document-load",
+  save: "canvas:document-save",
 } as const
 
 const importTokens = new Map<string, { expiresAt: number; path: string }>()
@@ -94,7 +118,6 @@ const projectClient = {
   openProject: () => ipcRenderer.invoke(channels.openProject),
   readFile: (input) => ipcRenderer.invoke(channels.readFile, input),
   readFileInfo: (input) => ipcRenderer.invoke(channels.readFileInfo, input),
-  readCanvasDocument: (input) => ipcRenderer.invoke(channels.readCanvasDocument, input),
   readTextPreview: (input) => ipcRenderer.invoke(channels.readTextPreview, input),
   readTextFile: (input) => ipcRenderer.invoke(channels.readTextFile, input),
   renameEntry: (input) => ipcRenderer.invoke(channels.renameEntry, input),
@@ -102,10 +125,53 @@ const projectClient = {
   renameProject: (input) => ipcRenderer.invoke(channels.renameProject, input),
   revealEntry: (input) => ipcRenderer.invoke(channels.revealEntry, input),
   writeTextFile: (input) => ipcRenderer.invoke(channels.writeTextFile, input),
-  writeCanvasDocument: (input) => ipcRenderer.invoke(channels.writeCanvasDocument, input),
 } satisfies ProjectClient
 
+const agentClient = {
+  abort: (input) => ipcRenderer.invoke(agentChannels.abort, input),
+  createSession: (input) => ipcRenderer.invoke(agentChannels.createSession, input),
+  getSessionState: (input) => ipcRenderer.invoke(agentChannels.getSessionState, input),
+  getStatus: () => ipcRenderer.invoke(agentChannels.getStatus),
+  listCapabilities: (input) => ipcRenderer.invoke(agentChannels.listCapabilities, input),
+  listSessions: (input) => ipcRenderer.invoke(agentChannels.listSessions, input),
+  prompt: (input) => ipcRenderer.invoke(agentChannels.prompt, input),
+  rejectQuestion: (input) => ipcRenderer.invoke(agentChannels.rejectQuestion, input),
+  replyPermission: (input) => ipcRenderer.invoke(agentChannels.replyPermission, input),
+  replyQuestion: (input) => ipcRenderer.invoke(agentChannels.replyQuestion, input),
+} satisfies AgentClient
+
+const canvasDocumentClient = {
+  load: (input) => ipcRenderer.invoke(canvasDocumentChannels.load, input),
+  save: (input) => ipcRenderer.invoke(canvasDocumentChannels.save, input),
+} satisfies CanvasDocumentClient
+
+const canvasRendererClient = {
+  onRequest(handler) {
+    const listener = (_event: Electron.IpcRendererEvent, envelope: CanvasRendererRequestEnvelope) => {
+      if (!envelope || typeof envelope.id !== "string") return
+      void handler(envelope.request).then(
+        (result) => {
+          const response: CanvasRendererResponseEnvelope = { id: envelope.id, ok: true, result }
+          ipcRenderer.send(canvasRendererChannels.response, response)
+        },
+        (error) => {
+          const response: CanvasRendererResponseEnvelope = {
+            error: error instanceof Error ? error.message : String(error),
+            id: envelope.id,
+            ok: false,
+          }
+          ipcRenderer.send(canvasRendererChannels.response, response)
+        },
+      )
+    }
+    ipcRenderer.on(canvasRendererChannels.request, listener)
+    return () => ipcRenderer.removeListener(canvasRendererChannels.request, listener)
+  },
+} satisfies CanvasRendererClient
+
 contextBridge.exposeInMainWorld("convax", {
+  agent: agentClient,
+  canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
   platform: process.platform,
   projects: projectClient,
 })
