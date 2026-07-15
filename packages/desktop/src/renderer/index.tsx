@@ -8,8 +8,6 @@ import {
   type CanvasNotification,
 } from "@convax/canvas"
 import {
-  parseProjectEntryDrag,
-  PROJECT_ENTRY_DRAG_TYPE,
   ProjectController,
   ProjectSidebar,
   type ProjectFileInfo,
@@ -18,6 +16,8 @@ import { CheckCircle2, Info, TriangleAlert, XCircle } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { createInitialCanvasDocument } from "./canvas-document"
+import { resolveCanvasUploadItems } from "./canvas-upload"
+import { ProjectEmptyWorkspace, ProjectWorkspaceLoading } from "./project-empty-workspace"
 import "./styles.css"
 
 function mediaKindFromMime(mimeType: string): CanvasMediaKind {
@@ -116,6 +116,10 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
   return projectFiles
 }
 
+function uploadItemId(scope: "local" | "project", index: number) {
+  return `resource_${scope}_${Date.now()}_${index}`
+}
+
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
@@ -157,40 +161,44 @@ function App() {
   const activeCanvasId = activeCanvas?.id
   const activeCanvasNameRef = useRef(activeCanvas?.name)
   activeCanvasNameRef.current = activeCanvas?.name
-  const initialDocument = useMemo(
-    () => createInitialCanvasDocument({
-      canvasId: activeCanvasId ?? new URL(window.location.href).searchParams.get("document") ?? "convax-welcome",
-      canvasName: activeCanvas?.name,
-      projectName: activeProject?.name,
-    }),
-    [activeCanvas?.name, activeCanvasId, activeProject?.name],
-  )
+  const initialDocument = useMemo(() => {
+    if (!activeProject || !activeCanvas) return null
+    return createInitialCanvasDocument({
+      canvasId: activeCanvas.id,
+      canvasName: activeCanvas.name,
+      projectName: activeProject.name,
+    })
+  }, [activeCanvas, activeProject])
   const services = useMemo(
     () =>
       createCanvasServices({
         upload: {
           async upload(request) {
             if (request.signal.aborted) throw request.signal.reason
-            if (!activeProjectId && request.files.length > 0) throw new Error("Open a project before adding files to the canvas")
-            const importedFiles = activeProjectId
-              ? await importCanvasFiles(request.files, activeProjectId, request.signal)
-              : []
-            const dragged = parseProjectEntryDrag(request.transfer?.data[PROJECT_ENTRY_DRAG_TYPE] ?? "")
-            const projectFiles = dragged && dragged.projectId === activeProjectId
-              ? await copyCanvasProjectFiles(
-                  dragged.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
-                  activeProjectId,
-                  request.signal,
-                )
-              : []
-            const files = [
-              ...importedFiles.map((file) => projectFileResource(file, activeProjectId!)),
-              ...projectFiles.map((file) => projectFileResource(file, activeProjectId!)),
-            ]
-            return files.map((file, index) => ({
-                id: `resource_${Date.now()}_${index}`,
-                ...file,
-              }))
+            if (!activeProjectId) throw new Error("Open a project before adding files to the canvas")
+            return resolveCanvasUploadItems(request, {
+              projectId: activeProjectId,
+              async copyProjectMediaFiles(paths, signal) {
+                const files = await copyCanvasProjectFiles([...paths], activeProjectId, signal)
+                return files.map((file, index) => ({
+                  id: uploadItemId("project", index),
+                  ...projectFileResource(file, activeProjectId),
+                }))
+              },
+              async importLocalMediaFiles(files, signal) {
+                const imported = await importCanvasFiles(files, activeProjectId, signal)
+                return imported.map((file, index) => ({
+                  id: uploadItemId("local", index),
+                  ...projectFileResource(file, activeProjectId),
+                }))
+              },
+              async readProjectTextFile(path, signal) {
+                const result = await window.convax.projects.readTextFile({ path, projectId: activeProjectId })
+                if (!result.exists) throw new Error(`Could not read ${path}`)
+                if (signal.aborted) throw signal.reason
+                return result.content
+              },
+            })
           },
         },
         generate: {
@@ -288,18 +296,25 @@ function App() {
     <main className="relative flex size-full overflow-hidden bg-background">
       <ProjectSidebar
         controller={projectController}
+        hideWhenNoProject
         resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
       />
       <section className="relative min-w-0 flex-1">
-        <CanvasEditor
-          key={activeProjectId && activeCanvasId ? `${activeProjectId}:${activeCanvasId}` : "welcome"}
-          clipboardScope={activeProjectId ?? "welcome"}
-          initialDocument={initialDocument}
-          readOnly={projectSnapshot.changingActiveCanvas || projectSnapshot.changingActiveProject}
-          ref={canvasEditorRef}
-          services={services}
-          title={activeCanvas?.name}
-        />
+        {!activeProject ? (
+          <ProjectEmptyWorkspace controller={projectController} initialized={projectSnapshot.initialized} />
+        ) : !activeCanvas || !initialDocument ? (
+          <ProjectWorkspaceLoading projectName={activeProject.name} />
+        ) : (
+          <CanvasEditor
+            key={`${activeProject.id}:${activeCanvas.id}`}
+            clipboardScope={activeProject.id}
+            initialDocument={initialDocument}
+            readOnly={projectSnapshot.changingActiveCanvas || projectSnapshot.changingActiveProject}
+            ref={canvasEditorRef}
+            services={services}
+            title={activeCanvas.name}
+          />
+        )}
       </section>
       {notification ? <Toast notification={notification} /> : null}
     </main>

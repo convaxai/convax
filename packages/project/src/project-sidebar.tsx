@@ -41,6 +41,7 @@ import {
 export interface ProjectSidebarProps {
   className?: string
   controller: ProjectController
+  hideWhenNoProject?: boolean
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
 }
 
@@ -55,7 +56,7 @@ const minimumSectionSplitRatio = 0.1
 const minimumExpandedSectionSize = 112
 const sectionSplitterSize = 6
 
-export function ProjectSidebar({ className, controller, resolveFileUrl }: ProjectSidebarProps) {
+export function ProjectSidebar({ className, controller, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const activeProject = snapshot.projects.find((project) => project.id === snapshot.activeProjectId)
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -204,6 +205,8 @@ export function ProjectSidebar({ className, controller, resolveFileUrl }: Projec
   const sectionSplitBounds = getSectionSplitBounds(sectionsRef.current?.clientHeight ?? 0)
   const bothSectionsExpanded = filesExpanded && canvasesExpanded
   const expandedSectionMinHeight = `min(${minimumExpandedSectionSize}px, calc((100% - ${sectionSplitterSize}px) / 2))`
+
+  if (hideWhenNoProject && !activeProject) return null
 
   return (
     <TooltipProvider>

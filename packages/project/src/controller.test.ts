@@ -105,6 +105,30 @@ function createClient(overrides: Partial<ProjectClient> = {}) {
 }
 
 describe("ProjectController", () => {
+  test("initializes an empty project registry without loading a workspace", async () => {
+    const getWorkspace = mock(async (input: Parameters<ProjectClient["getWorkspace"]>[0]) => workspace(input.projectId))
+    const listDirectory = mock(async (input: Parameters<ProjectClient["listDirectory"]>[0]) => listing(input.projectId, input.path ?? "", []))
+    const { client } = createClient({
+      getWorkspace,
+      listDirectory,
+      listProjects: mock(async () => ({ projects: [] })),
+    })
+    const controller = new ProjectController(client)
+
+    await controller.initialize()
+
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.initialized).toBe(true)
+    expect(snapshot.projects).toEqual([])
+    expect(snapshot.activeProjectId).toBeNull()
+    expect(snapshot.activeCanvasId).toBeNull()
+    expect(snapshot.canvases).toEqual([])
+    expect(snapshot.listings).toEqual({})
+    expect(getWorkspace).not.toHaveBeenCalled()
+    expect(listDirectory).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
   test("initializes the latest project and lazily expands directories", async () => {
     const { client } = createClient({
       listDirectory: mock(async (input) => input.path === "assets"
