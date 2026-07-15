@@ -87,7 +87,6 @@ function createClient(overrides: Partial<ProjectClient> = {}) {
     openProject: mock(async () => ({ canceled: true, projects })),
     readFile: mock(async (input) => ({ dataUrl: "data:text/plain;base64,", mimeType: "text/plain", name: input.path, path: input.path, size: 0 })),
     readFileInfo: mock(async (input) => ({ mimeType: "text/plain", name: input.path, path: input.path, size: 0 })),
-    readCanvasDocument: mock(async () => ({ content: "", exists: false, path: "" })),
     readTextPreview: mock(async (input) => ({ content: "", path: input.path, truncated: false })),
     readTextFile: mock(async (input) => ({ content: "", exists: false, path: input.path })),
     renameEntry: mock(async (input: Parameters<ProjectClient["renameEntry"]>[0]): Promise<ProjectMutationResult> => ({ affectedPaths: [input.path], operation: "rename", projectId: input.projectId, targetPaths: [input.name] })),
@@ -98,7 +97,6 @@ function createClient(overrides: Partial<ProjectClient> = {}) {
     renameProject: mock(async (input) => ({ project: projects[0]!, projects })),
     revealEntry: mock(async () => undefined),
     writeTextFile: mock(async (input: Parameters<ProjectClient["writeTextFile"]>[0]): Promise<ProjectMutationResult> => ({ affectedPaths: [input.path], operation: "write", projectId: input.projectId, targetPaths: [input.path] })),
-    writeCanvasDocument: mock(async (input: Parameters<ProjectClient["writeCanvasDocument"]>[0]): Promise<ProjectMutationResult> => ({ affectedPaths: [input.canvasId], operation: "write", projectId: input.projectId, targetPaths: [input.canvasId] })),
     ...overrides,
   }
   return { client, emit: (event: ProjectChangeEvent) => changeListener?.(event) }

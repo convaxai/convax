@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { watch as watchFileSystem, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -15,7 +15,6 @@ import type {
   ProjectWorkspace,
 } from "../contracts"
 import {
-  assertCanvasExists,
   assertCopyOrImportTarget,
   assertNoSymlinkSegments,
   assertNotProjectRoot,
@@ -23,7 +22,6 @@ import {
   assertUserMutationPath,
   canvasDirectory,
   canvasDocumentPath,
-  canvasDocumentRelativePath,
   collisionKey,
   compareEntries,
   compareProjects,
@@ -70,6 +68,12 @@ import {
   type ProjectRegistryFile,
   type ProjectRegistryRecord,
 } from "./project-manager-helpers"
+import {
+  ProjectPrivateStorageConflictError,
+  type ProjectPrivateStorage,
+  type ProjectPrivateTextFileRef,
+  type ProjectPrivateTextFileWrite,
+} from "./project-private-storage"
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
@@ -81,7 +85,28 @@ export interface NodeProjectManagerOptions {
   watchDebounceMs?: number
 }
 
-export class NodeProjectManager {
+function privateTextFileRelativePath(namespace: string, value: string) {
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(namespace)) {
+    throw new Error(`Invalid project private namespace: ${namespace}`)
+  }
+  const relativePath = normalizeRelativePath(value)
+  if (!relativePath) throw new Error("Project private file path is required")
+  return `.convax/${namespace}/${relativePath}`
+}
+
+function privateTextFilePath(rootPath: string, namespace: string, value: string) {
+  const relativePath = privateTextFileRelativePath(namespace, value)
+  const namespaceRoot = path.join(rootPath, ".convax", namespace)
+  const absolutePath = path.resolve(rootPath, ...relativePath.split("/"))
+  ensureInside(absolutePath, namespaceRoot, relativePath)
+  return absolutePath
+}
+
+function privateTextVersion(content: string) {
+  return createHash("sha256").update(content).digest("hex")
+}
+
+export class NodeProjectManager implements ProjectPrivateStorage {
   private readonly now: () => number
   private registryQueue: Promise<unknown> = Promise.resolve()
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
@@ -123,6 +148,56 @@ export class NodeProjectManager {
         && registry === this.registryQueue) break
     }
     if (failures.length > 0) throw new AggregateError(failures, "Project files could not be saved")
+  }
+
+  async readPrivateTextFile(input: ProjectPrivateTextFileRef) {
+    const relativePath = privateTextFileRelativePath(input.namespace, input.path)
+    await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
+    const project = await this.getProject(input.projectId)
+    const absolutePath = privateTextFilePath(project.rootPath, input.namespace, input.path)
+    await assertNoSymlinkSegments(project.rootPath, relativePath)
+    try {
+      const stat = await fs.stat(absolutePath)
+      if (!stat.isFile()) throw new Error(`Project private path is not a file: ${relativePath}`)
+      if (stat.size > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+        throw new Error(`Project private file is too large to read: ${relativePath}`)
+      }
+      const content = await fs.readFile(absolutePath, "utf8")
+      return { content, exists: true, version: privateTextVersion(content) }
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") return { content: "", exists: false, version: null }
+      throw error
+    }
+  }
+
+  async writePrivateTextFile(input: ProjectPrivateTextFileWrite) {
+    const relativePath = privateTextFileRelativePath(input.namespace, input.path)
+    if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+      throw new Error(`Project private file is too large to write: ${relativePath}`)
+    }
+    let version = ""
+    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
+      await this.queueProjectMutation(input.projectId, async () => {
+        const project = await this.getProject(input.projectId)
+        const absolutePath = privateTextFilePath(project.rootPath, input.namespace, input.path)
+        await assertNoSymlinkSegments(project.rootPath, relativePath)
+        const currentContent = await fs.readFile(absolutePath, "utf8").catch((error: unknown) => {
+          if (isNodeError(error) && error.code === "ENOENT") return null
+          throw error
+        })
+        const currentVersion = currentContent === null ? null : privateTextVersion(currentContent)
+        if (input.expectedVersion !== undefined && input.expectedVersion !== currentVersion) {
+          throw new ProjectPrivateStorageConflictError(input.expectedVersion, currentVersion)
+        }
+        if (input.createParents) await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+        else if (!(await fs.stat(path.dirname(absolutePath))).isDirectory()) {
+          throw new Error(`Project private parent is not a directory: ${relativePath}`)
+        }
+        await writeFileReplacing(absolutePath, input.content)
+        version = privateTextVersion(input.content)
+      })
+    })
+    return { version }
   }
 
   async listProjects() {
@@ -481,6 +556,22 @@ export class NodeProjectManager {
     })
   }
 
+  touchCanvas(input: { canvasId: string; projectId: string }): Promise<ProjectCanvas> {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      const current = manifest.canvases.find((canvas) => canvas.id === canvasId)
+      if (!current) throw new Error(`Canvas was not found: ${input.canvasId}`)
+      const canvas = { ...current, updatedAt: this.now() }
+      await this.writeProjectManifest(project.rootPath, {
+        ...manifest,
+        canvases: manifest.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
+      })
+      return canvas
+    })
+  }
+
   deleteCanvas(input: { canvasId: string; projectId: string }): Promise<{ deleted: boolean; workspace: ProjectWorkspace }> {
     return this.queueProjectMutation(input.projectId, async () => {
       const project = await this.getProject(input.projectId)
@@ -553,51 +644,6 @@ export class NodeProjectManager {
       await this.setActiveCanvasInRegistry(input.projectId, canvasId, true)
       return workspaceFromManifest(manifest, canvasId)
     })
-  }
-
-  async readCanvasDocument(input: { canvasId: string; projectId: string }): Promise<ProjectTextFileContents> {
-    const canvasId = requireCanvasId(input.canvasId)
-    const relativePath = canvasDocumentRelativePath(canvasId)
-    await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
-    const project = await this.getProject(input.projectId)
-    const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-    assertCanvasExists(manifest, canvasId)
-    const absolutePath = canvasDocumentPath(project.rootPath, canvasId)
-    try {
-      const stat = await fs.stat(absolutePath)
-      if (!stat.isFile()) throw new Error(`Canvas document is not a file: ${canvasId}`)
-      if (stat.size > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
-        throw new Error(`Canvas document is too large to read: ${canvasId}`)
-      }
-      return { content: await fs.readFile(absolutePath, "utf8"), exists: true, path: relativePath }
-    } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return { content: "", exists: false, path: relativePath }
-      throw error
-    }
-  }
-
-  async writeCanvasDocument(input: { canvasId: string; content: string; projectId: string }): Promise<ProjectMutationResult> {
-    const canvasId = requireCanvasId(input.canvasId)
-    const relativePath = canvasDocumentRelativePath(canvasId)
-    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
-      if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
-        throw new Error(`Canvas document is too large to write: ${canvasId}`)
-      }
-      await this.queueProjectMutation(input.projectId, async () => {
-        const project = await this.getProject(input.projectId)
-        const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-        assertCanvasExists(manifest, canvasId)
-        const absolutePath = canvasDocumentPath(project.rootPath, canvasId)
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-        await writeFileReplacing(absolutePath, input.content)
-        const timestamp = this.now()
-        await this.writeProjectManifest(project.rootPath, {
-          ...manifest,
-          canvases: manifest.canvases.map((canvas) => canvas.id === canvasId ? { ...canvas, updatedAt: timestamp } : canvas),
-        })
-      })
-    })
-    return mutation("write", input.projectId, [relativePath], undefined, [relativePath])
   }
 
   async readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents> {

@@ -120,7 +120,6 @@ export interface ProjectClient {
   openProject(): Promise<ProjectSelectionResult>
   readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo>
-  readCanvasDocument(input: { canvasId: string; projectId: string }): Promise<ProjectTextFileContents>
   readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents>
   readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents>
   renameEntry(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult>
@@ -131,11 +130,6 @@ export interface ProjectClient {
     content: string
     createParents?: boolean
     path: string
-    projectId: string
-  }): Promise<ProjectMutationResult>
-  writeCanvasDocument(input: {
-    canvasId: string
-    content: string
     projectId: string
   }): Promise<ProjectMutationResult>
 }

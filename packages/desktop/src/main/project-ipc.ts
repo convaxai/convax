@@ -30,7 +30,6 @@ export const projectIpcChannels = {
   openProject: "project:open",
   readFile: "project:read-file",
   readFileInfo: "project:read-file-info",
-  readCanvasDocument: "project:canvas-read-document",
   readTextPreview: "project:read-text-preview",
   readTextFile: "project:read-text-file",
   renameEntry: "project:rename-entry",
@@ -38,7 +37,6 @@ export const projectIpcChannels = {
   renameProject: "project:rename",
   revealEntry: "project:reveal-entry",
   writeTextFile: "project:write-text-file",
-  writeCanvasDocument: "project:canvas-write-document",
 } as const
 
 interface ProjectIpcContract {
@@ -110,10 +108,6 @@ interface ProjectIpcContract {
     input: ClientInput<"readFileInfo">
     result: ClientResult<"readFileInfo">
   }
-  "project:canvas-read-document": {
-    input: ClientInput<"readCanvasDocument">
-    result: ClientResult<"readCanvasDocument">
-  }
   "project:read-text-preview": {
     input: ClientInput<"readTextPreview">
     result: ClientResult<"readTextPreview">
@@ -142,10 +136,6 @@ interface ProjectIpcContract {
     input: ClientInput<"writeTextFile">
     result: ClientResult<"writeTextFile">
   }
-  "project:canvas-write-document": {
-    input: ClientInput<"writeCanvasDocument">
-    result: ClientResult<"writeCanvasDocument">
-  }
 }
 
 type ProjectInvokeChannel = keyof ProjectIpcContract
@@ -168,7 +158,6 @@ export interface DesktopProjectManager {
   moveEntries(input: ClientInput<"moveEntries">): Promise<ClientResult<"moveEntries">>
   readFile(input: ClientInput<"readFile">): Promise<ClientResult<"readFile">>
   readFileInfo(input: ClientInput<"readFileInfo">): Promise<ClientResult<"readFileInfo">>
-  readCanvasDocument(input: ClientInput<"readCanvasDocument">): Promise<ClientResult<"readCanvasDocument">>
   readTextPreview(input: ClientInput<"readTextPreview">): Promise<ClientResult<"readTextPreview">>
   readTextFile(input: ClientInput<"readTextFile">): Promise<ClientResult<"readTextFile">>
   rename(projectId: string, name: string): Promise<ProjectRecord>
@@ -177,7 +166,6 @@ export interface DesktopProjectManager {
   resolveEntryPath(input: { path?: string; projectId: string }): Promise<string>
   watchProject(projectId: string, listener: (event: ProjectChangeEvent) => void): Promise<StopWatching> | StopWatching
   writeTextFile(input: ClientInput<"writeTextFile">): Promise<ClientResult<"writeTextFile">>
-  writeCanvasDocument(input: ClientInput<"writeCanvasDocument">): Promise<ClientResult<"writeCanvasDocument">>
 }
 
 function showDirectoryDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions) {
@@ -309,11 +297,9 @@ export async function registerProjectIpc(
     }),
     registerHandler(projectIpcChannels.readFile, options.isTrustedSender, (_event, input) => manager.readFile(input)),
     registerHandler(projectIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) => manager.readFileInfo(input)),
-    registerHandler(projectIpcChannels.readCanvasDocument, options.isTrustedSender, (_event, input) => manager.readCanvasDocument(input)),
     registerHandler(projectIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) => manager.readTextPreview(input)),
     registerHandler(projectIpcChannels.readTextFile, options.isTrustedSender, (_event, input) => manager.readTextFile(input)),
     registerHandler(projectIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) => manager.writeTextFile(input)),
-    registerHandler(projectIpcChannels.writeCanvasDocument, options.isTrustedSender, (_event, input) => manager.writeCanvasDocument(input)),
     registerHandler(projectIpcChannels.renameCanvas, options.isTrustedSender, async (_event, input) => {
       const result = await manager.renameCanvas(input)
       publishChange({ kind: "workspace", projectId: input.projectId })

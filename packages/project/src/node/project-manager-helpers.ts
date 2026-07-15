@@ -201,14 +201,6 @@ export function canvasDocumentPath(rootPath: string, canvasId: string) {
   return path.join(canvasDirectory(rootPath, canvasId), "document.json")
 }
 
-export function canvasDocumentRelativePath(canvasId: string) {
-  return `.convax/canvases/${requireCanvasId(canvasId)}/document.json`
-}
-
-export function assertCanvasExists(manifest: ProjectManifest, canvasId: string) {
-  if (!manifest.canvases.some((canvas) => canvas.id === canvasId)) throw new Error(`Canvas was not found: ${canvasId}`)
-}
-
 export function validActiveCanvasId(activeCanvasId: string | undefined, manifest: ProjectManifest) {
   return activeCanvasId && manifest.canvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
