@@ -1,8 +1,7 @@
 @import "tailwindcss";
 @import "@convax/canvas/styles.css";
-@source "../../../canvas/src";
-@source "../../../project/src";
-@source "../../../ui/src";
+@import "@convax/project/styles.css";
+@import "@convax/ui/styles.css";
 
 @theme inline {
   --color-background: var(--background);
@@ -77,4 +76,123 @@ button,
 input,
 textarea {
   font: inherit;
+}
+
+.agent-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-markdown p,
+.agent-markdown blockquote,
+.agent-markdown pre,
+.agent-markdown table,
+.agent-markdown ul,
+.agent-markdown ol {
+  margin: 0.55rem 0;
+}
+
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3,
+.agent-markdown h4 {
+  margin: 0.9rem 0 0.4rem;
+  color: inherit;
+  font-size: 1em;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.agent-markdown h1 {
+  font-size: 1.2em;
+}
+
+.agent-markdown h2 {
+  font-size: 1.1em;
+}
+
+.agent-markdown ul,
+.agent-markdown ol {
+  padding-left: 1.35rem;
+}
+
+.agent-markdown ul {
+  list-style: disc;
+}
+
+.agent-markdown ol {
+  list-style: decimal;
+}
+
+.agent-markdown li + li {
+  margin-top: 0.2rem;
+}
+
+.agent-markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.agent-markdown code {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 82%, transparent);
+  padding: 0.1rem 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.agent-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--muted);
+  padding: 0.75rem;
+}
+
+.agent-markdown pre code {
+  background: transparent;
+  padding: 0;
+  white-space: pre;
+}
+
+.agent-markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.agent-markdown th,
+.agent-markdown td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+}
+
+.agent-markdown img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.agent-markdown hr {
+  margin: 0.8rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
