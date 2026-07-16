@@ -6,7 +6,20 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@convax/agent-runtime": ["./packages/agent-runtime/src/index.ts"],
+      "@convax/agent-runtime/*": ["./packages/agent-runtime/src/*"],
+      "@convax/canvas": ["./packages/canvas/src/index.ts"],
+      "@convax/canvas/*": ["./packages/canvas/src/*"],
+      "@convax/project": ["./packages/project/src/index.ts"],
+      "@convax/project/*": ["./packages/project/src/*"],
+      "@convax/project-files": ["./packages/project-files/src/index.ts"],
+      "@convax/project-files/*": ["./packages/project-files/src/*"],
+      "@convax/ui": ["./packages/ui/src/index.ts"],
+      "@convax/ui/*": ["./packages/ui/src/*"],
+      "@convax/workbench": ["./packages/workbench/src/index.ts"],
+      "@convax/workbench/*": ["./packages/workbench/src/*"]
+    }
   }
 }
-
