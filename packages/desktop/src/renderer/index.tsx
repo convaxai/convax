@@ -1,28 +1,53 @@
 import {
   CanvasEditor,
+  createDefaultCanvasFileRendererRegistry,
+  createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
   createCanvasServices,
   type CanvasEditorHandle,
   type CanvasMediaKind,
   type CanvasNotification,
 } from "@convax/canvas"
+import type { AgentResource } from "@convax/agent-runtime"
 import {
   ProjectController,
   ProjectSidebar,
-  type ProjectFileInfo,
 } from "@convax/project"
+import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
 import {
+  ProjectCanvasController,
   hydrateProjectCanvasDocument,
   projectFileReferenceKey,
-} from "@convax/workspace"
+} from "@convax/project/canvas"
+import {
+  WorkbenchController,
+  WorkbenchLayoutController,
+  WorkbenchLayoutParts,
+} from "@convax/workbench"
 import { CheckCircle2, Info, TriangleAlert, XCircle } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
+import { agentCanvasNodeResourceUri } from "../agent-canvas-context"
 import { AgentPanel } from "./agent-panel"
 import { createInitialCanvasDocument } from "./canvas-document"
 import { resolveCanvasUploadItems } from "./canvas-upload"
-import { ProjectEmptyWorkspace, ProjectWorkspaceLoading } from "./project-empty-workspace"
+import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
+import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
+import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import {
+  readWorkbenchLayoutPreferences,
+  writeWorkbenchLayoutPreferences,
+} from "./workbench-layout-preferences"
+import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import "./styles.css"
+
+const primarySidebarBounds = { defaultSize: 292, maxSize: 480, minSize: 220 }
+const secondarySidebarBounds = { defaultSize: 380, defaultVisible: true, maxSize: 620, minSize: 300 }
+const secondarySidebarCollapseThreshold = 260
+const collapsedSecondarySidebarSize = 44
+const minimumWorkbenchSurfaceSize = 520
+const overlaySidebarBreakpoint = 1040
 
 function mediaKindFromMime(mimeType: string): CanvasMediaKind {
   if (mimeType.startsWith("image/")) return "image"
@@ -51,8 +76,16 @@ function uploadItemId(scope: "local" | "project", index: number) {
   return `resource_${scope}_${Date.now()}_${index}`
 }
 
+function canvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
+  return {
+    kind: "resource",
+    name,
+    uri: agentCanvasNodeResourceUri(canvasId, nodeId),
+  }
+}
+
 async function ensureProjectAssetsDirectory(projectId: string) {
-  await window.convax.projects.writeTextFile({
+  await window.convax.projectFiles.writeTextFile({
     content: "",
     createParents: true,
     path: ".convax/assets/.keep",
@@ -63,14 +96,14 @@ async function ensureProjectAssetsDirectory(projectId: string) {
 async function importCanvasFiles(files: readonly File[], projectId: string, signal: AbortSignal) {
   if (files.length === 0) return []
   await ensureProjectAssetsDirectory(projectId)
-  const sourceTokens = files.map((file) => window.convax.projects.createImportToken(file))
+  const sourceTokens = files.map((file) => window.convax.projectFiles.createImportToken(file))
   if (sourceTokens.some((token) => !token)) throw new Error("Only files from the local disk can be added to a project canvas")
-  const imported = await window.convax.projects.importEntries({
+  const imported = await window.convax.projectFiles.importEntries({
     destinationPath: ".convax/assets",
     projectId,
     sourceTokens,
   })
-  const projectFiles = await Promise.all((imported.targetPaths ?? []).map((path) => window.convax.projects.readFileInfo({ path, projectId })))
+  const projectFiles = await Promise.all((imported.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })))
   if (signal.aborted) throw signal.reason
   return projectFiles
 }
@@ -78,8 +111,8 @@ async function importCanvasFiles(files: readonly File[], projectId: string, sign
 async function copyCanvasProjectFiles(paths: string[], projectId: string, signal: AbortSignal) {
   if (paths.length === 0) return []
   await ensureProjectAssetsDirectory(projectId)
-  const copied = await window.convax.projects.copyEntries({ destinationPath: ".convax/assets", paths, projectId })
-  const projectFiles = await Promise.all((copied.targetPaths ?? []).map((path) => window.convax.projects.readFileInfo({ path, projectId })))
+  const copied = await window.convax.projectFiles.copyEntries({ destinationPath: ".convax/assets", paths, projectId })
+  const projectFiles = await Promise.all((copied.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })))
   if (signal.aborted) throw signal.reason
   return projectFiles
 }
@@ -87,6 +120,8 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
+  const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
   const drainCanvasSaves = useCallback(async () => {
@@ -111,26 +146,129 @@ function App() {
       await canvasEditorRef.current?.prepareToLeave()
       await drainCanvasSaves()
     },
-    beforeActiveCanvasChange: async () => {
+    onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
+  }), [drainCanvasSaves])
+  const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
+  const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
+  const workbenchLayoutController = useMemo(() => {
+    const preferences = readWorkbenchLayoutPreferences(localStorage, {
+      primarySidebar: primarySidebarBounds,
+      secondarySidebar: secondarySidebarBounds,
+    })
+    return new WorkbenchLayoutController({
+      parts: {
+        [WorkbenchLayoutParts.PrimarySidebar]: {
+          initialSize: preferences.primarySidebar.size,
+          initialVisible: true,
+          maxSize: primarySidebarBounds.maxSize,
+          minSize: primarySidebarBounds.minSize,
+        },
+        [WorkbenchLayoutParts.SecondarySidebar]: {
+          collapseThreshold: secondarySidebarCollapseThreshold,
+          initialSize: preferences.secondarySidebar.size,
+          initialVisible: preferences.secondarySidebar.visible,
+          maxSize: secondarySidebarBounds.maxSize,
+          minSize: secondarySidebarBounds.minSize,
+        },
+      },
+    })
+  }, [])
+  const workbenchController = useMemo(() => new WorkbenchController({
+    beforeInputChange: async (currentInput) => {
+      if (currentInput?.kind !== "canvas") return
       await canvasEditorRef.current?.prepareToLeave()
       await drainCanvasSaves()
     },
-    onActiveCanvasChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
-    onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
+    onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
   }), [drainCanvasSaves])
+  const projectCanvasWorkbench = useMemo(
+    () => new ProjectCanvasWorkbenchCoordinator(projectCanvasController, workbenchController),
+    [projectCanvasController, workbenchController],
+  )
   const projectSnapshot = useSyncExternalStore(
     projectController.subscribe,
     projectController.getSnapshot,
     projectController.getSnapshot,
   )
+  const projectCanvasSnapshot = useSyncExternalStore(
+    projectCanvasController.subscribe,
+    projectCanvasController.getSnapshot,
+    projectCanvasController.getSnapshot,
+  )
+  const workbenchSnapshot = useSyncExternalStore(
+    workbenchController.subscribe,
+    workbenchController.getSnapshot,
+    workbenchController.getSnapshot,
+  )
+  const workbenchLayoutSnapshot = useSyncExternalStore(
+    workbenchLayoutController.subscribe,
+    workbenchLayoutController.getSnapshot,
+    workbenchLayoutController.getSnapshot,
+  )
   useEffect(() => () => projectController.dispose(), [projectController])
+  useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
+  useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
+  useEffect(() => () => workbenchController.dispose(), [workbenchController])
+  useEffect(() => () => workbenchLayoutController.dispose(), [workbenchLayoutController])
+  useEffect(() => {
+    if (!workbenchLayoutSnapshot.resize) {
+      writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
+    }
+  }, [workbenchLayoutSnapshot])
+  useEffect(() => {
+    const projectId = projectSnapshot.activeProjectId
+    workbenchController.setProject(projectId)
+    void projectFilesController.setProject(projectId)
+    void projectCanvasController.setProject(projectId)
+  }, [projectCanvasController, projectFilesController, projectSnapshot.activeProjectId, workbenchController])
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const activeProjectId = activeProject?.id
-  const activeCanvas = projectSnapshot.canvases.find((canvas) => canvas.id === projectSnapshot.activeCanvasId)
-  const activeCanvasId = activeCanvas?.id
+  const activeCanvasId = workbenchSnapshot.surface.kind === "canvas"
+    && workbenchSnapshot.surface.input.projectId === activeProjectId
+    ? workbenchSnapshot.surface.input.canvasId
+    : undefined
+  const activeCanvas = activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
+    ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
+    : undefined
+  useEffect(() => {
+    if (!activeProjectId || projectCanvasSnapshot.projectId !== activeProjectId) return
+    void projectCanvasWorkbench.reconcile(
+      activeProjectId,
+      migrateLastCanvasPreference(
+        localStorage,
+        activeProjectId,
+        projectCanvasSnapshot.workbenchPreferenceMigration?.canvasId,
+      ),
+    )
+  }, [
+    activeProjectId,
+    projectCanvasSnapshot.busy,
+    projectCanvasSnapshot.canvases,
+    projectCanvasSnapshot.projectId,
+    projectCanvasSnapshot.workbenchPreferenceMigration,
+    projectCanvasWorkbench,
+    workbenchSnapshot.activeInput,
+    workbenchSnapshot.changingInput,
+    workbenchSnapshot.error,
+  ])
+  useEffect(() => {
+    if (activeProjectId && activeCanvas) writeLastCanvasPreference(localStorage, activeProjectId, activeCanvas.id)
+  }, [activeCanvas, activeProjectId])
+  const assistantHostRef = useRef({
+    activeCanvas,
+    activeProject,
+    beforePrompt: flushCanvasForAgent,
+    canvases: projectCanvasSnapshot.canvases,
+  })
+  assistantHostRef.current = {
+    activeCanvas,
+    activeProject,
+    beforePrompt: flushCanvasForAgent,
+    canvases: projectCanvasSnapshot.canvases,
+  }
   useEffect(() => window.convax.canvas.renderer.onRequest(async (request) => {
     if (request.type === "document.reload") {
-      if (request.ref.projectId !== activeProjectId || request.ref.canvasId !== activeCanvasId) {
+      if (request.ref.scopeId !== activeProjectId || request.ref.canvasId !== activeCanvasId) {
         return { type: "document.reload", reloaded: false }
       }
       const editor = canvasEditorRef.current
@@ -156,6 +294,28 @@ function App() {
       let storageVersion: string | null | undefined
       let saveQueue = Promise.resolve()
       return createCanvasServices({
+        assistant: {
+          render(request) {
+            const host = assistantHostRef.current
+            const contextResources = request.mentionedNodeIds.flatMap((nodeId) => {
+              const node = request.document.nodes.find((candidate) => candidate.id === nodeId)
+              return node ? [canvasNodeResource(request.document.id, node.id, node.data.label)] : []
+            })
+            return (
+              <AgentPanel
+                activeCanvas={host.activeCanvas}
+                beforePrompt={host.beforePrompt}
+                canvases={host.canvases}
+                className="!h-full !min-h-0 rounded-none border-0"
+                contextResources={contextResources}
+                conversationKey={JSON.stringify([request.document.id, request.ownerNodeId])}
+                embedded
+                projectId={host.activeProject?.id}
+                projectName={host.activeProject?.name}
+              />
+            )
+          },
+        },
         upload: {
           async upload(request) {
             if (request.signal.aborted) throw request.signal.reason
@@ -177,7 +337,7 @@ function App() {
                 }))
               },
               async readProjectTextFile(path, signal) {
-                const result = await window.convax.projects.readTextFile({ path, projectId: activeProjectId })
+                const result = await window.convax.projectFiles.readTextFile({ path, projectId: activeProjectId })
                 if (!result.exists) throw new Error(`Could not read ${path}`)
                 if (signal.aborted) throw signal.reason
                 return result.content
@@ -213,7 +373,7 @@ function App() {
             if (signal.aborted) throw signal.reason
             const result = await window.convax.canvas.documents.load({
               canvasId: activeCanvasId,
-              projectId: activeProjectId,
+              scopeId: activeProjectId,
             })
             storageVersion = result.storageVersion
             if (!result.document) return null
@@ -237,7 +397,7 @@ function App() {
               const result = await window.convax.canvas.documents.save({
                 document,
                 expectedStorageVersion: storageVersion,
-                ref: { canvasId: activeCanvasId, projectId: activeProjectId },
+                ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
               })
               storageVersion = result.storageVersion
             })
@@ -275,24 +435,147 @@ function App() {
     return () => window.clearTimeout(timeout)
   }, [notification])
 
+  const resizeWorkbenchPartBy = useCallback((partId: string, delta: number) => {
+    if (!workbenchLayoutController.beginResize(partId)) return
+    try {
+      workbenchLayoutController.updateResize(delta)
+      workbenchLayoutController.endResize()
+    } catch (error) {
+      workbenchLayoutController.cancelResize()
+      throw error
+    }
+  }, [workbenchLayoutController])
+
+  const startWorkbenchPartResize = useCallback((
+    partId: string,
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
+    const part = workbenchLayoutController.getSnapshot().parts[partId]
+    if (!part || !workbenchLayoutController.beginResize(partId)) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startSize = part.size
+    const direction = partId === WorkbenchLayoutParts.PrimarySidebar ? 1 : -1
+
+    const update = (clientX: number) => {
+      const layout = workbenchLayoutController.getSnapshot()
+      const primary = layout.parts[WorkbenchLayoutParts.PrimarySidebar]!
+      const secondary = layout.parts[WorkbenchLayoutParts.SecondarySidebar]!
+      const overlays = window.innerWidth <= overlaySidebarBreakpoint
+      const occupiedBySecondary = overlays
+        ? 0
+        : secondary.visible
+          ? secondary.size
+          : collapsedSecondarySidebarSize
+      const available = partId === WorkbenchLayoutParts.PrimarySidebar
+        ? window.innerWidth - occupiedBySecondary - minimumWorkbenchSurfaceSize
+        : overlays
+          ? window.innerWidth - 96
+          : window.innerWidth - primary.size - minimumWorkbenchSurfaceSize
+      const requested = startSize + (clientX - startX) * direction
+      const constrained = Math.min(requested, Math.max(0, available))
+      workbenchLayoutController.updateResize(constrained - startSize)
+    }
+
+    let settled = false
+    const cleanup = () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", finish)
+      window.removeEventListener("pointercancel", cancel)
+      window.removeEventListener("blur", cancel)
+    }
+    const move = (moveEvent: PointerEvent) => update(moveEvent.clientX)
+    const finish = (finishEvent: PointerEvent) => {
+      if (settled) return
+      settled = true
+      update(finishEvent.clientX)
+      cleanup()
+      workbenchLayoutController.endResize()
+    }
+    const cancel = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      workbenchLayoutController.cancelResize()
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", finish)
+    window.addEventListener("pointercancel", cancel)
+    window.addEventListener("blur", cancel)
+  }, [workbenchLayoutController])
+
+  const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
+  const secondarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.SecondarySidebar]!
+
   return (
-    <main className="relative flex size-full overflow-hidden bg-background">
-      <ProjectSidebar
-        controller={projectController}
-        hideWhenNoProject
-        resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
-      />
+    <main className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}>
+      <div
+        className="relative h-full shrink-0"
+        style={{ width: activeProject && primarySidebar.visible ? primarySidebar.size : 0 }}
+      >
+        <ProjectSidebar
+          className="w-full"
+          controller={projectController}
+          extension={activeProject ? {
+            busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
+            content: (
+              <ProjectCanvasSidebar
+                activeCanvasId={activeCanvasId ?? null}
+                controller={projectCanvasController}
+                navigationBusy={workbenchSnapshot.changingInput}
+                navigationError={workbenchSnapshot.error}
+                onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
+                onClearNavigationError={() => workbenchController.clearError()}
+                onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
+                onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+              />
+            ),
+            count: projectCanvasSnapshot.canvases.length,
+            createLabel: "New canvas",
+            label: "Canvases",
+            onCreate: () => { void projectCanvasWorkbench.createCanvas(activeProject.id) },
+          } : undefined}
+          filesController={projectFilesController}
+          hideWhenNoProject
+          resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
+        />
+        {activeProject && primarySidebar.visible ? (
+          <div
+            aria-label="Resize project sidebar"
+            aria-orientation="vertical"
+            aria-valuemax={primarySidebarBounds.maxSize}
+            aria-valuemin={primarySidebarBounds.minSize}
+            aria-valuenow={primarySidebar.size}
+            className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
+            onKeyDown={(keyEvent) => {
+              if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
+              keyEvent.preventDefault()
+              resizeWorkbenchPartBy(
+                WorkbenchLayoutParts.PrimarySidebar,
+                keyEvent.key === "ArrowLeft" ? -24 : 24,
+              )
+            }}
+            onPointerDown={(pointerEvent) => startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)}
+            role="separator"
+            tabIndex={0}
+          />
+        ) : null}
+      </div>
       <section className="relative min-w-0 flex-1">
-        {!activeProject ? (
-          <ProjectEmptyWorkspace controller={projectController} initialized={projectSnapshot.initialized} />
-        ) : !activeCanvas || !initialDocument ? (
-          <ProjectWorkspaceLoading projectName={activeProject.name} />
+        {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
+          <ProjectEmptyState controller={projectController} initialized={projectSnapshot.initialized} />
+        ) : workbenchSnapshot.surface.kind === "file" ? (
+          <div className="grid size-full place-items-center text-sm text-muted-foreground">File surface is not available yet.</div>
+        ) : workbenchSnapshot.surface.kind === "empty" || !activeProject || !activeCanvas || !initialDocument ? (
+          <ProjectLoadingState projectName={activeProject?.name ?? "Project"} />
         ) : (
           <CanvasEditor
             key={`${activeProject.id}:${activeCanvas.id}`}
             clipboardScope={activeProject.id}
+            fileRendererRegistry={canvasFileRendererRegistry}
             initialDocument={initialDocument}
-            readOnly={projectSnapshot.changingActiveCanvas || projectSnapshot.changingActiveProject}
+            nodeRegistry={canvasNodeRegistry}
+            readOnly={workbenchSnapshot.changingInput || projectCanvasSnapshot.busy || projectSnapshot.changingActiveProject}
             ref={canvasEditorRef}
             services={services}
             title={activeCanvas.name}
@@ -305,7 +588,23 @@ function App() {
       <AgentPanel
         activeCanvas={activeCanvas}
         beforePrompt={flushCanvasForAgent}
-        canvases={projectSnapshot.canvases}
+        canvases={projectCanvasSnapshot.canvases}
+        layout={{
+          maxWidth: secondarySidebarBounds.maxSize,
+          minWidth: secondarySidebarBounds.minSize,
+          onOpenChange: (open) => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, open),
+          onResizeKeyDown: (keyEvent) => {
+            if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
+            keyEvent.preventDefault()
+            resizeWorkbenchPartBy(
+              WorkbenchLayoutParts.SecondarySidebar,
+              keyEvent.key === "ArrowLeft" ? 24 : -24,
+            )
+          },
+          onResizeStart: (pointerEvent) => startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent),
+          open: secondarySidebar.visible,
+          width: secondarySidebar.size,
+        }}
         projectId={activeProjectId}
         projectName={activeProject?.name}
       />
@@ -337,4 +636,4 @@ const root = document.getElementById("app")
 if (!(root instanceof HTMLElement)) throw new Error("App root was not found")
 const reactRoot = import.meta.hot?.data.root ?? createRoot(root)
 if (import.meta.hot) import.meta.hot.data.root = reactRoot
-reactRoot.render(<App />)
+reactRoot.render(<DesktopProtocolGate><App /></DesktopProtocolGate>)
