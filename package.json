@@ -11,7 +11,7 @@
     "typecheck": "bun turbo typecheck",
     "test": "bun turbo test",
     "package:boundaries": "bun scripts/package-boundary-check.ts",
-    "pack:check": "bun run package:boundaries && bun turbo build --filter=@convax/agent-runtime --filter=@convax/canvas --filter=@convax/project --filter=@convax/project-files --filter=@convax/ui --filter=@convax/workbench && bun scripts/package-pack-smoke.ts",
+    "pack:check": "bun run package:boundaries && bun scripts/package-pack-smoke.ts",
     "check": "bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project"
   },
   "workspaces": {

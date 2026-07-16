@@ -1,13 +1,17 @@
+import { builtinModules } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 
 type PackageManifest = {
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
   exports?: Record<string, unknown> | string
+  files?: string[]
   name?: string
   optionalDependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
   private?: boolean
+  scripts?: Record<string, string>
+  version?: string
 }
 
 type WorkspacePackage = {
@@ -17,6 +21,7 @@ type WorkspacePackage = {
 }
 
 const repositoryRoot = join(import.meta.dir, "..")
+const applicationPackageNames = new Set(["@convax/desktop"])
 const publishablePackageNames = new Set([
   "@convax/agent-runtime",
   "@convax/canvas",
@@ -25,6 +30,62 @@ const publishablePackageNames = new Set([
   "@convax/ui",
   "@convax/workbench",
 ])
+const reservedWorkspacePackageName = "@convax/workspace"
+const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>([
+  ["@convax/agent-runtime", new Set()],
+  ["@convax/canvas", new Set(["@convax/ui"])],
+  [
+    "@convax/desktop",
+    new Set([
+      "@convax/agent-runtime",
+      "@convax/canvas",
+      "@convax/project",
+      "@convax/project-files",
+      "@convax/ui",
+      "@convax/workbench",
+    ]),
+  ],
+  ["@convax/project", new Set(["@convax/canvas", "@convax/project-files", "@convax/ui"])],
+  ["@convax/project-files", new Set()],
+  ["@convax/ui", new Set()],
+  ["@convax/workbench", new Set()],
+])
+const allowedInternalSubpaths = new Map<string, ReadonlySet<string>>([
+  ["@convax/canvas -> @convax/ui", new Set([".", "./theme.css"])],
+  ["@convax/project -> @convax/canvas", new Set(["./application", "./core"])],
+  ["@convax/project -> @convax/project-files", new Set([".", "./contracts", "./drag"])],
+  ["@convax/project -> @convax/ui", new Set([".", "./theme.css"])],
+])
+const nodeBuiltinSpecifiers = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]))
+
+function normalizedSourcePath(sourcePath: string): string {
+  return sourcePath.replaceAll("\\", "/")
+}
+
+function isTestSource(sourcePath: string): boolean {
+  const normalized = normalizedSourcePath(sourcePath)
+  return normalized.startsWith("test/") || /(?:^|\/)[^/]+\.(?:spec|test)\.[cm]?[jt]sx?$/.test(normalized)
+}
+
+function canImportNodeBuiltins(packageName: string, sourcePath: string): boolean {
+  if (isTestSource(sourcePath)) return true
+  const normalized = normalizedSourcePath(sourcePath)
+  if (packageName === "@convax/agent-runtime") return normalized.startsWith("src/node/")
+  if (packageName === "@convax/project") return normalized.startsWith("src/node/")
+  if (packageName === "@convax/desktop") return normalized.startsWith("src/main/")
+  return false
+}
+
+function canImportElectron(packageName: string, sourcePath: string): boolean {
+  if (packageName !== "@convax/desktop") return false
+  const normalized = normalizedSourcePath(sourcePath)
+  return normalized.startsWith("src/main/") || normalized.startsWith("src/preload/")
+}
+
+function canImportNodeEntry(packageName: string, sourcePath: string): boolean {
+  if (isTestSource(sourcePath)) return true
+  return packageName === "@convax/desktop" && normalizedSourcePath(sourcePath).startsWith("src/main/")
+}
 
 function matchesExport(exports: PackageManifest["exports"], subpath: string): boolean {
   if (typeof exports === "string") return subpath === "."
@@ -79,10 +140,51 @@ for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(re
 }
 
 const packagesByName = new Map(packages.map((workspacePackage) => [workspacePackage.name, workspacePackage]))
+for (const workspacePackage of packages) {
+  if (!workspacePackage.name.startsWith("@convax/")) {
+    throw new Error(`${workspacePackage.name}: workspace packages must use the @convax scope`)
+  }
+  if (!allowedInternalRuntimeDependencies.has(workspacePackage.name)) {
+    throw new Error(
+      `${workspacePackage.name}: package ownership is not registered; update AGENTS.md, docs/architecture.md, and package-boundary-check.ts`,
+    )
+  }
+  if (!await Bun.file(join(workspacePackage.directory, "AGENTS.md")).exists()) {
+    throw new Error(`${workspacePackage.name}: every package needs a local AGENTS.md ownership contract`)
+  }
+  if (!applicationPackageNames.has(workspacePackage.name) && !publishablePackageNames.has(workspacePackage.name)) {
+    throw new Error(`${workspacePackage.name}: new library packages must be registered as independently publishable`)
+  }
+}
+for (const packageName of allowedInternalRuntimeDependencies.keys()) {
+  if (!packagesByName.has(packageName)) {
+    throw new Error(`${packageName}: architecture dependency policy refers to a missing workspace package`)
+  }
+}
 for (const name of publishablePackageNames) {
   const workspacePackage = packagesByName.get(name)
   if (!workspacePackage || workspacePackage.manifest.private) {
     throw new Error(`${name}: expected an independent publishable package`)
+  }
+  const { exports, files, scripts, version } = workspacePackage.manifest
+  if (
+    !version
+    || version === "0.0.0"
+    || !files?.includes("dist")
+    || !exports
+    || typeof exports === "string"
+    || !matchesExport(exports, ".")
+  ) {
+    throw new Error(`${name}: publishable packages need a real version, dist files, and a public root export`)
+  }
+  for (const script of ["build", "clean", "prepack", "prepublishOnly", "test", "typecheck"]) {
+    if (!scripts?.[script]) throw new Error(`${name}: publishable packages need a package-local ${script} script`)
+  }
+}
+for (const name of applicationPackageNames) {
+  const workspacePackage = packagesByName.get(name)
+  if (!workspacePackage?.manifest.private) {
+    throw new Error(`${name}: application composition packages must stay private`)
   }
 }
 
@@ -93,15 +195,48 @@ for (const workspacePackage of packages) {
     ...workspacePackage.manifest.optionalDependencies,
     ...workspacePackage.manifest.peerDependencies,
   }
+  const allDeclaredDependencies = {
+    ...runtimeDependencies,
+    ...workspacePackage.manifest.devDependencies,
+  }
+  if (reservedWorkspacePackageName in allDeclaredDependencies) {
+    throw new Error(
+      `${workspacePackage.name}: ${reservedWorkspacePackageName} is reserved for a future multi-project window model`,
+    )
+  }
+  const internalRuntimeDependencies = Object.keys(runtimeDependencies).filter((dependency) => packagesByName.has(dependency))
+  const allowedDependencies = allowedInternalRuntimeDependencies.get(workspacePackage.name)!
+  for (const dependency of internalRuntimeDependencies) {
+    if (!allowedDependencies.has(dependency)) {
+      throw new Error(
+        `${workspacePackage.name}: architecture forbids runtime dependency on ${dependency}; compose the packages in @convax/desktop instead`,
+      )
+    }
+  }
   graph.set(
     workspacePackage.name,
-    new Set(Object.keys(runtimeDependencies).filter((dependency) => packagesByName.has(dependency))),
+    new Set(internalRuntimeDependencies),
   )
 
   const validateSpecifier = (sourcePath: string, specifier: string) => {
     const absoluteSourcePath = join(workspacePackage.directory, sourcePath)
+    if (
+      specifier.startsWith("/")
+      || /^[A-Za-z]:[\\/]/.test(specifier)
+      || specifier.startsWith("file:")
+    ) {
+      throw new Error(`${sourcePath}: absolute file imports are not portable: ${specifier}`)
+    }
+    if ((specifier.startsWith(".") || specifier.startsWith("@convax/")) && specifier.includes("\\")) {
+      throw new Error(`${sourcePath}: module specifiers must use forward slashes on every platform: ${specifier}`)
+    }
     if (specifier.startsWith(".") && leavesPackage(absoluteSourcePath, specifier, workspacePackage.directory)) {
       throw new Error(`${sourcePath}: relative import escapes ${workspacePackage.name}: ${specifier}`)
+    }
+    if (specifier === reservedWorkspacePackageName || specifier.startsWith(`${reservedWorkspacePackageName}/`)) {
+      throw new Error(
+        `${sourcePath}: ${reservedWorkspacePackageName} is reserved; Workbench owns active window state and Project owns one folder`,
+      )
     }
     if (
       workspacePackage.name !== "@convax/agent-runtime" &&
@@ -109,12 +244,18 @@ for (const workspacePackage of packages) {
     ) {
       throw new Error(`${sourcePath}: OpenCode imports must stay behind @convax/agent-runtime`)
     }
+    if (nodeBuiltinSpecifiers.has(specifier) && !canImportNodeBuiltins(workspacePackage.name, sourcePath)) {
+      throw new Error(`${sourcePath}: Node built-in ${specifier} is outside an approved Node adapter directory`)
+    }
+    if ((specifier === "electron" || specifier.startsWith("electron/")) && !canImportElectron(workspacePackage.name, sourcePath)) {
+      throw new Error(`${sourcePath}: Electron imports are limited to @convax/desktop main and preload`)
+    }
 
     const dependencyPackage = packages.find(
       (candidate) => specifier === candidate.name || specifier.startsWith(`${candidate.name}/`),
     )
-    if (!dependencyPackage || dependencyPackage.name === workspacePackage.name) return
-    if (!(dependencyPackage.name in runtimeDependencies)) {
+    if (!dependencyPackage) return
+    if (dependencyPackage.name !== workspacePackage.name && !(dependencyPackage.name in runtimeDependencies)) {
       throw new Error(`${sourcePath}: ${dependencyPackage.name} must be a runtime dependency of ${workspacePackage.name}`)
     }
 
@@ -123,6 +264,18 @@ for (const workspacePackage of packages) {
     if (!matchesExport(dependencyPackage.manifest.exports, subpath)) {
       throw new Error(`${sourcePath}: ${specifier} is not a public export of ${dependencyPackage.name}`)
     }
+    if ((subpath === "./node" || subpath.startsWith("./node/")) && !canImportNodeEntry(workspacePackage.name, sourcePath)) {
+      throw new Error(`${sourcePath}: ${specifier} is a Node-only entry and may only be composed by Desktop main`)
+    }
+    if (dependencyPackage.name !== workspacePackage.name) {
+      const edge = `${workspacePackage.name} -> ${dependencyPackage.name}`
+      const allowedSubpaths = allowedInternalSubpaths.get(edge)
+      if (allowedSubpaths && !allowedSubpaths.has(subpath)) {
+        throw new Error(
+          `${sourcePath}: architecture forbids ${specifier}; allowed ${dependencyPackage.name} entries are ${[...allowedSubpaths].join(", ")}`,
+        )
+      }
+    }
   }
 
   for (const sourceRoot of ["src", "test"]) {
@@ -130,11 +283,40 @@ for (const workspacePackage of packages) {
       workspacePackage.directory,
     )) {
       const source = await Bun.file(join(workspacePackage.directory, sourcePath)).text()
+      if (
+        workspacePackage.name !== "@convax/project"
+        && !isTestSource(sourcePath)
+        && /\.convax\/(?:project\.json|canvas\.json|canvases(?:\/|\b))/i.test(source.replaceAll("\\", "/"))
+      ) {
+        throw new Error(
+          `${sourcePath}: private Project metadata must be accessed through @convax/project ports, never by path`,
+        )
+      }
       const specifiers = [
         ...source.matchAll(/(?:from\s*|import\s*\(\s*|require(?:\.resolve)?\s*\(\s*)["']([^"']+)["']/g),
         ...source.matchAll(/(?:^|[;\n])\s*import\s*["']([^"']+)["']/g),
       ].map((match) => match[1])
-      for (const specifier of specifiers) validateSpecifier(sourcePath, specifier)
+      for (const specifier of specifiers) {
+        validateSpecifier(sourcePath, specifier)
+        if (
+          publishablePackageNames.has(workspacePackage.name)
+          && !isTestSource(sourcePath)
+          && !specifier.startsWith(".")
+          && !specifier.startsWith("/")
+          && !specifier.startsWith("file:")
+          && !specifier.startsWith("bun:")
+          && !nodeBuiltinSpecifiers.has(specifier)
+          && !packages.some((candidate) => specifier === candidate.name || specifier.startsWith(`${candidate.name}/`))
+        ) {
+          const [first, second] = specifier.split("/")
+          const dependencyName = first?.startsWith("@") ? `${first}/${second}` : first
+          if (!dependencyName || !(dependencyName in runtimeDependencies)) {
+            throw new Error(
+              `${sourcePath}: external import ${specifier} must be a declared dependency or peer of ${workspacePackage.name}`,
+            )
+          }
+        }
+      }
     }
   }
 
@@ -158,4 +340,4 @@ for (const workspacePackage of packages) {
 const cycle = findCycle(graph)
 if (cycle) throw new Error(`package dependency cycle: ${cycle.join(" -> ")}`)
 
-console.log(`package boundary check passed: ${packages.length} packages, no private imports or dependency cycles`)
+console.log(`package boundary check passed: ${packages.length} packages, architecture and runtime boundaries valid`)

@@ -7,7 +7,7 @@ import {
   type CanvasUploadItem,
   type CanvasUploadRequest,
 } from "@convax/canvas"
-import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project"
+import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 
 export interface CanvasUploadHost {
   copyProjectMediaFiles: (paths: readonly string[], signal: AbortSignal) => Promise<readonly CanvasResource[]>

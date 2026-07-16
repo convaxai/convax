@@ -1,21 +1,73 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 
-const packageDirectories = ["agent-runtime", "canvas", "project", "project-files", "ui", "workbench"] as const
-const standaloneBuildOrder = ["ui", "project-files", "canvas", "project", "workbench", "agent-runtime"] as const
+interface PublishableManifest {
+  dependencies?: Record<string, string>
+  exports?: Record<string, unknown>
+  files?: string[]
+  name?: string
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  private?: boolean
+  scripts?: Record<string, string>
+  version?: string
+}
+
+interface PublishablePackage {
+  directory: string
+  manifest: PublishableManifest
+  name: string
+}
+
 const stylePackageDirectories = new Set(["canvas", "project", "ui"])
 const repositoryRoot = join(import.meta.dir, "..")
 const forbiddenPackEntries = [".turbo/", "src/", "test/", "tsconfig.json", "tsconfig.build.json"]
 
-const workspaceVersions = new Map<string, string>()
-for (const directory of packageDirectories) {
-  const manifest = await Bun.file(join(repositoryRoot, "packages", directory, "package.json")).json() as {
-    name?: string
-    version?: string
-  }
-  if (manifest.name && manifest.version) workspaceVersions.set(manifest.name, manifest.version)
+const publishablePackages: PublishablePackage[] = []
+for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(repositoryRoot)) {
+  const packageDirectory = dirname(join(repositoryRoot, manifestPath))
+  const manifest = await Bun.file(join(repositoryRoot, manifestPath)).json() as PublishableManifest
+  if (manifest.private) continue
+  if (!manifest.name) throw new Error(`${manifestPath}: publishable package name is required`)
+  publishablePackages.push({
+    directory: basename(packageDirectory),
+    manifest,
+    name: manifest.name,
+  })
 }
+publishablePackages.sort((left, right) => left.name.localeCompare(right.name))
+
+const packagesByName = new Map(publishablePackages.map((workspacePackage) => [workspacePackage.name, workspacePackage]))
+const packageDirectories = publishablePackages.map((workspacePackage) => workspacePackage.directory)
+const standaloneBuildOrder: string[] = []
+const built = new Set<string>()
+const building = new Set<string>()
+
+function scheduleBuild(workspacePackage: PublishablePackage) {
+  if (built.has(workspacePackage.name)) return
+  if (building.has(workspacePackage.name)) throw new Error(`publishable package dependency cycle at ${workspacePackage.name}`)
+  building.add(workspacePackage.name)
+  const dependencies = {
+    ...workspacePackage.manifest.dependencies,
+    ...workspacePackage.manifest.optionalDependencies,
+    ...workspacePackage.manifest.peerDependencies,
+  }
+  for (const dependencyName of Object.keys(dependencies).sort()) {
+    const dependency = packagesByName.get(dependencyName)
+    if (dependency) scheduleBuild(dependency)
+  }
+  building.delete(workspacePackage.name)
+  built.add(workspacePackage.name)
+  standaloneBuildOrder.push(workspacePackage.directory)
+}
+for (const workspacePackage of publishablePackages) scheduleBuild(workspacePackage)
+
+const workspaceVersions = new Map(
+  publishablePackages.flatMap((workspacePackage) =>
+    workspacePackage.manifest.version ? [[workspacePackage.name, workspacePackage.manifest.version] as const] : [],
+  ),
+)
 
 for (const directory of packageDirectories) {
   const cwd = join(repositoryRoot, "packages", directory)
@@ -31,18 +83,40 @@ function collectExportTargets(value: unknown): string[] {
   return Object.values(value).flatMap(collectExportTargets)
 }
 
+const publicTypeEntrypoints = new Set<string>()
+
+async function registerPublicTypeEntrypoints(manifest: PublishableManifest, cwd: string) {
+  if (!manifest.name || !manifest.exports) return
+  for (const [exportPath, exportValue] of Object.entries(manifest.exports)) {
+    const typeTargets = collectExportTargets(exportValue).filter((target) => target.endsWith(".d.ts"))
+    for (const target of typeTargets) {
+      const exportWildcard = exportPath.indexOf("*")
+      const targetWildcard = target.indexOf("*")
+      if (exportWildcard < 0 && targetWildcard < 0) {
+        publicTypeEntrypoints.add(`${manifest.name}${exportPath === "." ? "" : exportPath.slice(1)}`)
+        continue
+      }
+      if (exportWildcard < 0 || targetWildcard < 0) {
+        throw new Error(`${manifest.name}: type export wildcards do not align: ${exportPath} -> ${target}`)
+      }
+      const pattern = target.slice(2)
+      const patternWildcard = pattern.indexOf("*")
+      const prefix = pattern.slice(0, patternWildcard)
+      const suffix = pattern.slice(patternWildcard + 1)
+      for await (const sourcePath of new Bun.Glob(pattern).scan(cwd)) {
+        const normalizedSourcePath = sourcePath.replaceAll("\\", "/")
+        const valueEnd = suffix ? normalizedSourcePath.length - suffix.length : normalizedSourcePath.length
+        const wildcardValue = normalizedSourcePath.slice(prefix.length, valueEnd)
+        const resolvedExport = exportPath.replace("*", wildcardValue)
+        publicTypeEntrypoints.add(`${manifest.name}${resolvedExport.slice(1)}`)
+      }
+    }
+  }
+}
+
 for (const directory of standaloneBuildOrder) {
   const cwd = join(repositoryRoot, "packages", directory)
-  const manifest = await Bun.file(join(cwd, "package.json")).json() as {
-    exports?: Record<string, unknown>
-    dependencies?: Record<string, string>
-    files?: string[]
-    name?: string
-    peerDependencies?: Record<string, string>
-    private?: boolean
-    scripts?: Record<string, string>
-    version?: string
-  }
+  const manifest = await Bun.file(join(cwd, "package.json")).json() as PublishableManifest
 
   const build = Bun.spawnSync({ cmd: [process.execPath, "run", "build"], cwd, stdout: "pipe", stderr: "pipe" })
   if (build.exitCode !== 0) {
@@ -73,6 +147,7 @@ for (const directory of standaloneBuildOrder) {
       throw new Error(`${manifest.name}: export target is missing: ${target}`)
     }
   }
+  await registerPublicTypeEntrypoints(manifest, cwd)
   if (stylePackageDirectories.has(directory)) {
     for (const peer of ["react", "react-dom"]) {
       if (!manifest.peerDependencies?.[peer] || manifest.peerDependencies[peer].includes("catalog:")) {
@@ -165,37 +240,26 @@ const consumerDirectory = mkdtempSync(join(tmpdir(), "convax-consumer-"))
 try {
   const packageScopeDirectory = join(consumerDirectory, "node_modules", "@convax")
   mkdirSync(packageScopeDirectory, { recursive: true })
-  for (const directory of packageDirectories) {
-    symlinkSync(join(repositoryRoot, "packages", directory), join(packageScopeDirectory, directory), "dir")
+  for (const workspacePackage of publishablePackages) {
+    const packageLinkName = workspacePackage.name.slice("@convax/".length)
+    const linkType = process.platform === "win32" ? "junction" : "dir"
+    symlinkSync(
+      join(repositoryRoot, "packages", workspacePackage.directory),
+      join(packageScopeDirectory, packageLinkName),
+      linkType,
+    )
   }
 
-  const publicTypeEntrypoints = [
-    "@convax/agent-runtime",
-    "@convax/agent-runtime/node",
-    "@convax/agent-runtime/node/protected-path-plugin",
-    "@convax/canvas",
-    "@convax/canvas/application",
-    "@convax/canvas/core",
-    "@convax/canvas/view",
-    "@convax/project",
-    "@convax/project/canvas",
-    "@convax/project/contracts",
-    "@convax/project/node",
-    "@convax/project-files",
-    "@convax/project-files/contracts",
-    "@convax/project-files/drag",
-    "@convax/ui",
-    "@convax/ui/components/button",
-    "@convax/ui/components/context-menu",
-    "@convax/ui/components/input",
-    "@convax/ui/components/tooltip",
-    "@convax/ui/lib/utils",
-    "@convax/workbench",
-  ]
-  const consumerSource = publicTypeEntrypoints
+  for (const workspacePackage of publishablePackages) {
+    if (!publicTypeEntrypoints.has(workspacePackage.name)) {
+      throw new Error(`${workspacePackage.name}: public root TypeScript entrypoint is missing from external consumer smoke`)
+    }
+  }
+  const sortedTypeEntrypoints = [...publicTypeEntrypoints].sort()
+  const consumerSource = sortedTypeEntrypoints
     .map((specifier, index) => `import * as package${index} from ${JSON.stringify(specifier)}`)
     .join("\n")
-  await Bun.write(join(consumerDirectory, "index.ts"), `${consumerSource}\nvoid [${publicTypeEntrypoints.map((_, index) => `package${index}`).join(", ")}]\n`)
+  await Bun.write(join(consumerDirectory, "index.ts"), `${consumerSource}\nvoid [${sortedTypeEntrypoints.map((_, index) => `package${index}`).join(", ")}]\n`)
   await Bun.write(
     join(consumerDirectory, "tsconfig.json"),
     JSON.stringify(

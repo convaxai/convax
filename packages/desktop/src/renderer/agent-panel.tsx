@@ -7,10 +7,7 @@ import type {
   AgentSession,
   AgentSessionState,
 } from "@convax/agent-runtime"
-import {
-  parseProjectEntryDrag,
-  PROJECT_ENTRY_DRAG_TYPE,
-} from "@convax/project"
+import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import {
   parseProjectCanvasDrag,
   PROJECT_CANVAS_DRAG_TYPE,

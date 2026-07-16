@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { CanvasResource, CanvasUploadRequest } from "@convax/canvas"
-import { PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "@convax/project"
+import { PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "@convax/project-files/drag"
 import {
   canvasProjectEntryReferenceKey,
   resolveCanvasUploadItems,

@@ -2,6 +2,8 @@
 
 Convax is an independent desktop canvas for AI-assisted work. It uses OpenCode through published npm packages rather than maintaining an OpenCode source fork.
 
+The canonical package boundaries, state ownership, persistence map, and extension workflow live in [the architecture contract](docs/architecture.md). Contributor and AI rules are enforced through the root and package-local `AGENTS.md` files plus `bun run package:boundaries`.
+
 ## Structure
 
 ```text
@@ -15,15 +17,17 @@ packages/
   workbench/      Window-level Input, Selection, Surface, open, close, and reveal coordination
 ```
 
-Each package is independently publishable and owns only its domain. Packages do not discover or mutate one another through hidden globals; the application injects ports and combines optional capabilities at its composition root.
+Each library package is independently buildable, testable, publishable, and consumable from a clean external project. Independence does not mean zero dependencies or zero domain semantics: dependencies are explicit, and each package owns only its coherent domain. Packages do not discover or mutate one another through hidden globals; the application injects ports and combines optional capabilities at its composition root. Desktop is the private composition application rather than a published library.
 
-The published libraries export compiled ESM, declarations, and (for UI packages) precompiled CSS from `dist`. Internal dependencies use compatible semver ranges in packed manifests. `bun run package:boundaries` rejects undeclared/private cross-package imports, dependency cycles, and OpenCode imports outside `@convax/agent-runtime`. `bun run pack:check` then clean-builds the six libraries in dependency order, inspects real tarballs for unresolved workspace protocols or leaked source, and type-checks every public entry from an external consumer without monorepo path aliases.
+The published libraries export compiled ESM, declarations, and (for UI packages) precompiled CSS from `dist`. Internal dependencies use compatible semver ranges in packed manifests. `bun run package:boundaries` enforces the architecture dependency allowlist, public package exports, browser/Node entry boundaries, the OpenCode isolation boundary, and cycle freedom. `bun run pack:check` then discovers every publishable library, clean-builds them in dependency order, inspects real tarballs for unresolved workspace protocols or leaked source, and type-checks every public TypeScript entry from an external consumer without monorepo path aliases.
+
+The `package-boundaries` GitHub check runs on every push and pull request without needing dependency installation. Protect release branches by requiring that status check so architecture drift cannot be merged by skipping local validation.
 
 `@convax/project-files` owns renderer-safe file contracts, the file controller, and drag protocol. `@convax/project` owns durable Project identity, bindings, private storage, and project-level capability composition while keeping compatibility exports for the existing explorer. Native filesystem and Project Canvas persistence code is isolated behind `@convax/project/node` and is only imported by the Electron main process. Renderer file operations always use a project id plus a portable project-relative path through the preload bridge.
 
 Canvas document semantics do not live in Project. `@convax/canvas/application` owns schema validation, JSON serialization, business commands, queries, logical revisions, and the `CanvasDocumentRepository` port. `@convax/project/canvas` owns the Project's Canvas catalog, controller, drag contracts, and Project-resource references; `@convax/project/node` implements the corresponding persistence adapters on top of opaque, namespaced Project private storage. Desktop exposes lifecycle operations as `window.convax.projects`, file operations as `window.convax.projectFiles`, and the Project Canvas catalog as `window.convax.projects.canvases`. Their IPC namespaces are likewise separate: `project:*`, `project-files:*`, `project:canvas-*`, and `canvas:*`.
 
-`@convax/workbench` is deliberately smaller than the Project aggregate. It owns only the active serializable Input, an Input-scoped Selection, the derived primary Surface, and guarded open/close/reveal commands. It is the sole source of truth for the currently displayed Canvas or file; the Project Canvas controller owns only catalog CRUD. Project files, Canvas documents, Agent runtime state, and durable relationships remain in their domain packages.
+`@convax/workbench` is deliberately smaller than the Project aggregate. It owns the active serializable Input, an Input-scoped Selection, the derived primary Surface, guarded open/close/reveal commands, and DOM-free top-level layout-part transactions. Desktop supplies concrete sizes, pointer/keyboard events, animation, responsiveness, and preference persistence. Workbench is the sole source of truth for the currently displayed Canvas or file; the Project Canvas controller owns only catalog CRUD. Project files, Canvas documents, Agent runtime state, and durable relationships remain in their domain packages.
 
 Canvas operations are layered deliberately:
 
