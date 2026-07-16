@@ -61,6 +61,14 @@ There is no current Workspace aggregate. The term is reserved for a future featu
 where one window/session genuinely coordinates multiple Projects. The legacy schema
 name `convax.canvas-workspace/1` exists only as a migration input.
 
+### Skill and Plugin
+
+An OpenCode Skill is a trusted instruction bundle discovered and executed by the
+existing Agent runtime. A Convax Plugin is a user-installed, sandboxed product
+surface composed by Desktop from existing Canvas, Project and Agent capabilities.
+They may be installed together, but they are not the same extension mechanism:
+Skills never implement UI, and Plugins never become OpenCode plugins.
+
 ## 3. Packages and dependency graph
 
 | Package | Responsibility |
@@ -131,6 +139,8 @@ boundary checker fails closed until those admissions are complete.
 | Canvas document and revision | Canvas application service/repository | Mutations use commands and conflict checks |
 | Top-level sidebar size/visibility/resize transaction | `WorkbenchLayoutController` | Desktop supplies pixels, events, animation and persistence |
 | Agent sessions | `@convax/agent-runtime` scoped by the host | Never stored in Project Canvas state |
+| OpenCode Skill discovery | `@convax/agent-runtime` | Desktop owns only the managed install adapter and UI |
+| Installed Plugin packages | Desktop main | Global static packages; no active Project/Canvas state |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -141,6 +151,8 @@ truth. Do not mirror active state into catalogs, React state, or another control
 ```text
 Electron userData/
   projects.json                         per-user bindings and recency
+  opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
+  plugins/<plugin-id>/                  validated static Plugin packages
 
 browser localStorage                    per-user Workbench/renderer preferences
 
@@ -162,6 +174,12 @@ Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Ca
 application services. A schema change needs a version, a migration path, and tests
 using real old data. Never “fix” an incompatibility by deleting or silently resetting
 portable data.
+
+Installed Plugins are user-global. Canvas documents persist only the existing file
+node kind plus a stable Plugin reference and namespaced portable instance state.
+Uninstalling a Plugin therefore leaves recoverable Canvas data and falls back to the
+unknown-file renderer. Managed Skills are copied into Convax's OpenCode config root;
+normal external global Skills remain visible and read-only.
 
 ## 6. Core flows
 
@@ -223,8 +241,32 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Tool arguments cannot select another Project or expand the host-provided scope.
 - Canvas attachments are validated read-only snapshots. Agents mutate through tools,
   never by shell/file edits under `.convax`.
+- Opening a Project must not discover project-local `.agents`/`.claude` Skills or
+  executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
+  discovery state without replacing durable sessions.
+- A Plugin companion Skill is installed explicitly through the same managed Skill
+  lifecycle. It does not gain extra Plugin permissions or bypass typed capabilities.
 
-## 8. Workbench layout boundary
+## 8. Plugin host boundary
+
+Canvas already owns the file renderer and node-toolbar registries. Desktop may map a
+validated Plugin manifest into those registries; it must not add another extension
+bus, Canvas node role, or parallel mutation API. A Plugin surface remains a `file`
+node and calls existing clients/controllers through a narrow host adapter.
+
+Third-party Plugin code is static HTML/JavaScript rendered in an iframe with exactly
+`sandbox="allow-scripts"`. It is never imported into the renderer bundle, loaded as
+an Electron `webview`, or given Node, Electron, same-origin, arbitrary network, or
+absolute-path access. A dedicated static protocol performs containment checks and
+fixed MIME/CSP handling.
+
+Each mounted node receives a fresh `MessageChannel`. The port is bound to the exact
+installed Plugin, active Project, active Canvas and owning node. Every direct call is
+versioned, size-limited, manifest-authorized and delegated to an existing typed
+Project/Canvas/Agent capability. Plugin state writes may update only that node's
+namespaced portable state.
+
+## 9. Workbench layout boundary
 
 Workbench owns the generic state transition: part size, visibility, collapse
 threshold, begin/update/end/cancel resize, and restoration of an expanded size.
@@ -235,7 +277,7 @@ adapters. Project Sidebar still owns its internal vertical Canvases/Files split.
 This distinction applies to future panels: add generic state only when it is reusable
 window coordination; keep the product's visual implementation in the host.
 
-## 9. Electron boundary
+## 10. Electron boundary
 
 - Main: native I/O, Electron lifecycle, Project Node adapters, Canvas repositories,
   Agent runtime, and trusted IPC handlers.
@@ -248,7 +290,7 @@ Project Canvas, Canvas documents/views, and Agent runtime. Incompatible bridge c
 must bump the Desktop protocol version so stale main/preload/renderer combinations
 fail visibly instead of hanging.
 
-## 10. Portable paths and trust boundaries
+## 11. Portable paths and trust boundaries
 
 Contracts carry only normalized POSIX-style Project-relative paths. Native adapters
 join them with the bound root using `node:path`, validate containment, and defend
@@ -259,7 +301,7 @@ traversal, reserved device names including superscript forms, alternate data str
 trailing dots/spaces, case-insensitive reserved paths, and cross-device moves. Use
 `pathToFileURL` instead of constructing file URLs.
 
-## 11. Adding a capability
+## 12. Adding a capability
 
 Before implementation, answer:
 

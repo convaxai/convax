@@ -92,6 +92,8 @@ source, or ambient application state.
   through Canvas repository/application ports implemented by `@convax/project/node`.
 - `<project>/.convax/assets/`: managed Canvas assets accessed through the scoped
   Project Files capability.
+- Electron `userData/opencode/skills/user/<name>/`: Convax-managed OpenCode Skills.
+- Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
 - Browser storage: per-user Workbench input/layout and renderer preferences only.
 - In-memory controller state: loading, errors, selection, preview, and transition
   state. Do not silently turn it into durable shared state.
@@ -131,14 +133,32 @@ current schema.
   cannot switch or widen that scope.
 - Structured resources are validated and prepared by the host. Canvas snapshots are
   pathless/read-only; mutations use Canvas tools.
+- OpenCode Skills remain native instruction bundles. Project-local ambient Skills
+  and executable OpenCode extensions are not discovered merely by opening a folder.
+- Installing a Plugin companion Skill is explicit and uses the same managed Skill
+  lifecycle; it grants no implicit Plugin or host capability.
+
+## Plugin capability rules
+
+- Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
+  surface is a `file` node; do not add an extension bus, service locator, or node
+  role to route Plugin behavior.
+- Third-party Plugin code is static Web content in an iframe with exactly
+  `sandbox="allow-scripts"`. Never import it into the host, use Electron `webview`,
+  enable same-origin/Node/Electron access, or expose a generic function-call bridge.
+- Bind every MessageChannel to the installed Plugin plus current Project, Canvas and
+  owning node. Check manifest permissions, message size, stale scope and target on
+  every call. Plugin node state writes stay inside a namespaced field.
+- Direct Plugin calls are thin adapters over existing typed Project, Canvas and
+  Agent capabilities. They do not read private JSON or recreate domain invariants.
 
 ## Desktop and IPC rules
 
 - Main owns native filesystem, Electron, Project Node adapters, and Agent runtime.
 - Preload exposes a narrow typed bridge. Renderer code must not import Node/Electron.
 - Keep bridge namespaces separate: `projects`, `projectFiles`, `projects.canvases`,
-  `canvas`, and `agent`; keep IPC prefixes `project:*`, `project-files:*`,
-  `project:canvas-*`, `canvas:*`, and `agent:*`.
+  `canvas`, `agent`, and `plugins`; keep IPC prefixes `project:*`, `project-files:*`,
+  `project:canvas-*`, `canvas:*`, `agent:*`, and `plugin:*`.
 - Bump the Desktop protocol version and update its compatibility tests when the
   preload/main contract changes incompatibly.
 - Desktop may coordinate packages, but reusable state machines and business rules

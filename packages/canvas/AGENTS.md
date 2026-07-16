@@ -24,6 +24,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
 - Plugins are disposable, deterministic and failure-isolated.
+- Canvas owns only host-neutral renderer and toolbar contracts. Installed Web
+  packages, permissions, iframe transport, Project/Agent calls and package storage
+  belong to the host. A Web Plugin renderer still produces a `file` node and must
+  mutate the document through the same editor/application APIs as built-in UI.
 
 Run `bun typecheck && bun test`. For public command, plugin or export changes also
 run root `bun run pack:check`.
