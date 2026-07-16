@@ -1,0 +1,346 @@
+import { randomUUID } from "node:crypto"
+import fs from "node:fs/promises"
+import path from "node:path"
+import type { ProjectCanvas, ProjectCanvasCatalog } from "../../canvas/contracts"
+import type { ProjectPrivatePathResolver, ProjectPrivateStorage } from "../project-private-storage"
+import type { ProjectCanvasCatalogStore } from "./project-canvas-document-repository"
+
+interface ProjectCanvasCatalogFile {
+  canvases: ProjectCanvas[]
+  schemaVersion: "convax.project-canvases/2"
+}
+
+interface ProjectCanvasCatalogSnapshot {
+  catalog: ProjectCanvasCatalogFile
+  storageVersion: string | null
+  workbenchPreferenceMigration?: ProjectCanvasCatalog["workbenchPreferenceMigration"]
+}
+
+export interface NodeProjectCanvasManagerOptions {
+  now?: () => number
+}
+
+export class NodeProjectCanvasManager implements ProjectCanvasCatalogStore {
+  private readonly now: () => number
+  private readonly queues = new Map<string, Promise<void>>()
+  private readonly workbenchPreferenceMigrations = new Map<string, NonNullable<ProjectCanvasCatalog["workbenchPreferenceMigration"]>>()
+
+  constructor(
+    private readonly storage: ProjectPrivateStorage,
+    private readonly privatePaths: ProjectPrivatePathResolver,
+    options: NodeProjectCanvasManagerOptions = {},
+  ) {
+    this.now = options.now ?? Date.now
+  }
+
+  getCanvasCatalog(input: { projectId: string }): Promise<ProjectCanvasCatalog> {
+    return this.queue(input.projectId, async () => {
+      const current = await this.ensureCatalog(input.projectId)
+      return toCatalog(input.projectId, current.catalog, current.workbenchPreferenceMigration)
+    })
+  }
+
+  createCanvas(input: { name?: string; projectId: string }): Promise<{ canvas: ProjectCanvas; catalog: ProjectCanvasCatalog }> {
+    return this.queue(input.projectId, async () => {
+      const current = await this.ensureCatalog(input.projectId)
+      const timestamp = this.now()
+      let id = createCanvasId()
+      while (current.catalog.canvases.some((canvas) => canvas.id === id)) id = createCanvasId()
+      const canvas = {
+        createdAt: timestamp,
+        id,
+        name: validateCanvasName(input.name ?? `Canvas ${current.catalog.canvases.length + 1}`),
+        updatedAt: timestamp,
+      }
+      const directory = await this.privatePaths.resolvePrivatePath({
+        path: canvasStoragePath(canvas.id),
+        projectId: input.projectId,
+      })
+      await fs.mkdir(directory, { recursive: false })
+      const next = { ...current.catalog, canvases: [...current.catalog.canvases, canvas] }
+      try {
+        await this.writeCatalog(input.projectId, next, current.storageVersion)
+      } catch (error) {
+        await this.privatePaths.resolvePrivatePath({ path: canvasStoragePath(canvas.id), projectId: input.projectId })
+          .then((safeDirectory) => fs.rm(safeDirectory, { force: true, recursive: true }))
+          .catch(() => undefined)
+        throw error
+      }
+      return { canvas, catalog: toCatalog(input.projectId, next, current.workbenchPreferenceMigration) }
+    })
+  }
+
+  renameCanvas(input: { canvasId: string; name: string; projectId: string }): Promise<{ canvas: ProjectCanvas; catalog: ProjectCanvasCatalog }> {
+    return this.queue(input.projectId, async () => {
+      const current = await this.ensureCatalog(input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      const existing = current.catalog.canvases.find((canvas) => canvas.id === canvasId)
+      if (!existing) throw new Error(`Canvas was not found: ${input.canvasId}`)
+      const canvas = { ...existing, name: validateCanvasName(input.name), updatedAt: this.now() }
+      const next = {
+        ...current.catalog,
+        canvases: current.catalog.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
+      }
+      await this.writeCatalog(input.projectId, next, current.storageVersion)
+      return { canvas, catalog: toCatalog(input.projectId, next, current.workbenchPreferenceMigration) }
+    })
+  }
+
+  touchCanvas(input: { canvasId: string; projectId: string }): Promise<ProjectCanvas> {
+    return this.queue(input.projectId, async () => {
+      const current = await this.ensureCatalog(input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      const existing = current.catalog.canvases.find((canvas) => canvas.id === canvasId)
+      if (!existing) throw new Error(`Canvas was not found: ${input.canvasId}`)
+      const canvas = { ...existing, updatedAt: this.now() }
+      await this.writeCatalog(input.projectId, {
+        ...current.catalog,
+        canvases: current.catalog.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
+      }, current.storageVersion)
+      return canvas
+    })
+  }
+
+  deleteCanvas(input: { canvasId: string; projectId: string }): Promise<{ deleted: boolean; catalog: ProjectCanvasCatalog }> {
+    return this.queue(input.projectId, async () => {
+      const current = await this.ensureCatalog(input.projectId)
+      const canvasId = requireCanvasId(input.canvasId)
+      if (!current.catalog.canvases.some((canvas) => canvas.id === canvasId)) {
+        return {
+          deleted: false,
+          catalog: toCatalog(input.projectId, current.catalog, current.workbenchPreferenceMigration),
+        }
+      }
+      if (current.catalog.canvases.length === 1) throw new Error("The last canvas in a project cannot be deleted")
+      const canvases = current.catalog.canvases.filter((canvas) => canvas.id !== canvasId)
+      const next = {
+        ...current.catalog,
+        canvases,
+      }
+      const source = await this.privatePaths.resolvePrivatePath({
+        path: canvasStoragePath(canvasId),
+        projectId: input.projectId,
+      })
+      const tombstoneName = `${canvasId}-${randomUUID()}`
+      const tombstone = await this.privatePaths.resolvePrivatePath({
+        path: `deleted-canvases/${tombstoneName}`,
+        projectId: input.projectId,
+      })
+      const tombstoneRoot = path.dirname(tombstone)
+      let moved = false
+      const stat = await fs.lstat(source).catch((error: unknown) => {
+        if (isNodeError(error) && error.code === "ENOENT") return null
+        throw error
+      })
+      if (stat) {
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Canvas storage is not a directory: ${canvasId}`)
+        await fs.mkdir(tombstoneRoot, { recursive: true })
+        await fs.rename(source, tombstone)
+        moved = true
+      }
+      try {
+        await this.writeCatalog(input.projectId, next, current.storageVersion)
+      } catch (error) {
+        if (moved) {
+          await Promise.all([
+            this.privatePaths.resolvePrivatePath({ path: `deleted-canvases/${tombstoneName}`, projectId: input.projectId }),
+            this.privatePaths.resolvePrivatePath({ path: canvasStoragePath(canvasId), projectId: input.projectId }),
+          ]).then(([safeTombstone, safeSource]) => fs.rename(safeTombstone, safeSource)).catch(() => undefined)
+        }
+        throw error
+      }
+      if (moved) {
+        await this.privatePaths.resolvePrivatePath({ path: `deleted-canvases/${tombstoneName}`, projectId: input.projectId })
+          .then((safeTombstone) => fs.rm(safeTombstone, { force: true, recursive: true }))
+          .catch(() => undefined)
+      }
+      return { deleted: true, catalog: toCatalog(input.projectId, next, current.workbenchPreferenceMigration) }
+    })
+  }
+
+  private async ensureCatalog(projectId: string): Promise<ProjectCanvasCatalogSnapshot> {
+    const stored = await this.storage.readPrivateTextFile(catalogRef(projectId))
+    let snapshot: ProjectCanvasCatalogSnapshot
+    if (stored.exists) {
+      snapshot = { ...parseCatalog(JSON.parse(stored.content)), storageVersion: stored.version }
+    } else {
+      snapshot = await this.migrateOrCreateCatalog(projectId)
+    }
+    if (snapshot.workbenchPreferenceMigration) {
+      this.workbenchPreferenceMigrations.set(projectId, snapshot.workbenchPreferenceMigration)
+    }
+    return {
+      ...snapshot,
+      workbenchPreferenceMigration: snapshot.workbenchPreferenceMigration
+        ?? this.workbenchPreferenceMigrations.get(projectId),
+    }
+  }
+
+  private async migrateOrCreateCatalog(projectId: string): Promise<ProjectCanvasCatalogSnapshot> {
+    const projectManifestPath = await this.privatePaths.resolvePrivatePath({ path: "project.json", projectId })
+    const projectManifest = await readJson(projectManifestPath)
+    const legacyCanvases = readLegacyCanvases(projectManifest)
+    const timestamp = this.now()
+    const canvases = legacyCanvases.length > 0
+      ? legacyCanvases
+      : [{ createdAt: timestamp, id: "canvas-main", name: "Canvas 1", updatedAt: timestamp }]
+    const catalog: ProjectCanvasCatalogFile = {
+      canvases,
+      schemaVersion: "convax.project-canvases/2",
+    }
+    const workbenchPreferenceMigration = readLegacyWorkbenchPreference(projectManifest, canvases)
+    for (const canvas of canvases) {
+      const directory = await this.privatePaths.resolvePrivatePath({ path: canvasStoragePath(canvas.id), projectId })
+      await fs.mkdir(directory, { recursive: true })
+    }
+    await this.migrateLegacyDocument(projectId, canvases[0]!.id)
+    const result = await this.writeCatalog(projectId, catalog, null)
+    if (projectManifest && typeof projectManifest === "object" && !Array.isArray(projectManifest)
+      && ("canvases" in projectManifest || "activeCanvasId" in projectManifest)) {
+      const { canvases: _canvases, activeCanvasId: _activeCanvasId, ...identity } = projectManifest as Record<string, unknown>
+      const safeManifestPath = await this.privatePaths.resolvePrivatePath({ path: "project.json", projectId })
+      await writeJson(safeManifestPath, identity)
+    }
+    return { catalog, storageVersion: result.version, workbenchPreferenceMigration }
+  }
+
+  private async migrateLegacyDocument(projectId: string, canvasId: string) {
+    const legacy = await this.privatePaths.resolvePrivatePath({ path: "canvas.json", projectId })
+    const target = await this.privatePaths.resolvePrivatePath({ path: `${canvasStoragePath(canvasId)}/document.json`, projectId })
+    const legacyStat = await fs.lstat(legacy).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return null
+      throw error
+    })
+    if (!legacyStat) return
+    if (legacyStat.isSymbolicLink() || !legacyStat.isFile()) throw new Error("Legacy canvas document is not a regular file")
+    const targetExists = await fs.access(target).then(() => true, () => false)
+    if (!targetExists) await fs.copyFile(legacy, target, fs.constants.COPYFILE_EXCL)
+    await fs.rm(legacy)
+  }
+
+  private writeCatalog(projectId: string, catalog: ProjectCanvasCatalogFile, expectedVersion: string | null) {
+    return this.storage.writePrivateTextFile({
+      ...catalogRef(projectId),
+      content: `${JSON.stringify(catalog, null, 2)}\n`,
+      expectedVersion,
+    })
+  }
+
+  private async queue<T>(projectId: string, operation: () => Promise<T>) {
+    const previous = this.queues.get(projectId) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(operation)
+    const settled = result.then(() => undefined, () => undefined)
+    this.queues.set(projectId, settled)
+    try {
+      return await result
+    } finally {
+      if (this.queues.get(projectId) === settled) this.queues.delete(projectId)
+    }
+  }
+}
+
+function catalogRef(projectId: string) {
+  return { namespace: "canvases", path: "catalog.json", projectId }
+}
+
+function toCatalog(
+  projectId: string,
+  catalog: ProjectCanvasCatalogFile,
+  workbenchPreferenceMigration?: ProjectCanvasCatalog["workbenchPreferenceMigration"],
+): ProjectCanvasCatalog {
+  return workbenchPreferenceMigration
+    && catalog.canvases.some((canvas) => canvas.id === workbenchPreferenceMigration.canvasId)
+    ? { canvases: catalog.canvases, projectId, workbenchPreferenceMigration }
+    : { canvases: catalog.canvases, projectId }
+}
+
+function canvasStoragePath(canvasId: string) {
+  return `canvases/${requireCanvasId(canvasId)}`
+}
+
+function createCanvasId() {
+  return `canvas_${randomUUID().replaceAll("-", "")}`
+}
+
+function requireCanvasId(value: unknown) {
+  if (typeof value !== "string" || !/^canvas[-_][a-z0-9][a-z0-9_-]{0,79}$/.test(value)) {
+    throw new Error(`Invalid canvas id: ${String(value)}`)
+  }
+  return value
+}
+
+function validateCanvasName(value: string) {
+  const name = value.trim()
+  if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) throw new Error(`Invalid canvas name: ${value}`)
+  return name
+}
+
+function parseCatalog(value: unknown): Pick<ProjectCanvasCatalogSnapshot, "catalog" | "workbenchPreferenceMigration"> {
+  if (!value || typeof value !== "object") throw new Error("Canvas catalog is invalid")
+  const input = value as { activeCanvasId?: unknown; canvases?: unknown; schemaVersion?: unknown }
+  if (
+    (input.schemaVersion !== "convax.project-canvases/2" && input.schemaVersion !== "convax.canvas-workspace/1")
+    || !Array.isArray(input.canvases)
+  ) {
+    throw new Error("Canvas catalog schema is not supported")
+  }
+  const canvases = parseCanvases(input.canvases)
+  if (canvases.length === 0) throw new Error("Canvas catalog must contain at least one canvas")
+  return {
+    catalog: { canvases, schemaVersion: "convax.project-canvases/2" },
+    workbenchPreferenceMigration: input.schemaVersion === "convax.canvas-workspace/1"
+      ? readLegacyWorkbenchPreference(input, canvases)
+      : undefined,
+  }
+}
+
+function readLegacyCanvases(value: unknown) {
+  if (!value || typeof value !== "object" || !Array.isArray((value as { canvases?: unknown }).canvases)) return []
+  return parseCanvases((value as { canvases: unknown[] }).canvases)
+}
+
+function readLegacyWorkbenchPreference(value: unknown, canvases: ProjectCanvas[]) {
+  if (!value || typeof value !== "object") return undefined
+  const canvasId = (value as { activeCanvasId?: unknown }).activeCanvasId
+  return typeof canvasId === "string" && canvases.some((canvas) => canvas.id === canvasId)
+    ? { canvasId }
+    : undefined
+}
+
+function parseCanvases(values: unknown[]): ProjectCanvas[] {
+  const ids = new Set<string>()
+  return values.map((value) => {
+    if (!value || typeof value !== "object") throw new Error("Canvas catalog contains an invalid canvas")
+    const canvas = value as Partial<ProjectCanvas>
+    const id = requireCanvasId(canvas.id)
+    if (ids.has(id)) throw new Error(`Canvas catalog contains a duplicate canvas: ${id}`)
+    ids.add(id)
+    if (typeof canvas.createdAt !== "number" || !Number.isFinite(canvas.createdAt)
+      || typeof canvas.updatedAt !== "number" || !Number.isFinite(canvas.updatedAt)
+      || typeof canvas.name !== "string") throw new Error(`Canvas catalog contains an invalid canvas: ${id}`)
+    return { createdAt: canvas.createdAt, id, name: validateCanvasName(canvas.name), updatedAt: canvas.updatedAt }
+  })
+}
+
+async function readJson(filePath: string): Promise<unknown | null> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"))
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return null
+    throw error
+  }
+}
+
+async function writeJson(filePath: string, value: unknown) {
+  const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.tmp`)
+  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
+  try {
+    await fs.rename(temporary, filePath)
+  } finally {
+    await fs.rm(temporary, { force: true })
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error
+}
