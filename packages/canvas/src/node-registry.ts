@@ -1,6 +1,6 @@
 import type { ComponentType } from "react"
 import type { NodeProps } from "@xyflow/react"
-import type { CanvasNode, CanvasPoint } from "./types"
+import type { CanvasNode, CanvasNodeType, CanvasPoint } from "./types"
 
 export interface CanvasNodeCreateInput {
   id?: string
@@ -9,7 +9,7 @@ export interface CanvasNodeCreateInput {
 }
 
 export interface CanvasNodeDefinition {
-  type: string
+  type: CanvasNodeType
   label: string
   component: ComponentType<NodeProps<CanvasNode>>
   create: (input: CanvasNodeCreateInput) => CanvasNode
@@ -24,8 +24,19 @@ export interface CanvasNodeRegistry {
   subscribe: (listener: () => void) => () => void
 }
 
+function validateNodeType(type: string): asserts type is CanvasNodeType {
+  if (type !== "file" && type !== "agent") {
+    throw new Error(`Canvas node type must be either file or agent: ${type}`)
+  }
+}
+
 export function createCanvasNodeRegistry(initial: readonly CanvasNodeDefinition[] = []): CanvasNodeRegistry {
-  const definitions = new Map(initial.map((definition) => [definition.type, definition]))
+  const definitions = new Map<CanvasNodeType, CanvasNodeDefinition>()
+  for (const definition of initial) {
+    validateNodeType(definition.type)
+    if (definitions.has(definition.type)) throw new Error(`Canvas node type is already registered: ${definition.type}`)
+    definitions.set(definition.type, definition)
+  }
   const listeners = new Set<() => void>()
   let version = 0
   const emit = () => {
@@ -35,7 +46,7 @@ export function createCanvasNodeRegistry(initial: readonly CanvasNodeDefinition[
 
   return {
     get(type) {
-      return definitions.get(type)
+      return type === "file" || type === "agent" ? definitions.get(type) : undefined
     },
     getVersion() {
       return version
@@ -44,6 +55,7 @@ export function createCanvasNodeRegistry(initial: readonly CanvasNodeDefinition[
       return [...definitions.values()]
     },
     register(definition) {
+      validateNodeType(definition.type)
       if (definitions.has(definition.type)) throw new Error(`Canvas node type is already registered: ${definition.type}`)
       definitions.set(definition.type, definition)
       emit()
@@ -59,4 +71,3 @@ export function createCanvasNodeRegistry(initial: readonly CanvasNodeDefinition[
     },
   }
 }
-

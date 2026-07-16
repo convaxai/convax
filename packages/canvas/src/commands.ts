@@ -206,7 +206,7 @@ export function groupCanvasNodes(
 }
 
 export function ungroupCanvasNode(document: CanvasDocument, groupId: string): CanvasCommandResult {
-  const group = document.nodes.find((node) => node.id === groupId && node.type === "group")
+  const group = document.nodes.find((node) => node.id === groupId && node.data.kind === "group")
   if (!group) return { document, selectedNodeIds: [] }
   const childIds = document.nodes.filter((node) => node.parentId === groupId).map((node) => node.id)
   const nodes = document.nodes.flatMap((node) => {

@@ -1,8 +1,23 @@
 import { duplicateCanvasSelection } from "./commands"
 import { parseCanvasDocument } from "./document"
-import type { CanvasClipboardPayload, CanvasDocument } from "./types"
+import type { CanvasClipboardPayload, CanvasDocument, CanvasNode } from "./types"
 
 export const CANVAS_CLIPBOARD_MIME_TYPE = "application/x-convax-canvas+json"
+
+/**
+ * File references backed by a host scope must not silently resolve against a
+ * different scope after paste. Unknown plugin file kinds are treated as bound
+ * by default; plugins can still serialize self-contained data inside a text node.
+ */
+export function isCanvasNodeScopeBound(node: CanvasNode) {
+  if (node.type === "agent" || node.data.kind === "agent" || node.data.kind === "group") return false
+  if (node.data.kind === "text") return Boolean(node.data.metadata && Object.keys(node.data.metadata).length)
+  return true
+}
+
+export function canvasClipboardHasScopeConflict(payload: CanvasClipboardPayload, targetScope?: string) {
+  return payload.scope !== targetScope && payload.nodes.some(isCanvasNodeScopeBound)
+}
 
 function collectClipboardNodeIds(document: CanvasDocument, selectedNodeIds: readonly string[]) {
   const ids = new Set(selectedNodeIds)

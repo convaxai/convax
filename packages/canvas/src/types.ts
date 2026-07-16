@@ -6,6 +6,9 @@ export type CanvasDocumentId = string
 
 export type CanvasNodeStatus = "idle" | "pending" | "error"
 export type CanvasMediaKind = "image" | "video" | "audio" | "file"
+export type CanvasFileKind = "text" | CanvasMediaKind | "folder"
+/** Public canvas node roles. Structural groups are persisted as file nodes with `data.kind = "group"`. */
+export type CanvasNodeType = "file" | "agent"
 export type CanvasTextFormat = "plain" | "markdown"
 
 export interface CanvasBaseNodeData extends Record<string, unknown> {
@@ -29,6 +32,7 @@ export interface CanvasTextNodeData extends CanvasBaseNodeData {
   text: string
   format?: CanvasTextFormat
   richText?: CanvasRichTextContent
+  metadata?: Record<string, unknown>
 }
 
 export interface CanvasMediaNodeData extends CanvasBaseNodeData {
@@ -48,13 +52,28 @@ export interface CanvasGroupNodeData extends CanvasBaseNodeData {
   kind: "group"
 }
 
+export interface CanvasFolderNodeData extends CanvasBaseNodeData {
+  kind: "folder"
+  name?: string
+  path?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface CanvasAgentNodeData extends CanvasBaseNodeData {
+  kind: "agent"
+  agentId?: string
+}
+
 export type CanvasNodeData =
   | CanvasTextNodeData
   | CanvasMediaNodeData
+  | CanvasFolderNodeData
+  | CanvasAgentNodeData
   | CanvasGroupNodeData
   | CanvasBaseNodeData
 
-export type CanvasNode = Node<CanvasNodeData, string>
+/** Public and in-memory Canvas nodes have exactly two roles. Legacy types are normalized while parsing. */
+export type CanvasNode = Node<CanvasNodeData, CanvasNodeType>
 
 export interface CanvasEdgeData extends Record<string, unknown> {
   label?: string
@@ -111,7 +130,15 @@ export interface CanvasTextResource {
   metadata?: Record<string, unknown>
 }
 
-export type CanvasUploadItem = CanvasResource | CanvasTextResource
+export interface CanvasFolderResource {
+  id: string
+  kind: "folder"
+  name: string
+  path?: string
+  metadata?: Record<string, unknown>
+}
+
+export type CanvasUploadItem = CanvasResource | CanvasTextResource | CanvasFolderResource
 
 export interface CanvasClipboardPayload {
   version: 1

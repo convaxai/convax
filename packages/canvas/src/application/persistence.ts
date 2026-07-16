@@ -3,7 +3,8 @@ import type { CanvasDocument } from "../types"
 
 export interface CanvasDocumentRef {
   canvasId: string
-  projectId: string
+  /** Host-defined isolation boundary (for example a project, tenant, or document space). */
+  scopeId: string
 }
 
 export interface CanvasDocumentSnapshot {

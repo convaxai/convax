@@ -30,6 +30,7 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
           format: "markdown",
           id: "resource_brief",
           kind: "text",
+          metadata: { source: "docs/brief.md" },
           name: "Brief.md",
           text: "# Campaign brief",
         },
@@ -58,6 +59,7 @@ describe("canvas application commands", () => {
       style: { height: 180, width: 320 },
     })
     expect(applied.document.nodes.find((node) => node.id === "text_node")).toMatchObject({
+      data: { metadata: { source: "docs/brief.md" } },
       position: { x: 36, y: 276 },
       style: { height: 240, width: 360 },
     })
@@ -101,6 +103,23 @@ describe("canvas application commands", () => {
     }).changed).toBeFalse()
     expect(() => applyCanvasBusinessCommand(document, addResourcesCommand())).toThrow(CanvasCommandValidationError)
     expect(applyCanvasBusinessCommand(document, { type: "nodes.layout", nodeIds: [] }).changed).toBeFalse()
+  })
+
+  test("adds folders as file nodes with the folder renderer discriminator", () => {
+    const applied = applyCanvasBusinessCommand(createCanvasDocument(), {
+      type: "resources.add",
+      items: [{
+        item: { id: "folder-resource", kind: "folder", name: "Design", path: "assets/design" },
+        nodeId: "folder-node",
+      }],
+      placement: { anchor: { x: 10, y: 20 } },
+    })
+
+    expect(applied.document.nodes[0]).toMatchObject({
+      data: { kind: "folder", name: "Design", path: "assets/design" },
+      id: "folder-node",
+      type: "file",
+    })
   })
 })
 

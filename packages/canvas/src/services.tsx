@@ -83,7 +83,20 @@ export interface CanvasTelemetryService {
   track: (event: CanvasTelemetryEvent) => void
 }
 
+export interface CanvasAssistantRequest {
+  document: CanvasDocument
+  mentionedNodeIds: readonly string[]
+  mode: "agent" | "file"
+  ownerNodeId: string
+}
+
+/** Host-rendered conversation surface. Canvas never imports an Agent implementation. */
+export interface CanvasAssistantService {
+  render: (request: CanvasAssistantRequest) => ReactNode
+}
+
 export interface CanvasServiceMap {
+  assistant: CanvasAssistantService
   upload: CanvasUploadService
   generate: CanvasGenerateService
   persistence: CanvasPersistenceService
@@ -102,9 +115,11 @@ export interface CanvasServices {
 }
 
 export function createCanvasServices(initial?: Partial<CanvasServiceMap>): CanvasServices {
-  const entries = new Map<keyof CanvasServiceMap, unknown>(
+  const baseEntries = new Map<keyof CanvasServiceMap, unknown>(
     Object.entries(initial ?? {}) as [keyof CanvasServiceMap, unknown][],
   )
+  const entries = new Map(baseEntries)
+  const registrations = new Map<keyof CanvasServiceMap, Array<{ service: unknown; token: object }>>()
   const listeners = new Set<() => void>()
   let version = 0
   const emit = () => {
@@ -120,13 +135,21 @@ export function createCanvasServices(initial?: Partial<CanvasServiceMap>): Canva
       return entries.has(key)
     },
     register(key, service) {
-      const previous = entries.get(key)
+      const token = {}
+      const stack = registrations.get(key) ?? []
+      stack.push({ service, token })
+      registrations.set(key, stack)
       entries.set(key, service)
       emit()
       return () => {
-        if (entries.get(key) !== service) return
-        if (previous) entries.set(key, previous)
-        if (!previous) entries.delete(key)
+        const current = registrations.get(key)
+        const index = current?.findIndex((registration) => registration.token === token) ?? -1
+        if (!current || index < 0) return
+        current.splice(index, 1)
+        if (current.length === 0) registrations.delete(key)
+        const active = current.at(-1)?.service ?? baseEntries.get(key)
+        if (active === undefined) entries.delete(key)
+        else entries.set(key, active)
         emit()
       }
     },

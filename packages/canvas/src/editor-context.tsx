@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext } from "react"
+import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
 import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
 
 export interface CanvasConnectionNodeType {
@@ -11,6 +12,7 @@ export interface CanvasEditorController {
   selection: CanvasSelection
   readOnly: boolean
   canUpload: boolean
+  fileRenderers: CanvasFileRendererRegistry
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
   beginGesture: () => void
   cancelGesture: () => void

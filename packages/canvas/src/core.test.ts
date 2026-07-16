@@ -10,9 +10,24 @@ import {
   removeCanvasElements,
   ungroupCanvasNode,
 } from "./commands"
-import { createDefaultCanvasNodeRegistry } from "./builtin-registry"
-import { createCanvasClipboardPayload, parseCanvasClipboard, pasteCanvasClipboard, serializeCanvasClipboard } from "./clipboard"
-import { createCanvasDocument, createGroupNode, createMediaNode, createTextNode, parseCanvasDocument } from "./document"
+import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "./builtin-registry"
+import {
+  canvasClipboardHasScopeConflict,
+  createCanvasClipboardPayload,
+  parseCanvasClipboard,
+  pasteCanvasClipboard,
+  serializeCanvasClipboard,
+} from "./clipboard"
+import { getConnectedCanvasFileNodeIds } from "./connections"
+import {
+  createAgentNode,
+  createCanvasDocument,
+  createFolderNode,
+  createGroupNode,
+  createMediaNode,
+  createTextNode,
+  parseCanvasDocument,
+} from "./document"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
@@ -34,15 +49,31 @@ describe("canvas history", () => {
     expect(hydrated.future).toEqual([])
   })
 
-  test("keeps a single built-in text node type", () => {
-    expect(createDefaultCanvasNodeRegistry().list().map((definition) => definition.type)).toEqual([
-      "text",
-      "image",
-      "video",
+  test("keeps file and agent as the only user-facing node types", () => {
+    const registry = createDefaultCanvasNodeRegistry()
+    expect(registry.list().map((definition) => definition.type)).toEqual([
+      "file",
+      "agent",
+    ])
+    const fileDefinition = registry.get("file")!
+    expect(() => registry.register({ ...fileDefinition, type: "plugin-role" as "file" })).toThrow("file or agent")
+    expect(createDefaultCanvasFileRendererRegistry().list().map((definition) => definition.id)).toEqual([
       "audio",
       "file",
-      "group",
+      "folder",
+      "image",
+      "text",
+      "video",
     ])
+    expect(createTextNode({ position: { x: 0, y: 0 } }).type).toBe("file")
+    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image", url: "" } }).type).toBe("file")
+    expect(createAgentNode({ position: { x: 0, y: 0 } }).type).toBe("agent")
+
+    const text = createTextNode({ position: { x: 0, y: 0 } })
+    expect(parseCanvasDocument({
+      ...createCanvasDocument({ id: "legacy-role", nodes: [text] }),
+      nodes: [{ ...text, type: "legacy-plugin-role" }],
+    })?.nodes[0].type).toBe("file")
   })
 
   test("rejects malformed persisted documents before they reach the editor", () => {
@@ -57,22 +88,30 @@ describe("canvas history", () => {
       ...createCanvasDocument({ id: "rich-text", nodes: [text] }),
       nodes: [{ ...text, data: { ...text.data, richText: { type: "doc", content: "invalid" } } }],
     })).toBeNull()
+    expect(parseCanvasDocument({
+      ...createCanvasDocument({ id: "bad-folder", nodes: [text] }),
+      nodes: [{ ...text, data: { kind: "folder", label: "Folder", name: {} } }],
+    })).toBeNull()
+    expect(parseCanvasDocument({
+      ...createCanvasDocument({ id: "bad-agent", nodes: [text] }),
+      nodes: [{ ...text, data: { agentId: [], kind: "agent", label: "Agent" } }],
+    })).toBeNull()
   })
   test("migrates legacy notes into text nodes", () => {
-    const legacy = createCanvasDocument({
-      id: "legacy",
+    const legacy = {
+      ...createCanvasDocument({ id: "legacy" }),
       nodes: [{
         id: "legacy_note",
         type: "note",
         position: { x: 20, y: 30 },
         data: { kind: "note", label: "Note", text: "Keep this thought", tone: "yellow" },
       }],
-    })
+    }
     const parsed = parseCanvasDocument(legacy)
 
     expect(parsed?.nodes[0]).toMatchObject({
       data: { kind: "text", label: "Text", text: "Keep this thought" },
-      type: "text",
+      type: "file",
     })
     expect(parsed?.nodes[0].data).not.toHaveProperty("tone")
     const media = createMediaNode({
@@ -178,6 +217,32 @@ describe("canvas history", () => {
   })
 })
 
+describe("canvas agent context", () => {
+  test("collects connected file nodes in both directions without duplicates", () => {
+    const agent = createAgentNode({ id: "agent", position: { x: 0, y: 0 } })
+    const first = createTextNode({ id: "first", position: { x: 0, y: 0 } })
+    const second = createMediaNode({
+      id: "second",
+      position: { x: 0, y: 0 },
+      resource: { id: "image", kind: "image", url: "image.png" },
+    })
+    const otherAgent = createAgentNode({ id: "other-agent", position: { x: 0, y: 0 } })
+    const group = createGroupNode({ id: "group", height: 100, position: { x: 0, y: 0 }, width: 100 })
+    const document = createCanvasDocument({
+      edges: [
+        { id: "one", source: agent.id, target: first.id },
+        { id: "two", source: second.id, target: agent.id },
+        { id: "duplicate", source: first.id, target: agent.id },
+        { id: "agent-link", source: agent.id, target: otherAgent.id },
+        { id: "group-link", source: group.id, target: agent.id },
+      ],
+      nodes: [agent, first, second, otherAgent, group],
+    })
+
+    expect(getConnectedCanvasFileNodeIds(document, agent.id)).toEqual([first.id, second.id])
+  })
+})
+
 describe("canvas commands", () => {
   test("applies async-style updates to the latest history document", () => {
     const initial = createCanvasDocument({ id: "canvas_async" })
@@ -199,10 +264,11 @@ describe("canvas commands", () => {
     const second = createTextNode({ id: "node_b", position: { x: 360, y: 90 } })
     const initial = createCanvasDocument({ nodes: [first, second] })
     const grouped = groupCanvasNodes(initial, [first.id, second.id])
-    const group = grouped.document.nodes.find((node) => node.type === "group")
+    const group = grouped.document.nodes.find((node) => node.data.kind === "group")
 
     expect(group).toBeDefined()
     if (!group) throw new Error("Group was not created")
+    expect(group.type).toBe("file")
     expect(grouped.selectedNodeIds).toEqual([group.id])
     const ungrouped = ungroupCanvasNode(grouped.document, group.id)
     expect(ungrouped.document.nodes.map((node) => [node.id, node.position])).toEqual([
@@ -299,6 +365,25 @@ describe("canvas commands", () => {
 })
 
 describe("canvas clipboard", () => {
+  test("blocks scope-backed files and folders from resolving in another scope", () => {
+    const folder = createFolderNode({
+      id: "folder",
+      position: { x: 0, y: 0 },
+      resource: { id: "folder", kind: "folder", name: "docs", path: "docs" },
+    })
+    const sourcedText = createTextNode({
+      id: "text",
+      metadata: { sourcePath: "README.md" },
+      position: { x: 0, y: 0 },
+    })
+    const inlineText = createTextNode({ id: "inline", position: { x: 0, y: 0 } })
+
+    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [folder], edges: [] }, "two")).toBeTrue()
+    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [sourcedText], edges: [] }, "two")).toBeTrue()
+    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [inlineText], edges: [] }, "two")).toBeFalse()
+    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [folder], edges: [] }, "one")).toBeFalse()
+  })
+
   test("round trips a graph fragment with fresh identifiers", () => {
     const first = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
     const second = createTextNode({ id: "node_b", position: { x: 320, y: 0 } })
@@ -337,5 +422,19 @@ describe("canvas services", () => {
     dispose()
     expect(services.require("notify")).toBe(first)
     expect(services.getVersion()).toBe(version + 2)
+  })
+
+  test("never resurrects an override disposed out of order", () => {
+    const base = { show() {} }
+    const middle = { show() {} }
+    const latest = { show() {} }
+    const services = createCanvasServices({ notify: base })
+    const disposeMiddle = services.register("notify", middle)
+    const disposeLatest = services.register("notify", latest)
+
+    disposeMiddle()
+    expect(services.require("notify")).toBe(latest)
+    disposeLatest()
+    expect(services.require("notify")).toBe(base)
   })
 })

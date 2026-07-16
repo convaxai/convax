@@ -1,4 +1,5 @@
 export * from "./commands"
+export * from "./connections"
 export * from "./document"
 export * from "./file-import"
 export * from "./history"

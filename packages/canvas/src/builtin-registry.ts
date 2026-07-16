@@ -1,14 +1,20 @@
-import { BuiltinCanvasNode } from "./components/builtin-node"
-import { createMediaNode, createTextNode } from "./document"
+import {
+  BuiltinCanvasNode,
+  BuiltinFolderFileNode,
+  BuiltinMediaFileNode,
+  BuiltinTextFileNode,
+} from "./components/builtin-node"
+import { createAgentNode, createMediaNode, createTextNode } from "./document"
+import { createCanvasFileRendererRegistry, type CanvasFileRendererDefinition } from "./file-renderer-registry"
 import { createCanvasNodeRegistry } from "./node-registry"
-import type { CanvasNodeDefinition } from "./node-registry"
 import type { CanvasMediaKind, CanvasResource } from "./types"
 
-function mediaDefinition(kind: CanvasMediaKind): CanvasNodeDefinition {
+function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
   return {
-    type: kind,
-    label: kind[0].toUpperCase() + kind.slice(1),
-    component: BuiltinCanvasNode,
+    id: kind,
+    label: kind[0]!.toUpperCase() + kind.slice(1),
+    component: BuiltinMediaFileNode,
+    matches: (data) => data.kind === kind,
     create(input) {
       const resource = input.data?.resource as CanvasResource | undefined
       return createMediaNode({
@@ -21,29 +27,41 @@ function mediaDefinition(kind: CanvasMediaKind): CanvasNodeDefinition {
   }
 }
 
+export function createDefaultCanvasFileRendererRegistry() {
+  return createCanvasFileRendererRegistry([
+    {
+      id: "text",
+      label: "Text",
+      component: BuiltinTextFileNode,
+      create: (input) => createTextNode({ id: input.id, position: input.position }),
+      matches: (data) => data.kind === "text",
+    },
+    mediaRenderer("image"),
+    mediaRenderer("video"),
+    mediaRenderer("audio"),
+    mediaRenderer("file"),
+    {
+      id: "folder",
+      label: "Folder",
+      component: BuiltinFolderFileNode,
+      matches: (data) => data.kind === "folder",
+    },
+  ])
+}
+
 export function createDefaultCanvasNodeRegistry() {
   return createCanvasNodeRegistry([
     {
-      type: "text",
-      label: "Text",
+      type: "file",
+      label: "File",
       component: BuiltinCanvasNode,
       create: (input) => createTextNode({ id: input.id, position: input.position }),
     },
-    mediaDefinition("image"),
-    mediaDefinition("video"),
-    mediaDefinition("audio"),
-    mediaDefinition("file"),
     {
-      type: "group",
-      label: "Group",
+      type: "agent",
+      label: "Agent",
       component: BuiltinCanvasNode,
-      create: (input) => ({
-        id: input.id ?? `group_${Date.now()}`,
-        type: "group",
-        position: input.position,
-        data: { kind: "group", label: "Group" },
-        style: { width: 480, height: 320 },
-      }),
+      create: (input) => createAgentNode({ id: input.id, position: input.position }),
     },
   ])
 }

@@ -34,7 +34,7 @@ describe("canvas application service", () => {
     const service = new CanvasApplicationService(repository)
     const request: CanvasApplicationCommandRequest = {
       canvasId: "canvas-main",
-      projectId: "project_one",
+      scopeId: "project_one",
       envelope: {
         actor: { id: "agent_one", kind: "agent" },
         command: { type: "nodes.move", delta: { x: 20, y: 10 }, nodeIds: ["first"] },
@@ -57,7 +57,7 @@ describe("canvas application service", () => {
       },
     })).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
     expect((await service.query(
-      { canvasId: "canvas-main", projectId: "project_one" },
+      { canvasId: "canvas-main", scopeId: "project_one" },
       { text: "launch" },
     )).nodes.map((node) => node.id)).toEqual(["first"])
   })

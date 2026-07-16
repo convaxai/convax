@@ -1,14 +1,22 @@
+import type { Node } from "@xyflow/react"
 import type {
   CanvasDocument,
   CanvasEdge,
+  CanvasAgentNodeData,
+  CanvasFolderNodeData,
+  CanvasFolderResource,
   CanvasGroupNodeData,
   CanvasMediaNodeData,
   CanvasNode,
+  CanvasNodeData,
   CanvasPoint,
   CanvasResource,
   CanvasTextFormat,
   CanvasTextNodeData,
 } from "./types"
+
+/** Wide only at the persistence boundary so legacy node types never leak into the public model. */
+type PersistedCanvasNode = Node<CanvasNodeData, string>
 
 export function createCanvasId(prefix: string) {
   const value = typeof crypto === "object" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2)
@@ -49,7 +57,7 @@ export function parseCanvasDocument(value: unknown, expectedId?: string): Canvas
     || !value.edges.every(isCanvasEdge)) {
     return null
   }
-  const nodes = value.nodes as unknown as CanvasNode[]
+  const nodes = value.nodes as unknown as PersistedCanvasNode[]
   const edges = value.edges as unknown as CanvasEdge[]
   const nodeIds = new Set(nodes.map((node) => node.id))
   const edgeIds = new Set(edges.map((edge) => edge.id))
@@ -71,6 +79,7 @@ export function createTextNode(input: {
   label?: string
   text?: string
   format?: CanvasTextFormat
+  metadata?: Record<string, unknown>
   position: CanvasPoint
 }): CanvasNode {
   const data: CanvasTextNodeData = {
@@ -78,10 +87,11 @@ export function createTextNode(input: {
     label: input.label ?? "Text",
     text: input.text ?? "",
     format: input.format,
+    metadata: input.metadata,
   }
   return {
     id: input.id ?? createCanvasId("node"),
-    type: "text",
+    type: "file",
     position: input.position,
     data,
     style: input.format ? { width: 360, height: 240 } : { width: 280, height: 160 },
@@ -111,10 +121,52 @@ export function createMediaNode(input: {
   const width = 320
   return {
     id: input.id ?? createCanvasId("node"),
-    type: input.resource.kind,
+    type: "file",
     position: input.position,
     data,
     style: { width, height: Math.max(180, Math.round(width / ratio)) },
+  }
+}
+
+export function createFolderNode(input: {
+  id?: string
+  label?: string
+  position: CanvasPoint
+  resource: CanvasFolderResource
+}): CanvasNode {
+  const data: CanvasFolderNodeData = {
+    kind: "folder",
+    label: input.label ?? input.resource.name,
+    name: input.resource.name,
+    path: input.resource.path,
+    metadata: input.resource.metadata,
+  }
+  return {
+    id: input.id ?? createCanvasId("node"),
+    type: "file",
+    position: input.position,
+    data,
+    style: { width: 300, height: 180 },
+  }
+}
+
+export function createAgentNode(input: {
+  agentId?: string
+  id?: string
+  label?: string
+  position: CanvasPoint
+}): CanvasNode {
+  const data: CanvasAgentNodeData = {
+    agentId: input.agentId,
+    kind: "agent",
+    label: input.label ?? "Agent",
+  }
+  return {
+    id: input.id ?? createCanvasId("agent"),
+    type: "agent",
+    position: input.position,
+    data,
+    style: { width: 420, height: 520 },
   }
 }
 
@@ -132,11 +184,12 @@ export function createGroupNode(input: {
   }
   return {
     id: input.id ?? createCanvasId("group"),
-    type: "group",
+    type: "file",
     position: input.position,
     parentId: input.parentId,
     data,
     style: { width: input.width, height: input.height },
+    zIndex: -1,
   }
 }
 
@@ -169,6 +222,11 @@ function isCanvasNode(value: unknown) {
   if ((value.data.kind === "text" || value.data.kind === "note") && typeof value.data.text !== "string") return false
   if (value.data.kind === "text" && value.data.format !== undefined && !["plain", "markdown"].includes(String(value.data.format))) return false
   if (value.data.kind === "text" && value.data.richText !== undefined && !isCanvasRichTextContent(value.data.richText)) return false
+  if (value.data.kind === "folder"
+    && (value.data.name !== undefined && typeof value.data.name !== "string"
+      || value.data.path !== undefined && typeof value.data.path !== "string")) return false
+  if (value.data.kind === "agent" && value.data.agentId !== undefined && typeof value.data.agentId !== "string") return false
+  if (value.data.metadata !== undefined && !isRecord(value.data.metadata)) return false
   if (["image", "video", "audio", "file"].includes(value.data.kind) && typeof value.data.url !== "string") return false
   if (["image", "video", "audio", "file"].includes(value.data.kind)
     && value.data.fit !== undefined
@@ -190,12 +248,12 @@ function isCanvasRichTextContent(value: unknown, depth = 0): boolean {
   return true
 }
 
-function migrateCanvasNode(node: CanvasNode): CanvasNode {
+function migrateCanvasNode(node: PersistedCanvasNode): CanvasNode {
   if (node.data.kind === "note") {
     const { tone: _tone, ...legacyData } = node.data
     return {
       ...node,
-      type: "text",
+      type: "file",
       data: {
         ...legacyData,
         kind: "text",
@@ -208,9 +266,11 @@ function migrateCanvasNode(node: CanvasNode): CanvasNode {
     && node.data.label === "Media"
     && typeof node.data.name !== "string") {
     const kindLabel = node.data.kind[0].toUpperCase() + node.data.kind.slice(1)
-    return { ...node, data: { ...node.data, label: kindLabel } }
+    return { ...node, type: "file", data: { ...node.data, label: kindLabel } }
   }
-  return node
+  if (node.data.kind === "group") return { ...node, type: "file", zIndex: node.zIndex ?? -1 }
+  if (node.data.kind === "agent") return { ...node, type: "agent" }
+  return { ...node, type: "file" }
 }
 
 function isCanvasEdge(value: unknown) {
@@ -224,7 +284,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
-function hasParentCycle(nodes: readonly CanvasNode[]) {
+function hasParentCycle(nodes: readonly PersistedCanvasNode[]) {
   const parents = new Map(nodes.map((node) => [node.id, node.parentId]))
   const states = new Map<string, "visiting" | "resolved">()
   for (const node of nodes) {

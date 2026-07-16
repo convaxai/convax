@@ -12,7 +12,7 @@ import {
   type CanvasDistribute,
   type CanvasLayout,
 } from "../commands"
-import { createCanvasId, createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
+import { createCanvasId, createFolderNode, createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
 import type {
   CanvasDocument,
   CanvasEdge,
@@ -21,10 +21,11 @@ import type {
   CanvasUploadItem,
 } from "../types"
 
-export type CanvasCommandActor =
-  | { id: string; kind: "agent" }
-  | { id: string; kind: "system" }
-  | { id: string; kind: "ui" }
+/** Host-defined actor identity. Canvas does not prescribe application roles. */
+export interface CanvasCommandActor {
+  id: string
+  kind: string
+}
 
 export interface CanvasAddResourceItem {
   item: CanvasUploadItem
@@ -196,7 +197,7 @@ export function executeCanvasApplicationCommand(
   document: CanvasDocument,
   envelope: CanvasCommandEnvelope,
 ): CanvasBusinessCommandResult {
-  if (!envelope.commandId.trim() || !envelope.actor.id.trim()) {
+  if (!envelope.commandId.trim() || !envelope.actor.id.trim() || !envelope.actor.kind.trim()) {
     throw new CanvasCommandValidationError("Canvas command and actor ids are required")
   }
   if (document.revision !== envelope.expectedRevision) {
@@ -232,10 +233,13 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
         format: item.format,
         id: nodeId,
         label: item.name ?? "Text",
+        metadata: item.metadata,
         position: command.placement.anchor,
         text: item.text,
       })
-    : createMediaNode({ id: nodeId, position: command.placement.anchor, resource: item }))
+    : item.kind === "folder"
+      ? createFolderNode({ id: nodeId, position: command.placement.anchor, resource: item })
+      : createMediaNode({ id: nodeId, position: command.placement.anchor, resource: item }))
   const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(nodes[0]!))
   let next = addCanvasNodes(document, nodes.map((node, index) => ({
     ...node,

@@ -48,7 +48,7 @@ export class CanvasApplicationService {
 
   execute(request: CanvasApplicationCommandRequest): Promise<CanvasApplicationCommandResult> {
     const key = JSON.stringify([
-      request.projectId,
+      request.scopeId,
       request.canvasId,
       request.envelope.actor.kind,
       request.envelope.actor.id,
@@ -76,7 +76,7 @@ export class CanvasApplicationService {
   }
 
   private async executeOnce(request: CanvasApplicationCommandRequest): Promise<CanvasApplicationCommandResult> {
-    const ref = { canvasId: request.canvasId, projectId: request.projectId }
+    const ref = { canvasId: request.canvasId, scopeId: request.scopeId }
     const snapshot = await this.repository.load(ref)
     if (!snapshot.document) throw new Error(`Canvas document was not found: ${request.canvasId}`)
     const result = executeCanvasApplicationCommand(snapshot.document, request.envelope)

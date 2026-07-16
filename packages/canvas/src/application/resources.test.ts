@@ -14,7 +14,7 @@ import {
 import { CanvasApplicationService, CanvasCommandIdConflictError } from "./service"
 
 function source(): CanvasResourceSource {
-  return { kind: "project-file", path: "assets/poster.png", sourceId: "poster_source" }
+  return { kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }
 }
 
 describe("canvas resource business service", () => {
@@ -60,7 +60,7 @@ describe("canvas resource business service", () => {
       canvasId: "canvas-main",
       commandId: "add_poster",
       expectedRevision: 0,
-      projectId: "project-one",
+      scopeId: "project-one",
       relation: { anchorNodeIds: ["anchor"], mode: "connect" as const },
       sources: [source()],
     }
@@ -70,8 +70,8 @@ describe("canvas resource business service", () => {
 
     expect(preparations).toEqual([{
       canvasId: "canvas-main",
-      projectId: "project-one",
-      sources: [{ kind: "project-file", path: "assets/poster.png", sourceId: "poster_source" }],
+      scopeId: "project-one",
+      sources: [{ kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }],
     }])
     const createdNodeId = result.createdNodeIds[0]!
     expect(result.document).toMatchObject({
@@ -114,10 +114,10 @@ describe("canvas resource business service", () => {
       canvasId: "canvas",
       commandId: "invalid_sources",
       expectedRevision: 0,
-      projectId: "project",
+      scopeId: "project",
       sources: [
-        { kind: "project-file", path: "one.png", sourceId: "duplicate" },
-        { kind: "project-file", path: "two.png", sourceId: "duplicate" },
+        { kind: "host-file", path: "one.png", sourceId: "duplicate" },
+        { kind: "host-file", path: "two.png", sourceId: "duplicate" },
       ],
     })).rejects.toBeInstanceOf(CanvasCommandValidationError)
     expect(preparationCalls).toBe(0)
@@ -133,7 +133,7 @@ describe("canvas resource business service", () => {
       canvasId: "canvas",
       commandId: "invalid_preparation",
       expectedRevision: 0,
-      projectId: "project",
+      scopeId: "project",
       sources: [source()],
     })).rejects.toBeInstanceOf(CanvasCommandValidationError)
   })

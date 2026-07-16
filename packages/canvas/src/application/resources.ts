@@ -31,8 +31,13 @@ export type CanvasResourceSource =
       text: string
     }
   | CanvasResourceSourceBase & {
-      /** A portable path relative to the project root. */
-      kind: "project-file"
+      /** A portable file reference interpreted relative to the host scope. */
+      kind: "host-file"
+      path: string
+    }
+  | CanvasResourceSourceBase & {
+      /** A portable directory reference interpreted relative to the host scope. */
+      kind: "host-directory"
       path: string
     }
   | CanvasResourceSourceBase & {
@@ -87,7 +92,7 @@ export class CanvasResourceBusinessService {
 
   addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
     const key = JSON.stringify([
-      request.projectId,
+      request.scopeId,
       request.canvasId,
       request.actor.kind,
       request.actor.id,
@@ -131,7 +136,7 @@ export class CanvasResourceBusinessService {
 
     const prepared = await this.preparation.prepare({
       canvasId: request.canvasId,
-      projectId: request.projectId,
+      scopeId: request.scopeId,
       sources: request.sources,
     })
     validatePreparedCanvasResources(prepared)
@@ -148,7 +153,7 @@ export class CanvasResourceBusinessService {
         commandId: request.commandId,
         expectedRevision: request.expectedRevision,
       },
-      projectId: request.projectId,
+      scopeId: request.scopeId,
     }
     const result = await this.application.execute(applicationRequest)
     return {
@@ -169,7 +174,9 @@ export function validateCanvasResourceSources(sources: readonly CanvasResourceSo
       throw new CanvasCommandValidationError(`Canvas resource source id is duplicated: ${source.sourceId}`)
     }
     sourceIds.add(source.sourceId)
-    if (source.kind === "project-file") requireNonEmptyString(source.path, "Project file path")
+    if (source.kind === "host-file" || source.kind === "host-directory") {
+      requireNonEmptyString(source.path, "Host entry path")
+    }
     else if (source.kind === "remote-url") requireNonEmptyString(source.url, "Resource URL")
     else if (source.kind === "inline-text") {
       if (typeof source.text !== "string") throw new CanvasCommandValidationError("Inline resource text is required")
@@ -191,6 +198,11 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
     requireNonEmptyString(item.id, "Prepared resource id")
     if (item.kind === "text") {
       if (typeof item.text !== "string") throw new CanvasCommandValidationError("Prepared text resource is invalid")
+      continue
+    }
+    if (item.kind === "folder") {
+      requireNonEmptyString(item.name, "Prepared folder name")
+      if (item.path !== undefined) requireNonEmptyString(item.path, "Prepared folder path")
       continue
     }
     if (item.kind !== "audio" && item.kind !== "file" && item.kind !== "image" && item.kind !== "video") {

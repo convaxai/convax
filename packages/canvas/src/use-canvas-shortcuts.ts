@@ -13,6 +13,7 @@ export interface CanvasShortcutActions {
   openSearch: () => void
   paste: () => void
   redo: () => void
+  select: () => void
   selectAll: () => void
   undo: () => void
   ungroup: () => void
@@ -21,7 +22,7 @@ export interface CanvasShortcutActions {
 }
 
 function ignoresCanvasShortcuts(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false
+  if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
   return Boolean(target.closest("input, textarea, select, [data-canvas-shortcuts='ignore']"))
 }
@@ -44,6 +45,7 @@ export function createCanvasShortcutHandler(actions: CanvasShortcutActions, read
     if (mod && key === "f") return run(actions.openSearch)
     if (mod && key === "c") return run(actions.copy)
     if (event.key === "Escape") return run(actions.clearSelection)
+    if (!mod && key === "v") return run(actions.select)
     if (readOnly) return
     if (mod && key === "z") return run(event.shiftKey ? actions.redo : actions.undo)
     if (mod && key === "y") return run(actions.redo)
