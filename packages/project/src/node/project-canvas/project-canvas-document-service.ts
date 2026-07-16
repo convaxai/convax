@@ -5,21 +5,21 @@ import {
   type CanvasDocumentRepository,
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
-import type { ProjectCanvasCatalog } from "./project-canvas-document-repository"
+import type { ProjectCanvasCatalogStore } from "./project-canvas-document-repository"
 
 export class ProjectCanvasDocumentService implements CanvasDocumentClient {
   constructor(
     private readonly repository: CanvasDocumentRepository,
-    private readonly catalog: ProjectCanvasCatalog,
+    private readonly catalog: ProjectCanvasCatalogStore,
   ) {}
 
   async load(ref: CanvasDocumentRef) {
     const current = await this.repository.load(ref)
     if (current.document) return current
 
-    const workspace = await this.catalog.getWorkspace({ projectId: ref.projectId })
-    const canvas = workspace.canvases.find((candidate) => candidate.id === ref.canvasId)
-    if (!canvas) throw new Error(`Canvas was not found in project ${ref.projectId}: ${ref.canvasId}`)
+    const catalog = await this.catalog.getCanvasCatalog({ projectId: ref.scopeId })
+    const canvas = catalog.canvases.find((candidate) => candidate.id === ref.canvasId)
+    if (!canvas) throw new Error(`Canvas was not found in project ${ref.scopeId}: ${ref.canvasId}`)
     const document = createCanvasDocument({ id: canvas.id, title: canvas.name })
     try {
       const saved = await this.repository.save({

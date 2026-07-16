@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { CanvasStorageConflictError } from "@convax/canvas/application"
 import { createCanvasDocument, createMediaNode } from "@convax/canvas/core"
+import { projectFileReferenceKey } from "../../canvas/project-resources"
 import {
   ProjectPrivateStorageConflictError,
   type ProjectPrivateStorage,
   type ProjectPrivateTextFileSnapshot,
-} from "@convax/project/node"
-import { projectFileReferenceKey } from "../project-resources"
-import { ProjectCanvasDocumentRepository, type ProjectCanvasCatalog } from "./project-canvas-document-repository"
+} from "../project-private-storage"
+import { ProjectCanvasDocumentRepository, type ProjectCanvasCatalogStore } from "./project-canvas-document-repository"
 
 function harness() {
   let stored: ProjectPrivateTextFileSnapshot = { content: "", exists: false, version: null }
@@ -24,10 +24,9 @@ function harness() {
     },
   }
   let touched = 0
-  const catalog: ProjectCanvasCatalog = {
-    async getWorkspace({ projectId }) {
+  const catalog: ProjectCanvasCatalogStore = {
+    async getCanvasCatalog({ projectId }) {
       return {
-        activeCanvasId: "canvas-main",
         canvases: [{ createdAt: 1, id: "canvas-main", name: "Canvas", updatedAt: 1 }],
         projectId,
       }
@@ -64,13 +63,13 @@ describe("project canvas document repository", () => {
     const saved = await repository.save({
       document,
       expectedStorageVersion: null,
-      ref: { canvasId: "canvas-main", projectId: "project_one" },
+      ref: { canvasId: "canvas-main", scopeId: "project_one" },
     })
 
     expect(saved.storageVersion).toStartWith("version_")
     expect(JSON.parse(getStored().content).nodes[0].data.url).toBe("")
     expect(JSON.parse(getStored().content).nodes[0].data).not.toHaveProperty("posterUrl")
-    expect((await repository.load({ canvasId: "canvas-main", projectId: "project_one" })).document?.id).toBe("canvas-main")
+    expect((await repository.load({ canvasId: "canvas-main", scopeId: "project_one" })).document?.id).toBe("canvas-main")
     expect(getTouched()).toBe(1)
   })
 
@@ -79,12 +78,12 @@ describe("project canvas document repository", () => {
     await repository.save({
       document: createCanvasDocument({ id: "canvas-main" }),
       expectedStorageVersion: null,
-      ref: { canvasId: "canvas-main", projectId: "project_one" },
+      ref: { canvasId: "canvas-main", scopeId: "project_one" },
     })
     await expect(repository.save({
       document: createCanvasDocument({ id: "canvas-main" }),
       expectedStorageVersion: null,
-      ref: { canvasId: "canvas-main", projectId: "project_one" },
+      ref: { canvasId: "canvas-main", scopeId: "project_one" },
     })).rejects.toBeInstanceOf(CanvasStorageConflictError)
   })
 })

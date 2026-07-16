@@ -4,7 +4,7 @@ import type {
   CanvasDocumentSaveRequest,
   CanvasDocumentSnapshot,
 } from "@convax/canvas/application"
-import type { ProjectCanvasCatalog } from "./project-canvas-document-repository"
+import type { ProjectCanvasCatalogStore } from "./project-canvas-document-repository"
 import { ProjectCanvasDocumentService } from "./project-canvas-document-service"
 
 describe("project canvas document service", () => {
@@ -19,10 +19,9 @@ describe("project canvas document service", () => {
         return { storageVersion: "created" }
       },
     }
-    const catalog: ProjectCanvasCatalog = {
-      async getWorkspace({ projectId }) {
+    const catalog: ProjectCanvasCatalogStore = {
+      async getCanvasCatalog({ projectId }) {
         return {
-          activeCanvasId: "canvas-main",
           canvases: [{ createdAt: 1, id: "canvas-main", name: "Storyboard", updatedAt: 1 }],
           projectId,
         }
@@ -32,7 +31,7 @@ describe("project canvas document service", () => {
       },
     }
     const service = new ProjectCanvasDocumentService(repository, catalog)
-    const loaded = await service.load({ canvasId: "canvas-main", projectId: "project_one" })
+    const loaded = await service.load({ canvasId: "canvas-main", scopeId: "project_one" })
 
     expect(loaded.storageVersion).toBe("created")
     expect(loaded.document).toMatchObject({
