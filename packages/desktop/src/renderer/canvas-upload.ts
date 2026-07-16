@@ -16,11 +16,14 @@ export interface CanvasUploadHost {
   readProjectTextFile: (path: string, signal: AbortSignal) => Promise<string>
 }
 
+export const canvasProjectEntryReferenceKey = "convaxProjectEntry"
+
 function createTextResource(input: {
   format: CanvasTextFormat
   mimeType?: string
   name: string
   text: string
+  metadata?: Record<string, unknown>
 }): CanvasTextResource {
   return {
     format: input.format,
@@ -29,7 +32,12 @@ function createTextResource(input: {
     mimeType: input.mimeType,
     name: input.name,
     text: input.text,
+    metadata: input.metadata,
   }
+}
+
+function projectEntryMetadata(entry: { kind: "directory" | "file"; path: string }) {
+  return { [canvasProjectEntryReferenceKey]: { kind: entry.kind, path: entry.path } }
 }
 
 function requireResource(resources: readonly CanvasResource[], index: number, name: string) {
@@ -56,18 +64,33 @@ export async function resolveCanvasUploadItems(
   }))
 
   const dragged = parseProjectEntryDrag(request.transfer?.data[PROJECT_ENTRY_DRAG_TYPE] ?? "")
-  const projectEntries = dragged?.projectId === host.projectId
-    ? dragged.entries.filter((entry) => entry.kind === "file")
-    : []
-  const projectMediaEntries = projectEntries.filter((entry) => !getCanvasTextFileFormat(entry))
-  const copiedMedia = await host.copyProjectMediaFiles(
-    projectMediaEntries.map((entry) => entry.path),
-    request.signal,
+  const projectEntries = dragged?.projectId === host.projectId ? dragged.entries : []
+  const projectMediaEntries = projectEntries.filter((entry) =>
+    entry.kind === "file" && !getCanvasTextFileFormat(entry),
   )
+  const copiedMedia = projectMediaEntries.length > 0
+    ? await host.copyProjectMediaFiles(
+        projectMediaEntries.map((entry) => entry.path),
+        request.signal,
+      )
+    : []
   let projectMediaIndex = 0
   const projectItems = await Promise.all(projectEntries.map(async (entry) => {
+    const metadata = projectEntryMetadata(entry)
+    if (entry.kind === "directory") {
+      return {
+        id: createCanvasId("resource"),
+        kind: "folder" as const,
+        metadata,
+        name: entry.name,
+        path: entry.path,
+      }
+    }
     const format = getCanvasTextFileFormat(entry)
-    if (!format) return requireResource(copiedMedia, projectMediaIndex++, entry.name)
+    if (!format) {
+      const resource = requireResource(copiedMedia, projectMediaIndex++, entry.name)
+      return { ...resource, metadata: { ...resource.metadata, ...metadata } }
+    }
     const text = await host.readProjectTextFile(entry.path, request.signal)
     if (request.signal.aborted) throw request.signal.reason
     return createTextResource({
@@ -75,6 +98,7 @@ export async function resolveCanvasUploadItems(
       mimeType: format === "markdown" ? "text/markdown" : "text/plain",
       name: entry.name,
       text,
+      metadata,
     })
   }))
 

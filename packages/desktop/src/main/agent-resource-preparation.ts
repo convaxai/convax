@@ -1,4 +1,5 @@
-import type { AgentCanvasContext, AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
+import type { AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
+import { parseCanvasDocument } from "@convax/canvas/core"
 import { isAbsolute, win32 } from "node:path"
 
 export interface AgentProjectResolver {
@@ -15,6 +16,12 @@ export interface AgentCanvasSnapshotResolver {
   resolveCanvasSnapshot(input: { canvasId: string; projectId: string }): Promise<AgentCanvasSnapshot>
 }
 
+export interface AgentCanvasResourceReference {
+  canvasId: string
+  nodeId?: string
+  uri: string
+}
+
 function validateSkillResource(resource: AgentResource): AgentRuntimeResource {
   if (resource.kind !== "skill" || !resource.name.trim()) throw new Error("Agent skill reference is invalid")
   return { kind: "skill", name: resource.name.trim() }
@@ -22,19 +29,67 @@ function validateSkillResource(resource: AgentResource): AgentRuntimeResource {
 
 function validateCanvasId(canvasId: string) {
   const value = canvasId.trim()
-  if (!value || value.length > 256 || value === "." || value === ".." || /[\\/\0]/.test(value)) {
+  if (!value || value.length > 256 || value === "." || value === ".." || /[\\/\u0000-\u001f\u007f]/.test(value)) {
     throw new Error("Agent canvas reference is invalid")
   }
   return value
 }
 
-export function prepareAgentCanvasContext(context: AgentCanvasContext | undefined): AgentCanvasContext | undefined {
-  if (!context) return undefined
-  const name = context.name?.trim()
-  return {
-    canvasId: validateCanvasId(context.canvasId),
-    ...(name ? { name } : {}),
+function validateCanvasNodeId(nodeId: string) {
+  const value = nodeId
+  if (!value || value.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error("Agent Canvas node reference is invalid")
   }
+  return value
+}
+
+function decodeResourceSegment(value: string) {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    throw new Error("Agent structured resource URI is invalid")
+  }
+}
+
+/** Parse a full Canvas or one Canvas-node resource URI owned by the desktop host. */
+export function parseAgentCanvasResourceUri(value: string): AgentCanvasResourceReference {
+  const input = value.trim()
+  let url: URL
+  try {
+    url = new URL(input)
+  } catch {
+    throw new Error("Agent structured resource URI is invalid")
+  }
+  const segments = url.pathname.split("/")
+  if (
+    url.protocol !== "convax:"
+    || url.hostname !== "canvas"
+    || url.username
+    || url.password
+    || url.port
+    || url.search
+    || url.hash
+    || (segments.length !== 2 && segments.length !== 4)
+    || segments[0] !== ""
+    || (segments.length === 4 && segments[2] !== "node")
+  ) {
+    throw new Error("Agent structured resource URI is invalid")
+  }
+  const canvasId = validateCanvasId(decodeResourceSegment(segments[1]!))
+  const nodeId = segments.length === 4 ? validateCanvasNodeId(decodeResourceSegment(segments[3]!)) : undefined
+  return {
+    canvasId,
+    ...(nodeId ? { nodeId } : {}),
+    uri: nodeId
+      ? `convax://canvas/${encodeURIComponent(canvasId)}/node/${encodeURIComponent(nodeId)}`
+      : `convax://canvas/${encodeURIComponent(canvasId)}`,
+  }
+}
+
+export function parseAgentCanvasNodeResourceUri(value: string) {
+  const reference = parseAgentCanvasResourceUri(value)
+  if (!reference.nodeId) throw new Error("Agent Canvas node reference is invalid")
+  return reference as AgentCanvasResourceReference & { nodeId: string }
 }
 
 function validateProjectPath(path: string) {
@@ -47,6 +102,56 @@ function validateProjectPath(path: string) {
   }
 }
 
+async function prepareStructuredResource(
+  resource: Extract<AgentResource, { kind: "resource" }>,
+  canvasSnapshots: AgentCanvasSnapshotResolver | undefined,
+  projectId: string,
+): Promise<Extract<AgentRuntimeResource, { kind: "resource" }>> {
+  if (!canvasSnapshots) throw new Error("Canvas node resources are unavailable")
+  const reference = parseAgentCanvasResourceUri(resource.uri)
+  const snapshot = await canvasSnapshots.resolveCanvasSnapshot({ canvasId: reference.canvasId, projectId })
+  let document: ReturnType<typeof parseCanvasDocument>
+  try {
+    document = parseCanvasDocument(JSON.parse(snapshot.content), reference.canvasId)
+  } catch {
+    document = null
+  }
+  if (!document) throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
+  const requestedName = resource.name?.trim()
+  const node = reference.nodeId
+    ? document.nodes.find((candidate) => candidate.id === reference.nodeId)
+    : undefined
+  if (reference.nodeId && !node) throw new Error(`Canvas node was not found: ${reference.nodeId}`)
+  const edges = node ? document.edges.filter((edge) => edge.source === node.id || edge.target === node.id) : undefined
+  const nodeLabel = node?.data.label.trim()
+  const content = node
+    ? {
+        canvas: {
+          id: document.id,
+          name: snapshot.name,
+          revision: document.revision,
+        },
+        edges,
+        node,
+        type: "convax.canvas-node",
+        version: 1,
+      }
+    : {
+        canvas: document,
+        name: snapshot.name,
+        type: "convax.canvas",
+        version: 1,
+      }
+  return {
+    clientName: "convax",
+    content: JSON.stringify(content, null, 2),
+    kind: "resource",
+    mime: "application/json",
+    name: requestedName || nodeLabel || snapshot.name || document.metadata.title || reference.canvasId,
+    uri: reference.uri,
+  }
+}
+
 export async function prepareAgentResources(
   manager: AgentProjectResolver,
   canvasSnapshots: AgentCanvasSnapshotResolver | undefined,
@@ -55,22 +160,9 @@ export async function prepareAgentResources(
 ): Promise<AgentRuntimeResource[]> {
   return Promise.all((resources ?? []).map(async (resource): Promise<AgentRuntimeResource> => {
     if (resource.kind === "skill") return validateSkillResource(resource)
-    if (resource.kind === "canvas") {
-      if (!canvasSnapshots) throw new Error("Canvas snapshots are unavailable")
-      const canvasId = validateCanvasId(resource.canvasId)
-      const snapshot = await canvasSnapshots.resolveCanvasSnapshot({ canvasId, projectId })
-      if (typeof snapshot.content !== "string" || !snapshot.content.trim()) {
-        throw new Error("Canvas snapshot is empty")
-      }
-      return {
-        canvasId,
-        content: snapshot.content,
-        kind: "canvas",
-        mime: "application/json",
-        name: resource.name ?? snapshot.name,
-      }
+    if (resource.kind === "resource") {
+      return prepareStructuredResource(resource, canvasSnapshots, projectId)
     }
-
     validateProjectPath(resource.path)
     await manager.resolveEntryPath({ path: resource.path, projectId })
     return {

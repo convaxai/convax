@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { CanvasResource, CanvasUploadRequest } from "@convax/canvas"
 import { PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "@convax/project"
-import { resolveCanvasUploadItems, type CanvasUploadHost } from "./canvas-upload"
+import {
+  canvasProjectEntryReferenceKey,
+  resolveCanvasUploadItems,
+  type CanvasUploadHost,
+} from "./canvas-upload"
 
 function request(input: Partial<CanvasUploadRequest>): CanvasUploadRequest {
   return {
@@ -79,6 +83,31 @@ describe("desktop canvas uploads", () => {
     }), uploadHost)
 
     expect(items).toEqual([])
+    expect(uploadHost.readProjectTextFile).not.toHaveBeenCalled()
+  })
+
+  test("turns a dragged folder into one file-node resource without copying or reading it", async () => {
+    const uploadHost = host()
+    const drag = serializeProjectEntryDrag({
+      entries: [{ kind: "directory", name: "design", path: "assets/design" }],
+      projectId: "project-a",
+      version: 1,
+    })
+
+    const items = await resolveCanvasUploadItems(request({
+      transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
+    }), uploadHost)
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      kind: "folder",
+      metadata: {
+        [canvasProjectEntryReferenceKey]: { kind: "directory", path: "assets/design" },
+      },
+      name: "design",
+      path: "assets/design",
+    })
+    expect(uploadHost.copyProjectMediaFiles).not.toHaveBeenCalled()
     expect(uploadHost.readProjectTextFile).not.toHaveBeenCalled()
   })
 })

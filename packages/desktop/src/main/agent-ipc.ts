@@ -3,7 +3,6 @@ import type { AgentRuntime } from "@convax/agent-runtime"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 
 import {
-  prepareAgentCanvasContext,
   prepareAgentResources,
   type AgentCanvasSnapshotResolver,
   type AgentProjectResolver,
@@ -46,7 +45,7 @@ export function registerAgentIpc(
     isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   },
 ) {
-  const directoryFor = (projectId: string) => manager.resolveEntryPath({ projectId })
+  const directoryFor = (scopeId: string) => manager.resolveEntryPath({ projectId: scopeId })
   const disposers = [
     registerHandler<undefined, Awaited<ReturnType<AgentClient["getStatus"]>>>(
       agentIpcChannels.getStatus,
@@ -56,18 +55,18 @@ export function registerAgentIpc(
     registerHandler<ClientInput<"listSessions">, Awaited<ReturnType<AgentClient["listSessions"]>>>(
       agentIpcChannels.listSessions,
       options.isTrustedSender,
-      async (input) => runtime.listSessions({ directory: await directoryFor(input.projectId), limit: input.limit }),
+      async (input) => runtime.listSessions({ directory: await directoryFor(input.scopeId), limit: input.limit }),
     ),
     registerHandler<ClientInput<"createSession">, Awaited<ReturnType<AgentClient["createSession"]>>>(
       agentIpcChannels.createSession,
       options.isTrustedSender,
-      async (input) => runtime.createSession({ directory: await directoryFor(input.projectId), title: input.title }),
+      async (input) => runtime.createSession({ directory: await directoryFor(input.scopeId), title: input.title }),
     ),
     registerHandler<ClientInput<"getSessionState">, Awaited<ReturnType<AgentClient["getSessionState"]>>>(
       agentIpcChannels.getSessionState,
       options.isTrustedSender,
       async (input) => runtime.getSessionState({
-        directory: await directoryFor(input.projectId),
+        directory: await directoryFor(input.scopeId),
         limit: input.limit,
         sessionId: input.sessionId,
       }),
@@ -76,12 +75,12 @@ export function registerAgentIpc(
       agentIpcChannels.prompt,
       options.isTrustedSender,
       async (input) => runtime.prompt({
-        activeCanvas: prepareAgentCanvasContext(input.activeCanvas),
         agent: input.agent,
-        directory: await directoryFor(input.projectId),
+        directory: await directoryFor(input.scopeId),
+        instructions: input.instructions,
         model: input.model,
-        resources: await prepareAgentResources(manager, options.canvasSnapshots, input.projectId, input.resources),
-        scopeId: input.projectId,
+        resources: await prepareAgentResources(manager, options.canvasSnapshots, input.scopeId, input.resources),
+        scopeId: input.scopeId,
         sessionId: input.sessionId,
         text: input.text,
         variant: input.variant,
@@ -90,21 +89,21 @@ export function registerAgentIpc(
     registerHandler<ClientInput<"abort">, void>(
       agentIpcChannels.abort,
       options.isTrustedSender,
-      async (input) => runtime.abort({ directory: await directoryFor(input.projectId), sessionId: input.sessionId }),
+      async (input) => runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId }),
     ),
     registerHandler<ClientInput<"listCapabilities">, Awaited<ReturnType<AgentClient["listCapabilities"]>>>(
       agentIpcChannels.listCapabilities,
       options.isTrustedSender,
       async (input) => runtime.listCapabilities({
-        directory: await directoryFor(input.projectId),
-        scopeId: input.projectId,
+        directory: await directoryFor(input.scopeId),
+        scopeId: input.scopeId,
       }),
     ),
     registerHandler<ClientInput<"replyPermission">, void>(
       agentIpcChannels.replyPermission,
       options.isTrustedSender,
       async (input) => runtime.replyPermission({
-        directory: await directoryFor(input.projectId),
+        directory: await directoryFor(input.scopeId),
         message: input.message,
         reply: input.reply,
         requestId: input.requestId,
@@ -115,7 +114,7 @@ export function registerAgentIpc(
       options.isTrustedSender,
       async (input) => runtime.replyQuestion({
         answers: input.answers,
-        directory: await directoryFor(input.projectId),
+        directory: await directoryFor(input.scopeId),
         requestId: input.requestId,
       }),
     ),
@@ -123,7 +122,7 @@ export function registerAgentIpc(
       agentIpcChannels.rejectQuestion,
       options.isTrustedSender,
       async (input) => runtime.rejectQuestion({
-        directory: await directoryFor(input.projectId),
+        directory: await directoryFor(input.scopeId),
         requestId: input.requestId,
       }),
     ),

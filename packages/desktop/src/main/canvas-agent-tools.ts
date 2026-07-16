@@ -3,6 +3,7 @@ import {
   type CanvasAddResourceSourcesRequest,
   type CanvasApplicationCommandResult,
   type CanvasApplicationService,
+  type CanvasDocumentRef,
   type CanvasPrimitiveCommand,
   type CanvasResourceBusinessService,
   type CanvasResourceSource,
@@ -49,7 +50,17 @@ const resourceSourceSchema = {
     {
       additionalProperties: false,
       properties: {
-        kind: { const: "project-file" },
+        kind: { const: "host-file" },
+        path: nonEmptyStringSchema,
+        sourceId: nonEmptyStringSchema,
+      },
+      required: ["kind", "path", "sourceId"],
+      type: "object",
+    },
+    {
+      additionalProperties: false,
+      properties: {
+        kind: { const: "host-directory" },
         path: nonEmptyStringSchema,
         sourceId: nonEmptyStringSchema,
       },
@@ -138,7 +149,7 @@ const viewCommandSchema = {
   ],
 }
 const canvasFields = {
-  canvasId: { description: "Canvas id from the active project", minLength: 1, type: "string" },
+  canvasId: { description: "Canvas id from the active host scope", minLength: 1, type: "string" },
   expectedRevision: { description: "Revision returned by the latest Canvas query", minimum: 0, type: "integer" },
 }
 
@@ -162,7 +173,7 @@ const tools = [
   },
   {
     name: "canvas_add_resources",
-    description: "Preferred business tool for adding inline text, project files, images, media, or remote URLs. It prepares assets, inspects media, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
+    description: "Preferred business tool for adding inline text, host files or directories, images, media, or remote URLs. It prepares assets, inspects media, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -183,7 +194,7 @@ const tools = [
           type: "object",
         },
         sources: {
-          description: "Sources with a stable sourceId and kind inline-text, project-file, or remote-url.",
+          description: "Sources with a stable sourceId and kind inline-text, host-file, host-directory, or remote-url.",
           items: resourceSourceSchema,
           minItems: 1,
           type: "array",
@@ -286,7 +297,7 @@ async function addResources(
     canvasId,
     commandId: requiredString(input.commandId, "commandId"),
     expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
-    projectId: scope.scopeId,
+    scopeId: scope.scopeId,
     relation: relation(input.relation),
     sources: resourceSources(input.sources),
   }
@@ -342,7 +353,7 @@ async function applyPrimitive(
       commandId: requiredString(input.commandId, "commandId"),
       expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
     },
-    projectId: scope.scopeId,
+    scopeId: scope.scopeId,
   })
   return { ...mutationSummary(result), sync: result.changed ? await syncRenderer(renderer, ref(scope, canvasId)) : undefined }
 }
@@ -450,7 +461,7 @@ function mutationSummary(result: CanvasApplicationCommandResult) {
   }
 }
 
-async function syncRenderer(renderer: CanvasRendererBridge, value: { canvasId: string; projectId: string }) {
+async function syncRenderer(renderer: CanvasRendererBridge, value: CanvasDocumentRef) {
   try {
     return { reloaded: await renderer.reloadDocument(value) }
   } catch (error) {
@@ -466,19 +477,51 @@ function actor(scope: AgentToolScope) {
   return { id: `opencode:${scope.scopeId}`, kind: "agent" as const }
 }
 
-function ref(scope: AgentToolScope, canvasId: string) {
-  return { canvasId, projectId: scope.scopeId }
+function ref(scope: AgentToolScope, canvasId: string): CanvasDocumentRef {
+  return { canvasId, scopeId: scope.scopeId }
 }
 
-function resourceSources(value: unknown) {
+function resourceSources(value: unknown): CanvasResourceSource[] {
   if (!Array.isArray(value) || value.length === 0) throw new Error("sources must be a non-empty array")
   return value.map((item, index) => {
-    const source = record(item, `sources[${index}]`)
-    if (source.kind === "remote-url") {
-      const url = new URL(requiredString(source.url, `sources[${index}].url`))
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Remote Canvas resources must use HTTP or HTTPS")
+    const label = `sources[${index}]`
+    const source = record(item, label)
+    const kind = requiredString(source.kind, `${label}.kind`)
+    const sourceId = requiredString(source.sourceId, `${label}.sourceId`)
+    if (kind === "inline-text") {
+      return {
+        format: optionalEnum(source.format, `${label}.format`, ["markdown", "plain"] as const),
+        kind,
+        name: optionalText(source.name, `${label}.name`),
+        sourceId,
+        text: text(source.text, `${label}.text`),
+      }
     }
-    return source as unknown as CanvasResourceSource
+    if (kind === "host-file" || kind === "host-directory") {
+      return {
+        kind,
+        path: requiredString(source.path, `${label}.path`),
+        sourceId,
+      }
+    }
+    if (kind === "remote-url") {
+      const urlValue = requiredString(source.url, `${label}.url`)
+      let url: URL
+      try {
+        url = new URL(urlValue)
+      } catch {
+        throw new Error(`${label}.url must be a valid URL`)
+      }
+      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Remote Canvas resources must use HTTP or HTTPS")
+      return {
+        kind,
+        mimeType: optionalText(source.mimeType, `${label}.mimeType`),
+        name: optionalText(source.name, `${label}.name`),
+        sourceId,
+        url: urlValue,
+      }
+    }
+    throw new Error(`Unsupported Canvas resource source: ${kind}`)
   })
 }
 
@@ -504,6 +547,15 @@ function requiredString(value: unknown, label: string) {
 
 function optionalString(value: unknown, label: string) {
   return value === undefined ? undefined : requiredString(value, label)
+}
+
+function text(value: unknown, label: string) {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`)
+  return value
+}
+
+function optionalText(value: unknown, label: string) {
+  return value === undefined ? undefined : text(value, label)
 }
 
 function stringArray(value: unknown, label: string) {
