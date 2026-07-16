@@ -13,6 +13,23 @@ import {
 } from "../src/node/opencode-agent-runtime"
 import protectedPathPlugin from "../src/node/protected-path-plugin"
 
+async function writeSkill(directory: string, name: string, description = `${name} description`) {
+  await mkdir(directory, { recursive: true })
+  await writeFile(join(directory, "SKILL.md"), [
+    "---",
+    `name: ${name}`,
+    `description: ${description}`,
+    "---",
+    "",
+    `Use the ${name} workflow.`,
+  ].join("\n"))
+}
+
+function restoreTestEnvironment(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name]
+  else process.env[name] = value
+}
+
 describe("OpenCode agent runtime boundaries", () => {
   test("keeps session history scoped to the opened directory", () => {
     expect(isAgentSessionInDirectory("/workspace/a", "/workspace/a")).toBe(true)
@@ -52,6 +69,29 @@ describe("OpenCode agent runtime boundaries", () => {
     const permission = { read: { ".private/**": "allow" as const } }
     const merged = withProtectedPathPermissions({ permission }, [])
     expect(merged.permission).toBe(permission)
+  })
+
+  test("disables remote skill indexes without replacing explicit paths", async () => {
+    const config = {
+      skills: {
+        paths: ["/managed/skills"],
+        urls: ["https://example.com/skills"],
+      },
+    }
+    const runtime = new OpenCodeAgentRuntime({ config })
+    const bounded = (runtime as unknown as {
+      options: { config: typeof config }
+    }).options.config
+
+    expect(bounded.skills?.paths).toEqual(["/managed/skills"])
+    expect(bounded.skills?.urls).toEqual([])
+    expect(config.skills.urls).toEqual(["https://example.com/skills"])
+    const runtimeWithoutPaths = new OpenCodeAgentRuntime()
+    const boundedWithoutPaths = (runtimeWithoutPaths as unknown as {
+      options: { config: { skills?: { paths?: string[]; urls?: string[] } } }
+    }).options.config
+    expect("paths" in boundedWithoutPaths.skills!).toBe(false)
+    await Promise.all([runtime.dispose(), runtimeWithoutPaths.dispose()])
   })
 
   test("adds the explicit strong guard after caller plugins and disables unsafe built-ins", () => {
@@ -128,6 +168,134 @@ describe("OpenCode agent runtime boundaries", () => {
 
   test("validates the configurable tool server name", () => {
     expect(() => new OpenCodeAgentRuntime({ toolServerName: "not a name" })).toThrow("Tool server name")
+  })
+
+  test("discovers global and managed skills without project external skills", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-runtime-skills-"))
+    const directory = join(root, "workspace")
+    const xdgConfig = join(root, "xdg")
+    const configDirectory = join(root, "managed-config")
+    const configuredSkills = join(root, "configured-skills")
+    await mkdir(directory, { recursive: true })
+    await writeSkill(join(xdgConfig, "opencode", "skills", "global-skill"), "global-skill")
+    await writeSkill(join(configDirectory, "skills", "managed-skill"), "managed-skill")
+    await writeSkill(join(configuredSkills, "configured-skill"), "configured-skill")
+    await writeSkill(join(directory, ".agents", "skills", "project-external-skill"), "project-external-skill")
+
+    const previousXdgConfig = process.env.XDG_CONFIG_HOME
+    const previousConfigDirectory = process.env.OPENCODE_CONFIG_DIR
+    const previousDisableExternalSkills = process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS
+    process.env.XDG_CONFIG_HOME = xdgConfig
+    process.env.OPENCODE_CONFIG_DIR = "parent-config-must-be-restored"
+    process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS = "parent-value-must-be-restored"
+    const runtime = new OpenCodeAgentRuntime({
+      config: {
+        skills: {
+          paths: [configuredSkills],
+          // A malformed URL would fail discovery if the host boundary did not
+          // force remote Skill indexes off while preserving explicit paths.
+          urls: ["not a valid skill index URL"],
+        },
+      },
+      configDirectory,
+      timeout: 15_000,
+    })
+
+    try {
+      const skills = await runtime.listSkills({ directory })
+      const names = skills.map((skill) => skill.name)
+      expect(names).toContain("global-skill")
+      expect(names).toContain("managed-skill")
+      expect(names).toContain("configured-skill")
+      expect(names).not.toContain("project-external-skill")
+      expect(process.env.OPENCODE_CONFIG_DIR).toBe("parent-config-must-be-restored")
+      expect(process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBe("parent-value-must-be-restored")
+    } finally {
+      await runtime.dispose()
+      restoreTestEnvironment("XDG_CONFIG_HOME", previousXdgConfig)
+      restoreTestEnvironment("OPENCODE_CONFIG_DIR", previousConfigDirectory)
+      restoreTestEnvironment("OPENCODE_DISABLE_EXTERNAL_SKILLS", previousDisableExternalSkills)
+      await rm(root, { force: true, recursive: true })
+    }
+  }, 30_000)
+
+  test("defers a skill refresh until the active prompt finishes", async () => {
+    const directory = join(tmpdir(), "agent-runtime-skill-refresh-prompt")
+    const runtime = new OpenCodeAgentRuntime()
+    let releasePrompt!: () => void
+    let markPromptStarted!: () => void
+    const promptRelease = new Promise<void>((resolve) => {
+      releasePrompt = resolve
+    })
+    const promptStarted = new Promise<void>((resolve) => {
+      markPromptStarted = resolve
+    })
+    let disposeCalls = 0
+    const now = Date.now()
+    const session = {
+      id: "persistent-session",
+      title: "Persistent session",
+      directory,
+      time: { created: now, updated: now },
+    }
+    const internals = runtime as unknown as {
+      client: unknown
+      protectedPathRegistrations: Map<string, Promise<void>>
+      toolRegistrations: Map<string, Promise<void>>
+    }
+    internals.client = {
+      global: {
+        dispose: async () => {
+          disposeCalls += 1
+          return { data: true }
+        },
+      },
+      session: {
+        list: async () => ({ data: [session] }),
+        prompt: async () => {
+          markPromptStarted()
+          await promptRelease
+          return {
+            data: {
+              info: {
+                id: "assistant-message",
+                role: "assistant",
+                sessionID: "deferred-session",
+                time: { completed: now, created: now },
+              },
+              parts: [],
+            },
+          }
+        },
+      },
+    }
+    internals.toolRegistrations.set("tool", Promise.resolve())
+    internals.protectedPathRegistrations.set("guard", Promise.resolve())
+
+    try {
+      expect((await runtime.listSessions({ directory })).map((item) => item.id)).toEqual([session.id])
+      const prompt = runtime.prompt({ directory, sessionId: "deferred-session", text: "Hello" })
+      await promptStarted
+      let refreshFinished = false
+      const refresh = runtime.refreshSkills().then(() => {
+        refreshFinished = true
+      })
+      await Promise.resolve()
+      expect(disposeCalls).toBe(0)
+      expect(refreshFinished).toBe(false)
+
+      releasePrompt()
+      await prompt
+      await refresh
+      expect(disposeCalls).toBe(1)
+      expect(refreshFinished).toBe(true)
+      expect(internals.toolRegistrations.size).toBe(0)
+      expect(internals.protectedPathRegistrations.size).toBe(0)
+      expect((await runtime.listSessions({ directory })).map((item) => item.id)).toEqual([session.id])
+    } finally {
+      releasePrompt()
+      await runtime.dispose()
+    }
   })
 
   test("does not discover executable extensions from an opened workspace", async () => {
