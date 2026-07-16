@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
-import type { AddressInfo } from "node:net"
+import type { AddressInfo, Socket } from "node:net"
 import type { AgentToolDefinition, AgentToolProvider, AgentToolScope } from "../contracts"
 
 interface JsonRpcRequest {
@@ -69,16 +69,20 @@ function toolList(tools: readonly AgentToolDefinition[]) {
 
 /**
  * Minimal stateless Streamable HTTP MCP transport. It is loopback-only,
- * bearer-authenticated, and gives every project an unguessable scope URL.
+ * bearer-authenticated, and gives every registered scope an unguessable URL.
  */
 export class AgentLocalToolServer {
   private readonly authorization = `Bearer ${randomBytes(32).toString("base64url")}`
   private readonly byScope = new Map<string, RegisteredScope>()
   private readonly byToken = new Map<string, RegisteredScope>()
+  private readonly sockets = new Set<Socket>()
   private server?: Server
   private starting?: Promise<void>
 
-  constructor(private readonly provider: AgentToolProvider) {}
+  constructor(
+    private readonly provider: AgentToolProvider,
+    private readonly serverName = "host",
+  ) {}
 
   async registerScope(scope: AgentToolScope): Promise<AgentLocalToolRegistration> {
     await this.start()
@@ -90,7 +94,7 @@ export class AgentLocalToolServer {
       this.byToken.set(registration.token, registration)
     }
     const address = this.server?.address() as AddressInfo | null
-    if (!address) throw new Error("Agent tool server is not listening")
+    if (!address) throw new Error("Tool server is not listening")
     return {
       headers: { Authorization: this.authorization },
       url: `http://127.0.0.1:${address.port}/mcp/${registration.token}`,
@@ -101,6 +105,10 @@ export class AgentLocalToolServer {
     if (this.server?.listening) return Promise.resolve()
     if (this.starting) return this.starting
     const server = createServer((request, response) => void this.handle(request, response))
+    server.on("connection", (socket) => {
+      this.sockets.add(socket)
+      socket.once("close", () => this.sockets.delete(socket))
+    })
     this.server = server
     this.starting = new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -167,7 +175,7 @@ export class AgentLocalToolServer {
         json(response, 200, rpcResult(rpc.id, {
           capabilities: { tools: { listChanged: false } },
           protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : "2025-03-26",
-          serverInfo: { name: "convax", version: "0.0.0" },
+          serverInfo: { name: this.serverName, version: "0.0.0" },
         }))
         return
       }
@@ -187,7 +195,7 @@ export class AgentLocalToolServer {
         const tools = await this.provider.listTools(registration.scope)
         if (!tools.some((tool) => tool.name === name)) {
           json(response, 200, rpcResult(rpc.id, {
-            content: [{ text: `Unknown Convax tool: ${name}`, type: "text" }],
+            content: [{ text: `Unknown tool: ${name}`, type: "text" }],
             isError: true,
           }))
           return
@@ -215,6 +223,12 @@ export class AgentLocalToolServer {
     const server = this.server
     this.server = undefined
     if (!server) return
-    await new Promise<void>((resolve) => server.close(() => resolve()))
+    server.close()
+    // OpenCode may still have an MCP request in flight while the desktop is
+    // quitting. Waiting for that request would keep the Electron main process
+    // alive indefinitely and allow a new renderer to run against stale IPC.
+    server.closeAllConnections()
+    for (const socket of this.sockets) socket.destroy()
+    this.sockets.clear()
   }
 }

@@ -112,22 +112,17 @@ interface AgentPathResource {
   mime?: string
 }
 
-export interface AgentCanvasResource {
-  kind: "canvas"
-  canvasId: string
-  name?: string
-}
-
-/** Authoritative Canvas identity supplied by the host for the current prompt. */
-export interface AgentCanvasContext {
-  canvasId: string
+/** A host-owned resource identified by a stable URI. */
+export interface AgentStructuredResource {
+  kind: "resource"
+  uri: string
   name?: string
 }
 
 export type AgentResource =
   | (AgentPathResource & { kind: "file" })
   | (AgentPathResource & { kind: "directory" })
-  | AgentCanvasResource
+  | AgentStructuredResource
   | { kind: "skill"; name: string }
 
 /** Host-prepared resources accepted by the Node runtime. */
@@ -135,11 +130,12 @@ export type AgentRuntimeResource =
   | (AgentPathResource & { kind: "file" })
   | (AgentPathResource & { kind: "directory" })
   | {
-      kind: "canvas"
-      canvasId: string
+      kind: "resource"
+      clientName: string
       content: string
-      mime: "application/json"
+      mime: string
       name?: string
+      uri: string
     }
   | { kind: "skill"; name: string }
 
@@ -152,60 +148,60 @@ interface AgentPromptFields<Resource> {
   sessionId: string
   text: string
   resources?: Resource[]
-  activeCanvas?: AgentCanvasContext
+  instructions?: string[]
   agent?: string
   model?: AgentModel
   variant?: string
 }
 
 export interface AgentListSessionsRequest {
-  projectId: string
+  scopeId: string
   limit?: number
 }
 
 export interface AgentCreateSessionRequest {
-  projectId: string
+  scopeId: string
   title?: string
 }
 
 export interface AgentGetSessionStateRequest {
-  projectId: string
+  scopeId: string
   sessionId: string
   limit?: number
 }
 
 export interface AgentPromptRequest extends AgentPromptFields<AgentResource> {
-  projectId: string
+  scopeId: string
 }
 
 export interface AgentAbortRequest {
-  projectId: string
+  scopeId: string
   sessionId: string
 }
 
 export interface AgentListCapabilitiesRequest {
-  projectId: string
+  scopeId: string
 }
 
 export interface AgentReplyPermissionRequest {
-  projectId: string
+  scopeId: string
   requestId: string
   reply: "once" | "always" | "reject"
   message?: string
 }
 
 export interface AgentReplyQuestionRequest {
-  projectId: string
+  scopeId: string
   requestId: string
   answers: string[][]
 }
 
 export interface AgentRejectQuestionRequest {
-  projectId: string
+  scopeId: string
   requestId: string
 }
 
-/** Renderer-safe API exposed by the desktop preload. */
+/** Host-facing API safe to expose across a serialization boundary. */
 export interface AgentClient {
   getStatus(): Promise<AgentRuntimeStatus>
   listSessions(request: AgentListSessionsRequest): Promise<AgentSession[]>

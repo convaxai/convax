@@ -12,12 +12,12 @@ async function rpc(url: string, headers: Record<string, string>, body: Record<st
 }
 
 describe("AgentLocalToolServer", () => {
-  test("exposes authenticated MCP tools inside one opaque project scope", async () => {
+  test("exposes authenticated MCP tools inside one opaque workspace scope", async () => {
     const calls: Array<{ input: Record<string, unknown>; name: string; scope: AgentToolScope }> = []
     const server = new AgentLocalToolServer({
       async callTool(scope, name, input) {
         calls.push({ input, name, scope })
-        return { echoed: input.value, project: scope.scopeId }
+        return { echoed: input.value, scopeId: scope.scopeId }
       },
       listTools: () => [{
         description: "Echo a value",
@@ -27,10 +27,10 @@ describe("AgentLocalToolServer", () => {
           required: ["value"],
           type: "object",
         },
-        name: "canvas_echo",
+        name: "echo",
       }],
-    })
-    const registration = await server.registerScope({ directory: "/project/a", scopeId: "project-a" })
+    }, "bridge")
+    const registration = await server.registerScope({ directory: "/workspace/a", scopeId: "workspace-a" })
 
     try {
       const unauthorized = await fetch(registration.url, {
@@ -47,7 +47,13 @@ describe("AgentLocalToolServer", () => {
         params: { protocolVersion: "2025-03-26" },
       })
       expect(initialized.response.status).toBe(200)
-      expect(initialized.value).toMatchObject({ result: { capabilities: { tools: {} }, protocolVersion: "2025-03-26" } })
+      expect(initialized.value).toMatchObject({
+        result: {
+          capabilities: { tools: {} },
+          protocolVersion: "2025-03-26",
+          serverInfo: { name: "bridge" },
+        },
+      })
 
       const listed = await rpc(registration.url, registration.headers, {
         id: 2,
@@ -55,23 +61,50 @@ describe("AgentLocalToolServer", () => {
         method: "tools/list",
         params: {},
       })
-      expect(listed.value).toMatchObject({ result: { tools: [{ name: "canvas_echo" }] } })
+      expect(listed.value).toMatchObject({ result: { tools: [{ name: "echo" }] } })
 
       const called = await rpc(registration.url, registration.headers, {
         id: 3,
         jsonrpc: "2.0",
         method: "tools/call",
-        params: { arguments: { value: "hello" }, name: "canvas_echo" },
+        params: { arguments: { value: "hello" }, name: "echo" },
       })
       const result = called.value.result as { content: Array<{ text: string }> }
-      expect(JSON.parse(result.content[0]!.text)).toEqual({ echoed: "hello", project: "project-a" })
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ echoed: "hello", scopeId: "workspace-a" })
       expect(calls).toEqual([{
         input: { value: "hello" },
-        name: "canvas_echo",
-        scope: { directory: "/project/a", scopeId: "project-a" },
+        name: "echo",
+        scope: { directory: "/workspace/a", scopeId: "workspace-a" },
       }])
     } finally {
       await server.close()
     }
+  })
+
+  test("closes promptly while an MCP request is still in flight", async () => {
+    let markRequestStarted: (() => void) | undefined
+    const requestStarted = new Promise<void>((resolve) => { markRequestStarted = resolve })
+    const neverCompletes = new Promise<never>(() => undefined)
+    const server = new AgentLocalToolServer({
+      callTool: async () => undefined,
+      listTools: async () => {
+        markRequestStarted?.()
+        return neverCompletes
+      },
+    })
+    const registration = await server.registerScope({ directory: "/workspace/a", scopeId: "workspace-a" })
+    const pendingRequest = fetch(registration.url, {
+      body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list", params: {} }),
+      headers: { ...registration.headers, "Content-Type": "application/json" },
+      method: "POST",
+    }).catch(() => undefined)
+
+    await requestStarted
+    const result = await Promise.race([
+      server.close().then(() => "closed" as const),
+      Bun.sleep(1_000).then(() => "timed-out" as const),
+    ])
+    expect(result).toBe("closed")
+    await pendingRequest
   })
 })

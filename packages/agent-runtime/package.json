@@ -1,16 +1,39 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@convax/agent-runtime",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./node": "./src/node/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js",
+      "default": "./dist/node/index.js"
+    },
+    "./node/protected-path-plugin": {
+      "types": "./dist/node/protected-path-plugin.d.ts",
+      "import": "./dist/node/protected-path-plugin.js",
+      "default": "./dist/node/protected-path-plugin.js"
+    }
   },
   "scripts": {
+    "clean": "rm -rf dist",
+    "build:js": "for entry in src/index.ts src/node/index.ts src/node/protected-path-plugin.ts; do bun build --production --keep-names --target=node --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun run clean && bun run build:js && bun run build:types",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
     "@opencode-ai/sdk": "1.18.1",
@@ -19,5 +42,8 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "typescript": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
