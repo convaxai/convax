@@ -8,12 +8,14 @@ import type {
   AgentSessionState,
 } from "@convax/agent-runtime"
 import {
-  parseProjectCanvasDrag,
   parseProjectEntryDrag,
-  PROJECT_CANVAS_DRAG_TYPE,
   PROJECT_ENTRY_DRAG_TYPE,
-  type ProjectCanvas,
 } from "@convax/project"
+import {
+  parseProjectCanvasDrag,
+  PROJECT_CANVAS_DRAG_TYPE,
+  type ProjectCanvas,
+} from "@convax/project/canvas"
 import { Button, cn, Tooltip, TooltipProvider } from "@convax/ui"
 import {
   Bot,
@@ -36,40 +38,34 @@ import {
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  createAgentCanvasInstructions,
+  isAgentCanvasResource,
+  shouldFlushAgentCanvasContext,
+} from "../agent-canvas-context"
+import {
+  agentResourceKey,
+  canvasAgentResource,
+  containEmbeddedResourceDrag,
+  embeddedConversationTitle,
+  embeddedConversationSessions,
+  filterStandaloneAgentSessions,
+  forgetStaleEmbeddedConversation,
+  mergeAgentResources,
+} from "./agent-panel-state"
+import { AgentMarkdown } from "./agent-markdown"
 import { getAgentToolPresentation } from "./agent-tool-presentation"
 
 const resourceDragType = "application/x-convax-agent-resource"
-const panelOpenKey = "convax:agent-panel:open"
-const panelWidthKey = "convax:agent-panel:width"
-const defaultPanelWidth = 380
-const minimumPanelWidth = 300
-const maximumPanelWidth = 620
-
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
-}
-
-function resourceKey(resource: AgentResource) {
-  if (resource.kind === "skill") return `skill:${resource.name}`
-  if (resource.kind === "canvas") return `canvas:${resource.canvasId}`
-  return `${resource.kind}:${resource.path}`
 }
 
 function resourceLabel(resource: AgentResource) {
   if (resource.name) return resource.name
   if (resource.kind === "skill") return resource.name
-  if (resource.kind === "canvas") return resource.canvasId
+  if (resource.kind === "resource") return resource.uri
   return resource.path.split("/").at(-1) || resource.path
-}
-
-function appendResources(current: AgentResource[], added: readonly AgentResource[]) {
-  const existing = new Set(current.map(resourceKey))
-  return [...current, ...added.filter((resource) => {
-    const key = resourceKey(resource)
-    if (existing.has(key)) return false
-    existing.add(key)
-    return true
-  })]
 }
 
 function serializeResource(resource: AgentResource) {
@@ -82,10 +78,10 @@ function parseResource(value: string): AgentResource | null {
     if (parsed.version !== 1 || !parsed.resource) return null
     const resource = parsed.resource
     if (resource.kind === "skill") return typeof resource.name === "string" ? { kind: "skill", name: resource.name } : null
-    if (!(["canvas", "directory", "file"] as string[]).includes(resource.kind)) return null
-    if (resource.kind === "canvas") {
-      return typeof resource.canvasId === "string"
-        ? { canvasId: resource.canvasId, kind: "canvas", name: resource.name }
+    if (!(["directory", "file", "resource"] as string[]).includes(resource.kind)) return null
+    if (resource.kind === "resource") {
+      return typeof resource.uri === "string"
+        ? { kind: "resource", name: resource.name, uri: resource.uri }
         : null
     }
     if (typeof resource.path !== "string") return null
@@ -104,24 +100,39 @@ function supportsResourceDrop(dataTransfer: DataTransfer) {
     || types.includes(resourceDragType)
 }
 
-function initialPanelOpen() {
-  return localStorage.getItem(panelOpenKey) !== "false"
+export interface AgentPanelLayout {
+  maxWidth: number
+  minWidth: number
+  open: boolean
+  onOpenChange(open: boolean): void
+  onResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void
+  onResizeStart(event: React.PointerEvent<HTMLDivElement>): void
+  width: number
 }
 
-function initialPanelWidth() {
-  const value = Number(localStorage.getItem(panelWidthKey))
-  return Number.isFinite(value) ? Math.min(maximumPanelWidth, Math.max(minimumPanelWidth, value)) : defaultPanelWidth
-}
-
-export function AgentPanel(props: {
+export interface AgentPanelProps {
   activeCanvas?: Pick<ProjectCanvas, "id" | "name">
   beforePrompt?: () => Promise<void>
   canvases: ProjectCanvas[]
+  className?: string
+  contextResources?: readonly AgentResource[]
+  conversationKey?: string
+  embedded?: boolean
+  layout?: AgentPanelLayout
   projectId?: string
   projectName?: string
-}) {
-  const [open, setOpenState] = useState(initialPanelOpen)
-  const [width, setWidth] = useState(initialPanelWidth)
+}
+
+export function AgentPanel(props: AgentPanelProps) {
+  const embedded = props.embedded === true
+  const conversationScope = JSON.stringify([
+    props.projectId ?? null,
+    embedded ? "embedded" : "panel",
+    embedded ? props.conversationKey ?? null : null,
+  ])
+  const contextResources = mergeAgentResources(props.contextResources ?? [])
+  const lockedResourceKeys = new Set(contextResources.map(agentResourceKey))
+  const open = embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
   const [resourcePickerOpen, setResourcePickerOpen] = useState(false)
   const [dropActive, setDropActive] = useState(false)
@@ -141,29 +152,49 @@ export function AgentPanel(props: {
   const activeRequestRef = useRef(0)
   const sessionListRequestRef = useRef(0)
   const activeProjectRef = useRef(props.projectId)
+  const activeScopeRef = useRef(conversationScope)
+  const generationRef = useRef(0)
+  const mountedRef = useRef(false)
   const creatingSessionRef = useRef(false)
+  const restoredSessionRef = useRef<string | undefined>(undefined)
   const sessionProjectRef = useRef<string | undefined>(undefined)
+  const sessionScopeRef = useRef<string | undefined>(undefined)
   activeProjectRef.current = props.projectId
+  activeScopeRef.current = conversationScope
 
-  const setOpen = useCallback((next: boolean) => {
-    setOpenState(next)
-    localStorage.setItem(panelOpenKey, String(next))
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      generationRef.current += 1
+      activeRequestRef.current += 1
+      sessionListRequestRef.current += 1
+    }
   }, [])
 
   const refreshSessions = useCallback(async (preferredSessionId?: string) => {
-    if (!props.projectId) return []
-    const projectId = props.projectId
+    if (embedded || !props.projectId) return []
+    const scopeId = props.projectId
+    const scope = conversationScope
     const request = ++sessionListRequestRef.current
-    const result = await window.convax.agent.listSessions({ projectId, limit: 60 })
-    if (activeProjectRef.current !== projectId || request !== sessionListRequestRef.current) return result
+    const result = filterStandaloneAgentSessions(
+      await window.convax.agent.listSessions({ scopeId, limit: 60 }),
+    )
+    if (
+      !mountedRef.current
+      || activeProjectRef.current !== scopeId
+      || activeScopeRef.current !== scope
+      || request !== sessionListRequestRef.current
+    ) return result
     setSessions(result)
     const selected = preferredSessionId && result.some((session) => session.id === preferredSessionId)
       ? preferredSessionId
       : result[0]?.id
-    sessionProjectRef.current = projectId
+    sessionProjectRef.current = scopeId
+    sessionScopeRef.current = scope
     setSessionId(selected)
     return result
-  }, [props.projectId])
+  }, [conversationScope, embedded, props.projectId])
 
   const refreshSessionState = useCallback(async (targetSessionId = sessionId) => {
     if (!props.projectId || !targetSessionId) {
@@ -171,21 +202,38 @@ export function AgentPanel(props: {
       return
     }
     const request = ++activeRequestRef.current
-    const projectId = props.projectId
+    const scopeId = props.projectId
+    const scope = conversationScope
     const result = await window.convax.agent.getSessionState({
-      projectId,
+      scopeId,
       sessionId: targetSessionId,
       limit: 200,
     })
-    if (request === activeRequestRef.current && activeProjectRef.current === projectId) setSessionState(result)
-  }, [props.projectId, sessionId])
+    if (
+      request === activeRequestRef.current
+      && mountedRef.current
+      && activeProjectRef.current === scopeId
+      && activeScopeRef.current === scope
+    ) setSessionState(result)
+    return result
+  }, [conversationScope, props.projectId, sessionId])
 
   useEffect(() => {
+    generationRef.current += 1
     activeRequestRef.current += 1
     sessionListRequestRef.current += 1
     sessionProjectRef.current = undefined
+    sessionScopeRef.current = undefined
     setSessions([])
-    setSessionId(undefined)
+    const cachedSessionId = embedded
+      ? embeddedConversationSessions.get(props.projectId, props.conversationKey)
+      : undefined
+    if (cachedSessionId && props.projectId) {
+      sessionProjectRef.current = props.projectId
+      sessionScopeRef.current = conversationScope
+    }
+    restoredSessionRef.current = cachedSessionId
+    setSessionId(cachedSessionId)
     setSessionState(undefined)
     setCapabilities(undefined)
     setHistoryVisible(false)
@@ -197,20 +245,30 @@ export function AgentPanel(props: {
     setError(undefined)
     setCapabilitiesLoading(false)
     setLoading(false)
-  }, [props.projectId])
+  }, [conversationScope])
 
   useEffect(() => {
-    if (!open || !props.projectId) {
+    if (embedded || !open || !props.projectId) {
       setLoading(false)
       return
     }
+    const scopeId = props.projectId
+    const scope = conversationScope
     let stale = false
     const request = ++sessionListRequestRef.current
     setLoading(true)
-    void window.convax.agent.listSessions({ projectId: props.projectId, limit: 60 }).then((result) => {
-      if (stale || request !== sessionListRequestRef.current) return
+    void window.convax.agent.listSessions({ scopeId, limit: 60 }).then((listedSessions) => {
+      const result = filterStandaloneAgentSessions(listedSessions)
+      if (
+        stale
+        || !mountedRef.current
+        || activeProjectRef.current !== scopeId
+        || activeScopeRef.current !== scope
+        || request !== sessionListRequestRef.current
+      ) return
       setSessions(result)
-      sessionProjectRef.current = props.projectId
+      sessionProjectRef.current = scopeId
+      sessionScopeRef.current = scope
       setSessionId(result[0]?.id)
     }).catch((cause) => {
       if (!stale) setError(errorMessage(cause))
@@ -218,26 +276,59 @@ export function AgentPanel(props: {
       if (!stale) setLoading(false)
     })
     return () => { stale = true }
-  }, [open, props.projectId])
+  }, [conversationScope, embedded, open, props.projectId])
 
   useEffect(() => {
-    if (!props.projectId || !sessionId || sessionProjectRef.current !== props.projectId) {
+    if (
+      !props.projectId
+      || !sessionId
+      || sessionProjectRef.current !== props.projectId
+      || sessionScopeRef.current !== conversationScope
+    ) {
       setSessionState(undefined)
       return
     }
-    const projectId = props.projectId
+    const scopeId = props.projectId
+    const scope = conversationScope
     let stale = false
     setLoading(true)
-    void refreshSessionState(sessionId).catch((cause) => {
-      if (!stale && activeProjectRef.current === projectId) setError(errorMessage(cause))
+    void refreshSessionState(sessionId).then(() => {
+      if (restoredSessionRef.current === sessionId) restoredSessionRef.current = undefined
+    }).catch((cause) => {
+      if (
+        stale
+        || !mountedRef.current
+        || activeProjectRef.current !== scopeId
+        || activeScopeRef.current !== scope
+      ) return
+      const recovered = embedded
+        && restoredSessionRef.current === sessionId
+        && forgetStaleEmbeddedConversation(
+          embeddedConversationSessions,
+          scopeId,
+          props.conversationKey,
+          sessionId,
+        )
+      if (recovered) {
+        activeRequestRef.current += 1
+        restoredSessionRef.current = undefined
+        sessionProjectRef.current = undefined
+        sessionScopeRef.current = undefined
+        setSessionId(undefined)
+        setSessionState(undefined)
+        setError(undefined)
+        return
+      }
+      setError(errorMessage(cause))
     }).finally(() => {
-      if (!stale && activeProjectRef.current === projectId) setLoading(false)
+      if (!stale && mountedRef.current && activeProjectRef.current === scopeId && activeScopeRef.current === scope) setLoading(false)
     })
     return () => { stale = true }
-  }, [props.projectId, refreshSessionState, sessionId])
+  }, [conversationScope, embedded, props.conversationKey, props.projectId, refreshSessionState, sessionId])
 
   const runtimeBusy = sending || sessionState?.status.type === "busy" || sessionState?.status.type === "retry"
   const interactionDisabled = runtimeBusy || loading || creatingSession
+  const displayedResources = mergeAgentResources(contextResources, resources)
   useEffect(() => {
     if (!runtimeBusy || !sessionId) return
     let stopped = false
@@ -262,12 +353,15 @@ export function AgentPanel(props: {
   }, [sending, sessionState?.messages, sessionState?.pendingPermissions, sessionState?.pendingQuestions])
 
   const addResources = useCallback((next: readonly AgentResource[]) => {
-    setResources((current) => appendResources(current, next))
+    setResources((current) => mergeAgentResources(current, next).filter(
+      (resource) => !lockedResourceKeys.has(agentResourceKey(resource)),
+    ))
     setResourcePickerOpen(false)
-  }, [])
+  }, [lockedResourceKeys])
 
   const handleDrop = useCallback((event: React.DragEvent) => {
     if (!supportsResourceDrop(event.dataTransfer)) return
+    containEmbeddedResourceDrag(embedded, event)
     event.preventDefault()
     setDropActive(false)
     if (!props.projectId) return
@@ -282,130 +376,137 @@ export function AgentPanel(props: {
     }
     const projectCanvas = parseProjectCanvasDrag(event.dataTransfer.getData(PROJECT_CANVAS_DRAG_TYPE))
     if (projectCanvas?.projectId === props.projectId) {
-      addResources([{
-        canvasId: projectCanvas.canvas.id,
-        kind: "canvas",
-        name: projectCanvas.canvas.name,
-      }])
+      addResources([canvasAgentResource(projectCanvas.canvas)])
       return
     }
     const resource = parseResource(event.dataTransfer.getData(resourceDragType))
     if (resource) addResources([resource])
-  }, [addResources, props.projectId])
+  }, [addResources, embedded, props.projectId])
 
   const createSession = useCallback(async () => {
     if (!props.projectId || creatingSessionRef.current) return undefined
-    const projectId = props.projectId
+    const scopeId = props.projectId
+    const scope = conversationScope
+    const generation = generationRef.current
     creatingSessionRef.current = true
     setCreatingSession(true)
     setError(undefined)
     try {
-      const session = await window.convax.agent.createSession({ projectId })
-      if (activeProjectRef.current !== projectId) return undefined
+      const session = await window.convax.agent.createSession({
+        scopeId,
+        title: embedded ? embeddedConversationTitle(props.conversationKey) : undefined,
+      })
+      if (
+        !mountedRef.current
+        || generationRef.current !== generation
+        || activeProjectRef.current !== scopeId
+        || activeScopeRef.current !== scope
+      ) return undefined
       activeRequestRef.current += 1
       sessionListRequestRef.current += 1
-      setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)])
-      sessionProjectRef.current = projectId
+      restoredSessionRef.current = undefined
+      if (embedded) {
+        embeddedConversationSessions.remember(scopeId, props.conversationKey, session.id)
+      } else {
+        setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)])
+      }
+      sessionProjectRef.current = scopeId
+      sessionScopeRef.current = scope
       setSessionId(session.id)
       setSessionState(undefined)
       setHistoryVisible(false)
       return session
     } finally {
       creatingSessionRef.current = false
-      setCreatingSession(false)
+      if (mountedRef.current && generationRef.current === generation) setCreatingSession(false)
     }
-  }, [props.projectId])
+  }, [conversationScope, embedded, props.conversationKey, props.projectId])
 
   const send = useCallback(async () => {
     const text = draft.trim()
-    if (!props.projectId || interactionDisabled || (!text && resources.length === 0)) return
-    const projectId = props.projectId
-    const submittedResources = resources
+    const submittedResources = mergeAgentResources(contextResources, resources)
+    if (!props.projectId || interactionDisabled || (!text && submittedResources.length === 0)) return
+    const scopeId = props.projectId
+    const scope = conversationScope
+    const generation = generationRef.current
+    const submittedUserResources = resources
     const submittedDraft = draft
     const submittedActiveCanvas = props.activeCanvas
+    const isCurrentGeneration = () => mountedRef.current
+      && generationRef.current === generation
+      && activeProjectRef.current === scopeId
+      && activeScopeRef.current === scope
     let cleared = false
-    let targetSessionId = sessionId
+    let targetSessionId = sessionScopeRef.current === scope ? sessionId : undefined
     setError(undefined)
     setSending(true)
     try {
+      if (!targetSessionId && embedded) {
+        targetSessionId = embeddedConversationSessions.get(scopeId, props.conversationKey)
+        if (targetSessionId) {
+          sessionProjectRef.current = scopeId
+          sessionScopeRef.current = scope
+          setSessionId(targetSessionId)
+        }
+      }
       if (!targetSessionId) targetSessionId = (await createSession())?.id
-      if (!targetSessionId || activeProjectRef.current !== projectId) return
-      if (submittedActiveCanvas || submittedResources.some((resource) => resource.kind === "canvas")) {
+      if (!targetSessionId || !isCurrentGeneration()) return
+      if (shouldFlushAgentCanvasContext({
+        activeCanvas: submittedActiveCanvas,
+        resources: submittedResources,
+      })) {
         await props.beforePrompt?.()
       }
-      if (activeProjectRef.current !== projectId) return
+      // beforePrompt can outlive the node that owns an embedded panel. Never
+      // continue with a send after unmounting or switching Canvas scope.
+      if (!isCurrentGeneration()) return
       setDraft("")
       setResources([])
       stickToBottomRef.current = true
       cleared = true
       await window.convax.agent.prompt({
-        activeCanvas: submittedActiveCanvas
-          ? { canvasId: submittedActiveCanvas.id, name: submittedActiveCanvas.name }
-          : undefined,
-        projectId,
+        instructions: createAgentCanvasInstructions({
+          activeCanvas: submittedActiveCanvas,
+          resources: submittedResources,
+        }),
         resources: submittedResources,
+        scopeId,
         sessionId: targetSessionId,
         text,
       })
-      if (activeProjectRef.current !== projectId) return
+      if (!isCurrentGeneration()) return
       await Promise.all([refreshSessionState(targetSessionId), refreshSessions(targetSessionId)])
     } catch (cause) {
-      if (activeProjectRef.current !== projectId) return
+      if (!isCurrentGeneration()) return
       if (cleared) {
         setDraft((current) => current || submittedDraft)
-        setResources((current) => appendResources(current, submittedResources))
+        setResources((current) => mergeAgentResources(current, submittedUserResources))
       }
       setError(errorMessage(cause))
       if (targetSessionId) await refreshSessionState(targetSessionId).catch(() => undefined)
     } finally {
-      if (activeProjectRef.current === projectId) setSending(false)
+      if (isCurrentGeneration()) setSending(false)
     }
-  }, [createSession, draft, interactionDisabled, props.activeCanvas, props.beforePrompt, props.projectId, refreshSessionState, refreshSessions, resources, sessionId])
+  }, [contextResources, conversationScope, createSession, draft, embedded, interactionDisabled, props.activeCanvas, props.beforePrompt, props.conversationKey, props.projectId, refreshSessionState, refreshSessions, resources, sessionId])
 
   const abort = useCallback(async () => {
-    if (!props.projectId || !sessionId) return
+    if (!props.projectId || !sessionId || sessionScopeRef.current !== conversationScope) return
     try {
-      await window.convax.agent.abort({ projectId: props.projectId, sessionId })
+      await window.convax.agent.abort({ scopeId: props.projectId, sessionId })
       await refreshSessionState(sessionId)
     } catch (cause) {
       setError(errorMessage(cause))
     }
-  }, [props.projectId, refreshSessionState, sessionId])
-
-  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId)
-    const startX = event.clientX
-    const startWidth = width
-    const move = (moveEvent: PointerEvent) => {
-      const available = Math.max(minimumPanelWidth, window.innerWidth - 520)
-      const next = Math.min(maximumPanelWidth, available, Math.max(220, startWidth + startX - moveEvent.clientX))
-      setWidth(next)
-    }
-    const finish = () => {
-      window.removeEventListener("pointermove", move)
-      window.removeEventListener("pointerup", finish)
-      setWidth((current) => {
-        if (current < 260) {
-          setOpen(false)
-          return defaultPanelWidth
-        }
-        const next = Math.max(minimumPanelWidth, current)
-        localStorage.setItem(panelWidthKey, String(next))
-        return next
-      })
-    }
-    window.addEventListener("pointermove", move)
-    window.addEventListener("pointerup", finish, { once: true })
-  }
+  }, [conversationScope, props.projectId, refreshSessionState, sessionId])
 
   if (!props.projectId) return null
 
-  if (!open) {
+  if (!embedded && !open) {
     return (
       <TooltipProvider>
         <aside className="relative z-40 flex w-11 shrink-0 flex-col items-center border-l border-border bg-card py-2 max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0">
           <Tooltip content="Open agent">
-            <Button aria-label="Open agent" onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><Bot /></Button>
+            <Button aria-label="Open agent" onClick={() => props.layout?.onOpenChange(true)} size="icon-sm" variant="ghost"><Bot /></Button>
           </Tooltip>
           <div className="mt-2 h-px w-5 bg-border" />
           <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Agent</span>
@@ -417,20 +518,38 @@ export function AgentPanel(props: {
   return (
     <TooltipProvider>
       <aside
-        className="relative z-40 flex shrink-0 flex-col border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl"
-        style={{ maxWidth: "calc(100vw - 96px)", width }}
+        className={cn(
+          embedded
+            ? "relative flex h-80 min-h-64 w-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground"
+            : "relative z-40 flex shrink-0 flex-col border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
+          props.className,
+        )}
+        style={embedded ? undefined : { maxWidth: "calc(100vw - 96px)", width: props.layout?.width }}
       >
-        <div aria-label="Resize agent panel" className="absolute inset-y-0 -left-1 z-50 w-2 cursor-col-resize" onPointerDown={startResize} role="separator" />
-        <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-2">
+        {!embedded ? (
+          <div
+            aria-label="Resize agent panel"
+            aria-orientation="vertical"
+            aria-valuemax={props.layout?.maxWidth}
+            aria-valuemin={props.layout?.minWidth}
+            aria-valuenow={props.layout?.width}
+            className="absolute inset-y-0 -left-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
+            onKeyDown={props.layout?.onResizeKeyDown}
+            onPointerDown={props.layout?.onResizeStart}
+            role="separator"
+            tabIndex={0}
+          />
+        ) : null}
+        <header className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}>
           <Bot className="ml-1 size-4 text-primary" />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{props.projectName ? `${props.projectName} Agent` : "Agent"}</span>
+          <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>{embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}</span>
           {capabilities ? <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span> : null}
-          <Tooltip content="Conversation history"><Button aria-label="Conversation history" onClick={() => setHistoryVisible((value) => !value)} size="icon-sm" variant={historyVisible ? "secondary" : "ghost"}><History /></Button></Tooltip>
-          <Tooltip content="New conversation"><Button aria-label="New conversation" disabled={!props.projectId || interactionDisabled} onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))} size="icon-sm" variant="ghost"><Plus /></Button></Tooltip>
-          <Tooltip content="Close agent"><Button aria-label="Close agent" onClick={() => setOpen(false)} size="icon-sm" variant="ghost"><ChevronRight /></Button></Tooltip>
+          {!embedded ? <Tooltip content="Conversation history"><Button aria-label="Conversation history" onClick={() => setHistoryVisible((value) => !value)} size="icon-sm" variant={historyVisible ? "secondary" : "ghost"}><History /></Button></Tooltip> : null}
+          <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}><Button aria-label={embedded ? "Restart embedded conversation" : "New conversation"} disabled={!props.projectId || interactionDisabled} onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))} size="icon-sm" variant="ghost"><Plus /></Button></Tooltip>
+          {!embedded ? <Tooltip content="Close agent"><Button aria-label="Close agent" onClick={() => props.layout?.onOpenChange(false)} size="icon-sm" variant="ghost"><ChevronRight /></Button></Tooltip> : null}
         </header>
 
-        {historyVisible ? (
+        {!embedded && historyVisible ? (
           <ConversationHistory
             disabled={interactionDisabled}
             loading={loading}
@@ -438,6 +557,7 @@ export function AgentPanel(props: {
               activeRequestRef.current += 1
               stickToBottomRef.current = true
               sessionProjectRef.current = props.projectId
+              sessionScopeRef.current = conversationScope
               setSessionState(undefined)
               setSessionId(id)
               setHistoryVisible(false)
@@ -469,7 +589,7 @@ export function AgentPanel(props: {
                 <PermissionCard
                   key={request.id}
                   onReply={(reply) => props.projectId
-                    ? window.convax.agent.replyPermission({ projectId: props.projectId, requestId: request.id, reply }).then(() => refreshSessionState())
+                    ? window.convax.agent.replyPermission({ scopeId: props.projectId, requestId: request.id, reply }).then(() => refreshSessionState())
                     : Promise.resolve()}
                   request={request}
                 />
@@ -478,10 +598,10 @@ export function AgentPanel(props: {
                 <QuestionCard
                   key={request.id}
                   onReject={() => props.projectId
-                    ? window.convax.agent.rejectQuestion({ projectId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
+                    ? window.convax.agent.rejectQuestion({ scopeId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
                     : Promise.resolve()}
                   onReply={(answers) => props.projectId
-                    ? window.convax.agent.replyQuestion({ answers, projectId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
+                    ? window.convax.agent.replyQuestion({ answers, scopeId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
                     : Promise.resolve()}
                   request={request}
                 />
@@ -490,7 +610,7 @@ export function AgentPanel(props: {
               <div ref={messagesEndRef} />
             </div>
 
-            <div className="relative shrink-0 border-t border-border bg-card p-3">
+            <div className={cn("relative shrink-0 border-t border-border bg-card", embedded ? "p-2" : "p-3")}>
               {error ? <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive"><span className="min-w-0 flex-1">{error}</span><button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button"><X className="size-3.5" /></button></div> : null}
               {resourcePickerOpen ? (
                 <ResourcePicker
@@ -505,29 +625,41 @@ export function AgentPanel(props: {
                 className={cn("rounded-lg border border-input bg-background p-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20", dropActive && "border-primary bg-primary/5 ring-2 ring-primary/20")}
                 onDragEnter={(event) => {
                   if (!supportsResourceDrop(event.dataTransfer)) return
+                  containEmbeddedResourceDrag(embedded, event)
                   event.preventDefault()
                   setDropActive(true)
                 }}
                 onDragLeave={(event) => {
+                  if (supportsResourceDrop(event.dataTransfer)) containEmbeddedResourceDrag(embedded, event)
                   if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropActive(false)
                 }}
                 onDragOver={(event) => {
                   if (!supportsResourceDrop(event.dataTransfer)) return
+                  containEmbeddedResourceDrag(embedded, event)
                   event.preventDefault()
                   event.dataTransfer.dropEffect = "copy"
                 }}
                 onDrop={handleDrop}
               >
-                {resources.length > 0 ? (
+                {displayedResources.length > 0 ? (
                   <div className="mb-2 flex flex-wrap gap-1.5">
-                    {resources.map((resource) => (
-                      <ResourceChip key={resourceKey(resource)} onRemove={() => setResources((current) => current.filter((item) => resourceKey(item) !== resourceKey(resource)))} resource={resource} />
-                    ))}
+                    {displayedResources.map((resource) => {
+                      const key = agentResourceKey(resource)
+                      const locked = lockedResourceKeys.has(key)
+                      return (
+                        <ResourceChip
+                          key={key}
+                          locked={locked}
+                          onRemove={locked ? undefined : () => setResources((current) => current.filter((item) => agentResourceKey(item) !== key))}
+                          resource={resource}
+                        />
+                      )
+                    })}
                   </div>
                 ) : null}
                 <textarea
                   aria-label="Message the project agent"
-                  className="max-h-40 min-h-16 w-full resize-none bg-transparent px-1 text-sm leading-5 outline-none placeholder:text-muted-foreground"
+                  className={cn("max-h-40 w-full resize-none bg-transparent px-1 text-sm leading-5 outline-none placeholder:text-muted-foreground", embedded ? "min-h-12" : "min-h-16")}
                   disabled={!props.projectId || interactionDisabled}
                   onChange={(event) => setDraft(event.currentTarget.value)}
                   onKeyDown={(event) => {
@@ -536,7 +668,7 @@ export function AgentPanel(props: {
                       void send()
                     }
                   }}
-                  placeholder={props.projectId ? "Ask about this project…" : "Open a project to start chatting"}
+                  placeholder={props.projectId ? embedded ? "Ask about this context…" : "Ask about this project…" : "Open a project to start chatting"}
                   value={draft}
                 />
                 <div className="flex items-center gap-1 pt-1">
@@ -544,17 +676,17 @@ export function AgentPanel(props: {
                     const next = !resourcePickerOpen
                     setResourcePickerOpen(next)
                     if (next && props.projectId) {
-                      const projectId = props.projectId
+                      const scopeId = props.projectId
                       setCapabilitiesLoading(true)
-                      void window.convax.agent.listCapabilities({ projectId })
+                      void window.convax.agent.listCapabilities({ scopeId })
                         .then((result) => {
-                          if (activeProjectRef.current === projectId) setCapabilities(result)
+                          if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilities(result)
                         })
                         .catch((cause) => {
-                          if (activeProjectRef.current === projectId) setError(errorMessage(cause))
+                          if (mountedRef.current && activeProjectRef.current === scopeId) setError(errorMessage(cause))
                         })
                         .finally(() => {
-                          if (activeProjectRef.current === projectId) setCapabilitiesLoading(false)
+                          if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilitiesLoading(false)
                         })
                     }
                   }} size="icon-sm" variant={resourcePickerOpen ? "secondary" : "ghost"}><Paperclip /></Button></Tooltip>
@@ -562,7 +694,7 @@ export function AgentPanel(props: {
                   {runtimeBusy ? (
                     <Tooltip content="Stop"><Button aria-label="Stop response" onClick={() => void abort()} size="icon-sm" variant="outline"><Square className="fill-current" /></Button></Tooltip>
                   ) : (
-                    <Tooltip content="Send"><Button aria-label="Send message" disabled={!props.projectId || interactionDisabled || (!draft.trim() && resources.length === 0)} onClick={() => void send()} size="icon-sm"><Send /></Button></Tooltip>
+                    <Tooltip content="Send"><Button aria-label="Send message" disabled={!props.projectId || interactionDisabled || (!draft.trim() && displayedResources.length === 0)} onClick={() => void send()} size="icon-sm"><Send /></Button></Tooltip>
                   )}
                 </div>
               </div>
@@ -625,7 +757,7 @@ function MessageView({ message }: { message: AgentMessage }) {
 }
 
 function MessagePartView({ part }: { part: AgentMessage["parts"][number] }) {
-  if (part.type === "text") return part.synthetic ? null : <div className="whitespace-pre-wrap break-words leading-6">{part.text}</div>
+  if (part.type === "text") return part.synthetic ? null : <AgentMarkdown text={part.text} />
   if (part.type === "reasoning") return <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs"><summary className="cursor-pointer text-muted-foreground">Reasoning</summary><div className="mt-2 whitespace-pre-wrap leading-5">{part.text}</div></details>
   if (part.type === "file") return <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"><FileText className="size-3.5" /><span className="truncate">{part.filename ?? "File"}</span></div>
   if (part.type === "tool") {
@@ -658,7 +790,7 @@ function ResourcePicker(props: {
     <div className="absolute inset-x-3 bottom-[calc(100%+4px)] z-50 max-h-72 overflow-auto rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-xl">
       <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Canvases</div>
       {props.canvases.map((canvas) => {
-        const resource: AgentResource = { canvasId: canvas.id, kind: "canvas", name: canvas.name }
+        const resource = canvasAgentResource(canvas)
         return <ResourceRow active={canvas.id === props.activeCanvasId} icon={<PanelsTopLeft />} key={canvas.id} onAdd={() => props.onAdd([resource])} resource={resource} />
       })}
       <div className="mt-1 border-t border-border px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Skills</div>
@@ -692,13 +824,20 @@ function ResourceRow(props: { active?: boolean; description?: string; icon: Reac
   )
 }
 
-function ResourceChip(props: { onRemove: () => void; resource: AgentResource }) {
-  const icon = props.resource.kind === "directory" ? <Folder /> : props.resource.kind === "canvas" ? <PanelsTopLeft /> : props.resource.kind === "skill" ? <Sparkles /> : <FileText />
+function ResourceChip(props: { locked?: boolean; onRemove?: () => void; resource: AgentResource }) {
+  const icon = props.resource.kind === "directory"
+    ? <Folder />
+    : isAgentCanvasResource(props.resource)
+      ? <PanelsTopLeft />
+      : props.resource.kind === "skill"
+        ? <Sparkles />
+        : <FileText />
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-1 text-[11px]">
       <span className="text-primary [&_svg]:size-3">{icon}</span>
       <span className="max-w-40 truncate">{resourceLabel(props.resource)}</span>
-      <button aria-label={`Remove ${resourceLabel(props.resource)}`} className="rounded hover:bg-background" onClick={props.onRemove} type="button"><X className="size-3" /></button>
+      {props.locked ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">context</span> : null}
+      {props.onRemove ? <button aria-label={`Remove ${resourceLabel(props.resource)}`} className="rounded hover:bg-background" onClick={props.onRemove} type="button"><X className="size-3" /></button> : null}
     </span>
   )
 }
