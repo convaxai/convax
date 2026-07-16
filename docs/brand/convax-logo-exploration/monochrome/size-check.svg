@@ -1,0 +1,63 @@
+<svg width="1200" height="520" viewBox="0 0 1200 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="520" fill="#F2F2F4"/>
+  <text x="54" y="62" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="30" font-weight="700">Small-size check</text>
+  <text x="54" y="92" fill="#71717A" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17">16 px · 32 px · 64 px 原始像素尺寸</text>
+
+  <g transform="translate(54 126)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">01 Context Stack</text>
+    <image x="22" y="76" width="16" height="16" href="01-context-stack.svg"/>
+    <image x="68" y="68" width="32" height="32" href="01-context-stack.svg"/>
+    <image x="142" y="52" width="64" height="64" href="01-context-stack.svg"/>
+  </g>
+  <g transform="translate(334 126)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">02 Selective Plane</text>
+    <image x="22" y="76" width="16" height="16" href="02-selective-plane.svg"/>
+    <image x="68" y="68" width="32" height="32" href="02-selective-plane.svg"/>
+    <image x="142" y="52" width="64" height="64" href="02-selective-plane.svg"/>
+  </g>
+  <g transform="translate(614 126)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">03 Signal Field</text>
+    <image x="22" y="76" width="16" height="16" href="03-signal-field.svg"/>
+    <image x="68" y="68" width="32" height="32" href="03-signal-field.svg"/>
+    <image x="142" y="52" width="64" height="64" href="03-signal-field.svg"/>
+  </g>
+  <g transform="translate(894 126)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">04 Soft Current</text>
+    <image x="22" y="76" width="16" height="16" href="04-soft-current.svg"/>
+    <image x="68" y="68" width="32" height="32" href="04-soft-current.svg"/>
+    <image x="142" y="52" width="64" height="64" href="04-soft-current.svg"/>
+  </g>
+
+  <g transform="translate(54 314)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">05 Guided Focus</text>
+    <image x="22" y="76" width="16" height="16" href="05-guided-focus.svg"/>
+    <image x="68" y="68" width="32" height="32" href="05-guided-focus.svg"/>
+    <image x="142" y="52" width="64" height="64" href="05-guided-focus.svg"/>
+  </g>
+  <g transform="translate(334 314)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">06 Shared Space</text>
+    <image x="22" y="76" width="16" height="16" href="06-shared-space.svg"/>
+    <image x="68" y="68" width="32" height="32" href="06-shared-space.svg"/>
+    <image x="142" y="52" width="64" height="64" href="06-shared-space.svg"/>
+  </g>
+  <g transform="translate(614 314)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">07 Folded Context</text>
+    <image x="22" y="76" width="16" height="16" href="07-folded-context.svg"/>
+    <image x="68" y="68" width="32" height="32" href="07-folded-context.svg"/>
+    <image x="142" y="52" width="64" height="64" href="07-folded-context.svg"/>
+  </g>
+  <g transform="translate(894 314)">
+    <rect width="252" height="160" rx="22" fill="white"/>
+    <text x="20" y="32" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="17" font-weight="650">08 Modular Context</text>
+    <image x="22" y="76" width="16" height="16" href="08-modular-context.svg"/>
+    <image x="68" y="68" width="32" height="32" href="08-modular-context.svg"/>
+    <image x="142" y="52" width="64" height="64" href="08-modular-context.svg"/>
+  </g>
+</svg>

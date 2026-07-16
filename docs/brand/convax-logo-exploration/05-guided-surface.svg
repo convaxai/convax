@@ -1,0 +1,7 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Guided Surface logo">
+  <rect x="3" y="3" width="94" height="94" rx="22" fill="#fff" stroke="#e7e7ea" stroke-width="0.8"/>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" style="color:#7657e8">
+    <rect x="29" y="29" width="42" height="42" rx="11" stroke-width="3.5" opacity="0.34"/>
+    <path d="M24 61 C37 61 40 42 52 42 C62 42 64 53 72 48 C76 46 78 41 79 36" stroke-width="4"/>
+  </g>
+</svg>

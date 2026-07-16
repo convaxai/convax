@@ -1,0 +1,9 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Modular Field logo">
+  <rect x="3" y="3" width="94" height="94" rx="22" fill="#fff" stroke="#e7e7ea" stroke-width="0.8"/>
+  <g fill="currentColor" style="color:#7657e8">
+    <rect x="27" y="27" width="18" height="18" rx="6" opacity="0.36"/>
+    <rect x="50" y="27" width="24" height="18" rx="6"/>
+    <rect x="27" y="50" width="18" height="24" rx="6"/>
+    <rect x="50" y="50" width="24" height="24" rx="7" opacity="0.64"/>
+  </g>
+</svg>
