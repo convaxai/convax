@@ -70,7 +70,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
             <div
               aria-selected={active}
               className={cn(
-                "group flex h-8 items-center gap-2 rounded-md px-2 text-[13px] outline-none",
+                "group my-0.5 flex h-8 items-center gap-2 rounded-md px-2 text-[13px] outline-none",
                 active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
               )}
               data-project-canvas-id={canvas.id}
