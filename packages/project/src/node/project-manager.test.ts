@@ -23,28 +23,33 @@ afterEach(async () => {
 })
 
 describe("NodeProjectManager registry", () => {
-  test("creates project-local metadata and keeps the active canvas in user data", async () => {
-    const workspace = await manager.getWorkspace({ projectId })
-    expect(workspace.canvases).toHaveLength(1)
-    expect(workspace.activeCanvasId).toBe("canvas-main")
-
+  test("creates project identity metadata without plugin-owned catalog state", async () => {
     const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))
-    expect(manifest).toMatchObject({
-      canvases: [{ id: "canvas-main", name: "Canvas 1" }],
+    expect(manifest).toEqual({
       projectId,
       schemaVersion: "convax.project/1",
     })
-    expect(manifest.activeCanvasId).toBeUndefined()
     expect(await fs.stat(path.join(projectRoot, ".convax", "assets")).then((stat) => stat.isDirectory())).toBe(true)
 
     const registry = JSON.parse(await fs.readFile(path.join(temporaryRoot, "state", "projects.json"), "utf8"))
-    expect(registry.projects[0]?.activeCanvasId).toBe("canvas-main")
+    expect(registry.projects[0]).not.toHaveProperty("activeCanvasId")
+  })
+
+  test("rejects a symlinked private storage root without writing outside the project", async () => {
+    const unsafeRoot = path.join(temporaryRoot, "unsafe-project")
+    const outsideRoot = path.join(temporaryRoot, "outside-private-storage")
+    await fs.mkdir(unsafeRoot)
+    await fs.mkdir(outsideRoot)
+    await fs.symlink(outsideRoot, path.join(unsafeRoot, ".convax"))
+
+    await expect(manager.addProject(unsafeRoot)).rejects.toThrow("symbolic link")
+    expect(await fs.readdir(outsideRoot)).toEqual([])
   })
 
   test("persists, renames, and forgets projects without deleting their folders", async () => {
     expect((await manager.listProjects()).map((project) => project.id)).toEqual([projectId])
     expect((await manager.renameProject(projectId, "Launch board")).name).toBe("Launch board")
-    await manager.writePrivateTextFile({ namespace: "canvases", path: "canvas-main/document.json", content: "saved canvas", projectId })
+    await manager.writePrivateTextFile({ namespace: "plugin-data", path: "items/main/document.json", content: "saved plugin data", createParents: true, projectId })
 
     const reloaded = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "state", "projects.json") })
     expect((await reloaded.listProjects())[0]?.name).toBe("Launch board")
@@ -54,9 +59,8 @@ describe("NodeProjectManager registry", () => {
 
     const rebound = await reloaded.addProject(projectRoot)
     expect(rebound.id).toBe(projectId)
-    expect((await reloaded.getWorkspace({ projectId })).canvases.map((canvas) => canvas.name)).toEqual(["Canvas 1"])
-    expect(await reloaded.readPrivateTextFile({ namespace: "canvases", path: "canvas-main/document.json", projectId })).toMatchObject({
-      content: "saved canvas",
+    expect(await reloaded.readPrivateTextFile({ namespace: "plugin-data", path: "items/main/document.json", projectId })).toMatchObject({
+      content: "saved plugin data",
       exists: true,
     })
   })
@@ -88,67 +92,16 @@ describe("NodeProjectManager registry", () => {
     await fs.writeFile(path.join(projectRoot, ".convax", "project.json"), "not json")
 
     expect((await manager.listProjects()).map((project) => project.id)).toEqual([projectId])
-    await expect(manager.getWorkspace({ projectId })).rejects.toThrow()
-  })
-
-  test("migrates the legacy single canvas document without changing its bytes", async () => {
-    const legacyRoot = path.join(temporaryRoot, "legacy")
-    await fs.mkdir(path.join(legacyRoot, ".convax"), { recursive: true })
-    const legacyContents = "{\n  \"legacy\": true,\n  \"unicode\": \"画布\"\n}\n"
-    await fs.writeFile(path.join(legacyRoot, ".convax", "canvas.json"), legacyContents)
-
-    const legacyProject = await manager.addProject(legacyRoot)
-    const workspace = await manager.getWorkspace({ projectId: legacyProject.id })
-    expect(workspace.canvases.map((canvas) => canvas.id)).toEqual(["canvas-main"])
-    expect(await manager.readPrivateTextFile({ namespace: "canvases", path: "canvas-main/document.json", projectId: legacyProject.id })).toMatchObject({
-      content: legacyContents,
-      exists: true,
-    })
-    await expect(fs.access(path.join(legacyRoot, ".convax", "canvas.json"))).rejects.toThrow()
-  })
-})
-
-describe("NodeProjectManager canvases", () => {
-  test("creates, activates, renames, persists, and deletes project canvases", async () => {
-    const original = await manager.getWorkspace({ projectId })
-    const created = await manager.createCanvas({ name: "Storyboard / v2", projectId })
-    expect(created.workspace.activeCanvasId).toBe(original.activeCanvasId)
-    expect(created.canvas.id).toMatch(/^canvas_[a-z0-9]+$/)
-    expect(created.canvas.name).toBe("Storyboard / v2")
-
-    await manager.writePrivateTextFile({ namespace: "canvases", path: `${created.canvas.id}/document.json`, content: "canvas document", projectId })
-    expect(await manager.readPrivateTextFile({ namespace: "canvases", path: `${created.canvas.id}/document.json`, projectId })).toMatchObject({
-      content: "canvas document",
-      exists: true,
-    })
-    expect((await manager.activateCanvas({ canvasId: created.canvas.id, projectId })).activeCanvasId).toBe(created.canvas.id)
-    expect((await manager.renameCanvas({ canvasId: created.canvas.id, name: "Final board", projectId })).canvas.name).toBe("Final board")
-
-    const reloaded = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "state", "projects.json") })
-    expect((await reloaded.getWorkspace({ projectId })).activeCanvasId).toBe(created.canvas.id)
-    const manifest = JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))
-    expect(manifest.activeCanvasId).toBeUndefined()
-    expect(manifest.canvases.map((canvas: { name: string }) => canvas.name)).toEqual(["Canvas 1", "Final board"])
-
-    const deleted = await reloaded.deleteCanvas({ canvasId: created.canvas.id, projectId })
-    expect(deleted.workspace.activeCanvasId).toBe("canvas-main")
-    expect(deleted.deleted).toBe(true)
-    expect(await reloaded.readPrivateTextFile({ namespace: "canvases", path: `${created.canvas.id}/document.json`, projectId })).toMatchObject({ exists: false })
-    await expect(reloaded.deleteCanvas({ canvasId: "canvas-main", projectId })).rejects.toThrow("last canvas")
-  })
-
-  test("validates canvas ownership and rejects ids that could become paths", async () => {
-    await expect(manager.activateCanvas({ canvasId: "canvas_missing", projectId })).rejects.toThrow("not found")
-    await expect(manager.activateCanvas({ canvasId: "CANVAS_MAIN", projectId })).rejects.toThrow("Invalid canvas id")
+    await expect(manager.addProject(projectRoot)).rejects.toThrow()
   })
 })
 
 describe("NodeProjectManager private storage", () => {
   test("stores opaque namespaced files with content versions", async () => {
-    const ref = { namespace: "canvases", path: "canvas-main/document.json", projectId }
+    const ref = { namespace: "plugin-data", path: "items/main/document.json", projectId }
     expect(await manager.readPrivateTextFile(ref)).toEqual({ content: "", exists: false, version: null })
 
-    const first = await manager.writePrivateTextFile({ ...ref, content: "first", expectedVersion: null })
+    const first = await manager.writePrivateTextFile({ ...ref, content: "first", createParents: true, expectedVersion: null })
     expect(first.version).toHaveLength(64)
     expect(await manager.readPrivateTextFile(ref)).toEqual({ content: "first", exists: true, version: first.version })
 
@@ -156,14 +109,16 @@ describe("NodeProjectManager private storage", () => {
       .rejects.toBeInstanceOf(ProjectPrivateStorageConflictError)
     const second = await manager.writePrivateTextFile({ ...ref, content: "second", expectedVersion: first.version })
     expect(second.version).not.toBe(first.version)
+    expect(await manager.removePrivatePath({ namespace: "plugin-data", path: "items", projectId })).toEqual({ removed: true })
+    expect(await manager.readPrivateTextFile(ref)).toMatchObject({ exists: false })
   })
 
   test("rejects non-portable namespaces and private paths", async () => {
-    await expect(manager.readPrivateTextFile({ namespace: "Canvas", path: "document.json", projectId }))
+    await expect(manager.readPrivateTextFile({ namespace: "Plugin", path: "document.json", projectId }))
       .rejects.toThrow("Invalid project private namespace")
-    await expect(manager.readPrivateTextFile({ namespace: "canvases", path: "../document.json", projectId }))
+    await expect(manager.readPrivateTextFile({ namespace: "plugin-data", path: "../document.json", projectId }))
       .rejects.toThrow("escapes its root")
-    await expect(manager.readPrivateTextFile({ namespace: "canvases", path: "C:\\document.json", projectId }))
+    await expect(manager.readPrivateTextFile({ namespace: "plugin-data", path: "C:\\document.json", projectId }))
       .rejects.toThrow("Invalid project-relative path")
   })
 })
@@ -181,7 +136,7 @@ describe("NodeProjectManager files", () => {
   })
 
   test("uses portable names and case-folded collision checks on every platform", async () => {
-    for (const name of ["bad:name.txt", "bad?.txt", "trail.", "trail ", "NUL", "con.txt", "control\u0001.txt"]) {
+    for (const name of ["bad:name.txt", "bad?.txt", "trail.", "trail ", "NUL", "con.txt", "COM¹.txt", "lpt³", "control\u0001.txt"]) {
       await expect(manager.createEntry({ kind: "file", name, projectId })).rejects.toThrow("Invalid")
     }
 

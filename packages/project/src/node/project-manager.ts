@@ -3,7 +3,6 @@ import { watch as watchFileSystem, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type {
-  ProjectCanvas,
   ProjectChangeEvent,
   ProjectDirectoryListing,
   ProjectEntry,
@@ -12,7 +11,6 @@ import type {
   ProjectMutationResult,
   ProjectTextFileContents,
   ProjectTextPreviewContents,
-  ProjectWorkspace,
 } from "../contracts"
 import {
   assertCopyOrImportTarget,
@@ -20,13 +18,10 @@ import {
   assertNotProjectRoot,
   assertPortableTree,
   assertUserMutationPath,
-  canvasDirectory,
-  canvasDocumentPath,
   collisionKey,
   compareEntries,
   compareProjects,
   copyPath,
-  createCanvasId,
   ensureInside,
   exists,
   existsPortable,
@@ -38,7 +33,6 @@ import {
   isProjectRecord,
   isSafeProjectRoot,
   joinRelative,
-  legacyCanvasDocumentPath,
   managedAssetDirectory,
   mimeTypeForPath,
   movePath,
@@ -52,17 +46,13 @@ import {
   projectManifestPath,
   replaceFile,
   removePathWithRetries,
-  requireCanvasId,
   requireEntryPath,
   requireProjectId,
   sameNativePath,
   textFileKey,
   textPreviewBytes,
   toProjectRecord,
-  validActiveCanvasId,
-  validateCanvasName,
   validateName,
-  workspaceFromManifest,
   writeFileReplacing,
   type ProjectManifest,
   type ProjectRegistryFile,
@@ -70,6 +60,8 @@ import {
 } from "./project-manager-helpers"
 import {
   ProjectPrivateStorageConflictError,
+  type ProjectPrivatePathRef,
+  type ProjectPrivatePathResolver,
   type ProjectPrivateStorage,
   type ProjectPrivateTextFileRef,
   type ProjectPrivateTextFileWrite,
@@ -102,11 +94,17 @@ function privateTextFilePath(rootPath: string, namespace: string, value: string)
   return absolutePath
 }
 
+function privatePathRelativePath(value: string) {
+  const relativePath = normalizeRelativePath(value)
+  if (!relativePath) throw new Error("Project private path is required")
+  return `.convax/${relativePath}`
+}
+
 function privateTextVersion(content: string) {
   return createHash("sha256").update(content).digest("hex")
 }
 
-export class NodeProjectManager implements ProjectPrivateStorage {
+export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
   private readonly now: () => number
   private registryQueue: Promise<unknown> = Promise.resolve()
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
@@ -200,6 +198,24 @@ export class NodeProjectManager implements ProjectPrivateStorage {
     return { version }
   }
 
+  async removePrivatePath(input: ProjectPrivateTextFileRef) {
+    const relativePath = privateTextFileRelativePath(input.namespace, input.path)
+    await this.waitForProjectTextWrites(input.projectId)
+    return this.queueProjectMutation(input.projectId, async () => {
+      const project = await this.getProject(input.projectId)
+      const absolutePath = privateTextFilePath(project.rootPath, input.namespace, input.path)
+      await assertNoSymlinkSegments(project.rootPath, relativePath)
+      const stat = await fs.lstat(absolutePath).catch((error: unknown) => {
+        if (isNodeError(error) && error.code === "ENOENT") return null
+        throw error
+      })
+      if (!stat) return { removed: false }
+      if (stat.isSymbolicLink()) throw new Error(`Project private path is a symbolic link: ${relativePath}`)
+      await fs.rm(absolutePath, { force: true, recursive: true })
+      return { removed: true }
+    })
+  }
+
   async listProjects() {
     const projects = await this.readStableRegistry()
     return Promise.all(projects.map(async (project) => {
@@ -231,13 +247,9 @@ export class NodeProjectManager implements ProjectPrivateStorage {
       }
       const existing = projects.find((project) => project.id === id || sameNativePath(project.rootPath, realRoot))
       const timestamp = this.now()
-      const activeCanvasId = existing?.activeCanvasId && manifest.canvases.some((canvas) => canvas.id === existing.activeCanvasId)
-        ? existing.activeCanvasId
-        : manifest.canvases[0]!.id
       const project: ProjectRegistryRecord = existing
-        ? { ...existing, activeCanvasId, id, lastOpenedAt: timestamp, missing: false, rootPath: realRoot }
+        ? { ...toProjectRecord(existing), id, lastOpenedAt: timestamp, missing: false, rootPath: realRoot }
         : {
-            activeCanvasId,
             createdAt: timestamp,
             id,
             lastOpenedAt: timestamp,
@@ -506,146 +518,6 @@ export class NodeProjectManager implements ProjectPrivateStorage {
     return mutation("import", input.projectId, targetPaths, sourcePaths, targetPaths)
   }
 
-  getWorkspace(input: { projectId: string }): Promise<ProjectWorkspace> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const activeCanvasId = project.activeCanvasId && manifest.canvases.some((canvas) => canvas.id === project.activeCanvasId)
-        ? project.activeCanvasId
-        : manifest.canvases[0]!.id
-      await this.setActiveCanvasInRegistry(input.projectId, activeCanvasId, true)
-      return workspaceFromManifest(manifest, activeCanvasId)
-    })
-  }
-
-  createCanvas(input: { name?: string; projectId: string }): Promise<{ canvas: ProjectCanvas; workspace: ProjectWorkspace }> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const timestamp = this.now()
-      let canvasId = createCanvasId()
-      while (manifest.canvases.some((canvas) => canvas.id === canvasId)) canvasId = createCanvasId()
-      const canvas: ProjectCanvas = {
-        createdAt: timestamp,
-        id: canvasId,
-        name: validateCanvasName(input.name ?? `Canvas ${manifest.canvases.length + 1}`),
-        updatedAt: timestamp,
-      }
-      const next = { ...manifest, canvases: [...manifest.canvases, canvas] }
-      await fs.mkdir(canvasDirectory(project.rootPath, canvas.id), { recursive: true })
-      await this.writeProjectManifest(project.rootPath, next)
-      const activeCanvasId = validActiveCanvasId(project.activeCanvasId, next)
-      return { canvas, workspace: workspaceFromManifest(next, activeCanvasId) }
-    })
-  }
-
-  renameCanvas(input: { canvasId: string; name: string; projectId: string }): Promise<{ canvas: ProjectCanvas; workspace: ProjectWorkspace }> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const canvasId = requireCanvasId(input.canvasId)
-      const current = manifest.canvases.find((canvas) => canvas.id === canvasId)
-      if (!current) throw new Error(`Canvas was not found: ${input.canvasId}`)
-      const canvas = { ...current, name: validateCanvasName(input.name), updatedAt: this.now() }
-      const next = {
-        ...manifest,
-        canvases: manifest.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
-      }
-      await this.writeProjectManifest(project.rootPath, next)
-      return { canvas, workspace: workspaceFromManifest(next, validActiveCanvasId(project.activeCanvasId, next)) }
-    })
-  }
-
-  touchCanvas(input: { canvasId: string; projectId: string }): Promise<ProjectCanvas> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const canvasId = requireCanvasId(input.canvasId)
-      const current = manifest.canvases.find((canvas) => canvas.id === canvasId)
-      if (!current) throw new Error(`Canvas was not found: ${input.canvasId}`)
-      const canvas = { ...current, updatedAt: this.now() }
-      await this.writeProjectManifest(project.rootPath, {
-        ...manifest,
-        canvases: manifest.canvases.map((candidate) => candidate.id === canvasId ? canvas : candidate),
-      })
-      return canvas
-    })
-  }
-
-  deleteCanvas(input: { canvasId: string; projectId: string }): Promise<{ deleted: boolean; workspace: ProjectWorkspace }> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const canvasId = requireCanvasId(input.canvasId)
-      if (!manifest.canvases.some((canvas) => canvas.id === canvasId)) {
-        return { deleted: false, workspace: workspaceFromManifest(manifest, validActiveCanvasId(project.activeCanvasId, manifest)) }
-      }
-      if (manifest.canvases.length === 1) throw new Error("The last canvas in a project cannot be deleted")
-      const next = { ...manifest, canvases: manifest.canvases.filter((canvas) => canvas.id !== canvasId) }
-      const previousActiveCanvasId = validActiveCanvasId(project.activeCanvasId, manifest)
-      const activeCanvasId = previousActiveCanvasId === canvasId
-        ? next.canvases[0]!.id
-        : validActiveCanvasId(previousActiveCanvasId, next)
-      const changesActiveCanvas = activeCanvasId !== previousActiveCanvasId
-      if (changesActiveCanvas) await this.setActiveCanvasInRegistry(input.projectId, activeCanvasId)
-
-      const sourceDirectory = canvasDirectory(project.rootPath, canvasId)
-      const tombstoneRoot = path.join(project.rootPath, ".convax", "deleted-canvases")
-      const tombstone = path.join(tombstoneRoot, `${canvasId}-${randomUUID()}`)
-      let movedToTombstone = false
-      try {
-        const sourceStat = await fs.lstat(sourceDirectory).catch((error: unknown) => {
-          if (isNodeError(error) && error.code === "ENOENT") return null
-          throw error
-        })
-        if (sourceStat) {
-          if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
-            throw new Error(`Canvas storage is not a directory: ${canvasId}`)
-          }
-          await fs.mkdir(tombstoneRoot, { recursive: true })
-          await fs.rename(sourceDirectory, tombstone)
-          movedToTombstone = true
-        }
-        await this.writeProjectManifest(project.rootPath, next)
-      } catch (error) {
-        const rollbackErrors: unknown[] = []
-        if (movedToTombstone) {
-          try {
-            await fs.rename(tombstone, sourceDirectory)
-          } catch (rollbackError) {
-            rollbackErrors.push(rollbackError)
-          }
-        }
-        if (changesActiveCanvas) {
-          try {
-            await this.setActiveCanvasInRegistry(input.projectId, previousActiveCanvasId)
-          } catch (rollbackError) {
-            rollbackErrors.push(rollbackError)
-          }
-        }
-        if (rollbackErrors.length > 0) {
-          throw new AggregateError([error, ...rollbackErrors], "Canvas deletion could not be rolled back")
-        }
-        throw error
-      }
-      if (movedToTombstone) await removePathWithRetries(tombstone).catch(() => undefined)
-      return { deleted: true, workspace: workspaceFromManifest(next, activeCanvasId) }
-    })
-  }
-
-  activateCanvas(input: { canvasId: string; projectId: string }): Promise<ProjectWorkspace> {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const project = await this.getProject(input.projectId)
-      const manifest = await this.ensureProjectManifest(project.rootPath, input.projectId)
-      const canvasId = requireCanvasId(input.canvasId)
-      if (!manifest.canvases.some((canvas) => canvas.id === canvasId)) {
-        throw new Error(`Canvas was not found: ${input.canvasId}`)
-      }
-      await this.setActiveCanvasInRegistry(input.projectId, canvasId, true)
-      return workspaceFromManifest(manifest, canvasId)
-    })
-  }
-
   async readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents> {
     const relativePath = requireEntryPath(input.path)
     await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
@@ -739,6 +611,20 @@ export class NodeProjectManager implements ProjectPrivateStorage {
     return (await this.resolveExisting(input.projectId, normalizeRelativePath(input.path))).absolutePath
   }
 
+  async resolveProjectRoot(input: { projectId: string }) {
+    return fs.realpath((await this.getProject(input.projectId)).rootPath)
+  }
+
+  async resolvePrivatePath(input: ProjectPrivatePathRef) {
+    const relativePath = privatePathRelativePath(input.path)
+    const rootPath = await fs.realpath((await this.getProject(input.projectId)).rootPath)
+    const privateRoot = path.join(rootPath, ".convax")
+    const absolutePath = path.resolve(rootPath, ...relativePath.split("/"))
+    ensureInside(absolutePath, privateRoot, relativePath)
+    await assertNoSymlinkSegments(rootPath, relativePath)
+    return absolutePath
+  }
+
   async watchProject(projectId: string, listener: (event: ProjectChangeEvent) => void) {
     const project = await this.getProject(projectId)
     const rootPath = await fs.realpath(project.rootPath)
@@ -814,16 +700,17 @@ export class NodeProjectManager implements ProjectPrivateStorage {
   }
 
   private async ensureProjectManifest(rootPath: string, preferredProjectId: string): Promise<ProjectManifest> {
+    const privateRoot = path.join(rootPath, ".convax")
     const manifestFile = path.join(rootPath, ...projectManifestPath.split("/"))
+    await ensureSafeDirectory(privateRoot, "Project private storage")
+    await assertNoSymlinkSegments(rootPath, projectManifestPath)
     let manifest: ProjectManifest
     let manifestChanged = false
     try {
       manifest = parseProjectManifest(JSON.parse(await fs.readFile(manifestFile, "utf8")))
     } catch (error) {
       if (!isNodeError(error) || error.code !== "ENOENT") throw error
-      const timestamp = this.now()
       manifest = {
-        canvases: [{ createdAt: timestamp, id: "canvas-main", name: "Canvas 1", updatedAt: timestamp }],
         projectId: requireProjectId(preferredProjectId),
         schemaVersion: "convax.project/1",
       }
@@ -833,59 +720,20 @@ export class NodeProjectManager implements ProjectPrivateStorage {
       throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
     }
 
-    if (manifest.canvases.length === 0) {
-      const timestamp = this.now()
-      manifest = {
-        ...manifest,
-        canvases: [{ createdAt: timestamp, id: "canvas-main", name: "Canvas 1", updatedAt: timestamp }],
-      }
-      manifestChanged = true
-    }
-
-    const legacyPath = path.join(rootPath, ...legacyCanvasDocumentPath.split("/"))
-    const documentPath = canvasDocumentPath(rootPath, manifest.canvases[0]!.id)
-    const legacyExists = await exists(legacyPath)
-    if (legacyExists && !(await exists(documentPath))) {
-      const stat = await fs.lstat(legacyPath)
-      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Legacy canvas document is not a regular file")
-      await fs.mkdir(path.dirname(documentPath), { recursive: true })
-      const temporary = path.join(path.dirname(documentPath), `.${path.basename(documentPath)}.${randomUUID()}.tmp`)
-      try {
-        await fs.copyFile(legacyPath, temporary, fs.constants.COPYFILE_EXCL)
-        await replaceFile(temporary, documentPath)
-        manifestChanged = true
-      } finally {
-        await fs.rm(temporary, { force: true })
-      }
-    }
-    await fs.mkdir(path.join(rootPath, ".convax", "assets"), { recursive: true })
-    await fs.mkdir(canvasDirectory(rootPath, manifest.canvases[0]!.id), { recursive: true })
+    await ensureSafeDirectory(path.join(privateRoot, "assets"), "Project asset storage")
     if (manifestChanged) await this.writeProjectManifest(rootPath, manifest)
-    if (legacyExists && await exists(documentPath)) await fs.rm(legacyPath)
     return manifest
   }
 
   private async writeProjectManifest(rootPath: string, manifest: ProjectManifest) {
     const target = path.join(rootPath, ...projectManifestPath.split("/"))
-    await fs.mkdir(path.dirname(target), { recursive: true })
+    await ensureSafeDirectory(path.dirname(target), "Project private storage")
+    await assertNoSymlinkSegments(rootPath, projectManifestPath)
     await writeFileReplacing(target, `${JSON.stringify(manifest, null, 2)}\n`)
   }
 
   private async registryContainsProject(projectId: string) {
     return (await this.readStableRegistry()).some((project) => project.id === projectId)
-  }
-
-  private setActiveCanvasInRegistry(projectId: string, activeCanvasId: string, touchLastOpened = false) {
-    return this.mutateRegistry((projects) => {
-      const current = projects.find((project) => project.id === projectId)
-      if (!current) throw new Error(`Project was not found: ${projectId}`)
-      return {
-        projects: projects.map((project) => project.id === projectId
-          ? { ...project, activeCanvasId, lastOpenedAt: touchLastOpened ? this.now() : project.lastOpenedAt }
-          : project),
-        value: undefined,
-      }
-    })
   }
 
   private async resolveExisting(projectId: string, relativePath: string) {
@@ -983,7 +831,7 @@ export class NodeProjectManager implements ProjectPrivateStorage {
     try {
       const parsed = JSON.parse(await fs.readFile(this.options.registryFile, "utf8")) as Partial<ProjectRegistryFile>
       if (parsed.version !== 1 || !Array.isArray(parsed.projects)) return []
-      return parsed.projects.filter(isProjectRecord)
+      return parsed.projects.filter(isProjectRecord).map(toProjectRecord)
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return []
       throw error
@@ -997,4 +845,15 @@ export class NodeProjectManager implements ProjectPrivateStorage {
       `${JSON.stringify({ projects, version: 1 } satisfies ProjectRegistryFile, null, 2)}\n`,
     )
   }
+}
+
+async function ensureSafeDirectory(directory: string, description: string) {
+  try {
+    await fs.mkdir(directory)
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "EEXIST") throw error
+  }
+  const stat = await fs.lstat(directory)
+  if (stat.isSymbolicLink()) throw new Error(`${description} cannot be a symbolic link: ${directory}`)
+  if (!stat.isDirectory()) throw new Error(`${description} is not a directory: ${directory}`)
 }

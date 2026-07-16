@@ -1,20 +1,23 @@
 import { describe, expect, test } from "bun:test"
+import type { ProjectFilesController, ProjectFilesControllerSnapshot } from "@convax/project-files"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { ProjectController, ProjectControllerSnapshot } from "./controller"
 import { ProjectSidebar } from "./project-sidebar"
 
 const emptySnapshot: ProjectControllerSnapshot = {
-  activeCanvasId: null,
   activeProjectId: null,
-  canvases: [],
-  changingActiveCanvas: false,
   changingActiveProject: false,
   error: null,
-  expandedPaths: [],
   initialized: true,
+  projects: [],
+}
+
+const emptyFilesSnapshot: ProjectFilesControllerSnapshot = {
+  error: null,
+  expandedPaths: [],
   listings: {},
   loadingPaths: [],
-  projects: [],
+  projectId: null,
   selectedPaths: [],
 }
 
@@ -23,9 +26,14 @@ const controller = {
   subscribe: () => () => undefined,
 } as unknown as ProjectController
 
+const filesController = {
+  getSnapshot: () => emptyFilesSnapshot,
+  subscribe: () => () => undefined,
+} as unknown as ProjectFilesController
+
 describe("ProjectSidebar", () => {
   test("stays mounted for initialization but renders nothing when the host hides an empty project sidebar", () => {
-    const markup = renderToStaticMarkup(<ProjectSidebar controller={controller} hideWhenNoProject />)
+    const markup = renderToStaticMarkup(<ProjectSidebar controller={controller} filesController={filesController} hideWhenNoProject />)
 
     expect(markup).toBe("")
   })

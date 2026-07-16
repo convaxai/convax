@@ -1,4 +1,13 @@
 import {
+  PROJECT_ENTRY_DRAG_TYPE,
+  parseProjectEntryDrag,
+  serializeProjectEntryDrag,
+  type ProjectEntry,
+  type ProjectEntryKind,
+  type ProjectFilesController,
+  type ProjectFilesControllerSnapshot,
+} from "@convax/project-files"
+import {
   Button,
   ContextMenu,
   ContextMenuContent,
@@ -26,11 +35,9 @@ import {
   X,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from "react"
-import type { ProjectCanvas, ProjectEntry, ProjectEntryKind, ProjectRecord } from "./contracts"
-import type { ProjectController, ProjectControllerSnapshot } from "./controller"
-import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "./drag"
+import type { ProjectRecord } from "./contracts"
+import type { ProjectController } from "./controller"
 import {
-  CanvasList,
   EntryIcon,
   FilePreviewPortal,
   InlineInput,
@@ -41,6 +48,15 @@ import {
 export interface ProjectSidebarProps {
   className?: string
   controller: ProjectController
+  extension?: {
+    busy?: boolean
+    content: ReactNode
+    count?: number
+    createLabel?: string
+    label: string
+    onCreate?: () => void
+  }
+  filesController: ProjectFilesController
   hideWhenNoProject?: boolean
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
 }
@@ -55,24 +71,34 @@ const defaultSectionSplitRatio = 0.6
 const minimumSectionSplitRatio = 0.1
 const minimumExpandedSectionSize = 112
 const sectionSplitterSize = 6
+const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
+  error: null,
+  expandedPaths: [],
+  listings: {},
+  loadingPaths: [],
+  projectId: null,
+  selectedPaths: [],
+}
 
-export function ProjectSidebar({ className, controller, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
-  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
-  const activeProject = snapshot.projects.find((project) => project.id === snapshot.activeProjectId)
+export function ProjectSidebar({ className, controller, extension, filesController, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
+  const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+  const latestFilesSnapshot = useSyncExternalStore(filesController.subscribe, filesController.getSnapshot, filesController.getSnapshot)
+  const filesSnapshot = latestFilesSnapshot.projectId === projectSnapshot.activeProjectId
+    ? latestFilesSnapshot
+    : emptyProjectFilesSnapshot
+  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [projectName, setProjectName] = useState("")
   const [editor, setEditor] = useState<EntryEditor | null>(null)
-  const [canvasEditor, setCanvasEditor] = useState<{ canvasId: string; name: string } | null>(null)
   const [filesExpanded, setFilesExpanded] = useState(true)
-  const [canvasesExpanded, setCanvasesExpanded] = useState(true)
+  const [extensionExpanded, setExtensionExpanded] = useState(true)
   const [sectionSplitRatio, setSectionSplitRatio] = useState(defaultSectionSplitRatio)
   const [resizingSections, setResizingSections] = useState(false)
   const [layoutProjectId, setLayoutProjectId] = useState<string | null>(null)
   const [treeDragActive, setTreeDragActive] = useState(false)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [confirmDeletePaths, setConfirmDeletePaths] = useState<string[] | null>(null)
-  const [confirmDeleteCanvas, setConfirmDeleteCanvas] = useState<ProjectCanvas | null>(null)
   const [confirmForget, setConfirmForget] = useState<ProjectRecord | null>(null)
   const suppressClickAfterDragRef = useRef(false)
   const sectionsRef = useRef<HTMLDivElement | null>(null)
@@ -83,46 +109,44 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
 
   useEffect(() => {
     setEditor(null)
-    setCanvasEditor(null)
     setSwitcherOpen(false)
     setDropTargetPath(null)
-    setConfirmDeleteCanvas(null)
     setTreeDragActive(false)
-  }, [snapshot.activeProjectId])
+  }, [projectSnapshot.activeProjectId])
 
   useEffect(() => {
-    const projectId = snapshot.activeProjectId
+    const projectId = projectSnapshot.activeProjectId
     if (!projectId) {
       setLayoutProjectId(null)
       return
     }
     const layout = readProjectSidebarLayout(projectId)
     setFilesExpanded(layout.filesExpanded)
-    setCanvasesExpanded(layout.canvasesExpanded)
+    setExtensionExpanded(layout.extensionExpanded)
     setSectionSplitRatio(layout.sectionSplitRatio)
     setLayoutProjectId(projectId)
-  }, [snapshot.activeProjectId])
+  }, [projectSnapshot.activeProjectId])
 
   useEffect(() => {
-    const projectId = snapshot.activeProjectId
+    const projectId = projectSnapshot.activeProjectId
     if (!projectId || layoutProjectId !== projectId) return
-    writeProjectSidebarLayout(projectId, { canvasesExpanded, filesExpanded, sectionSplitRatio })
-  }, [canvasesExpanded, filesExpanded, layoutProjectId, sectionSplitRatio, snapshot.activeProjectId])
+    writeProjectSidebarLayout(projectId, { extensionExpanded, filesExpanded, sectionSplitRatio })
+  }, [extensionExpanded, filesExpanded, layoutProjectId, sectionSplitRatio, projectSnapshot.activeProjectId])
 
   useEffect(() => () => {
     suppressClickAfterDragRef.current = false
   }, [])
 
-  const visibleEntries = useMemo(() => flattenVisibleEntries(snapshot), [snapshot])
+  const visibleEntries = useMemo(() => flattenVisibleEntries(filesSnapshot), [filesSnapshot])
   const entryByPath = useMemo(() => new Map(visibleEntries.map((entry) => [entry.path, entry])), [visibleEntries])
 
   const beginCreate = async (entryKind: ProjectEntryKind, parentPath = "") => {
-    const activeProjectId = controller.getSnapshot().activeProjectId
+    const activeProjectId = projectSnapshot.activeProjectId
     if (parentPath) {
-      if (!snapshot.expandedPaths.includes(parentPath)) await controller.toggleDirectory(parentPath)
-      else await controller.loadDirectory(parentPath)
+      if (!filesSnapshot.expandedPaths.includes(parentPath)) await filesController.toggleDirectory(parentPath)
+      else await filesController.loadDirectory(parentPath)
     }
-    if (controller.getSnapshot().activeProjectId !== activeProjectId) return
+    if (filesController.getSnapshot().projectId !== activeProjectId) return
     setEditor({ kind: "create", entryKind, name: "", parentPath })
   }
 
@@ -132,15 +156,15 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
       return
     }
     if (editor.kind === "create") {
-      await controller.createEntry({ kind: editor.entryKind, name: editor.name.trim(), parentPath: editor.parentPath })
+      await filesController.createEntry({ kind: editor.entryKind, name: editor.name.trim(), parentPath: editor.parentPath })
     } else {
-      await controller.renameEntry(editor.path, editor.name.trim())
+      await filesController.renameEntry(editor.path, editor.name.trim())
     }
     setEditor(null)
   }
 
   const requestDelete = (path: string) => {
-    const selected = snapshot.selectedPaths.includes(path) ? snapshot.selectedPaths : [path]
+    const selected = filesSnapshot.selectedPaths.includes(path) ? filesSnapshot.selectedPaths : [path]
     setConfirmDeletePaths(normalizeSelectionRoots(selected))
   }
 
@@ -152,25 +176,18 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
     }, 0)
   }
 
-  const commitCanvasEditor = async () => {
-    const current = canvasEditor
-    setCanvasEditor(null)
-    if (!current?.name.trim()) return
-    await controller.renameCanvas(current.canvasId, current.name.trim())
-  }
-
   const handleDrop = async (event: DragEvent<HTMLElement>, destinationPath = "") => {
     event.preventDefault()
     event.stopPropagation()
     setTreeDragActive(false)
     setDropTargetPath(null)
     const payload = parseProjectEntryDrag(event.dataTransfer.getData(PROJECT_ENTRY_DRAG_TYPE))
-    if (payload && payload.projectId === snapshot.activeProjectId) {
-      await controller.moveEntries(payload.entries.map((entry) => entry.path), destinationPath)
+    if (payload && payload.projectId === filesSnapshot.projectId) {
+      await filesController.moveEntries(payload.entries.map((entry) => entry.path), destinationPath)
       return
     }
     if (event.dataTransfer.files.length > 0) {
-      await controller.importDroppedFiles([...event.dataTransfer.files], destinationPath)
+      await filesController.importDroppedFiles([...event.dataTransfer.files], destinationPath)
     }
   }
 
@@ -203,7 +220,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
   }
 
   const sectionSplitBounds = getSectionSplitBounds(sectionsRef.current?.clientHeight ?? 0)
-  const bothSectionsExpanded = filesExpanded && canvasesExpanded
+  const bothSectionsExpanded = Boolean(extension) && filesExpanded && extensionExpanded
   const expandedSectionMinHeight = `min(${minimumExpandedSectionSize}px, calc((100% - ${sectionSplitterSize}px) / 2))`
 
   if (hideWhenNoProject && !activeProject) return null
@@ -211,10 +228,10 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
   return (
     <TooltipProvider>
       <aside
-        aria-busy={snapshot.changingActiveProject}
+        aria-busy={projectSnapshot.changingActiveProject}
         className={cn(
           "relative flex h-full w-[292px] shrink-0 flex-col border-r border-border bg-card text-card-foreground",
-          snapshot.changingActiveProject && "pointer-events-none opacity-80",
+          projectSnapshot.changingActiveProject && "pointer-events-none opacity-80",
           className,
         )}
       >
@@ -235,8 +252,8 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
         </Tooltip>
         {switcherOpen ? (
           <ProjectSwitcher
-            activeProjectId={snapshot.activeProjectId}
-            projects={snapshot.projects}
+            activeProjectId={projectSnapshot.activeProjectId}
+            projects={projectSnapshot.projects}
             onActivate={(projectId) => void controller.activate(projectId)}
             onClose={() => setSwitcherOpen(false)}
             onCreate={() => {
@@ -251,7 +268,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
 
       {!activeProject ? (
         <ProjectEmptyState
-          loading={!snapshot.initialized}
+          loading={!projectSnapshot.initialized}
           onCreate={() => setCreateProjectOpen(true)}
           onOpen={() => void controller.openProject()}
         />
@@ -261,7 +278,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
             <section
               className="flex min-h-0 flex-col overflow-hidden"
               style={{
-                flex: filesExpanded ? (canvasesExpanded ? `${sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
+                flex: filesExpanded ? (extension && extensionExpanded ? `${sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
                 minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
               }}
             >
@@ -288,8 +305,8 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
                   }} size="icon-sm" variant="ghost"><FolderPlus /></Button>
                 </Tooltip>
                 <Tooltip content="Refresh">
-                  <Button aria-label="Refresh files" onClick={() => void controller.refreshVisibleDirectories()} size="icon-sm" variant="ghost">
-                    <RefreshCw className={cn(snapshot.loadingPaths.length > 0 && "animate-spin")} />
+                  <Button aria-label="Refresh files" onClick={() => void filesController.refreshVisibleDirectories()} size="icon-sm" variant="ghost">
+                    <RefreshCw className={cn(filesSnapshot.loadingPaths.length > 0 && "animate-spin")} />
                   </Button>
                 </Tooltip>
               </div>
@@ -308,9 +325,9 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
                   {editor?.kind === "create" && editor.parentPath === "" ? (
                     <EntryEditorRow editor={editor} level={1} onCancel={() => setEditor(null)} onChange={setEditor} onCommit={commitEditor} />
                   ) : null}
-                  {(snapshot.listings[""]?.entries ?? []).map((entry) => (
+                  {(filesSnapshot.listings[""]?.entries ?? []).map((entry) => (
                     <ProjectTreeNode
-                      controller={controller}
+                      controller={filesController}
                       dropTargetPath={dropTargetPath}
                       editor={editor}
                       entry={entry}
@@ -334,10 +351,10 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
                       previewDisabled={Boolean(editor) || treeDragActive}
                       resolveFileUrl={resolveFileUrl}
                       shouldSuppressClick={() => suppressClickAfterDragRef.current}
-                      snapshot={snapshot}
+                      snapshot={filesSnapshot}
                     />
                   ))}
-                  {snapshot.initialized && snapshot.listings[""]?.entries.length === 0 && !editor ? (
+                  {filesSnapshot.listings[""]?.entries.length === 0 && !editor ? (
                     <div className="flex h-32 flex-col items-center justify-center gap-2 px-5 text-center text-xs text-muted-foreground">
                       <FolderOpen className="size-7 opacity-60" />
                       <span>This project is empty.</span>
@@ -350,7 +367,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
 
             {bothSectionsExpanded ? (
               <div
-                aria-label="Resize Files and Canvases sections"
+                aria-label={`Resize Files and ${extension?.label ?? "extension"} sections`}
                 aria-orientation="horizontal"
                 aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
                 aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
@@ -390,51 +407,44 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
               </div>
             ) : null}
 
-            <section
-              aria-busy={snapshot.changingActiveCanvas}
-              className={cn(
-                "flex min-h-0 flex-col overflow-hidden",
-                !bothSectionsExpanded && "border-t border-border",
-                snapshot.changingActiveCanvas && "opacity-70",
-              )}
-              style={{
-                flex: canvasesExpanded ? (filesExpanded ? `${1 - sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
-                minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
-              }}
-            >
-              <div className="flex h-9 shrink-0 items-center gap-1 px-2">
-                <button
-                  aria-expanded={canvasesExpanded}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
-                  onClick={() => setCanvasesExpanded((expanded) => !expanded)}
-                  type="button"
-                >
-                  <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", canvasesExpanded && "rotate-90")} />
-                  <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Canvases</span>
-                  <span className="text-[10px] tabular-nums text-muted-foreground/70">{snapshot.canvases.length}</span>
-                </button>
-                <Tooltip content="New canvas">
-                  <Button aria-label="New canvas" disabled={snapshot.changingActiveCanvas} onClick={() => {
-                    setCanvasesExpanded(true)
-                    void controller.createCanvas()
-                  }} size="icon-sm" variant="ghost"><Plus /></Button>
-                </Tooltip>
-              </div>
-              {canvasesExpanded ? (
-                <CanvasList
-                  activeCanvasId={snapshot.activeCanvasId}
-                  canvases={snapshot.canvases}
-                  controller={controller}
-                  editor={canvasEditor}
-                  onCancelEdit={() => setCanvasEditor(null)}
-                  onChangeEdit={(name) => setCanvasEditor((current) => current ? { ...current, name } : null)}
-                  onCommitEdit={commitCanvasEditor}
-                  onDelete={setConfirmDeleteCanvas}
-                  onRename={(canvas) => setCanvasEditor({ canvasId: canvas.id, name: canvas.name })}
-                  projectId={activeProject.id}
-                />
-              ) : null}
-            </section>
+            {extension ? (
+              <section
+                aria-busy={extension.busy}
+                className={cn(
+                  "flex min-h-0 flex-col overflow-hidden",
+                  !bothSectionsExpanded && "border-t border-border",
+                  extension.busy && "opacity-70",
+                )}
+                style={{
+                  flex: extensionExpanded ? (filesExpanded ? `${1 - sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
+                  minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
+                }}
+              >
+                <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                  <button
+                    aria-expanded={extensionExpanded}
+                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
+                    onClick={() => setExtensionExpanded((expanded) => !expanded)}
+                    type="button"
+                  >
+                    <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", extensionExpanded && "rotate-90")} />
+                    <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{extension.label}</span>
+                    {extension.count === undefined ? null : (
+                      <span className="text-[10px] tabular-nums text-muted-foreground/70">{extension.count}</span>
+                    )}
+                  </button>
+                  {extension.onCreate ? (
+                    <Tooltip content={extension.createLabel ?? `New ${extension.label}`}>
+                      <Button aria-label={extension.createLabel ?? `New ${extension.label}`} disabled={extension.busy} onClick={() => {
+                        setExtensionExpanded(true)
+                        extension.onCreate?.()
+                      }} size="icon-sm" variant="ghost"><Plus /></Button>
+                    </Tooltip>
+                  ) : null}
+                </div>
+                {extensionExpanded ? extension.content : null}
+              </section>
+            ) : null}
           </div>
           <footer className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3 text-[11px] text-muted-foreground">
             <span className="size-1.5 rounded-full bg-emerald-500" />
@@ -443,10 +453,13 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
         </>
       )}
 
-      {snapshot.error ? (
+      {projectSnapshot.error || filesSnapshot.error ? (
         <div className="absolute inset-x-3 bottom-11 z-30 flex items-start gap-2 rounded-lg border border-destructive/25 bg-popover p-2.5 text-xs text-popover-foreground shadow-lg">
-          <span className="min-w-0 flex-1">{snapshot.error}</span>
-          <button aria-label="Dismiss error" onClick={() => controller.clearError()} type="button"><X className="size-3.5" /></button>
+          <span className="min-w-0 flex-1">{projectSnapshot.error ?? filesSnapshot.error}</span>
+          <button aria-label="Dismiss error" onClick={() => {
+            if (projectSnapshot.error) controller.clearError()
+            else filesController.clearError()
+          }} type="button"><X className="size-3.5" /></button>
         </div>
       ) : null}
 
@@ -485,18 +498,8 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
           description={`${confirmDeletePaths.length} item${confirmDeletePaths.length === 1 ? "" : "s"} will be moved to the system Trash.`}
           destructive
           onCancel={() => setConfirmDeletePaths(null)}
-          onConfirm={() => void controller.deleteEntries(confirmDeletePaths).then(() => setConfirmDeletePaths(null))}
+          onConfirm={() => void filesController.deleteEntries(confirmDeletePaths).then(() => setConfirmDeletePaths(null))}
           title="Delete selected items?"
-        />
-      ) : null}
-      {confirmDeleteCanvas ? (
-        <ConfirmDialog
-          confirmLabel="Delete canvas"
-          description={`“${confirmDeleteCanvas.name}” and its canvas document will be deleted. Project files are not affected.`}
-          destructive
-          onCancel={() => setConfirmDeleteCanvas(null)}
-          onConfirm={() => void controller.deleteCanvas(confirmDeleteCanvas.id).then(() => setConfirmDeleteCanvas(null))}
-          title="Delete canvas?"
         />
       ) : null}
       {confirmForget ? (
@@ -514,7 +517,7 @@ export function ProjectSidebar({ className, controller, hideWhenNoProject = fals
 }
 
 function ProjectTreeNode(props: {
-  controller: ProjectController
+  controller: ProjectFilesController
   dropTargetPath: string | null
   editor: EntryEditor | null
   entry: ProjectEntry
@@ -534,7 +537,7 @@ function ProjectTreeNode(props: {
   previewDisabled: boolean
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
   shouldSuppressClick: () => boolean
-  snapshot: ProjectControllerSnapshot
+  snapshot: ProjectFilesControllerSnapshot
 }) {
   const { entry, snapshot } = props
   const directory = entry.kind === "directory"
@@ -547,15 +550,15 @@ function ProjectTreeNode(props: {
   const editing = props.editor?.kind === "rename" && props.editor.path === entry.path
   const previewKind = getFilePreviewKind(entry)
   const previewUrl = useMemo(() => {
-    if (!previewKind || !snapshot.activeProjectId) return null
+    if (!previewKind || !snapshot.projectId) return null
     if (previewKind === "markdown" || previewKind === "text") return ""
     if (!props.resolveFileUrl) return null
     try {
-      return props.resolveFileUrl({ path: entry.path, projectId: snapshot.activeProjectId }) || null
+      return props.resolveFileUrl({ path: entry.path, projectId: snapshot.projectId }) || null
     } catch {
       return null
     }
-  }, [entry.path, previewKind, props.resolveFileUrl, snapshot.activeProjectId])
+  }, [entry.path, previewKind, props.resolveFileUrl, snapshot.projectId])
   const rowRef = useRef<HTMLDivElement | null>(null)
   const previewOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -618,7 +621,7 @@ function ProjectTreeNode(props: {
     event.dataTransfer.effectAllowed = "copyMove"
     event.dataTransfer.setData(PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag({
       entries,
-      projectId: snapshot.activeProjectId ?? "",
+      projectId: snapshot.projectId ?? "",
       version: 1,
     }))
     event.dataTransfer.setData("text/plain", entries.map((item) => item.path).join("\n"))
@@ -720,11 +723,11 @@ function ProjectTreeNode(props: {
             {!loading && listing && children.length === 0 && !(props.editor?.kind === "create" && props.editor.parentPath === entry.path)
               ? <TreeStateRow label="Empty folder" level={props.level + 1} />
               : null}
-            {children.map((child) => <ProjectTreeNode {...props} entry={child} key={child.path} level={props.level + 1} />)}
+            {children.map((child) => <ProjectTreeNode key={child.path} {...props} entry={child} level={props.level + 1} />)}
           </div>
         ) : null}
       </ContextMenu>
-      {previewOpen && previewKind && previewUrl !== null && snapshot.activeProjectId ? (
+      {previewOpen && previewKind && previewUrl !== null && snapshot.projectId ? (
         <FilePreviewPortal
           controller={props.controller}
           entry={entry}
@@ -732,7 +735,7 @@ function ProjectTreeNode(props: {
           onMouseEnter={cancelPreviewClose}
           onMouseLeave={schedulePreviewClose}
           position={previewPosition}
-          projectId={snapshot.activeProjectId}
+          projectId={snapshot.projectId}
           url={previewUrl}
         />
       ) : null}
@@ -820,7 +823,7 @@ function ProjectEmptyState({ loading, onCreate, onOpen }: { loading: boolean; on
         <>
           <span className="mb-4 grid size-12 place-items-center rounded-2xl bg-accent text-primary"><FolderOpen className="size-6" /></span>
           <h2 className="text-sm font-semibold">Start with a project</h2>
-          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">Open a folder or create a clean workspace for your canvas and files.</p>
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">Open a folder or create a clean project for your files.</p>
           <Button className="mt-5 w-full" onClick={onOpen} size="sm"><FolderPlus />Open folder</Button>
           <Button className="mt-2 w-full" onClick={onCreate} size="sm" variant="outline"><Plus />New project</Button>
         </>
@@ -856,7 +859,7 @@ function ConfirmDialog(props: { confirmLabel: string; description: string; destr
 }
 
 interface ProjectSidebarLayout {
-  canvasesExpanded: boolean
+  extensionExpanded: boolean
   filesExpanded: boolean
   sectionSplitRatio: number
 }
@@ -866,14 +869,14 @@ function projectSidebarLayoutKey(projectId: string) {
 }
 
 function readProjectSidebarLayout(projectId: string): ProjectSidebarLayout {
-  const fallback = { canvasesExpanded: true, filesExpanded: true, sectionSplitRatio: defaultSectionSplitRatio }
+  const fallback = { extensionExpanded: true, filesExpanded: true, sectionSplitRatio: defaultSectionSplitRatio }
   if (typeof window === "undefined") return fallback
   try {
     const raw = window.localStorage.getItem(projectSidebarLayoutKey(projectId))
     if (!raw) return fallback
     const parsed = JSON.parse(raw) as Partial<ProjectSidebarLayout>
     return {
-      canvasesExpanded: typeof parsed.canvasesExpanded === "boolean" ? parsed.canvasesExpanded : true,
+      extensionExpanded: typeof parsed.extensionExpanded === "boolean" ? parsed.extensionExpanded : true,
       filesExpanded: typeof parsed.filesExpanded === "boolean" ? parsed.filesExpanded : true,
       sectionSplitRatio: typeof parsed.sectionSplitRatio === "number" && Number.isFinite(parsed.sectionSplitRatio)
         ? clamp(parsed.sectionSplitRatio, minimumSectionSplitRatio, 1 - minimumSectionSplitRatio)
@@ -906,7 +909,7 @@ function writeProjectSidebarLayout(projectId: string, layout: ProjectSidebarLayo
   }
 }
 
-function flattenVisibleEntries(snapshot: ProjectControllerSnapshot) {
+function flattenVisibleEntries(snapshot: ProjectFilesControllerSnapshot) {
   const visible: ProjectEntry[] = []
   const visit = (directoryPath: string) => {
     for (const entry of snapshot.listings[directoryPath]?.entries ?? []) {
