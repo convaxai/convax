@@ -3,12 +3,12 @@ import { Button } from "@convax/ui"
 import { FolderOpen, FolderPlus, Layers3, LoaderCircle, X } from "lucide-react"
 import { useState } from "react"
 
-interface ProjectEmptyWorkspaceProps {
+interface ProjectEmptyStateProps {
   controller: ProjectController
   initialized: boolean
 }
 
-export function ProjectWorkspaceLoading({ projectName }: { projectName: string }) {
+export function ProjectLoadingState({ projectName }: { projectName: string }) {
   return (
     <div aria-live="polite" className="grid size-full place-items-center bg-background" role="status">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -22,7 +22,7 @@ export function ProjectWorkspaceLoading({ projectName }: { projectName: string }
   )
 }
 
-export function ProjectEmptyWorkspace({ controller, initialized }: ProjectEmptyWorkspaceProps) {
+export function ProjectEmptyState({ controller, initialized }: ProjectEmptyStateProps) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [projectName, setProjectName] = useState("")
   const [openingProject, setOpeningProject] = useState(false)
@@ -73,10 +73,10 @@ export function ProjectEmptyWorkspace({ controller, initialized }: ProjectEmptyW
           <div className="mb-5 grid size-14 place-items-center rounded-2xl border border-primary/15 bg-primary/10 text-primary shadow-sm">
             <Layers3 className="size-7" />
           </div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Convax workspace</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Convax project</p>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Create or open a project</h1>
           <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            Projects keep canvases and files together. Start a new workspace, or open an existing project folder to continue.
+            Projects keep canvases and files together. Create a project, or open an existing project folder to continue.
           </p>
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
             <Button className="h-10 px-5" disabled={openingProject} onClick={() => setCreateProjectOpen(true)}>
@@ -123,12 +123,12 @@ export function ProjectEmptyWorkspace({ controller, initialized }: ProjectEmptyW
                 void createProject()
               }}
             >
-              <label className="mb-1.5 block text-xs font-medium" htmlFor="workspace-project-name">Project name</label>
+              <label className="mb-1.5 block text-xs font-medium" htmlFor="project-name">Project name</label>
               <input
                 autoFocus
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/25"
                 disabled={creatingProject}
-                id="workspace-project-name"
+                id="project-name"
                 onChange={(event) => setProjectName(event.currentTarget.value)}
                 placeholder="My project"
                 value={projectName}

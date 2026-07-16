@@ -1,7 +1,10 @@
 import type { AgentClient } from "@convax/agent-runtime"
 import type { CanvasDocumentClient } from "@convax/canvas/application"
-import type { ProjectClient, ProjectChangeEvent } from "@convax/project"
+import type { ProjectLifecycleClient } from "@convax/project"
+import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
+import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
+import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -10,31 +13,37 @@ import {
 } from "../canvas-renderer-contracts"
 
 const channels = {
-  activateCanvas: "project:canvas-activate",
-  changed: "project:changed",
-  copyEntries: "project:copy-entries",
-  createEntry: "project:create-entry",
-  createCanvas: "project:canvas-create",
   createProject: "project:create",
-  deleteEntries: "project:delete-entries",
-  deleteCanvas: "project:canvas-delete",
   forgetProject: "project:forget",
-  importEntries: "project:import-entries",
-  getWorkspace: "project:workspace",
-  listDirectory: "project:list-directory",
   listProjects: "project:list",
-  moveEntries: "project:move-entries",
-  openEntry: "project:open-entry",
   openProject: "project:open",
-  readFile: "project:read-file",
-  readFileInfo: "project:read-file-info",
-  readTextPreview: "project:read-text-preview",
-  readTextFile: "project:read-text-file",
-  renameEntry: "project:rename-entry",
-  renameCanvas: "project:canvas-rename",
   renameProject: "project:rename",
-  revealEntry: "project:reveal-entry",
-  writeTextFile: "project:write-text-file",
+} as const
+
+const projectFilesChannels = {
+  changed: "project-files:changed",
+  copyEntries: "project-files:copy-entries",
+  createEntry: "project-files:create-entry",
+  deleteEntries: "project-files:delete-entries",
+  importEntries: "project-files:import-entries",
+  listDirectory: "project-files:list-directory",
+  moveEntries: "project-files:move-entries",
+  openEntry: "project-files:open-entry",
+  readFile: "project-files:read-file",
+  readFileInfo: "project-files:read-file-info",
+  readTextPreview: "project-files:read-text-preview",
+  readTextFile: "project-files:read-text-file",
+  renameEntry: "project-files:rename-entry",
+  revealEntry: "project-files:reveal-entry",
+  writeTextFile: "project-files:write-text-file",
+} as const
+
+const projectCanvasChannels = {
+  changed: "project:canvases-changed",
+  createCanvas: "project:canvas-create",
+  deleteCanvas: "project:canvas-delete",
+  getCanvasCatalog: "project:canvas-catalog",
+  renameCanvas: "project:canvas-rename",
 } as const
 
 const agentChannels = {
@@ -54,6 +63,11 @@ const canvasDocumentChannels = {
   load: "canvas:document-load",
   save: "canvas:document-save",
 } as const
+
+const desktopProtocolClient = {
+  getVersion: () => ipcRenderer.invoke(desktopProtocolChannel),
+  version: desktopProtocolVersion,
+} satisfies DesktopProtocolClient
 
 const importTokens = new Map<string, { expiresAt: number; path: string }>()
 const maxImportTokens = 1_000
@@ -91,41 +105,56 @@ function consumeImportTokens(tokens: string[]) {
 }
 
 const projectClient = {
-  activateCanvas: (input) => ipcRenderer.invoke(channels.activateCanvas, input),
-  copyEntries: (input) => ipcRenderer.invoke(channels.copyEntries, input),
-  createEntry: (input) => ipcRenderer.invoke(channels.createEntry, input),
-  createCanvas: (input) => ipcRenderer.invoke(channels.createCanvas, input),
   createProject: (input) => ipcRenderer.invoke(channels.createProject, input),
-  createImportToken,
-  deleteEntries: (input) => ipcRenderer.invoke(channels.deleteEntries, input),
-  deleteCanvas: (input) => ipcRenderer.invoke(channels.deleteCanvas, input),
   forgetProject: (input) => ipcRenderer.invoke(channels.forgetProject, input),
-  importEntries: (input) => ipcRenderer.invoke(channels.importEntries, {
+  listProjects: () => ipcRenderer.invoke(channels.listProjects),
+  openProject: () => ipcRenderer.invoke(channels.openProject),
+  renameProject: (input) => ipcRenderer.invoke(channels.renameProject, input),
+} satisfies ProjectLifecycleClient
+
+const projectFilesClient = {
+  copyEntries: (input) => ipcRenderer.invoke(projectFilesChannels.copyEntries, input),
+  createEntry: (input) => ipcRenderer.invoke(projectFilesChannels.createEntry, input),
+  createImportToken,
+  deleteEntries: (input) => ipcRenderer.invoke(projectFilesChannels.deleteEntries, input),
+  importEntries: (input) => ipcRenderer.invoke(projectFilesChannels.importEntries, {
     destinationPath: input.destinationPath,
     projectId: input.projectId,
     sourcePaths: consumeImportTokens(input.sourceTokens),
   }),
-  listDirectory: (input) => ipcRenderer.invoke(channels.listDirectory, input),
-  getWorkspace: (input) => ipcRenderer.invoke(channels.getWorkspace, input),
-  listProjects: () => ipcRenderer.invoke(channels.listProjects),
-  moveEntries: (input) => ipcRenderer.invoke(channels.moveEntries, input),
+  listDirectory: (input) => ipcRenderer.invoke(projectFilesChannels.listDirectory, input),
+  moveEntries: (input) => ipcRenderer.invoke(projectFilesChannels.moveEntries, input),
   onDidChange: (listener) => {
     const handleChange = (_event: Electron.IpcRendererEvent, change: ProjectChangeEvent) => listener(change)
-    ipcRenderer.on(channels.changed, handleChange)
-    return () => ipcRenderer.removeListener(channels.changed, handleChange)
+    ipcRenderer.on(projectFilesChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(projectFilesChannels.changed, handleChange)
   },
-  openEntry: (input) => ipcRenderer.invoke(channels.openEntry, input),
-  openProject: () => ipcRenderer.invoke(channels.openProject),
-  readFile: (input) => ipcRenderer.invoke(channels.readFile, input),
-  readFileInfo: (input) => ipcRenderer.invoke(channels.readFileInfo, input),
-  readTextPreview: (input) => ipcRenderer.invoke(channels.readTextPreview, input),
-  readTextFile: (input) => ipcRenderer.invoke(channels.readTextFile, input),
-  renameEntry: (input) => ipcRenderer.invoke(channels.renameEntry, input),
-  renameCanvas: (input) => ipcRenderer.invoke(channels.renameCanvas, input),
-  renameProject: (input) => ipcRenderer.invoke(channels.renameProject, input),
-  revealEntry: (input) => ipcRenderer.invoke(channels.revealEntry, input),
-  writeTextFile: (input) => ipcRenderer.invoke(channels.writeTextFile, input),
-} satisfies ProjectClient
+  openEntry: (input) => ipcRenderer.invoke(projectFilesChannels.openEntry, input),
+  readFile: (input) => ipcRenderer.invoke(projectFilesChannels.readFile, input),
+  readFileInfo: (input) => ipcRenderer.invoke(projectFilesChannels.readFileInfo, input),
+  readTextPreview: (input) => ipcRenderer.invoke(projectFilesChannels.readTextPreview, input),
+  readTextFile: (input) => ipcRenderer.invoke(projectFilesChannels.readTextFile, input),
+  renameEntry: (input) => ipcRenderer.invoke(projectFilesChannels.renameEntry, input),
+  revealEntry: (input) => ipcRenderer.invoke(projectFilesChannels.revealEntry, input),
+  writeTextFile: (input) => ipcRenderer.invoke(projectFilesChannels.writeTextFile, input),
+} satisfies ProjectFilesClient
+
+const projectCanvasClient = {
+  createCanvas: (input) => ipcRenderer.invoke(projectCanvasChannels.createCanvas, input),
+  deleteCanvas: (input) => ipcRenderer.invoke(projectCanvasChannels.deleteCanvas, input),
+  getCanvasCatalog: (input) => ipcRenderer.invoke(projectCanvasChannels.getCanvasCatalog, input),
+  onDidChange: (listener) => {
+    const handleChange = (_event: Electron.IpcRendererEvent, change: ProjectCanvasChangeEvent) => listener(change)
+    ipcRenderer.on(projectCanvasChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(projectCanvasChannels.changed, handleChange)
+  },
+  renameCanvas: (input) => ipcRenderer.invoke(projectCanvasChannels.renameCanvas, input),
+} satisfies ProjectCanvasClient
+
+const projectsClient = {
+  ...projectClient,
+  canvases: projectCanvasClient,
+} satisfies ProjectLifecycleClient & { canvases: ProjectCanvasClient }
 
 const agentClient = {
   abort: (input) => ipcRenderer.invoke(agentChannels.abort, input),
@@ -173,5 +202,7 @@ contextBridge.exposeInMainWorld("convax", {
   agent: agentClient,
   canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
   platform: process.platform,
-  projects: projectClient,
+  projectFiles: projectFilesClient,
+  projects: projectsClient,
+  protocol: desktopProtocolClient,
 })

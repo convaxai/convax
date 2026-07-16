@@ -1,9 +1,12 @@
-import type { ProjectChangeEvent, ProjectClient, ProjectRecord } from "@convax/project"
+import type { ProjectLifecycleClient, ProjectRecord } from "@convax/project"
+import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { IpcMainInvokeEvent, OpenDialogOptions } from "electron"
 
-type ClientInput<Method extends keyof ProjectClient> = Parameters<ProjectClient[Method]>[0]
-type ClientResult<Method extends keyof ProjectClient> = Awaited<ReturnType<ProjectClient[Method]>>
+type LifecycleInput<Method extends keyof ProjectLifecycleClient> = Parameters<ProjectLifecycleClient[Method]>[0]
+type LifecycleResult<Method extends keyof ProjectLifecycleClient> = Awaited<ReturnType<ProjectLifecycleClient[Method]>>
+type FilesInput<Method extends keyof ProjectFilesClient> = Parameters<ProjectFilesClient[Method]>[0]
+type FilesResult<Method extends keyof ProjectFilesClient> = Awaited<ReturnType<ProjectFilesClient[Method]>>
 
 interface ProjectImportIpcInput {
   destinationPath?: string
@@ -12,129 +15,107 @@ interface ProjectImportIpcInput {
 }
 
 export const projectIpcChannels = {
-  activateCanvas: "project:canvas-activate",
-  changed: "project:changed",
-  copyEntries: "project:copy-entries",
-  createEntry: "project:create-entry",
-  createCanvas: "project:canvas-create",
   createProject: "project:create",
-  deleteEntries: "project:delete-entries",
-  deleteCanvas: "project:canvas-delete",
   forgetProject: "project:forget",
-  importEntries: "project:import-entries",
-  getWorkspace: "project:workspace",
-  listDirectory: "project:list-directory",
   listProjects: "project:list",
-  moveEntries: "project:move-entries",
-  openEntry: "project:open-entry",
   openProject: "project:open",
-  readFile: "project:read-file",
-  readFileInfo: "project:read-file-info",
-  readTextPreview: "project:read-text-preview",
-  readTextFile: "project:read-text-file",
-  renameEntry: "project:rename-entry",
-  renameCanvas: "project:canvas-rename",
   renameProject: "project:rename",
-  revealEntry: "project:reveal-entry",
-  writeTextFile: "project:write-text-file",
+} as const
+
+export const projectFilesIpcChannels = {
+  changed: "project-files:changed",
+  copyEntries: "project-files:copy-entries",
+  createEntry: "project-files:create-entry",
+  deleteEntries: "project-files:delete-entries",
+  importEntries: "project-files:import-entries",
+  listDirectory: "project-files:list-directory",
+  moveEntries: "project-files:move-entries",
+  openEntry: "project-files:open-entry",
+  readFile: "project-files:read-file",
+  readFileInfo: "project-files:read-file-info",
+  readTextPreview: "project-files:read-text-preview",
+  readTextFile: "project-files:read-text-file",
+  renameEntry: "project-files:rename-entry",
+  revealEntry: "project-files:reveal-entry",
+  writeTextFile: "project-files:write-text-file",
 } as const
 
 interface ProjectIpcContract {
-  "project:canvas-activate": {
-    input: ClientInput<"activateCanvas">
-    result: ClientResult<"activateCanvas">
+  "project-files:copy-entries": {
+    input: FilesInput<"copyEntries">
+    result: FilesResult<"copyEntries">
   }
-  "project:copy-entries": {
-    input: ClientInput<"copyEntries">
-    result: ClientResult<"copyEntries">
-  }
-  "project:create-entry": {
-    input: ClientInput<"createEntry">
-    result: ClientResult<"createEntry">
-  }
-  "project:canvas-create": {
-    input: ClientInput<"createCanvas">
-    result: ClientResult<"createCanvas">
+  "project-files:create-entry": {
+    input: FilesInput<"createEntry">
+    result: FilesResult<"createEntry">
   }
   "project:create": {
-    input: ClientInput<"createProject">
-    result: ClientResult<"createProject">
+    input: LifecycleInput<"createProject">
+    result: LifecycleResult<"createProject">
   }
-  "project:delete-entries": {
-    input: ClientInput<"deleteEntries">
-    result: ClientResult<"deleteEntries">
-  }
-  "project:canvas-delete": {
-    input: ClientInput<"deleteCanvas">
-    result: ClientResult<"deleteCanvas">
+  "project-files:delete-entries": {
+    input: FilesInput<"deleteEntries">
+    result: FilesResult<"deleteEntries">
   }
   "project:forget": {
-    input: ClientInput<"forgetProject">
-    result: ClientResult<"forgetProject">
+    input: LifecycleInput<"forgetProject">
+    result: LifecycleResult<"forgetProject">
   }
-  "project:import-entries": {
+  "project-files:import-entries": {
     input: ProjectImportIpcInput
-    result: ClientResult<"importEntries">
+    result: FilesResult<"importEntries">
   }
-  "project:workspace": {
-    input: ClientInput<"getWorkspace">
-    result: ClientResult<"getWorkspace">
-  }
-  "project:list-directory": {
-    input: ClientInput<"listDirectory">
-    result: ClientResult<"listDirectory">
+  "project-files:list-directory": {
+    input: FilesInput<"listDirectory">
+    result: FilesResult<"listDirectory">
   }
   "project:list": {
     input: undefined
-    result: ClientResult<"listProjects">
+    result: LifecycleResult<"listProjects">
   }
-  "project:move-entries": {
-    input: ClientInput<"moveEntries">
-    result: ClientResult<"moveEntries">
+  "project-files:move-entries": {
+    input: FilesInput<"moveEntries">
+    result: FilesResult<"moveEntries">
   }
-  "project:open-entry": {
-    input: ClientInput<"openEntry">
-    result: ClientResult<"openEntry">
+  "project-files:open-entry": {
+    input: FilesInput<"openEntry">
+    result: FilesResult<"openEntry">
   }
   "project:open": {
     input: undefined
-    result: ClientResult<"openProject">
+    result: LifecycleResult<"openProject">
   }
-  "project:read-file": {
-    input: ClientInput<"readFile">
-    result: ClientResult<"readFile">
+  "project-files:read-file": {
+    input: FilesInput<"readFile">
+    result: FilesResult<"readFile">
   }
-  "project:read-file-info": {
-    input: ClientInput<"readFileInfo">
-    result: ClientResult<"readFileInfo">
+  "project-files:read-file-info": {
+    input: FilesInput<"readFileInfo">
+    result: FilesResult<"readFileInfo">
   }
-  "project:read-text-preview": {
-    input: ClientInput<"readTextPreview">
-    result: ClientResult<"readTextPreview">
+  "project-files:read-text-preview": {
+    input: FilesInput<"readTextPreview">
+    result: FilesResult<"readTextPreview">
   }
-  "project:read-text-file": {
-    input: ClientInput<"readTextFile">
-    result: ClientResult<"readTextFile">
+  "project-files:read-text-file": {
+    input: FilesInput<"readTextFile">
+    result: FilesResult<"readTextFile">
   }
-  "project:rename-entry": {
-    input: ClientInput<"renameEntry">
-    result: ClientResult<"renameEntry">
-  }
-  "project:canvas-rename": {
-    input: ClientInput<"renameCanvas">
-    result: ClientResult<"renameCanvas">
+  "project-files:rename-entry": {
+    input: FilesInput<"renameEntry">
+    result: FilesResult<"renameEntry">
   }
   "project:rename": {
-    input: ClientInput<"renameProject">
-    result: ClientResult<"renameProject">
+    input: LifecycleInput<"renameProject">
+    result: LifecycleResult<"renameProject">
   }
-  "project:reveal-entry": {
-    input: ClientInput<"revealEntry">
-    result: ClientResult<"revealEntry">
+  "project-files:reveal-entry": {
+    input: FilesInput<"revealEntry">
+    result: FilesResult<"revealEntry">
   }
-  "project:write-text-file": {
-    input: ClientInput<"writeTextFile">
-    result: ClientResult<"writeTextFile">
+  "project-files:write-text-file": {
+    input: FilesInput<"writeTextFile">
+    result: FilesResult<"writeTextFile">
   }
 }
 
@@ -142,30 +123,25 @@ type ProjectInvokeChannel = keyof ProjectIpcContract
 type StopWatching = () => void
 
 export interface DesktopProjectManager {
-  activateCanvas(input: ClientInput<"activateCanvas">): Promise<ClientResult<"activateCanvas">>
   add(rootPath: string): Promise<ProjectRecord>
-  copyEntries(input: ClientInput<"copyEntries">): Promise<ClientResult<"copyEntries">>
+  copyEntries(input: FilesInput<"copyEntries">): Promise<FilesResult<"copyEntries">>
   create(parentPath: string, name: string): Promise<ProjectRecord>
-  createEntry(input: ClientInput<"createEntry">): Promise<ClientResult<"createEntry">>
-  createCanvas(input: ClientInput<"createCanvas">): Promise<ClientResult<"createCanvas">>
-  deleteEntries(input: ClientInput<"deleteEntries">): Promise<ClientResult<"deleteEntries">>
-  deleteCanvas(input: ClientInput<"deleteCanvas">): Promise<ClientResult<"deleteCanvas">>
+  createEntry(input: FilesInput<"createEntry">): Promise<FilesResult<"createEntry">>
+  deleteEntries(input: FilesInput<"deleteEntries">): Promise<FilesResult<"deleteEntries">>
   forget(projectId: string): Promise<boolean>
-  importEntries(input: ProjectImportIpcInput): Promise<ClientResult<"importEntries">>
-  getWorkspace(input: ClientInput<"getWorkspace">): Promise<ClientResult<"getWorkspace">>
+  importEntries(input: ProjectImportIpcInput): Promise<FilesResult<"importEntries">>
   list(): Promise<ProjectRecord[]>
-  listDirectory(input: ClientInput<"listDirectory">): Promise<ClientResult<"listDirectory">>
-  moveEntries(input: ClientInput<"moveEntries">): Promise<ClientResult<"moveEntries">>
-  readFile(input: ClientInput<"readFile">): Promise<ClientResult<"readFile">>
-  readFileInfo(input: ClientInput<"readFileInfo">): Promise<ClientResult<"readFileInfo">>
-  readTextPreview(input: ClientInput<"readTextPreview">): Promise<ClientResult<"readTextPreview">>
-  readTextFile(input: ClientInput<"readTextFile">): Promise<ClientResult<"readTextFile">>
+  listDirectory(input: FilesInput<"listDirectory">): Promise<FilesResult<"listDirectory">>
+  moveEntries(input: FilesInput<"moveEntries">): Promise<FilesResult<"moveEntries">>
+  readFile(input: FilesInput<"readFile">): Promise<FilesResult<"readFile">>
+  readFileInfo(input: FilesInput<"readFileInfo">): Promise<FilesResult<"readFileInfo">>
+  readTextPreview(input: FilesInput<"readTextPreview">): Promise<FilesResult<"readTextPreview">>
+  readTextFile(input: FilesInput<"readTextFile">): Promise<FilesResult<"readTextFile">>
   rename(projectId: string, name: string): Promise<ProjectRecord>
-  renameEntry(input: ClientInput<"renameEntry">): Promise<ClientResult<"renameEntry">>
-  renameCanvas(input: ClientInput<"renameCanvas">): Promise<ClientResult<"renameCanvas">>
+  renameEntry(input: FilesInput<"renameEntry">): Promise<FilesResult<"renameEntry">>
   resolveEntryPath(input: { path?: string; projectId: string }): Promise<string>
   watchProject(projectId: string, listener: (event: ProjectChangeEvent) => void): Promise<StopWatching> | StopWatching
-  writeTextFile(input: ClientInput<"writeTextFile">): Promise<ClientResult<"writeTextFile">>
+  writeTextFile(input: FilesInput<"writeTextFile">): Promise<FilesResult<"writeTextFile">>
 }
 
 function showDirectoryDialog(event: IpcMainInvokeEvent, options: OpenDialogOptions) {
@@ -206,7 +182,7 @@ export async function registerProjectIpc(
   const publishChange = (event: ProjectChangeEvent) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-      window.webContents.send(projectIpcChannels.changed, event)
+      window.webContents.send(projectFilesIpcChannels.changed, event)
     }
   }
 
@@ -237,11 +213,6 @@ export async function registerProjectIpc(
   })
 
   handlerDisposers.push(
-    registerHandler(projectIpcChannels.activateCanvas, options.isTrustedSender, async (_event, input) => {
-      const workspace = await manager.activateCanvas(input)
-      publishChange({ kind: "workspace", projectId: input.projectId })
-      return workspace
-    }),
     registerHandler(projectIpcChannels.listProjects, options.isTrustedSender, async () => ({ projects: await listProjects() })),
     registerHandler(projectIpcChannels.openProject, options.isTrustedSender, async (event) => {
       const result = await showDirectoryDialog(event, {
@@ -274,41 +245,25 @@ export async function registerProjectIpc(
       if (removed) await stopWatching(input.projectId)
       return { projects: await listProjects(), removed }
     }),
-    registerHandler(projectIpcChannels.listDirectory, options.isTrustedSender, (_event, input) => manager.listDirectory(input)),
-    registerHandler(projectIpcChannels.copyEntries, options.isTrustedSender, (_event, input) => manager.copyEntries(input)),
-    registerHandler(projectIpcChannels.createEntry, options.isTrustedSender, (_event, input) => manager.createEntry(input)),
-    registerHandler(projectIpcChannels.createCanvas, options.isTrustedSender, async (_event, input) => {
-      const result = await manager.createCanvas(input)
-      publishChange({ kind: "workspace", projectId: input.projectId })
-      return result
-    }),
-    registerHandler(projectIpcChannels.renameEntry, options.isTrustedSender, (_event, input) => manager.renameEntry(input)),
-    registerHandler(projectIpcChannels.moveEntries, options.isTrustedSender, (_event, input) => manager.moveEntries(input)),
-    registerHandler(projectIpcChannels.deleteEntries, options.isTrustedSender, (_event, input) => manager.deleteEntries(input)),
-    registerHandler(projectIpcChannels.deleteCanvas, options.isTrustedSender, async (_event, input) => {
-      const result = await manager.deleteCanvas(input)
-      publishChange({ kind: "workspace", projectId: input.projectId })
-      return result
-    }),
-    registerHandler(projectIpcChannels.getWorkspace, options.isTrustedSender, (_event, input) => manager.getWorkspace(input)),
-    registerHandler(projectIpcChannels.importEntries, options.isTrustedSender, async (_event, input) => {
+    registerHandler(projectFilesIpcChannels.listDirectory, options.isTrustedSender, (_event, input) => manager.listDirectory(input)),
+    registerHandler(projectFilesIpcChannels.copyEntries, options.isTrustedSender, (_event, input) => manager.copyEntries(input)),
+    registerHandler(projectFilesIpcChannels.createEntry, options.isTrustedSender, (_event, input) => manager.createEntry(input)),
+    registerHandler(projectFilesIpcChannels.renameEntry, options.isTrustedSender, (_event, input) => manager.renameEntry(input)),
+    registerHandler(projectFilesIpcChannels.moveEntries, options.isTrustedSender, (_event, input) => manager.moveEntries(input)),
+    registerHandler(projectFilesIpcChannels.deleteEntries, options.isTrustedSender, (_event, input) => manager.deleteEntries(input)),
+    registerHandler(projectFilesIpcChannels.importEntries, options.isTrustedSender, async (_event, input) => {
       const result = await manager.importEntries(input)
       return { ...result, sourcePaths: undefined }
     }),
-    registerHandler(projectIpcChannels.readFile, options.isTrustedSender, (_event, input) => manager.readFile(input)),
-    registerHandler(projectIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) => manager.readFileInfo(input)),
-    registerHandler(projectIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) => manager.readTextPreview(input)),
-    registerHandler(projectIpcChannels.readTextFile, options.isTrustedSender, (_event, input) => manager.readTextFile(input)),
-    registerHandler(projectIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) => manager.writeTextFile(input)),
-    registerHandler(projectIpcChannels.renameCanvas, options.isTrustedSender, async (_event, input) => {
-      const result = await manager.renameCanvas(input)
-      publishChange({ kind: "workspace", projectId: input.projectId })
-      return result
-    }),
-    registerHandler(projectIpcChannels.revealEntry, options.isTrustedSender, async (_event, input) => {
+    registerHandler(projectFilesIpcChannels.readFile, options.isTrustedSender, (_event, input) => manager.readFile(input)),
+    registerHandler(projectFilesIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) => manager.readFileInfo(input)),
+    registerHandler(projectFilesIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) => manager.readTextPreview(input)),
+    registerHandler(projectFilesIpcChannels.readTextFile, options.isTrustedSender, (_event, input) => manager.readTextFile(input)),
+    registerHandler(projectFilesIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) => manager.writeTextFile(input)),
+    registerHandler(projectFilesIpcChannels.revealEntry, options.isTrustedSender, async (_event, input) => {
       shell.showItemInFolder(await manager.resolveEntryPath(input))
     }),
-    registerHandler(projectIpcChannels.openEntry, options.isTrustedSender, async (_event, input) => {
+    registerHandler(projectFilesIpcChannels.openEntry, options.isTrustedSender, async (_event, input) => {
       const error = await shell.openPath(await manager.resolveEntryPath(input))
       return error ? { error } : {}
     }),

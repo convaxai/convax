@@ -1,7 +1,10 @@
 import type { AgentClient } from "@convax/agent-runtime"
 import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { CanvasRendererClient } from "../canvas-renderer-contracts"
-import type { ProjectClient } from "@convax/project"
+import type { ProjectLifecycleClient } from "@convax/project"
+import type { ProjectCanvasClient } from "@convax/project/canvas"
+import type { ProjectFilesClient } from "@convax/project-files"
+import type { DesktopProtocolClient } from "../desktop-protocol"
 
 declare global {
   interface Window {
@@ -9,7 +12,9 @@ declare global {
       agent: AgentClient
       canvas: { documents: CanvasDocumentClient; renderer: CanvasRendererClient }
       platform: NodeJS.Platform
-      projects: ProjectClient
+      projectFiles: ProjectFilesClient
+      projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
+      protocol?: DesktopProtocolClient
     }
   }
 }
