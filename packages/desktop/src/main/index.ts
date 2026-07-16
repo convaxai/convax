@@ -6,17 +6,20 @@ import {
   CanvasResourceBusinessService,
   serializeCanvasDocument,
 } from "@convax/canvas/application"
-import { NodeProjectManager } from "@convax/project/node"
 import {
+  NodeProjectManager,
   ProjectCanvasDocumentRepository,
   ProjectCanvasDocumentService,
+  NodeProjectCanvasManager,
   ProjectCanvasResourcePreparation,
-} from "@convax/workspace/node"
+} from "@convax/project/node"
 import { app, BrowserWindow, net, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
 import { registerAgentIpc } from "./agent-ipc"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
+import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
+import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
 
 const trustedWebContents = new Set<number>()
@@ -111,8 +114,9 @@ function startApplication() {
       registryFile: join(app.getPath("userData"), "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
-    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectManager)
-    const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectManager)
+    const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
+    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
+    const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
     const canvasApplication = new CanvasApplicationService(canvasDocumentRepository)
     const canvasResources = new CanvasResourceBusinessService(
       new ProjectCanvasResourcePreparation(projectManager),
@@ -127,24 +131,29 @@ function startApplication() {
       isTrustedWebContentsId: (id) => trustedWebContents.has(id),
     })
     const agentRuntime = new OpenCodeAgentRuntime({
+      protectedPathPatterns: [".convax", ".convax/**", "**/.convax", "**/.convax/**"],
+      protectedPaths: [".convax"],
       toolProvider: createCanvasAgentToolProvider({
         application: canvasApplication,
         renderer: canvasRenderer,
         resources: canvasResources,
       }),
+      toolServerName: "convax",
     })
+    const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
+    const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,
       canvasSnapshots: {
         async resolveCanvasSnapshot(ref) {
-          const [snapshot, workspace] = await Promise.all([
-            canvasDocuments.load(ref),
-            projectManager.getWorkspace({ projectId: ref.projectId }),
+          const [snapshot, catalog] = await Promise.all([
+            canvasDocuments.load({ canvasId: ref.canvasId, scopeId: ref.projectId }),
+            projectCanvases.getCanvasCatalog({ projectId: ref.projectId }),
           ])
           if (!snapshot.document) throw new Error(`Canvas document was not found: ${ref.canvasId}`)
-          const canvas = workspace.canvases.find((candidate) => candidate.id === ref.canvasId)
+          const canvas = catalog.canvases.find((candidate) => candidate.id === ref.canvasId)
           return {
             content: serializeCanvasDocument(snapshot.document),
             name: canvas?.name ?? snapshot.document.metadata.title,
@@ -164,7 +173,9 @@ function startApplication() {
       }
     })
     app.once("will-quit", () => protocol.unhandle("convax-asset"))
+    app.once("will-quit", disposeDesktopProtocolIpc)
     app.once("will-quit", disposeProjectIpc)
+    app.once("will-quit", disposeProjectCanvasIpc)
     app.once("will-quit", disposeCanvasDocumentIpc)
     app.once("will-quit", disposeAgentIpc)
     app.once("will-quit", () => canvasRenderer.dispose())
