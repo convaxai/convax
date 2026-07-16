@@ -7,7 +7,7 @@ import {
 } from "./workbench-layout-preferences"
 
 const bounds: WorkbenchLayoutPreferenceBounds = {
-  primarySidebar: { defaultSize: 292, maxSize: 480, minSize: 220 },
+  primarySidebar: { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 },
   secondarySidebar: { defaultSize: 380, defaultVisible: true, maxSize: 620, minSize: 300 },
 }
 
@@ -23,7 +23,7 @@ function memoryStorage(entries: Record<string, string> = {}) {
 describe("Workbench layout preferences", () => {
   test("uses host defaults when no preference exists", () => {
     expect(readWorkbenchLayoutPreferences(memoryStorage(), bounds)).toEqual({
-      primarySidebar: { size: 292 },
+      primarySidebar: { size: 292, visible: true },
       secondarySidebar: { size: 380, visible: true },
     })
   })
@@ -32,14 +32,14 @@ describe("Workbench layout preferences", () => {
     const storage = memoryStorage({
       "convax.workbench.layout.v1": JSON.stringify({
         parts: {
-          [WorkbenchLayoutParts.PrimarySidebar]: { size: 999 },
+          [WorkbenchLayoutParts.PrimarySidebar]: { size: 999, visible: false },
           [WorkbenchLayoutParts.SecondarySidebar]: { size: 120, visible: false },
         },
         version: 1,
       }),
     })
     expect(readWorkbenchLayoutPreferences(storage, bounds)).toEqual({
-      primarySidebar: { size: 480 },
+      primarySidebar: { size: 480, visible: false },
       secondarySidebar: { size: 300, visible: false },
     })
   })
@@ -63,7 +63,7 @@ describe("Workbench layout preferences", () => {
     }
     expect(writeWorkbenchLayoutPreferences(storage, snapshot)).toBe(true)
     expect(readWorkbenchLayoutPreferences(storage, bounds)).toEqual({
-      primarySidebar: { size: 320 },
+      primarySidebar: { size: 320, visible: true },
       secondarySidebar: { size: 440, visible: false },
     })
     expect(writeWorkbenchLayoutPreferences({ setItem() { throw new Error("blocked") } }, snapshot)).toBe(false)

@@ -24,7 +24,7 @@ import {
   WorkbenchLayoutController,
   WorkbenchLayoutParts,
 } from "@convax/workbench"
-import { CheckCircle2, Info, TriangleAlert, XCircle } from "lucide-react"
+import { CheckCircle2, Info, PanelLeftOpen, TriangleAlert, XCircle } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { agentCanvasNodeResourceUri } from "../agent-canvas-context"
@@ -42,11 +42,13 @@ import {
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import "./styles.css"
 
-const primarySidebarBounds = { defaultSize: 292, maxSize: 480, minSize: 220 }
-const secondarySidebarBounds = { defaultSize: 380, defaultVisible: true, maxSize: 620, minSize: 300 }
+const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
+const secondarySidebarBounds = { defaultSize: 380, defaultVisible: true, maxSize: 4096, minSize: 300 }
+const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
+const collapsedPrimarySidebarSize = 44
 const collapsedSecondarySidebarSize = 44
-const minimumWorkbenchSurfaceSize = 520
+const minimumCanvasPeekSize = 160
 const overlaySidebarBreakpoint = 1040
 
 function mediaKindFromMime(mimeType: string): CanvasMediaKind {
@@ -119,6 +121,7 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
@@ -158,8 +161,9 @@ function App() {
     return new WorkbenchLayoutController({
       parts: {
         [WorkbenchLayoutParts.PrimarySidebar]: {
+          collapseThreshold: primarySidebarCollapseThreshold,
           initialSize: preferences.primarySidebar.size,
-          initialVisible: true,
+          initialVisible: preferences.primarySidebar.visible,
           maxSize: primarySidebarBounds.maxSize,
           minSize: primarySidebarBounds.minSize,
         },
@@ -210,6 +214,11 @@ function App() {
   useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
   useEffect(() => () => workbenchController.dispose(), [workbenchController])
   useEffect(() => () => workbenchLayoutController.dispose(), [workbenchLayoutController])
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth)
+    window.addEventListener("resize", updateViewportWidth)
+    return () => window.removeEventListener("resize", updateViewportWidth)
+  }, [])
   useEffect(() => {
     if (!workbenchLayoutSnapshot.resize) {
       writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
@@ -468,10 +477,10 @@ function App() {
           ? secondary.size
           : collapsedSecondarySidebarSize
       const available = partId === WorkbenchLayoutParts.PrimarySidebar
-        ? window.innerWidth - occupiedBySecondary - minimumWorkbenchSurfaceSize
+        ? window.innerWidth - occupiedBySecondary - minimumCanvasPeekSize
         : overlays
           ? window.innerWidth - 96
-          : window.innerWidth - primary.size - minimumWorkbenchSurfaceSize
+          : window.innerWidth - (primary.visible ? primary.size : collapsedPrimarySidebarSize) - minimumCanvasPeekSize
       const requested = startSize + (clientX - startX) * direction
       const constrained = Math.min(requested, Math.max(0, available))
       workbenchLayoutController.updateResize(constrained - startSize)
@@ -506,39 +515,81 @@ function App() {
 
   const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
   const secondarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.SecondarySidebar]!
+  const primarySidebarOccupiedSize = primarySidebar.visible ? primarySidebar.size : collapsedPrimarySidebarSize
+  const secondarySidebarAvailableSize = Math.max(
+    secondarySidebarBounds.minSize,
+    viewportWidth <= overlaySidebarBreakpoint
+      ? viewportWidth - 96
+      : viewportWidth - primarySidebarOccupiedSize - minimumCanvasPeekSize,
+  )
+  const secondarySidebarMaxWidthStyle = viewportWidth <= overlaySidebarBreakpoint
+    ? "calc(100vw - 96px)"
+    : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
+  const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
+  const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
+
+  useEffect(() => {
+    if (!activeProject || workbenchLayoutSnapshot.resize || !secondarySidebar.visible) return
+    if (secondarySidebar.size > secondarySidebarAvailableSize) {
+      workbenchLayoutController.setPartSize(WorkbenchLayoutParts.SecondarySidebar, secondarySidebarAvailableSize)
+    }
+  }, [
+    activeProject,
+    secondarySidebar.size,
+    secondarySidebar.visible,
+    secondarySidebarAvailableSize,
+    workbenchLayoutController,
+    workbenchLayoutSnapshot.resize,
+  ])
 
   return (
     <main className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}>
       <div
-        className="relative h-full shrink-0"
-        style={{ width: activeProject && primarySidebar.visible ? primarySidebar.size : 0 }}
+        className={`relative h-full shrink-0 overflow-hidden${!resizingPrimarySidebar || !primarySidebar.visible ? " transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}
+        style={{ width: activeProject ? primarySidebarOccupiedSize : 0 }}
       >
-        <ProjectSidebar
-          className="w-full"
-          controller={projectController}
-          extension={activeProject ? {
-            busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
-            content: (
-              <ProjectCanvasSidebar
-                activeCanvasId={activeCanvasId ?? null}
-                controller={projectCanvasController}
-                navigationBusy={workbenchSnapshot.changingInput}
-                navigationError={workbenchSnapshot.error}
-                onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
-                onClearNavigationError={() => workbenchController.clearError()}
-                onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
-                onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
-              />
-            ),
-            count: projectCanvasSnapshot.canvases.length,
-            createLabel: "New canvas",
-            label: "Canvases",
-            onCreate: () => { void projectCanvasWorkbench.createCanvas(activeProject.id) },
-          } : undefined}
-          filesController={projectFilesController}
-          hideWhenNoProject
-          resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
-        />
+        {!activeProject || primarySidebar.visible ? (
+          <ProjectSidebar
+            className="w-full"
+            controller={projectController}
+            extension={activeProject ? {
+              busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
+              content: (
+                <ProjectCanvasSidebar
+                  activeCanvasId={activeCanvasId ?? null}
+                  controller={projectCanvasController}
+                  navigationBusy={workbenchSnapshot.changingInput}
+                  navigationError={workbenchSnapshot.error}
+                  onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
+                  onClearNavigationError={() => workbenchController.clearError()}
+                  onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
+                  onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+                />
+              ),
+              count: projectCanvasSnapshot.canvases.length,
+              createLabel: "New canvas",
+              label: "Canvases",
+              onCreate: () => { void projectCanvasWorkbench.createCanvas(activeProject.id) },
+            } : undefined}
+            filesController={projectFilesController}
+            hideWhenNoProject
+            resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
+          />
+        ) : (
+          <aside className="flex h-full w-full flex-col items-center border-r border-border bg-card py-2 text-card-foreground">
+            <button
+              aria-label="Open project sidebar"
+              className="grid size-8 place-items-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+              onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, true)}
+              title="Open project sidebar"
+              type="button"
+            >
+              <PanelLeftOpen className="size-4" />
+            </button>
+            <div className="mt-2 h-px w-5 bg-border" />
+            <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Project</span>
+          </aside>
+        )}
         {activeProject && primarySidebar.visible ? (
           <div
             aria-label="Resize project sidebar"
@@ -590,7 +641,9 @@ function App() {
         beforePrompt={flushCanvasForAgent}
         canvases={projectCanvasSnapshot.canvases}
         layout={{
-          maxWidth: secondarySidebarBounds.maxSize,
+          collapsedWidth: collapsedSecondarySidebarSize,
+          maxWidth: secondarySidebarAvailableSize,
+          maxWidthStyle: secondarySidebarMaxWidthStyle,
           minWidth: secondarySidebarBounds.minSize,
           onOpenChange: (open) => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, open),
           onResizeKeyDown: (keyEvent) => {
@@ -603,6 +656,7 @@ function App() {
           },
           onResizeStart: (pointerEvent) => startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent),
           open: secondarySidebar.visible,
+          resizing: resizingSecondarySidebar,
           width: secondarySidebar.size,
         }}
         projectId={activeProjectId}

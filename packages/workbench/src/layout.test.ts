@@ -135,6 +135,20 @@ describe("WorkbenchLayoutController", () => {
     expect(controller.getSnapshot().parts.panel).toEqual({ size: 240, visible: true })
   })
 
+  test("lets the host constrain a committed size without changing visibility", () => {
+    const controller = new WorkbenchLayoutController(options({
+      [WorkbenchLayoutParts.SecondarySidebar]: { initialVisible: false },
+    }))
+
+    expect(controller.setPartSize(WorkbenchLayoutParts.SecondarySidebar, 900)).toBe(true)
+    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]).toEqual({
+      size: 640,
+      visible: false,
+    })
+    expect(controller.setPartSize(WorkbenchLayoutParts.SecondarySidebar, 640)).toBe(false)
+    expect(() => controller.setPartSize(WorkbenchLayoutParts.SecondarySidebar, Number.NaN)).toThrow("must be finite")
+  })
+
   test("guards invalid resize transactions", () => {
     const controller = new WorkbenchLayoutController(options({
       [WorkbenchLayoutParts.SecondarySidebar]: { initialVisible: false },

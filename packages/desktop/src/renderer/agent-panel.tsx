@@ -101,12 +101,15 @@ function supportsResourceDrop(dataTransfer: DataTransfer) {
 }
 
 export interface AgentPanelLayout {
+  collapsedWidth: number
   maxWidth: number
+  maxWidthStyle: string
   minWidth: number
   open: boolean
   onOpenChange(open: boolean): void
   onResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void
   onResizeStart(event: React.PointerEvent<HTMLDivElement>): void
+  resizing: boolean
   width: number
 }
 
@@ -504,7 +507,10 @@ export function AgentPanel(props: AgentPanelProps) {
   if (!embedded && !open) {
     return (
       <TooltipProvider>
-        <aside className="relative z-40 flex w-11 shrink-0 flex-col items-center border-l border-border bg-card py-2 max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0">
+        <aside
+          className="relative z-40 flex shrink-0 flex-col items-center overflow-hidden border-l border-border bg-card py-2 transition-[width] duration-200 ease-out motion-reduce:transition-none max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0"
+          style={{ width: props.layout?.collapsedWidth }}
+        >
           <Tooltip content="Open agent">
             <Button aria-label="Open agent" onClick={() => props.layout?.onOpenChange(true)} size="icon-sm" variant="ghost"><Bot /></Button>
           </Tooltip>
@@ -521,10 +527,11 @@ export function AgentPanel(props: AgentPanelProps) {
         className={cn(
           embedded
             ? "relative flex h-80 min-h-64 w-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground"
-            : "relative z-40 flex shrink-0 flex-col border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
+            : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
+          !embedded && !props.layout?.resizing && "transition-[width] duration-200 ease-out motion-reduce:transition-none",
           props.className,
         )}
-        style={embedded ? undefined : { maxWidth: "calc(100vw - 96px)", width: props.layout?.width }}
+        style={embedded ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
       >
         {!embedded ? (
           <div

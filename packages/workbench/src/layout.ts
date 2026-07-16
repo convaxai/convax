@@ -89,6 +89,18 @@ export class WorkbenchLayoutController {
     return this.setPartVisible(partId, !part.visible)
   }
 
+  /** Applies a host layout constraint without changing part visibility. */
+  setPartSize(partId: string, size: number) {
+    const part = this.requirePart(partId)
+    if (this.resizeTransaction) throw new Error("Workbench part size cannot change during a resize.")
+    requireFiniteNumber(size, "Workbench part size")
+    const configuration = this.configurations.get(partId)!
+    const nextSize = clamp(size, configuration.minSize, configuration.maxSize)
+    if (part.size === nextSize) return false
+    this.replacePart(partId, { ...part, size: nextSize })
+    return true
+  }
+
   beginResize(partId: string) {
     const part = this.requirePart(partId)
     if (this.resizeTransaction) throw new Error("A Workbench resize is already active.")

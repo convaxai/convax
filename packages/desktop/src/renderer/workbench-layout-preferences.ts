@@ -5,12 +5,12 @@ const legacyAgentPanelOpenKey = "convax:agent-panel:open"
 const legacyAgentPanelWidthKey = "convax:agent-panel:width"
 
 export interface WorkbenchLayoutPreferenceBounds {
-  primarySidebar: { defaultSize: number; maxSize: number; minSize: number }
+  primarySidebar: { defaultSize: number; defaultVisible: boolean; maxSize: number; minSize: number }
   secondarySidebar: { defaultSize: number; defaultVisible: boolean; maxSize: number; minSize: number }
 }
 
 export interface WorkbenchLayoutPreferences {
-  primarySidebar: { size: number }
+  primarySidebar: { size: number; visible: boolean }
   secondarySidebar: { size: number; visible: boolean }
 }
 
@@ -31,6 +31,7 @@ export function readWorkbenchLayoutPreferences(
   return {
     primarySidebar: {
       size: clampSize(primary?.size, bounds.primarySidebar),
+      visible: typeof primary?.visible === "boolean" ? primary.visible : bounds.primarySidebar.defaultVisible,
     },
     secondarySidebar: {
       size: clampSize(secondary?.size ?? legacyWidth, bounds.secondarySidebar),
