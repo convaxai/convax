@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { projectFileReferenceKey } from "../project-resources"
+import { projectFileReferenceKey } from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
   type ProjectCanvasMediaInspector,
   type ProjectCanvasResourceHost,
 } from "./project-canvas-resource-preparation"
 
-const requestRef = { canvasId: "canvas_main", projectId: "project_one" }
+const requestRef = { canvasId: "canvas_main", scopeId: "project_one" }
 
 describe("project canvas resource preparation", () => {
   test("prepares inline text and reads project text through the Project host", async () => {
@@ -14,6 +14,9 @@ describe("project canvas resource preparation", () => {
     const host: ProjectCanvasResourceHost = {
       async copyEntries() {
         throw new Error("Text resources must not be copied")
+      },
+      async listDirectory() {
+        throw new Error("Text resources must not list directories")
       },
       async readFileInfo(input) {
         readPaths.push(input.path)
@@ -35,7 +38,7 @@ describe("project canvas resource preparation", () => {
       ...requestRef,
       sources: [
         { format: "plain", kind: "inline-text", sourceId: "inline", text: "Hello" },
-        { kind: "project-file", path: "docs/brief.md", sourceId: "project-text" },
+        { kind: "host-file", path: "docs/brief.md", sourceId: "project-text" },
       ],
     })
 
@@ -45,12 +48,46 @@ describe("project canvas resource preparation", () => {
         format: "markdown",
         id: "project-text",
         kind: "text",
+        metadata: { [projectFileReferenceKey]: { path: "docs/brief.md" } },
         mimeType: "text/markdown",
         name: "brief.md",
         text: "# Project brief",
       },
     ])
     expect(readPaths).toEqual(["docs/brief.md", "docs/brief.md"])
+  })
+
+  test("prepares a host directory as a folder without reading or copying it as a file", async () => {
+    const directoryRequests: unknown[] = []
+    const host: ProjectCanvasResourceHost = {
+      async copyEntries() {
+        throw new Error("Directories must not be copied into managed media")
+      },
+      async listDirectory(input) {
+        directoryRequests.push(input)
+        return { entries: [], path: input.path ?? "", projectId: input.projectId }
+      },
+      async readFileInfo() {
+        throw new Error("Directories must not be read as files")
+      },
+      async readTextFile() {
+        throw new Error("Directories must not be read as text")
+      },
+    }
+
+    const result = await new ProjectCanvasResourcePreparation(host).prepare({
+      ...requestRef,
+      sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder" }],
+    })
+
+    expect(directoryRequests).toEqual([{ path: "design/references", projectId: "project_one" }])
+    expect(result.items).toEqual([{
+      id: "folder",
+      kind: "folder",
+      metadata: { [projectFileReferenceKey]: { path: "design/references" } },
+      name: "references",
+      path: "design/references",
+    }])
   })
 
   test("copies project media into managed assets and uses the returned collision path", async () => {
@@ -66,6 +103,9 @@ describe("project canvas resource preparation", () => {
           sourcePaths: input.paths,
           targetPaths: [".convax/assets/hero copy.png"],
         }
+      },
+      async listDirectory() {
+        throw new Error("Media resources must not list directories")
       },
       async readFileInfo(input) {
         readPaths.push(input.path)
@@ -84,7 +124,7 @@ describe("project canvas resource preparation", () => {
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "project-file", path: "media\\hero.png", sourceId: "hero" }],
+      sources: [{ kind: "host-file", path: "media\\hero.png", sourceId: "hero" }],
     })
 
     expect(copyInputs).toEqual([{ destinationPath: ".convax/assets", paths: ["media/hero.png"] }])
@@ -106,6 +146,9 @@ describe("project canvas resource preparation", () => {
       async copyEntries() {
         copied = true
         throw new Error("Existing assets must not be copied")
+      },
+      async listDirectory() {
+        throw new Error("Media resources must not list directories")
       },
       async readFileInfo(input) {
         return {
@@ -134,7 +177,7 @@ describe("project canvas resource preparation", () => {
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "project-file", path: ".convax/assets/clip.mp4", sourceId: "clip" }],
+      sources: [{ kind: "host-file", path: ".convax/assets/clip.mp4", sourceId: "clip" }],
     })
 
     expect(copied).toBe(false)
@@ -158,6 +201,9 @@ describe("project canvas resource preparation", () => {
   test("maps remote URLs by MIME type without touching the Project host", async () => {
     const host: ProjectCanvasResourceHost = {
       async copyEntries() {
+        throw new Error("Remote resources must not use Project storage")
+      },
+      async listDirectory() {
         throw new Error("Remote resources must not use Project storage")
       },
       async readFileInfo() {
@@ -197,13 +243,15 @@ describe("project canvas resource preparation", () => {
     "\\\\server\\share\\image.png",
     "..\\outside.png",
     "media/CON.png",
+    "media/COM².png",
+    "media/LPT³.txt",
     "media/trailing. ",
   ])("rejects non-portable project paths: %s", async (path) => {
     const preparation = new ProjectCanvasResourcePreparation(unusedHost())
 
     await expect(preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "project-file", path, sourceId: "unsafe" }],
+      sources: [{ kind: "host-file", path, sourceId: "unsafe" }],
     })).rejects.toThrow(/Invalid portable project path|Project path escapes its root/)
   })
 
@@ -216,7 +264,7 @@ describe("project canvas resource preparation", () => {
 
     await expect(preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "project-file", path, sourceId: "private" }],
+      sources: [{ kind: "host-file", path, sourceId: "private" }],
     })).rejects.toThrow("Project private storage")
   })
 })
@@ -224,6 +272,9 @@ describe("project canvas resource preparation", () => {
 function unusedHost(): ProjectCanvasResourceHost {
   return {
     async copyEntries() {
+      throw new Error("Invalid resources must not use Project storage")
+    },
+    async listDirectory() {
       throw new Error("Invalid resources must not use Project storage")
     },
     async readFileInfo() {

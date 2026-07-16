@@ -9,14 +9,14 @@ import type {
   CanvasResourcePreparationResult,
   CanvasResourceSource,
 } from "@convax/canvas/application"
-import type { ProjectClient, ProjectFileInfo } from "@convax/project/contracts"
-import { projectFileReferenceKey } from "../project-resources"
+import type { ProjectFileInfo, ProjectFilesClient } from "@convax/project-files/contracts"
+import { projectFileReferenceKey } from "../../canvas/project-resources"
 
 const managedAssetDirectory = ".convax/assets"
 
 export type ProjectCanvasResourceHost = Pick<
-  ProjectClient,
-  "copyEntries" | "readFileInfo" | "readTextFile"
+  ProjectFilesClient,
+  "copyEntries" | "listDirectory" | "readFileInfo" | "readTextFile"
 >
 
 export interface ProjectCanvasMediaInspection {
@@ -49,7 +49,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
     const items: CanvasUploadItem[] = []
     for (const source of request.sources) {
-      items.push(await this.prepareSource(request.projectId, source))
+      items.push(await this.prepareSource(request.scopeId, source))
     }
     return { items }
   }
@@ -81,6 +81,17 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     const sourcePath = portableProjectPath(source.path)
+    if (source.kind === "host-directory") {
+      await this.project.listDirectory({ path: sourcePath, projectId })
+      return {
+        id: source.sourceId,
+        kind: "folder",
+        metadata: { [projectFileReferenceKey]: { path: sourcePath } },
+        name: sourcePath.split("/").at(-1)!,
+        path: sourcePath,
+      }
+    }
+
     const sourceInfo = await this.project.readFileInfo({ path: sourcePath, projectId })
     const textFormat = getCanvasTextFileFormat(sourceInfo)
     if (textFormat) {
@@ -90,6 +101,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         format: textFormat,
         id: source.sourceId,
         kind: "text",
+        metadata: { [projectFileReferenceKey]: { path: sourcePath } },
         mimeType: normalizeMimeType(sourceInfo.mimeType) || undefined,
         name: sourceInfo.name,
         text: text.content,
@@ -200,7 +212,7 @@ function assertPortableSegment(value: string) {
   const stem = value.split(".")[0]?.toUpperCase()
   if (/[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value)
     || /[. ]$/.test(value)
-    || stem && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CONIN\$|CONOUT\$)$/.test(stem)) {
+    || stem && /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/.test(stem)) {
     throw new Error(`Invalid portable project path segment: ${value}`)
   }
 }
