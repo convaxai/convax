@@ -10,7 +10,6 @@ export default defineConfig({
           "@convax/agent-runtime",
           "@convax/canvas",
           "@convax/project",
-          "@convax/workspace",
           "@opencode-ai/sdk",
         ],
       },

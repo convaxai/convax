@@ -6,8 +6,9 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "bun scripts/ensure-electron-runtime.ts && electron-vite dev",
     "build": "electron-vite build",
+    "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
@@ -15,9 +16,11 @@
     "@convax/agent-runtime": "workspace:*",
     "@convax/canvas": "workspace:*",
     "@convax/project": "workspace:*",
+    "@convax/project-files": "workspace:*",
     "@convax/ui": "workspace:*",
-    "@convax/workspace": "workspace:*",
+    "@convax/workbench": "workspace:*",
     "lucide-react": "catalog:",
+    "marked": "17.0.6",
     "react": "catalog:",
     "react-dom": "catalog:"
   },
