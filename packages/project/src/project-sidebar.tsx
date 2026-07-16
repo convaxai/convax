@@ -57,6 +57,7 @@ export interface ProjectSidebarProps {
     onCreate?: () => void
   }
   filesController: ProjectFilesController
+  footerActions?: ReactNode
   hideWhenNoProject?: boolean
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
 }
@@ -80,7 +81,7 @@ const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   selectedPaths: [],
 }
 
-export function ProjectSidebar({ className, controller, extension, filesController, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
+export function ProjectSidebar({ className, controller, extension, filesController, footerActions, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
   const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const latestFilesSnapshot = useSyncExternalStore(filesController.subscribe, filesController.getSnapshot, filesController.getSnapshot)
   const filesSnapshot = latestFilesSnapshot.projectId === projectSnapshot.activeProjectId
@@ -235,13 +236,26 @@ export function ProjectSidebar({ className, controller, extension, filesControll
           className,
         )}
       >
-      <header className="relative flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+      <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
         <button
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => setSwitcherOpen((open) => !open)}
           type="button"
         >
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{activeProject?.name ?? "Convax"}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">{activeProject?.name ?? "Convax"}</span>
+            {activeProject ? (
+              <Tooltip content={<span className="break-all">{activeProject.rootPath}</span>} side="right">
+                <span
+                  aria-label={`Project path: ${activeProject.rootPath}`}
+                  className="mt-0.5 block truncate text-[10px] font-normal leading-4 text-muted-foreground"
+                  data-project-header-path={activeProject.rootPath}
+                >
+                  {activeProject.rootPath}
+                </span>
+              </Tooltip>
+            ) : null}
+          </span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </button>
         <Tooltip content="Open folder">
@@ -445,10 +459,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
               </section>
             ) : null}
           </div>
-          <footer className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3 text-[11px] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
-            <span className="min-w-0 flex-1 truncate" title={activeProject.rootPath}>{activeProject.rootPath}</span>
-          </footer>
+          {footerActions ? <div className="shrink-0 border-t border-border p-2">{footerActions}</div> : null}
         </>
       )}
 
