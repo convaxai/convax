@@ -2,16 +2,12 @@ import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type {
-  ProjectCanvas,
   ProjectEntry,
   ProjectMutationResult,
   ProjectRecord,
-  ProjectWorkspace,
 } from "../contracts"
 
-export interface ProjectRegistryRecord extends ProjectRecord {
-  activeCanvasId?: string
-}
+export interface ProjectRegistryRecord extends ProjectRecord {}
 
 export interface ProjectRegistryFile {
   projects: ProjectRegistryRecord[]
@@ -19,7 +15,6 @@ export interface ProjectRegistryFile {
 }
 
 export interface ProjectManifest {
-  canvases: ProjectCanvas[]
   projectId: string
   schemaVersion: "convax.project/1"
 }
@@ -40,7 +35,6 @@ const ignoredNames = new Set([
 
 export const managedAssetDirectory = ".convax/assets"
 export const projectManifestPath = ".convax/project.json"
-export const legacyCanvasDocumentPath = ".convax/canvas.json"
 export const textPreviewBytes = 64 * 1024
 
 export function normalizeRelativePath(value?: string) {
@@ -69,16 +63,8 @@ export function validateName(value: string) {
     || name === ".."
     || /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(name)
     || /[. ]$/.test(value)
-    || stem && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]|CONIN\$|CONOUT\$)$/.test(stem)) {
+    || stem && /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/.test(stem)) {
     throw new Error(`Invalid project entry name: ${value}`)
-  }
-  return name
-}
-
-export function validateCanvasName(value: string) {
-  const name = value.trim()
-  if (!name || name.length > 120 || /[\u0000-\u001f\u007f]/.test(name)) {
-    throw new Error(`Invalid canvas name: ${value}`)
   }
   return name
 }
@@ -149,30 +135,11 @@ export function normalizeSelectionRoots(paths: readonly string[]) {
 export function parseProjectManifest(value: unknown): ProjectManifest {
   if (!value || typeof value !== "object") throw new Error("Project manifest is invalid")
   const input = value as Partial<ProjectManifest>
-  if (input.schemaVersion !== "convax.project/1" || !Array.isArray(input.canvases)) {
+  if (input.schemaVersion !== "convax.project/1") {
     throw new Error("Project manifest schema is not supported")
   }
   const projectId = requireProjectId(input.projectId)
-  const ids = new Set<string>()
-  const canvases = input.canvases.map((value): ProjectCanvas => {
-    if (!value || typeof value !== "object") throw new Error("Project manifest contains an invalid canvas")
-    const canvas = value as Partial<ProjectCanvas>
-    const id = requireCanvasId(canvas.id)
-    if (ids.has(id)) throw new Error(`Project manifest contains a duplicate canvas: ${id}`)
-    ids.add(id)
-    if (typeof canvas.createdAt !== "number" || !Number.isFinite(canvas.createdAt)
-      || typeof canvas.updatedAt !== "number" || !Number.isFinite(canvas.updatedAt)
-      || typeof canvas.name !== "string") {
-      throw new Error(`Project manifest contains an invalid canvas: ${id}`)
-    }
-    return {
-      createdAt: canvas.createdAt,
-      id,
-      name: validateCanvasName(canvas.name),
-      updatedAt: canvas.updatedAt,
-    }
-  })
-  return { canvases, projectId, schemaVersion: "convax.project/1" }
+  return { projectId, schemaVersion: "convax.project/1" }
 }
 
 export function requireProjectId(value: unknown) {
@@ -182,38 +149,15 @@ export function requireProjectId(value: unknown) {
   return value
 }
 
-export function requireCanvasId(value: unknown) {
-  if (typeof value !== "string" || !/^canvas[-_][a-z0-9][a-z0-9_-]{0,79}$/.test(value)) {
-    throw new Error(`Invalid canvas id: ${String(value)}`)
-  }
-  return value
-}
-
-export function createCanvasId() {
-  return `canvas_${randomUUID().replaceAll("-", "")}`
-}
-
-export function canvasDirectory(rootPath: string, canvasId: string) {
-  return path.join(rootPath, ".convax", "canvases", requireCanvasId(canvasId))
-}
-
-export function canvasDocumentPath(rootPath: string, canvasId: string) {
-  return path.join(canvasDirectory(rootPath, canvasId), "document.json")
-}
-
-export function validActiveCanvasId(activeCanvasId: string | undefined, manifest: ProjectManifest) {
-  return activeCanvasId && manifest.canvases.some((canvas) => canvas.id === activeCanvasId)
-    ? activeCanvasId
-    : manifest.canvases[0]!.id
-}
-
-export function workspaceFromManifest(manifest: ProjectManifest, activeCanvasId: string): ProjectWorkspace {
-  return { activeCanvasId, canvases: manifest.canvases, projectId: manifest.projectId }
-}
-
 export function toProjectRecord(project: ProjectRegistryRecord): ProjectRecord {
-  const { activeCanvasId: _activeCanvasId, ...record } = project
-  return record
+  return {
+    createdAt: project.createdAt,
+    id: project.id,
+    lastOpenedAt: project.lastOpenedAt,
+    missing: project.missing,
+    name: project.name,
+    rootPath: project.rootPath,
+  }
 }
 
 export function projectIdForPath(rootPath: string) {

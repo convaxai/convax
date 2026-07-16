@@ -4,6 +4,15 @@ export interface ProjectPrivateTextFileRef {
   projectId: string
 }
 
+export interface ProjectPrivatePathRef {
+  path: string
+  projectId: string
+}
+
+export interface ProjectPrivatePathResolver {
+  resolvePrivatePath(input: ProjectPrivatePathRef): Promise<string>
+}
+
 export interface ProjectPrivateTextFileSnapshot {
   content: string
   exists: boolean
@@ -18,6 +27,7 @@ export interface ProjectPrivateTextFileWrite extends ProjectPrivateTextFileRef {
 
 export interface ProjectPrivateStorage {
   readPrivateTextFile(input: ProjectPrivateTextFileRef): Promise<ProjectPrivateTextFileSnapshot>
+  removePrivatePath?(input: ProjectPrivateTextFileRef): Promise<{ removed: boolean }>
   writePrivateTextFile(input: ProjectPrivateTextFileWrite): Promise<{ version: string }>
 }
 
