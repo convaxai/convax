@@ -14,7 +14,9 @@ import {
   Bold,
   Copy,
   Download,
+  Bot,
   File,
+  Folder,
   Heading1,
   Heading2,
   Image as ImageIcon,
@@ -38,10 +40,13 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { Component, type ReactNode, useEffect, useRef, useState } from "react"
 import { updateCanvasNodeData } from "../commands"
+import { getConnectedCanvasFileNodeIds } from "../connections"
 import { useCanvasEditor } from "../editor-context"
+import { useCanvasService } from "../services"
 import type {
+  CanvasFolderNodeData,
   CanvasMediaKind,
   CanvasMediaNodeData,
   CanvasNode,
@@ -235,7 +240,7 @@ function createTextEditorExtensions() {
   ]
 }
 
-function TextNode(props: NodeProps<CanvasNode>) {
+export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const canvasEditor = useCanvasEditor()
   const data = props.data as CanvasTextNodeData
   const dataRef = useRef(data)
@@ -673,7 +678,7 @@ function downloadMedia(data: CanvasMediaNodeData) {
   anchor.click()
 }
 
-function MediaNode(props: NodeProps<CanvasNode>) {
+export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const data = props.data as CanvasMediaNodeData
   const inputRef = useRef<HTMLInputElement>(null)
@@ -737,6 +742,7 @@ function GroupNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   return (
     <div
+      data-canvas-group
       className={cn(
         "relative size-full rounded-lg border border-dashed bg-muted/20",
         props.selected ? "border-ring ring-2 ring-ring/20" : "border-border",
@@ -759,13 +765,150 @@ function GroupNode(props: NodeProps<CanvasNode>) {
   )
 }
 
-export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
-  if (props.data.kind === "text") return <TextNode {...props} />
-  if (props.data.kind === "group") return <GroupNode {...props} />
-  if (["image", "video", "audio", "file"].includes(props.data.kind)) return <MediaNode {...props} />
+export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  const data = props.data as CanvasFolderNodeData
+  const toolbar = (
+    <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
+      <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
+    </div>
+  )
   return (
-    <NodeChrome icon={<File />} label={props.data.label} node={props}>
-      <div className="p-4 text-sm text-muted-foreground">No renderer registered for {props.type}.</div>
+    <NodeChrome icon={<Folder />} label={data.label} node={props} toolbar={toolbar}>
+      <div className="flex size-full flex-col items-center justify-center gap-3 bg-muted/25 p-5 text-center">
+        <Folder className="size-10 text-primary/75" />
+        <div className="max-w-full">
+          <div className="truncate text-sm font-medium">{data.name ?? data.label}</div>
+          {data.path ? <div className="mt-1 truncate text-[11px] text-muted-foreground">{data.path}</div> : null}
+        </div>
+      </div>
     </NodeChrome>
   )
+}
+
+function FileAssistantAccessory(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  const assistant = useCanvasService("assistant")
+  if (!assistant || !props.selected || editor.selection.nodeIds.size !== 1) return null
+  return (
+    <NodeToolbar
+      className="convax-node-assistant nodrag nowheel"
+      isVisible
+      offset={28}
+      position={Position.Bottom}
+    >
+      <div data-canvas-shortcuts="ignore">
+        {assistant.render({
+          document: editor.document,
+          mentionedNodeIds: [props.id],
+          mode: "file",
+          ownerNodeId: props.id,
+        })}
+      </div>
+    </NodeToolbar>
+  )
+}
+
+function AgentNode(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  const assistant = useCanvasService("assistant")
+  const mentionedNodeIds = getConnectedCanvasFileNodeIds(editor.document, props.id)
+  const toolbar = (
+    <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
+      <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
+    </div>
+  )
+  return (
+    <NodeChrome icon={<Bot />} label={props.data.label} node={props} toolbar={toolbar}>
+      <div className="convax-agent-node nodrag nowheel size-full" data-canvas-shortcuts="ignore">
+        {assistant
+          ? assistant.render({
+              document: editor.document,
+              mentionedNodeIds,
+              mode: "agent",
+              ownerNodeId: props.id,
+            })
+          : <div className="grid size-full place-items-center p-5 text-center text-sm text-muted-foreground">Register an assistant service to use this Agent.</div>}
+      </div>
+    </NodeChrome>
+  )
+}
+
+export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
+  if (props.data.kind === "group") return <GroupNode {...props} />
+  if (props.data.kind === "agent" || props.type === "agent") return <AgentNode {...props} />
+  return <RegisteredFileNode {...props} />
+}
+
+function RegisteredFileNode(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  const definition = editor.fileRenderers.resolve(props.data)
+  const Renderer = definition?.component
+  const ContributedToolbar = definition?.toolbar
+  return (
+    <>
+      <FileRendererBoundary data={props.data} renderer={Renderer}>
+        {Renderer
+          ? <Renderer {...props} />
+          : <UnknownFileRenderer {...props} />}
+      </FileRendererBoundary>
+      {ContributedToolbar ? (
+        <NodeToolbar
+          className="convax-node-toolbar nodrag nowheel"
+          isVisible={props.selected && !editor.readOnly}
+          offset={82}
+          position={Position.Top}
+        >
+          <FileRendererBoundary data={props.data} fallback={null} renderer={ContributedToolbar}>
+            <ContributedToolbar {...props} />
+          </FileRendererBoundary>
+        </NodeToolbar>
+      ) : null}
+      <FileAssistantAccessory {...props} />
+    </>
+  )
+}
+
+function UnknownFileRenderer(props: NodeProps<CanvasNode>) {
+  return (
+    <NodeChrome icon={<File />} label={props.data.label} node={props}>
+      <div className="p-4 text-sm text-muted-foreground">No file renderer registered for {props.data.kind}.</div>
+    </NodeChrome>
+  )
+}
+
+class FileRendererBoundary extends Component<{
+  children: ReactNode
+  data: CanvasNode["data"]
+  fallback?: ReactNode
+  renderer?: unknown
+}, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidUpdate(previous: Readonly<{ data: CanvasNode["data"]; renderer?: unknown }>) {
+    if (this.state.failed && (previous.data !== this.props.data || previous.renderer !== this.props.renderer)) {
+      this.setState({ failed: false })
+    }
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children
+    return this.props.fallback !== undefined ? this.props.fallback : (
+      <div className="grid size-full place-items-center rounded-lg border border-destructive/40 bg-card p-4 text-center text-sm text-destructive">
+        This file renderer failed. Update the file or plugin to retry.
+      </div>
+    )
+  }
+}
+
+export {
+  NodeChrome as CanvasNodeChrome,
+  ToolbarButton as CanvasNodeToolbarButton,
+  ToolbarDivider as CanvasNodeToolbarDivider,
 }

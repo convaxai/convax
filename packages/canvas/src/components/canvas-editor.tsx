@@ -35,6 +35,7 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalSpaceBetween,
+  Bot,
   Check,
   ChevronUp,
   ClipboardPaste,
@@ -101,14 +102,16 @@ import {
   ungroupCanvasNode,
 } from "../commands"
 import {
+  canvasClipboardHasScopeConflict,
   createCanvasClipboardPayload,
   parseCanvasClipboard,
   prepareCanvasClipboardPaste,
   serializeCanvasClipboard,
 } from "../clipboard"
-import { createDefaultCanvasNodeRegistry } from "../builtin-registry"
-import { createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
+import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
+import { createMediaNode, createTextNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
+import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
 import {
@@ -131,7 +134,6 @@ import {
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { PendingConnectionMenu } from "./connection-node-menu"
 
-const defaultNodeRegistry = createDefaultCanvasNodeRegistry()
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
 
 interface CanvasLoadBarrier {
@@ -150,6 +152,12 @@ function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
   })
   void promise.catch(() => undefined)
   return { promise, reject: rejectPromise, resolve: resolvePromise }
+}
+
+function createInitialCanvasHistory(document: CanvasDocument) {
+  const normalized = parseCanvasDocument(document, document.id)
+  if (!normalized) throw new Error("CanvasEditor received an invalid initial document")
+  return createCanvasHistory(normalized)
 }
 
 function equalIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
@@ -216,6 +224,7 @@ export interface CanvasEditorProps {
   className?: string
   clipboardScope?: string
   initialDocument: CanvasDocument
+  fileRendererRegistry?: CanvasFileRendererRegistry
   nodeRegistry?: CanvasNodeRegistry
   onlyRenderVisibleElements?: boolean
   onDocumentChange?: (document: CanvasDocument) => void
@@ -235,10 +244,23 @@ export interface CanvasEditorHandle {
 }
 
 export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(function CanvasEditor(props, ref) {
+  const nodeRegistry = useMemo(
+    () => props.nodeRegistry ?? createDefaultCanvasNodeRegistry(),
+    [props.nodeRegistry],
+  )
+  const fileRendererRegistry = useMemo(
+    () => props.fileRendererRegistry ?? createDefaultCanvasFileRendererRegistry(),
+    [props.fileRendererRegistry],
+  )
   return (
     <CanvasServicesProvider services={props.services}>
       <ReactFlowProvider>
-        <CanvasEditorContent {...props} editorRef={ref} nodeRegistry={props.nodeRegistry ?? defaultNodeRegistry} />
+        <CanvasEditorContent
+          {...props}
+          editorRef={ref}
+          fileRendererRegistry={fileRendererRegistry}
+          nodeRegistry={nodeRegistry}
+        />
       </ReactFlowProvider>
     </CanvasServicesProvider>
   )
@@ -246,9 +268,10 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(fu
 
 function CanvasEditorContent(props: CanvasEditorProps & {
   editorRef: ForwardedRef<CanvasEditorHandle>
+  fileRendererRegistry: CanvasFileRendererRegistry
   nodeRegistry: CanvasNodeRegistry
 }) {
-  const [history, reduce] = useReducer(canvasHistoryReducer, props.initialDocument, createCanvasHistory)
+  const [history, reduce] = useReducer(canvasHistoryReducer, props.initialDocument, createInitialCanvasHistory)
   const [selection, setSelection] = useState<CanvasSelection>(() => ({ nodeIds: new Set(), edgeIds: new Set() }))
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
@@ -312,6 +335,11 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     props.nodeRegistry.getVersion,
     props.nodeRegistry.getVersion,
   )
+  const fileRendererRegistryVersion = useSyncExternalStore(
+    props.fileRendererRegistry.subscribe,
+    props.fileRendererRegistry.getVersion,
+    props.fileRendererRegistry.getVersion,
+  )
 
   const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
   const selectedNodeIds = [...selection.nodeIds]
@@ -324,7 +352,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     const ids = [...selection.nodeIds]
     if (ids.length !== 1) return ids
     const selected = nodeById.get(ids[0])
-    if (selected?.type !== "group") return ids
+    if (selected?.data.kind !== "group") return ids
     return history.document.nodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
   }, [history.document.nodes, nodeById, selection.nodeIds])
   const arrangeNodes = arrangeNodeIds.flatMap((id) => {
@@ -364,23 +392,26 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
     const definitions = props.nodeRegistry.list()
-    const types = new Set([
-      ...definitions.map((definition) => definition.type),
-      ...history.document.nodes.map((node) => node.type ?? "text"),
-    ])
     return Object.fromEntries(
-      [...types].flatMap((type) => {
+      definitions.flatMap((definition) => {
+        const type = definition.type
         const component = props.nodeRegistry.get(type)?.component ?? fallback
         return component ? [[type, component]] : []
       }),
     ) as NodeTypes
-  }, [history.document.nodes.map((node) => node.type).sort().join(","), props.nodeRegistry, registryVersion])
+  }, [props.nodeRegistry, registryVersion])
   const connectionNodeTypes = useMemo(
-    () => props.nodeRegistry
-      .list()
-      .filter((definition) => !definition.hidden && definition.type !== "group")
-      .map((definition) => ({ label: definition.label, type: definition.type })),
-    [props.nodeRegistry, registryVersion],
+    () => [
+      ...props.fileRendererRegistry
+        .list()
+        .filter((definition) => !definition.hidden && definition.create)
+        .map((definition) => ({ label: definition.label, type: definition.id })),
+      ...props.nodeRegistry
+        .list()
+        .filter((definition) => !definition.hidden && definition.type === "agent")
+        .map((definition) => ({ label: definition.label, type: definition.type })),
+    ],
+    [fileRendererRegistryVersion, props.fileRendererRegistry, props.nodeRegistry, registryVersion],
   )
 
   const updateSelection = useCallback((nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
@@ -737,11 +768,26 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       setPendingConnection(null)
     }
   }, [history.document.nodes, pendingConnection])
+  const createNodeForType = useCallback((
+    type: string,
+    position: CanvasPoint,
+    data?: Record<string, unknown>,
+  ) => {
+    try {
+      const fileRenderer = props.fileRendererRegistry.get(type)
+      if (fileRenderer?.create) return createCanvasFileNode(fileRenderer, { data, position })
+      return props.nodeRegistry.get(type)?.create({ data, position })
+    } catch (error) {
+      notifyError("Could not create canvas node", error)
+      return undefined
+    }
+  }, [notifyError, props.fileRendererRegistry, props.nodeRegistry])
   const addNode = useCallback(
     (type: string, position?: CanvasPoint) => {
-      const definition = props.nodeRegistry.get(type)
-      if (!definition || readOnly) return
-      const result = addCanvasNodes(history.document, [definition.create({ position: position ?? nextInsertPoint() })])
+      if (readOnly) return
+      const node = createNodeForType(type, position ?? nextInsertPoint())
+      if (!node) return
+      const result = addCanvasNodes(history.document, [node])
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
       fitAfterRender()
@@ -749,7 +795,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type } })
     },
-    [fitAfterRender, history.document, nextInsertPoint, props.nodeRegistry, readOnly, selectNodes, telemetryService],
+    [createNodeForType, fitAfterRender, history.document, nextInsertPoint, readOnly, selectNodes, telemetryService],
   )
   const duplicate = useCallback(() => {
     const result = duplicateCanvasSelection(history.document, selectedNodeIds)
@@ -764,9 +810,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   }, [selectNodes])
   const quickConnect = useCallback(
     (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
-      const definition = props.nodeRegistry.get(nodeType)
-      if (!definition || readOnly) return
-      const created = definition.create({ position: targetPosition ?? { x: 0, y: 0 } })
+      if (readOnly) return
+      const created = createNodeForType(nodeType, targetPosition ?? { x: 0, y: 0 })
+      if (!created) return
       commit((document) => {
         const anchor = document.nodes.find((node) => node.id === nodeId)
         if (!anchor) return document
@@ -812,7 +858,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       selectNodes([created.id])
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
-    [commit, props.nodeRegistry, readOnly, selectNodes, telemetryService],
+    [commit, createNodeForType, readOnly, selectNodes, telemetryService],
   )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
@@ -828,7 +874,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     selectNodes(result.selectedNodeIds)
   }, [history.document, selectedNodeIds, selectNodes])
   const ungroup = useCallback(() => {
-    const groupId = selectedNodeIds.find((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))
+    const groupId = selectedNodeIds.find((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))
     if (!groupId) return
     const result = ungroupCanvasNode(history.document, groupId)
     dispatch({ type: "commit", document: result.document })
@@ -864,12 +910,11 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       (value) => {
         const payload = parseCanvasClipboard(value)
         if (!payload) return
-        const containsMedia = payload.nodes.some((node) => ["image", "video", "audio", "file"].includes(node.data.kind))
-        if (containsMedia && payload.scope !== props.clipboardScope) {
+        if (canvasClipboardHasScopeConflict(payload, props.clipboardScope)) {
           notificationService?.show({
             kind: "warning",
-            title: "Media cannot be pasted between projects",
-            description: "Add the source file to this project instead so Convax can create a local asset reference.",
+            title: "Referenced files cannot be pasted between scopes",
+            description: "Add the source file or folder to this scope so the host can create a valid local reference.",
           })
           return
         }
@@ -956,7 +1001,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       (items) => {
         if (operationController.signal.aborted || documentRef.current.id !== documentId) return
         const resource = items.find((item) => item.kind !== "text" && item.kind === expectedKind)
-        if (!resource || resource.kind === "text") {
+        if (!resource || resource.kind === "text" || resource.kind === "folder") {
           notificationService?.show({
             kind: "warning",
             title: `Choose a ${expectedKind} file`,
@@ -1024,8 +1069,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             if (!item.nodeType || item.nodeType === "text") {
               return [createTextNode({ label: item.title ?? "Generated", position, text: item.text ?? requestPrompt })]
             }
-            const definition = props.nodeRegistry.get(item.nodeType)
-            return definition ? [definition.create({ position, data: { ...item.metadata, label: item.title, text: item.text } })] : []
+            const node = createNodeForType(item.nodeType, position, {
+              ...item.metadata,
+              label: item.title,
+              text: item.text,
+            })
+            return node ? [node] : []
           })
           dispatch({
             type: "commit-update",
@@ -1051,7 +1100,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
         operationControllersRef.current.delete(controller)
         if (!controller.signal.aborted) setGenerating(false)
       })
-  }, [dispatch, fitAfterRender, generateService, insertPoint, notificationService, notifyError, pointAtCenter, prompt, props.nodeRegistry, readOnly, selectedNodeIds, selectNodes, selection.nodeIds])
+  }, [createNodeForType, dispatch, fitAfterRender, generateService, insertPoint, notificationService, notifyError, pointAtCenter, prompt, readOnly, selectedNodeIds, selectNodes, selection.nodeIds])
   const exportCanvas = useCallback(() => {
     if (!exportService) return
     const controller = new AbortController()
@@ -1067,6 +1116,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     setGenerateOpen(false)
     setSearchOpen(false)
   }, [updateSelection])
+  const activateSelectTool = useCallback(() => {
+    setPendingConnection(null)
+    setNodeMenuOpen(false)
+    setGenerateOpen(false)
+    setSearchOpen(false)
+    rootRef.current?.focus()
+  }, [])
   const shortcutHandler = createCanvasShortcutHandler(
     {
       addNode: () => setNodeMenuOpen(true),
@@ -1081,6 +1137,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       openSearch: () => setSearchOpen(true),
       paste,
       redo: () => dispatch({ type: "redo" }),
+      select: activateSelectTool,
       selectAll: () => selectNodes(history.document.nodes.filter((node) => !node.parentId).map((node) => node.id)),
       undo: () => dispatch({ type: "undo" }),
       ungroup,
@@ -1095,6 +1152,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       selection,
       readOnly,
       canUpload: Boolean(uploadService),
+      fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
       cancelGesture: () => dispatch({ type: "cancel-gesture" }),
@@ -1106,7 +1164,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       replaceNodeMedia,
       selectNodes,
     }),
-    [commit, connectionNodeTypes, duplicateNode, history.document, quickConnect, readOnly, removeNode, replaceNodeMedia, selectNodes, selection, uploadService],
+    [commit, connectionNodeTypes, duplicateNode, history.document, props.fileRendererRegistry, quickConnect, readOnly, removeNode, replaceNodeMedia, selectNodes, selection, uploadService],
   )
   const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
 
@@ -1173,9 +1231,10 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                 autoPanOnNodeFocus={false}
                 panActivationKeyCode="Space"
-                panOnDrag={[0, 1]}
+                panOnDrag={[1]}
                 panOnScroll
-                selectionOnDrag={false}
+                selectionKeyCode={null}
+                selectionOnDrag={!readOnly}
                 selectionMode={SelectionMode.Partial}
                 snapGrid={[8, 8]}
                 snapToGrid={snapToGrid}
@@ -1368,11 +1427,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 canUpload={Boolean(uploadService)}
                 document={history.document}
                 generating={generating}
+                onAddAgent={() => addNode("agent")}
                 onAddText={() => addNode("text")}
                 onExport={exportCanvas}
                 onGenerate={() => setGenerateOpen(true)}
                 onRedo={() => dispatch({ type: "redo" })}
                 onSearch={() => setSearchOpen(true)}
+                onSelect={activateSelectTool}
                 onUndo={() => dispatch({ type: "undo" })}
                 onUpload={() => uploadInputRef.current?.click()}
                 readOnly={readOnly}
@@ -1427,17 +1488,17 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                         Revert last change
                       </Button>
                     </div>
-                    <div className="text-xs text-muted-foreground">Convax will keep this window open until the canvas is saved or the last change is reverted.</div>
+                    <div className="text-xs text-muted-foreground">This window stays open until the canvas is saved or the last change is reverted.</div>
                   </div>
                 </div>
               ) : null}
 
-              {(selectedNodeIds.length > 1 || selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))) && !readOnly ? (
+              {(selectedNodeIds.length > 1 || selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))) && !readOnly ? (
                 <SelectionToolbar
                   canArrange={canArrangeSelection}
                   canDistribute={canDistributeSelection}
                   canGroup={selectedNodeIds.length > 1}
-                  canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))}
+                  canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))}
                   onAlign={align}
                   onDelete={remove}
                   onDistribute={distribute}
@@ -1466,9 +1527,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 <FloatingPanel className="left-1/2 top-20 w-64 -translate-x-1/2">
                   <div className="mb-2 px-1 text-xs font-medium text-muted-foreground">Add to canvas</div>
                   <div className="grid grid-cols-2 gap-1">
-                    {props.nodeRegistry.list().filter((definition) => !definition.hidden && definition.type !== "group").map((definition) => (
+                    {connectionNodeTypes.map((definition) => (
                       <Button key={definition.type} className="justify-start" onClick={() => addNode(definition.type)} size="sm" variant="ghost">
-                        {definition.type === "text" ? <Type /> : <FileUp />}
+                        {definition.type === "text" ? <Type /> : definition.type === "agent" ? <Sparkles /> : <FileUp />}
                         {definition.label}
                       </Button>
                     ))}
@@ -1543,11 +1604,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             canDistribute={canDistributeSelection}
             canGroup={selectedNodeIds.length > 1}
             canRedo={history.future.length > 0}
-            canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.type === "group"))}
+            canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))}
             canUndo={history.past.length > 0}
             canUpload={Boolean(uploadService)}
             hasNodeSelection={selectedNodeIds.length > 0}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
+            onAddAgent={() => addNode("agent")}
             onAddText={() => addNode("text")}
             onAddImage={() => addNode("image")}
             onAddVideo={() => addNode("video")}
@@ -1619,11 +1681,13 @@ function CanvasHeader(props: {
   canUpload: boolean
   document: CanvasDocument
   generating: boolean
+  onAddAgent: () => void
   onAddText: () => void
   onExport: () => void
   onGenerate: () => void
   onRedo: () => void
   onSearch: () => void
+  onSelect: () => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
@@ -1640,9 +1704,10 @@ function CanvasHeader(props: {
         {props.saveState !== "idle" ? <span className="text-xs text-muted-foreground">{props.saveState === "saving" ? "Saving..." : "Saved"}</span> : null}
       </ToolSurface>
       <ToolSurface className="left-1/2 top-4 -translate-x-1/2 gap-0.5 max-[820px]:top-16">
-        <IconButton icon={<MousePointer2 />} label="Select" onClick={() => undefined} shortcut="V" />
+        <IconButton icon={<MousePointer2 />} label="Select" onClick={props.onSelect} pressed shortcut="V" />
         <span className="mx-1 h-5 w-px bg-border" />
         <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
+        <IconButton disabled={props.readOnly} icon={<Bot />} label="Agent" onClick={props.onAddAgent} />
         {props.canUpload ? <IconButton disabled={props.readOnly} icon={<FileUp />} label="Upload" onClick={props.onUpload} /> : null}
         {props.canGenerate ? <IconButton disabled={props.readOnly || props.generating} icon={props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />} label="Generate" onClick={props.onGenerate} shortcut="⌘↵" /> : null}
       </ToolSurface>
@@ -1893,6 +1958,7 @@ function CanvasContextMenu(props: {
   canUpload: boolean
   hasNodeSelection: boolean
   hasSelection: boolean
+  onAddAgent: () => void
   onAddImage: () => void
   onAddText: () => void
   onAddVideo: () => void
@@ -1915,6 +1981,7 @@ function CanvasContextMenu(props: {
     <ContextMenuContent className="w-60">
       {!props.readOnly ? <ContextMenuLabel>Create</ContextMenuLabel> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddText}><Type />Add text</ContextMenuItem> : null}
+      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddAgent}><Bot />Add agent</ContextMenuItem> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddImage}><ImagePlus />Add image</ContextMenuItem> : null}
       {!props.readOnly ? <ContextMenuItem onSelect={props.onAddVideo}><Video />Add video</ContextMenuItem> : null}
       {props.canUpload && !props.readOnly ? <ContextMenuItem onSelect={props.onUpload}><FileUp />Upload files</ContextMenuItem> : null}
