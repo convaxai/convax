@@ -119,9 +119,11 @@
       "version": "0.1.0",
       "dependencies": {
         "@radix-ui/react-context-menu": "catalog:",
+        "@radix-ui/react-menu": "catalog:",
         "@radix-ui/react-tooltip": "catalog:",
         "class-variance-authority": "catalog:",
         "clsx": "catalog:",
+        "lucide-react": "catalog:",
         "tailwind-merge": "catalog:",
       },
       "devDependencies": {
@@ -156,6 +158,7 @@
   ],
   "catalog": {
     "@radix-ui/react-context-menu": "2.3.3",
+    "@radix-ui/react-menu": "2.1.20",
     "@radix-ui/react-tooltip": "1.2.12",
     "@tailwindcss/vite": "4.3.2",
     "@tiptap/core": "3.27.4",
