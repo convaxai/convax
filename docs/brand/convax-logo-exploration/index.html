@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Convax — Logo Design Exploration</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #f5f5f7; color: #19191c; -webkit-font-smoothing: antialiased; }
+      main { width: min(1240px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0 96px; }
+      header { max-width: 700px; margin-bottom: 48px; }
+      .eyebrow { color: #7657e8; font-size: 12px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+      h1 { margin: 14px 0 12px; font-size: clamp(42px, 7vw, 76px); font-weight: 600; letter-spacing: -.055em; }
+      header p { margin: 0; color: #6a6a72; font-size: 16px; line-height: 1.7; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }
+      .card { padding: 14px; border: 1px solid #e4e4e8; border-radius: 26px; background: rgba(255,255,255,.78); cursor: pointer; transition: transform .3s ease, border-color .3s ease, box-shadow .3s ease; }
+      .card:hover { transform: translateY(-3px); border-color: #c8bdf4; box-shadow: 0 18px 45px rgba(34,23,70,.08); }
+      .card.selected { border-color: #7657e8; box-shadow: 0 0 0 3px rgba(118,87,232,.12); }
+      .canvas { display: grid; place-items: center; aspect-ratio: 1; border-radius: 18px; background: #ececef; }
+      .canvas img { width: 82%; height: 82%; filter: drop-shadow(0 12px 18px rgba(31,26,52,.08)); }
+      .meta { padding: 17px 5px 6px; }
+      .number { color: #8b8b93; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; }
+      h2 { margin: 7px 0 7px; font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
+      .meta p { min-height: 60px; margin: 0; color: #707078; font-size: 13px; line-height: 1.55; }
+      .sizes { display: flex; align-items: end; gap: 10px; margin-top: 18px; }
+      .sizes img { display: block; }
+      .selection { position: sticky; bottom: 20px; width: max-content; max-width: 100%; margin: 32px auto 0; padding: 12px 18px; border: 1px solid rgba(255,255,255,.8); border-radius: 999px; background: rgba(22,22,25,.88); color: white; font-size: 13px; backdrop-filter: blur(18px); }
+      @media (max-width: 980px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (max-width: 560px) { main { width: min(100% - 24px, 1240px); padding-top: 44px; } .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div class="eyebrow">Convax · App Icon Study</div>
+        <h1>Eight directions.<br />No monograms.</h1>
+        <p>统一使用白色圆角 app 容器与 Convax 紫色。八个方案分别探索协作、涌现、无限画布、负空间、引导路径、共创、上下文层叠和模块化。</p>
+      </header>
+      <section class="grid">
+        <article class="card" data-id="01 — Synthesis Lens">
+          <div class="canvas"><img src="01-synthesis-lens.svg" alt="Synthesis Lens" /></div>
+          <div class="meta"><div class="number">01 / PURE GEOMETRIC</div><h2>Synthesis Lens</h2><p>两块独立空间在重叠处产生新语境，表达用户与 AI 的协同，而非字母。</p><div class="sizes"><img src="01-synthesis-lens.svg" width="64"/><img src="01-synthesis-lens.svg" width="32"/><img src="01-synthesis-lens.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="02 — Emerging Field">
+          <div class="canvas"><img src="02-emerging-field.svg" alt="Emerging Field" /></div>
+          <div class="meta"><div class="number">02 / DOT MATRIX</div><h2>Emerging Field</h2><p>信息从一个主焦点逐步涌现，适合表达 Agent 将分散素材组织为结果。</p><div class="sizes"><img src="02-emerging-field.svg" width="64"/><img src="02-emerging-field.svg" width="32"/><img src="02-emerging-field.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="03 — Infinite Flow">
+          <div class="canvas"><img src="03-infinite-flow.svg" alt="Infinite Flow" /></div>
+          <div class="meta"><div class="number">03 / LINE SYSTEM</div><h2>Infinite Flow</h2><p>多条连续轨迹形成开放表面，表达无边画布和持续推进的工作流。</p><div class="sizes"><img src="03-infinite-flow.svg" width="64"/><img src="03-infinite-flow.svg" width="32"/><img src="03-infinite-flow.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="04 — Selective Void">
+          <div class="canvas"><img src="04-selective-void.svg" alt="Selective Void" /></div>
+          <div class="meta"><div class="number">04 / NEGATIVE SPACE</div><h2>Selective Void</h2><p>从完整形体中减去少量信息，象征 AI 识别重点、留出思考空间。</p><div class="sizes"><img src="04-selective-void.svg" width="64"/><img src="04-selective-void.svg" width="32"/><img src="04-selective-void.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="05 — Guided Surface">
+          <div class="canvas"><img src="05-guided-surface.svg" alt="Guided Surface" /></div>
+          <div class="meta"><div class="number">05 / GEOMETRY + LINE</div><h2>Guided Surface</h2><p>稳定的画布边界与一条智能路径叠加，强调 Agent 在空间中执行操作。</p><div class="sizes"><img src="05-guided-surface.svg" width="64"/><img src="05-guided-surface.svg" width="32"/><img src="05-guided-surface.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="06 — Co-creation">
+          <div class="canvas"><img src="06-co-creation.svg" alt="Co-creation" /></div>
+          <div class="meta"><div class="number">06 / ORGANIC NODES</div><h2>Co-creation</h2><p>两个尺度不同的思考体融合成一个结果，保留一点有机感和非对称张力。</p><div class="sizes"><img src="06-co-creation.svg" width="64"/><img src="06-co-creation.svg" width="32"/><img src="06-co-creation.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="07 — Stacked Context">
+          <div class="canvas"><img src="07-stacked-context.svg" alt="Stacked Context" /></div>
+          <div class="meta"><div class="number">07 / LAYERED GEOMETRY</div><h2>Stacked Context</h2><p>两层旋转的圆角画布代表 Project 与 Canvas、素材与上下文的组合。</p><div class="sizes"><img src="07-stacked-context.svg" width="64"/><img src="07-stacked-context.svg" width="32"/><img src="07-stacked-context.svg" width="16"/></div></div>
+        </article>
+        <article class="card" data-id="08 — Modular Field">
+          <div class="canvas"><img src="08-modular-field.svg" alt="Modular Field" /></div>
+          <div class="meta"><div class="number">08 / MODULAR SYSTEM</div><h2>Modular Field</h2><p>四块不同尺度的内容单元形成开放工作区，直指文件、节点和画布布局。</p><div class="sizes"><img src="08-modular-field.svg" width="64"/><img src="08-modular-field.svg" width="32"/><img src="08-modular-field.svg" width="16"/></div></div>
+        </article>
+      </section>
+      <div class="selection" id="selection">点击任一方案进行标记</div>
+    </main>
+    <script>
+      const cards = [...document.querySelectorAll('.card')]
+      const selection = document.querySelector('#selection')
+      cards.forEach((card) => card.addEventListener('click', () => {
+        cards.forEach((item) => item.classList.remove('selected'))
+        card.classList.add('selected')
+        selection.textContent = `已标记：${card.dataset.id}`
+      }))
+    </script>
+  </body>
+</html>

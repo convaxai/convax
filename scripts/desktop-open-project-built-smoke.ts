@@ -6,7 +6,8 @@ import { pathToFileURL } from "node:url"
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..")
 const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
-const timeoutMs = 15_000
+const timeoutMs = 25_000
+const evaluationTimeoutMs = timeoutMs + 10_000
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
@@ -57,7 +58,7 @@ async function evaluate(webSocketUrl: string, expression: string) {
     const timer = setTimeout(() => {
       socket.close()
       reject(new Error("Timed out waiting for debugger evaluation"))
-    }, timeoutMs)
+    }, evaluationTimeoutMs)
 
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({
@@ -160,24 +161,164 @@ try {
 
   const result = await evaluateStable(rendererDebugger, `(async () => {
     const deadline = Date.now() + ${timeoutMs}
+    const waitFor = async (read, label) => {
+      while (Date.now() < deadline) {
+        const value = await read()
+        if (value) return value
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Timed out waiting for " + label)
+    }
+    const buttonWithText = (text) => [...document.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === text)
+    const buttonContainingText = (text) => [...document.querySelectorAll("button")]
+      .find((button) => button.textContent?.includes(text))
     while (!window.convax) {
       if (Date.now() >= deadline) throw new Error("The preload bridge did not become ready")
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
-    const selection = await window.convax.projects.openProject()
-    if (selection.canceled || !selection.project?.id) throw new Error("Open Project did not return a project")
-    const projectId = selection.project.id
+    await waitFor(() => buttonWithText("Open project"), "the empty Project surface")
+    if (buttonWithText("Skill & Plugin") || buttonWithText("技能与插件")) {
+      throw new Error("The empty Project surface exposed global capabilities")
+    }
+    const initialPlugins = await window.convax.plugins.listPlugins()
+    const catalogPlugin = initialPlugins.catalog.find((plugin) => plugin.id === "storyai-3d-director-desk")
+    if (!catalogPlugin || catalogPlugin.installed) throw new Error("The built-in Plugin catalog is invalid")
+
+    const openProject = await waitFor(() => buttonWithText("Open project"), "the Open project action")
+    openProject.click()
+    const canvasElement = await waitFor(() => document.querySelector(".convax-canvas"), "the active Canvas")
+    await waitFor(() => !document.body.textContent?.includes("Loading canvas"), "Canvas hydration")
+
+    const projects = await window.convax.projects.listProjects()
+    const project = projects.projects.find((candidate) => candidate.name === "empty-project")
+    if (!project) throw new Error("Open Project did not return a project")
+    const projectId = project.id
     const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId })
     const selectedCanvasId = catalog.canvases[0]?.id
     if (!selectedCanvasId) throw new Error("Project did not create its default Canvas")
-    const loaded = await window.convax.canvas.documents.load({
+    const initialDocument = await window.convax.canvas.documents.load({
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
+    if (initialDocument.document?.nodes.length !== 0) throw new Error("A new Canvas was not empty")
+
+    const applicationMenu = await waitFor(
+      () => document.querySelector('button[aria-label="Open application menu"], button[aria-label="打开应用菜单"]'),
+      "the local workspace application menu",
+    )
+    applicationMenu.click()
+    const settingsAction = await waitFor(
+      () => buttonContainingText("Settings") || buttonContainingText("设置"),
+      "the Settings action",
+    )
+    settingsAction.click()
+    const settingsView = await waitFor(
+      () => document.querySelector('[data-settings-view="true"]'),
+      "the global Settings view",
+    )
+    const languageSelect = await waitFor(
+      () => settingsView.querySelector("#settings-language"),
+      "the application language setting",
+    )
+    languageSelect.click()
+    await waitFor(
+      () => document.querySelector('[data-slot="select-content"]'),
+      "the application language options",
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const languageSelectFocusTarget = document.activeElement ?? languageSelect
+    languageSelectFocusTarget.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Escape",
+    }))
+    await waitFor(
+      () => !document.querySelector('[data-slot="select-content"]'),
+      "Escape to close only the application language options",
+    )
+    if (!document.querySelector('[data-settings-view="true"]')) {
+      throw new Error("Escape closed Settings together with the language options")
+    }
+    languageSelect.click()
+    const chineseLanguageOption = await waitFor(
+      () => [...document.querySelectorAll('[role="option"]')]
+        .find((option) => option.textContent?.trim() === "简体中文"),
+      "the Simplified Chinese language option",
+    )
+    chineseLanguageOption.click()
+    await waitFor(
+      () => document.documentElement.lang === "zh-CN" && buttonWithText("技能与插件"),
+      "the live Chinese Settings interface",
+    )
+    buttonWithText("技能与插件").click()
+    await waitFor(
+      () => document.querySelector('section[aria-label="技能与插件"] [role="tablist"]'),
+      "Skill and Plugin management inside Settings",
+    )
+    const storedLanguage = JSON.parse(localStorage.getItem("convax.desktop.app-language.v1") ?? "null")
+    if (storedLanguage?.language !== "zh-CN") throw new Error("The global language preference was not persisted")
+    const backToApp = await waitFor(() => buttonWithText("返回应用"), "the Settings return action")
+    backToApp.click()
+    await waitFor(() => !document.querySelector('[data-settings-view="true"]'), "Settings to close")
+
+    await window.convax.plugins.installCatalogPlugin({ id: catalogPlugin.id })
+
+    const canvasPane = await waitFor(
+      () => document.querySelector(".convax-canvas .react-flow__pane"),
+      "the Canvas pane",
+    )
+    const paneBounds = canvasPane.getBoundingClientRect()
+    canvasPane.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      buttons: 2,
+      clientX: paneBounds.left + paneBounds.width / 2,
+      clientY: paneBounds.top + paneBounds.height / 2,
+    }))
+    await waitFor(
+      () => document.querySelector('[data-slot="context-menu-content"]'),
+      "the Canvas context menu",
+    )
+    const addPlugin = await waitFor(
+      () => [...document.querySelectorAll('[data-slot="context-menu-item"]')]
+        .find((item) => item.textContent?.trim() === "Add 3D Director Desk"),
+      "the installed Plugin in the Canvas context menu",
+    ).catch(() => {
+      const items = [...document.querySelectorAll('[data-slot="context-menu-item"]')]
+        .map((item) => item.textContent?.trim())
+      throw new Error("The Canvas context menu did not expose the installed Plugin: " + JSON.stringify(items))
+    })
+    addPlugin.click()
+    const pluginFrame = await waitFor(
+      () => document.querySelector('iframe[title="3D Director Desk plugin"]'),
+      "the sandboxed Plugin frame",
+    )
+
+    const savedDocument = await waitFor(async () => {
+      const loaded = await window.convax.canvas.documents.load({
+        canvasId: selectedCanvasId,
+        scopeId: projectId,
+      })
+      const pluginNode = loaded.document?.nodes.find(
+        (node) => node.data.kind === "plugin.storyai-3d-director-desk",
+      )
+      const pluginState = pluginNode?.data.metadata?.convaxPluginState
+      return pluginState?.schemaVersion === 1 && pluginState.directorProject?.version === 1
+        ? loaded.document
+        : null
+    }, "the connected 3D Director Desk state")
+    const pluginState = savedDocument.nodes[0]?.data.metadata?.convaxPluginState
     return {
       activeCanvasId: selectedCanvasId,
       canvasCount: catalog.canvases.length,
-      documentId: loaded.document?.id,
+      documentId: savedDocument.id,
+      frameSandbox: pluginFrame.getAttribute("sandbox"),
+      frameUrl: pluginFrame.getAttribute("src"),
+      language: document.documentElement.lang,
+      pluginNodeKind: savedDocument.nodes[0]?.data.kind,
+      pluginStateVersion: pluginState?.schemaVersion,
       projectId,
     }
   })()`)
@@ -186,19 +327,45 @@ try {
     activeCanvasId?: string
     canvasCount?: number
     documentId?: string
+    frameSandbox?: string | null
+    frameUrl?: string | null
+    language?: string
+    pluginNodeKind?: string
+    pluginStateVersion?: number
     projectId?: string
   }
-  if (summary.activeCanvasId !== "canvas-main" || summary.canvasCount !== 1 || summary.documentId !== "canvas-main") {
+  if (summary.activeCanvasId !== "canvas-main"
+    || summary.canvasCount !== 1
+    || summary.documentId !== "canvas-main"
+    || summary.frameSandbox !== "allow-scripts"
+    || !summary.frameUrl?.startsWith("convax-plugin://storyai-3d-director-desk/")
+    || summary.language !== "zh-CN"
+    || summary.pluginNodeKind !== "plugin.storyai-3d-director-desk"
+    || summary.pluginStateVersion !== 1) {
     throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
   }
   const persistedDocument = JSON.parse(await fs.readFile(
     path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"),
     "utf8",
-  )) as { edges?: unknown[]; id?: string; nodes?: unknown[] }
-  if (persistedDocument.id !== "canvas-main" || persistedDocument.nodes?.length !== 0 || persistedDocument.edges?.length !== 0) {
+  )) as {
+    edges?: unknown[]
+    id?: string
+    nodes?: Array<{
+      data?: {
+        kind?: string
+        metadata?: { convaxPluginState?: { directorProject?: { version?: number }; schemaVersion?: number } }
+      }
+    }>
+  }
+  if (persistedDocument.id !== "canvas-main"
+    || persistedDocument.nodes?.length !== 1
+    || persistedDocument.nodes[0]?.data?.kind !== "plugin.storyai-3d-director-desk"
+    || persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.schemaVersion !== 1
+    || persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.directorProject?.version !== 1
+    || persistedDocument.edges?.length !== 0) {
     throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
   }
-  console.log(`Desktop Open Project smoke passed (${summary.projectId}, canvas-main)`)
+  console.log(`Desktop Settings, Open Project, and Plugin smoke passed (${summary.projectId}, canvas-main)`)
 } catch (error) {
   child.kill("SIGKILL")
   const [capturedStdout, capturedStderr] = await Promise.all([stdout, stderr])

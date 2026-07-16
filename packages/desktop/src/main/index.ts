@@ -1,6 +1,6 @@
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
+import { ManagedAgentSkillStore, OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
 import {
   CanvasApplicationService,
   CanvasResourceBusinessService,
@@ -14,13 +14,26 @@ import {
   ProjectCanvasResourcePreparation,
 } from "@convax/project/node"
 import { app, BrowserWindow, net, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
+import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
+import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
+import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
+import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
+import {
+  createWebPluginAssetHandler,
+  webPluginAssetPrivileges,
+  webPluginAssetScheme,
+} from "./plugin-asset-protocol"
+import { registerPluginManagementIpc } from "./plugin-management-ipc"
+import { WebPluginManager } from "./plugin-manager"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
+import { registerSkillManagementIpc } from "./skill-management-ipc"
+import { DesktopSkillManager } from "./skill-manager"
 
 const trustedWebContents = new Set<number>()
 type CloseGate = "approved" | "flushing" | "idle"
@@ -29,9 +42,14 @@ let quitGate: CloseGate = "idle"
 const rendererUrl = process.env.ELECTRON_RENDERER_URL
 const trustedRendererUrl = rendererUrl ?? pathToFileURL(join(import.meta.dirname, "../renderer/index.html")).href
 
-if (!app.isPackaged && process.env.CONVAX_USER_DATA_DIR) {
-  app.setPath("userData", resolve(process.env.CONVAX_USER_DATA_DIR))
-}
+app.setName(desktopProductName)
+
+const userDataDirectoryOverride = desktopUserDataDirectory({
+  appDataDirectory: app.getPath("appData"),
+  isPackaged: app.isPackaged,
+  requestedDirectory: process.env.CONVAX_USER_DATA_DIR,
+})
+if (userDataDirectoryOverride) app.setPath("userData", resolve(userDataDirectoryOverride))
 
 function isTrustedRendererUrl(value: string) {
   try {
@@ -47,6 +65,8 @@ function isTrustedRendererUrl(value: string) {
 
 function createWindow(projectManager: NodeProjectManager) {
   const window = new BrowserWindow({
+    title: desktopProductName,
+    icon: appIcon,
     width: 1280,
     height: 820,
     minWidth: 720,
@@ -97,10 +117,13 @@ function createWindow(projectManager: NodeProjectManager) {
 }
 
 function startApplication() {
-  protocol.registerSchemesAsPrivileged([{
-    scheme: "convax-asset",
-    privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
-  }])
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: "convax-asset",
+      privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
+    },
+    { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
+  ])
   app.on("second-instance", () => {
     const window = BrowserWindow.getAllWindows()[0]
     if (!window) return
@@ -110,10 +133,15 @@ function startApplication() {
   })
 
   void app.whenReady().then(async () => {
+    if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
+
+    const userDataDirectory = app.getPath("userData")
+    const openCodeConfigDirectory = join(userDataDirectory, "opencode")
     const projectManager = new NodeProjectManager({
-      registryFile: join(app.getPath("userData"), "projects.json"),
+      registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
+    const pluginManager = new WebPluginManager(join(userDataDirectory, "plugins"))
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
@@ -131,6 +159,7 @@ function startApplication() {
       isTrustedWebContentsId: (id) => trustedWebContents.has(id),
     })
     const agentRuntime = new OpenCodeAgentRuntime({
+      configDirectory: openCodeConfigDirectory,
       protectedPathPatterns: [".convax", ".convax/**", "**/.convax", "**/.convax/**"],
       protectedPaths: [".convax"],
       toolProvider: createCanvasAgentToolProvider({
@@ -140,10 +169,27 @@ function startApplication() {
       }),
       toolServerName: "convax",
     })
+    const skillManager = new DesktopSkillManager(
+      new ManagedAgentSkillStore(openCodeConfigDirectory),
+      agentRuntime,
+      userDataDirectory,
+      desktopBuiltinSkillCatalog,
+    )
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposePluginManagementIpc = registerPluginManagementIpc(
+      pluginManager,
+      desktopBuiltinPluginCatalog,
+      ipcSecurity.isTrustedSender,
+    )
+    const disposeSkillManagementIpc = registerSkillManagementIpc(
+      skillManager,
+      projectManager,
+      pluginManager,
+      ipcSecurity.isTrustedSender,
+    )
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,
       canvasSnapshots: {
@@ -161,6 +207,9 @@ function startApplication() {
         },
       },
     })
+    protocol.handle(webPluginAssetScheme, createWebPluginAssetHandler(pluginManager, {
+      rendererUrl: trustedRendererUrl,
+    }))
     protocol.handle("convax-asset", async (request) => {
       try {
         const url = new URL(request.url)
@@ -173,10 +222,13 @@ function startApplication() {
       }
     })
     app.once("will-quit", () => protocol.unhandle("convax-asset"))
+    app.once("will-quit", () => protocol.unhandle(webPluginAssetScheme))
     app.once("will-quit", disposeDesktopProtocolIpc)
     app.once("will-quit", disposeProjectIpc)
     app.once("will-quit", disposeProjectCanvasIpc)
     app.once("will-quit", disposeCanvasDocumentIpc)
+    app.once("will-quit", disposePluginManagementIpc)
+    app.once("will-quit", disposeSkillManagementIpc)
     app.once("will-quit", disposeAgentIpc)
     app.once("will-quit", () => canvasRenderer.dispose())
     app.on("before-quit", (event) => {

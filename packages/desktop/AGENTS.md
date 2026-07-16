@@ -27,6 +27,15 @@ it must not become the permanent home of reusable domain rules.
   and `desktopProtocolVersion` together.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, and trusted
   sender validation.
+- Treat OpenCode Skills and Convax Plugins as distinct existing concepts. Skills use
+  the Agent runtime's native discovery; Plugins compose existing Canvas file-renderer
+  and toolbar registries. Do not create a generic extension framework.
+- Install Plugins as validated static packages under `userData`. Render third-party
+  entries only in `sandbox="allow-scripts"` iframes served by the contained Plugin
+  asset protocol. Never use `webview`, import Plugin JS, or expose Electron/Node.
+- Bind Plugin RPC to its MessagePort and exact Project/Canvas/node scope. Enforce the
+  manifest allowlist and delegate to existing typed clients; never add a generic
+  IPC/function-call escape hatch.
 
 Run `bun typecheck && bun test`. Run `bun run build` for main/preload/renderer changes
 and `bun run smoke:open-project` for Project open, persistence, IPC or migration work.

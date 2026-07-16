@@ -5,6 +5,8 @@ import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/proj
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
+import type { DesktopSkillClient } from "../skill-management-contracts"
+import type { WebPluginClient } from "../plugin-contracts"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -59,9 +61,26 @@ const agentChannels = {
   replyQuestion: "agent:question-reply",
 } as const
 
+const agentSkillChannels = {
+  changed: "agent:skills-changed",
+  importSkill: "agent:skill-import",
+  installCatalogSkill: "agent:skill-catalog-install",
+  installPluginSkill: "agent:skill-plugin-install",
+  listSkills: "agent:skills-list",
+  uninstallSkill: "agent:skill-uninstall",
+} as const
+
 const canvasDocumentChannels = {
   load: "canvas:document-load",
   save: "canvas:document-save",
+} as const
+
+const pluginChannels = {
+  changed: "plugin:changed",
+  importPlugin: "plugin:import",
+  installCatalogPlugin: "plugin:catalog-install",
+  listPlugins: "plugin:list",
+  uninstallPlugin: "plugin:uninstall",
 } as const
 
 const desktopProtocolClient = {
@@ -169,6 +188,19 @@ const agentClient = {
   replyQuestion: (input) => ipcRenderer.invoke(agentChannels.replyQuestion, input),
 } satisfies AgentClient
 
+const agentSkillClient = {
+  importSkill: () => ipcRenderer.invoke(agentSkillChannels.importSkill),
+  installCatalogSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installCatalogSkill, input),
+  installPluginSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installPluginSkill, input),
+  listSkills: (input) => ipcRenderer.invoke(agentSkillChannels.listSkills, input),
+  onDidChange(listener) {
+    const handleChange = () => listener()
+    ipcRenderer.on(agentSkillChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(agentSkillChannels.changed, handleChange)
+  },
+  uninstallSkill: (input) => ipcRenderer.invoke(agentSkillChannels.uninstallSkill, input),
+} satisfies DesktopSkillClient
+
 const canvasDocumentClient = {
   load: (input) => ipcRenderer.invoke(canvasDocumentChannels.load, input),
   save: (input) => ipcRenderer.invoke(canvasDocumentChannels.save, input),
@@ -198,10 +230,23 @@ const canvasRendererClient = {
   },
 } satisfies CanvasRendererClient
 
+const pluginClient = {
+  importPlugin: () => ipcRenderer.invoke(pluginChannels.importPlugin),
+  installCatalogPlugin: (input) => ipcRenderer.invoke(pluginChannels.installCatalogPlugin, input),
+  listPlugins: () => ipcRenderer.invoke(pluginChannels.listPlugins),
+  onDidChange(listener) {
+    const handleChange = () => listener()
+    ipcRenderer.on(pluginChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+  },
+  uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
+} satisfies WebPluginClient
+
 contextBridge.exposeInMainWorld("convax", {
-  agent: agentClient,
+  agent: { ...agentClient, skills: agentSkillClient },
   canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
   platform: process.platform,
+  plugins: pluginClient,
   projectFiles: projectFilesClient,
   projects: projectsClient,
   protocol: desktopProtocolClient,

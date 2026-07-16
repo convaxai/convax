@@ -99,6 +99,8 @@ export interface AgentSessionState {
 export interface AgentSkill {
   name: string
   description?: string
+  /** Native OpenCode source location. Hosts may use it to distinguish managed and external Skills. */
+  location?: string
 }
 
 export interface AgentCapabilities {
@@ -283,6 +285,8 @@ export interface AgentRuntimeRejectQuestionInput {
 
 export interface AgentRuntime {
   getStatus(): Promise<AgentRuntimeStatus>
+  /** List OpenCode-native Skills without requiring a host tool scope. */
+  listSkills(input: AgentRuntimeDirectoryInput): Promise<AgentSkill[]>
   listSessions(input: AgentRuntimeListSessionsInput): Promise<AgentSession[]>
   createSession(input: AgentRuntimeCreateSessionInput): Promise<AgentSession>
   getSessionState(input: AgentRuntimeGetSessionStateInput): Promise<AgentSessionState>

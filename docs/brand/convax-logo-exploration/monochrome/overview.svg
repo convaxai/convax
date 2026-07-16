@@ -1,0 +1,63 @@
+<svg width="1600" height="940" viewBox="0 0 1600 940" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="940" fill="#F2F2F4"/>
+  <text x="88" y="92" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="42" font-weight="700">Convax — Monochrome Study</text>
+  <text x="88" y="132" fill="#71717A" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="21">统一白色圆角容器 · 透明四角 · 近黑主图形 · 1024 px</text>
+
+  <g transform="translate(88 188)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="01-context-stack.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">01  Context Stack</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">上下文层叠 · 稳定对齐</text>
+  </g>
+  <g transform="translate(459 188)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="02-selective-plane.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">02  Selective Plane</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">选择平面 · 负空间</text>
+  </g>
+  <g transform="translate(830 188)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="03-signal-field.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">03  Signal Field</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">信号聚合 · 尺度递进</text>
+  </g>
+  <g transform="translate(1201 188)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="04-soft-current.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">04  Soft Current</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">柔性流动 · 三重层级</text>
+  </g>
+
+  <g transform="translate(88 552)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="05-guided-focus.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">05  Guided Focus</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">聚焦上下文 · 同心结构</text>
+  </g>
+  <g transform="translate(459 552)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="06-shared-space.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">06  Shared Space</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">人机协作 · 共享区域</text>
+  </g>
+  <g transform="translate(830 552)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="07-folded-context.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">07  Folded Context</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">上下文折页 · 单体识别</text>
+  </g>
+  <g transform="translate(1201 552)">
+    <rect width="310" height="304" rx="28" fill="white"/>
+    <rect x="47" y="16" width="216" height="216" rx="24" fill="#F4F4F5"/>
+    <image x="59" y="28" width="192" height="192" href="08-modular-context.svg"/>
+    <text x="28" y="256" fill="#111113" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="22" font-weight="650">08  Modular Context</text>
+    <text x="28" y="283" fill="#8A8A93" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="16">模块组合 · 明确秩序</text>
+  </g>
+</svg>

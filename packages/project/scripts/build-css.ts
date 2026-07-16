@@ -51,6 +51,11 @@ const uiStyles = hasBuiltUiStyles
   : await compileStyles(sourceUiStylesPath, uiPackageDirectory)
 const uiThemePath = hasBuiltUiStyles ? builtUiThemePath : sourceUiThemePath
 const projectStyles = await compileStyles(join(packageDirectory, "src", "styles.css"), packageDirectory, uiThemePath)
+for (const selector of [".fixed", ".w-80", ".h-56", ".h-52"]) {
+  if (!projectStyles.includes(selector)) {
+    throw new Error(`@convax/project: compiled CSS is missing required preview utility ${selector}`)
+  }
+}
 const styles = `${uiStyles}\n${projectStyles}`
 
 mkdirSync(outputDirectory, { recursive: true })

@@ -40,9 +40,11 @@
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "catalog:",
+    "@radix-ui/react-menu": "catalog:",
     "@radix-ui/react-tooltip": "catalog:",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
+    "lucide-react": "catalog:",
     "tailwind-merge": "catalog:"
   },
   "peerDependencies": {

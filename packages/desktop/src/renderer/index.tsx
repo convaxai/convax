@@ -27,19 +27,33 @@ import {
 import { CheckCircle2, Info, PanelLeftOpen, TriangleAlert, XCircle } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
-import { agentCanvasNodeResourceUri } from "../agent-canvas-context"
+import { agentCanvasNodeResourceUri, createAgentCanvasInstructions } from "../agent-canvas-context"
+import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import { AgentPanel } from "./agent-panel"
+import {
+  readAppLanguagePreference,
+  resolveAppLocale,
+  writeAppLanguagePreference,
+  type AppLanguagePreference,
+} from "./app-language"
+import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { createInitialCanvasDocument } from "./canvas-document"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import { SettingsView, type SettingsSection } from "./settings-view"
 import {
   readWorkbenchLayoutPreferences,
   writeWorkbenchLayoutPreferences,
 } from "./workbench-layout-preferences"
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
+import {
+  createWebPluginCanvasContribution,
+  type WebPluginCanvasHost,
+} from "./web-plugin-canvas"
 import "./styles.css"
 
 const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
@@ -122,10 +136,19 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+  const [languagePreference, setLanguagePreference] = useState<AppLanguagePreference>(() => readAppLanguagePreference(localStorage))
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null)
+  const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
+  const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
+  const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
+  const pluginHostContextRef = useRef<{
+    activeCanvas?: { id: string; name: string }
+    activeProject?: { id: string; name: string }
+  }>({})
   const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
   const drainCanvasSaves = useCallback(async () => {
     while (true) {
@@ -220,6 +243,33 @@ function App() {
     return () => window.removeEventListener("resize", updateViewportWidth)
   }, [])
   useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
+  useEffect(() => {
+    const synchronizeStoredLanguage = () => setLanguagePreference(readAppLanguagePreference(localStorage))
+    window.addEventListener("storage", synchronizeStoredLanguage)
+    return () => {
+      window.removeEventListener("storage", synchronizeStoredLanguage)
+    }
+  }, [])
+  useEffect(() => {
+    const openSettingsShortcut = (event: KeyboardEvent) => {
+      if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
+      event.preventDefault()
+      setSettingsSection("general")
+    }
+    window.addEventListener("keydown", openSettingsShortcut)
+    return () => window.removeEventListener("keydown", openSettingsShortcut)
+  }, [])
+  useEffect(() => {
+    if (!settingsSection) return
+    const closeSettings = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsSection(null)
+    }
+    window.addEventListener("keydown", closeSettings)
+    return () => window.removeEventListener("keydown", closeSettings)
+  }, [settingsSection])
+  useEffect(() => {
     if (!workbenchLayoutSnapshot.resize) {
       writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
     }
@@ -239,6 +289,133 @@ function App() {
   const activeCanvas = activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
     ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
     : undefined
+  pluginHostContextRef.current = { activeCanvas, activeProject }
+
+  const webPluginHost = useMemo<WebPluginCanvasHost>(() => {
+    const currentScope = (projectId: string, canvasId: string) => {
+      const current = pluginHostContextRef.current
+      if (current.activeProject?.id !== projectId || current.activeCanvas?.id !== canvasId) {
+        throw new Error("Plugin call is no longer in the active Project and Canvas")
+      }
+      return current
+    }
+    const throwIfAborted = (signal: AbortSignal) => {
+      if (signal.aborted) throw signal.reason ?? new Error("Plugin call was canceled")
+    }
+    return {
+      getActiveContext() {
+        const current = pluginHostContextRef.current
+        if (!current.activeProject || !current.activeCanvas) return null
+        return {
+          canvasId: current.activeCanvas.id,
+          canvasName: current.activeCanvas.name,
+          projectId: current.activeProject.id,
+          projectName: current.activeProject.name,
+        }
+      },
+      async promptAgent(input) {
+        throwIfAborted(input.signal)
+        const initial = currentScope(input.projectId, input.canvasId)
+        await flushCanvasForAgent()
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+
+        const session = await window.convax.agent.createSession({
+          scopeId: input.projectId,
+          title: `Plugin: ${input.pluginName}`,
+        })
+        const abortSession = () => {
+          void window.convax.agent.abort({
+            scopeId: input.projectId,
+            sessionId: session.id,
+          }).catch(() => undefined)
+        }
+        input.signal.addEventListener("abort", abortSession, { once: true })
+        try {
+          throwIfAborted(input.signal)
+          currentScope(input.projectId, input.canvasId)
+          const resource = canvasNodeResource(input.canvasId, input.nodeId, `${input.pluginName} node`)
+          const message = await window.convax.agent.prompt({
+            instructions: [
+              ...createAgentCanvasInstructions({
+                activeCanvas: initial.activeCanvas,
+                resources: [resource],
+              }),
+              `A sandboxed Convax Plugin named ${JSON.stringify(input.pluginName)} requested this response through its declared Agent capability. Keep every tool call in the authoritative active Project and Canvas scope.`,
+            ],
+            resources: [resource],
+            scopeId: input.projectId,
+            sessionId: session.id,
+            text: input.text,
+          })
+          throwIfAborted(input.signal)
+          currentScope(input.projectId, input.canvasId)
+          if (message.error) throw new Error(message.error)
+          return {
+            text: message.parts
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n\n"),
+          }
+        } finally {
+          input.signal.removeEventListener("abort", abortSession)
+        }
+      },
+      async readProjectText(input) {
+        throwIfAborted(input.signal)
+        const current = pluginHostContextRef.current
+        if (current.activeProject?.id !== input.projectId || !current.activeCanvas) {
+          throw new Error("Plugin call is no longer in the active Project")
+        }
+        const result = await window.convax.projectFiles.readTextFile({
+          path: input.path,
+          projectId: input.projectId,
+        })
+        throwIfAborted(input.signal)
+        const latest = pluginHostContextRef.current
+        if (latest.activeProject?.id !== input.projectId || latest.activeCanvas?.id !== current.activeCanvas.id) {
+          throw new Error("Plugin call completed after its Project or Canvas changed")
+        }
+        return result
+      },
+    }
+  }, [flushCanvasForAgent])
+
+  useEffect(() => {
+    let active = true
+    let request = 0
+    const refresh = async () => {
+      const current = ++request
+      try {
+        const inventory = await window.convax.plugins.listPlugins()
+        if (active && current === request) setInstalledPlugins(inventory.installed)
+      } catch (error) {
+        if (active && current === request) console.error("Could not load installed Canvas Plugins", error)
+      }
+    }
+    void refresh()
+    const unsubscribe = window.convax.plugins.onDidChange(() => void refresh())
+    return () => {
+      active = false
+      request += 1
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    const disposers: Array<() => void> = []
+    for (const plugin of installedPlugins) {
+      try {
+        disposers.push(canvasFileRendererRegistry.registerPlugin(createWebPluginCanvasContribution(plugin, {
+          frameRegistry: pluginFrameRegistry,
+          host: webPluginHost,
+        })))
+      } catch (error) {
+        console.error(`Could not register Canvas Plugin ${plugin.id}`, error)
+      }
+    }
+    return () => disposers.reverse().forEach((dispose) => dispose())
+  }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, webPluginHost])
   useEffect(() => {
     if (!activeProjectId || projectCanvasSnapshot.projectId !== activeProjectId) return
     void projectCanvasWorkbench.reconcile(
@@ -527,6 +704,13 @@ function App() {
     : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
   const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
+  const openSettings = useCallback((target: ApplicationMenuTarget) => {
+    setSettingsSection(target)
+  }, [])
+  const changeLanguage = useCallback((preference: AppLanguagePreference) => {
+    setLanguagePreference(preference)
+    writeAppLanguagePreference(localStorage, preference)
+  }, [])
 
   useEffect(() => {
     if (!activeProject || workbenchLayoutSnapshot.resize || !secondarySidebar.visible) return
@@ -543,7 +727,12 @@ function App() {
   ])
 
   return (
-    <main className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}>
+    <>
+    <main
+      aria-hidden={settingsSection ? true : undefined}
+      className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}
+      inert={settingsSection ? true : undefined}
+    >
       <div
         className={`relative h-full shrink-0 overflow-hidden${!resizingPrimarySidebar || !primarySidebar.visible ? " transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}
         style={{ width: activeProject ? primarySidebarOccupiedSize : 0 }}
@@ -572,6 +761,7 @@ function App() {
               onCreate: () => { void projectCanvasWorkbench.createCanvas(activeProject.id) },
             } : undefined}
             filesController={projectFilesController}
+            footerActions={<ApplicationMenu locale={locale} onOpenSettings={openSettings} />}
             hideWhenNoProject
             resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
           />
@@ -588,6 +778,9 @@ function App() {
             </button>
             <div className="mt-2 h-px w-5 bg-border" />
             <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Project</span>
+            <div className="mt-auto">
+              <ApplicationMenu compact locale={locale} onOpenSettings={openSettings} />
+            </div>
           </aside>
         )}
         {activeProject && primarySidebar.visible ? (
@@ -664,6 +857,19 @@ function App() {
       />
       {notification ? <Toast notification={notification} /> : null}
     </main>
+    {settingsSection ? (
+      <SettingsView
+        className="fixed inset-0 z-[100]"
+        initialSection={settingsSection}
+        languagePreference={languagePreference}
+        locale={locale}
+        onClose={() => setSettingsSection(null)}
+        onLanguageChange={changeLanguage}
+        pluginClient={window.convax.plugins}
+        skillClient={window.convax.agent.skills}
+      />
+    ) : null}
+    </>
   )
 }
 

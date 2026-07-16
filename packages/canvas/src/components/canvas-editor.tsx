@@ -1607,12 +1607,10 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))}
             canUndo={history.past.length > 0}
             canUpload={Boolean(uploadService)}
+            createItems={connectionNodeTypes}
             hasNodeSelection={selectedNodeIds.length > 0}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
-            onAddAgent={() => addNode("agent")}
-            onAddText={() => addNode("text")}
-            onAddImage={() => addNode("image")}
-            onAddVideo={() => addNode("video")}
+            onAddNode={addNode}
             onAlign={align}
             onCopy={copy}
             onDelete={remove}
@@ -1956,12 +1954,10 @@ function CanvasContextMenu(props: {
   canUngroup: boolean
   canUndo: boolean
   canUpload: boolean
+  createItems: readonly { label: string; type: string }[]
   hasNodeSelection: boolean
   hasSelection: boolean
-  onAddAgent: () => void
-  onAddImage: () => void
-  onAddText: () => void
-  onAddVideo: () => void
+  onAddNode: (type: string) => void
   onAlign: (direction: CanvasAlign) => void
   onCopy: () => void
   onDelete: () => void
@@ -1980,10 +1976,20 @@ function CanvasContextMenu(props: {
   return (
     <ContextMenuContent className="w-60">
       {!props.readOnly ? <ContextMenuLabel>Create</ContextMenuLabel> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddText}><Type />Add text</ContextMenuItem> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddAgent}><Bot />Add agent</ContextMenuItem> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddImage}><ImagePlus />Add image</ContextMenuItem> : null}
-      {!props.readOnly ? <ContextMenuItem onSelect={props.onAddVideo}><Video />Add video</ContextMenuItem> : null}
+      {!props.readOnly ? props.createItems.map((item) => (
+        <ContextMenuItem key={item.type} onSelect={() => props.onAddNode(item.type)}>
+          {item.type === "text"
+            ? <Type />
+            : item.type === "agent"
+              ? <Bot />
+              : item.type === "image"
+                ? <ImagePlus />
+                : item.type === "video"
+                  ? <Video />
+                  : <FileUp />}
+          Add {item.label}
+        </ContextMenuItem>
+      )) : null}
       {props.canUpload && !props.readOnly ? <ContextMenuItem onSelect={props.onUpload}><FileUp />Upload files</ContextMenuItem> : null}
       {!props.readOnly ? <ContextMenuSeparator /> : null}
       <ContextMenuLabel>Canvas</ContextMenuLabel>

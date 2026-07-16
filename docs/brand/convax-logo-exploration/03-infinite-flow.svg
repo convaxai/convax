@@ -1,0 +1,10 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Infinite Flow logo">
+  <rect x="3" y="3" width="94" height="94" rx="22" fill="#fff" stroke="#e7e7ea" stroke-width="0.8"/>
+  <g fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" style="color:#7657e8">
+    <path d="M27 34 C39 28 49 31 58 36 S70 43 76 37" opacity="0.34"/>
+    <path d="M25 41 C38 35 48 38 57 43 S69 50 77 44" opacity="0.5"/>
+    <path d="M24 49 C37 43 47 46 56 51 S68 58 78 52" opacity="0.68"/>
+    <path d="M24 57 C37 51 47 54 56 59 S68 66 78 60" opacity="0.84"/>
+    <path d="M26 65 C38 59 48 62 57 67 S69 74 76 68"/>
+  </g>
+</svg>

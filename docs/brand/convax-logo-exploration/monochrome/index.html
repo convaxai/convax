@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Convax Monochrome Logo Study</title>
+    <style>
+      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; background: #f2f2f4; color: #111113; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; }
+      main { width: min(1480px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0 80px; }
+      header { display: flex; align-items: end; justify-content: space-between; gap: 32px; margin-bottom: 40px; }
+      h1 { margin: 0 0 10px; font-size: clamp(34px, 4vw, 54px); letter-spacing: -0.04em; }
+      p { margin: 0; color: #71717a; font-size: 17px; }
+      .controls { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 18px; background: rgba(255,255,255,.8); }
+      input { accent-color: #111113; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+      article { background: white; border-radius: 28px; padding: 28px; transition: transform .18s ease, box-shadow .18s ease; }
+      article:hover { transform: translateY(-4px); box-shadow: 0 18px 46px rgba(0,0,0,.08); }
+      .stage { height: 220px; display: grid; place-items: center; border-radius: 22px; background: #f7f7f8; }
+      img { width: var(--preview-size, 168px); height: var(--preview-size, 168px); transition: width .15s ease, height .15s ease; }
+      h2 { margin: 22px 0 6px; font-size: 20px; letter-spacing: -0.02em; }
+      small { color: #8a8a93; font-size: 15px; }
+      @media (max-width: 1050px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 620px) { main { width: min(100% - 28px, 1480px); padding-top: 32px; } header { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Convax · Monochrome</h1>
+          <p>统一白色圆角底与透明四角，仅比较图形语言。</p>
+        </div>
+        <label class="controls">预览尺寸 <input id="size" type="range" min="16" max="188" value="168" /></label>
+      </header>
+      <section class="grid">
+        <article><div class="stage"><img src="01-context-stack.svg" alt="Context Stack" /></div><h2>01 · Context Stack</h2><small>上下文层叠 · 稳定对齐</small></article>
+        <article><div class="stage"><img src="02-selective-plane.svg" alt="Selective Plane" /></div><h2>02 · Selective Plane</h2><small>选择平面 · 负空间</small></article>
+        <article><div class="stage"><img src="03-signal-field.svg" alt="Signal Field" /></div><h2>03 · Signal Field</h2><small>信号聚合 · 尺度递进</small></article>
+        <article><div class="stage"><img src="04-soft-current.svg" alt="Soft Current" /></div><h2>04 · Soft Current</h2><small>柔性流动 · 三重层级</small></article>
+        <article><div class="stage"><img src="05-guided-focus.svg" alt="Guided Focus" /></div><h2>05 · Guided Focus</h2><small>聚焦上下文 · 同心结构</small></article>
+        <article><div class="stage"><img src="06-shared-space.svg" alt="Shared Space" /></div><h2>06 · Shared Space</h2><small>人机协作 · 共享区域</small></article>
+        <article><div class="stage"><img src="07-folded-context.svg" alt="Folded Context" /></div><h2>07 · Folded Context</h2><small>上下文折页 · 单体识别</small></article>
+        <article><div class="stage"><img src="08-modular-context.svg" alt="Modular Context" /></div><h2>08 · Modular Context</h2><small>模块组合 · 明确秩序</small></article>
+      </section>
+    </main>
+    <script>
+      const range = document.querySelector('#size');
+      range.addEventListener('input', () => document.documentElement.style.setProperty('--preview-size', `${range.value}px`));
+    </script>
+  </body>
+</html>

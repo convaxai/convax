@@ -57,6 +57,7 @@ export interface ProjectSidebarProps {
     onCreate?: () => void
   }
   filesController: ProjectFilesController
+  footerActions?: ReactNode
   hideWhenNoProject?: boolean
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
 }
@@ -80,7 +81,7 @@ const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   selectedPaths: [],
 }
 
-export function ProjectSidebar({ className, controller, extension, filesController, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
+export function ProjectSidebar({ className, controller, extension, filesController, footerActions, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
   const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const latestFilesSnapshot = useSyncExternalStore(filesController.subscribe, filesController.getSnapshot, filesController.getSnapshot)
   const filesSnapshot = latestFilesSnapshot.projectId === projectSnapshot.activeProjectId
@@ -235,14 +236,26 @@ export function ProjectSidebar({ className, controller, extension, filesControll
           className,
         )}
       >
-      <header className="relative flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
-        <span className="grid size-7 place-items-center rounded-lg bg-primary text-[11px] font-bold tracking-tight text-primary-foreground">CX</span>
+      <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
         <button
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => setSwitcherOpen((open) => !open)}
           type="button"
         >
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{activeProject?.name ?? "Convax"}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold">{activeProject?.name ?? "Convax"}</span>
+            {activeProject ? (
+              <Tooltip content={<span className="break-all">{activeProject.rootPath}</span>} side="right">
+                <span
+                  aria-label={`Project path: ${activeProject.rootPath}`}
+                  className="mt-0.5 block truncate text-[10px] font-normal leading-4 text-muted-foreground"
+                  data-project-header-path={activeProject.rootPath}
+                >
+                  {activeProject.rootPath}
+                </span>
+              </Tooltip>
+            ) : null}
+          </span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </button>
         <Tooltip content="Open folder">
@@ -446,10 +459,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
               </section>
             ) : null}
           </div>
-          <footer className="flex h-9 shrink-0 items-center gap-2 border-t border-border px-3 text-[11px] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
-            <span className="min-w-0 flex-1 truncate" title={activeProject.rootPath}>{activeProject.rootPath}</span>
-          </footer>
+          {footerActions ? <div className="shrink-0 border-t border-border p-2">{footerActions}</div> : null}
         </>
       )}
 
@@ -632,7 +642,7 @@ function ProjectTreeNode(props: {
       aria-level={props.level}
       aria-selected={selected}
       className={cn(
-        "group flex h-7 select-none items-center rounded-md pr-1 text-[13px] outline-none",
+        "group my-0.5 flex h-7 select-none items-center rounded-md pr-1 text-[13px] outline-none",
         selected ? "bg-accent text-accent-foreground" : "hover:bg-muted/70",
         props.dropTargetPath === entry.path && "bg-primary/10 ring-1 ring-inset ring-primary/40",
       )}
@@ -751,7 +761,7 @@ function EntryEditorRow(props: {
   onCommit: () => Promise<void>
 }) {
   return (
-    <div className="flex h-7 items-center rounded-md bg-accent/60 pr-1 text-[13px]" role="treeitem" aria-level={props.level}>
+    <div className="my-0.5 flex h-7 items-center rounded-md bg-accent/60 pr-1 text-[13px]" role="treeitem" aria-level={props.level}>
       <span style={{ width: `${(props.level - 1) * 14 + 24}px` }} />
       <EntryIcon entry={{ kind: props.editor.entryKind, name: props.editor.name }} />
       <InlineInput
@@ -767,7 +777,7 @@ function EntryEditorRow(props: {
 
 function TreeStateRow({ icon, label, level }: { icon?: ReactNode; label: string; level: number }) {
   return (
-    <div className="flex h-7 items-center gap-1.5 text-xs text-muted-foreground" role="treeitem" aria-level={level}>
+    <div className="my-0.5 flex h-7 items-center gap-1.5 text-xs text-muted-foreground" role="treeitem" aria-level={level}>
       <span style={{ width: `${(level - 1) * 14 + 24}px` }} />
       {icon ? <span className="[&>svg]:size-3.5">{icon}</span> : null}
       <span>{label}</span>
@@ -792,7 +802,7 @@ function ProjectSwitcher(props: {
       </div>
       <div className="max-h-56 overflow-auto">
         {props.projects.map((project) => (
-          <div className={cn("group flex items-center rounded-lg", project.id === props.activeProjectId && "bg-accent")} key={project.id}>
+          <div className={cn("group my-0.5 flex items-center rounded-lg", project.id === props.activeProjectId && "bg-accent")} key={project.id}>
             <button className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left" onClick={() => props.onActivate(project.id)} type="button">
               <Folder className="size-4 shrink-0 text-primary" />
               <span className="min-w-0 flex-1">

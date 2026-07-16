@@ -1,0 +1,11 @@
+<svg width="1024" height="1024" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" rx="22" fill="white"/>
+  <defs>
+    <mask id="shared-space-cutout">
+      <rect width="100" height="100" fill="white"/>
+      <circle cx="50" cy="50" r="9" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="42" cy="50" r="21" fill="currentColor" style="color:#111113" opacity="0.18"/>
+  <circle cx="58" cy="50" r="21" fill="currentColor" style="color:#111113" mask="url(#shared-space-cutout)"/>
+</svg>

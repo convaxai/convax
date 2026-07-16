@@ -40,6 +40,7 @@ import type {
   AgentSession,
   AgentSessionState,
   AgentSessionStatus,
+  AgentSkill,
   AgentToolState,
   AgentToolProvider,
 } from "../contracts"
@@ -51,6 +52,8 @@ type OpenCodeServer = Awaited<ReturnType<typeof createOpencodeServer>>
 
 export interface OpenCodeAgentRuntimeOptions {
   binaryDirectory?: string
+  /** Host-managed OpenCode config root used for installed Skills. */
+  configDirectory?: string
   hostname?: string
   port?: number
   timeout?: number
@@ -70,6 +73,11 @@ interface SdkResult<T> {
   data?: T
   error?: unknown
   response?: Response
+}
+
+interface SkillRefreshWaiter {
+  resolve: () => void
+  reject: (error: unknown) => void
 }
 
 const textExtensions = new Set([
@@ -131,6 +139,18 @@ type OpenCodePermissionObject = Exclude<OpenCodePermission, string>
 type OpenCodePermissionRule = NonNullable<OpenCodePermissionObject["read"]>
 type OpenCodePermissionAction = Extract<OpenCodePermission, string>
 const defaultProtectedPathMarker = ".agent-runtime-protected-path-guard"
+
+function withSkillDiscoveryBoundary(config: ServerOptions["config"] | undefined): OpenCodeConfig {
+  return {
+    ...config,
+    skills: {
+      ...config?.skills,
+      // Remote Skill indexes are not a runtime discovery mechanism. The host
+      // installs reviewed content into its managed config directory instead.
+      urls: [],
+    },
+  }
+}
 
 function protectPathPatterns(
   rule: OpenCodePermissionRule | undefined,
@@ -239,7 +259,27 @@ function restoreEnvironment(name: string, value: string | undefined) {
   else process.env[name] = value
 }
 
-function startAuthenticatedServer(options: ServerOptions, username: string, password: string) {
+function withOpenCodeSkillEnvironment<T>(configDirectory: string | undefined, launch: () => T): T {
+  const previousDisableExternalSkills = process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS
+  const previousConfigDirectory = process.env.OPENCODE_CONFIG_DIR
+  // Skills are installed into host-controlled config roots. Do not discover
+  // ambient ~/.agents, ~/.claude, or project-local external Skill directories.
+  process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS = "1"
+  if (configDirectory) process.env.OPENCODE_CONFIG_DIR = configDirectory
+  try {
+    return launch()
+  } finally {
+    restoreEnvironment("OPENCODE_DISABLE_EXTERNAL_SKILLS", previousDisableExternalSkills)
+    restoreEnvironment("OPENCODE_CONFIG_DIR", previousConfigDirectory)
+  }
+}
+
+function startAuthenticatedServer(
+  options: ServerOptions,
+  username: string,
+  password: string,
+  configDirectory?: string,
+) {
   const previousUsername = process.env.OPENCODE_SERVER_USERNAME
   const previousPassword = process.env.OPENCODE_SERVER_PASSWORD
   const previousDisableDirectoryConfig = process.env.OPENCODE_DISABLE_PROJECT_CONFIG
@@ -252,7 +292,7 @@ function startAuthenticatedServer(options: ServerOptions, username: string, pass
   try {
     // createOpencodeServer launches the child synchronously before returning its startup promise,
     // so the child receives the private credentials and execution boundary while the parent environment is restored immediately.
-    return createOpencodeServer(options)
+    return withOpenCodeSkillEnvironment(configDirectory, () => createOpencodeServer(options))
   } finally {
     restoreEnvironment("OPENCODE_SERVER_USERNAME", previousUsername)
     restoreEnvironment("OPENCODE_SERVER_PASSWORD", previousPassword)
@@ -557,6 +597,10 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   private readonly toolRegistrations = new Map<string, Promise<void>>()
   private readonly protectedPathRegistrations = new Map<string, Promise<void>>()
   private protectedPathArtifact?: Promise<{ directory: string; marker: string; specifier: string }>
+  private activePromptCount = 0
+  private skillRefreshRequested = false
+  private skillRefreshInFlight?: Promise<void>
+  private readonly skillRefreshWaiters: SkillRefreshWaiter[] = []
 
   constructor(options: OpenCodeAgentRuntimeOptions = {}) {
     const toolServerName = options.toolServerName?.trim() || "host"
@@ -565,9 +609,17 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     }
     this.toolServerName = toolServerName
     const permissionConfig = withProtectedPathPermissions(options.config, options.protectedPathPatterns ?? [])
+    const config = withSkillDiscoveryBoundary(permissionConfig)
+    if (options.configDirectory !== undefined && !options.configDirectory.trim()) {
+      throw new Error("OpenCode config directory is required")
+    }
+    const configDirectory = options.configDirectory === undefined
+      ? undefined
+      : resolve(options.configDirectory.trim())
     this.options = {
       ...options,
-      config: permissionConfig,
+      config,
+      configDirectory,
       protectedPaths: normalizeProtectedPaths(options.protectedPaths ?? []),
       toolServerName,
     }
@@ -576,6 +628,61 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
 
   async getStatus(): Promise<AgentRuntimeStatus> {
     return this.lifecycle
+  }
+
+  private async enterPrompt() {
+    while (this.skillRefreshInFlight) await this.skillRefreshInFlight
+    if (this.disposed) throw new Error("OpenCode agent runtime has been disposed")
+    this.activePromptCount += 1
+  }
+
+  private leavePrompt() {
+    this.activePromptCount = Math.max(0, this.activePromptCount - 1)
+    if (this.activePromptCount === 0) this.drainSkillRefresh()
+  }
+
+  private drainSkillRefresh() {
+    if (
+      this.disposed
+      || this.activePromptCount > 0
+      || this.skillRefreshInFlight
+      || !this.skillRefreshRequested
+    ) return
+
+    this.skillRefreshRequested = false
+    const waiters = this.skillRefreshWaiters.splice(0)
+    const refresh = (async () => {
+      try {
+        const client = await this.getClient()
+        unwrap(await client.global.dispose(), "Refresh OpenCode skills")
+      } finally {
+        // Global disposal invalidates per-directory instances, including their
+        // MCP tool and strong path-guard initialization.
+        this.toolRegistrations.clear()
+        this.protectedPathRegistrations.clear()
+      }
+    })()
+    this.skillRefreshInFlight = refresh
+    void refresh
+      .then(
+        () => waiters.forEach((waiter) => waiter.resolve()),
+        (error) => waiters.forEach((waiter) => waiter.reject(error)),
+      )
+      .finally(() => {
+        if (this.skillRefreshInFlight === refresh) this.skillRefreshInFlight = undefined
+        this.drainSkillRefresh()
+      })
+  }
+
+  /** Rebuild OpenCode's Skill registry without replacing its durable sessions. */
+  refreshSkills(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error("OpenCode agent runtime has been disposed"))
+    this.skillRefreshRequested = true
+    const result = new Promise<void>((resolve, reject) => {
+      this.skillRefreshWaiters.push({ resolve, reject })
+    })
+    this.drainSkillRefresh()
+    return result
   }
 
   private materializeProtectedPathPlugin() {
@@ -629,7 +736,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
         timeout: this.options.timeout ?? 10_000,
         config,
         signal: this.controller.signal,
-      }, username, password)
+      }, username, password, this.options.configDirectory)
       if (this.disposed || generation !== this.connectionGeneration) {
         server.close()
         throw new Error("OpenCode agent runtime was disposed while starting")
@@ -788,67 +895,72 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       throw new Error("A message or resource is required")
     }
 
-    const client = await this.getClient()
-    await this.ensureProtectedPathGuard(client, directory)
-    await this.ensureToolScope(client, directory, input.scopeId)
-    const attachments = await prepareAgentResourceParts(directory, resources)
-    const skills = [...new Set(selectedSkills)].filter(Boolean)
+    await this.enterPrompt()
+    try {
+      const client = await this.getClient()
+      await this.ensureProtectedPathGuard(client, directory)
+      await this.ensureToolScope(client, directory, input.scopeId)
+      const attachments = await prepareAgentResourceParts(directory, resources)
+      const skills = [...new Set(selectedSkills)].filter(Boolean)
 
-    let useSkillTool = skills.length > 1
-    if (skills.length === 1) {
-      const commands = unwrap(await client.command.list({ directory }), "List OpenCode commands")
-      const matchingCommand = commands.find((command) => command.name === skills[0])
-      useSkillTool = matchingCommand !== undefined && matchingCommand.source !== "skill"
+      let useSkillTool = skills.length > 1
+      if (skills.length === 1) {
+        const commands = unwrap(await client.command.list({ directory }), "List OpenCode commands")
+        const matchingCommand = commands.find((command) => command.name === skills[0])
+        useSkillTool = matchingCommand !== undefined && matchingCommand.source !== "skill"
 
-      if (!useSkillTool) {
-        const response = unwrap(
-          await client.session.command({
-            directory,
-            sessionID: input.sessionId,
-            command: skills[0],
-            arguments: [input.text, ...instructions].filter((part) => part.trim()).join("\n\n"),
-            parts: attachments,
-            agent: input.agent,
-            model: input.model ? `${input.model.providerId}/${input.model.modelId}` : undefined,
-            variant: input.variant,
-          }),
-          `Run OpenCode skill ${skills[0]}`,
-        )
-        return mapMessage(response)
+        if (!useSkillTool) {
+          const response = unwrap(
+            await client.session.command({
+              directory,
+              sessionID: input.sessionId,
+              command: skills[0],
+              arguments: [input.text, ...instructions].filter((part) => part.trim()).join("\n\n"),
+              parts: attachments,
+              agent: input.agent,
+              model: input.model ? `${input.model.providerId}/${input.model.modelId}` : undefined,
+              variant: input.variant,
+            }),
+            `Run OpenCode skill ${skills[0]}`,
+          )
+          return mapMessage(response)
+        }
       }
-    }
 
-    const parts: Array<{ type: "text"; text: string; synthetic?: boolean } | FilePartInput> = []
-    if (useSkillTool) {
-      parts.push({
-        type: "text",
-        synthetic: true,
-        text: `Use the skill tool to load each of these skills before handling the request: ${skills.join(", ")}.`,
-      })
-    }
-    for (const instruction of instructions) {
-      parts.push({ type: "text", text: instruction, synthetic: true })
-    }
-    if (input.text.trim()) parts.push({ type: "text", text: input.text })
-    parts.push(...attachments)
+      const parts: Array<{ type: "text"; text: string; synthetic?: boolean } | FilePartInput> = []
+      if (useSkillTool) {
+        parts.push({
+          type: "text",
+          synthetic: true,
+          text: `Use the skill tool to load each of these skills before handling the request: ${skills.join(", ")}.`,
+        })
+      }
+      for (const instruction of instructions) {
+        parts.push({ type: "text", text: instruction, synthetic: true })
+      }
+      if (input.text.trim()) parts.push({ type: "text", text: input.text })
+      parts.push(...attachments)
 
-    const response = unwrap(
-      await client.session.prompt({
-        directory,
-        sessionID: input.sessionId,
-        parts,
-        agent: input.agent,
-        model: input.model
-          ? {
-              providerID: input.model.providerId,
-              modelID: input.model.modelId,
-            }
-          : undefined,
-        variant: input.variant,
-      }),
-      "Prompt OpenCode session",
-    )
-    return mapMessage(response)
+      const response = unwrap(
+        await client.session.prompt({
+          directory,
+          sessionID: input.sessionId,
+          parts,
+          agent: input.agent,
+          model: input.model
+            ? {
+                providerID: input.model.providerId,
+                modelID: input.model.modelId,
+              }
+            : undefined,
+          variant: input.variant,
+        }),
+        "Prompt OpenCode session",
+      )
+      return mapMessage(response)
+    } finally {
+      this.leavePrompt()
+    }
   }
 
   async abort(input: AgentRuntimeSessionInput): Promise<void> {
@@ -857,16 +969,26 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     unwrap(await client.session.abort({ directory, sessionID: input.sessionId }), "Abort OpenCode session")
   }
 
+  async listSkills(input: AgentRuntimeDirectoryInput): Promise<AgentSkill[]> {
+    const directory = workspaceDirectory(input.directory)
+    const client = await this.getClient()
+    const skills = unwrap(await client.app.skills({ directory }), "List OpenCode skills")
+    return skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      location: skill.location,
+    }))
+  }
+
   async listCapabilities(input: AgentRuntimeDirectoryInput): Promise<AgentCapabilities> {
     const directory = workspaceDirectory(input.directory)
     const client = await this.getClient()
     await this.ensureProtectedPathGuard(client, directory)
     await this.ensureToolScope(client, directory, input.scopeId)
-    const [skillsResult, toolsResult] = await Promise.all([
-      client.app.skills({ directory }),
+    const [skills, toolsResult] = await Promise.all([
+      this.listSkills({ directory }),
       client.tool.ids({ directory }),
     ])
-    const skills = unwrap(skillsResult, "List OpenCode skills")
     const toolIds = unwrap(toolsResult, "List OpenCode tools")
     const visibleToolIds = (this.options.protectedPaths?.length ?? 0) > 0
       ? toolIds.filter((tool) => tool !== "bash" && tool !== "shell" && tool !== "lsp")
@@ -876,7 +998,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
           .map((tool) => `${this.toolServerName}_${tool.name}`)
       : []
     return {
-      skills: skills.map((skill) => ({ name: skill.name, description: skill.description })),
+      skills,
       toolIds: [...new Set([...visibleToolIds, ...hostToolIds])],
     }
   }
@@ -916,7 +1038,10 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
-    this.controller.abort(new Error("OpenCode agent runtime disposed"))
+    const disposalError = new Error("OpenCode agent runtime disposed")
+    this.skillRefreshRequested = false
+    for (const waiter of this.skillRefreshWaiters.splice(0)) waiter.reject(disposalError)
+    this.controller.abort(disposalError)
     await this.startup?.catch(() => undefined)
     this.server?.close()
     this.server = undefined

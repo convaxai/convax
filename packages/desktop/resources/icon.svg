@@ -1,0 +1,7 @@
+<svg width="1024" height="1024" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stacked Context logo">
+  <rect x="9" y="9" width="82" height="82" rx="18" fill="#fff"/>
+  <g fill="currentColor" style="color:#7657e8">
+    <rect x="27" y="28" width="44" height="44" rx="12" transform="rotate(-12 49 50)" opacity="0.24"/>
+    <rect x="31" y="30" width="40" height="40" rx="11" transform="rotate(10 51 50)"/>
+  </g>
+</svg>
