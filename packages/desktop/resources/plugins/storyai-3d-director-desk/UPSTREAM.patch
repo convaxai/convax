@@ -1,0 +1,908 @@
+diff --git a/index.html b/index.html
+index b287f31..9b719f7 100644
+--- a/index.html
++++ b/index.html
+@@ -3,16 +3,7 @@
+   <head>
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <title>3D导演台 Demo</title>
+-    <style>
+-      html,
+-      body,
+-      #root {
+-        height: 100%;
+-        margin: 0;
+-        background: #090909;
+-      }
+-    </style>
++    <title>3D Director Desk</title>
+   </head>
+   <body>
+     <div id="root"></div>
+diff --git a/src/App.tsx b/src/App.tsx
+index fa4b915..23b2ace 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,9 +1,8 @@
+ import "./styles/index.css";
+ import { useEffect } from "react";
+-import { X } from "lucide-react";
+ import { DirectorDeskShell } from "./app/layout/DirectorDeskShell";
+ import { DirectorCanvas } from "./editor/canvas/DirectorCanvas";
+-import { initDirectorDeskHostBridge } from "./editor/io/hostBridge";
++import { clearDirectorDeskHostBridge, initDirectorDeskHostBridge } from "./editor/io/hostBridge";
+ import { useDirectorStore } from "./editor/store/directorStore";
+ 
+ function isEditableShortcutTarget(target: EventTarget | null) {
+@@ -18,13 +17,9 @@ export default function App() {
+ 
+   useEffect(() => {
+     initDirectorDeskHostBridge();
+-    window.parent?.postMessage({ type: "storyai:director-desk-ready" }, window.location.origin);
++    return clearDirectorDeskHostBridge;
+   }, []);
+ 
+-  function handleClose() {
+-    window.parent?.postMessage({ type: "storyai:director-desk-close" }, window.location.origin);
+-  }
+-
+   useEffect(() => {
+     function handleKeyDown(event: KeyboardEvent) {
+       if (event.defaultPrevented || isEditableShortcutTarget(event.target)) return;
+@@ -82,17 +77,7 @@ export default function App() {
+             </button>
+           </div>
+         </div>
+-        <div className="top-bar-actions">
+-          <button
+-            className="top-bar-action-button"
+-            type="button"
+-            aria-label="关闭"
+-            title="关闭"
+-            onClick={handleClose}
+-          >
+-            <X aria-hidden="true" size={16} strokeWidth={1.8} />
+-          </button>
+-        </div>
++        <div aria-hidden="true" className="top-bar-actions" />
+       </header>
+       <DirectorDeskShell>
+         <DirectorCanvas />
+diff --git a/src/editor/canvas/DirectorCanvas.tsx b/src/editor/canvas/DirectorCanvas.tsx
+index f103cbc..eaab260 100644
+--- a/src/editor/canvas/DirectorCanvas.tsx
++++ b/src/editor/canvas/DirectorCanvas.tsx
+@@ -19,7 +19,6 @@ import { useDirectorStore, type CameraShotSnapshot } from "../store/directorStor
+ import { DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT, getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
+ import type { DirectorObject, DirectorTransform, SceneSettings } from "../schema/directorProject";
+ import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
+-import { getUE4GroundedLabelY } from "../runtime/ue4Mannequin/ue4MannequinRig";
+ import { SceneRoot } from "./SceneRoot";
+ import { ViewportAspectOverlay } from "./ViewportAspectOverlay";
+ import { ViewportBackground } from "./ViewportBackground";
+@@ -161,9 +160,7 @@ function createSceneMatrix(scene: SceneSettings) {
+ }
+ 
+ function getCharacterCaptureLabelY(item: DirectorObject) {
+-  return item.characterRig?.rigType === "ue4-mannequin"
+-    ? getUE4GroundedLabelY(item.bodyType)
+-    : getGroundedLabelY(item.bodyType);
++  return getGroundedLabelY(item.bodyType);
+ }
+ 
+ function getViewportCaptureLabels() {
+diff --git a/src/editor/canvas/SceneRoot.tsx b/src/editor/canvas/SceneRoot.tsx
+index 0e69e4c..502f73b 100644
+--- a/src/editor/canvas/SceneRoot.tsx
++++ b/src/editor/canvas/SceneRoot.tsx
+@@ -22,7 +22,6 @@ import type { TransformMode } from "../store/directorStore";
+ import { useDirectorStore } from "../store/directorStore";
+ import { CharacterModel } from "../runtime/CharacterModel";
+ import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
+-import { getUE4GroundedLabelY } from "../runtime/ue4Mannequin/ue4MannequinRig";
+ import { getEffectiveGroundOpacity } from "./panoramaMath";
+ import { getCrowdAnchorTransform } from "../store/directorStore";
+ 
+@@ -463,38 +462,9 @@ function ObjectSceneNode({
+   onSelect?: (item: DirectorObject) => void;
+ }) {
+   const groupRef = useRef<Group>(null!);
+-  const [measuredCharacterLabel, setMeasuredCharacterLabel] = useState<{
+-    key: string;
+-    y: number;
+-  } | null>(null);
+   const updateObjectTransform = useDirectorStore((state) => state.updateObjectTransform);
+   const isImportedModel = asset?.sourceType === "model";
+-  const characterLabelKey = `${item.id}:${item.bodyType ?? ""}:${item.characterRig?.rigType ?? ""}`;
+-  const fallbackCharacterLabelY =
+-    item.kind === "character"
+-      ? item.characterRig?.rigType === "ue4-mannequin"
+-        ? getUE4GroundedLabelY(item.bodyType)
+-        : getGroundedLabelY(item.bodyType)
+-      : 1.25;
+-  const characterLabelY =
+-    measuredCharacterLabel?.key === characterLabelKey ? measuredCharacterLabel.y : fallbackCharacterLabelY;
+-  const handleCharacterLabelAnchorYChange = useCallback(
+-    (anchorY: number) => {
+-      setMeasuredCharacterLabel((current) => {
+-        const nextY = Number(anchorY.toFixed(4));
+-
+-        if (current?.key === characterLabelKey && Math.abs(current.y - nextY) < 0.0001) {
+-          return current;
+-        }
+-
+-        return {
+-          key: characterLabelKey,
+-          y: nextY,
+-        };
+-      });
+-    },
+-    [characterLabelKey]
+-  );
++  const characterLabelY = item.kind === "character" ? getGroundedLabelY(item.bodyType) : 1.25;
+ 
+   function commitTransformFromViewport() {
+     const group = groupRef.current;
+@@ -528,7 +498,6 @@ function ObjectSceneNode({
+             <CharacterModel
+               bodyType={item.bodyType}
+               color={item.color}
+-              onLabelAnchorYChange={handleCharacterLabelAnchorYChange}
+               rigState={item.characterRig}
+             />
+           </Suspense>
+diff --git a/src/editor/canvas/ViewportToolbar.tsx b/src/editor/canvas/ViewportToolbar.tsx
+index 537f896..b246673 100644
+--- a/src/editor/canvas/ViewportToolbar.tsx
++++ b/src/editor/canvas/ViewportToolbar.tsx
+@@ -66,6 +66,10 @@ const MIN_CROWD_GRID_SIZE = 1;
+ const MAX_CROWD_GRID_SIZE = 12;
+ const MIN_CROWD_SPACING = 0.1;
+ const MAX_CROWD_SPACING = 10;
++// Opaque-origin Convax Plugin frames intentionally disallow fetch-based local
++// model loading. Keep these controls out of the embedded build until models are
++// imported through a scoped host capability instead.
++const LOCAL_MODEL_IMPORT_ENABLED = false;
+ 
+ function clampCrowdGridSize(value: number) {
+   if (!Number.isFinite(value)) return MIN_CROWD_GRID_SIZE;
+@@ -444,14 +448,16 @@ export function ViewportToolbar({
+     { label: "旋转", icon: Rotate3D, mode: "rotate", onClick: () => selectTransformMode("rotate") },
+     { label: "缩放", icon: Scale3D, mode: "scale", onClick: () => selectTransformMode("scale") },
+     { label: "导入全景图", icon: ImagePlus, onClick: () => panoramaInputRef.current?.click() },
+-    {
+-      label: "导入本地模型",
+-      icon: Box,
+-      onClick: () => {
+-        sceneLocalModelInputRef.current?.click();
++    ...(LOCAL_MODEL_IMPORT_ENABLED ? [
++      {
++        label: "导入本地模型",
++        icon: Box,
++        onClick: () => {
++          sceneLocalModelInputRef.current?.click();
++        },
+       },
+-    },
+-    { label: "模型库", icon: Boxes, onClick: toggleModelLibrary },
++      { label: "模型库", icon: Boxes, onClick: toggleModelLibrary },
++    ] : []),
+     { label: "添加机位", icon: Video, onClick: addCameraFromViewport },
+     { label: "选择画幅比例", icon: Ratio, onClick: toggleAspectRatioPanel },
+     { label: "当前视角截图", icon: Camera, onClick: () => void handleCapture("current") },
+@@ -694,7 +700,7 @@ export function ViewportToolbar({
+           ))}
+         </div>
+       ) : null}
+-      {modelLibraryOpen ? (
++      {LOCAL_MODEL_IMPORT_ENABLED && modelLibraryOpen ? (
+         <div
+           ref={modelLibraryPanelRef}
+           className="model-library-panel"
+@@ -864,27 +870,31 @@ export function ViewportToolbar({
+         type="file"
+         onChange={(event) => void handlePanoramaChange(event)}
+       />
+-      <input
+-        ref={sceneLocalModelInputRef}
+-        aria-hidden="true"
+-        className="hidden-file-input"
+-        data-testid="scene-local-model-input"
+-        tabIndex={-1}
+-        accept=".fbx,.obj"
+-        type="file"
+-        onChange={(event) => void handleLocalModelChange(event, true)}
+-      />
+-      <input
+-        ref={libraryLocalModelInputRef}
+-        aria-hidden="true"
+-        className="hidden-file-input"
+-        data-testid="library-local-model-input"
+-        tabIndex={-1}
+-        accept=".fbx,.obj"
+-        multiple
+-        type="file"
+-        onChange={(event) => void handleLocalModelChange(event, false)}
+-      />
++      {LOCAL_MODEL_IMPORT_ENABLED ? (
++        <>
++          <input
++            ref={sceneLocalModelInputRef}
++            aria-hidden="true"
++            className="hidden-file-input"
++            data-testid="scene-local-model-input"
++            tabIndex={-1}
++            accept=".fbx,.obj"
++            type="file"
++            onChange={(event) => void handleLocalModelChange(event, true)}
++          />
++          <input
++            ref={libraryLocalModelInputRef}
++            aria-hidden="true"
++            className="hidden-file-input"
++            data-testid="library-local-model-input"
++            tabIndex={-1}
++            accept=".fbx,.obj"
++            multiple
++            type="file"
++            onChange={(event) => void handleLocalModelChange(event, false)}
++          />
++        </>
++      ) : null}
+     </>
+   );
+ }
+diff --git a/src/editor/io/hostBridge.ts b/src/editor/io/hostBridge.ts
+index bb143e5..ba9a097 100644
+--- a/src/editor/io/hostBridge.ts
++++ b/src/editor/io/hostBridge.ts
+@@ -1,200 +1,212 @@
++import type { DirectorAssetRef, DirectorProject } from "../schema/directorProject";
+ import { useDirectorStore } from "../store/directorStore";
+ 
+-interface HostPanoramaPayload {
+-  edgeId?: unknown;
+-  sourceNodeId?: unknown;
+-  imageUrl?: unknown;
+-  fileName?: unknown;
+-}
++const HOST_PROTOCOL = "convax.plugin-host/1";
++const PLUGIN_ID = "storyai-3d-director-desk";
++const HOST_STATE_SCHEMA_VERSION = 1;
++const HOST_STATE_BYTE_LIMIT = 240 * 1024;
++const SAVE_DEBOUNCE_MS = 250;
+ 
+-interface HostSessionPayload {
+-  instanceId?: unknown;
+-  theme?: unknown;
+-}
++type HostMethod = "host.context.get" | "canvas.node.updateState";
+ 
+-export interface HostCaptureItemPayload {
+-  dataUrl?: unknown;
+-  fileName?: unknown;
++interface HostResponse {
++  error?: string;
++  id: string;
++  ok: boolean;
++  protocol: typeof HOST_PROTOCOL;
++  result?: unknown;
++  type: "response";
+ }
+ 
+-export interface HostCaptureBatchPayload {
+-  captures?: HostCaptureItemPayload[];
++interface PendingRequest {
++  reject(error: Error): void;
++  resolve(result: unknown): void;
+ }
+ 
+-interface HostConnectedPanorama {
+-  edgeId: string;
+-  sourceNodeId: string;
++interface DirectorHostState {
++  directorProject: DirectorProject;
++  schemaVersion: typeof HOST_STATE_SCHEMA_VERSION;
+ }
+ 
+ let initialized = false;
+-let hostConnectedPanorama: HostConnectedPanorama | null = null;
+-let removeUnsubscribe: (() => void) | null = null;
+-let suppressNextPanoramaRemovalNotice = false;
+-
+-function normalizeString(value: unknown) {
+-  return typeof value === "string" ? value.trim() : "";
+-}
+-
+-function getHostOrigin() {
+-  return window.location.origin;
+-}
+-
+-function normalizeTheme(value: unknown): "dark" | "light" | null {
+-  return value === "light" || value === "dark" ? value : null;
++let port: MessagePort | null = null;
++let requestSequence = 0;
++let saveTimer: number | null = null;
++let unsubscribe: (() => void) | null = null;
++let previousProject: DirectorProject | null = null;
++let lastSavedProject = "";
++const pending = new Map<string, PendingRequest>();
++
++function cloneJsonValue<T>(value: T): T {
++  return JSON.parse(JSON.stringify(value)) as T;
++}
++
++function isPlainRecord(value: unknown): value is Record<string, unknown> {
++  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
++}
++
++function isDirectorProject(value: unknown): value is DirectorProject {
++  if (!isPlainRecord(value) || value.version !== 1) return false;
++  return Array.isArray(value.assets)
++    && Array.isArray(value.objects)
++    && Array.isArray(value.cameras)
++    && isPlainRecord(value.scene)
++    && typeof value.scene.backgroundColor === "string";
++}
++
++function isEphemeralAsset(asset: DirectorAssetRef) {
++  return asset.url.startsWith("blob:") || asset.url.startsWith("data:");
++}
++
++/**
++ * Canvas node state is intentionally scene-only. Generated captures and browser
++ * object URLs are session data; persisting them would be invalid after reload
++ * and can exceed the host's bounded node-state contract.
++ */
++function createHostProject(project: DirectorProject): DirectorProject {
++  const excludedAssetIds = new Set(project.assets.filter(isEphemeralAsset).map((asset) => asset.id));
++  const assets = project.assets.filter((asset) => !excludedAssetIds.has(asset.id));
++  const objects = project.objects
++    .filter((object) => !object.assetRefId || !excludedAssetIds.has(object.assetRefId))
++    .map((object) => object.kind === "character" && object.characterRig
++      ? { ...object, characterRig: { ...object.characterRig, rigType: "mannequin" as const } }
++      : object);
++
++  return cloneJsonValue({
++    ...project,
++    assets,
++    cameras: project.cameras.map((camera) => ({ ...camera, captures: [], lastCaptureUrl: null })),
++    objects,
++    panoramaAssetId: project.panoramaAssetId && excludedAssetIds.has(project.panoramaAssetId)
++      ? null
++      : project.panoramaAssetId,
++  });
+ }
+ 
+-function applyDirectorDeskTheme(theme: "dark" | "light") {
+-  document.documentElement.dataset.theme = theme;
+-  document.documentElement.classList.toggle("dark", theme === "dark");
++function readHostProject(context: unknown): DirectorProject | null {
++  if (!isPlainRecord(context) || !isPlainRecord(context.node)) return null;
++  const data = context.node.data;
++  if (!isPlainRecord(data) || !isPlainRecord(data.metadata)) return null;
++  const state = data.metadata.convaxPluginState;
++  if (!isPlainRecord(state) || state.schemaVersion !== HOST_STATE_SCHEMA_VERSION) return null;
++  return isDirectorProject(state.directorProject) ? createHostProject(state.directorProject) : null;
++}
++
++function call(method: HostMethod, params?: unknown) {
++  if (!port) return Promise.reject(new Error("Convax Plugin host is not connected"));
++  const id = `director-${++requestSequence}`;
++  port.postMessage({ id, method, ...(params === undefined ? {} : { params }), protocol: HOST_PROTOCOL, type: "request" });
++  return new Promise<unknown>((resolve, reject) => pending.set(id, { reject, resolve }));
++}
++
++function isHostResponse(value: unknown): value is HostResponse {
++  return isPlainRecord(value)
++    && value.protocol === HOST_PROTOCOL
++    && value.type === "response"
++    && typeof value.id === "string"
++    && typeof value.ok === "boolean";
++}
++
++function handlePortMessage(event: MessageEvent) {
++  if (!isHostResponse(event.data)) return;
++  const operation = pending.get(event.data.id);
++  if (!operation) return;
++  pending.delete(event.data.id);
++  if (event.data.ok) operation.resolve(event.data.result);
++  else operation.reject(new Error(event.data.error || "Convax Plugin request failed"));
++}
++
++function queueProjectSave(project: DirectorProject) {
++  const hostProject = createHostProject(project);
++  const serializedProject = JSON.stringify(hostProject);
++  if (serializedProject === lastSavedProject) return;
++
++  if (saveTimer !== null) window.clearTimeout(saveTimer);
++  saveTimer = window.setTimeout(() => {
++    saveTimer = null;
++    const state: DirectorHostState = {
++      directorProject: hostProject,
++      schemaVersion: HOST_STATE_SCHEMA_VERSION,
++    };
++    if (new TextEncoder().encode(JSON.stringify(state)).byteLength > HOST_STATE_BYTE_LIMIT) {
++      console.warn("Director scene was not saved because it exceeds the Convax node-state limit");
++      return;
++    }
++    void call("canvas.node.updateState", { state }).then(() => {
++      lastSavedProject = serializedProject;
++    }).catch((error) => {
++      console.error("Failed to save Director scene through Convax", error);
++    });
++  }, SAVE_DEBOUNCE_MS);
+ }
+ 
+-function getInitialHostTheme() {
++async function hydrateAndSubscribe() {
+   try {
+-    return normalizeTheme(new URLSearchParams(window.location.search).get("theme"));
+-  } catch {
+-    return null;
+-  }
+-}
+-
+-function notifyPanoramaRemoved() {
+-  if (!hostConnectedPanorama) {
+-    return;
+-  }
+-
+-  window.parent?.postMessage(
+-    {
+-      type: "storyai:director-desk-panorama-removed",
+-      payload: hostConnectedPanorama,
+-    },
+-    getHostOrigin()
+-  );
+-  hostConnectedPanorama = null;
+-}
+-
+-function subscribeToPanoramaRemoval() {
+-  if (removeUnsubscribe) {
+-    return;
+-  }
+-
+-  let previousPanoramaAssetId = useDirectorStore.getState().project.panoramaAssetId;
+-  removeUnsubscribe = useDirectorStore.subscribe((state) => {
+-    const nextPanoramaAssetId = state.project.panoramaAssetId;
+-
+-    if (previousPanoramaAssetId && !nextPanoramaAssetId) {
+-      if (suppressNextPanoramaRemovalNotice) {
+-        suppressNextPanoramaRemovalNotice = false;
+-        hostConnectedPanorama = null;
+-      } else {
+-        notifyPanoramaRemoved();
+-      }
++    const context = await call("host.context.get");
++    const hostProject = readHostProject(context);
++    if (hostProject) {
++      useDirectorStore.setState({
++        directorInspectorMode: "auto",
++        project: hostProject,
++        selectedCrowdId: null,
++        selectedObjectId: null,
++        selectedObjectIds: [],
++      });
++      lastSavedProject = JSON.stringify(hostProject);
+     }
+-
+-    previousPanoramaAssetId = nextPanoramaAssetId;
+-  });
+-}
+-
+-function importHostPanorama(payload: HostPanoramaPayload) {
+-  const imageUrl = normalizeString(payload.imageUrl);
+-  if (!imageUrl) {
+-    return;
++  } catch (error) {
++    console.error("Failed to hydrate Director scene through Convax", error);
+   }
+ 
+-  const fileName = normalizeString(payload.fileName) || "画布全景图.png";
+-  const edgeId = normalizeString(payload.edgeId);
+-  const sourceNodeId = normalizeString(payload.sourceNodeId);
+-
+-  hostConnectedPanorama = edgeId && sourceNodeId ? { edgeId, sourceNodeId } : null;
+-  useDirectorStore.getState().addImportedAsset({
+-    kind: "panorama",
+-    name: fileName,
+-    fileName,
+-    url: imageUrl,
+-    projectionMode: "backdrop",
++  previousProject = useDirectorStore.getState().project;
++  unsubscribe = useDirectorStore.subscribe((state) => {
++    if (state.project === previousProject) return;
++    previousProject = state.project;
++    queueProjectSave(state.project);
+   });
++  queueProjectSave(useDirectorStore.getState().project);
+ }
+ 
+-function openHostSession(payload: HostSessionPayload) {
+-  const instanceId = normalizeString(payload.instanceId);
+-  const theme = normalizeTheme(payload.theme);
+-  if (theme) {
+-    applyDirectorDeskTheme(theme);
+-  }
+-  suppressNextPanoramaRemovalNotice = Boolean(useDirectorStore.getState().project.panoramaAssetId);
+-  useDirectorStore.getState().openScopedScene(instanceId || null);
+-  suppressNextPanoramaRemovalNotice = false;
+-  hostConnectedPanorama = null;
+-}
+-
+-export function postDirectorDeskCapturesToHost(
+-  captures: Array<{
+-    dataUrl: string;
+-    fileName?: string;
+-  }>
+-) {
+-  const normalizedCaptures = captures
+-    .map((capture, index) => {
+-      const dataUrl = normalizeString(capture.dataUrl);
+-      if (!dataUrl) {
+-        return null;
+-      }
+-
+-      return {
+-        dataUrl,
+-        fileName: normalizeString(capture.fileName) || `director-desk-capture-${index + 1}.png`,
+-      };
+-    })
+-    .filter((capture): capture is { dataUrl: string; fileName: string } => Boolean(capture));
+-
+-  if (normalizedCaptures.length === 0) {
+-    return;
+-  }
+-
+-  window.parent?.postMessage(
+-    {
+-      type: "storyai:director-desk-captures-sent",
+-      payload: {
+-        captures: normalizedCaptures,
+-      },
+-    },
+-    getHostOrigin()
+-  );
++function connect(nextPort: MessagePort) {
++  if (port) return;
++  port = nextPort;
++  port.onmessage = handlePortMessage;
++  port.start();
++  void hydrateAndSubscribe();
+ }
+ 
+-function handleHostMessage(event: MessageEvent) {
+-  if (event.origin !== getHostOrigin()) {
+-    return;
+-  }
+-
+-  if (event.data?.type === "storyai:director-desk-session") {
+-    openHostSession((event.data.payload || {}) as HostSessionPayload);
+-    return;
+-  }
+-
+-  if (event.data?.type === "storyai:director-desk-panorama") {
+-    importHostPanorama((event.data.payload || {}) as HostPanoramaPayload);
+-  }
++function handleConnect(event: MessageEvent) {
++  if (
++    event.source !== window.parent
++    || event.data?.protocol !== HOST_PROTOCOL
++    || event.data?.type !== "connect"
++    || event.data?.pluginId !== PLUGIN_ID
++    || event.ports.length !== 1
++  ) return;
++  window.removeEventListener("message", handleConnect);
++  connect(event.ports[0]);
+ }
+ 
+ export function initDirectorDeskHostBridge() {
+-  if (initialized) {
+-    return;
+-  }
+-
++  if (initialized) return;
+   initialized = true;
+-  applyDirectorDeskTheme(getInitialHostTheme() ?? "dark");
+-  window.addEventListener("message", handleHostMessage);
+-  subscribeToPanoramaRemoval();
++  document.documentElement.dataset.theme = "dark";
++  document.documentElement.classList.add("dark");
++  window.addEventListener("message", handleConnect);
+ }
+ 
+ export function clearDirectorDeskHostBridge() {
+-  if (!initialized) {
+-    return;
+-  }
+-
++  if (!initialized) return;
+   initialized = false;
+-  hostConnectedPanorama = null;
+-  suppressNextPanoramaRemovalNotice = false;
+-  window.removeEventListener("message", handleHostMessage);
+-  removeUnsubscribe?.();
+-  removeUnsubscribe = null;
++  window.removeEventListener("message", handleConnect);
++  unsubscribe?.();
++  unsubscribe = null;
++  if (saveTimer !== null) window.clearTimeout(saveTimer);
++  saveTimer = null;
++  pending.forEach(({ reject }) => reject(new Error("Convax Plugin host disconnected")));
++  pending.clear();
++  port?.close();
++  port = null;
++  previousProject = null;
++  lastSavedProject = "";
+ }
+diff --git a/src/editor/modelLibrary/modelLibraryCatalog.ts b/src/editor/modelLibrary/modelLibraryCatalog.ts
+index dadcac5..5d66091 100644
+--- a/src/editor/modelLibrary/modelLibraryCatalog.ts
++++ b/src/editor/modelLibrary/modelLibraryCatalog.ts
+@@ -274,11 +274,7 @@ const MODEL_LIBRARY_THUMB_NAME_MAP: Record<string, string> = {
+   "display_cooler_low.fbx": "展示冰柜",
+ };
+ 
+-const UPDATED_MODEL_THUMBNAIL_OVERRIDES: Record<string, string> = {
+-  "deer_skull_low.fbx": new URL("../../../../模型库/户外出行/缩略图/鹿头骨.png", import.meta.url).href,
+-  "drill_press_low.fbx": new URL("../../../../模型库/工具配件/缩略图/台钻.png", import.meta.url).href,
+-  "thermus_low.fbx": new URL("../../../../模型库/户外出行/缩略图/保温瓶.png", import.meta.url).href,
+-};
++const UPDATED_MODEL_THUMBNAIL_OVERRIDES: Record<string, string> = {};
+ 
+ function createModelName(fileName: string) {
+   const mappedName = MODEL_LIBRARY_NAME_MAP[fileName];
+diff --git a/src/editor/panels/CameraPanel.tsx b/src/editor/panels/CameraPanel.tsx
+index 90b508b..3007d44 100644
+--- a/src/editor/panels/CameraPanel.tsx
++++ b/src/editor/panels/CameraPanel.tsx
+@@ -1,4 +1,4 @@
+-import { Camera, Download, Eye, Images, Send, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
++import { Camera, Eye, Images, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+ import {
+   InspectorAxisGroup,
+@@ -9,8 +9,6 @@ import {
+   InspectorTextField,
+ } from "./InspectorControls";
+ import { requestViewportCapture } from "../io/captureBridge";
+-import { downloadDataUrl } from "../io/screenshotExport";
+-import { postDirectorDeskCapturesToHost } from "../io/hostBridge";
+ import { getDirectorObjectFocusTarget, isCameraFocusableObject } from "../schema/cameraTarget";
+ import type { DirectorCameraCapture } from "../schema/directorProject";
+ import { useDirectorStore } from "../store/directorStore";
+@@ -130,26 +128,6 @@ export function CameraPanel() {
+     setViewerScale((currentScale) => clampViewerScale(Number(updater(currentScale).toFixed(2))));
+   }, [clampViewerScale]);
+ 
+-  const sendCaptureToCanvas = useCallback((capture: DirectorCameraCapture) => {
+-    postDirectorDeskCapturesToHost([
+-      {
+-        dataUrl: capture.dataUrl,
+-        fileName: `${capture.name}.png`,
+-      },
+-    ]);
+-  }, []);
+-
+-  const sendAllCapturesToCanvas = useCallback(() => {
+-    postDirectorDeskCapturesToHost(
+-      cameraCaptureGroups.flatMap((group) =>
+-        group.captures.map((capture) => ({
+-          dataUrl: capture.dataUrl,
+-          fileName: `${capture.name}.png`,
+-        }))
+-      )
+-    );
+-  }, [cameraCaptureGroups]);
+-
+   async function handleCameraCapture() {
+     try {
+       setCaptureError(null);
+@@ -290,17 +268,6 @@ export function CameraPanel() {
+                   >
+                     <Trash2 aria-hidden="true" size={14} strokeWidth={1.9} />
+                   </button>
+-                  <button
+-                    aria-label={`发送到画布 ${capture.name}`}
+-                    className="camera-capture-action"
+-                    type="button"
+-                    onClick={(event) => {
+-                      event.stopPropagation();
+-                      sendCaptureToCanvas(capture);
+-                    }}
+-                  >
+-                    <Send aria-hidden="true" size={14} strokeWidth={1.9} />
+-                  </button>
+                   <button
+                     aria-label={`查看截图 ${capture.name}`}
+                     className="camera-capture-action"
+@@ -377,14 +344,6 @@ export function CameraPanel() {
+           <Trash2 aria-hidden="true" data-testid="camera-capture-clear-icon" size={14} strokeWidth={1.9} />
+           <span>清空全部</span>
+         </button>
+-        <button
+-          className="camera-capture-send-all viewport-toolbar-crowd-confirm"
+-          type="button"
+-          onClick={sendAllCapturesToCanvas}
+-        >
+-          <Send aria-hidden="true" data-testid="camera-capture-send-icon" size={14} strokeWidth={1.9} />
+-          <span>发送到画布</span>
+-        </button>
+       </div>
+     );
+   }
+@@ -431,14 +390,6 @@ export function CameraPanel() {
+           >
+             <ZoomOut aria-hidden="true" size={18} strokeWidth={2} />
+           </button>
+-          <button
+-            aria-label="下载图片"
+-            className="camera-capture-viewer-tool"
+-            type="button"
+-            onClick={() => downloadDataUrl(viewerCapture.dataUrl, `${viewerCapture.name}.png`)}
+-          >
+-            <Download aria-hidden="true" size={18} strokeWidth={2} />
+-          </button>
+           <button
+             aria-label="关闭相机截图查看器"
+             className="camera-capture-viewer-tool camera-capture-viewer-close"
+diff --git a/src/editor/runtime/CharacterModel.tsx b/src/editor/runtime/CharacterModel.tsx
+index ffd78db..8f02193 100644
+--- a/src/editor/runtime/CharacterModel.tsx
++++ b/src/editor/runtime/CharacterModel.tsx
+@@ -1,51 +1,13 @@
+-import { Component, type ReactNode } from "react";
+ import type { CharacterRigState } from "../schema/directorProject";
+ import { PrimitiveMannequin } from "./PrimitiveMannequin";
+-import { UE4MannequinModel } from "./UE4MannequinModel";
+ import type { CharacterBodyType } from "./mannequin/bodyTypes";
+ 
+ interface CharacterModelProps {
+   bodyType?: CharacterBodyType;
+   color?: string;
+-  onLabelAnchorYChange?: (anchorY: number) => void;
+   rigState?: CharacterRigState;
+ }
+ 
+-class CharacterModelBoundary extends Component<
+-  {
+-    fallback: ReactNode;
+-    children: ReactNode;
+-  },
+-  {
+-    hasError: boolean;
+-  }
+-> {
+-  state = { hasError: false };
+-
+-  static getDerivedStateFromError() {
+-    return { hasError: true };
+-  }
+-
+-  render() {
+-    return this.state.hasError ? this.props.fallback : this.props.children;
+-  }
+-}
+-
+-export function CharacterModel({ bodyType, color, onLabelAnchorYChange, rigState }: CharacterModelProps) {
+-  const fallback = <PrimitiveMannequin bodyType={bodyType} color={color} rigState={rigState} />;
+-
+-  if (rigState?.rigType !== "ue4-mannequin") {
+-    return fallback;
+-  }
+-
+-  return (
+-    <CharacterModelBoundary fallback={fallback}>
+-      <UE4MannequinModel
+-        bodyType={bodyType}
+-        color={color}
+-        onLabelAnchorYChange={onLabelAnchorYChange}
+-        rigState={rigState}
+-      />
+-    </CharacterModelBoundary>
+-  );
++export function CharacterModel({ bodyType, color, rigState }: CharacterModelProps) {
++  return <PrimitiveMannequin bodyType={bodyType} color={color} rigState={rigState} />;
+ }
+diff --git a/src/editor/schema/cameraTarget.ts b/src/editor/schema/cameraTarget.ts
+index fedfb44..26b915d 100644
+--- a/src/editor/schema/cameraTarget.ts
++++ b/src/editor/schema/cameraTarget.ts
+@@ -1,6 +1,5 @@
+ import { Euler, Vector3 } from "three";
+ import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
+-import { getUE4GroundedLabelY } from "../runtime/ue4Mannequin/ue4MannequinRig";
+ import type { DirectorObject, GeometryPrimitiveType } from "./directorProject";
+ 
+ const IMPORTED_MODEL_FOCUS_OFFSET_Y = 1;
+@@ -28,12 +27,7 @@ export function getDirectorObjectFocusOffsetY(object: DirectorObject) {
+   }
+ 
+   if (object.kind === "character") {
+-    const labelY =
+-      object.characterRig?.rigType === "ue4-mannequin"
+-        ? getUE4GroundedLabelY(object.bodyType)
+-        : getGroundedLabelY(object.bodyType);
+-
+-    return labelY / 2;
++    return getGroundedLabelY(object.bodyType) / 2;
+   }
+ 
+   if (object.geometryType) {
+diff --git a/src/editor/store/directorStore.ts b/src/editor/store/directorStore.ts
+index 81f867e..7d33804 100644
+--- a/src/editor/store/directorStore.ts
++++ b/src/editor/store/directorStore.ts
+@@ -255,10 +255,9 @@ function isLocalModelLibraryAsset(asset: DirectorAssetRef) {
+   return asset.sourceType === "model" && asset.kind !== "panorama" && asset.assetSource === "local";
+ }
+ 
+-function getLocalStorageSafe() {
+-  if (typeof localStorage === "undefined") return null;
+-
+-  return localStorage;
++function getLocalStorageSafe(): Storage | null {
++  // Convax owns durable Plugin state through the scoped MessageChannel host.
++  return null;
+ }
+ 
+ function cloneJsonValue<T>(value: T): T {
+@@ -346,12 +345,12 @@ function migrateDirectorProject(project: DirectorProject): DirectorProject {
+       if (object.kind !== "character") return object;
+ 
+       const rig = object.characterRig;
+-      if (rig?.rigType === "ue4-mannequin") return object;
++      if (rig?.rigType === "mannequin") return object;
+ 
+       return {
+         ...object,
+         characterRig: {
+-          rigType: "ue4-mannequin",
++          rigType: "mannequin",
+           posePresetId: rig?.posePresetId ?? "stand",
+           controls: rig?.controls ?? {},
+         },
+@@ -479,7 +478,7 @@ export function createDefaultDirectorProject({
+     color: "#4F8EF7",
+     transform: createTransform([0, 0, 0]),
+     characterRig: {
+-      rigType: "ue4-mannequin",
++      rigType: "mannequin",
+       posePresetId: "stand",
+       controls: {},
+     },
+@@ -613,7 +612,7 @@ function buildPresetCharacterObject(
+     crowdLabel: crowdMetadata?.crowdLabel,
+     transform: createTransform(position),
+     characterRig: {
+-      rigType: "ue4-mannequin" as const,
++      rigType: "mannequin" as const,
+       posePresetId: "stand",
+       controls: {},
+     },
+diff --git a/vite.config.ts b/vite.config.ts
+index 6fe5d02..65acfd1 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -2,9 +2,18 @@ import { defineConfig } from "vitest/config";
+ import react from "@vitejs/plugin-react";
+ 
+ export default defineConfig({
+-  base: "/",
++  base: "./",
+   assetsInclude: ["**/*.fbx", "**/*.obj"],
+   plugins: [react()],
++  build: {
++    rollupOptions: {
++      output: {
++        assetFileNames: "assets/styles.css",
++        chunkFileNames: "assets/chunk-[hash].js",
++        entryFileNames: "assets/app.js",
++      },
++    },
++  },
+   server: {
+     fs: {
+       allow: [
