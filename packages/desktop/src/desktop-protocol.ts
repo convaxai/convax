@@ -1,5 +1,5 @@
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/3"
+export const desktopProtocolVersion = "convax.desktop-ipc/4"
 
 export interface DesktopProtocolClient {
   readonly version: string
