@@ -1,0 +1,4 @@
+@import "tailwindcss" source(none);
+@import "./theme.css";
+
+@source "./**/*.{ts,tsx}";

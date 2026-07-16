@@ -1,0 +1,50 @@
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+:root {
+  --radius: 6px;
+  --background: #f7f8f7;
+  --foreground: #171a18;
+  --card: #ffffff;
+  --card-foreground: #171a18;
+  --popover: #ffffff;
+  --popover-foreground: #171a18;
+  --primary: #7657e8;
+  --primary-foreground: #ffffff;
+  --secondary: #e8eeeb;
+  --secondary-foreground: #24342d;
+  --muted: #edf0ee;
+  --muted-foreground: #68716c;
+  --accent: #efecfb;
+  --accent-foreground: #40346d;
+  --destructive: #c43d49;
+  --border: #d9ddda;
+  --input: #ccd2ce;
+  --ring: #7657e8;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}

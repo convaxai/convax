@@ -1,21 +1,42 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@convax/ui",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
-  "imports": {
-    "#components/*": "./src/components/*.tsx",
-    "#hooks/*": "./src/hooks/*.ts",
-    "#lib/*": "./src/lib/*.ts"
-  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./components/*": "./src/components/*.tsx",
-    "./lib/*": "./src/lib/*.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./components/*": {
+      "types": "./dist/components/*.d.ts",
+      "import": "./dist/components/*.js",
+      "default": "./dist/components/*.js"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "default": "./dist/lib/*.js"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./theme.css": "./dist/theme.css"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "clean": "rm -rf dist",
+    "build:js": "bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/index.ts && bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/components/*.tsx && bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/lib/*.ts",
+    "build:css": "bun scripts/build-css.ts",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun run clean && bun run build:js && bun run build:css && bun run build:types",
+    "test": "bun test --pass-with-no-tests",
+    "typecheck": "tsc --noEmit",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "catalog:",
@@ -25,14 +46,21 @@
     "tailwind-merge": "catalog:"
   },
   "peerDependencies": {
-    "react": "catalog:",
-    "react-dom": "catalog:"
+    "react": "^18.2.0 || ^19.0.0",
+    "react-dom": "^18.2.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "typescript": "catalog:"
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

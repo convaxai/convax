@@ -5,7 +5,7 @@
   "tsx": true,
   "tailwind": {
     "config": "",
-    "css": "../desktop/src/renderer/styles.css",
+    "css": "src/styles.css",
     "baseColor": "neutral",
     "cssVariables": true
   },
@@ -18,4 +18,3 @@
     "utils": "#lib/utils"
   }
 }
-

@@ -1,22 +1,49 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@convax/canvas",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./application": "./src/application/index.ts",
-    "./core": "./src/core.ts",
-    "./styles.css": "./src/styles.css",
-    "./view": "./src/view.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./application": {
+      "types": "./dist/application/index.d.ts",
+      "import": "./dist/application/index.js",
+      "default": "./dist/application/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js",
+      "default": "./dist/core.js"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./view": {
+      "types": "./dist/view.d.ts",
+      "import": "./dist/view.js",
+      "default": "./dist/view.js"
+    }
   },
   "scripts": {
+    "clean": "rm -rf dist",
+    "build:js": "for entry in src/index.ts src/application/index.ts src/core.ts src/view.ts; do bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "build:css": "bun scripts/build-css.ts",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:css && bun run build:types",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
-    "@convax/ui": "workspace:*",
+    "@convax/ui": "workspace:^",
     "@tiptap/core": "catalog:",
     "@tiptap/extension-placeholder": "catalog:",
     "@tiptap/extension-table": "catalog:",
@@ -28,15 +55,21 @@
     "lucide-react": "catalog:"
   },
   "peerDependencies": {
-    "react": "catalog:",
-    "react-dom": "catalog:"
+    "react": "^18.2.0 || ^19.0.0",
+    "react-dom": "^18.2.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "typescript": "catalog:"
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

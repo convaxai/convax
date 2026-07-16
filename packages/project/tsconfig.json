@@ -5,5 +5,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["bun", "node", "react", "react-dom"]
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }
