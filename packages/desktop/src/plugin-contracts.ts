@@ -10,7 +10,7 @@ export const webPluginCapabilities = [
   "ui.fullscreen",
 ] as const
 
-export type WebPluginCapability = typeof webPluginCapabilities[number]
+export type WebPluginCapability = (typeof webPluginCapabilities)[number]
 
 export interface WebPluginCanvasRendererContribution {
   create?: boolean
@@ -52,6 +52,10 @@ export interface InstalledWebPluginSummary extends WebPluginManifest {}
 
 export interface WebPluginCatalogItem extends WebPluginManifest {
   installed: boolean
+  /** Validated installed version when the catalog id is already present. */
+  installedVersion?: string
+  /** True only when the trusted catalog contains a newer SemVer. */
+  updateAvailable?: boolean
 }
 
 export interface WebPluginInventory {
@@ -69,7 +73,54 @@ export interface WebPluginClient {
 
 const allowedCapabilities = new Set<string>(webPluginCapabilities)
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
-const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
+const semverPattern =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
+
+function compareNumericIdentifier(left: string, right: string) {
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1
+  return left === right ? 0 : left < right ? -1 : 1
+}
+
+function splitSemver(value: string) {
+  if (!semverPattern.test(value)) throw new Error("Plugin version must be valid SemVer")
+  const withoutBuild = value.split("+", 1)[0]
+  const prereleaseIndex = withoutBuild.indexOf("-")
+  const core = (prereleaseIndex === -1 ? withoutBuild : withoutBuild.slice(0, prereleaseIndex)).split(".")
+  const prerelease = prereleaseIndex === -1 ? [] : withoutBuild.slice(prereleaseIndex + 1).split(".")
+  return { core, prerelease }
+}
+
+/** Compares two validated Plugin SemVer values using SemVer precedence. */
+export function compareWebPluginVersions(left: string, right: string) {
+  const leftVersion = splitSemver(left)
+  const rightVersion = splitSemver(right)
+  for (let index = 0; index < 3; index += 1) {
+    const compared = compareNumericIdentifier(leftVersion.core[index], rightVersion.core[index])
+    if (compared) return compared
+  }
+  if (leftVersion.prerelease.length === 0 || rightVersion.prerelease.length === 0) {
+    return leftVersion.prerelease.length === rightVersion.prerelease.length
+      ? 0
+      : leftVersion.prerelease.length === 0
+        ? 1
+        : -1
+  }
+  const length = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length)
+  for (let index = 0; index < length; index += 1) {
+    const leftIdentifier = leftVersion.prerelease[index]
+    const rightIdentifier = rightVersion.prerelease[index]
+    if (leftIdentifier === undefined || rightIdentifier === undefined) {
+      return leftIdentifier === rightIdentifier ? 0 : leftIdentifier === undefined ? -1 : 1
+    }
+    if (leftIdentifier === rightIdentifier) continue
+    const leftNumeric = /^\d+$/.test(leftIdentifier)
+    const rightNumeric = /^\d+$/.test(rightIdentifier)
+    if (leftNumeric && rightNumeric) return compareNumericIdentifier(leftIdentifier, rightIdentifier)
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
+    return leftIdentifier < rightIdentifier ? -1 : 1
+  }
+  return 0
+}
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -85,8 +136,13 @@ function assertKeys(value: Record<string, unknown>, allowed: readonly string[], 
 }
 
 function requireString(value: unknown, label: string, maxLength: number) {
-  if (typeof value !== "string" || value !== value.trim() || !value || value.length > maxLength
-    || /[\u0000-\u001f\u007f]/.test(value)) {
+  if (
+    typeof value !== "string" ||
+    value !== value.trim() ||
+    !value ||
+    value.length > maxLength ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
     throw new Error(`${label} must be a non-empty, trimmed string`)
   }
   return value
@@ -103,10 +159,15 @@ export function requireWebPluginId(value: unknown) {
 
 export function validatePortablePluginSegment(value: string) {
   const stem = value.split(".")[0] ?? ""
-  if (!value || value.length > 255 || value === "." || value === ".."
-    || /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value)
-    || /[. ]$/.test(value)
-    || windowsReservedName.test(stem)) {
+  if (
+    !value ||
+    value.length > 255 ||
+    value === "." ||
+    value === ".." ||
+    /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value) ||
+    /[. ]$/.test(value) ||
+    windowsReservedName.test(stem)
+  ) {
     throw new Error(`Plugin path contains an invalid Windows filename: ${value}`)
   }
   return value
@@ -126,11 +187,7 @@ export function requireWebPluginRelativePath(value: unknown, label = "Plugin pat
   return input
 }
 
-function parseStringArray(
-  value: unknown,
-  label: string,
-  validate: (item: string) => string,
-): string[] | undefined {
+function parseStringArray(value: unknown, label: string, validate: (item: string) => string): string[] | undefined {
   if (value === undefined) return undefined
   if (!Array.isArray(value) || value.length > 64) throw new Error(`${label} must be an array`)
   const items = value.map((item) => validate(requireString(item, label, 128)))
@@ -148,13 +205,18 @@ function parseDimension(value: unknown, label: string) {
 
 function parseRenderer(value: unknown): WebPluginCanvasRendererContribution {
   const input = asRecord(value, "Canvas renderer contribution")
-  assertKeys(input, ["create", "extensions", "height", "mimeTypes", "nodeKinds", "width"], "Canvas renderer contribution")
+  assertKeys(
+    input,
+    ["create", "extensions", "height", "mimeTypes", "nodeKinds", "width"],
+    "Canvas renderer contribution",
+  )
   if (input.create !== undefined && typeof input.create !== "boolean") {
     throw new Error("Canvas renderer create must be a boolean")
   }
   const extensions = parseStringArray(input.extensions, "Canvas renderer extensions", (item) => {
     const normalized = item.toLowerCase()
-    if (!/^\.[a-z0-9][a-z0-9._+-]{0,31}$/.test(normalized)) throw new Error(`Invalid Canvas renderer extension: ${item}`)
+    if (!/^\.[a-z0-9][a-z0-9._+-]{0,31}$/.test(normalized))
+      throw new Error(`Invalid Canvas renderer extension: ${item}`)
     return normalized
   })
   const mimeTypes = parseStringArray(input.mimeTypes, "Canvas renderer MIME types", (item) => {
@@ -203,16 +265,23 @@ function parseToolbar(value: unknown): WebPluginToolbarContribution[] | undefine
 
 export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const input = asRecord(value, "Plugin manifest")
-  assertKeys(input, ["capabilities", "contributes", "description", "entry", "id", "name", "schema", "skill", "version"], "Plugin manifest")
+  assertKeys(
+    input,
+    ["capabilities", "contributes", "description", "entry", "id", "name", "schema", "skill", "version"],
+    "Plugin manifest",
+  )
   if (input.schema !== webPluginManifestSchema) throw new Error("Plugin manifest schema is not supported")
   const entry = requireWebPluginRelativePath(input.entry, "Plugin entry")
   if (!entry.toLowerCase().endsWith(".html")) throw new Error("Plugin entry must be an HTML file")
   const version = requireString(input.version, "Plugin version", 128)
   if (!semverPattern.test(version)) throw new Error("Plugin version must be valid SemVer")
   const capabilities = input.capabilities === undefined ? [] : input.capabilities
-  if (!Array.isArray(capabilities) || capabilities.length > webPluginCapabilities.length
-    || capabilities.some((capability) => typeof capability !== "string" || !allowedCapabilities.has(capability))
-    || new Set(capabilities).size !== capabilities.length) {
+  if (
+    !Array.isArray(capabilities) ||
+    capabilities.length > webPluginCapabilities.length ||
+    capabilities.some((capability) => typeof capability !== "string" || !allowedCapabilities.has(capability)) ||
+    new Set(capabilities).size !== capabilities.length
+  ) {
     throw new Error("Plugin capabilities contain an unsupported or duplicate capability")
   }
   const contributes = asRecord(input.contributes, "Plugin contributions")

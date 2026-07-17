@@ -15,7 +15,8 @@ export function readAppLanguagePreference(storage: Pick<AppLanguageStorage, "get
     const value = JSON.parse(storage.getItem(appLanguageStorageKey) ?? "null") as unknown
     if (!value || typeof value !== "object") return "en"
     const candidate = value as { language?: unknown; version?: unknown }
-    if (candidate.version !== 1 || !languagePreferences.includes(candidate.language as AppLanguagePreference)) return "en"
+    if (candidate.version !== 1 || !languagePreferences.includes(candidate.language as AppLanguagePreference))
+      return "en"
     return candidate.language as AppLanguagePreference
   } catch {
     return "en"
@@ -57,21 +58,26 @@ const englishMessages = {
   "capabilities.installPlugin": "Install Plugin",
   "capabilities.installSkill": "Install Skill",
   "capabilities.installed": "Installed",
+  "capabilities.installedVersion": "Installed v{version}",
   "capabilities.loading": "Loading capabilities…",
   "capabilities.managed": "Managed",
   "capabilities.noCatalogPlugins": "The local Plugin catalog is empty.",
   "capabilities.noIncludedSkills": "No included Skills are available yet.",
   "capabilities.noSkills": "No managed or global Skills were found.",
   "capabilities.plugins": "Plugin",
-  "capabilities.pluginsDescription": "Plugins add sandboxed Canvas renderers and toolbar actions. A companion Skill is optional and installed separately.",
+  "capabilities.pluginsDescription":
+    "Plugins add sandboxed Canvas renderers and toolbar actions. A companion Skill is optional and installed separately.",
   "capabilities.pluginInstalled": "Plugin installed",
   "capabilities.pluginReady": "Ready on Canvas · Return to Canvas, then right-click or press Tab to add {name}.",
   "capabilities.pluginCatalog": "Plugin catalog",
   "capabilities.skills": "Skill",
-  "capabilities.skillsDescription": "Skills add reusable Agent workflows. Managed Skills can be removed here; global OpenCode Skills stay read-only.",
+  "capabilities.skillsDescription":
+    "Skills add reusable Agent workflows. Managed Skills can be removed here; global OpenCode Skills stay read-only.",
   "capabilities.title": "Skill & Plugin",
   "capabilities.unavailable": "Capabilities are not available.",
   "capabilities.uninstall": "Uninstall",
+  "capabilities.updateAvailable": "Update available",
+  "capabilities.updatePlugin": "Update Plugin",
   "settings.back": "Back to app",
   "settings.capabilities": "Skill & Plugin",
   "settings.general": "General",
@@ -104,6 +110,7 @@ const chineseMessages = {
   "capabilities.installPlugin": "安装插件",
   "capabilities.installSkill": "安装技能",
   "capabilities.installed": "已安装",
+  "capabilities.installedVersion": "已安装 v{version}",
   "capabilities.loading": "正在加载技能与插件…",
   "capabilities.managed": "由 Convax 管理",
   "capabilities.noCatalogPlugins": "本地插件目录为空。",
@@ -115,10 +122,13 @@ const chineseMessages = {
   "capabilities.pluginReady": "已可在画布中使用 · 返回画布后右键或按 Tab 添加 {name}。",
   "capabilities.pluginCatalog": "插件目录",
   "capabilities.skills": "技能",
-  "capabilities.skillsDescription": "技能用于复用 Agent 工作流。这里可以移除由 Convax 管理的技能；OpenCode 全局技能保持只读。",
+  "capabilities.skillsDescription":
+    "技能用于复用 Agent 工作流。这里可以移除由 Convax 管理的技能；OpenCode 全局技能保持只读。",
   "capabilities.title": "技能与插件",
   "capabilities.unavailable": "技能与插件当前不可用。",
   "capabilities.uninstall": "卸载",
+  "capabilities.updateAvailable": "有可用更新",
+  "capabilities.updatePlugin": "更新插件",
   "settings.back": "返回应用",
   "settings.capabilities": "技能与插件",
   "settings.general": "常规",
@@ -135,14 +145,10 @@ const messages: Record<AppLocale, Record<AppMessageKey, string>> = {
   "zh-CN": chineseMessages,
 }
 
-export function appMessage(
-  locale: AppLocale,
-  key: AppMessageKey,
-  values?: Readonly<Record<string, string | number>>,
-) {
+export function appMessage(locale: AppLocale, key: AppMessageKey, values?: Readonly<Record<string, string | number>>) {
   const message = messages[locale][key]
   if (!values) return message
-  return message.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name: string) => (
-    Object.hasOwn(values, name) ? String(values[name]) : match
-  ))
+  return message.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name: string) =>
+    Object.hasOwn(values, name) ? String(values[name]) : match,
+  )
 }

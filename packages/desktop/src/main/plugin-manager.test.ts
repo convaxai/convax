@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { parseWebPluginManifest } from "../plugin-contracts"
+import { compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
 import { WebPluginManager } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
@@ -55,6 +55,15 @@ async function writePackage(root: string, value: Record<string, unknown> = manif
 }
 
 describe("parseWebPluginManifest", () => {
+  test("compares stable, prerelease, numeric prerelease, and build versions", () => {
+    expect(compareWebPluginVersions("1.0.0", "1.0.0-rc.9")).toBeGreaterThan(0)
+    expect(compareWebPluginVersions("0.0.1-convax.2", "0.0.1-convax.1")).toBeGreaterThan(0)
+    expect(compareWebPluginVersions("1.0.0-alpha.10", "1.0.0-alpha.2")).toBeGreaterThan(0)
+    expect(compareWebPluginVersions("1.0.0+new", "1.0.0+old")).toBe(0)
+    expect(compareWebPluginVersions("2.0.0", "10.0.0")).toBeLessThan(0)
+    expect(() => compareWebPluginVersions("latest", "1.0.0")).toThrow("SemVer")
+  })
+
   test("parses the versioned manifest and canonicalizes match values", () => {
     expect(parseWebPluginManifest(manifest())).toEqual({
       ...manifest(),
@@ -86,20 +95,28 @@ describe("parseWebPluginManifest", () => {
 
   test("rejects undeclared capabilities and renderer or toolbar ambiguity", () => {
     expect(() => parseWebPluginManifest(manifest({ capabilities: ["filesystem.full"] }))).toThrow("capability")
-    expect(() => parseWebPluginManifest(manifest({
-      contributes: { canvas: { renderer: { create: false } } },
-    }))).toThrow("creatable")
-    expect(() => parseWebPluginManifest(manifest({
-      contributes: {
-        canvas: {
-          renderer: { extensions: [".scene"] },
-          toolbar: [
-            { command: "first", id: "same", title: "First" },
-            { command: "second", id: "same", title: "Second" },
-          ],
-        },
-      },
-    }))).toThrow("duplicate ids")
+    expect(() =>
+      parseWebPluginManifest(
+        manifest({
+          contributes: { canvas: { renderer: { create: false } } },
+        }),
+      ),
+    ).toThrow("creatable")
+    expect(() =>
+      parseWebPluginManifest(
+        manifest({
+          contributes: {
+            canvas: {
+              renderer: { extensions: [".scene"] },
+              toolbar: [
+                { command: "first", id: "same", title: "First" },
+                { command: "second", id: "same", title: "Second" },
+              ],
+            },
+          },
+        }),
+      ),
+    ).toThrow("duplicate ids")
   })
 
   test("rejects traversal and Windows-unsafe entry or skill paths", () => {
@@ -111,7 +128,8 @@ describe("parseWebPluginManifest", () => {
       "web/file:stream.html",
       "web/index.html.",
       "web//index.html",
-    ]) expect(() => parseWebPluginManifest(manifest({ entry }))).toThrow()
+    ])
+      expect(() => parseWebPluginManifest(manifest({ entry }))).toThrow()
     for (const skill of ["skills/../SKILL.md", "skills/PRN/SKILL.md", "skills/SKILL.md "]) {
       expect(() => parseWebPluginManifest(manifest({ skill }))).toThrow()
     }
@@ -119,9 +137,13 @@ describe("parseWebPluginManifest", () => {
 
   test("rejects unknown fields instead of silently ignoring manifest mistakes", () => {
     expect(() => parseWebPluginManifest({ ...manifest(), executable: "server.js" })).toThrow("unsupported field")
-    expect(() => parseWebPluginManifest(manifest({
-      contributes: { canvas: { renderer: { create: true, executable: "server.js" } } },
-    }))).toThrow("unsupported field")
+    expect(() =>
+      parseWebPluginManifest(
+        manifest({
+          contributes: { canvas: { renderer: { create: true, executable: "server.js" } } },
+        }),
+      ),
+    ).toThrow("unsupported field")
   })
 })
 
@@ -207,12 +229,14 @@ describe("WebPluginManager", () => {
     await expect(tinyFile.install(source)).rejects.toThrow(/per-file|manifest exceeds/)
 
     const total = new WebPluginManager(path.join(root, "total"), { maxFileBytes: 1_000, maxTotalBytes: 1_000 })
-    await expect(total.installBundle({
-      files: {
-        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined })),
-        "index.html": "x".repeat(700),
-      },
-    })).rejects.toThrow("total size")
+    await expect(
+      total.installBundle({
+        files: {
+          "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined })),
+          "index.html": "x".repeat(700),
+        },
+      }),
+    ).rejects.toThrow("total size")
   })
 
   test("does not replace an installed plugin or expose externally tampered entries", async () => {
@@ -228,15 +252,57 @@ describe("WebPluginManager", () => {
     expect(await manager.list()).toEqual([])
   })
 
+  test("atomically upgrades a validated bundle and rejects same-version or downgrade replacement", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const bundle = (version: string, application: string) => ({
+      files: {
+        "index.html": application,
+        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined, version })),
+      },
+    })
+    await manager.installBundle(bundle("1.0.0", "old application"))
+
+    await expect(
+      manager.installBundle(bundle("1.1.0", "new application"), { replaceExisting: true }),
+    ).resolves.toMatchObject({ version: "1.1.0" })
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "new application",
+    )
+    await expect(manager.installBundle(bundle("1.1.0", "same application"), { replaceExisting: true })).rejects.toThrow(
+      "newer version",
+    )
+    await expect(
+      manager.installBundle(bundle("1.0.0", "downgraded application"), { replaceExisting: true }),
+    ).rejects.toThrow("newer version")
+    await expect(
+      manager.installBundle(
+        {
+          files: {
+            "manifest.json": JSON.stringify(manifest({ entry: "missing.html", skill: undefined, version: "2.0.0" })),
+          },
+        },
+        { replaceExisting: true },
+      ),
+    ).rejects.toThrow("does not exist")
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "new application",
+    )
+  })
+
   test("rejects unsafe bundle names and file-directory collisions", async () => {
     const root = await temporaryRoot()
     const manager = new WebPluginManager(path.join(root, "installed"))
     const manifestJson = JSON.stringify(manifest({ entry: "index.html", skill: undefined }))
-    await expect(manager.installBundle({
-      files: { "CON/file.txt": "x", "index.html": "x", "manifest.json": manifestJson },
-    })).rejects.toThrow("Windows filename")
-    await expect(manager.installBundle({
-      files: { "asset": "x", "asset/file.txt": "x", "index.html": "x", "manifest.json": manifestJson },
-    })).rejects.toThrow("both a file and directory")
+    await expect(
+      manager.installBundle({
+        files: { "CON/file.txt": "x", "index.html": "x", "manifest.json": manifestJson },
+      }),
+    ).rejects.toThrow("Windows filename")
+    await expect(
+      manager.installBundle({
+        files: { asset: "x", "asset/file.txt": "x", "index.html": "x", "manifest.json": manifestJson },
+      }),
+    ).rejects.toThrow("both a file and directory")
   })
 })

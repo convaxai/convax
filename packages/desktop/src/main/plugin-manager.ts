@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import {
+  compareWebPluginVersions,
   type InstalledWebPluginSummary,
   type WebPluginManifest,
   parseWebPluginManifest,
@@ -78,7 +79,8 @@ function resolveLimits(input: WebPluginInstallLimits): ResolvedLimits {
 
 async function assertPlainDirectory(directory: string, label: string) {
   const stat = await fs.lstat(directory)
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} must be a directory and cannot be a symbolic link`)
+  if (stat.isSymbolicLink() || !stat.isDirectory())
+    throw new Error(`${label} must be a directory and cannot be a symbolic link`)
   return fs.realpath(directory)
 }
 
@@ -88,7 +90,8 @@ async function readManifest(directory: string, maxFileBytes: number): Promise<We
   try {
     stat = await fs.lstat(manifestPath)
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") throw new Error(`Plugin package is missing ${webPluginManifestFileName}`)
+    if (isNodeError(error) && error.code === "ENOENT")
+      throw new Error(`Plugin package is missing ${webPluginManifestFileName}`, { cause: error })
     throw error
   }
   if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Plugin manifest must be a regular file")
@@ -97,7 +100,7 @@ async function readManifest(directory: string, maxFileBytes: number): Promise<We
   try {
     value = JSON.parse(await fs.readFile(manifestPath, "utf8"))
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error("Plugin manifest is not valid JSON")
+    if (error instanceof SyntaxError) throw new Error("Plugin manifest is not valid JSON", { cause: error })
     throw error
   }
   return parseWebPluginManifest(value)
@@ -110,10 +113,13 @@ async function copyRegularFile(source: string, target: string, state: CopyState)
     const stat = await handle.stat()
     if (!stat.isFile()) throw new Error(`Plugin package contains an unsupported file type: ${source}`)
     if (stat.size > state.limits.maxFileBytes) throw new Error(`Plugin file exceeds the per-file size limit: ${source}`)
-    if (state.totalBytes + stat.size > state.limits.maxTotalBytes) throw new Error("Plugin package exceeds the total size limit")
+    if (state.totalBytes + stat.size > state.limits.maxTotalBytes)
+      throw new Error("Plugin package exceeds the total size limit")
     const content = await handle.readFile()
-    if (content.byteLength > state.limits.maxFileBytes
-      || state.totalBytes + content.byteLength > state.limits.maxTotalBytes) {
+    if (
+      content.byteLength > state.limits.maxFileBytes ||
+      state.totalBytes + content.byteLength > state.limits.maxTotalBytes
+    ) {
       throw new Error("Plugin package exceeds the configured size limits")
     }
     await fs.writeFile(target, content, { flag: "wx", mode: 0o600 })
@@ -143,7 +149,8 @@ async function copyPackageEntry(source: string, target: string, state: CopyState
   for (const name of names) {
     validatePortablePluginSegment(name)
     const portableName = name.toLocaleLowerCase("en-US")
-    if (portableNames.has(portableName)) throw new Error(`Plugin package contains names that collide on Windows: ${source}`)
+    if (portableNames.has(portableName))
+      throw new Error(`Plugin package contains names that collide on Windows: ${source}`)
     portableNames.add(portableName)
   }
   for (const name of names) await copyPackageEntry(path.join(source, name), path.join(target, name), state)
@@ -194,12 +201,46 @@ export class WebPluginManager {
     return assertPlainDirectory(this.#rootPath, "Plugin installation root")
   }
 
-  async #commitStaging(installationRoot: string, staging: string, expectedId?: string) {
+  async #commitStaging(
+    installationRoot: string,
+    staging: string,
+    options: { expectedId?: string; replaceExisting?: boolean } = {},
+  ) {
     const manifest = await validateInstalledPackage(staging, this.#limits)
-    if (expectedId && manifest.id !== expectedId) throw new Error("Plugin manifest changed while it was being installed")
+    if (options.expectedId && manifest.id !== options.expectedId) {
+      throw new Error("Plugin manifest changed while it was being installed")
+    }
     const target = path.join(installationRoot, manifest.id)
-    if (await exists(target)) throw new Error(`Plugin is already installed: ${manifest.id}`)
-    await fs.rename(staging, target)
+    const targetExists = await exists(target)
+    if (!options.replaceExisting) {
+      if (targetExists) throw new Error(`Plugin is already installed: ${manifest.id}`)
+      await fs.rename(staging, target)
+      return toInstalledWebPluginSummary(manifest)
+    }
+    if (!targetExists) throw new Error(`Plugin is not installed: ${manifest.id}`)
+
+    const installedRoot = await assertPlainDirectory(target, "Installed plugin")
+    const installedManifest = await validateInstalledPackage(installedRoot, this.#limits)
+    if (installedManifest.id !== manifest.id) throw new Error("Installed plugin id does not match its directory")
+    if (compareWebPluginVersions(manifest.version, installedManifest.version) <= 0) {
+      throw new Error(`Plugin update must have a newer version: ${manifest.id}`)
+    }
+
+    const backup = path.join(installationRoot, `.replaced-${manifest.id}-${randomUUID()}`)
+    await fs.rename(target, backup)
+    try {
+      await fs.rename(staging, target)
+    } catch (error) {
+      try {
+        await fs.rename(backup, target)
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], `Plugin update rollback failed: ${manifest.id}`, {
+          cause: error,
+        })
+      }
+      throw error
+    }
+    await fs.rm(backup, { force: true, recursive: true }).catch(() => undefined)
     return toInstalledWebPluginSummary(manifest)
   }
 
@@ -222,13 +263,16 @@ export class WebPluginManager {
         sourceRoot,
         totalBytes: 0,
       })
-      return await this.#commitStaging(installationRoot, staging, sourceManifest.id)
+      return await this.#commitStaging(installationRoot, staging, { expectedId: sourceManifest.id })
     } finally {
       await fs.rm(staging, { force: true, recursive: true })
     }
   }
 
-  async installBundle(bundle: WebPluginBundle): Promise<InstalledWebPluginSummary> {
+  async installBundle(
+    bundle: WebPluginBundle,
+    options: { replaceExisting?: boolean } = {},
+  ): Promise<InstalledWebPluginSummary> {
     if (!bundle || typeof bundle !== "object" || !bundle.files || typeof bundle.files !== "object") {
       throw new Error("Plugin bundle files are required")
     }
@@ -285,7 +329,7 @@ export class WebPluginManager {
         await fs.mkdir(path.dirname(target), { mode: 0o700, recursive: true })
         await fs.writeFile(target, content, { flag: "wx", mode: 0o600 })
       }
-      return await this.#commitStaging(installationRoot, staging)
+      return await this.#commitStaging(installationRoot, staging, options)
     } finally {
       await fs.rm(staging, { force: true, recursive: true })
     }
@@ -323,7 +367,7 @@ export class WebPluginManager {
     const id = requireWebPluginId(pluginId)
     const installationRoot = await this.#ensureRoot()
     const target = path.join(installationRoot, id)
-    if (!await exists(target)) return false
+    if (!(await exists(target))) return false
     await assertPlainDirectory(target, "Installed plugin")
     const tombstone = path.join(installationRoot, `.removed-${id}-${randomUUID()}`)
     await fs.rename(target, tombstone)

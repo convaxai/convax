@@ -1,13 +1,5 @@
 import { Button, cn } from "@convax/ui"
-import {
-  Download,
-  FolderInput,
-  LoaderCircle,
-  Plug,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react"
+import { Download, FolderInput, LoaderCircle, Plug, RefreshCw, Sparkles, Trash2, X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { WebPluginClient, WebPluginInventory, WebPluginManifest } from "../plugin-contracts"
 import type { DesktopSkillClient, DesktopSkillInventory } from "../skill-management-contracts"
@@ -101,6 +93,7 @@ function PluginActions({
   onInstallSkill,
   onUninstall,
   plugin,
+  updateAvailable,
 }: {
   busy: CapabilityAction | null
   installed: boolean
@@ -109,6 +102,7 @@ function PluginActions({
   onInstallSkill(): void
   onUninstall(): void
   plugin: WebPluginManifest
+  updateAvailable?: boolean
 }) {
   const disabled = busy !== null
   if (!installed) {
@@ -122,6 +116,13 @@ function PluginActions({
   }
   return (
     <div className="flex flex-wrap justify-end gap-2">
+      {updateAvailable ? (
+        <Button disabled={disabled} onClick={onInstall} size="sm" variant="outline">
+          <BusyIcon active={busy === `plugin.install:${plugin.id}`} />
+          <RefreshCw />
+          {appMessage(locale, "capabilities.updatePlugin")}
+        </Button>
+      ) : null}
       {plugin.skill ? (
         <Button disabled={disabled} onClick={onInstallSkill} size="sm" variant="outline">
           <BusyIcon active={busy === `plugin.skill:${plugin.id}`} />
@@ -145,19 +146,23 @@ function PluginActions({
 function PluginCard({
   busy,
   installed,
+  installedVersion,
   locale,
   onInstall,
   onInstallSkill,
   onUninstall,
   plugin,
+  updateAvailable,
 }: {
   busy: CapabilityAction | null
   installed: boolean
+  installedVersion?: string
   locale: AppLocale
   onInstall(): void
   onInstallSkill(): void
   onUninstall(): void
   plugin: WebPluginManifest
+  updateAvailable?: boolean
 }) {
   return (
     <article className="flex min-h-40 flex-col rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm">
@@ -169,7 +174,14 @@ function PluginCard({
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="truncate text-sm font-semibold">{plugin.name}</h4>
             <StatusPill>{`v${plugin.version}`}</StatusPill>
-            {installed ? <StatusPill>{appMessage(locale, "capabilities.pluginInstalled")}</StatusPill> : null}
+            {installed ? (
+              <StatusPill>
+                {installedVersion
+                  ? appMessage(locale, "capabilities.installedVersion", { version: installedVersion })
+                  : appMessage(locale, "capabilities.pluginInstalled")}
+              </StatusPill>
+            ) : null}
+            {updateAvailable ? <StatusPill>{appMessage(locale, "capabilities.updateAvailable")}</StatusPill> : null}
             {installed ? <StatusPill>{appMessage(locale, "capabilities.globalThisDevice")}</StatusPill> : null}
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{plugin.id}</p>
@@ -177,13 +189,18 @@ function PluginCard({
       </div>
       <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">{plugin.description}</p>
       {installed && plugin.contributes.canvas.renderer.create ? (
-        <p className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary" role="status">
+        <p
+          className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary"
+          role="status"
+        >
           {appMessage(locale, "capabilities.pluginReady", { name: plugin.name })}
         </p>
       ) : null}
       <div className="mt-auto flex items-end justify-between gap-3 pt-4">
         <div className="flex min-w-0 flex-wrap gap-1.5">
-          {plugin.capabilities.map((capability) => <StatusPill key={capability}>{capability}</StatusPill>)}
+          {plugin.capabilities.map((capability) => (
+            <StatusPill key={capability}>{capability}</StatusPill>
+          ))}
         </div>
         <PluginActions
           busy={busy}
@@ -193,6 +210,7 @@ function PluginCard({
           onInstallSkill={onInstallSkill}
           onUninstall={onUninstall}
           plugin={plugin}
+          updateAvailable={updateAvailable}
         />
       </div>
     </article>
@@ -233,25 +251,42 @@ function SkillsPanel({
           <div className="grid gap-3 sm:grid-cols-2">
             {inventory.catalog.map((skill) => {
               const managed = inventory.skills.find((candidate) => candidate.name === skill.id && candidate.managed)
-              const action = managed ? `skill.uninstall:${managed.name}` as const : `skill.install:${skill.id}` as const
+              const action = managed
+                ? (`skill.uninstall:${managed.name}` as const)
+                : (`skill.install:${skill.id}` as const)
               return (
-                <article className="flex min-h-32 flex-col rounded-xl border border-border bg-card p-4 shadow-sm" key={skill.id}>
+                <article
+                  className="flex min-h-32 flex-col rounded-xl border border-border bg-card p-4 shadow-sm"
+                  key={skill.id}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-sm font-semibold">{skill.name}</h4>
-                        {skill.installed ? <StatusPill>{appMessage(locale, "capabilities.installed")}</StatusPill> : null}
+                        {skill.installed ? (
+                          <StatusPill>{appMessage(locale, "capabilities.installed")}</StatusPill>
+                        ) : null}
                       </div>
                       <p className="mt-2 text-xs leading-5 text-muted-foreground">{skill.description}</p>
                     </div>
                     {managed ? (
-                      <Button disabled={busy !== null} onClick={() => onUninstall(managed.name)} size="sm" variant="ghost">
+                      <Button
+                        disabled={busy !== null}
+                        onClick={() => onUninstall(managed.name)}
+                        size="sm"
+                        variant="ghost"
+                      >
                         <BusyIcon active={busy === action} />
                         <Trash2 />
                         {appMessage(locale, "capabilities.uninstall")}
                       </Button>
                     ) : (
-                      <Button disabled={busy !== null || skill.installed} onClick={() => onInstall(skill.id)} size="sm" variant="outline">
+                      <Button
+                        disabled={busy !== null || skill.installed}
+                        onClick={() => onInstall(skill.id)}
+                        size="sm"
+                        variant="outline"
+                      >
                         <BusyIcon active={busy === action} />
                         <Download />
                         {appMessage(locale, skill.installed ? "capabilities.installed" : "capabilities.installSkill")}
@@ -262,7 +297,9 @@ function SkillsPanel({
               )
             })}
           </div>
-        ) : <EmptySection>{appMessage(locale, "capabilities.noIncludedSkills")}</EmptySection>}
+        ) : (
+          <EmptySection>{appMessage(locale, "capabilities.noIncludedSkills")}</EmptySection>
+        )}
       </section>
 
       <section className="space-y-3">
@@ -272,13 +309,23 @@ function SkillsPanel({
             {inventory.skills.map((skill) => {
               const action = `skill.uninstall:${skill.name}` as const
               return (
-                <div className="flex items-center justify-between gap-4 px-4 py-3" key={`${skill.source}:${skill.name}`}>
+                <div
+                  className="flex items-center justify-between gap-4 px-4 py-3"
+                  key={`${skill.source}:${skill.name}`}
+                >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="truncate text-sm font-medium">{skill.name}</p>
-                      <StatusPill>{appMessage(locale, skill.source === "global" ? "capabilities.globalReadOnly" : "capabilities.managed")}</StatusPill>
+                      <StatusPill>
+                        {appMessage(
+                          locale,
+                          skill.source === "global" ? "capabilities.globalReadOnly" : "capabilities.managed",
+                        )}
+                      </StatusPill>
                     </div>
-                    {skill.description ? <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{skill.description}</p> : null}
+                    {skill.description ? (
+                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{skill.description}</p>
+                    ) : null}
                   </div>
                   {skill.managed ? (
                     <Button disabled={busy !== null} onClick={() => onUninstall(skill.name)} size="sm" variant="ghost">
@@ -291,7 +338,9 @@ function SkillsPanel({
               )
             })}
           </div>
-        ) : <EmptySection>{appMessage(locale, "capabilities.noSkills")}</EmptySection>}
+        ) : (
+          <EmptySection>{appMessage(locale, "capabilities.noSkills")}</EmptySection>
+        )}
       </section>
     </div>
   )
@@ -337,16 +386,20 @@ function PluginsPanel({
               <PluginCard
                 busy={busy}
                 installed={plugin.installed}
+                installedVersion={plugin.installedVersion}
                 key={plugin.id}
                 locale={locale}
                 onInstall={() => onInstall(plugin.id)}
                 onInstallSkill={() => onInstallSkill(plugin.id)}
                 onUninstall={() => onUninstall(plugin.id)}
                 plugin={plugin}
+                updateAvailable={plugin.updateAvailable}
               />
             ))}
           </div>
-        ) : <EmptySection>{appMessage(locale, "capabilities.noCatalogPlugins")}</EmptySection>}
+        ) : (
+          <EmptySection>{appMessage(locale, "capabilities.noCatalogPlugins")}</EmptySection>
+        )}
       </section>
 
       {imported.length ? (
@@ -382,7 +435,8 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             aria-selected={props.tab === tab}
             className={cn(
               "relative px-4 py-3 text-sm font-medium capitalize text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
-              props.tab === tab && "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-foreground",
+              props.tab === tab &&
+                "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-foreground",
             )}
             key={tab}
             onClick={() => props.onTabChange(tab)}
@@ -396,13 +450,19 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {props.error ? (
-          <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert">
+          <div
+            className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            role="alert"
+          >
             {props.error}
           </div>
         ) : null}
         {props.loading && (!props.skills || !props.plugins) ? (
           <div className="grid min-h-72 place-items-center" role="status">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />{appMessage(locale, "capabilities.loading")}</div>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <LoaderCircle className="size-4 animate-spin" />
+              {appMessage(locale, "capabilities.loading")}
+            </div>
           </div>
         ) : props.tab === "skills" && props.skills ? (
           <SkillsPanel
@@ -449,13 +509,25 @@ export function CapabilityCenterDialog(props: CapabilityCenterDialogProps) {
       >
         <header className="flex items-center justify-between gap-4 border-b border-border px-5 py-4">
           <div className="flex items-center gap-3">
-            <div className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary"><Sparkles className="size-4" /></div>
+            <div className="grid size-9 place-items-center rounded-lg bg-primary/10 text-primary">
+              <Sparkles className="size-4" />
+            </div>
             <div>
-              <h2 className="text-base font-semibold" id="capability-center-title">{appMessage(locale, "capabilities.title")}</h2>
+              <h2 className="text-base font-semibold" id="capability-center-title">
+                {appMessage(locale, "capabilities.title")}
+              </h2>
               <p className="text-xs text-muted-foreground">{appMessage(locale, "capabilities.description")}</p>
             </div>
           </div>
-          <Button aria-label={appMessage(locale, "capabilities.close")} disabled={props.busy !== null} onClick={props.onClose} size="icon-sm" variant="ghost"><X /></Button>
+          <Button
+            aria-label={appMessage(locale, "capabilities.close")}
+            disabled={props.busy !== null}
+            onClick={props.onClose}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <X />
+          </Button>
         </header>
 
         <CapabilityManagementView {...props} />
@@ -510,19 +582,22 @@ function useCapabilityManagement({
     }
   }, [enabled, pluginClient, refresh, skillClient])
 
-  const mutate = useCallback(async (action: CapabilityAction, operation: () => Promise<unknown>) => {
-    if (busy) return
-    setBusy(action)
-    setError(null)
-    try {
-      await operation()
-      await refresh()
-    } catch (mutationError) {
-      setError(errorMessage(mutationError))
-    } finally {
-      setBusy(null)
-    }
-  }, [busy, refresh])
+  const mutate = useCallback(
+    async (action: CapabilityAction, operation: () => Promise<unknown>) => {
+      if (busy) return
+      setBusy(action)
+      setError(null)
+      try {
+        await operation()
+        await refresh()
+      } catch (mutationError) {
+        setError(errorMessage(mutationError))
+      } finally {
+        setBusy(null)
+      }
+    },
+    [busy, refresh],
+  )
 
   return {
     busy,
@@ -531,7 +606,8 @@ function useCapabilityManagement({
     onImportPlugin: () => void mutate("plugin.import", () => pluginClient.importPlugin()),
     onImportSkill: () => void mutate("skill.import", () => skillClient.importSkill()),
     onInstallPlugin: (id) => void mutate(`plugin.install:${id}`, () => pluginClient.installCatalogPlugin({ id })),
-    onInstallPluginSkill: (pluginId) => void mutate(`plugin.skill:${pluginId}`, () => skillClient.installPluginSkill({ pluginId })),
+    onInstallPluginSkill: (pluginId) =>
+      void mutate(`plugin.skill:${pluginId}`, () => skillClient.installPluginSkill({ pluginId })),
     onInstallSkill: (id) => void mutate(`skill.install:${id}`, () => skillClient.installCatalogSkill({ id })),
     onTabChange: setTab,
     onUninstallPlugin: (id) => void mutate(`plugin.uninstall:${id}`, () => pluginClient.uninstallPlugin({ id })),
@@ -600,13 +676,7 @@ export function CapabilityCenter({
         <Sparkles />
         {appMessage(locale, "capabilities.title")}
       </Button>
-      {open ? (
-        <CapabilityCenterDialog
-          {...management}
-          locale={locale}
-          onClose={() => setOpen(false)}
-        />
-      ) : null}
+      {open ? <CapabilityCenterDialog {...management} locale={locale} onClose={() => setOpen(false)} /> : null}
     </>
   )
 }
