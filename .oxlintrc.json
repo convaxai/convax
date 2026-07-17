@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicolo-ribaudo/oxc-project.github.io/refs/heads/json-schema/src/public/.oxlintrc.schema.json",
+  "options": {
+    "typeAware": true
+  },
+  "categories": {
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-control-regex": "off",
+    "no-shadow": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-reverse": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/prefer-add-event-listener": "off",
+    "unicorn/require-module-specifiers": "off",
+    "typescript/no-base-to-string": "warn",
+    "typescript/no-floating-promises": "warn",
+    "typescript/no-misused-spread": "warn"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/.turbo/**",
+    "**/.convax/**",
+    "**/.build/**",
+    "**/dist/**",
+    "**/out/**",
+    "**/coverage/**",
+    "**/resources/plugins/**/assets/**",
+    "**/*.d.ts",
+    "**/*.gen.ts",
+    "**/*.generated.ts"
+  ]
+}
