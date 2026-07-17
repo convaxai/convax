@@ -20,6 +20,7 @@ import {
   type ComponentProps,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react"
 import {
@@ -57,6 +58,72 @@ export function webPluginIframeAllow(plugin: Pick<InstalledWebPluginSummary, "ca
 }
 export const webPluginStateMetadataKey = "convaxPluginState" as const
 export const webPluginIdentityMetadataKey = "convaxPlugin" as const
+
+const webPluginIframeBaseClassName = "size-full border-0 bg-background"
+
+/** Keep embedded Plugin input behind selection and the pointer gesture that selected it. */
+export function webPluginIframeInteractionProps(input: {
+  dragging?: boolean
+  pointerReleasePending?: boolean
+  selected: boolean
+}) {
+  const interactive = input.selected && !input.dragging && !input.pointerReleasePending
+  return {
+    className: interactive
+      ? `nodrag nowheel ${webPluginIframeBaseClassName}`
+      : webPluginIframeBaseClassName,
+    style: {
+      pointerEvents: interactive ? "auto" : "none",
+      visibility: "visible",
+    } as const,
+    tabIndex: interactive ? 0 : -1,
+  }
+}
+
+/** Tracks pointer gestures that began on the Canvas-owned host chrome, outside the iframe. */
+export class WebPluginPointerReleaseGate {
+  private pointerIds = new Set<number>()
+  private waiting = false
+
+  get pending() {
+    return this.waiting
+  }
+
+  begin(pointerId: number) {
+    const size = this.pointerIds.size
+    this.waiting = true
+    this.pointerIds.add(pointerId)
+    return this.pointerIds.size !== size
+  }
+
+  release(pointerId: number) {
+    if (!this.pointerIds.delete(pointerId)) return false
+    return this.pointerIds.size === 0
+  }
+
+  releaseAll() {
+    if (!this.waiting) return false
+    this.pointerIds.clear()
+    return true
+  }
+
+  complete() {
+    if (!this.waiting || this.pointerIds.size > 0) return false
+    this.waiting = false
+    return true
+  }
+}
+
+/** Transparent host-owned shield that keeps a live Plugin surface out of the drag gesture. */
+export function WebPluginDragShield() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-[1] select-none bg-transparent"
+      data-web-plugin-drag-shield=""
+    />
+  )
+}
 
 const defaultRequestBytes = 256 * 1024
 const defaultResponseBytes = 1024 * 1024
@@ -650,11 +717,79 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
   const cleanupRef = useRef<(() => void) | null>(null)
   const connectedImageReadGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
+  const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
+  const pointerReleaseFrameRef = useRef<number | null>(null)
+  const pointerReleaseListenersRef = useRef<(() => void) | null>(null)
+  const [pointerReleasePending, setPointerReleasePending] = useState(false)
+  const interactionPending = pointerGateRef.current.pending || pointerReleasePending
+  const iframeInteractive = props.selected && !props.dragging && !interactionPending
+  const iframeInteraction = webPluginIframeInteractionProps({
+    dragging: props.dragging,
+    pointerReleasePending: interactionPending,
+    selected: props.selected,
+  })
   editorRef.current = editor
 
   const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
 
   useEffect(() => () => cleanupRef.current?.(), [])
+  useEffect(() => {
+    const iframe = iframeRef.current
+    if (iframeInteractive || !iframe || iframe !== document.activeElement) return
+    iframe.blur()
+  }, [iframeInteractive])
+  useEffect(() => () => {
+    pointerReleaseListenersRef.current?.()
+    const frame = pointerReleaseFrameRef.current
+    if (frame !== null) window.cancelAnimationFrame(frame)
+  }, [])
+
+  const finishHostPointerGesture = () => {
+    const removeListeners = pointerReleaseListenersRef.current
+    pointerReleaseListenersRef.current = null
+    removeListeners?.()
+    const scheduledFrame = pointerReleaseFrameRef.current
+    if (scheduledFrame !== null) window.cancelAnimationFrame(scheduledFrame)
+    // The window capture listener runs before React Flow handles pointerup. Keep
+    // the iframe inert through the rest of that dispatch and its synthetic click.
+    pointerReleaseFrameRef.current = window.requestAnimationFrame(() => {
+      pointerReleaseFrameRef.current = null
+      if (!pointerGateRef.current.complete()) return
+      setPointerReleasePending(false)
+    })
+  }
+
+  const beginHostPointerGesture = (pointerId: number) => {
+    if (!pointerGateRef.current.begin(pointerId)) return
+    const iframe = iframeRef.current
+    iframe?.blur()
+    if (iframe) iframe.style.pointerEvents = "none"
+    const scheduledFrame = pointerReleaseFrameRef.current
+    if (scheduledFrame !== null) {
+      window.cancelAnimationFrame(scheduledFrame)
+      pointerReleaseFrameRef.current = null
+    }
+    setPointerReleasePending(true)
+    if (pointerReleaseListenersRef.current) return
+
+    const releasePointer = (event: PointerEvent) => {
+      if (!pointerGateRef.current.release(event.pointerId)) return
+      finishHostPointerGesture()
+    }
+    const releaseAllPointers = () => {
+      if (!pointerGateRef.current.releaseAll()) return
+      finishHostPointerGesture()
+    }
+    const removeListeners = () => {
+      window.removeEventListener("pointerup", releasePointer, true)
+      window.removeEventListener("pointercancel", releasePointer, true)
+      window.removeEventListener("blur", releaseAllPointers, true)
+    }
+    window.addEventListener("pointerup", releasePointer, true)
+    window.addEventListener("pointercancel", releasePointer, true)
+    window.addEventListener("blur", releaseAllPointers, true)
+    pointerReleaseListenersRef.current = removeListeners
+  }
 
   useEffect(() => {
     if (!canReadConnectedImages) return
@@ -799,19 +934,24 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
     </div>
   )
   return (
-    <CanvasNodeChrome icon={<Puzzle />} label={props.data.label} node={props} toolbar={toolbar}>
-      <iframe
-        allow={webPluginIframeAllow(props.plugin)}
-        allowFullScreen={props.plugin.capabilities.includes("ui.fullscreen")}
-        className="nodrag nowheel size-full border-0 bg-background"
-        onLoad={connectFrame}
-        ref={iframeRef}
-        referrerPolicy="no-referrer"
-        sandbox={webPluginIframeSandbox}
-        src={webPluginEntryUrl(props.plugin)}
-        title={`${props.plugin.name} plugin`}
-      />
-    </CanvasNodeChrome>
+    <div className="size-full" onPointerDownCapture={(event) => beginHostPointerGesture(event.pointerId)}>
+      <CanvasNodeChrome icon={<Puzzle />} label={props.data.label} node={props} toolbar={toolbar}>
+        <div className="relative size-full">
+          <iframe
+            allow={webPluginIframeAllow(props.plugin)}
+            allowFullScreen={props.plugin.capabilities.includes("ui.fullscreen")}
+            {...iframeInteraction}
+            onLoad={connectFrame}
+            ref={iframeRef}
+            referrerPolicy="no-referrer"
+            sandbox={webPluginIframeSandbox}
+            src={webPluginEntryUrl(props.plugin)}
+            title={`${props.plugin.name} plugin`}
+          />
+          {props.dragging ? <WebPluginDragShield /> : null}
+        </div>
+      </CanvasNodeChrome>
+    </div>
   )
 }
 

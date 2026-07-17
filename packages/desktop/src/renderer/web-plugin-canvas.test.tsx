@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, type CanvasNode } from "@convax/canvas"
+import { renderToStaticMarkup } from "react-dom/server"
 import type { InstalledWebPluginSummary, WebPluginCapability } from "../plugin-contracts"
 import { desktopPluginHostProtocol } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
@@ -10,10 +11,13 @@ import {
   matchesWebPluginCanvasNode,
   updateWebPluginNodeState,
   webPluginIframeAllow,
+  WebPluginDragShield,
+  WebPluginPointerReleaseGate,
   webPluginCanvasRendererId,
   webPluginEntryUrl,
   webPluginIdentityMetadataKey,
   webPluginIframePermissions,
+  webPluginIframeInteractionProps,
   webPluginIframeSandbox,
   webPluginStateMetadataKey,
   type WebPluginCanvasActiveContext,
@@ -184,6 +188,65 @@ describe("Canvas Web Plugin contribution", () => {
     expect(webPluginIframePermissions).toContain("microphone 'none'")
     expect(webPluginIframeAllow(installedPlugin)).toContain("fullscreen 'none'")
     expect(webPluginIframeAllow(plugin(["ui.fullscreen"]))).toContain("fullscreen *")
+  })
+
+  test("keeps the Canvas in control until the selection pointer is released", () => {
+    const pointerGate = new WebPluginPointerReleaseGate()
+    const inactive = webPluginIframeInteractionProps({ selected: false })
+    expect(pointerGate.begin(7)).toBe(true)
+    const selectedDuringPointerGesture = webPluginIframeInteractionProps({
+      pointerReleasePending: pointerGate.pending,
+      selected: true,
+    })
+    const selectedDuringDrag = webPluginIframeInteractionProps({ dragging: true, selected: true })
+    const active = webPluginIframeInteractionProps({ selected: true })
+    const inactiveAgain = webPluginIframeInteractionProps({ selected: false })
+
+    expect(inactive).toMatchObject({
+      style: { pointerEvents: "none", visibility: "visible" },
+      tabIndex: -1,
+    })
+    expect(inactive.className).not.toContain("nodrag")
+    expect(inactive.className).not.toContain("nowheel")
+    expect(selectedDuringPointerGesture).toEqual(inactive)
+    expect(selectedDuringDrag).toMatchObject({
+      style: { pointerEvents: "none", visibility: "visible" },
+      tabIndex: -1,
+    })
+    expect(pointerGate.release(8)).toBe(false)
+    expect(pointerGate.pending).toBe(true)
+    expect(pointerGate.release(7)).toBe(true)
+    expect(pointerGate.pending).toBe(true)
+    expect(pointerGate.complete()).toBe(true)
+    expect(pointerGate.pending).toBe(false)
+    expect(active).toMatchObject({
+      style: { pointerEvents: "auto", visibility: "visible" },
+      tabIndex: 0,
+    })
+    expect(active.className).toContain("nodrag")
+    expect(active.className).toContain("nowheel")
+    expect(inactiveAgain).toEqual(inactive)
+  })
+
+  test("keeps the live Plugin surface visible behind a transparent host drag shield", () => {
+    const markup = renderToStaticMarkup(<WebPluginDragShield />)
+
+    expect(markup).toContain("data-web-plugin-drag-shield")
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup).toContain("pointer-events-none")
+    expect(markup).toContain("bg-transparent")
+    expect(markup).not.toContain("Moving plugin surface")
+  })
+
+  test("waits for every tracked pointer and can recover from pointer cancellation", () => {
+    const pointerGate = new WebPluginPointerReleaseGate()
+    expect(pointerGate.begin(1)).toBe(true)
+    expect(pointerGate.begin(2)).toBe(true)
+    expect(pointerGate.release(1)).toBe(false)
+    expect(pointerGate.complete()).toBe(false)
+    expect(pointerGate.releaseAll()).toBe(true)
+    expect(pointerGate.complete()).toBe(true)
+    expect(pointerGate.begin(3)).toBe(true)
   })
 
   test("matches its identity, extension, MIME type, or declared file-node kind", () => {
