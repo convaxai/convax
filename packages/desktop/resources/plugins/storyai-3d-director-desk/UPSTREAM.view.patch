@@ -1,0 +1,223 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 23b2ace..6799bea 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -2,7 +2,6 @@ import "./styles/index.css";
+ import { useEffect } from "react";
+ import { DirectorDeskShell } from "./app/layout/DirectorDeskShell";
+ import { DirectorCanvas } from "./editor/canvas/DirectorCanvas";
+-import { clearDirectorDeskHostBridge, initDirectorDeskHostBridge } from "./editor/io/hostBridge";
+ import { useDirectorStore } from "./editor/store/directorStore";
+
+ function isEditableShortcutTarget(target: EventTarget | null) {
+@@ -15,11 +14,6 @@ export default function App() {
+   const viewMode = useDirectorStore((state) => state.viewMode);
+   const setViewMode = useDirectorStore((state) => state.setViewMode);
+
+-  useEffect(() => {
+-    initDirectorDeskHostBridge();
+-    return clearDirectorDeskHostBridge;
+-  }, []);
+-
+   useEffect(() => {
+     function handleKeyDown(event: KeyboardEvent) {
+       if (event.defaultPrevented || isEditableShortcutTarget(event.target)) return;
+diff --git a/src/editor/canvas/DirectorCanvas.tsx b/src/editor/canvas/DirectorCanvas.tsx
+index eaab260..6b215bf 100644
+--- a/src/editor/canvas/DirectorCanvas.tsx
++++ b/src/editor/canvas/DirectorCanvas.tsx
+@@ -14,6 +14,7 @@ import { Euler, Matrix4, PerspectiveCamera as ThreePerspectiveCamera, Quaternion
+ import type { Object3D } from "three";
+ import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+ import { clearViewportCaptureHandler, setViewportCaptureHandler } from "../io/captureBridge";
++import { flushDirectorDeskHostState } from "../io/hostBridge";
+ import { buildScreenshotMeta, type ScreenshotResult } from "../io/screenshotExport";
+ import { useDirectorStore, type CameraShotSnapshot } from "../store/directorStore";
+ import { DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT, getCameraViewSnapshotFromShot } from "../schema/cameraGeometry";
+@@ -588,10 +589,11 @@ export function DirectorCanvas() {
+   const activeCamera = useDirectorStore((state) =>
+     state.project.cameras.find((item) => item.id === state.project.activeCameraId)
+   );
++  const directorViewSnapshot = useDirectorStore((state) => state.directorViewSnapshot);
++  const setDirectorViewSnapshot = useDirectorStore((state) => state.setDirectorViewSnapshot);
+   const controlsRef = useRef<OrbitControlsImpl | null>(null);
+   const toolbarRef = useRef<HTMLDivElement | null>(null);
+-  const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(DEFAULT_DIRECTOR_VIEW_SNAPSHOT);
+-  const [directorViewSnapshot, setDirectorViewSnapshot] = useState(DEFAULT_DIRECTOR_VIEW_SNAPSHOT);
++  const viewportCameraSnapshotRef = useRef<CameraShotSnapshot>(directorViewSnapshot);
+   const [toolbarHeight, setToolbarHeight] = useState(DEFAULT_VIEWPORT_TOOLBAR_HEIGHT);
+   const hasPanorama = Boolean(panoramaAssetId);
+   const panoramaAsset = assets.find((item) => item.id === panoramaAssetId);
+@@ -609,6 +611,10 @@ export function DirectorCanvas() {
+     : { left: LEFT_PANEL_WIDTH, right: RIGHT_PANEL_WIDTH, top: 0, bottom: 0 };
+   const gizmoRightOffset = viewportPanelsCollapsed ? GIZMO_EDGE_PADDING : RIGHT_PANEL_WIDTH + GIZMO_EDGE_PADDING;
+
++  useEffect(() => {
++    viewportCameraSnapshotRef.current = directorViewSnapshot;
++  }, [directorViewSnapshot]);
++
+   useLayoutEffect(() => {
+     const element = toolbarRef.current;
+     if (!element) return;
+@@ -643,9 +649,9 @@ export function DirectorCanvas() {
+
+   function updateDirectorViewSnapshot(snapshot: CameraShotSnapshot) {
+     viewportCameraSnapshotRef.current = snapshot;
+-    setDirectorViewSnapshot((currentSnapshot) =>
+-      areCameraSnapshotsClose(currentSnapshot, snapshot) ? currentSnapshot : snapshot
+-    );
++    if (!areCameraSnapshotsClose(directorViewSnapshot, snapshot)) {
++      setDirectorViewSnapshot(snapshot);
++    }
+   }
+
+   function updateViewportGizmoSnapshot(snapshot: CameraShotSnapshot) {
+@@ -653,6 +659,7 @@ export function DirectorCanvas() {
+       setViewMode("director");
+     }
+     updateDirectorViewSnapshot(snapshot);
++    flushDirectorDeskHostState();
+   }
+
+   const aspectOverlayBottomPadding =
+@@ -662,18 +669,17 @@ export function DirectorCanvas() {
+     <div className="canvas-frame">
+       <div className="director-canvas" data-testid="director-canvas">
+         <Canvas
+-          camera={{ position: DEFAULT_DIRECTOR_VIEW_SNAPSHOT.position, fov: DEFAULT_DIRECTOR_VIEW_SNAPSHOT.fov }}
++          camera={{ position: directorViewSnapshot.position, fov: directorViewSnapshot.fov }}
+           gl={{ antialias: true, preserveDrawingBuffer: true }}
+           onPointerMissed={openSceneInspector}
+           onCreated={({ camera }) => {
+             const perspectiveCamera = camera as ThreePerspectiveCamera;
+-            perspectiveCamera.lookAt(...DEFAULT_DIRECTOR_VIEW_SNAPSHOT.target);
++            perspectiveCamera.lookAt(...directorViewSnapshot.target);
+             viewportCameraSnapshotRef.current = {
+               fov: perspectiveCamera.fov,
+               position: [perspectiveCamera.position.x, perspectiveCamera.position.y, perspectiveCamera.position.z],
+-              target: DEFAULT_DIRECTOR_VIEW_SNAPSHOT.target,
++              target: directorViewSnapshot.target,
+             };
+-            setDirectorViewSnapshot(viewportCameraSnapshotRef.current);
+           }}
+         >
+           <ViewportBackground
+@@ -700,7 +706,7 @@ export function DirectorCanvas() {
+               enableDamping
+               enabled
+               makeDefault
+-              target={DEFAULT_DIRECTOR_VIEW_SNAPSHOT.target}
++              target={directorViewSnapshot.target}
+               onChange={(event) => {
+                 const perspectiveCamera = event?.target?.object as ThreePerspectiveCamera | undefined;
+                 const target = event?.target?.target as Vector3 | undefined;
+@@ -711,6 +717,7 @@ export function DirectorCanvas() {
+                   target: [target.x, target.y, target.z],
+                 });
+               }}
++              onEnd={flushDirectorDeskHostState}
+             />
+           ) : null}
+           <DirectorViewCameraSync controlsRef={controlsRef} snapshot={directorViewSnapshot} viewMode={viewMode} />
+diff --git a/src/editor/canvas/SceneRoot.tsx b/src/editor/canvas/SceneRoot.tsx
+index 502f73b..d212527 100644
+--- a/src/editor/canvas/SceneRoot.tsx
++++ b/src/editor/canvas/SceneRoot.tsx
+@@ -24,6 +24,7 @@ import { CharacterModel } from "../runtime/CharacterModel";
+ import { getGroundedLabelY } from "../runtime/mannequin/bodyTypes";
+ import { getEffectiveGroundOpacity } from "./panoramaMath";
+ import { getCrowdAnchorTransform } from "../store/directorStore";
++import { flushDirectorDeskHostState } from "../io/hostBridge";
+
+ export { getEffectiveGroundOpacity, getPanoramaRotationRadians } from "./panoramaMath";
+
+@@ -81,11 +82,13 @@ function ViewportTransformControls({
+   mode,
+   object,
+   onObjectChange,
++  onTransformEnd,
+   translationSnap,
+ }: {
+   mode: TransformMode;
+   object: TransformControlsProps["object"];
+   onObjectChange: TransformControlsProps["onObjectChange"];
++  onTransformEnd: () => void;
+   translationSnap?: number | null;
+ }) {
+   const controlsRef = useRef<TransformControlsImpl | null>(null);
+@@ -98,13 +101,19 @@ function ViewportTransformControls({
+   const beginUndoBatch = useDirectorStore((state) => state.beginUndoBatch);
+   const endUndoBatch = useDirectorStore((state) => state.endUndoBatch);
+
++  function finishTransformGesture() {
++    onTransformEnd();
++    endUndoBatch();
++    flushDirectorDeskHostState();
++  }
++
+   return (
+     <TransformControls
+       ref={setControlsRef}
+       mode={mode}
+       object={object}
+       onMouseDown={beginUndoBatch}
+-      onMouseUp={endUndoBatch}
++      onMouseUp={finishTransformGesture}
+       onObjectChange={onObjectChange}
+       translationSnap={translationSnap ?? undefined}
+       userData={{ [HIDE_FROM_VIEWPORT_CAPTURE_KEY]: true }}
+@@ -520,6 +529,7 @@ function ObjectSceneNode({
+         mode={transformMode}
+         object={groupRef}
+         onObjectChange={commitTransformFromViewport}
++        onTransformEnd={commitTransformFromViewport}
+         translationSnap={transformMode === "translate" ? translationSnap : null}
+       />
+     </>
+@@ -570,6 +580,7 @@ function CrowdTransformRig({
+         mode={transformMode}
+         object={groupRef}
+         onObjectChange={commitCrowdTransformFromViewport}
++        onTransformEnd={commitCrowdTransformFromViewport}
+         translationSnap={transformMode === "translate" ? translationSnap : null}
+       />
+     </>
+@@ -711,6 +722,7 @@ function ViewportCameraRig({
+         mode={transformMode}
+         object={groupRef}
+         onObjectChange={commitCameraTransformFromViewport}
++        onTransformEnd={commitCameraTransformFromViewport}
+         translationSnap={transformMode === "translate" ? translationSnap : null}
+       />
+     </>
+diff --git a/src/styles/index.css b/src/styles/index.css
+index acdf5df..968990f 100644
+--- a/src/styles/index.css
++++ b/src/styles/index.css
+@@ -3249,3 +3249,26 @@ textarea:focus-visible {
+     max-width: calc(100% - 32px);
+   }
+ }
++
++.convax-state-notice {
++  position: fixed;
++  z-index: 1000;
++  top: 56px;
++  left: 50%;
++  max-width: min(560px, calc(100vw - 32px));
++  padding: 9px 12px;
++  border: 1px solid rgb(248 113 113 / 55%);
++  border-radius: 8px;
++  background: rgb(69 10 10 / 94%);
++  color: rgb(254 226 226);
++  font-size: 12px;
++  line-height: 1.45;
++  box-shadow: var(--ui-shadow-panel);
++  transform: translateX(-50%);
++}
++
++.convax-state-notice.is-warning {
++  border-color: rgb(251 191 36 / 55%);
++  background: rgb(69 26 3 / 94%);
++  color: rgb(254 243 199);
++}
