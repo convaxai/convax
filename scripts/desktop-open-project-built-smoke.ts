@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import { createRequire } from "node:module"
 import os from "node:os"
@@ -6,6 +7,14 @@ import { pathToFileURL } from "node:url"
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..")
 const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
+const panoramaFixturePath = path.join(
+  repositoryRoot,
+  "scripts",
+  "fixtures",
+  "panorama",
+  "red-walk-highwoods-1280x640.jpg",
+)
+const panoramaFixtureSha256 = "1b35db0f48d6ba207b3d94ec012fee0d277106472396754790a2152225ad25fc"
 const timeoutMs = 25_000
 const evaluationTimeoutMs = timeoutMs + 10_000
 
@@ -119,6 +128,16 @@ await fs.access(path.join(desktopRoot, "out", "main", "index.js")).catch(() => {
   throw new Error("Desktop output is missing; run `bun --cwd packages/desktop build` before the smoke")
 })
 const builtRendererUrl = pathToFileURL(path.join(desktopRoot, "out", "renderer", "index.html")).href
+const panoramaFixture = await fs.readFile(panoramaFixturePath)
+if (panoramaFixture.byteLength < 100_000 || panoramaFixture.byteLength > 16 * 1024 * 1024
+  || panoramaFixture[0] !== 0xff || panoramaFixture[1] !== 0xd8 || panoramaFixture[2] !== 0xff) {
+  throw new Error(`Panorama smoke fixture is not the expected photographic JPEG: ${panoramaFixturePath}`)
+}
+const panoramaFixtureHash = createHash("sha256").update(panoramaFixture).digest("hex")
+if (panoramaFixtureHash !== panoramaFixtureSha256) {
+  throw new Error(`Panorama smoke fixture checksum changed: ${panoramaFixtureHash}`)
+}
+const panoramaFixtureDataUrl = `data:image/jpeg;base64,${panoramaFixture.toString("base64")}`
 
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-built-open-project-"))
 const projectRoot = path.join(temporaryRoot, "empty-project")
@@ -429,18 +448,21 @@ try {
     }, "the persisted Panorama Viewer node")
     const sourceNodeId = "smoke-panorama-source"
     const edgeId = "smoke-panorama-edge"
-    const sourceCanvas = document.createElement("canvas")
-    sourceCanvas.width = 8
-    sourceCanvas.height = 4
-    const context = sourceCanvas.getContext("2d")
-    if (!context) throw new Error("Could not create the Panorama smoke PNG")
-    const gradient = context.createLinearGradient(0, 0, 8, 0)
-    gradient.addColorStop(0, "#0ea5e9")
-    gradient.addColorStop(0.5, "#22c55e")
-    gradient.addColorStop(1, "#f97316")
-    context.fillStyle = gradient
-    context.fillRect(0, 0, 8, 4)
-    const dataUrl = sourceCanvas.toDataURL("image/png")
+    const dataUrl = ${JSON.stringify(panoramaFixtureDataUrl)}
+    const sourceImage = new Image()
+    await new Promise((resolve, reject) => {
+      sourceImage.addEventListener("load", resolve, { once: true })
+      sourceImage.addEventListener("error", () => reject(new Error("Could not decode the real Panorama smoke JPEG")), {
+        once: true,
+      })
+      sourceImage.src = dataUrl
+    })
+    if (sourceImage.naturalWidth !== 1280 || sourceImage.naturalHeight !== 640) {
+      throw new Error(
+        "Unexpected real Panorama smoke dimensions: "
+        + String(sourceImage.naturalWidth) + "x" + String(sourceImage.naturalHeight),
+      )
+    }
     const current = snapshot.loaded.document
     if (!current) throw new Error("Canvas document disappeared before Panorama seeding")
     await window.convax.canvas.documents.save({
@@ -452,13 +474,13 @@ try {
           {
             data: {
               fit: "contain",
-              height: 4,
+              height: sourceImage.naturalHeight,
               kind: "image",
-              label: "Smoke 2:1 Panorama",
-              mimeType: "image/png",
-              name: "smoke-panorama.png",
+              label: "Real CC0 360° Panorama · Highwoods, Bexhill",
+              mimeType: "image/jpeg",
+              name: "red-walk-highwoods-1280x640.jpg",
               url: dataUrl,
-              width: 8,
+              width: sourceImage.naturalWidth,
             },
             id: sourceNodeId,
             position: {
