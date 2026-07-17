@@ -609,36 +609,229 @@ export function AgentPanel(props: AgentPanelProps) {
     return () => viewport.removeEventListener("toggle", settleDisclosureScroll, true)
   }, [historyVisible, open])
 
-  const addResources = useCallback((next: readonly AgentResource[]) => {
-    setResources((current) => mergeAgentResources(current, next).filter(
-      (resource) => !lockedResourceKeys.has(agentResourceKey(resource)),
-    ))
-    setResourcePickerOpen(false)
-  }, [lockedResourceKeys])
+  const loadCapabilities = useCallback(() => {
+    if (!props.projectId) return Promise.resolve(undefined)
+    if (capabilities) return Promise.resolve(capabilities)
+    if (capabilitiesRequestRef.current) return capabilitiesRequestRef.current
+    const scopeId = props.projectId
+    setCapabilitiesLoading(true)
+    const request = window.convax.agent
+      .listCapabilities({ scopeId })
+      .then((result) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilities(result)
+        return result
+      })
+      .catch((cause) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId) setError(errorMessage(cause))
+        throw cause
+      })
+      .finally(() => {
+        if (capabilitiesRequestRef.current === request) capabilitiesRequestRef.current = undefined
+        if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilitiesLoading(false)
+      })
+    capabilitiesRequestRef.current = request
+    return request
+  }, [capabilities, props.projectId])
 
-  const handleDrop = useCallback((event: React.DragEvent) => {
-    if (!supportsResourceDrop(event.dataTransfer)) return
-    containEmbeddedResourceDrag(embedded, event)
-    event.preventDefault()
-    setDropActive(false)
-    if (!props.projectId) return
-    const projectEntries = parseProjectEntryDrag(event.dataTransfer.getData(PROJECT_ENTRY_DRAG_TYPE))
-    if (projectEntries?.projectId === props.projectId) {
-      addResources(projectEntries.entries.map((entry) => ({
-        kind: entry.kind,
-        name: entry.name,
-        path: entry.path,
-      })))
-      return
+  const loadProjectEntries = useCallback(() => {
+    if (!props.projectId) return Promise.resolve(undefined)
+    const scopeId = props.projectId
+    const request = ++projectEntriesRequestRef.current
+    setProjectEntriesLoading(true)
+    return window.convax.projectFiles
+      .listDirectory({ path: "", projectId: scopeId })
+      .then((listing) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
+          setProjectEntries(listing.entries)
+        return listing
+      })
+      .catch((cause) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
+          setError(errorMessage(cause))
+        throw cause
+      })
+      .finally(() => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
+          setProjectEntriesLoading(false)
+      })
+  }, [props.projectId])
+
+  const loadResourceInventory = useCallback(() => {
+    void loadCapabilities().catch(() => undefined)
+    void loadProjectEntries().catch(() => undefined)
+  }, [loadCapabilities, loadProjectEntries])
+
+  const closeResourcePicker = useCallback(() => {
+    skillSlashRangeRef.current = undefined
+    setResourcePickerOpen(false)
+    setSkillSlashQuery(undefined)
+    setSkillSlashIndex(0)
+  }, [])
+
+  useEffect(() => {
+    if (interactionDisabled) closeResourcePicker()
+  }, [closeResourcePicker, interactionDisabled])
+
+  const syncComposerDraft = useCallback(() => {
+    if (!composerRef.current) return
+    const next = readComposerDraft(composerRef.current)
+    composerDraftRef.current = next
+    setComposerDraft(next)
+  }, [])
+
+  const updateSkillSlashQuery = useCallback(() => {
+    if (!composerRef.current) return
+    const match = composerSlashRange(composerRef.current)
+    skillSlashRangeRef.current = match
+    setSkillSlashQuery(match?.query)
+    setSkillSlashIndex(0)
+    setResourcePickerOpen(false)
+    if (match) {
+      loadResourceInventory()
     }
-    const projectCanvas = parseProjectCanvasDrag(event.dataTransfer.getData(PROJECT_CANVAS_DRAG_TYPE))
-    if (projectCanvas?.projectId === props.projectId) {
-      addResources([canvasAgentResource(projectCanvas.canvas)])
-      return
+  }, [loadResourceInventory])
+
+  const insertSkill = useCallback(
+    (name: string, slash = false) => {
+      if (!composerRef.current) return
+      insertComposerSkill(composerRef.current, name, slash ? skillSlashRangeRef.current : undefined)
+      closeResourcePicker()
+      syncComposerDraft()
+    },
+    [closeResourcePicker, syncComposerDraft],
+  )
+
+  const openSkill = useCallback(
+    async (name: string) => {
+      if (!props.projectId) return
+      try {
+        await window.convax.agent.skills.openSkill({ name, scopeId: props.projectId })
+      } catch (cause) {
+        if (mountedRef.current) setError(errorMessage(cause))
+      }
+    },
+    [props.projectId],
+  )
+
+  const resourcePickerOptions = useMemo(() => {
+    const options: AgentResourcePickerOption[] = [
+      ...(capabilities?.skills ?? []).map((skill) => ({
+        description: skill.description,
+        id: `skill:${skill.name}`,
+        label: skill.name,
+        resource: { kind: "skill" as const, name: skill.name },
+        section: "skills" as const,
+      })),
+      ...projectEntries.map((entry) => ({
+        description: entry.path === entry.name ? undefined : entry.path,
+        id: `${entry.kind}:${entry.path}`,
+        label: entry.name,
+        resource: { kind: entry.kind, name: entry.name, path: entry.path },
+        section: "project" as const,
+      })),
+      ...props.canvases.map((canvas) => ({
+        active: canvas.id === props.activeCanvas?.id,
+        id: `canvas:${canvas.id}`,
+        label: canvas.name,
+        resource: canvasAgentResource(canvas),
+        section: "canvases" as const,
+      })),
+    ]
+    return filterAgentResourcePickerOptions(options, skillSlashQuery ?? "")
+  }, [capabilities?.skills, projectEntries, props.activeCanvas?.id, props.canvases, skillSlashQuery])
+  const selectableResourcePickerOptions = useMemo(
+    () =>
+      selectableAgentResourcePickerOptions(resourcePickerOptions, {
+        project: projectEntriesLoading,
+        skills: capabilitiesLoading,
+      }),
+    [capabilitiesLoading, projectEntriesLoading, resourcePickerOptions],
+  )
+
+  const addResources = useCallback(
+    (next: readonly AgentResource[]) => {
+      const skills = next.filter(
+        (resource): resource is Extract<AgentResource, { kind: "skill" }> => resource.kind === "skill",
+      )
+      for (const skill of skills) insertSkill(skill.name)
+      setAttachments((current) =>
+        mergeAgentResources(
+          current,
+          next.filter((resource) => resource.kind !== "skill"),
+        ).filter((resource) => !lockedResourceKeys.has(agentResourceKey(resource))),
+      )
+      closeResourcePicker()
+    },
+    [closeResourcePicker, insertSkill, lockedResourceKeys],
+  )
+
+  const selectPickerResource = useCallback(
+    (resource: AgentResource) => {
+      if (resource.kind === "skill") {
+        insertSkill(resource.name, skillSlashQuery !== undefined)
+        return
+      }
+      if (skillSlashQuery !== undefined && composerRef.current) {
+        removeComposerSlash(composerRef.current, skillSlashRangeRef.current)
+        syncComposerDraft()
+      }
+      addResources([resource])
+    },
+    [addResources, insertSkill, skillSlashQuery, syncComposerDraft],
+  )
+
+  const resourcePickerVisible = resourcePickerOpen || skillSlashQuery !== undefined
+  useEffect(() => {
+    if (!resourcePickerVisible) return
+    const dismissForTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Node) || shouldDismissAgentResourcePicker(composerSurfaceRef.current, target))
+        closeResourcePicker()
     }
-    const resource = parseResource(event.dataTransfer.getData(resourceDragType))
-    if (resource) addResources([resource])
-  }, [addResources, embedded, props.projectId])
+    const onPointerDown = (event: PointerEvent) => dismissForTarget(event.target)
+    const onFocusIn = (event: FocusEvent) => dismissForTarget(event.target)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      closeResourcePicker()
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("focusin", onFocusIn)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [closeResourcePicker, resourcePickerVisible])
+
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      if (!supportsResourceDrop(event.dataTransfer)) return
+      containEmbeddedResourceDrag(embedded, event)
+      event.preventDefault()
+      setDropActive(false)
+      if (!props.projectId) return
+      const projectEntries = parseProjectEntryDrag(event.dataTransfer.getData(PROJECT_ENTRY_DRAG_TYPE))
+      if (projectEntries?.projectId === props.projectId) {
+        addResources(
+          projectEntries.entries.map((entry) => ({
+            kind: entry.kind,
+            name: entry.name,
+            path: entry.path,
+          })),
+        )
+        return
+      }
+      const projectCanvas = parseProjectCanvasDrag(event.dataTransfer.getData(PROJECT_CANVAS_DRAG_TYPE))
+      if (projectCanvas?.projectId === props.projectId) {
+        addResources([canvasAgentResource(projectCanvas.canvas)])
+        return
+      }
+      const resource = parseResource(event.dataTransfer.getData(resourceDragType))
+      if (resource) addResources([resource])
+    },
+    [addResources, embedded, props.projectId],
+  )
 
   const createSession = useCallback(async () => {
     if (!props.projectId || creatingSessionRef.current) return undefined
@@ -654,12 +847,12 @@ export function AgentPanel(props: AgentPanelProps) {
         title: embedded ? embeddedConversationTitle(props.conversationKey) : undefined,
       })
       if (
-        !mountedRef.current
-        || generationRef.current !== generation
-        || activeProjectRef.current !== scopeId
-        || activeScopeRef.current !== scope
-      ) return undefined
-      activeRequestRef.current += 1
+        !mountedRef.current ||
+        generationRef.current !== generation ||
+        activeProjectRef.current !== scopeId ||
+        activeScopeRef.current !== scope
+      )
+        return undefined
       sessionListRequestRef.current += 1
       restoredSessionRef.current = undefined
       if (embedded) {
@@ -669,58 +862,68 @@ export function AgentPanel(props: AgentPanelProps) {
       }
       sessionProjectRef.current = scopeId
       sessionScopeRef.current = scope
-      setSessionId(session.id)
+      selectSession(session.id)
       setSessionState(undefined)
       setHistoryVisible(false)
+      stickToBottomRef.current = true
+      setFollowingLatest(true)
       return session
     } finally {
       creatingSessionRef.current = false
       if (mountedRef.current && generationRef.current === generation) setCreatingSession(false)
     }
-  }, [conversationScope, embedded, props.conversationKey, props.projectId])
+  }, [conversationScope, embedded, props.conversationKey, props.projectId, selectSession])
 
   const send = useCallback(async () => {
-    const text = draft.trim()
-    const submittedResources = mergeAgentResources(contextResources, resources)
+    const submittedDraft = composerDraftRef.current
+    const text = agentComposerText(submittedDraft).trim()
+    const submittedResources = mergeAgentResources(contextResources, attachments, agentComposerSkills(submittedDraft))
     if (!props.projectId || interactionDisabled || (!text && submittedResources.length === 0)) return
+    closeResourcePicker()
     const scopeId = props.projectId
     const scope = conversationScope
     const generation = generationRef.current
-    const submittedUserResources = resources
-    const submittedDraft = draft
+    const submittedAttachments = attachments
     const submittedActiveCanvas = props.activeCanvas
-    const isCurrentGeneration = () => mountedRef.current
-      && generationRef.current === generation
-      && activeProjectRef.current === scopeId
-      && activeScopeRef.current === scope
+    const isCurrentScope = () =>
+      mountedRef.current &&
+      generationRef.current === generation &&
+      activeProjectRef.current === scopeId &&
+      activeScopeRef.current === scope
+    const isActiveTarget = (targetSessionId: string) =>
+      isCurrentScope() && activeSessionIdRef.current === targetSessionId
     let cleared = false
     let targetSessionId = sessionScopeRef.current === scope ? sessionId : undefined
     setError(undefined)
-    setSending(true)
     try {
       if (!targetSessionId && embedded) {
         targetSessionId = embeddedConversationSessions.get(scopeId, props.conversationKey)
         if (targetSessionId) {
           sessionProjectRef.current = scopeId
           sessionScopeRef.current = scope
-          setSessionId(targetSessionId)
+          selectSession(targetSessionId)
         }
       }
       if (!targetSessionId) targetSessionId = (await createSession())?.id
-      if (!targetSessionId || !isCurrentGeneration()) return
-      if (shouldFlushAgentCanvasContext({
-        activeCanvas: submittedActiveCanvas,
-        resources: submittedResources,
-      })) {
+      if (!targetSessionId || !isCurrentScope()) return
+      setSessionPrompting(targetSessionId, true)
+      replaceComposerDraft(emptyAgentComposerDraft())
+      setAttachments([])
+      attachmentsRef.current = []
+      stickToBottomRef.current = true
+      setFollowingLatest(true)
+      cleared = true
+      if (
+        shouldFlushAgentCanvasContext({
+          activeCanvas: submittedActiveCanvas,
+          resources: submittedResources,
+        })
+      ) {
         await props.beforePrompt?.()
       }
       // beforePrompt can outlive the node that owns an embedded panel. Never
       // continue with a send after unmounting or switching Canvas scope.
-      if (!isCurrentGeneration()) return
-      setDraft("")
-      setResources([])
-      stickToBottomRef.current = true
-      cleared = true
+      if (!isCurrentScope()) return
       await window.convax.agent.prompt({
         instructions: createAgentCanvasInstructions({
           activeCanvas: submittedActiveCanvas,
@@ -731,30 +934,90 @@ export function AgentPanel(props: AgentPanelProps) {
         sessionId: targetSessionId,
         text,
       })
-      if (!isCurrentGeneration()) return
-      await Promise.all([refreshSessionState(targetSessionId), refreshSessions(targetSessionId)])
-    } catch (cause) {
-      if (!isCurrentGeneration()) return
-      if (cleared) {
-        setDraft((current) => current || submittedDraft)
-        setResources((current) => mergeAgentResources(current, submittedUserResources))
+      if (!isCurrentScope()) return
+      if (isActiveTarget(targetSessionId)) {
+        await Promise.all([refreshSessionState(targetSessionId), refreshSessions(targetSessionId)]).catch((cause) => {
+          if (targetSessionId && isActiveTarget(targetSessionId)) setError(errorMessage(cause))
+        })
+      } else {
+        await refreshSessions().catch(() => undefined)
       }
-      setError(errorMessage(cause))
-      if (targetSessionId) await refreshSessionState(targetSessionId).catch(() => undefined)
+    } catch (cause) {
+      if (!isCurrentScope()) return
+      const message = errorMessage(cause)
+      const activeTarget = Boolean(targetSessionId && isActiveTarget(targetSessionId))
+      if (cleared && targetSessionId) {
+        const failedSessionId = targetSessionId
+        if (activeTarget && !hasAgentComposerContent(composerDraftRef.current) && attachmentsRef.current.length === 0) {
+          replaceComposerDraft(submittedDraft)
+          setAttachments((current) => mergeAgentResources(current, submittedAttachments))
+        } else {
+          setFailedSubmissions((current) => [
+            ...current,
+            {
+              attachments: submittedAttachments,
+              draft: submittedDraft,
+              id: ++failedSubmissionIdRef.current,
+              message,
+              sessionId: failedSessionId,
+            },
+          ])
+        }
+      }
+      if (!targetSessionId || activeTarget) setError(message)
+      if (targetSessionId && activeTarget) await refreshSessionState(targetSessionId).catch(() => undefined)
     } finally {
-      if (isCurrentGeneration()) setSending(false)
+      if (targetSessionId && isCurrentScope()) setSessionPrompting(targetSessionId, false)
     }
-  }, [contextResources, conversationScope, createSession, draft, embedded, interactionDisabled, props.activeCanvas, props.beforePrompt, props.conversationKey, props.projectId, refreshSessionState, refreshSessions, resources, sessionId])
+  }, [
+    attachments,
+    contextResources,
+    closeResourcePicker,
+    conversationScope,
+    createSession,
+    embedded,
+    interactionDisabled,
+    props.activeCanvas,
+    props.beforePrompt,
+    props.conversationKey,
+    props.projectId,
+    refreshSessionState,
+    refreshSessions,
+    replaceComposerDraft,
+    selectSession,
+    sessionId,
+    setSessionPrompting,
+  ])
 
   const abort = useCallback(async () => {
     if (!props.projectId || !sessionId || sessionScopeRef.current !== conversationScope) return
+    const scopeId = props.projectId
+    const scope = conversationScope
+    const targetSessionId = sessionId
+    const isActiveTarget = () =>
+      mountedRef.current &&
+      activeProjectRef.current === scopeId &&
+      activeScopeRef.current === scope &&
+      activeSessionIdRef.current === targetSessionId
     try {
-      await window.convax.agent.abort({ scopeId: props.projectId, sessionId })
-      await refreshSessionState(sessionId)
+      await window.convax.agent.abort({ scopeId, sessionId: targetSessionId })
+      if (isActiveTarget()) await refreshSessionState(targetSessionId)
     } catch (cause) {
-      setError(errorMessage(cause))
+      if (isActiveTarget()) setError(errorMessage(cause))
     }
   }, [conversationScope, props.projectId, refreshSessionState, sessionId])
+
+  const conversationTurns = useMemo(
+    () => buildAgentConversationTurns(sessionState?.messages ?? []),
+    [sessionState?.messages],
+  )
+  const failedSubmission = failedSubmissions[0]
+  const failedConversationTitle = failedSubmission
+    ? sessions.find((session) => session.id === failedSubmission.sessionId)?.title || "another conversation"
+    : undefined
+  const canRestoreFailedSubmission = Boolean(
+    failedSubmission && !interactionDisabled && !hasAgentComposerContent(composerDraft) && attachments.length === 0,
+  )
 
   if (!props.projectId) return null
 
@@ -766,10 +1029,19 @@ export function AgentPanel(props: AgentPanelProps) {
           style={{ width: props.layout?.collapsedWidth }}
         >
           <Tooltip content="Open agent">
-            <Button aria-label="Open agent" onClick={() => props.layout?.onOpenChange(true)} size="icon-sm" variant="ghost"><Bot /></Button>
+            <Button
+              aria-label="Open agent"
+              onClick={() => props.layout?.onOpenChange(true)}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <Bot />
+            </Button>
           </Tooltip>
           <div className="mt-2 h-px w-5 bg-border" />
-          <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Agent</span>
+          <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Agent
+          </span>
         </aside>
       </TooltipProvider>
     )
@@ -782,7 +1054,9 @@ export function AgentPanel(props: AgentPanelProps) {
           embedded
             ? "relative flex h-80 min-h-64 w-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground"
             : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
-          !embedded && !props.layout?.resizing && "transition-[width] duration-200 ease-out motion-reduce:transition-none",
+          !embedded &&
+            !props.layout?.resizing &&
+            "transition-[width] duration-200 ease-out motion-reduce:transition-none",
           props.className,
         )}
         style={embedded ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
@@ -801,26 +1075,75 @@ export function AgentPanel(props: AgentPanelProps) {
             tabIndex={0}
           />
         ) : null}
-        <header className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}>
+        <header
+          className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}
+        >
           <Bot className="ml-1 size-4 text-primary" />
-          <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>{embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}</span>
-          {capabilities ? <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span> : null}
-          {!embedded ? <Tooltip content="Conversation history"><Button aria-label="Conversation history" onClick={() => setHistoryVisible((value) => !value)} size="icon-sm" variant={historyVisible ? "secondary" : "ghost"}><History /></Button></Tooltip> : null}
-          <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}><Button aria-label={embedded ? "Restart embedded conversation" : "New conversation"} disabled={!props.projectId || interactionDisabled} onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))} size="icon-sm" variant="ghost"><Plus /></Button></Tooltip>
-          {!embedded ? <Tooltip content="Close agent"><Button aria-label="Close agent" onClick={() => props.layout?.onOpenChange(false)} size="icon-sm" variant="ghost"><ChevronRight /></Button></Tooltip> : null}
+          <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>
+            {embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}
+          </span>
+          {capabilities ? (
+            <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span>
+          ) : null}
+          <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
+            <Button
+              aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
+              onClick={() => setShowActivity((value) => !value)}
+              size="icon-sm"
+              variant={showActivity ? "secondary" : "ghost"}
+            >
+              <ListTree />
+            </Button>
+          </Tooltip>
+          {!embedded ? (
+            <Tooltip content="Conversation history">
+              <Button
+                aria-label="Conversation history"
+                onClick={() => setHistoryVisible((value) => !value)}
+                size="icon-sm"
+                variant={historyVisible ? "secondary" : "ghost"}
+              >
+                <History />
+              </Button>
+            </Tooltip>
+          ) : null}
+          <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}>
+            <Button
+              aria-label={embedded ? "Restart embedded conversation" : "New conversation"}
+              disabled={!props.projectId || creatingSession}
+              onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <Plus />
+            </Button>
+          </Tooltip>
+          {!embedded ? (
+            <Tooltip content="Close agent">
+              <Button
+                aria-label="Close agent"
+                onClick={() => props.layout?.onOpenChange(false)}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <ChevronRight />
+              </Button>
+            </Tooltip>
+          ) : null}
         </header>
 
         {!embedded && historyVisible ? (
           <ConversationHistory
-            disabled={interactionDisabled}
+            busySessionIds={promptingSessionIds}
+            disabled={creatingSession}
             loading={loading}
             onSelect={(id) => {
-              activeRequestRef.current += 1
               stickToBottomRef.current = true
+              setFollowingLatest(true)
               sessionProjectRef.current = props.projectId
               sessionScopeRef.current = conversationScope
               setSessionState(undefined)
-              setSessionId(id)
+              selectSession(id)
               setHistoryVisible(false)
             }}
             selectedId={sessionId}
@@ -828,135 +1151,382 @@ export function AgentPanel(props: AgentPanelProps) {
           />
         ) : (
           <>
-            <div
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4"
-              onScroll={(event) => {
-                const element = event.currentTarget
-                stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
-              }}
-            >
-              {!props.projectId ? (
-                <EmptyState icon={<Folder />} title="Open a project" description="The agent uses the active project as its OpenCode working directory." />
-              ) : loading && !sessionState ? (
-                <div className="m-auto flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading conversation…</div>
-              ) : !sessionId || !sessionState?.messages.length ? (
-                <EmptyState icon={<Sparkles />} title="Start a conversation" description="Ask about the project, attach a canvas, or drag files, folders, and skills below." />
-              ) : (
-                <div className="space-y-4">
-                  {sessionState.messages.map((message) => <MessageView key={message.id} message={message} />)}
-                </div>
-              )}
-              {sessionState?.pendingPermissions.map((request) => (
-                <PermissionCard
-                  key={request.id}
-                  onReply={(reply) => props.projectId
-                    ? window.convax.agent.replyPermission({ scopeId: props.projectId, requestId: request.id, reply }).then(() => refreshSessionState())
-                    : Promise.resolve()}
-                  request={request}
-                />
-              ))}
-              {sessionState?.pendingQuestions.map((request) => (
-                <QuestionCard
-                  key={request.id}
-                  onReject={() => props.projectId
-                    ? window.convax.agent.rejectQuestion({ scopeId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
-                    : Promise.resolve()}
-                  onReply={(answers) => props.projectId
-                    ? window.convax.agent.replyQuestion({ answers, scopeId: props.projectId, requestId: request.id }).then(() => refreshSessionState())
-                    : Promise.resolve()}
-                  request={request}
-                />
-              ))}
-              {runtimeBusy ? <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />OpenCode is working…</div> : null}
-              <div ref={messagesEndRef} />
+            <div className="relative flex min-h-0 flex-1">
+              <div
+                className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 [overflow-anchor:none]"
+                onScroll={(event) => {
+                  const next = isAgentScrollNearBottom(event.currentTarget)
+                  stickToBottomRef.current = next
+                  setFollowingLatest(next)
+                }}
+                ref={scrollViewportRef}
+              >
+                {!props.projectId ? (
+                  <EmptyState
+                    icon={<Folder />}
+                    title="Open a project"
+                    description="The agent uses the active project as its OpenCode working directory."
+                  />
+                ) : loading && !sessionState ? (
+                  <div className="m-auto flex items-center gap-2 text-xs text-muted-foreground">
+                    <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+                    Loading conversation…
+                  </div>
+                ) : !sessionId || !conversationTurns.length ? (
+                  <EmptyState
+                    icon={<Sparkles />}
+                    title="Start a conversation"
+                    description="Ask about the project, add a canvas, or type / to use a Skill."
+                  />
+                ) : (
+                  <div className="space-y-5">
+                    {conversationTurns.map((turn, index) => (
+                      <ConversationTurnView
+                        awaitingInput={awaitingInteraction && index === conversationTurns.length - 1}
+                        busy={runtimeBusy && index === conversationTurns.length - 1}
+                        key={turn.id}
+                        onOpenSkill={openSkill}
+                        onShowActivity={() => setShowActivity(true)}
+                        showActivity={showActivity}
+                        turn={turn}
+                      />
+                    ))}
+                  </div>
+                )}
+                {sessionState?.pendingPermissions.map((request) => (
+                  <PermissionCard
+                    key={request.id}
+                    onReply={async (reply) => {
+                      const scopeId = props.projectId
+                      if (!scopeId) return
+                      await window.convax.agent.replyPermission({ scopeId, requestId: request.id, reply })
+                      if (
+                        activeProjectRef.current === scopeId &&
+                        activeScopeRef.current === conversationScope &&
+                        activeSessionIdRef.current === request.sessionID
+                      )
+                        await refreshSessionState(request.sessionID)
+                    }}
+                    request={request}
+                  />
+                ))}
+                {sessionState?.pendingQuestions.map((request) => (
+                  <QuestionCard
+                    key={request.id}
+                    onReject={async () => {
+                      const scopeId = props.projectId
+                      if (!scopeId) return
+                      await window.convax.agent.rejectQuestion({ scopeId, requestId: request.id })
+                      if (
+                        activeProjectRef.current === scopeId &&
+                        activeScopeRef.current === conversationScope &&
+                        activeSessionIdRef.current === request.sessionID
+                      )
+                        await refreshSessionState(request.sessionID)
+                    }}
+                    onReply={async (answers) => {
+                      const scopeId = props.projectId
+                      if (!scopeId) return
+                      await window.convax.agent.replyQuestion({ answers, scopeId, requestId: request.id })
+                      if (
+                        activeProjectRef.current === scopeId &&
+                        activeScopeRef.current === conversationScope &&
+                        activeSessionIdRef.current === request.sessionID
+                      )
+                        await refreshSessionState(request.sessionID)
+                    }}
+                    request={request}
+                  />
+                ))}
+              </div>
+              {!followingLatest ? (
+                <button
+                  className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-border/70 bg-card px-2.5 py-1 text-[10px] text-muted-foreground shadow-md hover:text-foreground"
+                  onClick={() => {
+                    stickToBottomRef.current = true
+                    setFollowingLatest(true)
+                    const viewport = scrollViewportRef.current
+                    if (viewport) viewport.scrollTop = viewport.scrollHeight
+                  }}
+                  type="button"
+                >
+                  Jump to latest
+                </button>
+              ) : null}
             </div>
 
-            <div className={cn("relative shrink-0 border-t border-border bg-card", embedded ? "p-2" : "p-3")}>
-              {error ? <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive"><span className="min-w-0 flex-1">{error}</span><button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button"><X className="size-3.5" /></button></div> : null}
-              {resourcePickerOpen ? (
-                <ResourcePicker
-                  activeCanvasId={props.activeCanvas?.id}
-                  canvases={props.canvases}
-                  capabilities={capabilities}
-                  loading={capabilitiesLoading}
-                  onAdd={addResources}
-                />
-              ) : null}
-              <div
-                className={cn("rounded-lg border border-input bg-background p-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20", dropActive && "border-primary bg-primary/5 ring-2 ring-primary/20")}
-                onDragEnter={(event) => {
-                  if (!supportsResourceDrop(event.dataTransfer)) return
-                  containEmbeddedResourceDrag(embedded, event)
-                  event.preventDefault()
-                  setDropActive(true)
-                }}
-                onDragLeave={(event) => {
-                  if (supportsResourceDrop(event.dataTransfer)) containEmbeddedResourceDrag(embedded, event)
-                  if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDropActive(false)
-                }}
-                onDragOver={(event) => {
-                  if (!supportsResourceDrop(event.dataTransfer)) return
-                  containEmbeddedResourceDrag(embedded, event)
-                  event.preventDefault()
-                  event.dataTransfer.dropEffect = "copy"
-                }}
-                onDrop={handleDrop}
+            <div aria-live="polite" className="flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground">
+              <span
+                className={cn(
+                  "flex items-center gap-2 transition-opacity",
+                  runtimeBusy ? "opacity-100" : "pointer-events-none opacity-0",
+                )}
               >
-                {displayedResources.length > 0 ? (
-                  <div className="mb-2 flex flex-wrap gap-1.5">
-                    {displayedResources.map((resource) => {
-                      const key = agentResourceKey(resource)
-                      const locked = lockedResourceKeys.has(key)
-                      return (
-                        <ResourceChip
-                          key={key}
-                          locked={locked}
-                          onRemove={locked ? undefined : () => setResources((current) => current.filter((item) => agentResourceKey(item) !== key))}
-                          resource={resource}
-                        />
+                <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
+                OpenCode is working…
+              </span>
+            </div>
+
+            <div className={cn("relative shrink-0 bg-card", embedded ? "p-2 pt-0" : "p-3 pt-0")}>
+              {failedSubmission ? (
+                <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  <span className="min-w-0 flex-1">
+                    A message in {failedConversationTitle} failed: {failedSubmission.message}
+                    {failedSubmissions.length > 1 ? ` · ${failedSubmissions.length - 1} more` : ""}
+                  </span>
+                  <button
+                    className="shrink-0 font-medium underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canRestoreFailedSubmission}
+                    onClick={() => {
+                      replaceComposerDraft(failedSubmission.draft)
+                      setAttachments(
+                        failedSubmission.attachments.filter(
+                          (resource) => !lockedResourceKeys.has(agentResourceKey(resource)),
+                        ),
                       )
-                    })}
-                  </div>
+                      setFailedSubmissions((current) => current.filter((item) => item.id !== failedSubmission.id))
+                    }}
+                    title={
+                      canRestoreFailedSubmission
+                        ? "Restore in the current conversation"
+                        : "Finish or clear the current draft before restoring here"
+                    }
+                    type="button"
+                  >
+                    Restore here
+                  </button>
+                  <button
+                    aria-label="Dismiss failed message"
+                    onClick={() =>
+                      setFailedSubmissions((current) => current.filter((item) => item.id !== failedSubmission.id))
+                    }
+                    type="button"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ) : null}
+              {error ? (
+                <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
+                  <span className="min-w-0 flex-1">{error}</span>
+                  <button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button">
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ) : null}
+              <div className="relative" ref={composerSurfaceRef}>
+                {resourcePickerVisible ? (
+                  <ResourcePicker
+                    activeIndex={skillSlashIndex}
+                    loadingProject={projectEntriesLoading}
+                    loadingSkills={capabilitiesLoading}
+                    onOpenSkill={openSkill}
+                    onSelect={selectPickerResource}
+                    options={selectableResourcePickerOptions}
+                    query={skillSlashQuery ?? ""}
+                  />
                 ) : null}
-                <textarea
-                  aria-label="Message the project agent"
-                  className={cn("max-h-40 w-full resize-none bg-transparent px-1 text-sm leading-5 outline-none placeholder:text-muted-foreground", embedded ? "min-h-12" : "min-h-16")}
-                  disabled={!props.projectId || interactionDisabled}
-                  onChange={(event) => setDraft(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                      event.preventDefault()
-                      void send()
-                    }
-                  }}
-                  placeholder={props.projectId ? embedded ? "Ask about this context…" : "Ask about this project…" : "Open a project to start chatting"}
-                  value={draft}
-                />
-                <div className="flex items-center gap-1 pt-1">
-                  <Tooltip content="Attach canvas or skill"><Button aria-label="Attach canvas or skill" disabled={!props.projectId || interactionDisabled} onClick={() => {
-                    const next = !resourcePickerOpen
-                    setResourcePickerOpen(next)
-                    if (next && props.projectId) {
-                      const scopeId = props.projectId
-                      setCapabilitiesLoading(true)
-                      void window.convax.agent.listCapabilities({ scopeId })
-                        .then((result) => {
-                          if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilities(result)
-                        })
-                        .catch((cause) => {
-                          if (mountedRef.current && activeProjectRef.current === scopeId) setError(errorMessage(cause))
-                        })
-                        .finally(() => {
-                          if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilitiesLoading(false)
-                        })
-                    }
-                  }} size="icon-sm" variant={resourcePickerOpen ? "secondary" : "ghost"}><Paperclip /></Button></Tooltip>
-                  <span className="min-w-0 flex-1 truncate px-1 text-[10px] text-muted-foreground">Drop project files, folders, canvases, or skills</span>
-                  {runtimeBusy ? (
-                    <Tooltip content="Stop"><Button aria-label="Stop response" onClick={() => void abort()} size="icon-sm" variant="outline"><Square className="fill-current" /></Button></Tooltip>
-                  ) : (
-                    <Tooltip content="Send"><Button aria-label="Send message" disabled={!props.projectId || interactionDisabled || (!draft.trim() && displayedResources.length === 0)} onClick={() => void send()} size="icon-sm"><Send /></Button></Tooltip>
+                <div
+                  className={cn(
+                    "rounded-2xl border border-border/60 bg-card p-2.5 shadow-lg shadow-black/5 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-xl focus-within:shadow-black/[0.07]",
+                    dropActive && "border-primary bg-primary/5 ring-2 ring-primary/15",
                   )}
+                  onDragEnter={(event) => {
+                    if (!supportsResourceDrop(event.dataTransfer)) return
+                    containEmbeddedResourceDrag(embedded, event)
+                    event.preventDefault()
+                    setDropActive(true)
+                  }}
+                  onDragLeave={(event) => {
+                    if (supportsResourceDrop(event.dataTransfer)) containEmbeddedResourceDrag(embedded, event)
+                    if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget))
+                      setDropActive(false)
+                  }}
+                  onDragOver={(event) => {
+                    if (!supportsResourceDrop(event.dataTransfer)) return
+                    containEmbeddedResourceDrag(embedded, event)
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = "copy"
+                  }}
+                  onDrop={handleDrop}
+                >
+                  {displayedResources.length > 0 ? (
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      {displayedResources.map((resource) => {
+                        const key = agentResourceKey(resource)
+                        const locked = lockedResourceKeys.has(key)
+                        return (
+                          <ResourceChip
+                            key={key}
+                            locked={locked}
+                            onRemove={
+                              locked
+                                ? undefined
+                                : () =>
+                                    setAttachments((current) =>
+                                      current.filter((item) => agentResourceKey(item) !== key),
+                                    )
+                            }
+                            resource={resource}
+                          />
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                  <div
+                    aria-label="Message the project agent"
+                    aria-multiline="true"
+                    aria-placeholder={
+                      props.projectId
+                        ? embedded
+                          ? "Ask about this context…"
+                          : "Ask about this project…"
+                        : "Open a project to start chatting"
+                    }
+                    className={cn(
+                      "max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-1 text-sm leading-5 outline-none before:pointer-events-none before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)] focus:data-[empty=true]:before:hidden",
+                      embedded ? "min-h-12" : "min-h-16",
+                      interactionDisabled && "cursor-not-allowed opacity-60",
+                    )}
+                    contentEditable={Boolean(props.projectId) && !interactionDisabled}
+                    data-empty={shouldShowAgentComposerPlaceholder(composerDraft, composerFocused) ? "true" : undefined}
+                    data-placeholder={
+                      props.projectId
+                        ? embedded
+                          ? "Ask about this context…"
+                          : "Ask about this project…"
+                        : "Open a project to start chatting"
+                    }
+                    onClick={(event) => {
+                      const target =
+                        event.target instanceof HTMLElement
+                          ? event.target.closest<HTMLElement>(`[${skillMentionAttribute}]`)
+                          : null
+                      const skill = target?.getAttribute(skillMentionAttribute)
+                      if (skill) {
+                        event.preventDefault()
+                        void openSkill(skill)
+                        return
+                      }
+                      updateSkillSlashQuery()
+                    }}
+                    onBlur={(event) => {
+                      setComposerFocused(false)
+                      const target = event.relatedTarget
+                      if (
+                        !(target instanceof Node) ||
+                        shouldDismissAgentResourcePicker(composerSurfaceRef.current, target)
+                      )
+                        closeResourcePicker()
+                    }}
+                    onFocus={() => setComposerFocused(true)}
+                    onInput={() => {
+                      syncComposerDraft()
+                      updateSkillSlashQuery()
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+                      if (skillSlashQuery !== undefined) {
+                        if (
+                          (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+                          !event.altKey &&
+                          !event.ctrlKey &&
+                          !event.metaKey &&
+                          !event.shiftKey
+                        ) {
+                          event.preventDefault()
+                          setSkillSlashIndex((current) => {
+                            if (!selectableResourcePickerOptions.length) return 0
+                            return event.key === "ArrowDown"
+                              ? (current + 1) % selectableResourcePickerOptions.length
+                              : (current - 1 + selectableResourcePickerOptions.length) %
+                                  selectableResourcePickerOptions.length
+                          })
+                          return
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault()
+                          closeResourcePicker()
+                          return
+                        }
+                        if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault()
+                          const option = selectableResourcePickerOptions[skillSlashIndex]
+                          if (option) selectPickerResource(option.resource)
+                          return
+                        }
+                      }
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault()
+                        void send()
+                      }
+                    }}
+                    onKeyUp={(event) => {
+                      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) updateSkillSlashQuery()
+                    }}
+                    onPaste={(event) => {
+                      event.preventDefault()
+                      insertComposerPlainText(event.currentTarget, event.clipboardData.getData("text/plain"))
+                      syncComposerDraft()
+                      updateSkillSlashQuery()
+                    }}
+                    ref={composerRef}
+                    role="textbox"
+                    suppressContentEditableWarning
+                  />
+                  <div className="flex items-center gap-1 pt-1">
+                    <Tooltip content="Add context or Skill">
+                      <Button
+                        aria-label="Add context or Skill"
+                        disabled={!props.projectId || interactionDisabled}
+                        onClick={() => {
+                          if (resourcePickerOpen) {
+                            closeResourcePicker()
+                            return
+                          }
+                          skillSlashRangeRef.current = undefined
+                          setSkillSlashQuery(undefined)
+                          setSkillSlashIndex(0)
+                          setResourcePickerOpen(true)
+                          loadResourceInventory()
+                        }}
+                        size="icon-sm"
+                        variant={resourcePickerVisible ? "secondary" : "ghost"}
+                      >
+                        <Plus />
+                      </Button>
+                    </Tooltip>
+                    <span className="min-w-0 flex-1 truncate px-1 text-[10px] text-muted-foreground">
+                      Type / to add context or Skills · drop files or canvases
+                    </span>
+                    {runtimeBusy ? (
+                      <Tooltip content="Stop">
+                        <Button
+                          aria-label="Stop response"
+                          onClick={() => void abort()}
+                          size="icon-sm"
+                          variant="outline"
+                        >
+                          <Square className="fill-current" />
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Send">
+                        <Button
+                          aria-label="Send message"
+                          disabled={
+                            !props.projectId ||
+                            interactionDisabled ||
+                            (!hasAgentComposerContent(composerDraft) && displayedResources.length === 0)
+                          }
+                          onClick={() => void send()}
+                          size="icon-sm"
+                        >
+                          <Send />
+                        </Button>
+                      </Tooltip>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
