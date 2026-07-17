@@ -8,11 +8,14 @@
     "dev": "bun turbo dev --filter=@convax/desktop",
     "dev:desktop": "bun --cwd packages/desktop dev",
     "build": "bun turbo build",
+    "format": "prettier --ignore-unknown --write .",
+    "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
     "test": "bun turbo test",
     "package:boundaries": "bun scripts/package-boundary-check.ts",
     "pack:check": "bun run package:boundaries && bun scripts/package-pack-smoke.ts",
-    "check": "bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project"
+    "check": "bun run lint && bun run typecheck && bun run test && bun run pack:check && bun --cwd packages/desktop smoke:open-project",
+    "prepare": "husky"
   },
   "workspaces": {
     "packages": [
@@ -30,6 +33,7 @@
       "@tiptap/markdown": "3.27.4",
       "@tiptap/react": "3.27.4",
       "@tiptap/starter-kit": "3.27.4",
+      "@typescript/native-preview": "7.0.0-dev.20251207.1",
       "@types/bun": "1.3.14",
       "@types/node": "24.12.2",
       "@types/react": "19.2.17",
@@ -50,6 +54,11 @@
     }
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:",
+    "husky": "9.1.7",
+    "oxlint": "1.60.0",
+    "oxlint-tsgolint": "0.21.0",
+    "prettier": "3.6.2",
     "turbo": "2.10.2"
   },
   "trustedDependencies": [

@@ -34,7 +34,7 @@
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run clean && bun run build:js && bun run build:css && bun run build:types",
     "test": "bun test --pass-with-no-tests",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test"
   },
@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "catalog:",
+    "@typescript/native-preview": "catalog:",
     "@types/bun": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
