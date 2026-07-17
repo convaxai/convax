@@ -16,14 +16,17 @@ const panoramaFixturePath = path.join(
 )
 const panoramaFixtureSha256 = "1b35db0f48d6ba207b3d94ec012fee0d277106472396754790a2152225ad25fc"
 const timeoutMs = 25_000
-const evaluationTimeoutMs = timeoutMs + 10_000
+const evaluationTimeoutMs = timeoutMs * 2 + 10_000
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
 
 async function resolveElectronBinary() {
   const pathFile = path.join(electronPackageRoot, "path.txt")
-  const relativeBinary = await fs.readFile(pathFile, "utf8").then((value) => value.trim()).catch(() => "")
+  const relativeBinary = await fs
+    .readFile(pathFile, "utf8")
+    .then((value) => value.trim())
+    .catch(() => "")
   if (!relativeBinary) {
     throw new Error("Electron runtime is missing; run its install script before the desktop smoke")
   }
@@ -50,7 +53,7 @@ async function waitForTarget(port: number, predicate: (target: DebugTarget) => b
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/list`)
-      const targets = await response.json() as DebugTarget[]
+      const targets = (await response.json()) as DebugTarget[]
       const target = targets.find(predicate)
       if (target?.webSocketDebuggerUrl) return target.webSocketDebuggerUrl
     } catch (error) {
@@ -70,11 +73,13 @@ async function evaluate(webSocketUrl: string, expression: string) {
     }, evaluationTimeoutMs)
 
     socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({
-        id: 1,
-        method: "Runtime.evaluate",
-        params: { awaitPromise: true, expression, returnByValue: true },
-      }))
+      socket.send(
+        JSON.stringify({
+          id: 1,
+          method: "Runtime.evaluate",
+          params: { awaitPromise: true, expression, returnByValue: true },
+        }),
+      )
     })
     socket.addEventListener("error", () => {
       clearTimeout(timer)
@@ -94,11 +99,11 @@ async function evaluate(webSocketUrl: string, expression: string) {
       socket.close()
       if (message.error) return reject(new Error(message.error.message))
       if (message.result?.exceptionDetails) {
-        return reject(new Error(
-          message.result.exceptionDetails.exception?.description
-          ?? message.result.exceptionDetails.text
-          ?? "Debugger evaluation failed",
-        ))
+        const description =
+          message.result.exceptionDetails.exception?.description ??
+          message.result.exceptionDetails.text ??
+          "Debugger evaluation failed"
+        return reject(new Error(`${description}: ${JSON.stringify(message.result.exceptionDetails)}`))
       }
       resolve(message.result?.result?.value)
     })
@@ -117,6 +122,75 @@ async function evaluateStable(webSocketUrl: string, expression: string) {
   }
 }
 
+async function evaluatePluginFrame(mainDebugger: string, pluginId: string, expression: string) {
+  const electronRequireBase = path.join(desktopRoot, "package.json")
+  return evaluateStable(
+    mainDebugger,
+    `(async () => {
+    const createRequire = process.getBuiltinModule("module").createRequire
+    const electron = createRequire(${JSON.stringify(electronRequireBase)})("electron")
+    const deadline = Date.now() + ${timeoutMs}
+    while (Date.now() < deadline) {
+      const frame = electron.BrowserWindow.getAllWindows()
+        .filter((candidate) => !candidate.isDestroyed())
+        .flatMap((candidate) => candidate.webContents.mainFrame.framesInSubtree)
+        .find((candidate) => !candidate.detached
+          && candidate.url.startsWith(${JSON.stringify(`convax-plugin://${pluginId}/`)}))
+      if (frame) return frame.executeJavaScript(${JSON.stringify(expression)}, true)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    throw new Error(${JSON.stringify(`Timed out waiting for ${pluginId} WebFrameMain`)})
+  })()`,
+  )
+}
+
+async function evaluatePluginFrames(mainDebugger: string, pluginId: string, expression: string) {
+  const electronRequireBase = path.join(desktopRoot, "package.json")
+  return evaluateStable(
+    mainDebugger,
+    `(async () => {
+    const createRequire = process.getBuiltinModule("module").createRequire
+    const electron = createRequire(${JSON.stringify(electronRequireBase)})("electron")
+    const deadline = Date.now() + ${timeoutMs}
+    while (Date.now() < deadline) {
+      const frames = electron.BrowserWindow.getAllWindows()
+        .filter((candidate) => !candidate.isDestroyed())
+        .flatMap((candidate) => candidate.webContents.mainFrame.framesInSubtree)
+        .filter((candidate) => !candidate.detached
+          && candidate.url.startsWith(${JSON.stringify(`convax-plugin://${pluginId}/`)}))
+      if (frames.length) return Promise.all(frames.map((frame) => frame.executeJavaScript(${JSON.stringify(expression)}, true)))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    throw new Error(${JSON.stringify(`Timed out waiting for ${pluginId} WebFrameMain instances`)})
+  })()`,
+  )
+}
+
+async function sendPluginMouseInput(mainDebugger: string, pluginId: string, events: Array<Record<string, unknown>>) {
+  const electronRequireBase = path.join(desktopRoot, "package.json")
+  return evaluateStable(
+    mainDebugger,
+    `(async () => {
+    const createRequire = process.getBuiltinModule("module").createRequire
+    const electron = createRequire(${JSON.stringify(electronRequireBase)})("electron")
+    const target = electron.BrowserWindow.getAllWindows()
+      .filter((candidate) => !candidate.isDestroyed())
+      .find((candidate) => candidate.webContents.mainFrame.framesInSubtree.some(
+        (frame) => !frame.detached
+          && frame.url.startsWith(${JSON.stringify(`convax-plugin://${pluginId}/`)}),
+    ))
+    if (!target) throw new Error(${JSON.stringify(`Could not find the ${pluginId} BrowserWindow`)})
+    target.focus()
+    target.webContents.focus()
+    for (const event of ${JSON.stringify(events)}) {
+      target.webContents.sendInputEvent(event)
+      await new Promise((resolve) => setTimeout(resolve, 35))
+    }
+    return true
+  })()`,
+  )
+}
+
 async function collectOutput(stream: ReadableStream<Uint8Array>) {
   let output = ""
   for await (const chunk of stream) output += new TextDecoder().decode(chunk)
@@ -129,8 +203,13 @@ await fs.access(path.join(desktopRoot, "out", "main", "index.js")).catch(() => {
 })
 const builtRendererUrl = pathToFileURL(path.join(desktopRoot, "out", "renderer", "index.html")).href
 const panoramaFixture = await fs.readFile(panoramaFixturePath)
-if (panoramaFixture.byteLength < 100_000 || panoramaFixture.byteLength > 16 * 1024 * 1024
-  || panoramaFixture[0] !== 0xff || panoramaFixture[1] !== 0xd8 || panoramaFixture[2] !== 0xff) {
+if (
+  panoramaFixture.byteLength < 100_000 ||
+  panoramaFixture.byteLength > 16 * 1024 * 1024 ||
+  panoramaFixture[0] !== 0xff ||
+  panoramaFixture[1] !== 0xd8 ||
+  panoramaFixture[2] !== 0xff
+) {
   throw new Error(`Panorama smoke fixture is not the expected photographic JPEG: ${panoramaFixturePath}`)
 }
 const panoramaFixtureHash = createHash("sha256").update(panoramaFixture).digest("hex")
@@ -143,25 +222,34 @@ const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-built-open
 const projectRoot = path.join(temporaryRoot, "empty-project")
 const userDataRoot = path.join(temporaryRoot, "user-data")
 await fs.mkdir(projectRoot)
+const seededDirectorPluginRoot = path.join(userDataRoot, "plugins", "storyai-3d-director-desk")
+await fs.mkdir(path.dirname(seededDirectorPluginRoot), { recursive: true })
+await fs.cp(path.join(desktopRoot, "resources", "plugins", "storyai-3d-director-desk"), seededDirectorPluginRoot, {
+  recursive: true,
+})
+const seededDirectorManifestPath = path.join(seededDirectorPluginRoot, "manifest.json")
+const seededDirectorManifest = JSON.parse(await fs.readFile(seededDirectorManifestPath, "utf8")) as {
+  version?: string
+}
+seededDirectorManifest.version = "0.0.1-convax.1"
+await fs.writeFile(seededDirectorManifestPath, `${JSON.stringify(seededDirectorManifest, null, 2)}\n`)
 
 const rendererPort = randomPort()
 let inspectorPort = randomPort()
 while (inspectorPort === rendererPort) inspectorPort = randomPort()
-const child = Bun.spawn([
-  electronBinary,
-  `--inspect=${inspectorPort}`,
-  `--remote-debugging-port=${rendererPort}`,
-  desktopRoot,
-], {
-  cwd: repositoryRoot,
-  env: {
-    ...process.env,
-    CONVAX_ALLOW_MULTIPLE_INSTANCES: "1",
-    CONVAX_USER_DATA_DIR: userDataRoot,
+const child = Bun.spawn(
+  [electronBinary, `--inspect=${inspectorPort}`, `--remote-debugging-port=${rendererPort}`, desktopRoot],
+  {
+    cwd: repositoryRoot,
+    env: {
+      ...process.env,
+      CONVAX_ALLOW_MULTIPLE_INSTANCES: "1",
+      CONVAX_USER_DATA_DIR: userDataRoot,
+    },
+    stderr: "pipe",
+    stdout: "pipe",
   },
-  stderr: "pipe",
-  stdout: "pipe",
-})
+)
 const stderr = collectOutput(child.stderr)
 const stdout = collectOutput(child.stdout)
 
@@ -171,14 +259,21 @@ try {
     waitForTarget(rendererPort, (target) => target.type === "page" && target.url === builtRendererUrl),
   ])
   const electronRequireBase = path.join(desktopRoot, "package.json")
-  await evaluateStable(mainDebugger, `(() => {
+  await evaluateStable(
+    mainDebugger,
+    `(() => {
     const createRequire = process.getBuiltinModule("module").createRequire
     const electron = createRequire(${JSON.stringify(electronRequireBase)})("electron")
     electron.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [${JSON.stringify(projectRoot)}] })
+    electron.ipcMain.removeHandler("agent:skills-list")
+    electron.ipcMain.handle("agent:skills-list", () => ({ catalog: [], skills: [] }))
     return true
-  })()`)
+  })()`,
+  )
 
-  const result = await evaluateStable(rendererDebugger, `(async () => {
+  const result = await evaluateStable(
+    rendererDebugger,
+    `(async () => {
     const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
       while (Date.now() < deadline) {
@@ -202,7 +297,13 @@ try {
     }
     const initialPlugins = await window.convax.plugins.listPlugins()
     const catalogPlugin = initialPlugins.catalog.find((plugin) => plugin.id === "storyai-3d-director-desk")
-    if (!catalogPlugin || catalogPlugin.installed) throw new Error("The built-in Plugin catalog is invalid")
+    if (!catalogPlugin
+      || !catalogPlugin.installed
+      || catalogPlugin.installedVersion !== "0.0.1-convax.1"
+      || catalogPlugin.version !== "0.0.1-convax.2"
+      || !catalogPlugin.updateAvailable) {
+      throw new Error("The seeded built-in Plugin update is invalid")
+    }
 
     const openProject = await waitFor(() => buttonWithText("Open project"), "the Open project action")
     openProject.click()
@@ -275,13 +376,36 @@ try {
       () => document.querySelector('section[aria-label="技能与插件"] [role="tablist"]'),
       "Skill and Plugin management inside Settings",
     )
+    const pluginTab = await waitFor(
+      () => [...document.querySelectorAll('[role="tab"]')]
+        .find((tab) => tab.textContent?.trim() === "插件"),
+      "the Plugin management tab",
+    )
+    pluginTab.click()
+    const directorPluginCard = await waitFor(
+      () => [...document.querySelectorAll("article")]
+        .find((article) => article.textContent?.includes("3D Director Desk")),
+      "the installed 3D Director Plugin card",
+    ).catch(() => {
+      throw new Error("The Plugin management surface did not render the built-in catalog: " + document.body.innerText)
+    })
+    const updateDirectorPlugin = await waitFor(
+      () => [...directorPluginCard.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes("更新插件")),
+      "the 3D Director Plugin update action",
+    )
+    updateDirectorPlugin.click()
+    await waitFor(async () => {
+      const current = await window.convax.plugins.listPlugins()
+      const installed = current.installed.find((plugin) => plugin.id === "storyai-3d-director-desk")
+      const catalog = current.catalog.find((plugin) => plugin.id === "storyai-3d-director-desk")
+      return installed?.version === "0.0.1-convax.2" && catalog?.updateAvailable === false
+    }, "the installed 3D Director Plugin to upgrade to .2")
     const storedLanguage = JSON.parse(localStorage.getItem("convax.desktop.app-language.v1") ?? "null")
     if (storedLanguage?.language !== "zh-CN") throw new Error("The global language preference was not persisted")
     const backToApp = await waitFor(() => buttonWithText("返回应用"), "the Settings return action")
     backToApp.click()
     await waitFor(() => !document.querySelector('[data-settings-view="true"]'), "Settings to close")
-
-    await window.convax.plugins.installCatalogPlugin({ id: catalogPlugin.id })
 
     const canvasPane = await waitFor(
       () => document.querySelector(".convax-canvas .react-flow__pane"),
@@ -324,7 +448,9 @@ try {
         (node) => node.data.kind === "plugin.storyai-3d-director-desk",
       )
       const pluginState = pluginNode?.data.metadata?.convaxPluginState
-      return pluginState?.schemaVersion === 1 && pluginState.directorProject?.version === 1
+      return pluginState?.schemaVersion === 2
+        && pluginState.directorProject?.version === 1
+        && pluginState.presentation?.viewport?.directorView
         ? loaded.document
         : null
     }, "the connected 3D Director Desk state")
@@ -337,10 +463,12 @@ try {
       frameUrl: pluginFrame.getAttribute("src"),
       language: document.documentElement.lang,
       pluginNodeKind: savedDocument.nodes[0]?.data.kind,
+      pluginNodeId: savedDocument.nodes[0]?.id,
       pluginStateVersion: pluginState?.schemaVersion,
       projectId,
     }
-  })()`)
+  })()`,
+  )
 
   const summary = result as {
     activeCanvasId?: string
@@ -350,42 +478,408 @@ try {
     frameUrl?: string | null
     language?: string
     pluginNodeKind?: string
+    pluginNodeId?: string
     pluginStateVersion?: number
     projectId?: string
   }
-  if (summary.activeCanvasId !== "canvas-main"
-    || summary.canvasCount !== 1
-    || summary.documentId !== "canvas-main"
-    || summary.frameSandbox !== "allow-scripts"
-    || !summary.frameUrl?.startsWith("convax-plugin://storyai-3d-director-desk/")
-    || summary.language !== "zh-CN"
-    || summary.pluginNodeKind !== "plugin.storyai-3d-director-desk"
-    || summary.pluginStateVersion !== 1) {
+  if (
+    summary.activeCanvasId !== "canvas-main" ||
+    summary.canvasCount !== 1 ||
+    summary.documentId !== "canvas-main" ||
+    summary.frameSandbox !== "allow-scripts" ||
+    !summary.frameUrl?.startsWith("convax-plugin://storyai-3d-director-desk/") ||
+    summary.language !== "zh-CN" ||
+    summary.pluginNodeKind !== "plugin.storyai-3d-director-desk" ||
+    !summary.pluginNodeId ||
+    summary.pluginStateVersion !== 2
+  ) {
     throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
   }
-  const persistedDocument = JSON.parse(await fs.readFile(
-    path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"),
-    "utf8",
+
+  const directorFrameGeometry = (await evaluatePluginFrame(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `(() => {
+      const canvas = document.querySelector("canvas")
+      if (!canvas) throw new Error("The 3D Director WebGL canvas is missing")
+      const bounds = canvas.getBoundingClientRect()
+      const sampleX = bounds.left + bounds.width * 0.54
+      const sampleY = bounds.top + bounds.height * 0.72
+      const hit = document.elementFromPoint(sampleX, sampleY)
+      return {
+        canvas: { height: bounds.height, left: bounds.left, top: bounds.top, width: bounds.width },
+        hit: hit ? hit.tagName + "." + String(hit.className ?? "") : null,
+        signature: [...document.querySelectorAll(".viewport-gizmo-hit-button")]
+          .map((button) => [
+            button.getAttribute("aria-label"),
+            button.style.left,
+            button.style.top,
+            button.style.zIndex,
+          ]),
+        viewport: { height: window.innerHeight, width: window.innerWidth },
+      }
+    })()`,
   )) as {
+    canvas?: { height?: number; left?: number; top?: number; width?: number }
+    hit?: string | null
+    signature?: string[][]
+    viewport?: { height?: number; width?: number }
+  }
+  const directorOuterGeometry = (await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const frame = document.querySelector('iframe[title="3D Director Desk plugin"]')
+      if (!frame) throw new Error("The outer 3D Director frame is missing")
+      const bounds = frame.getBoundingClientRect()
+      return { height: bounds.height, left: bounds.left, top: bounds.top, width: bounds.width }
+    })()`,
+  )) as { height?: number; left?: number; top?: number; width?: number }
+  const canvasHeight = Number(directorFrameGeometry.canvas?.height)
+  const canvasLeft = Number(directorFrameGeometry.canvas?.left)
+  const canvasTop = Number(directorFrameGeometry.canvas?.top)
+  const canvasWidth = Number(directorFrameGeometry.canvas?.width)
+  const frameViewportHeight = Number(directorFrameGeometry.viewport?.height)
+  const frameViewportWidth = Number(directorFrameGeometry.viewport?.width)
+  const outerHeight = Number(directorOuterGeometry.height)
+  const outerLeft = Number(directorOuterGeometry.left)
+  const outerTop = Number(directorOuterGeometry.top)
+  const outerWidth = Number(directorOuterGeometry.width)
+  const dimensionValues = [canvasHeight, canvasWidth, frameViewportHeight, frameViewportWidth, outerHeight, outerWidth]
+  const coordinateValues = [canvasLeft, canvasTop, outerLeft, outerTop]
+  if (
+    dimensionValues.some((value) => !Number.isFinite(value) || value <= 0) ||
+    coordinateValues.some((value) => !Number.isFinite(value)) ||
+    !directorFrameGeometry.signature?.length
+  ) {
+    throw new Error(
+      `Unexpected 3D Director frame geometry: ${JSON.stringify({ directorFrameGeometry, directorOuterGeometry })}`,
+    )
+  }
+  const projectIntoOuterFrame = (localX: number, localY: number) => ({
+    x: Math.round(outerLeft + (localX / frameViewportWidth) * outerWidth),
+    y: Math.round(outerTop + (localY / frameViewportHeight) * outerHeight),
+  })
+  const orbitStart = projectIntoOuterFrame(canvasLeft + canvasWidth * 0.54, canvasTop + canvasHeight * 0.72)
+  await sendPluginMouseInput(mainDebugger, "storyai-3d-director-desk", [
+    { button: "left", clickCount: 1, type: "mouseDown", ...orbitStart },
+    { button: "left", clickCount: 1, type: "mouseUp", ...orbitStart },
+  ])
+  await Bun.sleep(150)
+  const focusedPluginInteraction = (await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const frame = document.querySelector('iframe[title="3D Director Desk plugin"]')
+      const node = frame?.closest(".react-flow__node")
+      return frame ? {
+        activeElement: document.activeElement?.tagName,
+        dragging: node?.classList.contains("dragging"),
+        pointerEvents: getComputedStyle(frame).pointerEvents,
+        selected: node?.classList.contains("selected"),
+        tabIndex: frame.tabIndex,
+      } : null
+    })()`,
+  )) as {
+    activeElement?: string
+    dragging?: boolean
+    pointerEvents?: string
+    selected?: boolean
+    tabIndex?: number
+  } | null
+  if (
+    !focusedPluginInteraction?.selected ||
+    focusedPluginInteraction.dragging ||
+    focusedPluginInteraction.pointerEvents !== "auto" ||
+    focusedPluginInteraction.tabIndex !== 0
+  ) {
+    throw new Error(
+      `The 3D Plugin did not become interactive after pointer release: ${JSON.stringify({
+        directorFrameGeometry,
+        directorOuterGeometry,
+        focusedPluginInteraction,
+        orbitStart,
+      })}`,
+    )
+  }
+  const orbitSignature = (await evaluatePluginFrame(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `(async () => {
+      const canvas = document.querySelector("canvas")
+      if (!canvas) throw new Error("The 3D Director WebGL canvas is missing")
+      const bounds = canvas.getBoundingClientRect()
+      const dispatch = (type, x, y, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        button: 0,
+        buttons,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        isPrimary: true,
+        pointerId: 7,
+        pointerType: "mouse",
+      }))
+      const start = { x: bounds.left + bounds.width * 0.54, y: bounds.top + bounds.height * 0.72 }
+      const middle = { x: bounds.left + bounds.width * 0.61, y: bounds.top + bounds.height * 0.68 }
+      const end = { x: bounds.left + bounds.width * 0.68, y: bounds.top + bounds.height * 0.64 }
+      dispatch("pointerdown", start.x, start.y, 1)
+      dispatch("pointermove", middle.x, middle.y, 1)
+      dispatch("pointermove", end.x, end.y, 1)
+      dispatch("pointerup", end.x, end.y, 0)
+      const deadline = Date.now() + ${timeoutMs}
+      const defaultSignature = ${JSON.stringify(JSON.stringify(directorFrameGeometry.signature))}
+      let previousSignature = defaultSignature
+      let stableSamples = 0
+      while (Date.now() < deadline) {
+        const signature = [...document.querySelectorAll(".viewport-gizmo-hit-button")]
+          .map((button) => [
+            button.getAttribute("aria-label"),
+            button.style.left,
+            button.style.top,
+            button.style.zIndex,
+          ])
+        const serialized = JSON.stringify(signature)
+        if (serialized !== defaultSignature) {
+          stableSamples = serialized === previousSignature ? stableSamples + 1 : 0
+          if (stableSamples >= 8) return signature
+        }
+        previousSignature = serialized
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Timed out waiting for the OrbitControls pointer gesture")
+    })()`,
+  )) as string[][]
+  if (!orbitSignature.length) throw new Error("The OrbitControls pointer gesture did not change the director view")
+
+  const directorInteraction = (await evaluatePluginFrame(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      const waitFor = async (read, label) => {
+        while (Date.now() < deadline) {
+          const value = read()
+          if (value) return value
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        throw new Error("Timed out waiting for " + label)
+      }
+      const signature = ${JSON.stringify(orbitSignature)}
+      const role = await waitFor(
+        () => [...document.querySelectorAll('[role="treeitem"]')]
+          .find((item) => item.getAttribute("aria-label") === "角色01"),
+        "the default director role",
+      )
+      role.click()
+      const rotationHandle = await waitFor(
+        () => document.querySelector('button[aria-label="角色旋转 Y 拖动调整"]'),
+        "the role rotation drag handle",
+      )
+      rotationHandle.dispatchEvent(new MouseEvent("mousedown", {
+        bubbles: true,
+        button: 0,
+        buttons: 1,
+        cancelable: true,
+        clientX: 100,
+      }))
+      window.dispatchEvent(new MouseEvent("mousemove", {
+        bubbles: true,
+        buttons: 1,
+        cancelable: true,
+        clientX: 130,
+      }))
+      window.dispatchEvent(new MouseEvent("mouseup", {
+        bubbles: true,
+        button: 0,
+        buttons: 0,
+        cancelable: true,
+        clientX: 130,
+      }))
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      return waitFor(() => {
+        const rotation = document.querySelector('input[aria-label="角色旋转 Y"]')
+        const rotationY = Number(rotation?.value)
+        return Number.isFinite(rotationY)
+          && rotationY !== 0
+          ? { rotationY, signature }
+          : null
+      }, "the visible role rotation change")
+    })()`,
+  )) as { rotationY?: number; signature?: string[][] }
+  if (!Number.isFinite(directorInteraction.rotationY) || !directorInteraction.signature?.length) {
+    throw new Error(`Unexpected 3D Director interaction: ${JSON.stringify(directorInteraction)}`)
+  }
+
+  const savedDirectorState = (await evaluateStable(
+    rendererDebugger,
+    `(async () => {
+    const deadline = Date.now() + ${timeoutMs}
+    while (Date.now() < deadline) {
+      const loaded = await window.convax.canvas.documents.load({
+        canvasId: ${JSON.stringify(summary.activeCanvasId)},
+        scopeId: ${JSON.stringify(summary.projectId)},
+      })
+      const node = loaded.document?.nodes.find((candidate) => candidate.id === ${JSON.stringify(summary.pluginNodeId)})
+      const state = node?.data.metadata?.convaxPluginState
+      const role = state?.directorProject?.objects?.find((candidate) => candidate.id === "char_default_a")
+      const rotationY = role?.transform?.rotation?.[1]
+      const directorView = state?.presentation?.viewport?.directorView
+      if (state?.schemaVersion === 2 && Number.isFinite(rotationY) && rotationY !== 0 && directorView) {
+        return {
+          directorView,
+          identityVersion: node.data.metadata?.convaxPlugin?.version,
+          revision: loaded.document.revision,
+          rotationY,
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    throw new Error("Timed out waiting for edited 3D Director node state")
+  })()`,
+  )) as {
+    directorView?: unknown
+    identityVersion?: string
+    revision?: number
+    rotationY?: number
+  }
+  if (
+    !Number.isFinite(savedDirectorState.rotationY) ||
+    Math.abs(savedDirectorState.rotationY! - directorInteraction.rotationY!) > 0.000001 ||
+    !savedDirectorState.directorView ||
+    savedDirectorState.identityVersion !== "0.0.1-convax.2"
+  ) {
+    throw new Error(`Unexpected saved 3D Director state: ${JSON.stringify(savedDirectorState)}`)
+  }
+
+  const persistedDocument = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "utf8"),
+  ) as {
     edges?: unknown[]
     id?: string
     nodes?: Array<{
       data?: {
         kind?: string
-        metadata?: { convaxPluginState?: { directorProject?: { version?: number }; schemaVersion?: number } }
+        metadata?: {
+          convaxPlugin?: { version?: string }
+          convaxPluginState?: {
+            directorProject?: {
+              objects?: Array<{ id?: string; transform?: { rotation?: number[] } }>
+              version?: number
+            }
+            presentation?: { viewport?: { directorView?: unknown } }
+            schemaVersion?: number
+          }
+        }
       }
     }>
   }
-  if (persistedDocument.id !== "canvas-main"
-    || persistedDocument.nodes?.length !== 1
-    || persistedDocument.nodes[0]?.data?.kind !== "plugin.storyai-3d-director-desk"
-    || persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.schemaVersion !== 1
-    || persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.directorProject?.version !== 1
-    || persistedDocument.edges?.length !== 0) {
+  const persistedDirectorState = persistedDocument.nodes?.[0]?.data?.metadata?.convaxPluginState
+  const persistedRole = persistedDirectorState?.directorProject?.objects?.find(
+    (object) => object.id === "char_default_a",
+  )
+  const persistedRotationY = persistedRole?.transform?.rotation?.[1]
+  if (
+    persistedDocument.id !== "canvas-main" ||
+    persistedDocument.nodes?.length !== 1 ||
+    persistedDocument.nodes[0]?.data?.kind !== "plugin.storyai-3d-director-desk" ||
+    persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.schemaVersion !== 2 ||
+    persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.directorProject?.version !== 1 ||
+    !persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.presentation?.viewport?.directorView ||
+    !Number.isFinite(persistedRotationY) ||
+    Math.abs(persistedRotationY! - directorInteraction.rotationY!) > 0.000001 ||
+    JSON.stringify(persistedDirectorState?.presentation?.viewport?.directorView) !==
+      JSON.stringify(savedDirectorState.directorView) ||
+    persistedDocument.nodes[0]?.data?.metadata?.convaxPlugin?.version !== "0.0.1-convax.2" ||
+    persistedDocument.edges?.length !== 0
+  ) {
     throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
   }
 
-  const panoramaSeed = await evaluateStable(rendererDebugger, `(async () => {
+  // Match the recorded failure: finish an Orbit gesture and click the host-owned
+  // Duplicate action immediately, without polling for persistence first.
+  const duplicateViewSignature = (await evaluatePluginFrame(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `(async () => {
+      const canvas = document.querySelector("canvas")
+      if (!canvas) throw new Error("The 3D Director WebGL canvas is missing")
+      const bounds = canvas.getBoundingClientRect()
+      const dispatch = (type, x, y, buttons) => canvas.dispatchEvent(new PointerEvent(type, {
+        bubbles: true,
+        button: 0,
+        buttons,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        isPrimary: true,
+        pointerId: 11,
+        pointerType: "mouse",
+      }))
+      const start = { x: bounds.left + bounds.width * 0.62, y: bounds.top + bounds.height * 0.62 }
+      const middle = { x: bounds.left + bounds.width * 0.48, y: bounds.top + bounds.height * 0.66 }
+      const end = { x: bounds.left + bounds.width * 0.39, y: bounds.top + bounds.height * 0.7 }
+      dispatch("pointerdown", start.x, start.y, 1)
+      dispatch("pointermove", middle.x, middle.y, 1)
+      dispatch("pointermove", end.x, end.y, 1)
+      dispatch("pointerup", end.x, end.y, 0)
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      return [...document.querySelectorAll(".viewport-gizmo-hit-button")]
+        .map((button) => [
+          button.getAttribute("aria-label"),
+          button.style.left,
+          button.style.top,
+          button.style.zIndex,
+        ])
+    })()`,
+  )) as string[][]
+  if (!duplicateViewSignature.length) throw new Error("The final Orbit gesture did not expose a viewport signature")
+
+  const duplicatedDirector = (await evaluateStable(
+    rendererDebugger,
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      const frame = document.querySelector('iframe[title="3D Director Desk plugin"]')
+      if (!frame) throw new Error("The selected 3D Director frame is missing")
+      const duplicate = [...document.querySelectorAll('button[aria-label="Duplicate"]')]
+        .find((button) => button.getBoundingClientRect().width > 0)
+      if (!duplicate) throw new Error("The selected 3D Director node has no Duplicate action")
+      duplicate.click()
+      const previousView = ${JSON.stringify(JSON.stringify(savedDirectorState.directorView))}
+      while (Date.now() < deadline) {
+        const loaded = await window.convax.canvas.documents.load({
+          canvasId: ${JSON.stringify(summary.activeCanvasId)},
+          scopeId: ${JSON.stringify(summary.projectId)},
+        })
+        const nodes = loaded.document?.nodes.filter(
+          (candidate) => candidate.data.kind === "plugin.storyai-3d-director-desk",
+        ) ?? []
+        const original = nodes.find((candidate) => candidate.id === ${JSON.stringify(summary.pluginNodeId)})
+        const copy = nodes.find((candidate) => candidate.id !== ${JSON.stringify(summary.pluginNodeId)})
+        const originalState = original?.data.metadata?.convaxPluginState
+        const copyState = copy?.data.metadata?.convaxPluginState
+        const originalView = originalState?.presentation?.viewport?.directorView
+        const copyView = copyState?.presentation?.viewport?.directorView
+        if (nodes.length === 2
+          && originalState?.schemaVersion === 2
+          && copyState?.schemaVersion === 2
+          && originalView
+          && copyView
+          && JSON.stringify(originalView) !== previousView
+          && JSON.stringify(copyView) === JSON.stringify(originalView)
+          && JSON.stringify(copyState.directorProject) === JSON.stringify(originalState.directorProject)) {
+          return { copyNodeId: copy.id, directorView: originalView, nodeCount: nodes.length }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Immediate Duplicate did not clone the final 3D Director state")
+    })()`,
+  )) as { copyNodeId?: string; directorView?: unknown; nodeCount?: number }
+  if (!duplicatedDirector.copyNodeId || !duplicatedDirector.directorView || duplicatedDirector.nodeCount !== 2) {
+    throw new Error(`Unexpected duplicated 3D Director state: ${JSON.stringify(duplicatedDirector)}`)
+  }
+
+  const panoramaSeed = await evaluateStable(
+    rendererDebugger,
+    `(async () => {
     const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
       while (Date.now() < deadline) {
@@ -413,16 +907,20 @@ try {
       "the Canvas pane for Panorama Viewer",
     )
     const paneBounds = canvasPane.getBoundingClientRect()
-    canvasPane.dispatchEvent(new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      button: 2,
-      buttons: 2,
-      clientX: paneBounds.left + paneBounds.width * 0.72,
-      clientY: paneBounds.top + paneBounds.height * 0.58,
-    }))
     await waitFor(
-      () => document.querySelector('[data-slot="context-menu-content"]'),
+      () => {
+        const menu = document.querySelector('[data-slot="context-menu-content"]')
+        if (menu) return menu
+        canvasPane.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          buttons: 2,
+          clientX: paneBounds.left + paneBounds.width * 0.72,
+          clientY: paneBounds.top + paneBounds.height * 0.58,
+        }))
+        return null
+      },
       "the Panorama Canvas context menu",
     )
     const addPanorama = await waitFor(
@@ -512,7 +1010,8 @@ try {
       selectedCanvasId,
       sourceNodeId,
     }
-  })()`)
+  })()`,
+  )
   const seed = panoramaSeed as {
     panoramaNodeId?: string
     projectId?: string
@@ -523,16 +1022,21 @@ try {
     throw new Error(`Unexpected Panorama seed result: ${JSON.stringify(seed)}`)
   }
 
-  await evaluateStable(rendererDebugger, `(() => {
+  await evaluateStable(
+    rendererDebugger,
+    `(() => {
     window.setTimeout(() => window.location.reload(), 0)
     return true
-  })()`)
+  })()`,
+  )
   await Bun.sleep(300)
   const reloadedRendererDebugger = await waitForTarget(
     rendererPort,
     (target) => target.type === "page" && target.url === builtRendererUrl,
   )
-  const panoramaResult = await evaluateStable(reloadedRendererDebugger, `(async () => {
+  const panoramaResult = await evaluateStable(
+    reloadedRendererDebugger,
+    `(async () => {
     const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
       while (Date.now() < deadline) {
@@ -575,7 +1079,8 @@ try {
       selectedSourceNodeId: saved.state.selectedSourceNodeId,
       stateSchemaVersion: saved.state.schemaVersion,
     }
-  })()`)
+  })()`,
+  )
   const panoramaSummary = panoramaResult as {
     frameAllow?: string | null
     frameAllowFullscreen?: boolean
@@ -585,19 +1090,68 @@ try {
     selectedSourceNodeId?: string
     stateSchemaVersion?: number
   }
-  if (panoramaSummary.frameSandbox !== "allow-scripts"
-    || !panoramaSummary.frameAllow?.includes("fullscreen *")
-    || panoramaSummary.frameAllowFullscreen !== true
-    || !panoramaSummary.frameUrl?.startsWith("convax-plugin://panorama-viewer/")
-    || panoramaSummary.panoramaNodeId !== seed.panoramaNodeId
-    || panoramaSummary.selectedSourceNodeId !== seed.sourceNodeId
-    || panoramaSummary.stateSchemaVersion !== 1) {
+  if (
+    panoramaSummary.frameSandbox !== "allow-scripts" ||
+    !panoramaSummary.frameAllow?.includes("fullscreen *") ||
+    panoramaSummary.frameAllowFullscreen !== true ||
+    !panoramaSummary.frameUrl?.startsWith("convax-plugin://panorama-viewer/") ||
+    panoramaSummary.panoramaNodeId !== seed.panoramaNodeId ||
+    panoramaSummary.selectedSourceNodeId !== seed.sourceNodeId ||
+    panoramaSummary.stateSchemaVersion !== 1
+  ) {
     throw new Error(`Unexpected Panorama Viewer result: ${JSON.stringify(panoramaSummary)}`)
   }
-  const panoramaDocument = JSON.parse(await fs.readFile(
-    path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"),
-    "utf8",
-  )) as {
+
+  const reloadedDirectors = (await evaluatePluginFrames(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      const expectedRotationY = ${JSON.stringify(directorInteraction.rotationY)}
+      let last = null
+      let previousSignature = ""
+      let stableSamples = 0
+      while (Date.now() < deadline) {
+        const role = [...document.querySelectorAll('[role="treeitem"]')]
+          .find((item) => item.getAttribute("aria-label") === "角色01")
+        role?.click()
+        const rotation = document.querySelector('input[aria-label="角色旋转 Y"]')
+        const signature = [...document.querySelectorAll(".viewport-gizmo-hit-button")]
+          .map((button) => [
+            button.getAttribute("aria-label"),
+            button.style.left,
+            button.style.top,
+            button.style.zIndex,
+          ])
+        const rotationY = Number(rotation?.value)
+        last = { rotationY, signature }
+        const serialized = JSON.stringify(signature)
+        if (Math.abs(rotationY - expectedRotationY) <= 0.000001 && signature.length) {
+          stableSamples = serialized === previousSignature ? stableSamples + 1 : 0
+          if (stableSamples >= 8) return { rotationY, signature }
+        }
+        previousSignature = serialized
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return { ...last, timedOut: true }
+    })()`,
+  )) as Array<{ rotationY?: number; signature?: string[][]; timedOut?: boolean }>
+  if (
+    reloadedDirectors.length !== 2 ||
+    reloadedDirectors.some(
+      (director) =>
+        !Number.isFinite(director.rotationY) ||
+        Math.abs(director.rotationY! - directorInteraction.rotationY!) > 0.000001,
+    ) ||
+    JSON.stringify(reloadedDirectors[0]?.signature) !== JSON.stringify(reloadedDirectors[1]?.signature) ||
+    JSON.stringify(reloadedDirectors[0]?.signature) === JSON.stringify(directorInteraction.signature)
+  ) {
+    throw new Error(`Unexpected reloaded 3D Director UI: ${JSON.stringify(reloadedDirectors)}`)
+  }
+
+  const panoramaDocument = JSON.parse(
+    await fs.readFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "utf8"),
+  ) as {
     edges?: Array<{ id?: string; source?: string; target?: string }>
     nodes?: Array<{
       data?: {
@@ -608,15 +1162,20 @@ try {
     }>
   }
   const persistedPanorama = panoramaDocument.nodes?.find((node) => node.id === seed.panoramaNodeId)
-  if (persistedPanorama?.data?.kind !== "plugin.panorama-viewer"
-    || persistedPanorama.data.metadata?.convaxPluginState?.schemaVersion !== 1
-    || persistedPanorama.data.metadata?.convaxPluginState?.selectedSourceNodeId !== seed.sourceNodeId
-    || !panoramaDocument.edges?.some((edge) => edge.id === "smoke-panorama-edge"
-      && edge.source === seed.sourceNodeId
-      && edge.target === seed.panoramaNodeId)) {
+  if (
+    persistedPanorama?.data?.kind !== "plugin.panorama-viewer" ||
+    persistedPanorama.data.metadata?.convaxPluginState?.schemaVersion !== 1 ||
+    persistedPanorama.data.metadata?.convaxPluginState?.selectedSourceNodeId !== seed.sourceNodeId ||
+    !panoramaDocument.edges?.some(
+      (edge) =>
+        edge.id === "smoke-panorama-edge" && edge.source === seed.sourceNodeId && edge.target === seed.panoramaNodeId,
+    )
+  ) {
     throw new Error(`Unexpected persisted Panorama Canvas: ${JSON.stringify(panoramaDocument)}`)
   }
-  console.log(`Desktop Settings, Open Project, 3D Plugin, and Panorama Viewer smoke passed (${summary.projectId}, canvas-main)`)
+  console.log(
+    `Desktop Settings, Open Project, 3D Plugin, and Panorama Viewer smoke passed (${summary.projectId}, canvas-main)`,
+  )
 } catch (error) {
   child.kill("SIGKILL")
   const [capturedStdout, capturedStderr] = await Promise.all([stdout, stderr])
