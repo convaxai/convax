@@ -147,6 +147,13 @@ A recovery preference such as “last Canvas for Project X” is not canonical s
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
 truth. Do not mirror active state into catalogs, React state, or another controller.
 
+Within a mounted Canvas, `CanvasSelection` is the sole selected-element state.
+`CanvasSelectionContext` classifies that set as none, single, multi or mixed so UI
+surfaces can fail closed without inventing a primary node. Selection, editing mode,
+DOM focus and command execution remain separate. See
+[`canvas-selection-context.md`](canvas-selection-context.md) for the detailed
+interaction contract and adapter rules.
+
 ## 5. Persistence map
 
 ```text

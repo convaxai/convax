@@ -111,6 +111,7 @@ import {
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { createMediaNode, createTextNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
+import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
@@ -344,10 +345,14 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
   const selectedNodeIds = [...selection.nodeIds]
   const selectedEdgeIds = [...selection.edgeIds]
+  const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
+  const hasNodeOnlySelection = isNodeOnlySelectionContext(selectionContext)
   const nodeById = useMemo(
     () => new Map(history.document.nodes.map((node) => [node.id, node])),
     [history.document.nodes],
   )
+  const hasSingleGroupSelection = selectionContext.kind === "single-node"
+    && nodeById.get(selectionContext.nodeId)?.data.kind === "group"
   const arrangeNodeIds = useMemo(() => {
     const ids = [...selection.nodeIds]
     if (ids.length !== 1) return ids
@@ -798,10 +803,11 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     [createNodeForType, fitAfterRender, history.document, nextInsertPoint, readOnly, selectNodes, telemetryService],
   )
   const duplicate = useCallback(() => {
+    if (!hasNodeOnlySelection) return
     const result = duplicateCanvasSelection(history.document, selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [history.document, selectedNodeIds, selectNodes])
+  }, [hasNodeOnlySelection, history.document, selectedNodeIds, selectNodes])
   const duplicateNode = useCallback((nodeId: string) => {
     const result = duplicateCanvasSelection(documentRef.current, [nodeId])
     if (result.selectedNodeIds.length === 0) return
@@ -869,42 +875,45 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     updateSelection([])
   }, [commit, updateSelection])
   const group = useCallback(() => {
+    if (selectionContext.kind !== "multi-node") return
     const result = groupCanvasNodes(history.document, selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [history.document, selectedNodeIds, selectNodes])
+  }, [history.document, selectedNodeIds, selectNodes, selectionContext.kind])
   const ungroup = useCallback(() => {
-    const groupId = selectedNodeIds.find((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))
+    if (!hasSingleGroupSelection || selectionContext.kind !== "single-node") return
+    const groupId = selectionContext.nodeId
     if (!groupId) return
     const result = ungroupCanvasNode(history.document, groupId)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [history.document, selectedNodeIds, selectNodes])
+  }, [hasSingleGroupSelection, history.document, selectNodes, selectionContext])
   const align = useCallback((direction: CanvasAlign) => {
-    if (!canArrangeSelection) return
+    if (!hasNodeOnlySelection || !canArrangeSelection) return
     commit((document) => alignCanvasNodes(document, arrangeNodeIds, direction))
-  }, [arrangeNodeIds, canArrangeSelection, commit])
+  }, [arrangeNodeIds, canArrangeSelection, commit, hasNodeOnlySelection])
   const distribute = useCallback((axis: CanvasDistribute) => {
-    if (!canDistributeSelection) return
+    if (!hasNodeOnlySelection || !canDistributeSelection) return
     commit((document) => distributeCanvasNodes(document, arrangeNodeIds, axis))
-  }, [arrangeNodeIds, canDistributeSelection, commit])
+  }, [arrangeNodeIds, canDistributeSelection, commit, hasNodeOnlySelection])
   const layout = useCallback((value: CanvasLayout = "grid") => {
-    if (!canArrangeSelection) return
+    if (!hasNodeOnlySelection || !canArrangeSelection) return
     commit((document) => layoutCanvasNodes(document, { nodeIds: arrangeNodeIds, layout: value }))
-  }, [arrangeNodeIds, canArrangeSelection, commit])
+  }, [arrangeNodeIds, canArrangeSelection, commit, hasNodeOnlySelection])
   const layoutCanvas = useCallback(() => {
     if (!canLayoutCanvas) return
     commit((document) => layoutCanvasNodes(document, { nodeIds: canvasNodeIds, layout: "grid" }))
     fitAfterRender()
   }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterRender])
   const copy = useCallback(() => {
+    if (!hasNodeOnlySelection) return
     const payload = createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
     if (!payload) return
     void navigator.clipboard.writeText(serializeCanvasClipboard(payload)).then(
       () => notificationService?.show({ kind: "info", title: "Copied to clipboard" }),
       (error) => notifyError("Could not copy selection", error),
     )
-  }, [history.document, notificationService, notifyError, props.clipboardScope, selectedNodeIds])
+  }, [hasNodeOnlySelection, history.document, notificationService, notifyError, props.clipboardScope, selectedNodeIds])
   const paste = useCallback(() => {
     void navigator.clipboard.readText().then(
       (value) => {
@@ -1150,6 +1159,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     () => ({
       document: history.document,
       selection,
+      selectionContext,
       readOnly,
       canUpload: Boolean(uploadService),
       fileRenderers: props.fileRendererRegistry,
@@ -1164,7 +1174,21 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       replaceNodeMedia,
       selectNodes,
     }),
-    [commit, connectionNodeTypes, duplicateNode, history.document, props.fileRendererRegistry, quickConnect, readOnly, removeNode, replaceNodeMedia, selectNodes, selection, uploadService],
+    [
+      commit,
+      connectionNodeTypes,
+      duplicateNode,
+      history.document,
+      props.fileRendererRegistry,
+      quickConnect,
+      readOnly,
+      removeNode,
+      replaceNodeMedia,
+      selectNodes,
+      selection,
+      selectionContext,
+      uploadService,
+    ],
   )
   const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
 
@@ -1493,12 +1517,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
                 </div>
               ) : null}
 
-              {(selectedNodeIds.length > 1 || selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))) && !readOnly ? (
+              {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && !readOnly ? (
                 <SelectionToolbar
                   canArrange={canArrangeSelection}
                   canDistribute={canDistributeSelection}
-                  canGroup={selectedNodeIds.length > 1}
-                  canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))}
+                  canGroup={selectionContext.kind === "multi-node"}
+                  canUngroup={hasSingleGroupSelection}
                   onAlign={align}
                   onDelete={remove}
                   onDistribute={distribute}
@@ -1600,15 +1624,15 @@ function CanvasEditorContent(props: CanvasEditorProps & {
             </div>
           </ContextMenuTrigger>
           <CanvasContextMenu
-            canArrange={canArrangeSelection}
-            canDistribute={canDistributeSelection}
-            canGroup={selectedNodeIds.length > 1}
+            canArrange={hasNodeOnlySelection && canArrangeSelection}
+            canDistribute={hasNodeOnlySelection && canDistributeSelection}
+            canGroup={selectionContext.kind === "multi-node"}
             canRedo={history.future.length > 0}
-            canUngroup={selectedNodeIds.some((id) => history.document.nodes.some((node) => node.id === id && node.data.kind === "group"))}
+            canUngroup={hasSingleGroupSelection}
             canUndo={history.past.length > 0}
             canUpload={Boolean(uploadService)}
             createItems={connectionNodeTypes}
-            hasNodeSelection={selectedNodeIds.length > 0}
+            hasNodeSelection={hasNodeOnlySelection}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
             onAddNode={addNode}
             onAlign={align}

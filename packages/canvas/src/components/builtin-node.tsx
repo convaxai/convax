@@ -44,6 +44,7 @@ import { Component, type ReactNode, useEffect, useRef, useState } from "react"
 import { updateCanvasNodeData } from "../commands"
 import { getConnectedCanvasFileNodeIds } from "../connections"
 import { useCanvasEditor } from "../editor-context"
+import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import { useCanvasService } from "../services"
 import type {
   CanvasFolderNodeData,
@@ -105,12 +106,18 @@ function NodeChrome(props: {
   toolbar?: ReactNode
 }) {
   const editor = useCanvasEditor()
+  const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.node.id)
+  const showMutationToolbar = canShowNodeLocalMutationSurface(
+    editor.selectionContext,
+    props.node.id,
+    editor.readOnly,
+  )
   const [connectMenuSide, setConnectMenuSide] = useState<"left" | "right" | null>(null)
   const connectionInProgress = useConnection((connection) => connection.inProgress)
   useEffect(() => {
-    if (props.node.selected) return
+    if (ownsSingleNodeContext) return
     setConnectMenuSide(null)
-  }, [props.node.selected])
+  }, [ownsSingleNodeContext])
   useEffect(() => {
     if (connectionInProgress) setConnectMenuSide(null)
   }, [connectionInProgress])
@@ -131,13 +138,8 @@ function NodeChrome(props: {
         onResizeStart={editor.beginGesture}
         onResizeEnd={editor.endGesture}
       />
-      {props.toolbar ? (
-        <NodeToolbar
-          className="convax-node-toolbar nodrag nowheel"
-          isVisible={props.node.selected && !editor.readOnly}
-          offset={36}
-          position={Position.Top}
-        >
+      {props.toolbar && showMutationToolbar ? (
+        <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={36} position={Position.Top}>
           {props.toolbar}
         </NodeToolbar>
       ) : null}
@@ -242,6 +244,7 @@ function createTextEditorExtensions() {
 
 export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const canvasEditor = useCanvasEditor()
+  const ownsSingleNodeContext = isSingleNodeSelectionContext(canvasEditor.selectionContext, props.id)
   const data = props.data as CanvasTextNodeData
   const dataRef = useRef(data)
   const canvasEditorRef = useRef(canvasEditor)
@@ -301,11 +304,11 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   }, [canvasEditor.readOnly, editing, textEditor])
 
   useEffect(() => {
-    if (!editing || (props.selected && !canvasEditor.readOnly)) return
+    if (!editing || (ownsSingleNodeContext && !canvasEditor.readOnly)) return
     textEditor?.setEditable(false)
     setEditing(false)
     canvasEditor.endGesture()
-  }, [canvasEditor, editing, props.selected, textEditor])
+  }, [canvasEditor, editing, ownsSingleNodeContext, textEditor])
 
   const beginEditing = (position: "start" | "end" = "end") => {
     if (!textEditor || canvasEditor.readOnly) return
@@ -790,11 +793,10 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 function FileAssistantAccessory(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
-  if (!assistant || !props.selected || editor.selection.nodeIds.size !== 1) return null
+  if (!assistant || !canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)) return null
   return (
     <NodeToolbar
       className="convax-node-assistant nodrag nowheel"
-      isVisible
       offset={28}
       position={Position.Bottom}
     >
@@ -844,6 +846,7 @@ export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
 
 function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
   const ContributedToolbar = definition?.toolbar
@@ -854,13 +857,8 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           ? <Renderer {...props} />
           : <UnknownFileRenderer {...props} />}
       </FileRendererBoundary>
-      {ContributedToolbar ? (
-        <NodeToolbar
-          className="convax-node-toolbar nodrag nowheel"
-          isVisible={props.selected && !editor.readOnly}
-          offset={82}
-          position={Position.Top}
-        >
+      {ContributedToolbar && showMutationToolbar ? (
+        <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={82} position={Position.Top}>
           <FileRendererBoundary data={props.data} fallback={null} renderer={ContributedToolbar}>
             <ContributedToolbar {...props} />
           </FileRendererBoundary>
