@@ -11,18 +11,9 @@ import {
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas"
-import {
-  getProjectFileReference,
-  isManagedProjectAssetPath,
-} from "@convax/project/canvas"
+import { getProjectFileReference, isManagedProjectAssetPath } from "@convax/project/canvas"
 import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
-import {
-  type ComponentProps,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react"
+import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   requireWebPluginId,
   requireWebPluginRelativePath,
@@ -39,10 +30,7 @@ import {
   type DesktopPluginHostRequest,
   type DesktopPluginHostResponse,
 } from "../plugin-host-protocol"
-import {
-  DesktopPluginFrameRegistry,
-  type DesktopPluginFrameRef,
-} from "./plugin-frame-registry"
+import { DesktopPluginFrameRegistry, type DesktopPluginFrameRef } from "./plugin-frame-registry"
 
 export const webPluginIframeSandbox = "allow-scripts" as const
 export const webPluginIframePermissions = [
@@ -69,9 +57,7 @@ export function webPluginIframeInteractionProps(input: {
 }) {
   const interactive = input.selected && !input.dragging && !input.pointerReleasePending
   return {
-    className: interactive
-      ? `nodrag nowheel ${webPluginIframeBaseClassName}`
-      : webPluginIframeBaseClassName,
+    className: interactive ? `nodrag nowheel ${webPluginIframeBaseClassName}` : webPluginIframeBaseClassName,
     style: {
       pointerEvents: interactive ? "auto" : "none",
       visibility: "visible",
@@ -132,6 +118,64 @@ const defaultStateBytes = 256 * 1024
 const maximumConnectedImageBytes = 16 * 1024 * 1024
 const maximumPromptLength = 20_000
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
+const webPluginFrameConnectFallbackMs = 100
+
+export interface WebPluginFrameConnectClock {
+  cancelFrame(id: number): void
+  clearDelay(id: number): void
+  requestFrame(callback: () => void): number
+  setDelay(callback: () => void, delay: number): number
+}
+
+function browserWebPluginFrameConnectClock(): WebPluginFrameConnectClock {
+  return {
+    cancelFrame: (id) => window.cancelAnimationFrame(id),
+    clearDelay: (id) => window.clearTimeout(id),
+    requestFrame: (callback) => window.requestAnimationFrame(() => callback()),
+    setDelay: (callback, delay) => window.setTimeout(callback, delay),
+  }
+}
+
+/** Let iframe scripts and React passive effects register their one-shot port listener. */
+export function scheduleWebPluginFrameConnect(callback: () => void, clock = browserWebPluginFrameConnectClock()) {
+  let active = true
+  let frameId: number | null = null
+  let settleDelayId: number | null = null
+  let fallbackDelayId: number | null = null
+
+  const clearScheduled = () => {
+    if (frameId !== null) clock.cancelFrame(frameId)
+    if (settleDelayId !== null) clock.clearDelay(settleDelayId)
+    if (fallbackDelayId !== null) clock.clearDelay(fallbackDelayId)
+    frameId = null
+    settleDelayId = null
+    fallbackDelayId = null
+  }
+  const finish = () => {
+    if (!active) return
+    active = false
+    clearScheduled()
+    callback()
+  }
+
+  frameId = clock.requestFrame(() => {
+    frameId = null
+    settleDelayId = clock.setDelay(() => {
+      settleDelayId = null
+      finish()
+    }, 0)
+  })
+  fallbackDelayId = clock.setDelay(() => {
+    fallbackDelayId = null
+    finish()
+  }, webPluginFrameConnectFallbackMs)
+
+  return () => {
+    if (!active) return
+    active = false
+    clearScheduled()
+  }
+}
 
 type WebPluginNodeProps = ComponentProps<CanvasFileRendererDefinition["component"]>
 
@@ -163,16 +207,14 @@ export interface WebPluginAgentPromptResult {
 /** Narrow product ports supplied by the Desktop App; the plugin host owns no globals. */
 export interface WebPluginCanvasHost {
   getActiveContext(): WebPluginCanvasActiveContext | null
-  promptAgent(input: DesktopPluginFrameRef & {
-    pluginName: string
-    signal: AbortSignal
-    text: string
-  }): Promise<WebPluginAgentPromptResult>
-  readProjectText(input: {
-    path: string
-    projectId: string
-    signal: AbortSignal
-  }): Promise<WebPluginProjectTextResult>
+  promptAgent(
+    input: DesktopPluginFrameRef & {
+      pluginName: string
+      signal: AbortSignal
+      text: string
+    },
+  ): Promise<WebPluginAgentPromptResult>
+  readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<WebPluginProjectTextResult>
   readManagedProjectImage(input: {
     path: string
     projectId: string
@@ -201,16 +243,14 @@ export interface WebPluginHostRequestContext {
   getNode(): CanvasNode | undefined
   limits?: WebPluginCanvasHostLimits
   plugin: InstalledWebPluginSummary
-  promptAgent(input: DesktopPluginFrameRef & {
-    pluginName: string
-    signal: AbortSignal
-    text: string
-  }): Promise<WebPluginAgentPromptResult>
-  readProjectText(input: {
-    path: string
-    projectId: string
-    signal: AbortSignal
-  }): Promise<WebPluginProjectTextResult>
+  promptAgent(
+    input: DesktopPluginFrameRef & {
+      pluginName: string
+      signal: AbortSignal
+      text: string
+    },
+  ): Promise<WebPluginAgentPromptResult>
+  readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<WebPluginProjectTextResult>
   readManagedProjectImage(input: {
     path: string
     projectId: string
@@ -299,12 +339,12 @@ function requireProjectRelativePath(value: unknown) {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error("Project file path must not contain traversal")
   }
-  if (segments.some((segment) => {
-    const stem = segment.split(".")[0] ?? ""
-    return /[:*?"<>|\u0000-\u001f\u007f]/.test(segment)
-      || /[. ]$/.test(segment)
-      || windowsReservedName.test(stem)
-  })) {
+  if (
+    segments.some((segment) => {
+      const stem = segment.split(".")[0] ?? ""
+      return /[:*?"<>|\u0000-\u001f\u007f]/.test(segment) || /[. ]$/.test(segment) || windowsReservedName.test(stem)
+    })
+  ) {
     throw new Error("Project file path contains a non-portable Windows segment")
   }
   if (segments.some((segment) => segment.replace(/[. ]+$/g, "").toLowerCase() === ".convax")) {
@@ -320,15 +360,9 @@ function requirePromptText(value: unknown) {
   return value
 }
 
-const connectedImageMimeTypes = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-])
+const connectedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
 
-type ConnectedImageSource =
-  | { kind: "embedded"; dataUrl: string; mimeType: string }
-  | { kind: "project"; path: string }
+type ConnectedImageSource = { kind: "embedded"; dataUrl: string; mimeType: string } | { kind: "project"; path: string }
 
 function requireConnectedImageNodeId(value: unknown) {
   if (typeof value !== "string" || !value || value.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value)) {
@@ -354,10 +388,12 @@ function connectedImageSource(node: CanvasNode): ConnectedImageSource | null {
 function sameConnectedImageSource(left: ConnectedImageSource | null, right: ConnectedImageSource) {
   if (!left || left.kind !== right.kind) return false
   if (left.kind === "project" && right.kind === "project") return left.path === right.path
-  return left.kind === "embedded"
-    && right.kind === "embedded"
-    && left.mimeType === right.mimeType
-    && left.dataUrl === right.dataUrl
+  return (
+    left.kind === "embedded" &&
+    right.kind === "embedded" &&
+    left.mimeType === right.mimeType &&
+    left.dataUrl === right.dataUrl
+  )
 }
 
 function connectedImageDescriptor(node: CanvasNode) {
@@ -374,11 +410,14 @@ function connectedImageDescriptor(node: CanvasNode) {
   }
 }
 
-const connectedImageDataFingerprintCache = new WeakMap<object, {
-  fingerprint: Promise<string>
-  metadata: string
-  source: string
-}>()
+const connectedImageDataFingerprintCache = new WeakMap<
+  object,
+  {
+    fingerprint: Promise<string>
+    metadata: string
+    source: string
+  }
+>()
 
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
@@ -403,11 +442,13 @@ function connectedImageDataFingerprint(data: CanvasNodeData) {
 
 async function connectedImageFingerprint(document: CanvasDocument, ownerNodeId: string) {
   const nodes = new Map(document.nodes.map((node) => [node.id, node]))
-  const parts = await Promise.all(getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId).map(async (id) => {
-    const node = nodes.get(id)
-    if (!node || node.data.kind !== "image") return null
-    return [id, await connectedImageDataFingerprint(node.data)]
-  }))
+  const parts = await Promise.all(
+    getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId).map(async (id) => {
+      const node = nodes.get(id)
+      if (!node || node.data.kind !== "image") return null
+      return [id, await connectedImageDataFingerprint(node.data)]
+    }),
+  )
   return sha256(JSON.stringify(parts.filter(Boolean)))
 }
 
@@ -447,7 +488,7 @@ function requireConnectedImageDataUrl(value: unknown, mimeType: unknown, size?: 
     throw new Error("Connected image data is not canonical base64")
   }
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
-  const decodedBytes = encoded.length / 4 * 3 - padding
+  const decodedBytes = (encoded.length / 4) * 3 - padding
   if (decodedBytes > maximumConnectedImageBytes) {
     throw new Error(`Connected image exceeds the ${maximumConnectedImageBytes / 1024 / 1024} MB Plugin limit`)
   }
@@ -480,9 +521,10 @@ export function matchesWebPluginCanvasNode(plugin: InstalledWebPluginSummary, da
   const mimeType = typeof data.mimeType === "string" ? data.mimeType.toLowerCase() : undefined
   if (mimeType && renderer.mimeTypes?.includes(mimeType)) return true
   const projectPath = getProjectFileReference(metadata)?.path
-  const names = [data.name, data.path, data.label, projectPath].filter((value): value is string => typeof value === "string")
-  return Boolean(renderer.extensions?.some((extension) =>
-    names.some((name) => name.toLowerCase().endsWith(extension))))
+  const names = [data.name, data.path, data.label, projectPath].filter(
+    (value): value is string => typeof value === "string",
+  )
+  return Boolean(renderer.extensions?.some((extension) => names.some((name) => name.toLowerCase().endsWith(extension))))
 }
 
 function pluginNodeSnapshot(node: CanvasNode) {
@@ -508,6 +550,11 @@ export function updateWebPluginNodeState(
     ...data,
     metadata: {
       ...metadataOf(data),
+      [webPluginIdentityMetadataKey]: {
+        entry: input.plugin.entry,
+        id: input.plugin.id,
+        version: input.plugin.version,
+      },
       [webPluginStateMetadataKey]: state,
     },
   }))
@@ -516,9 +563,7 @@ export function updateWebPluginNodeState(
 function assertCurrentFrame(context: WebPluginHostRequestContext) {
   if (context.signal.aborted) throw context.signal.reason ?? new Error("Plugin frame was closed")
   const active = context.getActiveContext()
-  if (!active
-    || active.projectId !== context.frame.projectId
-    || active.canvasId !== context.frame.canvasId) {
+  if (!active || active.projectId !== context.frame.projectId || active.canvasId !== context.frame.canvasId) {
     throw new Error("Plugin frame is no longer in the active Project and Canvas")
   }
   const node = context.getNode()
@@ -533,10 +578,16 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: We
   if (request.method === "host.context.get") {
     requireEmptyParams(request.params)
     return {
-      canvas: { id: current.active.canvasId, ...(current.active.canvasName ? { name: current.active.canvasName } : {}) },
+      canvas: {
+        id: current.active.canvasId,
+        ...(current.active.canvasName ? { name: current.active.canvasName } : {}),
+      },
       node: pluginNodeSnapshot(current.node),
       plugin: { id: context.plugin.id, name: context.plugin.name, version: context.plugin.version },
-      project: { id: current.active.projectId, ...(current.active.projectName ? { name: current.active.projectName } : {}) },
+      project: {
+        id: current.active.projectId,
+        ...(current.active.projectName ? { name: current.active.projectName } : {}),
+      },
     }
   }
   if (request.method === "canvas.connectedImages.list") {
@@ -678,7 +729,15 @@ export function webPluginEntryUrl(plugin: Pick<InstalledWebPluginSummary, "entry
   return url.href
 }
 
-function createPluginNode(plugin: InstalledWebPluginSummary, input: Parameters<NonNullable<CanvasFileRendererDefinition["create"]>>[0]): CanvasNode {
+/** Force an installed Plugin upgrade to replace the live opaque-origin frame. */
+export function webPluginFrameKey(plugin: Pick<InstalledWebPluginSummary, "entry" | "id" | "version">) {
+  return `${requireWebPluginId(plugin.id)}:${plugin.version}:${requireWebPluginRelativePath(plugin.entry, "Plugin entry")}`
+}
+
+function createPluginNode(
+  plugin: InstalledWebPluginSummary,
+  input: Parameters<NonNullable<CanvasFileRendererDefinition["create"]>>[0],
+): CanvasNode {
   const renderer = plugin.contributes.canvas.renderer
   const inputData = input.data ?? {}
   const inputMetadata = isRecord(inputData.metadata) ? inputData.metadata : {}
@@ -707,14 +766,17 @@ function createPluginNode(plugin: InstalledWebPluginSummary, input: Parameters<N
   }
 }
 
-function WebPluginCanvasNode(props: WebPluginNodeProps & {
-  options: WebPluginCanvasContributionOptions
-  plugin: InstalledWebPluginSummary
-}) {
+function WebPluginCanvasNode(
+  props: WebPluginNodeProps & {
+    options: WebPluginCanvasContributionOptions
+    plugin: InstalledWebPluginSummary
+  },
+) {
   const editor = useCanvasEditor()
   const editorRef = useRef(editor)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
+  const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
   const connectedImageReadGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
   const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
@@ -732,17 +794,26 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
 
   const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
 
-  useEffect(() => () => cleanupRef.current?.(), [])
+  useEffect(
+    () => () => {
+      pendingConnectCleanupRef.current?.()
+      cleanupRef.current?.()
+    },
+    [],
+  )
   useEffect(() => {
     const iframe = iframeRef.current
     if (iframeInteractive || !iframe || iframe !== document.activeElement) return
     iframe.blur()
   }, [iframeInteractive])
-  useEffect(() => () => {
-    pointerReleaseListenersRef.current?.()
-    const frame = pointerReleaseFrameRef.current
-    if (frame !== null) window.cancelAnimationFrame(frame)
-  }, [])
+  useEffect(
+    () => () => {
+      pointerReleaseListenersRef.current?.()
+      const frame = pointerReleaseFrameRef.current
+      if (frame !== null) window.cancelAnimationFrame(frame)
+    },
+    [],
+  )
 
   const finishHostPointerGesture = () => {
     const removeListeners = pointerReleaseListenersRef.current
@@ -795,32 +866,43 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
     if (!canReadConnectedImages) return
     let canceled = false
     const document = editor.document
-    void connectedImageFingerprint(document, props.id).then((fingerprint) => {
-      if (canceled || connectedImageFingerprintRef.current === fingerprint) return
-      connectedImageFingerprintRef.current = fingerprint
-      const active = props.options.host.getActiveContext()
-      if (!active || active.canvasId !== document.id) return
-      const frame = {
-        canvasId: active.canvasId,
-        nodeId: props.id,
-        pluginId: props.plugin.id,
-        projectId: active.projectId,
-      }
-      if (!props.options.frameRegistry.has(frame)) return
-      try {
-        props.options.frameRegistry.send(frame, {
-          command: desktopPluginConnectedImagesChangedCommand,
-          protocol: desktopPluginHostProtocol,
-          type: "command",
-        })
-      } catch {
-        // The frame may unmount between the digest and this command.
-      }
-    }).catch(() => {
-      // Web Crypto is a renderer primitive; initial Plugin listing still fails safe if unavailable.
-    })
-    return () => { canceled = true }
-  }, [canReadConnectedImages, editor.document, props.id, props.options.frameRegistry, props.options.host, props.plugin.id])
+    void connectedImageFingerprint(document, props.id)
+      .then((fingerprint) => {
+        if (canceled || connectedImageFingerprintRef.current === fingerprint) return
+        connectedImageFingerprintRef.current = fingerprint
+        const active = props.options.host.getActiveContext()
+        if (!active || active.canvasId !== document.id) return
+        const frame = {
+          canvasId: active.canvasId,
+          nodeId: props.id,
+          pluginId: props.plugin.id,
+          projectId: active.projectId,
+        }
+        if (!props.options.frameRegistry.has(frame)) return
+        try {
+          props.options.frameRegistry.send(frame, {
+            command: desktopPluginConnectedImagesChangedCommand,
+            protocol: desktopPluginHostProtocol,
+            type: "command",
+          })
+        } catch {
+          // The frame may unmount between the digest and this command.
+        }
+      })
+      .catch(() => {
+        // Web Crypto is a renderer primitive; initial Plugin listing still fails safe if unavailable.
+      })
+    return () => {
+      canceled = true
+    }
+  }, [
+    canReadConnectedImages,
+    editor.document,
+    props.id,
+    props.options.frameRegistry,
+    props.options.host,
+    props.plugin.id,
+  ])
 
   const connectFrame = () => {
     cleanupRef.current?.()
@@ -829,8 +911,14 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
     const active = props.options.host.getActiveContext()
     const currentEditor = editorRef.current
     const node = currentEditor.document.nodes.find((candidate) => candidate.id === props.id)
-    if (!iframeWindow || !active || active.canvasId !== currentEditor.document.id
-      || !node || !matchesWebPluginCanvasNode(props.plugin, node.data)) return
+    if (
+      !iframeWindow ||
+      !active ||
+      active.canvasId !== currentEditor.document.id ||
+      !node ||
+      !matchesWebPluginCanvasNode(props.plugin, node.data)
+    )
+      return
 
     const controller = new AbortController()
     const channel = new MessageChannel()
@@ -898,11 +986,17 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
           if (!latestNode || !matchesWebPluginCanvasNode(props.plugin, latestNode.data)) {
             throw new Error("Plugin frame no longer owns this Canvas node")
           }
-          latest.commit((document) => updateWebPluginNodeState(document, {
-            canvasId: frame.canvasId,
-            nodeId: frame.nodeId,
-            plugin: props.plugin,
-          }, state))
+          latest.commit((document) =>
+            updateWebPluginNodeState(
+              document,
+              {
+                canvasId: frame.canvasId,
+                nodeId: frame.nodeId,
+                plugin: props.plugin,
+              },
+              state,
+            ),
+          )
         },
       }).then((response) => {
         if (!response || controller.signal.aborted) return
@@ -927,10 +1021,26 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
     }
   }
 
+  const scheduleConnectFrame = () => {
+    pendingConnectCleanupRef.current?.()
+    pendingConnectCleanupRef.current = null
+    cleanupRef.current?.()
+    cleanupRef.current = null
+    pendingConnectCleanupRef.current = scheduleWebPluginFrameConnect(() => {
+      pendingConnectCleanupRef.current = null
+      connectFrame()
+    })
+  }
+
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
       <CanvasNodeToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
-      <CanvasNodeToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
+      <CanvasNodeToolbarButton
+        destructive
+        icon={<Trash2 />}
+        label="Delete"
+        onClick={() => editor.removeNode(props.id)}
+      />
     </div>
   )
   return (
@@ -941,7 +1051,8 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
             allow={webPluginIframeAllow(props.plugin)}
             allowFullScreen={props.plugin.capabilities.includes("ui.fullscreen")}
             {...iframeInteraction}
-            onLoad={connectFrame}
+            key={webPluginFrameKey(props.plugin)}
+            onLoad={scheduleConnectFrame}
             ref={iframeRef}
             referrerPolicy="no-referrer"
             sandbox={webPluginIframeSandbox}
@@ -962,10 +1073,12 @@ export function getIncomingConnectedImageNodes(document: CanvasDocument, ownerNo
     .filter((node): node is CanvasNode => node !== undefined && node.data.kind === "image")
 }
 
-function WebPluginCanvasToolbar(props: WebPluginNodeProps & {
-  options: WebPluginCanvasContributionOptions
-  plugin: InstalledWebPluginSummary
-}) {
+function WebPluginCanvasToolbar(
+  props: WebPluginNodeProps & {
+    options: WebPluginCanvasContributionOptions
+    plugin: InstalledWebPluginSummary
+  },
+) {
   const editor = useCanvasEditor()
   useSyncExternalStore(
     props.options.frameRegistry.subscribe,
@@ -973,12 +1086,15 @@ function WebPluginCanvasToolbar(props: WebPluginNodeProps & {
     props.options.frameRegistry.getVersion,
   )
   const active = props.options.host.getActiveContext()
-  const frame = active && active.canvasId === editor.document.id ? {
-    canvasId: active.canvasId,
-    nodeId: props.id,
-    pluginId: props.plugin.id,
-    projectId: active.projectId,
-  } : null
+  const frame =
+    active && active.canvasId === editor.document.id
+      ? {
+          canvasId: active.canvasId,
+          nodeId: props.id,
+          pluginId: props.plugin.id,
+          projectId: active.projectId,
+        }
+      : null
   const mounted = Boolean(frame && props.options.frameRegistry.has(frame))
   return (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
@@ -1018,22 +1134,22 @@ export function createWebPluginCanvasContribution(
   options: WebPluginCanvasContributionOptions,
 ): CanvasFileRendererPlugin {
   const renderer = plugin.contributes.canvas.renderer
-  const Component = (props: WebPluginNodeProps) => (
-    <WebPluginCanvasNode {...props} options={options} plugin={plugin} />
-  )
+  const Component = (props: WebPluginNodeProps) => <WebPluginCanvasNode {...props} options={options} plugin={plugin} />
   const Toolbar = plugin.contributes.canvas.toolbar?.length
     ? (props: WebPluginNodeProps) => <WebPluginCanvasToolbar {...props} options={options} plugin={plugin} />
     : undefined
   return {
     id: `desktop.${plugin.id}`,
-    renderers: [{
-      component: Component,
-      ...(renderer.create ? { create: (input) => createPluginNode(plugin, input) } : {}),
-      id: webPluginCanvasRendererId(plugin.id),
-      label: plugin.name,
-      matches: (data) => matchesWebPluginCanvasNode(plugin, data),
-      priority: 1_000,
-      ...(Toolbar ? { toolbar: Toolbar } : {}),
-    }],
+    renderers: [
+      {
+        component: Component,
+        ...(renderer.create ? { create: (input) => createPluginNode(plugin, input) } : {}),
+        id: webPluginCanvasRendererId(plugin.id),
+        label: plugin.name,
+        matches: (data) => matchesWebPluginCanvasNode(plugin, data),
+        priority: 1_000,
+        ...(Toolbar ? { toolbar: Toolbar } : {}),
+      },
+    ],
   }
 }

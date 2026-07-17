@@ -9,21 +9,51 @@ import {
   dispatchWebPluginHostRequest,
   getIncomingConnectedImageNodes,
   matchesWebPluginCanvasNode,
+  scheduleWebPluginFrameConnect,
   updateWebPluginNodeState,
   webPluginIframeAllow,
   WebPluginDragShield,
   WebPluginPointerReleaseGate,
   webPluginCanvasRendererId,
   webPluginEntryUrl,
+  webPluginFrameKey,
   webPluginIdentityMetadataKey,
   webPluginIframePermissions,
   webPluginIframeInteractionProps,
   webPluginIframeSandbox,
   webPluginStateMetadataKey,
   type WebPluginCanvasActiveContext,
+  type WebPluginFrameConnectClock,
   type WebPluginHostRequestContext,
   type WebPluginProjectFileResult,
 } from "./web-plugin-canvas"
+
+function frameConnectClock() {
+  let sequence = 0
+  const frames: Array<{ callback(): void; canceled: boolean; id: number }> = []
+  const delays: Array<{ callback(): void; canceled: boolean; delay: number; id: number }> = []
+  const clock: WebPluginFrameConnectClock = {
+    cancelFrame(id) {
+      const frame = frames.find((candidate) => candidate.id === id)
+      if (frame) frame.canceled = true
+    },
+    clearDelay(id) {
+      const delay = delays.find((candidate) => candidate.id === id)
+      if (delay) delay.canceled = true
+    },
+    requestFrame(callback) {
+      const frame = { callback, canceled: false, id: ++sequence }
+      frames.push(frame)
+      return frame.id
+    },
+    setDelay(callback, delay) {
+      const scheduled = { callback, canceled: false, delay, id: ++sequence }
+      delays.push(scheduled)
+      return scheduled.id
+    },
+  }
+  return { clock, delays, frames }
+}
 
 function plugin(capabilities: WebPluginCapability[] = []): InstalledWebPluginSummary {
   return {
@@ -104,10 +134,7 @@ function request(method: string, params?: unknown) {
   }
 }
 
-function hostContext(
-  installedPlugin: InstalledWebPluginSummary,
-  overrides: Partial<WebPluginHostRequestContext> = {},
-) {
+function hostContext(installedPlugin: InstalledWebPluginSummary, overrides: Partial<WebPluginHostRequestContext> = {}) {
   const active: WebPluginCanvasActiveContext = {
     canvasId: "canvas-1",
     canvasName: "Storyboard",
@@ -143,6 +170,36 @@ function hostContext(
 }
 
 describe("Canvas Web Plugin contribution", () => {
+  test("connects after a frame and task barrier, with one fallback and cancellation", () => {
+    const normal = frameConnectClock()
+    const onNormalConnect = mock(() => undefined)
+    scheduleWebPluginFrameConnect(onNormalConnect, normal.clock)
+    expect(onNormalConnect).not.toHaveBeenCalled()
+    normal.frames[0]!.callback()
+    expect(onNormalConnect).not.toHaveBeenCalled()
+    normal.delays.find((delay) => delay.delay === 0)!.callback()
+    expect(onNormalConnect).toHaveBeenCalledTimes(1)
+    normal.delays.find((delay) => delay.delay > 0)!.callback()
+    expect(onNormalConnect).toHaveBeenCalledTimes(1)
+
+    const fallback = frameConnectClock()
+    const onFallbackConnect = mock(() => undefined)
+    scheduleWebPluginFrameConnect(onFallbackConnect, fallback.clock)
+    fallback.delays[0]!.callback()
+    fallback.frames[0]!.callback()
+    expect(onFallbackConnect).toHaveBeenCalledTimes(1)
+
+    const canceled = frameConnectClock()
+    const onCanceledConnect = mock(() => undefined)
+    const cancel = scheduleWebPluginFrameConnect(onCanceledConnect, canceled.clock)
+    cancel()
+    canceled.frames[0]!.callback()
+    canceled.delays[0]!.callback()
+    expect(onCanceledConnect).not.toHaveBeenCalled()
+    expect(canceled.frames[0]!.canceled).toBe(true)
+    expect(canceled.delays[0]!.canceled).toBe(true)
+  })
+
   test("stays a file renderer and creates only a portable plugin node reference", () => {
     const installedPlugin = plugin()
     const contribution = createWebPluginCanvasContribution(installedPlugin, {
@@ -252,28 +309,41 @@ describe("Canvas Web Plugin contribution", () => {
   test("matches its identity, extension, MIME type, or declared file-node kind", () => {
     const installedPlugin = plugin()
     expect(matchesWebPluginCanvasNode(installedPlugin, canvasNode().data)).toBe(true)
-    expect(matchesWebPluginCanvasNode(installedPlugin, {
-      kind: "text",
-      label: "Opening.stage.json",
-    })).toBe(true)
-    expect(matchesWebPluginCanvasNode(installedPlugin, {
-      kind: "file",
-      label: "Opening",
-      mimeType: "application/x-convax-stage",
-    })).toBe(true)
-    expect(matchesWebPluginCanvasNode(installedPlugin, {
-      kind: "director-scene",
-      label: "Opening",
-    })).toBe(true)
-    expect(matchesWebPluginCanvasNode(installedPlugin, {
-      kind: "text",
-      label: "notes.md",
-    })).toBe(false)
+    expect(
+      matchesWebPluginCanvasNode(installedPlugin, {
+        kind: "text",
+        label: "Opening.stage.json",
+      }),
+    ).toBe(true)
+    expect(
+      matchesWebPluginCanvasNode(installedPlugin, {
+        kind: "file",
+        label: "Opening",
+        mimeType: "application/x-convax-stage",
+      }),
+    ).toBe(true)
+    expect(
+      matchesWebPluginCanvasNode(installedPlugin, {
+        kind: "director-scene",
+        label: "Opening",
+      }),
+    ).toBe(true)
+    expect(
+      matchesWebPluginCanvasNode(installedPlugin, {
+        kind: "text",
+        label: "notes.md",
+      }),
+    ).toBe(false)
   })
 
   test("encodes portable entry segments and never turns backslashes into host paths", () => {
     expect(webPluginEntryUrl(plugin())).toBe("convax-plugin://director-stage/surfaces/Director%20Stage.html")
     expect(() => webPluginEntryUrl({ entry: "surfaces\\index.html", id: "director-stage" })).toThrow("portable")
+  })
+
+  test("changes the live frame identity when an installed Plugin is upgraded", () => {
+    const installed = plugin()
+    expect(webPluginFrameKey({ ...installed, version: "1.2.4" })).not.toBe(webPluginFrameKey(installed))
   })
 
   test("keeps incoming image inputs in edge order instead of Canvas node order", () => {
@@ -354,14 +424,16 @@ describe("Canvas Web Plugin host requests", () => {
     expect(listed).toMatchObject({
       ok: true,
       result: {
-        images: [{
-          height: 1024,
-          id: "image-1",
-          mimeType: "image/jpeg",
-          name: "panorama.jpg",
-          readable: true,
-          width: 2048,
-        }],
+        images: [
+          {
+            height: 1024,
+            id: "image-1",
+            mimeType: "image/jpeg",
+            name: "panorama.jpg",
+            readable: true,
+            width: 2048,
+          },
+        ],
       },
     })
     expect(JSON.stringify(listed)).not.toContain(".convax/assets")
@@ -379,10 +451,12 @@ describe("Canvas Web Plugin host requests", () => {
         name: "panorama.jpg",
       },
     })
-    expect(readManagedProjectImage).toHaveBeenCalledWith(expect.objectContaining({
-      path: ".convax/assets/panorama.jpg",
-      projectId: "project-1",
-    }))
+    expect(readManagedProjectImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: ".convax/assets/panorama.jpg",
+        projectId: "project-1",
+      }),
+    )
     expect(readManagedProjectImage).toHaveBeenCalledTimes(1)
   })
 
@@ -450,10 +524,9 @@ describe("Canvas Web Plugin host requests", () => {
         size: 16 * 1024 * 1024,
       })),
     })
-    expect(await dispatchWebPluginHostRequest(
-      request("canvas.connectedImage.read", { nodeId: "image-1" }),
-      exactContext,
-    )).toMatchObject({ ok: true })
+    expect(
+      await dispatchWebPluginHostRequest(request("canvas.connectedImage.read", { nodeId: "image-1" }), exactContext),
+    ).toMatchObject({ ok: true })
 
     const mismatchedContext = hostContext(plugin(["canvas.connectedImages.read"]), {
       getConnectedImageNodes: () => [connectedImageNode()],
@@ -465,10 +538,12 @@ describe("Canvas Web Plugin host requests", () => {
         size: 2,
       })),
     })
-    expect(await dispatchWebPluginHostRequest(
-      request("canvas.connectedImage.read", { nodeId: "image-1" }),
-      mismatchedContext,
-    )).toMatchObject({ ok: false, error: expect.stringContaining("declared size") })
+    expect(
+      await dispatchWebPluginHostRequest(
+        request("canvas.connectedImage.read", { nodeId: "image-1" }),
+        mismatchedContext,
+      ),
+    ).toMatchObject({ ok: false, error: expect.stringContaining("declared size") })
   })
 
   test("rejects forged or non-portable connected image references before Project file ports", async () => {
@@ -500,10 +575,9 @@ describe("Canvas Web Plugin host requests", () => {
       })
       const listed = await dispatchWebPluginHostRequest(request("canvas.connectedImages.list"), context)
       expect(listed).toMatchObject({ ok: true, result: { images: [{ readable: false }] } })
-      expect(await dispatchWebPluginHostRequest(
-        request("canvas.connectedImage.read", { nodeId: image.id }),
-        context,
-      )).toMatchObject({ ok: false, error: expect.stringContaining("managed Project asset") })
+      expect(
+        await dispatchWebPluginHostRequest(request("canvas.connectedImage.read", { nodeId: image.id }), context),
+      ).toMatchObject({ ok: false, error: expect.stringContaining("managed Project asset") })
     }
 
     expect(readManagedProjectImage).not.toHaveBeenCalled()
@@ -511,14 +585,13 @@ describe("Canvas Web Plugin host requests", () => {
 
   test("rejects a connected image whose source changes during its managed read", async () => {
     let image = connectedImageNode()
-    let resolveImage!: (value: {
-      dataUrl: string
-      mimeType: string
-      name: string
-      path: string
-      size: number
-    }) => void
-    const readManagedProjectImage = mock(() => new Promise<WebPluginProjectFileResult>((resolve) => { resolveImage = resolve }))
+    let resolveImage!: (value: { dataUrl: string; mimeType: string; name: string; path: string; size: number }) => void
+    const readManagedProjectImage = mock(
+      () =>
+        new Promise<WebPluginProjectFileResult>((resolve) => {
+          resolveImage = resolve
+        }),
+    )
     const context = hostContext(plugin(["canvas.connectedImages.read"]), {
       getConnectedImageNodes: () => [image],
       readManagedProjectImage,
@@ -550,22 +623,18 @@ describe("Canvas Web Plugin host requests", () => {
   })
 
   test("allows only one connected image read in flight per Plugin frame", async () => {
-    let resolveImage!: (value: {
-      dataUrl: string
-      mimeType: string
-      name: string
-      path: string
-      size: number
-    }) => void
-    const readManagedProjectImage = mock(() => new Promise<WebPluginProjectFileResult>((resolve) => { resolveImage = resolve }))
+    let resolveImage!: (value: { dataUrl: string; mimeType: string; name: string; path: string; size: number }) => void
+    const readManagedProjectImage = mock(
+      () =>
+        new Promise<WebPluginProjectFileResult>((resolve) => {
+          resolveImage = resolve
+        }),
+    )
     const context = hostContext(plugin(["canvas.connectedImages.read"]), {
       getConnectedImageNodes: () => [connectedImageNode()],
       readManagedProjectImage,
     })
-    const first = dispatchWebPluginHostRequest(
-      request("canvas.connectedImage.read", { nodeId: "image-1" }),
-      context,
-    )
+    const first = dispatchWebPluginHostRequest(request("canvas.connectedImage.read", { nodeId: "image-1" }), context)
     const second = await dispatchWebPluginHostRequest(
       { ...request("canvas.connectedImage.read", { nodeId: "image-1" }), id: "request-2" },
       context,
@@ -590,11 +659,15 @@ describe("Canvas Web Plugin host requests", () => {
       id: "canvas-1",
       nodes: [node, canvasNode({ id: "node-2" })],
     })
-    const next = updateWebPluginNodeState(document, {
-      canvasId: "canvas-1",
-      nodeId: "node-1",
-      plugin: installedPlugin,
-    }, { scene: "new" })
+    const next = updateWebPluginNodeState(
+      document,
+      {
+        canvasId: "canvas-1",
+        nodeId: "node-1",
+        plugin: installedPlugin,
+      },
+      { scene: "new" },
+    )
     const updated = next.nodes[0]!
 
     expect(updated.position).toEqual(node.position)
@@ -607,6 +680,36 @@ describe("Canvas Web Plugin host requests", () => {
     })
     expect(next.edges).toBe(document.edges)
     expect(next.nodes[1]).toBe(document.nodes[1])
+  })
+
+  test("stamps the installed Plugin version only after that version commits node state", () => {
+    const installedPlugin = plugin(["canvas.node.write"])
+    const node = canvasNode()
+    node.data.metadata = {
+      ...(node.data.metadata as Record<string, unknown>),
+      convaxPlugin: { entry: "legacy.html", id: installedPlugin.id, version: "1.0.0" },
+      convaxPluginState: { scene: "legacy" },
+    }
+    const document = createCanvasDocument({ id: "canvas-1", nodes: [node] })
+
+    const next = updateWebPluginNodeState(
+      document,
+      {
+        canvasId: document.id,
+        nodeId: node.id,
+        plugin: installedPlugin,
+      },
+      { scene: "migrated" },
+    )
+
+    expect(next.nodes[0]?.data.metadata).toMatchObject({
+      convaxPlugin: {
+        entry: installedPlugin.entry,
+        id: installedPlugin.id,
+        version: installedPlugin.version,
+      },
+      convaxPluginState: { scene: "migrated" },
+    })
   })
 
   test("rejects private, traversing, native, and backslash Project paths before the port", async () => {
@@ -630,33 +733,32 @@ describe("Canvas Web Plugin host requests", () => {
   test("binds Agent prompts to the exact Project, Canvas, plugin, and own node", async () => {
     const promptAgent = mock(async () => ({ text: "Use a wide shot." }))
     const context = hostContext(plugin(["agent.prompt"]), { promptAgent })
-    const response = await dispatchWebPluginHostRequest(
-      request("agent.prompt", { text: "Suggest a shot" }),
-      context,
-    )
+    const response = await dispatchWebPluginHostRequest(request("agent.prompt", { text: "Suggest a shot" }), context)
     expect(response).toMatchObject({ ok: true, result: { text: "Use a wide shot." } })
-    expect(promptAgent).toHaveBeenCalledWith(expect.objectContaining({
-      canvasId: "canvas-1",
-      nodeId: "node-1",
-      pluginId: "director-stage",
-      pluginName: "Director Stage",
-      projectId: "project-1",
-      text: "Suggest a shot",
-    }))
+    expect(promptAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canvasId: "canvas-1",
+        nodeId: "node-1",
+        pluginId: "director-stage",
+        pluginName: "Director Stage",
+        projectId: "project-1",
+        text: "Suggest a shot",
+      }),
+    )
   })
 
   test("rejects an async result when the active Canvas becomes stale", async () => {
     let active: WebPluginCanvasActiveContext = { canvasId: "canvas-1", projectId: "project-1" }
     let resolvePrompt!: (value: { text: string }) => void
-    const promptAgent = () => new Promise<{ text: string }>((resolve) => { resolvePrompt = resolve })
+    const promptAgent = () =>
+      new Promise<{ text: string }>((resolve) => {
+        resolvePrompt = resolve
+      })
     const context = hostContext(plugin(["agent.prompt"]), {
       getActiveContext: () => active,
       promptAgent,
     })
-    const responsePromise = dispatchWebPluginHostRequest(
-      request("agent.prompt", { text: "Suggest a shot" }),
-      context,
-    )
+    const responsePromise = dispatchWebPluginHostRequest(request("agent.prompt", { text: "Suggest a shot" }), context)
     active = { canvasId: "canvas-2", projectId: "project-1" }
     resolvePrompt({ text: "Stale answer" })
     expect(await responsePromise).toMatchObject({
@@ -672,11 +774,15 @@ describe("Canvas Web Plugin host requests", () => {
       ok: false,
       error: "Invalid plugin host request",
     })
-    expect(await dispatchWebPluginHostRequest({ ...request("host.context.get"), unexpected: true }, context)).toMatchObject({
+    expect(
+      await dispatchWebPluginHostRequest({ ...request("host.context.get"), unexpected: true }, context),
+    ).toMatchObject({
       ok: false,
       error: expect.stringContaining("unsupported field"),
     })
-    expect(await dispatchWebPluginHostRequest({ ...request("host.context.get"), extra: "x".repeat(300) }, context)).toMatchObject({
+    expect(
+      await dispatchWebPluginHostRequest({ ...request("host.context.get"), extra: "x".repeat(300) }, context),
+    ).toMatchObject({
       ok: false,
       error: expect.stringContaining("exceeds"),
     })
