@@ -2,6 +2,7 @@ import {
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
   createCanvasId,
+  getIncomingConnectedCanvasFileNodeIds,
   updateCanvasNodeData,
   useCanvasEditor,
   type CanvasDocument,
@@ -10,7 +11,10 @@ import {
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas"
-import { getProjectFileReference } from "@convax/project/canvas"
+import {
+  getProjectFileReference,
+  isManagedProjectAssetPath,
+} from "@convax/project/canvas"
 import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
 import {
   type ComponentProps,
@@ -26,6 +30,7 @@ import {
 } from "../plugin-contracts"
 import {
   desktopPluginHostProtocol,
+  desktopPluginConnectedImagesChangedCommand,
   isDesktopPluginHostRequest,
   pluginHostFailure,
   pluginHostSuccess,
@@ -47,12 +52,17 @@ export const webPluginIframePermissions = [
   "geolocation 'none'",
   "microphone 'none'",
 ].join("; ")
+export function webPluginIframeAllow(plugin: Pick<InstalledWebPluginSummary, "capabilities">) {
+  return `${webPluginIframePermissions}; fullscreen ${plugin.capabilities.includes("ui.fullscreen") ? "*" : "'none'"}`
+}
 export const webPluginStateMetadataKey = "convaxPluginState" as const
 export const webPluginIdentityMetadataKey = "convaxPlugin" as const
 
 const defaultRequestBytes = 256 * 1024
 const defaultResponseBytes = 1024 * 1024
+const defaultConnectedImageResponseBytes = 24 * 1024 * 1024
 const defaultStateBytes = 256 * 1024
+const maximumConnectedImageBytes = 16 * 1024 * 1024
 const maximumPromptLength = 20_000
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 
@@ -69,6 +79,14 @@ export interface WebPluginProjectTextResult {
   content: string
   exists: boolean
   path: string
+}
+
+export interface WebPluginProjectFileResult {
+  dataUrl: string
+  mimeType: string
+  name: string
+  path: string
+  size: number
 }
 
 export interface WebPluginAgentPromptResult {
@@ -88,9 +106,15 @@ export interface WebPluginCanvasHost {
     projectId: string
     signal: AbortSignal
   }): Promise<WebPluginProjectTextResult>
+  readManagedProjectImage(input: {
+    path: string
+    projectId: string
+    signal: AbortSignal
+  }): Promise<WebPluginProjectFileResult>
 }
 
 export interface WebPluginCanvasHostLimits {
+  connectedImageResponseBytes?: number
   requestBytes?: number
   responseBytes?: number
   stateBytes?: number
@@ -103,8 +127,10 @@ export interface WebPluginCanvasContributionOptions {
 }
 
 export interface WebPluginHostRequestContext {
+  connectedImageReadGate: { active: boolean }
   frame: DesktopPluginFrameRef
   getActiveContext(): WebPluginCanvasActiveContext | null
+  getConnectedImageNodes(): CanvasNode[]
   getNode(): CanvasNode | undefined
   limits?: WebPluginCanvasHostLimits
   plugin: InstalledWebPluginSummary
@@ -118,6 +144,11 @@ export interface WebPluginHostRequestContext {
     projectId: string
     signal: AbortSignal
   }): Promise<WebPluginProjectTextResult>
+  readManagedProjectImage(input: {
+    path: string
+    projectId: string
+    signal: AbortSignal
+  }): Promise<WebPluginProjectFileResult>
   signal: AbortSignal
   updateNodeState(state: Record<string, unknown>): void
 }
@@ -222,6 +253,143 @@ function requirePromptText(value: unknown) {
   return value
 }
 
+const connectedImageMimeTypes = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+])
+
+type ConnectedImageSource =
+  | { kind: "embedded"; dataUrl: string; mimeType: string }
+  | { kind: "project"; path: string }
+
+function requireConnectedImageNodeId(value: unknown) {
+  if (typeof value !== "string" || !value || value.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error("Connected image node id is invalid")
+  }
+  return value
+}
+
+function connectedImageSource(node: CanvasNode): ConnectedImageSource | null {
+  const data = node.data
+  const reference = getProjectFileReference(metadataOf(data))
+  if (reference && isManagedProjectAssetPath(reference.path)) {
+    return { kind: "project", path: reference.path }
+  }
+  if (typeof data.url !== "string") return null
+  const match = /^data:([^;,]+);base64,/i.exec(data.url)
+  const mimeType = match?.[1]?.toLowerCase()
+  if (!mimeType || !connectedImageMimeTypes.has(mimeType)) return null
+  if (typeof data.mimeType === "string" && data.mimeType.toLowerCase() !== mimeType) return null
+  return { dataUrl: data.url, kind: "embedded", mimeType }
+}
+
+function sameConnectedImageSource(left: ConnectedImageSource | null, right: ConnectedImageSource) {
+  if (!left || left.kind !== right.kind) return false
+  if (left.kind === "project" && right.kind === "project") return left.path === right.path
+  return left.kind === "embedded"
+    && right.kind === "embedded"
+    && left.mimeType === right.mimeType
+    && left.dataUrl === right.dataUrl
+}
+
+function connectedImageDescriptor(node: CanvasNode) {
+  const data = node.data
+  const source = connectedImageSource(node)
+  const declaredMimeType = typeof data.mimeType === "string" ? data.mimeType.toLowerCase() : undefined
+  return {
+    height: typeof data.height === "number" ? data.height : undefined,
+    id: node.id,
+    mimeType: typeof data.mimeType === "string" ? data.mimeType : undefined,
+    name: typeof data.name === "string" ? data.name : data.label,
+    readable: Boolean(source && (!declaredMimeType || connectedImageMimeTypes.has(declaredMimeType))),
+    width: typeof data.width === "number" ? data.width : undefined,
+  }
+}
+
+const connectedImageDataFingerprintCache = new WeakMap<object, {
+  fingerprint: Promise<string>
+  metadata: string
+  source: string
+}>()
+
+async function sha256(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+function connectedImageDataFingerprint(data: CanvasNodeData) {
+  const source = typeof data.url === "string" ? data.url : ""
+  const metadata = JSON.stringify([
+    data.name,
+    data.mimeType,
+    data.width,
+    data.height,
+    getProjectFileReference(metadataOf(data))?.path,
+  ])
+  const cached = connectedImageDataFingerprintCache.get(data)
+  if (cached && cached.source === source && cached.metadata === metadata) return cached.fingerprint
+  const fingerprint = sha256(`${metadata}\u0000${source}`)
+  connectedImageDataFingerprintCache.set(data, { fingerprint, metadata, source })
+  return fingerprint
+}
+
+async function connectedImageFingerprint(document: CanvasDocument, ownerNodeId: string) {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const parts = await Promise.all(getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId).map(async (id) => {
+    const node = nodes.get(id)
+    if (!node || node.data.kind !== "image") return null
+    return [id, await connectedImageDataFingerprint(node.data)]
+  }))
+  return sha256(JSON.stringify(parts.filter(Boolean)))
+}
+
+function requireCurrentConnectedImage(
+  context: WebPluginHostRequestContext,
+  nodeId: string,
+  expectedSource: ConnectedImageSource,
+) {
+  assertCurrentFrame(context)
+  const node = context.getConnectedImageNodes().find((candidate) => candidate.id === nodeId)
+  if (!node) throw new Error("Canvas image is no longer connected to this Plugin node")
+  if (!sameConnectedImageSource(connectedImageSource(node), expectedSource)) {
+    throw new Error("Canvas image source changed while the Plugin was reading it")
+  }
+  return node
+}
+
+function requireConnectedImageInfo(mimeType: unknown, size?: number) {
+  if (typeof mimeType !== "string" || !connectedImageMimeTypes.has(mimeType.toLowerCase())) {
+    throw new Error("Connected Canvas node is not a supported browser image")
+  }
+  if (typeof size === "number" && (!Number.isSafeInteger(size) || size < 0 || size > maximumConnectedImageBytes)) {
+    throw new Error(`Connected image exceeds the ${maximumConnectedImageBytes / 1024 / 1024} MB Plugin limit`)
+  }
+  return mimeType.toLowerCase()
+}
+
+function requireConnectedImageDataUrl(value: unknown, mimeType: unknown, size?: number) {
+  const normalizedMimeType = requireConnectedImageInfo(mimeType, size)
+  if (typeof value !== "string") throw new Error("Connected image data is invalid")
+  const prefix = `data:${normalizedMimeType};base64,`
+  if (value.slice(0, prefix.length).toLowerCase() !== prefix) {
+    throw new Error("Connected image data is not a supported base64 image")
+  }
+  const encoded = value.slice(prefix.length)
+  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    throw new Error("Connected image data is not canonical base64")
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
+  const decodedBytes = encoded.length / 4 * 3 - padding
+  if (decodedBytes > maximumConnectedImageBytes) {
+    throw new Error(`Connected image exceeds the ${maximumConnectedImageBytes / 1024 / 1024} MB Plugin limit`)
+  }
+  if (typeof size === "number" && decodedBytes !== size) {
+    throw new Error("Connected image data does not match its declared size")
+  }
+  return value
+}
+
 function requireCapability(plugin: InstalledWebPluginSummary, capability: WebPluginCapability) {
   if (!plugin.capabilities.includes(capability)) throw new Error(`Plugin capability is not granted: ${capability}`)
 }
@@ -304,6 +472,53 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: We
       project: { id: current.active.projectId, ...(current.active.projectName ? { name: current.active.projectName } : {}) },
     }
   }
+  if (request.method === "canvas.connectedImages.list") {
+    requireEmptyParams(request.params)
+    requireCapability(context.plugin, "canvas.connectedImages.read")
+    return { images: context.getConnectedImageNodes().map(connectedImageDescriptor) }
+  }
+  if (request.method === "canvas.connectedImage.read") {
+    requireCapability(context.plugin, "canvas.connectedImages.read")
+    if (context.connectedImageReadGate.active) {
+      throw new Error("A connected image read is already in progress for this Plugin frame")
+    }
+    context.connectedImageReadGate.active = true
+    try {
+      const params = exactRecord(request.params, ["nodeId"], "Connected image request")
+      const nodeId = requireConnectedImageNodeId(params.nodeId)
+      const node = context.getConnectedImageNodes().find((candidate) => candidate.id === nodeId)
+      if (!node) throw new Error("Canvas image is not directly connected to this Plugin node")
+      const source = connectedImageSource(node)
+      if (!source) {
+        throw new Error("Canvas image is not backed by a readable managed Project asset or embedded image")
+      }
+      if (typeof node.data.mimeType === "string") requireConnectedImageInfo(node.data.mimeType)
+      if (source.kind === "embedded") {
+        return {
+          ...connectedImageDescriptor(node),
+          dataUrl: requireConnectedImageDataUrl(source.dataUrl, source.mimeType),
+        }
+      }
+      const result = await context.readManagedProjectImage({
+        path: source.path,
+        projectId: context.frame.projectId,
+        signal: context.signal,
+      })
+      const latestNode = requireCurrentConnectedImage(context, nodeId, source)
+      if (result.path !== source.path || typeof result.name !== "string") {
+        throw new Error("Project file provider returned an invalid connected image")
+      }
+      return {
+        ...connectedImageDescriptor(latestNode),
+        dataUrl: requireConnectedImageDataUrl(result.dataUrl, result.mimeType, result.size),
+        mimeType: result.mimeType,
+        name: result.name,
+        size: result.size,
+      }
+    } finally {
+      context.connectedImageReadGate.active = false
+    }
+  }
   if (request.method === "canvas.node.get") {
     requireEmptyParams(request.params)
     requireCapability(context.plugin, "canvas.node.read")
@@ -372,7 +587,13 @@ export async function dispatchWebPluginHostRequest(
     const response = pluginHostSuccess(id, result)
     assertMessageSize(
       response,
-      requireLimit(context.limits?.responseBytes, defaultResponseBytes, "Plugin response byte limit"),
+      value.method === "canvas.connectedImage.read"
+        ? requireLimit(
+            context.limits?.connectedImageResponseBytes,
+            defaultConnectedImageResponseBytes,
+            "Plugin connected image response byte limit",
+          )
+        : requireLimit(context.limits?.responseBytes, defaultResponseBytes, "Plugin response byte limit"),
       "Plugin response",
     )
     return response
@@ -427,9 +648,44 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
   const editorRef = useRef(editor)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
+  const connectedImageReadGateRef = useRef({ active: false })
+  const connectedImageFingerprintRef = useRef<string | null>(null)
   editorRef.current = editor
 
+  const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
+
   useEffect(() => () => cleanupRef.current?.(), [])
+
+  useEffect(() => {
+    if (!canReadConnectedImages) return
+    let canceled = false
+    const document = editor.document
+    void connectedImageFingerprint(document, props.id).then((fingerprint) => {
+      if (canceled || connectedImageFingerprintRef.current === fingerprint) return
+      connectedImageFingerprintRef.current = fingerprint
+      const active = props.options.host.getActiveContext()
+      if (!active || active.canvasId !== document.id) return
+      const frame = {
+        canvasId: active.canvasId,
+        nodeId: props.id,
+        pluginId: props.plugin.id,
+        projectId: active.projectId,
+      }
+      if (!props.options.frameRegistry.has(frame)) return
+      try {
+        props.options.frameRegistry.send(frame, {
+          command: desktopPluginConnectedImagesChangedCommand,
+          protocol: desktopPluginHostProtocol,
+          type: "command",
+        })
+      } catch {
+        // The frame may unmount between the digest and this command.
+      }
+    }).catch(() => {
+      // Web Crypto is a renderer primitive; initial Plugin listing still fails safe if unavailable.
+    })
+    return () => { canceled = true }
+  }, [canReadConnectedImages, editor.document, props.id, props.options.frameRegistry, props.options.host, props.plugin.id])
 
   const connectFrame = () => {
     cleanupRef.current?.()
@@ -443,6 +699,7 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
 
     const controller = new AbortController()
     const channel = new MessageChannel()
+    const connectedImageReadGate = connectedImageReadGateRef.current
     const frame: DesktopPluginFrameRef = {
       canvasId: active.canvasId,
       nodeId: props.id,
@@ -478,8 +735,14 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
     cleanupRef.current = cleanup
     channel.port1.onmessage = (event) => {
       void dispatchWebPluginHostRequest(event.data, {
+        connectedImageReadGate,
         frame,
         getActiveContext: () => props.options.host.getActiveContext(),
+        getConnectedImageNodes: () => {
+          const latest = editorRef.current
+          if (latest.document.id !== frame.canvasId) return []
+          return getIncomingConnectedImageNodes(latest.document, frame.nodeId)
+        },
         getNode: () => {
           const latest = editorRef.current
           if (latest.document.id !== frame.canvasId) return undefined
@@ -488,6 +751,7 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
         limits: props.options.limits,
         plugin: props.plugin,
         promptAgent: (input) => props.options.host.promptAgent(input),
+        readManagedProjectImage: (input) => props.options.host.readManagedProjectImage(input),
         readProjectText: (input) => props.options.host.readProjectText(input),
         signal: controller.signal,
         updateNodeState: (state) => {
@@ -537,7 +801,8 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
   return (
     <CanvasNodeChrome icon={<Puzzle />} label={props.data.label} node={props} toolbar={toolbar}>
       <iframe
-        allow={webPluginIframePermissions}
+        allow={webPluginIframeAllow(props.plugin)}
+        allowFullScreen={props.plugin.capabilities.includes("ui.fullscreen")}
         className="nodrag nowheel size-full border-0 bg-background"
         onLoad={connectFrame}
         ref={iframeRef}
@@ -548,6 +813,13 @@ function WebPluginCanvasNode(props: WebPluginNodeProps & {
       />
     </CanvasNodeChrome>
   )
+}
+
+export function getIncomingConnectedImageNodes(document: CanvasDocument, ownerNodeId: string) {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  return getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId)
+    .map((id) => nodes.get(id))
+    .filter((node): node is CanvasNode => node !== undefined && node.data.kind === "image")
 }
 
 function WebPluginCanvasToolbar(props: WebPluginNodeProps & {

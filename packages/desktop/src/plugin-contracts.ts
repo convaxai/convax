@@ -2,10 +2,12 @@ export const webPluginManifestFileName = "manifest.json"
 export const webPluginManifestSchema = "convax.plugin/1" as const
 
 export const webPluginCapabilities = [
+  "canvas.connectedImages.read",
   "canvas.node.read",
   "canvas.node.write",
   "project.files.read",
   "agent.prompt",
+  "ui.fullscreen",
 ] as const
 
 export type WebPluginCapability = typeof webPluginCapabilities[number]

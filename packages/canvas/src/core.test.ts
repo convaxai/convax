@@ -18,7 +18,7 @@ import {
   pasteCanvasClipboard,
   serializeCanvasClipboard,
 } from "./clipboard"
-import { getConnectedCanvasFileNodeIds } from "./connections"
+import { getConnectedCanvasFileNodeIds, getIncomingConnectedCanvasFileNodeIds } from "./connections"
 import {
   createAgentNode,
   createCanvasDocument,
@@ -240,6 +240,26 @@ describe("canvas agent context", () => {
     })
 
     expect(getConnectedCanvasFileNodeIds(document, agent.id)).toEqual([first.id, second.id])
+  })
+
+  test("collects only incoming file nodes for data-flow inputs", () => {
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 } })
+    const incoming = createMediaNode({
+      id: "incoming",
+      position: { x: 0, y: 0 },
+      resource: { id: "image", kind: "image", url: "panorama.jpg" },
+    })
+    const outgoing = createTextNode({ id: "outgoing", position: { x: 0, y: 0 } })
+    const document = createCanvasDocument({
+      edges: [
+        { id: "input", source: incoming.id, target: owner.id },
+        { id: "duplicate", source: incoming.id, target: owner.id },
+        { id: "output", source: owner.id, target: outgoing.id },
+      ],
+      nodes: [owner, incoming, outgoing],
+    })
+
+    expect(getIncomingConnectedCanvasFileNodeIds(document, owner.id)).toEqual([incoming.id])
   })
 })
 
