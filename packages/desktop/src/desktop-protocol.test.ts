@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { checkDesktopProtocol } from "./desktop-protocol"
+import { checkDesktopProtocol, desktopProtocolVersion } from "./desktop-protocol"
 
 describe("desktop IPC protocol compatibility", () => {
+  test("tracks the managed-image preload bridge contract", () => {
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/5")
+  })
+
   test("accepts a matching main, preload, and renderer protocol", async () => {
     await expect(checkDesktopProtocol({
       getVersion: async () => "protocol/2",

@@ -84,6 +84,7 @@ export interface ProjectFilesClient {
   openEntry(input: { path: string; projectId: string }): Promise<{ error?: string }>
   readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo>
+  readManagedImageFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents>
   readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents>
   renameEntry(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult>

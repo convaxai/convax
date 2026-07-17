@@ -1,7 +1,10 @@
 export const desktopPluginHostProtocol = "convax.plugin-host/1"
+export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
 
 export type DesktopPluginHostMethod =
   | "host.context.get"
+  | "canvas.connectedImages.list"
+  | "canvas.connectedImage.read"
   | "canvas.node.get"
   | "canvas.node.updateState"
   | "project.file.readText"
@@ -43,6 +46,8 @@ export interface DesktopPluginHostConnect {
 
 const methods = new Set<DesktopPluginHostMethod>([
   "host.context.get",
+  "canvas.connectedImages.list",
+  "canvas.connectedImage.read",
   "canvas.node.get",
   "canvas.node.updateState",
   "project.file.readText",

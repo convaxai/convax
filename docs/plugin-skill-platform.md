@@ -113,6 +113,11 @@ surfaces:
   character, geometry, camera, panorama and shot-preview work. Its portable scene
   graph is stored in the owning Canvas node through `canvas.node.updateState`; its
   companion Skill reviews the same snapshot through normal Canvas Agent resources.
+- **Panorama Viewer** is an original offline WebGL2 surface for equirectangular 360°
+  images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
+  image nodes connected into its own Canvas node through a narrow host capability.
+  The selected connected-node preference and view settings are portable; local file
+  pixels remain session-local and are never stored in Plugin state.
 
 The 3D surface keeps the strict Plugin CSP and `sandbox="allow-scripts"`. The
 non-open upstream mannequin asset is replaced by the procedural MIT implementation.
@@ -155,6 +160,8 @@ The initial direct-call surface is intentionally narrow:
 | Method | Required capability | Scope |
 | --- | --- | --- |
 | `host.context.get` | none | current Project, Canvas and own node |
+| `canvas.connectedImages.list` | `canvas.connectedImages.read` | metadata for image nodes connected into the own node only |
+| `canvas.connectedImage.read` | `canvas.connectedImages.read` | one listed embedded image or managed Project image, atomically type-checked and limited to 16 MiB in main |
 | `canvas.node.get` | `canvas.node.read` | own node only |
 | `canvas.node.updateState` | `canvas.node.write` | own namespaced state only |
 | `project.file.readText` | `project.files.read` | current Project relative path |
@@ -163,6 +170,15 @@ The initial direct-call surface is intentionally narrow:
 These are adapters over existing clients/controllers. They do not expose private
 Project JSON, absolute paths, arbitrary target-node mutation, Electron, or a generic
 function-call escape hatch.
+
+The optional `ui.fullscreen` capability does not add an RPC method. It only lets the
+host add `fullscreen *` to that Plugin iframe's feature policy and set
+`allowFullScreen`; frames without the capability retain `fullscreen 'none'`.
+Connected-image access recognizes incoming Canvas edges only, never accepts a
+Project path from Plugin code, and rechecks the exact edge plus source reference
+after the asynchronous read. While that capability is granted, the host may also
+send `canvas.connectedImages.changed` on the same scoped port; frames without the
+capability receive no connection-change signal.
 
 ## Agent relationship
 

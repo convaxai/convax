@@ -149,6 +149,12 @@ current schema.
 - Bind every MessageChannel to the installed Plugin plus current Project, Canvas and
   owning node. Check manifest permissions, message size, stale scope and target on
   every call. Plugin node state writes stay inside a namespaced field.
+- Connected Plugin inputs must be derived from direct incoming Canvas edges. Never
+  accept a caller-supplied Project path or widen that access to unrelated nodes;
+  use the bounded Main-owned managed-asset reader and recheck the exact edge and
+  source reference afterward.
+- Gate browser feature-policy exceptions such as fullscreen through an explicit
+  manifest capability. Preserve every unrelated iframe permission denial.
 - Direct Plugin calls are thin adapters over existing typed Project, Canvas and
   Agent capabilities. They do not read private JSON or recreate domain invariants.
 

@@ -16,6 +16,19 @@ describe("desktop plugin host protocol", () => {
     })).toBe(true)
     expect(isDesktopPluginHostRequest({
       id: "request-1",
+      method: "canvas.connectedImages.list",
+      protocol: desktopPluginHostProtocol,
+      type: "request",
+    })).toBe(true)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
+      method: "canvas.connectedImage.read",
+      params: { nodeId: "image-1" },
+      protocol: desktopPluginHostProtocol,
+      type: "request",
+    })).toBe(true)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
       method: "canvas.document.writeJson",
       protocol: desktopPluginHostProtocol,
       type: "request",

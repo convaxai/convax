@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import { createRequire } from "node:module"
 import os from "node:os"
@@ -6,6 +7,14 @@ import { pathToFileURL } from "node:url"
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..")
 const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
+const panoramaFixturePath = path.join(
+  repositoryRoot,
+  "scripts",
+  "fixtures",
+  "panorama",
+  "red-walk-highwoods-1280x640.jpg",
+)
+const panoramaFixtureSha256 = "1b35db0f48d6ba207b3d94ec012fee0d277106472396754790a2152225ad25fc"
 const timeoutMs = 25_000
 const evaluationTimeoutMs = timeoutMs + 10_000
 
@@ -119,6 +128,16 @@ await fs.access(path.join(desktopRoot, "out", "main", "index.js")).catch(() => {
   throw new Error("Desktop output is missing; run `bun --cwd packages/desktop build` before the smoke")
 })
 const builtRendererUrl = pathToFileURL(path.join(desktopRoot, "out", "renderer", "index.html")).href
+const panoramaFixture = await fs.readFile(panoramaFixturePath)
+if (panoramaFixture.byteLength < 100_000 || panoramaFixture.byteLength > 16 * 1024 * 1024
+  || panoramaFixture[0] !== 0xff || panoramaFixture[1] !== 0xd8 || panoramaFixture[2] !== 0xff) {
+  throw new Error(`Panorama smoke fixture is not the expected photographic JPEG: ${panoramaFixturePath}`)
+}
+const panoramaFixtureHash = createHash("sha256").update(panoramaFixture).digest("hex")
+if (panoramaFixtureHash !== panoramaFixtureSha256) {
+  throw new Error(`Panorama smoke fixture checksum changed: ${panoramaFixtureHash}`)
+}
+const panoramaFixtureDataUrl = `data:image/jpeg;base64,${panoramaFixture.toString("base64")}`
 
 const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-built-open-project-"))
 const projectRoot = path.join(temporaryRoot, "empty-project")
@@ -365,7 +384,239 @@ try {
     || persistedDocument.edges?.length !== 0) {
     throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
   }
-  console.log(`Desktop Settings, Open Project, and Plugin smoke passed (${summary.projectId}, canvas-main)`)
+
+  const panoramaSeed = await evaluateStable(rendererDebugger, `(async () => {
+    const deadline = Date.now() + ${timeoutMs}
+    const waitFor = async (read, label) => {
+      while (Date.now() < deadline) {
+        const value = await read()
+        if (value) return value
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Timed out waiting for " + label)
+    }
+    const projectId = ${JSON.stringify(summary.projectId)}
+    const selectedCanvasId = ${JSON.stringify(summary.activeCanvasId)}
+    if (!projectId || !selectedCanvasId) throw new Error("Panorama smoke lost the active scope")
+
+    const plugins = await window.convax.plugins.listPlugins()
+    const panorama = plugins.catalog.find((plugin) => plugin.id === "panorama-viewer")
+    if (!panorama) throw new Error("Panorama Viewer is missing from the built-in catalog")
+    if (!panorama.installed) await window.convax.plugins.installCatalogPlugin({ id: panorama.id })
+    await waitFor(async () => {
+      const current = await window.convax.plugins.listPlugins()
+      return current.installed.some((plugin) => plugin.id === panorama.id)
+    }, "Panorama Viewer installation")
+
+    const canvasPane = await waitFor(
+      () => document.querySelector(".convax-canvas .react-flow__pane"),
+      "the Canvas pane for Panorama Viewer",
+    )
+    const paneBounds = canvasPane.getBoundingClientRect()
+    canvasPane.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      buttons: 2,
+      clientX: paneBounds.left + paneBounds.width * 0.72,
+      clientY: paneBounds.top + paneBounds.height * 0.58,
+    }))
+    await waitFor(
+      () => document.querySelector('[data-slot="context-menu-content"]'),
+      "the Panorama Canvas context menu",
+    )
+    const addPanorama = await waitFor(
+      () => [...document.querySelectorAll('[data-slot="context-menu-item"]')]
+        .find((item) => item.textContent?.includes("Panorama Viewer")),
+      "Panorama Viewer in the Canvas context menu",
+    )
+    addPanorama.click()
+    await waitFor(
+      () => document.querySelector('iframe[title="Panorama Viewer plugin"]'),
+      "the Panorama Viewer frame",
+    )
+
+    const snapshot = await waitFor(async () => {
+      const loaded = await window.convax.canvas.documents.load({
+        canvasId: selectedCanvasId,
+        scopeId: projectId,
+      })
+      const pluginNode = loaded.document?.nodes.find(
+        (node) => node.data.kind === "plugin.panorama-viewer",
+      )
+      return pluginNode ? { loaded, pluginNode } : null
+    }, "the persisted Panorama Viewer node")
+    const sourceNodeId = "smoke-panorama-source"
+    const edgeId = "smoke-panorama-edge"
+    const dataUrl = ${JSON.stringify(panoramaFixtureDataUrl)}
+    const sourceImage = new Image()
+    await new Promise((resolve, reject) => {
+      sourceImage.addEventListener("load", resolve, { once: true })
+      sourceImage.addEventListener("error", () => reject(new Error("Could not decode the real Panorama smoke JPEG")), {
+        once: true,
+      })
+      sourceImage.src = dataUrl
+    })
+    if (sourceImage.naturalWidth !== 1280 || sourceImage.naturalHeight !== 640) {
+      throw new Error(
+        "Unexpected real Panorama smoke dimensions: "
+        + String(sourceImage.naturalWidth) + "x" + String(sourceImage.naturalHeight),
+      )
+    }
+    const current = snapshot.loaded.document
+    if (!current) throw new Error("Canvas document disappeared before Panorama seeding")
+    await window.convax.canvas.documents.save({
+      document: {
+        ...current,
+        revision: current.revision + 1,
+        nodes: [
+          ...current.nodes,
+          {
+            data: {
+              fit: "contain",
+              height: sourceImage.naturalHeight,
+              kind: "image",
+              label: "Real CC0 360° Panorama · Highwoods, Bexhill",
+              mimeType: "image/jpeg",
+              name: "red-walk-highwoods-1280x640.jpg",
+              url: dataUrl,
+              width: sourceImage.naturalWidth,
+            },
+            id: sourceNodeId,
+            position: {
+              x: snapshot.pluginNode.position.x - 420,
+              y: snapshot.pluginNode.position.y,
+            },
+            style: { height: 180, width: 320 },
+            type: "file",
+          },
+        ],
+        edges: [
+          ...current.edges,
+          {
+            id: edgeId,
+            source: sourceNodeId,
+            sourceHandle: "source-right",
+            target: snapshot.pluginNode.id,
+            targetHandle: "target-left",
+            type: "canvas",
+          },
+        ],
+      },
+      expectedStorageVersion: snapshot.loaded.storageVersion,
+      ref: { canvasId: selectedCanvasId, scopeId: projectId },
+    })
+    return {
+      panoramaNodeId: snapshot.pluginNode.id,
+      projectId,
+      selectedCanvasId,
+      sourceNodeId,
+    }
+  })()`)
+  const seed = panoramaSeed as {
+    panoramaNodeId?: string
+    projectId?: string
+    selectedCanvasId?: string
+    sourceNodeId?: string
+  }
+  if (!seed.panoramaNodeId || !seed.projectId || !seed.selectedCanvasId || !seed.sourceNodeId) {
+    throw new Error(`Unexpected Panorama seed result: ${JSON.stringify(seed)}`)
+  }
+
+  await evaluateStable(rendererDebugger, `(() => {
+    window.setTimeout(() => window.location.reload(), 0)
+    return true
+  })()`)
+  await Bun.sleep(300)
+  const reloadedRendererDebugger = await waitForTarget(
+    rendererPort,
+    (target) => target.type === "page" && target.url === builtRendererUrl,
+  )
+  const panoramaResult = await evaluateStable(reloadedRendererDebugger, `(async () => {
+    const deadline = Date.now() + ${timeoutMs}
+    const waitFor = async (read, label) => {
+      while (Date.now() < deadline) {
+        const value = await read()
+        if (value) return value
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Timed out waiting for " + label)
+    }
+    while (!window.convax) {
+      if (Date.now() >= deadline) throw new Error("The preload bridge did not recover after reload")
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    const projectId = ${JSON.stringify(seed.projectId)}
+    const selectedCanvasId = ${JSON.stringify(seed.selectedCanvasId)}
+    const sourceNodeId = ${JSON.stringify(seed.sourceNodeId)}
+    const pluginFrame = await waitFor(
+      () => document.querySelector('iframe[title="Panorama Viewer plugin"][src^="convax-plugin://panorama-viewer/"]'),
+      "the reloaded Panorama Viewer frame",
+    )
+    const saved = await waitFor(async () => {
+      const loaded = await window.convax.canvas.documents.load({
+        canvasId: selectedCanvasId,
+        scopeId: projectId,
+      })
+      const node = loaded.document?.nodes.find(
+        (candidate) => candidate.data.kind === "plugin.panorama-viewer",
+      )
+      const state = node?.data.metadata?.convaxPluginState
+      return state?.schemaVersion === 1 && state.selectedSourceNodeId === sourceNodeId
+        ? { node, state }
+        : null
+    }, "Panorama image decode, WebGL upload, and state writeback")
+    return {
+      frameAllow: pluginFrame.getAttribute("allow"),
+      frameAllowFullscreen: pluginFrame.hasAttribute("allowfullscreen"),
+      frameSandbox: pluginFrame.getAttribute("sandbox"),
+      frameUrl: pluginFrame.getAttribute("src"),
+      panoramaNodeId: saved.node.id,
+      selectedSourceNodeId: saved.state.selectedSourceNodeId,
+      stateSchemaVersion: saved.state.schemaVersion,
+    }
+  })()`)
+  const panoramaSummary = panoramaResult as {
+    frameAllow?: string | null
+    frameAllowFullscreen?: boolean
+    frameSandbox?: string | null
+    frameUrl?: string | null
+    panoramaNodeId?: string
+    selectedSourceNodeId?: string
+    stateSchemaVersion?: number
+  }
+  if (panoramaSummary.frameSandbox !== "allow-scripts"
+    || !panoramaSummary.frameAllow?.includes("fullscreen *")
+    || panoramaSummary.frameAllowFullscreen !== true
+    || !panoramaSummary.frameUrl?.startsWith("convax-plugin://panorama-viewer/")
+    || panoramaSummary.panoramaNodeId !== seed.panoramaNodeId
+    || panoramaSummary.selectedSourceNodeId !== seed.sourceNodeId
+    || panoramaSummary.stateSchemaVersion !== 1) {
+    throw new Error(`Unexpected Panorama Viewer result: ${JSON.stringify(panoramaSummary)}`)
+  }
+  const panoramaDocument = JSON.parse(await fs.readFile(
+    path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"),
+    "utf8",
+  )) as {
+    edges?: Array<{ id?: string; source?: string; target?: string }>
+    nodes?: Array<{
+      data?: {
+        kind?: string
+        metadata?: { convaxPluginState?: { schemaVersion?: number; selectedSourceNodeId?: string } }
+      }
+      id?: string
+    }>
+  }
+  const persistedPanorama = panoramaDocument.nodes?.find((node) => node.id === seed.panoramaNodeId)
+  if (persistedPanorama?.data?.kind !== "plugin.panorama-viewer"
+    || persistedPanorama.data.metadata?.convaxPluginState?.schemaVersion !== 1
+    || persistedPanorama.data.metadata?.convaxPluginState?.selectedSourceNodeId !== seed.sourceNodeId
+    || !panoramaDocument.edges?.some((edge) => edge.id === "smoke-panorama-edge"
+      && edge.source === seed.sourceNodeId
+      && edge.target === seed.panoramaNodeId)) {
+    throw new Error(`Unexpected persisted Panorama Canvas: ${JSON.stringify(panoramaDocument)}`)
+  }
+  console.log(`Desktop Settings, Open Project, 3D Plugin, and Panorama Viewer smoke passed (${summary.projectId}, canvas-main)`)
 } catch (error) {
   child.kill("SIGKILL")
   const [capturedStdout, capturedStderr] = await Promise.all([stdout, stderr])

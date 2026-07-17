@@ -135,6 +135,55 @@ describe("NodeProjectManager files", () => {
     expect(await manager.readTextPreview({ path: "exact.txt", projectId })).toMatchObject({ truncated: false })
   })
 
+  test("reads only bounded, typed images from managed Canvas assets", async () => {
+    const assetRoot = path.join(projectRoot, ".convax", "assets")
+    const fixtures = [
+      { bytes: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), mimeType: "image/jpeg", name: "pano.jpg" },
+      { bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), mimeType: "image/png", name: "pano.png" },
+      { bytes: Buffer.from("RIFF\u0004\u0000\u0000\u0000WEBP", "binary"), mimeType: "image/webp", name: "pano.webp" },
+    ]
+    for (const fixture of fixtures) {
+      await fs.writeFile(path.join(assetRoot, fixture.name), fixture.bytes)
+      expect(await manager.readManagedImageFile({
+        path: `.convax/assets/${fixture.name}`,
+        projectId,
+      })).toMatchObject({
+        mimeType: fixture.mimeType,
+        name: fixture.name,
+        size: fixture.bytes.byteLength,
+      })
+    }
+  })
+
+  test("rejects forged, mismatched, and oversized managed Canvas image reads", async () => {
+    const assetRoot = path.join(projectRoot, ".convax", "assets")
+    await fs.writeFile(path.join(projectRoot, "secret.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
+    await fs.writeFile(path.join(assetRoot, "pano.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
+    await fs.writeFile(path.join(assetRoot, "mismatch.png"), Buffer.from([0xff, 0xd8, 0xff]))
+    await fs.writeFile(path.join(assetRoot, "oversized.jpg"), Buffer.alloc(16 * 1024 * 1024 + 1, 0xff))
+
+    for (const filePath of [
+      "secret.jpg",
+      ".convax/project.json",
+      ".convax/assets/../project.json",
+      ".convax/assets/references/.convax/secret.jpg",
+      ".CONVAX/assets/pano.jpg",
+      ".convax\\assets\\pano.jpg",
+      ".convax/assets//pano.jpg",
+      "./.convax/assets/pano.jpg",
+    ]) {
+      await expect(manager.readManagedImageFile({ path: filePath, projectId })).rejects.toThrow()
+    }
+    await expect(manager.readManagedImageFile({
+      path: ".convax/assets/mismatch.png",
+      projectId,
+    })).rejects.toThrow("do not match")
+    await expect(manager.readManagedImageFile({
+      path: ".convax/assets/oversized.jpg",
+      projectId,
+    })).rejects.toThrow("too large")
+  })
+
   test("uses portable names and case-folded collision checks on every platform", async () => {
     for (const name of ["bad:name.txt", "bad?.txt", "trail.", "trail ", "NUL", "con.txt", "COM¹.txt", "lpt³", "control\u0001.txt"]) {
       await expect(manager.createEntry({ kind: "file", name, projectId })).rejects.toThrow("Invalid")

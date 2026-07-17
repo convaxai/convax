@@ -118,12 +118,24 @@ describe("desktop Open Project IPC smoke", () => {
     if (!exposedBridge) throw new Error("The preload bridge was not exposed")
     expect(exposedBridge.projects).not.toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("listDirectory")
+    expect(exposedBridge.projectFiles).toHaveProperty("readManagedImageFile")
 
     const selection = await exposedBridge.projects.openProject()
     expect(selection).toMatchObject({ canceled: false, project: { name: "empty-project" } })
     const projectId = selection.project?.id
     if (!projectId) throw new Error("Open Project did not return a project id")
     expect(await exposedBridge.projectFiles.listDirectory({ path: "", projectId })).toMatchObject({ entries: [], path: "" })
+    const managedImagePath = path.join(selectedProjectPath, ".convax", "assets", "tiny.png")
+    await fs.writeFile(managedImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    expect(await exposedBridge.projectFiles.readManagedImageFile({
+      path: ".convax/assets/tiny.png",
+      projectId,
+    })).toMatchObject({ mimeType: "image/png", name: "tiny.png", size: 8 })
+    await fs.writeFile(path.join(selectedProjectPath, "private.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    await expect(exposedBridge.projectFiles.readManagedImageFile({
+      path: "private.png",
+      projectId,
+    })).rejects.toThrow("managed Canvas asset")
 
     const catalog = await exposedBridge.projects.canvases.getCanvasCatalog({ projectId })
     expect(catalog).toMatchObject({

@@ -33,6 +33,7 @@ export const projectFilesIpcChannels = {
   openEntry: "project-files:open-entry",
   readFile: "project-files:read-file",
   readFileInfo: "project-files:read-file-info",
+  readManagedImageFile: "project-files:read-managed-image-file",
   readTextPreview: "project-files:read-text-preview",
   readTextFile: "project-files:read-text-file",
   renameEntry: "project-files:rename-entry",
@@ -93,6 +94,10 @@ interface ProjectIpcContract {
     input: FilesInput<"readFileInfo">
     result: FilesResult<"readFileInfo">
   }
+  "project-files:read-managed-image-file": {
+    input: FilesInput<"readManagedImageFile">
+    result: FilesResult<"readManagedImageFile">
+  }
   "project-files:read-text-preview": {
     input: FilesInput<"readTextPreview">
     result: FilesResult<"readTextPreview">
@@ -135,6 +140,7 @@ export interface DesktopProjectManager {
   moveEntries(input: FilesInput<"moveEntries">): Promise<FilesResult<"moveEntries">>
   readFile(input: FilesInput<"readFile">): Promise<FilesResult<"readFile">>
   readFileInfo(input: FilesInput<"readFileInfo">): Promise<FilesResult<"readFileInfo">>
+  readManagedImageFile(input: FilesInput<"readManagedImageFile">): Promise<FilesResult<"readManagedImageFile">>
   readTextPreview(input: FilesInput<"readTextPreview">): Promise<FilesResult<"readTextPreview">>
   readTextFile(input: FilesInput<"readTextFile">): Promise<FilesResult<"readTextFile">>
   rename(projectId: string, name: string): Promise<ProjectRecord>
@@ -257,6 +263,7 @@ export async function registerProjectIpc(
     }),
     registerHandler(projectFilesIpcChannels.readFile, options.isTrustedSender, (_event, input) => manager.readFile(input)),
     registerHandler(projectFilesIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) => manager.readFileInfo(input)),
+    registerHandler(projectFilesIpcChannels.readManagedImageFile, options.isTrustedSender, (_event, input) => manager.readManagedImageFile(input)),
     registerHandler(projectFilesIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) => manager.readTextPreview(input)),
     registerHandler(projectFilesIpcChannels.readTextFile, options.isTrustedSender, (_event, input) => manager.readTextFile(input)),
     registerHandler(projectFilesIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) => manager.writeTextFile(input)),

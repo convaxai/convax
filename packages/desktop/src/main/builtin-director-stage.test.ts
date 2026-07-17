@@ -99,7 +99,9 @@ describe("built-in StoryAI 3D Director Desk", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-builtin-director-"))
     temporaryRoots.push(root)
     const manager = new WebPluginManager(path.join(root, "plugins"))
-    const catalogItem = desktopBuiltinPluginCatalog[0]
+    const catalogItem = desktopBuiltinPluginCatalog.find((item) => item.manifest.id === "storyai-3d-director-desk")
+    expect(catalogItem).toBeDefined()
+    if (!catalogItem) throw new Error("Built-in 3D Director Desk was not found")
     const installed = await manager.installBundle(catalogItem.bundle)
 
     expect(installed).toEqual(catalogItem.manifest)

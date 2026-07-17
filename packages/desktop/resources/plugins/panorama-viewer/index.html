@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Panorama Viewer</title>
+    <script type="module" src="./assets/app.js"></script>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell" id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <circle cx="16" cy="16" r="11"></circle>
+              <ellipse cx="16" cy="16" rx="5" ry="11"></ellipse>
+              <path d="M5 16h22M7.5 10.5h17M7.5 21.5h17"></path>
+            </svg>
+          </div>
+          <div>
+            <div class="brand-title">全景图预览</div>
+            <div class="brand-subtitle">Equirectangular · WebGL</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span class="connection-pill" id="connectionPill">
+            <span class="connection-dot"></span>
+            <span id="connectionText">等待宿主</span>
+          </span>
+          <button class="icon-button" id="refreshButton" type="button" aria-label="刷新画布连接" title="刷新画布连接">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="viewer" id="viewer">
+        <canvas id="panoramaCanvas" aria-label="360° 全景图交互预览"></canvas>
+        <div class="viewer-vignette" aria-hidden="true"></div>
+
+        <section class="empty-state" id="emptyState">
+          <div class="empty-orbit" aria-hidden="true">
+            <div class="orbit-ring orbit-ring-one"></div>
+            <div class="orbit-ring orbit-ring-two"></div>
+            <svg class="empty-globe" viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r="40"></circle>
+              <ellipse cx="60" cy="60" rx="18" ry="40"></ellipse>
+              <ellipse cx="60" cy="60" rx="31" ry="40"></ellipse>
+              <path d="M20 60h80M26 41h68M26 79h68"></path>
+            </svg>
+          </div>
+          <div class="empty-eyebrow">360° PANORAMA</div>
+          <h1 id="emptyTitle">连接或选择一张全景图</h1>
+          <p id="emptyDescription">将画布中的图片连到此节点，或从本地选择 2:1 等距柱状投影图片。</p>
+          <div class="empty-actions">
+            <button class="primary-button" id="emptyChooseButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12m-5-5 5 5 5-5M5 21h14"></path>
+              </svg>
+              选择本地图片
+            </button>
+          </div>
+          <div class="feature-tags" aria-label="支持的功能">
+            <span>拖拽环视</span>
+            <span>滚轮缩放</span>
+            <span>自动旋转</span>
+            <span>全屏</span>
+          </div>
+        </section>
+
+        <div class="loading-state is-hidden" id="loadingState" role="status">
+          <div class="spinner"></div>
+          <span id="loadingText">正在载入全景图…</span>
+        </div>
+
+        <div class="drag-hint is-hidden" id="dragHint">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m-5-5 5 5 5-5M5 21h14"></path>
+          </svg>
+          松开以预览这张图片
+        </div>
+
+        <div class="interaction-hint is-hidden" id="interactionHint">
+          <span>拖拽环视</span>
+          <span class="hint-divider"></span>
+          <span>滚轮缩放</span>
+        </div>
+      </main>
+
+      <footer class="control-deck">
+        <div class="source-section">
+          <div class="source-copy">
+            <span class="section-label">图像来源</span>
+            <span class="source-status" id="sourceStatus">尚未载入</span>
+          </div>
+          <div class="source-actions">
+            <label class="select-shell is-hidden" id="sourceSelectShell">
+              <span class="sr-only">画布连接图片</span>
+              <select id="sourceSelect"></select>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 9 5 5 5-5"></path>
+              </svg>
+            </label>
+            <button class="secondary-button" id="chooseButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 19V5a2 2 0 0 1 2-2h5l2 3h5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"></path>
+                <path d="m8 16 2.5-3 2 2 1.5-2 2 3"></path>
+              </svg>
+              本地选图
+            </button>
+          </div>
+        </div>
+
+        <div class="view-controls">
+          <button class="control-button" id="resetButton" type="button" title="重置视角">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+              <path d="M3 3v5h5"></path>
+            </svg>
+            重置
+          </button>
+          <button class="control-button" id="autoRotateButton" type="button" aria-pressed="false" title="自动旋转">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7Z"></path>
+            </svg>
+            自动旋转
+          </button>
+          <label class="fov-control">
+            <span>视野</span>
+            <input id="fovRange" type="range" min="30" max="100" step="1" value="75" />
+            <output id="fovOutput" for="fovRange">75°</output>
+          </label>
+          <button class="control-button fullscreen-button" id="fullscreenButton" type="button" title="全屏预览">
+            <svg class="fullscreen-enter" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path>
+            </svg>
+            <svg class="fullscreen-exit" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 8h5V3M21 8h-5V3M3 16h5v5M21 16h-5v5"></path>
+            </svg>
+            <span id="fullscreenLabel">全屏</span>
+          </button>
+        </div>
+        <div class="image-meta is-hidden" id="imageMeta">
+          <span id="imageDimensions"></span>
+          <span class="meta-divider"></span>
+          <span id="imageRatio"></span>
+        </div>
+      </footer>
+
+      <input
+        id="fileInput"
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        aria-hidden="true"
+        tabindex="-1"
+      />
+      <div class="toast is-hidden" id="toast" role="status"></div>
+    </div>
+  </body>
+</html>

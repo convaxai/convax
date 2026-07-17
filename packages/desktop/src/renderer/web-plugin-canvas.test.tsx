@@ -6,8 +6,10 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import {
   createWebPluginCanvasContribution,
   dispatchWebPluginHostRequest,
+  getIncomingConnectedImageNodes,
   matchesWebPluginCanvasNode,
   updateWebPluginNodeState,
+  webPluginIframeAllow,
   webPluginCanvasRendererId,
   webPluginEntryUrl,
   webPluginIdentityMetadataKey,
@@ -16,6 +18,7 @@ import {
   webPluginStateMetadataKey,
   type WebPluginCanvasActiveContext,
   type WebPluginHostRequestContext,
+  type WebPluginProjectFileResult,
 } from "./web-plugin-canvas"
 
 function plugin(capabilities: WebPluginCapability[] = []): InstalledWebPluginSummary {
@@ -66,6 +69,27 @@ function canvasNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
   }
 }
 
+function connectedImageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
+  return {
+    data: {
+      height: 1024,
+      kind: "image",
+      label: "Panorama",
+      metadata: {
+        convaxProjectFile: { path: ".convax/assets/panorama.jpg" },
+      },
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      url: "convax-asset://project-1/file?path=panorama.jpg",
+      width: 2048,
+    },
+    id: "image-1",
+    position: { x: -100, y: 20 },
+    type: "file",
+    ...overrides,
+  }
+}
+
 function request(method: string, params?: unknown) {
   return {
     id: "request-1",
@@ -88,6 +112,7 @@ function hostContext(
   }
   const controller = new AbortController()
   return {
+    connectedImageReadGate: { active: false },
     frame: {
       canvasId: active.canvasId,
       nodeId: "node-1",
@@ -95,9 +120,17 @@ function hostContext(
       projectId: active.projectId,
     },
     getActiveContext: () => active,
+    getConnectedImageNodes: () => [],
     getNode: () => canvasNode(),
     plugin: installedPlugin,
     promptAgent: mock(async () => ({ text: "Use a wide shot." })),
+    readManagedProjectImage: mock(async (input) => ({
+      dataUrl: "data:image/jpeg;base64,eA==",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: input.path,
+      size: 1,
+    })),
     readProjectText: mock(async (input) => ({ content: "hello", exists: true, path: input.path })),
     signal: controller.signal,
     updateNodeState: mock(() => undefined),
@@ -113,6 +146,13 @@ describe("Canvas Web Plugin contribution", () => {
       host: {
         getActiveContext: () => null,
         promptAgent: async () => ({ text: "" }),
+        readManagedProjectImage: async (input) => ({
+          dataUrl: "data:image/png;base64,",
+          mimeType: "image/png",
+          name: "image.png",
+          path: input.path,
+          size: 0,
+        }),
         readProjectText: async (input) => ({ content: "", exists: false, path: input.path }),
       },
     })
@@ -142,6 +182,8 @@ describe("Canvas Web Plugin contribution", () => {
     expect(webPluginIframeSandbox).toBe("allow-scripts")
     expect(webPluginIframePermissions).toContain("camera 'none'")
     expect(webPluginIframePermissions).toContain("microphone 'none'")
+    expect(webPluginIframeAllow(installedPlugin)).toContain("fullscreen 'none'")
+    expect(webPluginIframeAllow(plugin(["ui.fullscreen"]))).toContain("fullscreen *")
   })
 
   test("matches its identity, extension, MIME type, or declared file-node kind", () => {
@@ -169,6 +211,25 @@ describe("Canvas Web Plugin contribution", () => {
   test("encodes portable entry segments and never turns backslashes into host paths", () => {
     expect(webPluginEntryUrl(plugin())).toBe("convax-plugin://director-stage/surfaces/Director%20Stage.html")
     expect(() => webPluginEntryUrl({ entry: "surfaces\\index.html", id: "director-stage" })).toThrow("portable")
+  })
+
+  test("keeps incoming image inputs in edge order instead of Canvas node order", () => {
+    const owner = canvasNode()
+    const first = connectedImageNode({ id: "image-first" })
+    const second = connectedImageNode({ id: "image-second" })
+    const document = createCanvasDocument({
+      edges: [
+        { id: "edge-first", source: first.id, target: owner.id, type: "canvas" },
+        { id: "edge-second", source: second.id, target: owner.id, type: "canvas" },
+      ],
+      id: "canvas-1",
+      nodes: [owner, second, first],
+    })
+
+    expect(getIncomingConnectedImageNodes(document, owner.id).map((node) => node.id)).toEqual([
+      "image-first",
+      "image-second",
+    ])
   })
 })
 
@@ -210,6 +271,252 @@ describe("Canvas Web Plugin host requests", () => {
     )
     expect(targeted).toMatchObject({ ok: false, error: expect.stringContaining("unsupported field") })
     expect(updateNodeState).toHaveBeenCalledTimes(1)
+  })
+
+  test("lists and reads only directly connected browser images through the managed Project port", async () => {
+    const image = connectedImageNode()
+    const readManagedProjectImage = mock(async (input: { path: string }) => ({
+      dataUrl: "data:image/jpeg;base64,eHl6",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: input.path,
+      size: 3,
+    }))
+    const context = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [image],
+      readManagedProjectImage,
+    })
+
+    const listed = await dispatchWebPluginHostRequest(request("canvas.connectedImages.list"), context)
+    expect(listed).toMatchObject({
+      ok: true,
+      result: {
+        images: [{
+          height: 1024,
+          id: "image-1",
+          mimeType: "image/jpeg",
+          name: "panorama.jpg",
+          readable: true,
+          width: 2048,
+        }],
+      },
+    })
+    expect(JSON.stringify(listed)).not.toContain(".convax/assets")
+    expect(JSON.stringify(listed)).not.toContain("convax-asset:")
+
+    const read = await dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-1" }),
+      context,
+    )
+    expect(read).toMatchObject({
+      ok: true,
+      result: {
+        dataUrl: "data:image/jpeg;base64,eHl6",
+        id: "image-1",
+        name: "panorama.jpg",
+      },
+    })
+    expect(readManagedProjectImage).toHaveBeenCalledWith(expect.objectContaining({
+      path: ".convax/assets/panorama.jpg",
+      projectId: "project-1",
+    }))
+    expect(readManagedProjectImage).toHaveBeenCalledTimes(1)
+  })
+
+  test("denies missing connected-image capability and arbitrary node ids", async () => {
+    const readManagedProjectImage = mock(async () => ({
+      dataUrl: "data:image/jpeg;base64,",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: ".convax/assets/panorama.jpg",
+      size: 0,
+    }))
+    const denied = await dispatchWebPluginHostRequest(
+      request("canvas.connectedImages.list"),
+      hostContext(plugin(), { getConnectedImageNodes: () => [connectedImageNode()] }),
+    )
+    expect(denied).toMatchObject({
+      ok: false,
+      error: "Plugin capability is not granted: canvas.connectedImages.read",
+    })
+
+    const disconnected = await dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-2" }),
+      hostContext(plugin(["canvas.connectedImages.read"]), {
+        getConnectedImageNodes: () => [connectedImageNode()],
+        readManagedProjectImage,
+      }),
+    )
+    expect(disconnected).toMatchObject({
+      ok: false,
+      error: "Canvas image is not directly connected to this Plugin node",
+    })
+    expect(readManagedProjectImage).not.toHaveBeenCalled()
+  })
+
+  test("defensively rejects an oversized result from the bounded managed-image port", async () => {
+    const readManagedProjectImage = mock(async () => ({
+      dataUrl: "data:image/jpeg;base64,",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: ".convax/assets/panorama.jpg",
+      size: 16 * 1024 * 1024 + 1,
+    }))
+    const context = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [connectedImageNode()],
+      readManagedProjectImage,
+    })
+
+    const response = await dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-1" }),
+      context,
+    )
+    expect(response).toMatchObject({ ok: false, error: expect.stringContaining("16 MB") })
+    expect(readManagedProjectImage).toHaveBeenCalledTimes(1)
+  })
+
+  test("accepts an exact 16 MiB padded base64 image and rejects a false size declaration", async () => {
+    const encoded = `${"A".repeat(22_369_622)}==`
+    const exactContext = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [connectedImageNode()],
+      readManagedProjectImage: mock(async () => ({
+        dataUrl: `data:image/jpeg;base64,${encoded}`,
+        mimeType: "image/jpeg",
+        name: "panorama.jpg",
+        path: ".convax/assets/panorama.jpg",
+        size: 16 * 1024 * 1024,
+      })),
+    })
+    expect(await dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-1" }),
+      exactContext,
+    )).toMatchObject({ ok: true })
+
+    const mismatchedContext = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [connectedImageNode()],
+      readManagedProjectImage: mock(async () => ({
+        dataUrl: "data:image/jpeg;base64,eA==",
+        mimeType: "image/jpeg",
+        name: "panorama.jpg",
+        path: ".convax/assets/panorama.jpg",
+        size: 2,
+      })),
+    })
+    expect(await dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-1" }),
+      mismatchedContext,
+    )).toMatchObject({ ok: false, error: expect.stringContaining("declared size") })
+  })
+
+  test("rejects forged or non-portable connected image references before Project file ports", async () => {
+    const readManagedProjectImage = mock(async () => ({
+      dataUrl: "data:image/jpeg;base64,eA==",
+      mimeType: "image/jpeg",
+      name: "secret.jpg",
+      path: "docs/secret.jpg",
+      size: 1,
+    }))
+
+    for (const path of [
+      "docs/secret.jpg",
+      ".convax/canvases/private.png",
+      ".convax/assets/../project.json",
+      "C:/secret.jpg",
+      "\\\\server\\secret.jpg",
+    ]) {
+      const base = connectedImageNode()
+      const image = connectedImageNode({
+        data: {
+          ...base.data,
+          metadata: { convaxProjectFile: { path } },
+        },
+      })
+      const context = hostContext(plugin(["canvas.connectedImages.read"]), {
+        getConnectedImageNodes: () => [image],
+        readManagedProjectImage,
+      })
+      const listed = await dispatchWebPluginHostRequest(request("canvas.connectedImages.list"), context)
+      expect(listed).toMatchObject({ ok: true, result: { images: [{ readable: false }] } })
+      expect(await dispatchWebPluginHostRequest(
+        request("canvas.connectedImage.read", { nodeId: image.id }),
+        context,
+      )).toMatchObject({ ok: false, error: expect.stringContaining("managed Project asset") })
+    }
+
+    expect(readManagedProjectImage).not.toHaveBeenCalled()
+  })
+
+  test("rejects a connected image whose source changes during its managed read", async () => {
+    let image = connectedImageNode()
+    let resolveImage!: (value: {
+      dataUrl: string
+      mimeType: string
+      name: string
+      path: string
+      size: number
+    }) => void
+    const readManagedProjectImage = mock(() => new Promise<WebPluginProjectFileResult>((resolve) => { resolveImage = resolve }))
+    const context = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [image],
+      readManagedProjectImage,
+    })
+    const responsePromise = dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: image.id }),
+      context,
+    )
+    const replacement = connectedImageNode()
+    image = connectedImageNode({
+      data: {
+        ...replacement.data,
+        metadata: { convaxProjectFile: { path: ".convax/assets/replacement.jpg" } },
+      },
+    })
+    resolveImage({
+      dataUrl: "data:image/jpeg;base64,eA==",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: ".convax/assets/panorama.jpg",
+      size: 1,
+    })
+
+    expect(await responsePromise).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("source changed"),
+    })
+    expect(readManagedProjectImage).toHaveBeenCalledTimes(1)
+  })
+
+  test("allows only one connected image read in flight per Plugin frame", async () => {
+    let resolveImage!: (value: {
+      dataUrl: string
+      mimeType: string
+      name: string
+      path: string
+      size: number
+    }) => void
+    const readManagedProjectImage = mock(() => new Promise<WebPluginProjectFileResult>((resolve) => { resolveImage = resolve }))
+    const context = hostContext(plugin(["canvas.connectedImages.read"]), {
+      getConnectedImageNodes: () => [connectedImageNode()],
+      readManagedProjectImage,
+    })
+    const first = dispatchWebPluginHostRequest(
+      request("canvas.connectedImage.read", { nodeId: "image-1" }),
+      context,
+    )
+    const second = await dispatchWebPluginHostRequest(
+      { ...request("canvas.connectedImage.read", { nodeId: "image-1" }), id: "request-2" },
+      context,
+    )
+    expect(second).toMatchObject({ ok: false, error: expect.stringContaining("already in progress") })
+
+    resolveImage({
+      dataUrl: "data:image/jpeg;base64,eA==",
+      mimeType: "image/jpeg",
+      name: "panorama.jpg",
+      path: ".convax/assets/panorama.jpg",
+      size: 1,
+    })
+    expect(await first).toMatchObject({ ok: true })
   })
 
   test("the Canvas update preserves node data, geometry, edges, and unrelated metadata", () => {

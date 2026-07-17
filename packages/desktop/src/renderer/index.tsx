@@ -378,6 +378,23 @@ function App() {
         }
         return result
       },
+      async readManagedProjectImage(input) {
+        throwIfAborted(input.signal)
+        const current = pluginHostContextRef.current
+        if (current.activeProject?.id !== input.projectId || !current.activeCanvas) {
+          throw new Error("Plugin call is no longer in the active Project")
+        }
+        const result = await window.convax.projectFiles.readManagedImageFile({
+          path: input.path,
+          projectId: input.projectId,
+        })
+        throwIfAborted(input.signal)
+        const latest = pluginHostContextRef.current
+        if (latest.activeProject?.id !== input.projectId || latest.activeCanvas?.id !== current.activeCanvas.id) {
+          throw new Error("Plugin call completed after its Project or Canvas changed")
+        }
+        return result
+      },
     }
   }, [flushCanvasForAgent])
 

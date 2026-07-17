@@ -266,6 +266,17 @@ versioned, size-limited, manifest-authorized and delegated to an existing typed
 Project/Canvas/Agent capability. Plugin state writes may update only that node's
 namespaced portable state.
 
+A Plugin may read image bytes only when its manifest declares the connected-image
+capability and the image feeds the owning node through a direct incoming Canvas
+edge. Desktop derives the managed Project file reference from that node, preflights
+the exact `.convax/assets` reference, and delegates one bounded read to Main. Main
+opens one no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling, performs
+a fixed-length read and rejects identity changes before returning bytes. Desktop
+then rechecks scope, connectivity and the exact source reference. The Plugin never
+supplies a Project path and never receives a general Canvas snapshot. Browser
+features such as fullscreen are likewise enabled per manifest; all other iframe
+feature-policy denials remain in force.
+
 ## 9. Workbench layout boundary
 
 Workbench owns the generic state transition: part size, visibility, collapse
