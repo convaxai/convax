@@ -1,11 +1,12 @@
 import type { CanvasPoint, CanvasTextFormat, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
+  CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
   type CanvasAddResourcesCommand,
   type CanvasCommandActor,
 } from "./commands"
-import type { CanvasDocumentRef } from "./persistence"
+import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
 import type {
   CanvasApplicationCommandRequest,
   CanvasApplicationCommandResult,
@@ -24,28 +25,28 @@ interface CanvasResourceSourceBase {
  * preparation adapter rather than crossing this boundary.
  */
 export type CanvasResourceSource =
-  | CanvasResourceSourceBase & {
+  | (CanvasResourceSourceBase & {
       kind: "inline-text"
       format?: CanvasTextFormat
       name?: string
       text: string
-    }
-  | CanvasResourceSourceBase & {
+    })
+  | (CanvasResourceSourceBase & {
       /** A portable file reference interpreted relative to the host scope. */
       kind: "host-file"
       path: string
-    }
-  | CanvasResourceSourceBase & {
+    })
+  | (CanvasResourceSourceBase & {
       /** A portable directory reference interpreted relative to the host scope. */
       kind: "host-directory"
       path: string
-    }
-  | CanvasResourceSourceBase & {
+    })
+  | (CanvasResourceSourceBase & {
       kind: "remote-url"
       mimeType?: string
       name?: string
       url: string
-    }
+    })
 
 export interface CanvasResourcePreparationRequest extends CanvasDocumentRef {
   sources: readonly CanvasResourceSource[]
@@ -70,7 +71,9 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   sources: readonly CanvasResourceSource[]
 }
 
-type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute">
+type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
+
+const maxCanvasResourceConflictRetries = 2
 
 interface CanvasResourceExecution {
   fingerprint: string
@@ -145,22 +148,60 @@ export class CanvasResourceBusinessService {
       items: prepared.items,
       relation: request.relation,
     })
-    const applicationRequest: CanvasApplicationCommandRequest = {
-      canvasId: request.canvasId,
-      envelope: {
-        actor: request.actor,
-        command,
-        commandId: request.commandId,
-        expectedRevision: request.expectedRevision,
-      },
-      scopeId: request.scopeId,
-    }
-    const result = await this.application.execute(applicationRequest)
-    return {
-      ...result,
-      warnings: [...(prepared.warnings ?? []), ...result.warnings],
+    // Preparation and command creation stay outside the retry loop so one logical
+    // operation keeps the same materialized resources and generated node ids.
+    let expectedRevision = request.expectedRevision
+    let conflictRetries = 0
+
+    while (true) {
+      const applicationRequest: CanvasApplicationCommandRequest = {
+        canvasId: request.canvasId,
+        envelope: {
+          actor: request.actor,
+          command,
+          commandId: request.commandId,
+          expectedRevision,
+        },
+        scopeId: request.scopeId,
+      }
+      try {
+        const result = await this.application.execute(applicationRequest)
+        const replayWarning =
+          conflictRetries > 0
+            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
+            : []
+        return {
+          ...result,
+          warnings: [...(prepared.warnings ?? []), ...result.warnings, ...replayWarning],
+        }
+      } catch (error) {
+        if (!isCanvasResourceConflict(error) || conflictRetries >= maxCanvasResourceConflictRetries) throw error
+        conflictRetries += 1
+        // A storage conflict has no document revision, so both conflict types use
+        // one fresh query before reapplying the business command.
+        const latest = await this.application.query(
+          {
+            canvasId: request.canvasId,
+            scopeId: request.scopeId,
+          },
+          { limit: 0 },
+        )
+        expectedRevision = latest.revision
+      }
     }
   }
+}
+
+function isCanvasResourceConflict(error: unknown) {
+  return error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError
+}
+
+function canvasResourceReplayWarning(fromRevision: number, latestRevision: number, retries: number) {
+  return [
+    "Canvas changed while resources were being added;",
+    `replayed from revision ${fromRevision} on revision ${latestRevision}`,
+    `after ${retries} conflict ${retries === 1 ? "retry" : "retries"}.`,
+  ].join(" ")
 }
 
 export function validateCanvasResourceSources(sources: readonly CanvasResourceSource[]) {
@@ -176,8 +217,7 @@ export function validateCanvasResourceSources(sources: readonly CanvasResourceSo
     sourceIds.add(source.sourceId)
     if (source.kind === "host-file" || source.kind === "host-directory") {
       requireNonEmptyString(source.path, "Host entry path")
-    }
-    else if (source.kind === "remote-url") requireNonEmptyString(source.url, "Resource URL")
+    } else if (source.kind === "remote-url") requireNonEmptyString(source.url, "Resource URL")
     else if (source.kind === "inline-text") {
       if (typeof source.text !== "string") throw new CanvasCommandValidationError("Inline resource text is required")
       if (source.format !== undefined && source.format !== "markdown" && source.format !== "plain") {
@@ -213,8 +253,10 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
     requirePositiveNumberIfPresent(item.height, "Prepared resource height")
     requirePositiveNumberIfPresent(item.durationMs, "Prepared resource duration")
   }
-  if (prepared.warnings !== undefined
-    && (!Array.isArray(prepared.warnings) || prepared.warnings.some((warning) => typeof warning !== "string"))) {
+  if (
+    prepared.warnings !== undefined &&
+    (!Array.isArray(prepared.warnings) || prepared.warnings.some((warning) => typeof warning !== "string"))
+  ) {
     throw new CanvasCommandValidationError("Resource preparation warnings must be strings")
   }
 }
@@ -237,7 +279,10 @@ function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .join(",")}}`
   }
   return JSON.stringify(value) ?? "null"
 }

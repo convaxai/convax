@@ -25,6 +25,10 @@ describe("desktop Canvas Agent context", () => {
 
     expect(instructions.join("\n")).toContain('Active Canvas ID: "canvas-main"')
     expect(instructions.join("\n")).toContain('Active Canvas name: "Canvas 1"')
+    expect(instructions.join("\n")).toContain(
+      'call convax_canvas_query_nodes immediately with canvasId "canvas-main"',
+    )
+    expect(instructions.join("\n")).toContain("Do not search the filesystem for Canvas instructions")
     expect(instructions.join("\n")).toContain("read-only snapshots")
   })
 

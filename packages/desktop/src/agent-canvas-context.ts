@@ -44,6 +44,8 @@ export function createAgentCanvasInstructions(input: {
       `- Active Canvas ID: ${JSON.stringify(input.activeCanvas.id)}`,
       ...(input.activeCanvas.name ? [`- Active Canvas name: ${JSON.stringify(input.activeCanvas.name)}`] : []),
       "When a Convax Canvas tool needs the active canvas, pass exactly this Canvas ID. Do not guess it from the Canvas name, project ID, or view ID.",
+      `To inspect what is on the active Canvas, call convax_canvas_query_nodes immediately with canvasId ${JSON.stringify(input.activeCanvas.id)}.`,
+      "Convax Canvas tools are already registered. Do not search the filesystem for Canvas instructions or load a Canvas Skill unless the user explicitly selected one.",
     ].join("\n"))
   }
   instructions.push(hasCanvasResource

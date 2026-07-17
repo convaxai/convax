@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "../document"
 import { CanvasCommandValidationError } from "./commands"
-import type {
-  CanvasDocumentRepository,
-  CanvasDocumentSaveRequest,
-  CanvasDocumentSnapshot,
+import {
+  CanvasStorageConflictError,
+  type CanvasDocumentRepository,
+  type CanvasDocumentSaveRequest,
+  type CanvasDocumentSnapshot,
 } from "./persistence"
 import {
   CanvasResourceBusinessService,
@@ -38,22 +39,27 @@ describe("canvas resource business service", () => {
       },
     }
     const preparations: CanvasResourcePreparationRequest[] = []
-    const business = new CanvasResourceBusinessService({
-      async prepare(request) {
-        preparations.push(request)
-        return {
-          items: [{
-            height: 500,
-            id: "poster_resource",
-            kind: "image",
-            name: "Poster.png",
-            url: "asset://poster",
-            width: 1_000,
-          }],
-          warnings: ["metadata was normalized"],
-        }
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare(request) {
+          preparations.push(request)
+          return {
+            items: [
+              {
+                height: 500,
+                id: "poster_resource",
+                kind: "image",
+                name: "Poster.png",
+                url: "asset://poster",
+                width: 1_000,
+              },
+            ],
+            warnings: ["metadata was normalized"],
+          }
+        },
       },
-    }, new CanvasApplicationService(repository))
+      new CanvasApplicationService(repository),
+    )
     const request = {
       actor: { id: "agent_one", kind: "agent" as const },
       anchor: { x: 0, y: 0 },
@@ -68,11 +74,13 @@ describe("canvas resource business service", () => {
     expect(() => JSON.stringify(request.sources)).not.toThrow()
     const result = await business.addResources(request)
 
-    expect(preparations).toEqual([{
-      canvasId: "canvas-main",
-      scopeId: "project-one",
-      sources: [{ kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }],
-    }])
+    expect(preparations).toEqual([
+      {
+        canvasId: "canvas-main",
+        scopeId: "project-one",
+        sources: [{ kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }],
+      },
+    ])
     const createdNodeId = result.createdNodeIds[0]!
     expect(result.document).toMatchObject({
       edges: [{ source: "anchor", target: createdNodeId }],
@@ -89,10 +97,228 @@ describe("canvas resource business service", () => {
 
     expect(await business.addResources(request)).toBe(result)
     expect(preparations).toHaveLength(1)
-    await expect(business.addResources({
-      ...request,
-      sources: [{ kind: "remote-url", sourceId: "different", url: "https://example.com/image.png" }],
-    })).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+    await expect(
+      business.addResources({
+        ...request,
+        sources: [{ kind: "remote-url", sourceId: "different", url: "https://example.com/image.png" }],
+      }),
+    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+  })
+
+  test("rebases a stale resource addition on the latest document without losing an unrelated concurrent edit", async () => {
+    const concurrent = createTextNode({ id: "concurrent", position: { x: 0, y: 0 }, text: "Keep me" })
+    let snapshot: CanvasDocumentSnapshot = {
+      document: { ...createCanvasDocument({ id: "canvas-main", nodes: [concurrent] }), revision: 1 },
+      storageVersion: "v1",
+    }
+    let preparationCalls = 0
+    let saveCalls = 0
+    const application = new CanvasApplicationService({
+      async load() {
+        return snapshot
+      },
+      async save(request) {
+        saveCalls += 1
+        snapshot = { document: request.document, storageVersion: "v2" }
+        return { storageVersion: "v2" }
+      },
+    })
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      application,
+    )
+
+    const result = await business.addResources({
+      actor: { id: "agent", kind: "agent" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "stale-add",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+    })
+
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(1)
+    expect(result.document.revision).toBe(2)
+    expect(result.document.nodes.map((node) => node.id)).toContain("concurrent")
+    expect(result.createdNodeIds).toHaveLength(1)
+    expect(result.document.nodes.find((node) => node.id === result.createdNodeIds[0])?.position).toEqual({
+      x: 340,
+      y: 0,
+    })
+    expect(result.warnings).toContain(
+      "Canvas changed while resources were being added; replayed from revision 0 on revision 1 after 1 conflict retry.",
+    )
+  })
+
+  test("prepares once and reuses generated node ids when a storage conflict requires replay", async () => {
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main" }),
+      storageVersion: "v0",
+    }
+    let preparationCalls = 0
+    const attemptedNodeIds: string[] = []
+    let saveCalls = 0
+    const application = new CanvasApplicationService({
+      async load() {
+        return snapshot
+      },
+      async save(request) {
+        saveCalls += 1
+        const resourceNode = request.document.nodes.find((node) => node.id !== "concurrent")
+        attemptedNodeIds.push(resourceNode!.id)
+        if (saveCalls === 1) {
+          snapshot = {
+            document: {
+              ...createCanvasDocument({
+                id: "canvas-main",
+                nodes: [createTextNode({ id: "concurrent", position: { x: 0, y: 0 }, text: "Concurrent" })],
+              }),
+              revision: 1,
+            },
+            storageVersion: "v1",
+          }
+          throw new CanvasStorageConflictError(request.expectedStorageVersion, "v1")
+        }
+        snapshot = { document: request.document, storageVersion: "v2" }
+        return { storageVersion: "v2" }
+      },
+    })
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      application,
+    )
+    const request = {
+      actor: { id: "agent", kind: "agent" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "storage-retry",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "inline-text" as const, sourceId: "prepared", text: "New resource" }],
+    }
+
+    const result = await business.addResources(request)
+
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(2)
+    expect(attemptedNodeIds).toEqual([result.createdNodeIds[0], result.createdNodeIds[0]])
+    expect(result.document.nodes.map((node) => node.id)).toContain("concurrent")
+    expect(result.document.revision).toBe(2)
+    expect(result.warnings[0]).toContain("replayed from revision 0 on revision 1")
+    expect(await business.addResources(request)).toBe(result)
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(2)
+  })
+
+  test("rejects a replay when a concurrent edit removed a required relation anchor", async () => {
+    let saveCalls = 0
+    let preparationCalls = 0
+    const application = new CanvasApplicationService({
+      async load() {
+        return {
+          document: { ...createCanvasDocument({ id: "canvas-main" }), revision: 1 },
+          storageVersion: "v1",
+        }
+      },
+      async save() {
+        saveCalls += 1
+        throw new Error("The invalid replay must not be saved")
+      },
+    })
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      application,
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "agent", kind: "agent" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "deleted-anchor",
+        expectedRevision: 0,
+        relation: { anchorNodeIds: ["anchor"], mode: "connect" },
+        scopeId: "project",
+        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      }),
+    ).rejects.toThrow("Canvas node was not found: anchor")
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(0)
+  })
+
+  test("stops after two conflict retries", async () => {
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main" }),
+      storageVersion: "v0",
+    }
+    let preparationCalls = 0
+    let saveCalls = 0
+    const application = new CanvasApplicationService({
+      async load() {
+        return snapshot
+      },
+      async save(request) {
+        saveCalls += 1
+        const current = snapshot.document!
+        snapshot = {
+          document: {
+            ...current,
+            nodes: [
+              ...current.nodes,
+              createTextNode({
+                id: `concurrent-${saveCalls}`,
+                position: { x: saveCalls * 20, y: 0 },
+                text: "Concurrent",
+              }),
+            ],
+            revision: current.revision + 1,
+          },
+          storageVersion: `v${saveCalls}`,
+        }
+        throw new CanvasStorageConflictError(request.expectedStorageVersion, snapshot.storageVersion)
+      },
+    })
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      application,
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "agent", kind: "agent" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "retry-limit",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      }),
+    ).rejects.toBeInstanceOf(CanvasStorageConflictError)
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(3)
+    expect(snapshot.document?.nodes.map((node) => node.id)).toEqual(["concurrent-1", "concurrent-2", "concurrent-3"])
   })
 
   test("validates sources before preparation and rejects invalid prepared resources", async () => {
@@ -101,40 +327,53 @@ describe("canvas resource business service", () => {
       execute() {
         throw new Error("application should not run")
       },
-    }
-    const invalidSources = new CanvasResourceBusinessService({
-      async prepare() {
-        preparationCalls += 1
-        return { items: [] }
+      query() {
+        throw new Error("application should not run")
       },
-    }, application)
-    await expect(invalidSources.addResources({
-      actor: { id: "ui", kind: "ui" },
-      anchor: { x: 0, y: 0 },
-      canvasId: "canvas",
-      commandId: "invalid_sources",
-      expectedRevision: 0,
-      scopeId: "project",
-      sources: [
-        { kind: "host-file", path: "one.png", sourceId: "duplicate" },
-        { kind: "host-file", path: "two.png", sourceId: "duplicate" },
-      ],
-    })).rejects.toBeInstanceOf(CanvasCommandValidationError)
+    }
+    const invalidSources = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [] }
+        },
+      },
+      application,
+    )
+    await expect(
+      invalidSources.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas",
+        commandId: "invalid_sources",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [
+          { kind: "host-file", path: "one.png", sourceId: "duplicate" },
+          { kind: "host-file", path: "two.png", sourceId: "duplicate" },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(CanvasCommandValidationError)
     expect(preparationCalls).toBe(0)
 
-    const invalidPreparation = new CanvasResourceBusinessService({
-      async prepare() {
-        return { items: [{ id: "broken", kind: "image", url: "asset://broken", width: -1 }] }
+    const invalidPreparation = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [{ id: "broken", kind: "image", url: "asset://broken", width: -1 }] }
+        },
       },
-    }, application)
-    await expect(invalidPreparation.addResources({
-      actor: { id: "ui", kind: "ui" },
-      anchor: { x: 0, y: 0 },
-      canvasId: "canvas",
-      commandId: "invalid_preparation",
-      expectedRevision: 0,
-      scopeId: "project",
-      sources: [source()],
-    })).rejects.toBeInstanceOf(CanvasCommandValidationError)
+      application,
+    )
+    await expect(
+      invalidPreparation.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas",
+        commandId: "invalid_preparation",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [source()],
+      }),
+    ).rejects.toBeInstanceOf(CanvasCommandValidationError)
   })
 })

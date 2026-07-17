@@ -347,7 +347,7 @@ async function addResources(
     relation: relation(input.relation),
     sources: resourceSources(input.sources),
   }
-  await assertLiveActiveCanvas(renderer, scope, canvasId, expectedRevision)
+  await assertLiveActiveCanvas(renderer, scope, canvasId)
   const result = await resources.addResources(request)
   const sync = await syncRenderer(renderer, ref(scope, canvasId))
   const warnings = [...result.warnings]

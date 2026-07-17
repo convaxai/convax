@@ -248,8 +248,8 @@ describe("Canvas Agent tools", () => {
     expect(queryCalls).toBe(0)
   })
 
-  test("rejects stale revisions before mutation or view execution", async () => {
-    const calls = { execute: 0, resources: 0, view: 0 }
+  test("rejects stale revisions before primitive mutation or view execution", async () => {
+    const calls = { execute: 0, view: 0 }
     const provider = createCanvasAgentToolProvider({
       application: {
         async execute() {
@@ -274,23 +274,12 @@ describe("Canvas Agent tools", () => {
       },
       resources: {
         async addResources() {
-          calls.resources += 1
           throw new Error("Unexpected resources")
         },
       },
     })
     const scope = { directory: "/project", scopeId: "project-a" }
     const requests = [
-      [
-        "canvas_add_resources",
-        {
-          anchor: { x: 0, y: 0 },
-          canvasId: "canvas-main",
-          commandId: "stale-add",
-          expectedRevision: 7,
-          sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
-        },
-      ],
       [
         "canvas_apply_primitive",
         {
@@ -313,7 +302,7 @@ describe("Canvas Agent tools", () => {
     for (const [name, request] of requests) {
       await expect(provider.callTool(scope, name, request)).rejects.toThrow("expectedRevision does not match")
     }
-    expect(calls).toEqual({ execute: 0, resources: 0, view: 0 })
+    expect(calls).toEqual({ execute: 0, view: 0 })
   })
 
   test("exposes business tools by default while validating unsafe view values", async () => {
@@ -483,6 +472,65 @@ describe("Canvas Agent tools", () => {
       data: { kind: "folder", name: "references", path: "design/references" },
       type: "file",
     })
+  })
+
+  test("replays a stale resource addition on the latest Canvas revision", async () => {
+    let document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 1 }
+    let storageVersion = "v1"
+    let preparationCalls = 0
+    const application = new CanvasApplicationService({
+      async load() {
+        return { document, storageVersion }
+      },
+      async save(request) {
+        document = request.document
+        storageVersion = "v2"
+        return { storageVersion }
+      },
+    })
+    const resources = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "note", kind: "text" as const, text: "Latest context" }] }
+        },
+      },
+      application,
+    )
+    const provider = createCanvasAgentToolProvider({
+      application,
+      renderer: {
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(1)
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return true
+        },
+      },
+      resources,
+    })
+
+    const result = await provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_add_resources", {
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "stale-resource-add",
+      expectedRevision: 0,
+      sources: [{ kind: "inline-text", sourceId: "note", text: "Latest context" }],
+    })
+
+    expect(result).toMatchObject({
+      changed: true,
+      revision: 2,
+      sync: { reloaded: true },
+      warnings: [
+        "Canvas changed while resources were being added; replayed from revision 0 on revision 1 after 1 conflict retry.",
+      ],
+    })
+    expect(preparationCalls).toBe(1)
+    expect(document.nodes).toHaveLength(1)
   })
 
   test("rejects malformed and legacy project-specific resource inputs before business execution", async () => {
