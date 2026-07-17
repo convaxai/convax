@@ -3,9 +3,16 @@ export type JsonValue = null | boolean | number | string | readonly JsonValue[] 
 export type JsonObject = Readonly<Record<string, JsonValue>>
 export type ProviderOptions = Readonly<Record<string, JsonObject>>
 
+/** Minimal abort contract accepted from browser, Node, Bun, or another host. */
+export interface ProviderAbortSignal {
+  readonly aborted: boolean
+  addEventListener(type: "abort", listener: () => void, options?: { readonly once?: boolean }): void
+  removeEventListener(type: "abort", listener: () => void): void
+}
+
 /** Execution-only controls kept outside the serializable provider request. */
 export interface ProviderCallOptions {
-  readonly signal?: AbortSignal
+  readonly signal?: ProviderAbortSignal
 }
 
 /** Persistable selection of one outer adapter and one provider-owned model. */
@@ -69,9 +76,9 @@ export interface ProviderSortConfig {
 
 /** Endpoint routing inside an image provider; this is not the outer adapter selector. */
 export interface ImageProviderPreferences {
-  readonly only?: readonly string[]
-  readonly order?: readonly string[]
-  readonly ignore?: readonly string[]
+  readonly only?: readonly string[] | null
+  readonly order?: readonly string[] | null
+  readonly ignore?: readonly string[] | null
   readonly sort?: ProviderSort | ProviderSortConfig | null
   readonly allow_fallbacks?: boolean | null
   readonly options?: ProviderOptions
@@ -116,6 +123,10 @@ export interface ImageModelEndpoints {
   readonly endpoints: readonly ImageModelEndpoint[]
 }
 
+export type ImageGenerationQuality = "auto" | "low" | "medium" | "high" | (string & {})
+export type ImageOutputFormat = "png" | "jpeg" | "webp" | "svg" | (string & {})
+export type ImageBackground = "auto" | "transparent" | "opaque" | (string & {})
+
 export interface ImageGenerationRequest {
   readonly model: string
   readonly prompt: string
@@ -123,17 +134,18 @@ export interface ImageGenerationRequest {
   readonly resolution?: string
   readonly aspect_ratio?: string
   readonly size?: string
-  readonly quality?: "auto" | "low" | "medium" | "high"
-  readonly output_format?: "png" | "jpeg" | "webp" | "svg"
-  readonly background?: "auto" | "transparent" | "opaque"
+  readonly quality?: ImageGenerationQuality
+  readonly output_format?: ImageOutputFormat
+  readonly background?: ImageBackground
   readonly output_compression?: number
   readonly seed?: number
   readonly input_references?: readonly ImageUrlReference[]
   readonly provider?: ImageProviderPreferences
+  readonly stream?: boolean
 }
 
-export type BufferedImageGenerationRequest = ImageGenerationRequest & { readonly stream?: false }
-export type StreamingImageGenerationRequest = ImageGenerationRequest & { readonly stream: true }
+export type BufferedImageGenerationRequest = Omit<ImageGenerationRequest, "stream"> & { readonly stream?: false }
+export type StreamingImageGenerationRequest = Omit<ImageGenerationRequest, "stream"> & { readonly stream: true }
 
 export interface GeneratedImage {
   readonly b64_json: string
@@ -190,7 +202,7 @@ export interface ImageGenerationProvider {
   stream?(request: StreamingImageGenerationRequest, options?: ProviderCallOptions): AsyncIterable<ImageGenerationEvent>
 }
 
-export type VideoFrameType = "first_frame" | "last_frame"
+export type VideoFrameType = "first_frame" | "last_frame" | (string & {})
 
 export interface VideoFrameImage extends ImageUrlReference {
   readonly frame_type: VideoFrameType
@@ -246,7 +258,7 @@ export interface VideoGenerationJob {
 }
 
 export interface VideoGenerationContent {
-  readonly body: ReadableStream<Uint8Array>
+  readonly body: AsyncIterable<Uint8Array>
   readonly media_type: string
   readonly content_length?: number
 }

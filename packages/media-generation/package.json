@@ -21,7 +21,8 @@
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
     "test": "bun test",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit && bun run test:types",
+    "test:types": "tsc -p tsconfig.consumer.json",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test"
   },

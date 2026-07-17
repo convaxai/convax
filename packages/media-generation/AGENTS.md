@@ -12,6 +12,8 @@ This package owns provider-neutral AI image and video generation contracts.
   create/retrieve/content job flow. Do not invent one ambiguous shared lifecycle.
 - `AbortSignal` cancels the local request, stream, or poll only. It does not imply
   that an accepted upstream video job was cancelled.
+- Keep public declarations usable without DOM libraries; expose structural cancellation
+  and `AsyncIterable` byte streams instead of browser-only globals.
 - Keep model ids and capability values open-ended. Discovery, not a hard-coded
   model enum, is the source of supported models and parameters.
 - Provider-specific options are JSON values nested below a provider slug. Do not
