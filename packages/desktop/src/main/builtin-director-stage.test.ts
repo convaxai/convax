@@ -141,5 +141,7 @@ describe("built-in StoryAI 3D Director Desk", () => {
       "./assets/app.js",
     )
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/app.js"))).size).toBeGreaterThan(100_000)
+    expect(await manager.resolveAsset(installed.id, "UPSTREAM.state.patch")).toContain("UPSTREAM.state.patch")
+    expect(await manager.resolveAsset(installed.id, "UPSTREAM.view.patch")).toContain("UPSTREAM.view.patch")
   })
 })
