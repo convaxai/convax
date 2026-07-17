@@ -1,0 +1,39 @@
+{
+  "schema": "convax.plugin/1",
+  "id": "panorama-viewer",
+  "name": "Panorama Viewer",
+  "description": "Preview equirectangular 360° panoramas with drag-to-look, wheel zoom, auto-rotation, fullscreen, local files, and directly connected Canvas images.",
+  "version": "0.1.0",
+  "entry": "index.html",
+  "capabilities": [
+    "canvas.connectedImages.read",
+    "canvas.node.write",
+    "ui.fullscreen"
+  ],
+  "contributes": {
+    "canvas": {
+      "renderer": {
+        "create": true,
+        "width": 980,
+        "height": 640
+      },
+      "toolbar": [
+        {
+          "command": "panorama.reset",
+          "id": "reset",
+          "title": "Reset panorama view"
+        },
+        {
+          "command": "panorama.toggle-auto-rotate",
+          "id": "auto-rotate",
+          "title": "Toggle panorama auto-rotation"
+        },
+        {
+          "command": "panorama.refresh-connections",
+          "id": "refresh",
+          "title": "Refresh connected Canvas images"
+        }
+      ]
+    }
+  }
+}

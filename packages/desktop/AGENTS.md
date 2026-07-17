@@ -36,6 +36,11 @@ it must not become the permanent home of reusable domain rules.
 - Bind Plugin RPC to its MessagePort and exact Project/Canvas/node scope. Enforce the
   manifest allowlist and delegate to existing typed clients; never add a generic
   IPC/function-call escape hatch.
+- Treat connected media as a narrow input capability: derive it from direct incoming
+  edges, use the bounded Main-owned managed-asset read, and reject stale or
+  caller-selected paths.
+- Grant fullscreen or any future iframe feature-policy exception only when the
+  installed manifest declares it; keep all unrelated denials unchanged.
 
 Run `bun typecheck && bun test`. Run `bun run build` for main/preload/renderer changes
 and `bun run smoke:open-project` for Project open, persistence, IPC or migration work.
