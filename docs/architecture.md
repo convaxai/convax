@@ -86,6 +86,7 @@ OpenCode plugins.
 | `@convax/project/canvas` | Project Canvas catalog, relationships, controller, drag and resource references |
 | `@convax/project/node`   | Native Project, Project Files, private storage, and Canvas persistence adapters |
 | `@convax/workbench`      | Headless window Input/Selection/Surface and layout state machines               |
+| `@convax/media-generation` | Provider-neutral AI image/video generation contracts and model/job shapes     |
 | `@convax/agent-runtime`  | Host-agnostic OpenCode integration and protected execution boundary             |
 | `@convax/desktop`        | Electron composition root, IPC, adapters, coordinators and product shell        |
 
@@ -95,6 +96,7 @@ Allowed internal runtime dependencies:
 @convax/ui             -> none
 @convax/project-files  -> none
 @convax/workbench      -> none
+@convax/media-generation -> none
 @convax/agent-runtime  -> none
 @convax/canvas         -> @convax/ui
 @convax/project        -> @convax/canvas, @convax/project-files, @convax/ui
@@ -235,6 +237,19 @@ ProjectController activates Project
 
 Controllers use request generations/identities so late responses from the previous
 Project cannot overwrite current state.
+
+### AI media provider boundary
+
+`@convax/media-generation` defines contracts only. One outer provider adapter may
+discover and execute many provider-owned model slugs. Image contracts preserve the
+buffered or streamed lifecycle; video contracts preserve create, retrieve and
+content as an asynchronous job lifecycle. The serializable request uses OpenRouter-
+style fields, while execution-only cancellation stays in separate call options.
+
+Desktop may later own concrete adapters, credentials, selection and fallback
+orchestration, then adapt completed output into the existing Canvas resource flow.
+The contract package does not implement HTTP, register providers, select defaults,
+persist signed URLs, or expose Canvas/Project types.
 
 ### Canvas mutation from UI or Agent
 

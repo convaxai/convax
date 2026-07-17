@@ -27,6 +27,7 @@ files under `packages/` add local rules and inherit this contract.
 | `@convax/project` | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog and relationships | Active Canvas selection, Canvas document semantics, Agent sessions |
 | `@convax/canvas` | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
 | `@convax/workbench` | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage |
+| `@convax/media-generation` | Provider-neutral AI image/video generation contracts, model discovery, requests, responses, streams and async jobs | Provider implementations, credentials, routing registries, Canvas/Project state, Electron, OpenCode |
 | `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement | Convax Project/Canvas/UI policy or imports from other Convax packages |
 | `@convax/ui` | Product-agnostic visual primitives and theme | Project, Canvas, Workbench, Agent, persistence, or Electron behavior |
 | `@convax/desktop` | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring | New reusable domain semantics that belong in a published package |
@@ -41,10 +42,10 @@ The allowed internal runtime dependency graph is enforced by
 `bun run package:boundaries`:
 
 ```text
-desktop ──> agent-runtime, canvas, project, project-files, ui, workbench
+desktop ──> agent-runtime, canvas, media-generation, project, project-files, ui, workbench
 project ──> canvas, project-files, ui
 canvas  ──> ui
-agent-runtime, project-files, ui, workbench ──> no Convax package
+agent-runtime, media-generation, project-files, ui, workbench ──> no Convax package
 ```
 
 - Import another package only through an exported package subpath.

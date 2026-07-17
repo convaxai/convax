@@ -88,6 +88,15 @@
         "vite": "catalog:",
       },
     },
+    "packages/media-generation": {
+      "name": "@convax/media-generation",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@typescript/native-preview": "catalog:",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/project": {
       "name": "@convax/project",
       "version": "0.1.0",
@@ -245,6 +254,8 @@
     "@convax/canvas": ["@convax/canvas@workspace:packages/canvas"],
 
     "@convax/desktop": ["@convax/desktop@workspace:packages/desktop"],
+
+    "@convax/media-generation": ["@convax/media-generation@workspace:packages/media-generation"],
 
     "@convax/project": ["@convax/project@workspace:packages/project"],
 

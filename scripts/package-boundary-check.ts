@@ -25,6 +25,7 @@ const applicationPackageNames = new Set(["@convax/desktop"])
 const publishablePackageNames = new Set([
   "@convax/agent-runtime",
   "@convax/canvas",
+  "@convax/media-generation",
   "@convax/project",
   "@convax/project-files",
   "@convax/ui",
@@ -34,11 +35,13 @@ const reservedWorkspacePackageName = "@convax/workspace"
 const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>([
   ["@convax/agent-runtime", new Set()],
   ["@convax/canvas", new Set(["@convax/ui"])],
+  ["@convax/media-generation", new Set()],
   [
     "@convax/desktop",
     new Set([
       "@convax/agent-runtime",
       "@convax/canvas",
+      "@convax/media-generation",
       "@convax/project",
       "@convax/project-files",
       "@convax/ui",
