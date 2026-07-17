@@ -131,9 +131,9 @@ describe("built-in StoryAI 3D Director Desk", () => {
     const catalogItem = desktopBuiltinPluginCatalog.find((item) => item.manifest.id === "storyai-3d-director-desk")
     expect(catalogItem).toBeDefined()
     if (!catalogItem) throw new Error("Built-in 3D Director Desk was not found")
-    const installed = await manager.installBundle(catalogItem.bundle)
+    const installed = await manager.installOrUpdateBuiltinBundle(catalogItem.bundle)
 
-    expect(installed).toEqual(catalogItem.manifest)
+    expect(installed).toEqual({ ...catalogItem.manifest, trustedBuiltin: true })
     expect(installed.id).toBe("storyai-3d-director-desk")
     expect(installed.version).toBe("0.0.1-convax.2")
     expect(installed.capabilities).toEqual(["canvas.node.write"])

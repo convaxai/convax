@@ -7,17 +7,20 @@ import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
+import type { JianyingCanvasExportIpcEnvelope, JianyingRendererClient } from "../jianying-contracts"
 
 type InvokeHandler = (event: unknown, input?: unknown) => unknown
 type DesktopBridge = {
   agent: AgentClient
   canvas: { documents: CanvasDocumentClient }
+  jianying: JianyingRendererClient
   projectFiles: ProjectFilesClient
   projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
 }
 
 const handlers = new Map<string, InvokeHandler>()
 const rendererListeners = new Map<string, Set<(...args: unknown[]) => void>>()
+const rendererSends: Array<{ channel: string; input: unknown }> = []
 const trustedEvent = { sender: { id: 1 }, senderFrame: { url: "file:///convax/index.html" } }
 let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""
@@ -53,7 +56,7 @@ mock.module("electron", () => ({
     removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
       rendererListeners.get(channel)?.delete(listener)
     },
-    send: () => undefined,
+    send: (channel: string, input: unknown) => rendererSends.push({ channel, input }),
   },
   shell: {
     openPath: async () => "",
@@ -71,6 +74,7 @@ afterEach(async () => {
   disposeIpc.splice(0).reverse().forEach((dispose) => dispose())
   handlers.clear()
   rendererListeners.clear()
+  rendererSends.length = 0
   exposedBridge = undefined
   selectedProjectPath = ""
   if (temporaryRoot) await fs.rm(temporaryRoot, { force: true, recursive: true })
@@ -114,11 +118,43 @@ describe("desktop Open Project IPC smoke", () => {
       registerCanvasDocumentIpc(canvasDocuments, trusted),
       registerAgentIpc(runtime, projects, trusted),
     ]
+    handlers.set("jianying:draft-status", () => ({ draftName: "Current draft", draftToken: "draft-token", status: "active" }))
+    handlers.set("jianying:canvas-media-export", (_event, input) => ({
+      createdDraft: (input as JianyingCanvasExportIpcEnvelope).request.target.kind === "new",
+      draftName: "Current draft",
+      importedMediaCount: (input as JianyingCanvasExportIpcEnvelope).request.nodeIds.length,
+      importStatus: "dispatched",
+    }))
     await import("../preload/index")
     if (!exposedBridge) throw new Error("The preload bridge was not exposed")
     expect(exposedBridge.projects).not.toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("readManagedImageFile")
+    expect(await exposedBridge.jianying.getDraftStatus()).toEqual({
+      draftName: "Current draft",
+      draftToken: "draft-token",
+      status: "active",
+    })
+    const jianyingEnvelope: JianyingCanvasExportIpcEnvelope = {
+      operationId: "toolbar-export",
+      request: {
+        expectedRevision: 0,
+        nodeIds: ["image-1"],
+        ref: { canvasId: "canvas-main", scopeId: "project-1" },
+        target: { draftToken: "draft-token", kind: "current" },
+      },
+    }
+    expect(await exposedBridge.jianying.exportCanvasMedia(jianyingEnvelope)).toEqual({
+      createdDraft: false,
+      draftName: "Current draft",
+      importedMediaCount: 1,
+      importStatus: "dispatched",
+    })
+    exposedBridge.jianying.cancelCanvasMediaExport({ operationId: "toolbar-export" })
+    expect(rendererSends).toContainEqual({
+      channel: "jianying:canvas-media-export-cancel",
+      input: { operationId: "toolbar-export" },
+    })
 
     const selection = await exposedBridge.projects.openProject()
     expect(selection).toMatchObject({ canceled: false, project: { name: "empty-project" } })

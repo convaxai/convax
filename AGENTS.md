@@ -191,6 +191,6 @@ current schema.
   `.convax/` runtime state.
 - Keep the `package-boundaries` push/PR check enabled and required on protected
   branches. Do not weaken the policy to make a feature branch pass.
-- Keep every commit below 1,000 added plus deleted lines. Split by logical behavior,
-  not arbitrary file chunks.
+- Keep commits coherent and reviewable. Split changes when it improves clarity,
+  not to satisfy an arbitrary line-count limit.
 - Use conventional commit messages such as `feat(workbench): add part layout guard`.

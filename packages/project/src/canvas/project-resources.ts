@@ -2,6 +2,7 @@ import type { CanvasDocument } from "@convax/canvas/core"
 
 export const projectFileReferenceKey = "convaxProjectFile"
 export const managedProjectAssetDirectory = ".convax/assets"
+export const projectCanvasManagedAssetDirectory = managedProjectAssetDirectory
 
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 
@@ -33,6 +34,48 @@ export function isManagedProjectAssetPath(value: unknown): value is string {
       && !/[. ]$/.test(segment)
       && !windowsReservedName.test(stem)
   })
+}
+
+/** Validate the portable Project path admitted into a Canvas resource reference. */
+export function requireProjectCanvasResourcePath(value: string) {
+  const input = value.replaceAll("\\", "/")
+  if (!input || input.includes("\0") || input.startsWith("/") || /^[a-zA-Z]:\//.test(input)) {
+    throw new Error(`Invalid portable project path: ${value}`)
+  }
+  const segments: string[] = []
+  for (const segment of input.split("/")) {
+    if (!segment || segment === ".") continue
+    if (segment === "..") {
+      if (!segments.length) throw new Error(`Project path escapes its root: ${value}`)
+      segments.pop()
+      continue
+    }
+    assertPortableSegment(segment)
+    segments.push(segment)
+  }
+  if (!segments.length) throw new Error(`Invalid portable project path: ${value}`)
+  if (
+    segments[0]?.toLowerCase() === ".convax" &&
+    (segments[0] !== ".convax" || segments[1] !== "assets" || segments.length < 3)
+  ) {
+    throw new Error(`Project private storage cannot be used as a Canvas resource: ${value}`)
+  }
+  return segments.join("/")
+}
+
+export function isProjectCanvasManagedAssetPath(value: unknown): value is string {
+  return isManagedProjectAssetPath(value)
+}
+
+function assertPortableSegment(value: string) {
+  const stem = value.split(".")[0]?.toUpperCase()
+  if (
+    /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value) ||
+    /[. ]$/.test(value) ||
+    (stem && /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/.test(stem))
+  ) {
+    throw new Error(`Invalid portable project path segment: ${value}`)
+  }
 }
 
 export function dehydrateProjectCanvasDocument(document: CanvasDocument): CanvasDocument {

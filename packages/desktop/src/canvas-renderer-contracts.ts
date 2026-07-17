@@ -1,5 +1,5 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
-import type { CanvasViewCommandRequest, CanvasViewCommandResult } from "@convax/canvas/view"
+import type { CanvasViewCommandRequest, CanvasViewCommandResult, CanvasViewSnapshot } from "@convax/canvas/view"
 
 export const canvasRendererChannels = {
   request: "canvas:renderer-request",
@@ -8,10 +8,12 @@ export const canvasRendererChannels = {
 
 export type CanvasRendererRequest =
   | { type: "document.reload"; ref: CanvasDocumentRef }
+  | { type: "view.snapshot"; viewId: string }
   | { type: "view.execute"; input: CanvasViewCommandRequest }
 
 export type CanvasRendererRequestResult =
   | { type: "document.reload"; reloaded: boolean }
+  | { type: "view.snapshot"; snapshot: CanvasViewSnapshot | null }
   | { type: "view.execute"; result: CanvasViewCommandResult }
 
 export interface CanvasRendererRequestEnvelope {

@@ -1,9 +1,18 @@
 import { Button, cn } from "@convax/ui"
-import { Download, FolderInput, LoaderCircle, Plug, RefreshCw, Sparkles, Trash2, X } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
-import type { WebPluginClient, WebPluginInventory, WebPluginManifest } from "../plugin-contracts"
-import type { DesktopSkillClient, DesktopSkillInventory } from "../skill-management-contracts"
+import { ChevronRight, Download, FolderInput, LoaderCircle, Plug, RefreshCw, Sparkles, Trash2, X } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { WebPluginCatalogItem, WebPluginClient, WebPluginInventory, WebPluginManifest } from "../plugin-contracts"
+import type {
+  DesktopSkillCatalogItem,
+  DesktopSkillClient,
+  DesktopSkillDetails,
+  DesktopSkillInventory,
+  DesktopSkillShowcase,
+  DesktopSkillShowcaseMedia,
+  DesktopSkillTarget,
+} from "../skill-management-contracts"
 import { appMessage, type AppLocale } from "./app-language"
+import { SkillDetailDialog, SkillShowcaseMedia } from "./skill-catalog-preview"
 
 export type CapabilityCenterTab = "skills" | "plugins"
 
@@ -46,6 +55,11 @@ export interface CapabilityCenterDialogProps {
   onInstallPlugin(id: string): void
   onInstallPluginSkill(id: string): void
   onInstallSkill(id: string): void
+  onLoadSkillDetails(target: DesktopSkillTarget): Promise<DesktopSkillDetails>
+  onLoadSkillShowcase(
+    target: DesktopSkillTarget,
+    media: DesktopSkillShowcaseMedia,
+  ): Promise<DesktopSkillShowcase | null>
   onTabChange(tab: CapabilityCenterTab): void
   onUninstallPlugin(id: string): void
   onUninstallSkill(name: string): void
@@ -87,6 +101,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 function PluginActions({
   busy,
+  companionSkillInstalled,
   installed,
   locale,
   onInstall,
@@ -96,6 +111,7 @@ function PluginActions({
   updateAvailable,
 }: {
   busy: CapabilityAction | null
+  companionSkillInstalled: boolean
   installed: boolean
   locale: AppLocale
   onInstall(): void
@@ -124,10 +140,13 @@ function PluginActions({
         </Button>
       ) : null}
       {plugin.skill ? (
-        <Button disabled={disabled} onClick={onInstallSkill} size="sm" variant="outline">
+        <Button disabled={disabled || companionSkillInstalled} onClick={onInstallSkill} size="sm" variant="outline">
           <BusyIcon active={busy === `plugin.skill:${plugin.id}`} />
           <Sparkles />
-          {appMessage(locale, "capabilities.installCompanionSkill")}
+          {appMessage(
+            locale,
+            companionSkillInstalled ? "capabilities.installed" : "capabilities.installCompanionSkill",
+          )}
         </Button>
       ) : null}
       <Button
@@ -145,6 +164,7 @@ function PluginActions({
 
 function PluginCard({
   busy,
+  companionSkillInstalled,
   installed,
   installedVersion,
   locale,
@@ -155,6 +175,7 @@ function PluginCard({
   updateAvailable,
 }: {
   busy: CapabilityAction | null
+  companionSkillInstalled: boolean
   installed: boolean
   installedVersion?: string
   locale: AppLocale
@@ -204,6 +225,7 @@ function PluginCard({
         </div>
         <PluginActions
           busy={busy}
+          companionSkillInstalled={companionSkillInstalled}
           installed={installed}
           locale={locale}
           onInstall={onInstall}
@@ -217,12 +239,104 @@ function PluginCard({
   )
 }
 
+function SkillCatalogCard({
+  busy,
+  locale,
+  managedName,
+  onInstall,
+  onLoadShowcase,
+  onOpen,
+  onUninstall,
+  readOnly,
+  skill,
+  statusLabel,
+  target,
+}: {
+  busy: CapabilityAction | null
+  locale: AppLocale
+  managedName?: string
+  onInstall?(): void
+  onLoadShowcase(target: DesktopSkillTarget, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null>
+  onOpen(): void
+  onUninstall?(): void
+  readOnly?: boolean
+  skill: DesktopSkillCatalogItem
+  statusLabel?: string
+  target: DesktopSkillTarget
+}) {
+  const stableTarget = useMemo<DesktopSkillTarget>(
+    () =>
+      target.kind === "catalog"
+        ? { id: target.id, kind: "catalog" }
+        : { kind: "installed", name: target.name, source: target.source },
+    [target.kind, target.kind === "catalog" ? target.id : target.name, target.kind === "installed" && target.source],
+  )
+  const loadShowcase = useCallback(
+    (media: DesktopSkillShowcaseMedia) => onLoadShowcase(stableTarget, media),
+    [onLoadShowcase, stableTarget],
+  )
+  const action = managedName ? (`skill.uninstall:${managedName}` as const) : (`skill.install:${skill.id}` as const)
+  return (
+    <article className="group flex min-h-72 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:border-primary/35">
+      <button
+        aria-label={`${appMessage(locale, "capabilities.viewDetails")}: ${skill.name}`}
+        className="relative block w-full overflow-hidden border-b border-border text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
+        onClick={onOpen}
+        type="button"
+      >
+        <SkillShowcaseMedia load={loadShowcase} name={skill.name} />
+        <span className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/45 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
+      <div className="flex flex-1 flex-col p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="text-sm font-semibold">{skill.name}</h4>
+          {skill.installed ? <StatusPill>{appMessage(locale, "capabilities.installed")}</StatusPill> : null}
+          {statusLabel ? <StatusPill>{statusLabel}</StatusPill> : null}
+        </div>
+        <p className="mt-2 line-clamp-3 text-xs leading-5 text-muted-foreground">{skill.description}</p>
+        <div className="mt-auto flex items-center justify-between gap-2 pt-4">
+          <Button onClick={onOpen} size="sm" variant="ghost">
+            {appMessage(locale, "capabilities.viewDetails")}
+            <ChevronRight />
+          </Button>
+          {readOnly ? null : managedName ? (
+            <Button disabled={busy !== null} onClick={onUninstall} size="sm" variant="ghost">
+              <BusyIcon active={busy === action} />
+              <Trash2 />
+              {appMessage(locale, "capabilities.uninstall")}
+            </Button>
+          ) : (
+            <Button disabled={busy !== null || skill.installed} onClick={onInstall} size="sm" variant="outline">
+              <BusyIcon active={busy === action} />
+              <Download />
+              {appMessage(locale, skill.installed ? "capabilities.installed" : "capabilities.installSkill")}
+            </Button>
+          )}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+interface SelectedSkillDetails {
+  managedName?: string
+  readOnly: boolean
+  skill: DesktopSkillCatalogItem
+  target: DesktopSkillTarget
+}
+
+function skillTargetKey(target: DesktopSkillTarget) {
+  return target.kind === "catalog" ? `catalog:${target.id}` : `installed:${target.source}:${target.name}`
+}
+
 function SkillsPanel({
   busy,
   inventory,
   locale,
   onImport,
   onInstall,
+  onLoadDetails,
+  onLoadShowcase,
   onUninstall,
 }: {
   busy: CapabilityAction | null
@@ -230,8 +344,40 @@ function SkillsPanel({
   locale: AppLocale
   onImport(): void
   onInstall(id: string): void
+  onLoadDetails(target: DesktopSkillTarget): Promise<DesktopSkillDetails>
+  onLoadShowcase(target: DesktopSkillTarget, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null>
   onUninstall(name: string): void
 }) {
+  const [selected, setSelected] = useState<SelectedSkillDetails>()
+  const [details, setDetails] = useState<DesktopSkillDetails | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const detailRequest = useRef(0)
+  const openDetails = useCallback(
+    async (next: SelectedSkillDetails) => {
+      const current = ++detailRequest.current
+      setSelected(next)
+      setDetails(null)
+      setDetailError(null)
+      setDetailLoading(true)
+      try {
+        const result = await onLoadDetails(next.target)
+        if (detailRequest.current === current) setDetails(result)
+      } catch (loadError) {
+        if (detailRequest.current === current) setDetailError(errorMessage(loadError))
+      } finally {
+        if (detailRequest.current === current) setDetailLoading(false)
+      }
+    },
+    [onLoadDetails],
+  )
+  const closeDetails = useCallback(() => {
+    detailRequest.current += 1
+    setSelected(undefined)
+    setDetails(null)
+    setDetailError(null)
+    setDetailLoading(false)
+  }, [])
   return (
     <div className="space-y-6" role="tabpanel">
       <div className="flex items-start justify-between gap-4">
@@ -248,52 +394,29 @@ function SkillsPanel({
       <section className="space-y-3">
         <SectionTitle>{appMessage(locale, "capabilities.includedSkills")}</SectionTitle>
         {inventory.catalog.length ? (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {inventory.catalog.map((skill) => {
               const managed = inventory.skills.find((candidate) => candidate.name === skill.id && candidate.managed)
-              const action = managed
-                ? (`skill.uninstall:${managed.name}` as const)
-                : (`skill.install:${skill.id}` as const)
+              const target = { id: skill.id, kind: "catalog" } as const
+              const selection: SelectedSkillDetails = {
+                managedName: managed?.name,
+                readOnly: false,
+                skill,
+                target,
+              }
               return (
-                <article
-                  className="flex min-h-32 flex-col rounded-xl border border-border bg-card p-4 shadow-sm"
+                <SkillCatalogCard
+                  busy={busy}
                   key={skill.id}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="text-sm font-semibold">{skill.name}</h4>
-                        {skill.installed ? (
-                          <StatusPill>{appMessage(locale, "capabilities.installed")}</StatusPill>
-                        ) : null}
-                      </div>
-                      <p className="mt-2 text-xs leading-5 text-muted-foreground">{skill.description}</p>
-                    </div>
-                    {managed ? (
-                      <Button
-                        disabled={busy !== null}
-                        onClick={() => onUninstall(managed.name)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        <BusyIcon active={busy === action} />
-                        <Trash2 />
-                        {appMessage(locale, "capabilities.uninstall")}
-                      </Button>
-                    ) : (
-                      <Button
-                        disabled={busy !== null || skill.installed}
-                        onClick={() => onInstall(skill.id)}
-                        size="sm"
-                        variant="outline"
-                      >
-                        <BusyIcon active={busy === action} />
-                        <Download />
-                        {appMessage(locale, skill.installed ? "capabilities.installed" : "capabilities.installSkill")}
-                      </Button>
-                    )}
-                  </div>
-                </article>
+                  locale={locale}
+                  managedName={managed?.name}
+                  onInstall={() => onInstall(skill.id)}
+                  onLoadShowcase={onLoadShowcase}
+                  onOpen={() => void openDetails(selection)}
+                  onUninstall={() => managed && onUninstall(managed.name)}
+                  skill={skill}
+                  target={target}
+                />
               )
             })}
           </div>
@@ -305,36 +428,37 @@ function SkillsPanel({
       <section className="space-y-3">
         <SectionTitle>{appMessage(locale, "capabilities.availableSkills")}</SectionTitle>
         {inventory.skills.length ? (
-          <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {inventory.skills.map((skill) => {
-              const action = `skill.uninstall:${skill.name}` as const
+              const catalog = inventory.catalog.find((candidate) => candidate.id === skill.name)
+              const target = { kind: "installed", name: skill.name, source: skill.source } as const
+              const card: DesktopSkillCatalogItem = {
+                description: skill.description ?? catalog?.description ?? "",
+                id: skill.name,
+                installed: skill.managed,
+                name: skill.displayName ?? catalog?.name ?? skill.name,
+              }
+              const readOnly = skill.source === "global"
+              const selection: SelectedSkillDetails = {
+                managedName: skill.managed ? skill.name : undefined,
+                readOnly,
+                skill: card,
+                target,
+              }
               return (
-                <div
-                  className="flex items-center justify-between gap-4 px-4 py-3"
+                <SkillCatalogCard
+                  busy={busy}
                   key={`${skill.source}:${skill.name}`}
-                >
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-sm font-medium">{skill.name}</p>
-                      <StatusPill>
-                        {appMessage(
-                          locale,
-                          skill.source === "global" ? "capabilities.globalReadOnly" : "capabilities.managed",
-                        )}
-                      </StatusPill>
-                    </div>
-                    {skill.description ? (
-                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{skill.description}</p>
-                    ) : null}
-                  </div>
-                  {skill.managed ? (
-                    <Button disabled={busy !== null} onClick={() => onUninstall(skill.name)} size="sm" variant="ghost">
-                      <BusyIcon active={busy === action} />
-                      <Trash2 />
-                      {appMessage(locale, "capabilities.uninstall")}
-                    </Button>
-                  ) : null}
-                </div>
+                  locale={locale}
+                  managedName={skill.managed ? skill.name : undefined}
+                  onLoadShowcase={onLoadShowcase}
+                  onOpen={() => void openDetails(selection)}
+                  onUninstall={() => onUninstall(skill.name)}
+                  readOnly={readOnly}
+                  skill={card}
+                  statusLabel={appMessage(locale, readOnly ? "capabilities.globalReadOnly" : "capabilities.managed")}
+                  target={target}
+                />
               )
             })}
           </div>
@@ -342,6 +466,25 @@ function SkillsPanel({
           <EmptySection>{appMessage(locale, "capabilities.noSkills")}</EmptySection>
         )}
       </section>
+
+      {selected ? (
+        <SkillDetailDialog
+          busy={busy !== null}
+          details={details}
+          error={detailError}
+          installed={selected.skill.installed}
+          key={skillTargetKey(selected.target)}
+          loading={detailLoading}
+          locale={locale}
+          managedName={selected.managedName}
+          onClose={closeDetails}
+          onInstall={() => selected.target.kind === "catalog" && onInstall(selected.target.id)}
+          onRetry={() => void openDetails(selected)}
+          onUninstall={() => selected.managedName && onUninstall(selected.managedName)}
+          readOnly={selected.readOnly}
+          skill={selected.skill}
+        />
+      ) : null}
     </div>
   )
 }
@@ -354,6 +497,7 @@ function PluginsPanel({
   onInstall,
   onInstallSkill,
   onUninstall,
+  skills,
 }: {
   busy: CapabilityAction | null
   inventory: WebPluginInventory
@@ -362,9 +506,19 @@ function PluginsPanel({
   onInstall(id: string): void
   onInstallSkill(id: string): void
   onUninstall(id: string): void
+  skills: DesktopSkillInventory | null
 }) {
   const catalogIds = new Set(inventory.catalog.map((plugin) => plugin.id))
   const imported = inventory.installed.filter((plugin) => !catalogIds.has(plugin.id))
+  const installedSkillNames = new Set(skills?.skills.filter((skill) => skill.managed).map((skill) => skill.name))
+  const hasCompanionSkill = (plugin: WebPluginManifest | WebPluginCatalogItem) => {
+    if (!plugin.skill) return false
+    if ("companionSkillName" in plugin && plugin.companionSkillName) {
+      return installedSkillNames.has(plugin.companionSkillName)
+    }
+    const segments = plugin.skill.split("/")
+    return installedSkillNames.has(segments.at(-2) ?? "")
+  }
   return (
     <div className="space-y-6" role="tabpanel">
       <div className="flex items-start justify-between gap-4">
@@ -385,6 +539,7 @@ function PluginsPanel({
             {inventory.catalog.map((plugin) => (
               <PluginCard
                 busy={busy}
+                companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed={plugin.installed}
                 installedVersion={plugin.installedVersion}
                 key={plugin.id}
@@ -409,6 +564,7 @@ function PluginsPanel({
             {imported.map((plugin) => (
               <PluginCard
                 busy={busy}
+                companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed
                 key={plugin.id}
                 locale={locale}
@@ -471,6 +627,8 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             locale={locale}
             onImport={props.onImportSkill}
             onInstall={props.onInstallSkill}
+            onLoadDetails={props.onLoadSkillDetails}
+            onLoadShowcase={props.onLoadSkillShowcase}
             onUninstall={props.onUninstallSkill}
           />
         ) : props.tab === "plugins" && props.plugins ? (
@@ -482,6 +640,7 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             onInstall={props.onInstallPlugin}
             onInstallSkill={props.onInstallPluginSkill}
             onUninstall={props.onUninstallPlugin}
+            skills={props.skills}
           />
         ) : (
           <EmptySection>{appMessage(locale, "capabilities.unavailable")}</EmptySection>
@@ -598,6 +757,14 @@ function useCapabilityManagement({
     },
     [busy, refresh],
   )
+  const loadSkillDetails = useCallback(
+    (target: DesktopSkillTarget) => skillClient.getSkillDetails({ target }),
+    [skillClient],
+  )
+  const loadSkillShowcase = useCallback(
+    (target: DesktopSkillTarget, media: DesktopSkillShowcaseMedia) => skillClient.getSkillShowcase({ media, target }),
+    [skillClient],
+  )
 
   return {
     busy,
@@ -609,6 +776,8 @@ function useCapabilityManagement({
     onInstallPluginSkill: (pluginId) =>
       void mutate(`plugin.skill:${pluginId}`, () => skillClient.installPluginSkill({ pluginId })),
     onInstallSkill: (id) => void mutate(`skill.install:${id}`, () => skillClient.installCatalogSkill({ id })),
+    onLoadSkillDetails: loadSkillDetails,
+    onLoadSkillShowcase: loadSkillShowcase,
     onTabChange: setTab,
     onUninstallPlugin: (id) => void mutate(`plugin.uninstall:${id}`, () => pluginClient.uninstallPlugin({ id })),
     onUninstallSkill: (name) => void mutate(`skill.uninstall:${name}`, () => skillClient.uninstallSkill({ name })),

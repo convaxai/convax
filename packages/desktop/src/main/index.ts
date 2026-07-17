@@ -18,22 +18,31 @@ import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
+import { createCompositeAgentToolProvider } from "./composite-agent-tools"
 import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
+import { desktopBuiltinSkillPresentations } from "./builtin-skill-presentations"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
-import {
-  createWebPluginAssetHandler,
-  webPluginAssetPrivileges,
-  webPluginAssetScheme,
-} from "./plugin-asset-protocol"
+import { createWebPluginAssetHandler, webPluginAssetPrivileges, webPluginAssetScheme } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { WebPluginManager } from "./plugin-manager"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
 import { registerSkillManagementIpc } from "./skill-management-ipc"
 import { DesktopSkillManager } from "./skill-manager"
+import { provisionDefaultCapabilities } from "./default-capability-provisioner"
+import { JianyingCanvasService } from "./jianying-canvas-service"
+import { createJianyingAgentToolProvider } from "./jianying-agent-tools"
+import { MacOSJianyingDeepLinkTransport } from "./jianying-deeplink"
+import { registerJianyingIpc } from "./jianying-ipc"
+import { createJianyingNativeAdapter, JianyingIntegrationService } from "./jianying-service"
+import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
+import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
+import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
+import { RemoteCapabilityInstaller } from "./remote-capability-installer"
+import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 
 const trustedWebContents = new Set<number>()
 type CloseGate = "approved" | "flushing" | "idle"
@@ -55,9 +64,9 @@ function isTrustedRendererUrl(value: string) {
   try {
     const actual = new URL(value)
     const expected = new URL(trustedRendererUrl)
-    return actual.protocol === expected.protocol
-      && actual.host === expected.host
-      && actual.pathname === expected.pathname
+    return (
+      actual.protocol === expected.protocol && actual.host === expected.host && actual.pathname === expected.pathname
+    )
   } catch {
     return false
   }
@@ -141,7 +150,21 @@ function startApplication() {
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
-    const pluginManager = new WebPluginManager(join(userDataDirectory, "plugins"))
+    const pluginManager = new WebPluginManager(
+      join(userDataDirectory, "plugins"),
+      {},
+      desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
+    )
+    for (const item of desktopBuiltinPluginCatalog) {
+      await pluginManager
+        .claimInstalledBuiltinBundle(
+          item.bundle,
+          "legacyBundleDigests" in item ? { legacyBundleDigests: item.legacyBundleDigests } : {},
+        )
+        .catch((error) => {
+          console.warn(`Could not claim installed built-in Plugin ${item.manifest.id}`, error)
+        })
+    }
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
@@ -150,9 +173,26 @@ function startApplication() {
       new ProjectCanvasResourcePreparation(projectManager),
       canvasApplication,
     )
+    const jianyingIntegration = new JianyingIntegrationService(
+      createJianyingNativeAdapter({
+        transport: new MacOSJianyingDeepLinkTransport(),
+      }),
+    )
+    const jianyingBuiltin = desktopBuiltinPluginCatalog.find((item) => item.manifest.id === jianyingBuiltinPluginId)
+    if (!jianyingBuiltin || jianyingBuiltin.manifest.version !== jianyingBuiltinPluginVersion) {
+      throw new Error("The built-in JianYing Plugin catalog entry does not match its host contract")
+    }
+    const isJianyingEnabled = () => pluginManager.isBuiltinBundleInstalled(jianyingBuiltin.bundle)
+    const jianying = new JianyingCanvasService({
+      documents: canvasDocuments,
+      integration: jianyingIntegration,
+      isEnabled: isJianyingEnabled,
+      projects: projectManager,
+    })
     const ipcSecurity = {
-      isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) => trustedWebContents.has(event.sender.id)
-        && Boolean(event.senderFrame && isTrustedRendererUrl(event.senderFrame.url)),
+      isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) =>
+        trustedWebContents.has(event.sender.id) &&
+        Boolean(event.senderFrame && isTrustedRendererUrl(event.senderFrame.url)),
     }
     const canvasRenderer = createCanvasRendererBridge({
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -162,11 +202,26 @@ function startApplication() {
       configDirectory: openCodeConfigDirectory,
       protectedPathPatterns: [".convax", ".convax/**", "**/.convax", "**/.convax/**"],
       protectedPaths: [".convax"],
-      toolProvider: createCanvasAgentToolProvider({
-        application: canvasApplication,
-        renderer: canvasRenderer,
-        resources: canvasResources,
-      }),
+      toolProvider: createCompositeAgentToolProvider([
+        createCanvasAgentToolProvider({
+          application: canvasApplication,
+          renderer: canvasRenderer,
+          resources: canvasResources,
+        }),
+        createJianyingAgentToolProvider(jianying, {
+          isEnabled: async () => process.platform === "darwin" && (await isJianyingEnabled()),
+          async resolveActiveCanvas() {
+            const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+            return snapshot
+              ? {
+                  canvasId: snapshot.documentId,
+                  revision: snapshot.revision,
+                  scopeId: snapshot.scopeId,
+                }
+              : null
+          },
+        }),
+      ]),
       toolServerName: "convax",
     })
     const skillManager = new DesktopSkillManager(
@@ -174,21 +229,55 @@ function startApplication() {
       agentRuntime,
       userDataDirectory,
       desktopBuiltinSkillCatalog,
+      desktopBuiltinSkillPresentations,
     )
+    const remoteCapabilities = new RemoteCapabilityInstaller({
+      builtinPlugins: desktopBuiltinPluginCatalog,
+      builtinSkills: desktopBuiltinSkillCatalog,
+      pluginManager,
+      registry: new RemoteCapabilityRegistryClient({
+        cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
+        fetch: createElectronRemoteCapabilityFetch(net),
+      }),
+      skillManager,
+    })
+    await provisionDefaultCapabilities({
+      catalog: desktopBuiltinPluginCatalog,
+      pluginManager,
+      skillManager,
+      stateFile: join(userDataDirectory, "default-capabilities.json"),
+    }).catch((error) => {
+      console.error("Could not provision default Convax capabilities", error)
+    })
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposeJianyingIpc = registerJianyingIpc(jianying, {
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      async resolveActiveCanvas() {
+        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+        return snapshot
+          ? {
+              canvasId: snapshot.documentId,
+              revision: snapshot.revision,
+              scopeId: snapshot.scopeId,
+            }
+          : null
+      },
+    })
     const disposePluginManagementIpc = registerPluginManagementIpc(
       pluginManager,
       desktopBuiltinPluginCatalog,
       ipcSecurity.isTrustedSender,
+      remoteCapabilities,
     )
     const disposeSkillManagementIpc = registerSkillManagementIpc(
       skillManager,
       projectManager,
       pluginManager,
       ipcSecurity.isTrustedSender,
+      remoteCapabilities,
     )
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,
@@ -207,9 +296,12 @@ function startApplication() {
         },
       },
     })
-    protocol.handle(webPluginAssetScheme, createWebPluginAssetHandler(pluginManager, {
-      rendererUrl: trustedRendererUrl,
-    }))
+    protocol.handle(
+      webPluginAssetScheme,
+      createWebPluginAssetHandler(pluginManager, {
+        rendererUrl: trustedRendererUrl,
+      }),
+    )
     protocol.handle("convax-asset", async (request) => {
       try {
         const url = new URL(request.url)
@@ -227,6 +319,7 @@ function startApplication() {
     app.once("will-quit", disposeProjectIpc)
     app.once("will-quit", disposeProjectCanvasIpc)
     app.once("will-quit", disposeCanvasDocumentIpc)
+    app.once("will-quit", disposeJianyingIpc)
     app.once("will-quit", disposePluginManagementIpc)
     app.once("will-quit", disposeSkillManagementIpc)
     app.once("will-quit", disposeAgentIpc)
@@ -236,14 +329,17 @@ function startApplication() {
       event.preventDefault()
       if (quitGate === "flushing") return
       quitGate = "flushing"
-      void projectManager.flushPendingWrites().then(async () => {
-        await agentRuntime.dispose()
-        quitGate = "approved"
-        app.quit()
-      }).catch((error) => {
-        quitGate = "idle"
-        console.error("Convax stayed open because project files could not be saved", error)
-      })
+      void projectManager
+        .flushPendingWrites()
+        .then(async () => {
+          await agentRuntime.dispose()
+          quitGate = "approved"
+          app.quit()
+        })
+        .catch((error) => {
+          quitGate = "idle"
+          console.error("Convax stayed open because project files could not be saved", error)
+        })
     })
 
     createWindow(projectManager)

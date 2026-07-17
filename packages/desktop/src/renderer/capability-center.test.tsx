@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient, WebPluginInventory } from "../plugin-contracts"
-import type { DesktopSkillClient, DesktopSkillInventory } from "../skill-management-contracts"
+import type { DesktopSkillClient, DesktopSkillDetails, DesktopSkillInventory } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
 import {
   CapabilityCenter,
@@ -11,6 +11,14 @@ import {
 } from "./capability-center"
 
 const noop = () => undefined
+
+const skillDetails: DesktopSkillDetails = {
+  description: "Plan a visual sequence with Canvas tools.",
+  files: [{ content: "# Canvas Storyboard", kind: "text", path: "SKILL.md", size: 19 }],
+  id: "storyboard",
+  name: "Canvas Storyboard",
+  version: "0.1.0",
+}
 
 const baseDialogProps = {
   busy: null,
@@ -22,6 +30,8 @@ const baseDialogProps = {
   onInstallPlugin: noop,
   onInstallPluginSkill: noop,
   onInstallSkill: noop,
+  onLoadSkillDetails: mock(async () => skillDetails),
+  onLoadSkillShowcase: mock(async () => null),
   onTabChange: noop,
   onUninstallPlugin: noop,
   onUninstallSkill: noop,
@@ -42,6 +52,7 @@ const skillInventory: DesktopSkillInventory = {
   skills: [
     {
       description: "Installed by Convax",
+      displayName: "Canvas Storyboard",
       location: "/managed/storyboard/SKILL.md",
       managed: true,
       name: "storyboard",
@@ -87,6 +98,8 @@ const pluginInventory: WebPluginInventory = {
 }
 
 const skillClient: DesktopSkillClient = {
+  getSkillDetails: mock(async () => skillDetails),
+  getSkillShowcase: mock(async () => null),
   importSkill: mock(async () => null),
   installCatalogSkill: mock(async () => skillInventory.skills[0]!),
   installPluginSkill: mock(async () => skillInventory.skills[0]!),
@@ -126,10 +139,26 @@ describe("CapabilityCenter", () => {
     const markup = renderToStaticMarkup(<CapabilityCenterDialog {...baseDialogProps} skills={skillInventory} />)
 
     expect(markup).toContain("Canvas Storyboard")
+    expect(markup).toContain("View details")
     expect(markup).toContain("Global · read only")
     expect(markup).toContain("Discovered from OpenCode")
     expect(markup).toContain("Uninstall")
+    expect(markup.match(/aspect-video/g)).toHaveLength(3)
     expect(markup).not.toContain("/global/review")
+  })
+
+  test("gives a discovered global Skill the same preview interaction without mutation actions", () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} skills={{ catalog: [], skills: [skillInventory.skills[1]!] }} />,
+    )
+
+    expect(markup).toContain("review")
+    expect(markup).toContain("Discovered from OpenCode")
+    expect(markup).toContain("Global · read only")
+    expect(markup).toContain("View details")
+    expect(markup).toContain("aspect-video")
+    expect(markup).not.toContain("Install Skill")
+    expect(markup).not.toContain("Uninstall")
   })
 
   test("keeps a Plugin companion Skill as an explicit separate install", () => {
@@ -146,6 +175,39 @@ describe("CapabilityCenter", () => {
       "Ready on Canvas · Return to Canvas, then right-click or press Tab to add 3D Director Stage.",
     )
     expect(markup).toContain(appMessage("en", "capabilities.pluginsDescription"))
+  })
+
+  test("shows an installed companion Skill without offering a duplicate install", () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        plugins={{
+          catalog: [
+            {
+              ...pluginInventory.catalog[0]!,
+              id: "jianying-editor",
+              skill: "skills/jianying-editor/SKILL.md",
+            },
+          ],
+          installed: [],
+        }}
+        skills={{
+          catalog: [],
+          skills: [
+            {
+              location: "/managed/jianying-editor/SKILL.md",
+              managed: true,
+              name: "jianying-editor",
+              source: "managed",
+            },
+          ],
+        }}
+        tab="plugins"
+      />,
+    )
+
+    expect(markup).toContain("Installed")
+    expect(markup).not.toContain("Install companion Skill")
   })
 
   test("names install actions by capability type instead of using an ambiguous generic action", () => {
@@ -220,6 +282,6 @@ describe("CapabilityCenter", () => {
 
     expect(loading).toContain("Loading capabilities")
     expect(failed).toContain("Skill discovery failed")
-    expect(failed).toContain("No included Skills are available yet")
+    expect(failed).toContain("The Skill marketplace is empty")
   })
 })

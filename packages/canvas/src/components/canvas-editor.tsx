@@ -116,6 +116,12 @@ import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-r
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
 import {
+  CanvasSelectionActionExecutor,
+  createCanvasSelectionActionContext,
+  getVisibleCanvasSelectionActions,
+  type CanvasSelectionAction,
+} from "../selection-actions"
+import {
   CanvasServicesProvider,
   type CanvasServices,
   useCanvasService,
@@ -230,6 +236,7 @@ export interface CanvasEditorProps {
   onlyRenderVisibleElements?: boolean
   onDocumentChange?: (document: CanvasDocument) => void
   readOnly?: boolean
+  selectionActions?: readonly CanvasSelectionAction[]
   services: CanvasServices
   title?: string
   viewId?: string
@@ -343,8 +350,8 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   )
 
   const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
-  const selectedNodeIds = [...selection.nodeIds]
-  const selectedEdgeIds = [...selection.edgeIds]
+  const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
+  const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
   const hasNodeOnlySelection = isNodeOnlySelectionContext(selectionContext)
   const nodeById = useMemo(
@@ -562,6 +569,60 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       notificationService?.show({ kind: "error", title, description: error instanceof Error ? error.message : String(error) })
     },
     [notificationService],
+  )
+  const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
+  const selectionActionsMountedRef = useRef(true)
+  const selectionActionErrorRef = useRef(notifyError)
+  const selectionActionExecutorRef = useRef<CanvasSelectionActionExecutor | null>(null)
+  selectionActionErrorRef.current = notifyError
+  if (!selectionActionExecutorRef.current) {
+    selectionActionExecutorRef.current = new CanvasSelectionActionExecutor({
+      onError: (action, error) => selectionActionErrorRef.current(`Could not run ${action.label}`, error),
+      onPendingChange: () => {
+        if (selectionActionsMountedRef.current) refreshSelectionActionState()
+      },
+    })
+  }
+  const selectionActionExecutor = selectionActionExecutorRef.current
+  const selectionActionController = useMemo(
+    () => new AbortController(),
+    [history.document, readOnly, selectedEdgeIds, selectedNodeIds],
+  )
+  const selectionActionContext = useMemo(
+    () => createCanvasSelectionActionContext(
+      history.document,
+      selectedNodeIds,
+      selectedEdgeIds,
+      selectionActionController.signal,
+    ),
+    [history.document, selectedEdgeIds, selectedNodeIds, selectionActionController],
+  )
+  const visibleSelectionActions = useMemo(
+    () => getVisibleCanvasSelectionActions(props.selectionActions ?? [], selectionActionContext),
+    [props.selectionActions, selectionActionContext],
+  )
+  useEffect(() => {
+    selectionActionsMountedRef.current = true
+    return () => {
+      selectionActionsMountedRef.current = false
+    }
+  }, [])
+  useLayoutEffect(() => {
+    refreshSelectionActionState()
+    return () => {
+      selectionActionController.abort()
+      selectionActionExecutor.reset({ notify: false })
+    }
+  }, [selectionActionController, selectionActionExecutor])
+  const executeSelectionAction = useCallback(
+    (action: CanvasSelectionAction) => {
+      void selectionActionExecutor.execute(action, selectionActionContext)
+    },
+    [selectionActionContext, selectionActionExecutor],
+  )
+  const isSelectionActionPending = useCallback(
+    (actionId: string) => selectionActionExecutor.isPending(actionId),
+    [selectionActionExecutor],
   )
   const startSave = useCallback((document: CanvasDocument) => {
     if (!persistenceService || loadError || document.revision === 0) {
@@ -1164,11 +1225,14 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       canUpload: Boolean(uploadService),
       fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
+      visibleSelectionActions,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
       cancelGesture: () => dispatch({ type: "cancel-gesture" }),
       endGesture: () => dispatch({ type: "end-gesture" }),
       commit,
       duplicateNode,
+      executeSelectionAction,
+      isSelectionActionPending,
       quickConnect,
       removeNode,
       replaceNodeMedia,
@@ -1178,7 +1242,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       commit,
       connectionNodeTypes,
       duplicateNode,
+      executeSelectionAction,
       history.document,
+      isSelectionActionPending,
       props.fileRendererRegistry,
       quickConnect,
       readOnly,
@@ -1186,8 +1252,10 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       replaceNodeMedia,
       selectNodes,
       selection,
+      selectionActionStateVersion,
       selectionContext,
       uploadService,
+      visibleSelectionActions,
     ],
   )
   const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
@@ -1519,11 +1587,14 @@ function CanvasEditorContent(props: CanvasEditorProps & {
 
               {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && !readOnly ? (
                 <SelectionToolbar
+                  actions={visibleSelectionActions}
                   canArrange={canArrangeSelection}
                   canDistribute={canDistributeSelection}
                   canGroup={selectionContext.kind === "multi-node"}
                   canUngroup={hasSingleGroupSelection}
+                  isActionPending={isSelectionActionPending}
                   onAlign={align}
+                  onAction={executeSelectionAction}
                   onDelete={remove}
                   onDistribute={distribute}
                   onDuplicate={duplicate}
@@ -1764,11 +1835,14 @@ const selectionLayoutActions = [
 ] satisfies readonly { layout: CanvasLayout; icon: ReactNode; label: string }[]
 
 function SelectionToolbar(props: {
+  actions: readonly CanvasSelectionAction[]
   canArrange: boolean
   canDistribute: boolean
   canGroup: boolean
   canUngroup: boolean
+  isActionPending: (actionId: string) => boolean
   onAlign: (direction: CanvasAlign) => void
+  onAction: (action: CanvasSelectionAction) => void
   onDelete: () => void
   onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
@@ -1803,6 +1877,20 @@ function SelectionToolbar(props: {
       <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" tooltipSide="top" />
       <IconButton disabled={!props.canGroup} icon={<Group />} label="Group" onClick={props.onGroup} shortcut="⌘G" tooltipSide="top" />
       <IconButton disabled={!props.canUngroup} icon={<Ungroup />} label="Ungroup" onClick={props.onUngroup} shortcut="⇧⌘G" tooltipSide="top" />
+      {props.actions.length > 0 ? <span className="mx-1 h-5 w-px bg-border" /> : null}
+      {props.actions.map((action) => {
+        const pending = props.isActionPending(action.id)
+        return (
+          <IconButton
+            key={action.id}
+            disabled={pending}
+            icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+            label={action.label}
+            onClick={() => props.onAction(action)}
+            tooltipSide="top"
+          />
+        )
+      })}
       <span className="mx-1 h-5 w-px bg-border" />
       <div ref={menuRef} className="relative">
         <IconButton

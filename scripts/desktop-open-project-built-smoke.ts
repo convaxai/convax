@@ -148,7 +148,7 @@ async function evaluatePluginFrame(mainDebugger: string, pluginId: string, expre
   )
 }
 
-async function evaluatePluginFrames(mainDebugger: string, pluginId: string, expression: string) {
+async function evaluatePluginFrames(mainDebugger: string, pluginId: string, expression: string, expectedCount = 1) {
   const electronRequireBase = path.join(desktopRoot, "package.json")
   return evaluateStable(
     mainDebugger,
@@ -162,7 +162,9 @@ async function evaluatePluginFrames(mainDebugger: string, pluginId: string, expr
         .flatMap((candidate) => candidate.webContents.mainFrame.framesInSubtree)
         .filter((candidate) => !candidate.detached
           && candidate.url.startsWith(${JSON.stringify(`convax-plugin://${pluginId}/`)}))
-      if (frames.length) return Promise.all(frames.map((frame) => frame.executeJavaScript(${JSON.stringify(expression)}, true)))
+      if (frames.length >= ${expectedCount}) {
+        return Promise.all(frames.map((frame) => frame.executeJavaScript(${JSON.stringify(expression)}, true)))
+      }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     throw new Error(${JSON.stringify(`Timed out waiting for ${pluginId} WebFrameMain instances`)})
@@ -231,13 +233,6 @@ await fs.mkdir(path.dirname(seededDirectorPluginRoot), { recursive: true })
 await fs.cp(path.join(desktopRoot, "resources", "plugins", "storyai-3d-director-desk"), seededDirectorPluginRoot, {
   recursive: true,
 })
-const seededDirectorManifestPath = path.join(seededDirectorPluginRoot, "manifest.json")
-const seededDirectorManifest = JSON.parse(await fs.readFile(seededDirectorManifestPath, "utf8")) as {
-  version?: string
-}
-seededDirectorManifest.version = "0.0.1-convax.1"
-await fs.writeFile(seededDirectorManifestPath, `${JSON.stringify(seededDirectorManifest, null, 2)}\n`)
-
 const rendererPortReservation = reservePort()
 const inspectorPortReservation = reservePort()
 const rendererPort = rendererPortReservation.port
@@ -273,7 +268,42 @@ try {
     const electron = createRequire(${JSON.stringify(electronRequireBase)})("electron")
     electron.dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [${JSON.stringify(projectRoot)}] })
     electron.ipcMain.removeHandler("agent:skills-list")
-    electron.ipcMain.handle("agent:skills-list", () => ({ catalog: [], skills: [] }))
+    electron.ipcMain.handle("agent:skills-list", () => ({
+      catalog: [{
+        description: "Convert a brief into connected, reviewable shot cards.",
+        id: "canvas-storyboard",
+        installed: true,
+        name: "Storyboard Builder",
+      }],
+      skills: [{
+        description: "Convert a brief into connected, reviewable shot cards.",
+        displayName: "Storyboard Builder",
+        location: "/managed/canvas-storyboard/SKILL.md",
+        managed: true,
+        name: "canvas-storyboard",
+        source: "managed",
+      }],
+    }))
+    electron.ipcMain.removeHandler("agent:skill-details")
+    electron.ipcMain.handle("agent:skill-details", (_event, input) => {
+      if (input?.target?.kind !== "installed" || input.target.name !== "canvas-storyboard") {
+        throw new Error("The smoke Skill detail target changed unexpectedly")
+      }
+      const content = [
+        "---",
+        "name: canvas-storyboard",
+        "description: Convert a brief into connected, reviewable shot cards.",
+        "---",
+        "",
+        "# Storyboard Builder",
+      ].join("\\n")
+      return {
+        description: "Convert a brief into connected, reviewable shot cards.",
+        files: [{ content, kind: "text", path: "SKILL.md", size: Buffer.byteLength(content) }],
+        id: "canvas-storyboard",
+        name: "Storyboard Builder",
+      }
+    })
     return true
   })()`,
   )
@@ -304,12 +334,14 @@ try {
     }
     const initialPlugins = await window.convax.plugins.listPlugins()
     const catalogPlugin = initialPlugins.catalog.find((plugin) => plugin.id === "storyai-3d-director-desk")
+    const installedDirector = initialPlugins.installed.find((plugin) => plugin.id === "storyai-3d-director-desk")
     if (!catalogPlugin
       || !catalogPlugin.installed
-      || catalogPlugin.installedVersion !== "0.0.1-convax.1"
+      || catalogPlugin.installedVersion !== "0.0.1-convax.2"
       || catalogPlugin.version !== "0.0.1-convax.2"
-      || !catalogPlugin.updateAvailable) {
-      throw new Error("The seeded built-in Plugin update is invalid")
+      || catalogPlugin.updateAvailable
+      || installedDirector?.trustedBuiltin !== true) {
+      throw new Error("The exact legacy-marker-free built-in Plugin was not claimed at startup")
     }
 
     const openProject = await waitFor(() => buttonWithText("Open project"), "the Open project action")
@@ -383,6 +415,45 @@ try {
       () => document.querySelector('section[aria-label="技能与插件"] [role="tablist"]'),
       "Skill and Plugin management inside Settings",
     )
+    const installedSkillCard = await waitFor(
+      () => [...document.querySelectorAll("article")]
+        .find((article) => article.textContent?.includes("Storyboard Builder")
+          && article.textContent?.includes("由 Convax 管理")),
+      "the installed Storyboard Skill card",
+    )
+    const installedSkillVideo = await waitFor(
+      () => {
+        const video = installedSkillCard.querySelector("video")
+        return video && video.readyState >= 2 ? video : null
+      },
+      "the installed Skill showcase video",
+    )
+    await waitFor(() => !installedSkillVideo.paused && installedSkillVideo.currentTime > 0, "the in-view Skill video to play")
+    const installedSkillDetails = await waitFor(
+      () => [...installedSkillCard.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === "查看详情"),
+      "the installed Skill detail action",
+    )
+    installedSkillDetails.click()
+    const skillDetailDialog = await waitFor(
+      () => [...document.querySelectorAll('[role="dialog"]')]
+        .find((dialog) => dialog.textContent?.includes("Storyboard Builder")
+          && dialog.textContent?.includes("SKILL.md")),
+      "the installed Skill detail dialog",
+    )
+    const detailLayer = skillDetailDialog.parentElement
+    if (!detailLayer || Number.parseInt(getComputedStyle(detailLayer).zIndex, 10) <= 100) {
+      throw new Error("The Skill detail dialog did not render above Settings")
+    }
+    const closeSkillDetails = await waitFor(
+      () => skillDetailDialog.querySelector('button[aria-label="关闭技能详情"]'),
+      "the installed Skill detail close action",
+    )
+    closeSkillDetails.click()
+    await waitFor(() => !document.body.contains(skillDetailDialog), "the installed Skill detail dialog to close")
+    if (!document.querySelector('[data-settings-view="true"]')) {
+      throw new Error("Closing Skill details also closed Settings")
+    }
     const pluginTab = await waitFor(
       () => [...document.querySelectorAll('[role="tab"]')]
         .find((tab) => tab.textContent?.trim() === "插件"),
@@ -396,18 +467,11 @@ try {
     ).catch(() => {
       throw new Error("The Plugin management surface did not render the built-in catalog: " + document.body.innerText)
     })
-    const updateDirectorPlugin = await waitFor(
-      () => [...directorPluginCard.querySelectorAll("button")]
-        .find((button) => button.textContent?.includes("更新插件")),
-      "the 3D Director Plugin update action",
-    )
-    updateDirectorPlugin.click()
-    await waitFor(async () => {
-      const current = await window.convax.plugins.listPlugins()
-      const installed = current.installed.find((plugin) => plugin.id === "storyai-3d-director-desk")
-      const catalog = current.catalog.find((plugin) => plugin.id === "storyai-3d-director-desk")
-      return installed?.version === "0.0.1-convax.2" && catalog?.updateAvailable === false
-    }, "the installed 3D Director Plugin to upgrade to .2")
+    if (
+      [...directorPluginCard.querySelectorAll("button")].some((button) => button.textContent?.includes("更新插件"))
+    ) {
+      throw new Error("The claimed current 3D Director Plugin incorrectly offered an update")
+    }
     const storedLanguage = JSON.parse(localStorage.getItem("convax.desktop.app-language.v1") ?? "null")
     if (storedLanguage?.language !== "zh-CN") throw new Error("The global language preference was not persisted")
     const backToApp = await waitFor(() => buttonWithText("返回应用"), "the Settings return action")
@@ -1142,16 +1206,22 @@ try {
       }
       return { ...last, timedOut: true }
     })()`,
+    2,
   )) as Array<{ rotationY?: number; signature?: string[][]; timedOut?: boolean }>
+  // Duplicate clones the durable camera snapshot, not OrbitControls' transient damping velocity.
+  // The source can therefore settle past the copy before reload; both restored views must remain
+  // non-default and newer than the earlier gesture, but they are not required to stay identical.
+  const defaultDirectorSignature = JSON.stringify(directorFrameGeometry.signature)
+  const earlierDirectorSignature = JSON.stringify(directorInteraction.signature)
   if (
     reloadedDirectors.length !== 2 ||
     reloadedDirectors.some(
       (director) =>
         !Number.isFinite(director.rotationY) ||
-        Math.abs(director.rotationY! - directorInteraction.rotationY!) > 0.000001,
-    ) ||
-    JSON.stringify(reloadedDirectors[0]?.signature) !== JSON.stringify(reloadedDirectors[1]?.signature) ||
-    JSON.stringify(reloadedDirectors[0]?.signature) === JSON.stringify(directorInteraction.signature)
+        Math.abs(director.rotationY! - directorInteraction.rotationY!) > 0.000001 ||
+        !director.signature?.length ||
+        [defaultDirectorSignature, earlierDirectorSignature].includes(JSON.stringify(director.signature)),
+    )
   ) {
     throw new Error(`Unexpected reloaded 3D Director UI: ${JSON.stringify(reloadedDirectors)}`)
   }
@@ -1181,7 +1251,7 @@ try {
     throw new Error(`Unexpected persisted Panorama Canvas: ${JSON.stringify(panoramaDocument)}`)
   }
   console.log(
-    `Desktop Settings, Open Project, 3D Plugin, and Panorama Viewer smoke passed (${summary.projectId}, canvas-main)`,
+    `Desktop Settings, installed Skill showcase/detail, Open Project, 3D Plugin, and Panorama Viewer smoke passed (${summary.projectId}, canvas-main)`,
   )
 } catch (error) {
   child.kill("SIGKILL")

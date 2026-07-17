@@ -1,18 +1,37 @@
 import { describe, expect, test } from "bun:test"
 import { CanvasApplicationService, CanvasResourceBusinessService } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
+import type { CanvasViewSnapshot } from "@convax/canvas/view"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
+
+function activeCanvasSnapshot(
+  revision: number,
+  input: { canvasId?: string; scopeId?: string } = {},
+): CanvasViewSnapshot {
+  return {
+    documentId: input.canvasId ?? "canvas-main",
+    revision,
+    scopeId: input.scopeId ?? "project-a",
+    selectedEdgeIds: [],
+    selectedNodeIds: [],
+    viewId: "desktop-main",
+    viewport: { x: 0, y: 0, zoom: 1 },
+  }
+}
 
 describe("Canvas Agent tools", () => {
   test("maps the Agent scope to generic Canvas document and live-view scopes", async () => {
     const executed: unknown[] = []
+    const queried: unknown[] = []
     const reloaded: unknown[] = []
     const viewed: unknown[] = []
     const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 4 }
+    let liveRevision = 4
     const provider = createCanvasAgentToolProvider({
       application: {
         async execute(request) {
           executed.push(request)
+          liveRevision = 5
           return {
             affectedNodeIds: ["node-a"],
             changed: true,
@@ -22,11 +41,15 @@ describe("Canvas Agent tools", () => {
             warnings: [],
           }
         },
-        async query() {
+        async query(ref, query) {
+          queried.push({ query, ref })
           return { nodes: [], revision: 4, storageVersion: "v4" }
         },
       },
       renderer: {
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(liveRevision)
+        },
         async executeView(input) {
           viewed.push(input)
           return {
@@ -56,6 +79,17 @@ describe("Canvas Agent tools", () => {
     })
     const scope = { directory: "/project/a", scopeId: "project-a" }
 
+    await provider.callTool(scope, "canvas_query_nodes", {
+      canvasId: "canvas-main",
+      limit: 10,
+    })
+    expect(queried).toEqual([
+      {
+        query: { ids: undefined, kinds: undefined, limit: 10, relatedToNodeIds: undefined, text: undefined },
+        ref: { canvasId: "canvas-main", scopeId: "project-a" },
+      },
+    ])
+
     const result = await provider.callTool(scope, "canvas_apply_primitive", {
       canvasId: "canvas-main",
       command: { delta: { x: 12, y: -3 }, nodeIds: ["node-a"], type: "nodes.move" },
@@ -64,15 +98,17 @@ describe("Canvas Agent tools", () => {
     })
 
     expect(result).toMatchObject({ changed: true, revision: 5, sync: { reloaded: true } })
-    expect(executed).toMatchObject([{
-      canvasId: "canvas-main",
-      envelope: {
-        actor: { id: "opencode:project-a", kind: "agent" },
-        command: { type: "nodes.move" },
-        expectedRevision: 4,
+    expect(executed).toMatchObject([
+      {
+        canvasId: "canvas-main",
+        envelope: {
+          actor: { id: "opencode:project-a", kind: "agent" },
+          command: { type: "nodes.move" },
+          expectedRevision: 4,
+        },
+        scopeId: "project-a",
       },
-      scopeId: "project-a",
-    }])
+    ])
     expect(reloaded).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
 
     await provider.callTool(scope, "canvas_view", {
@@ -80,25 +116,232 @@ describe("Canvas Agent tools", () => {
       command: { nodeIds: ["node-a"], select: true, type: "nodes.reveal" },
       expectedRevision: 5,
     })
-    expect(viewed).toMatchObject([{
-      expectedDocumentId: "canvas-main",
-      expectedRevision: 5,
-      expectedScopeId: "project-a",
-      viewId: "desktop-main",
-    }])
+    expect(viewed).toMatchObject([
+      {
+        expectedDocumentId: "canvas-main",
+        expectedRevision: 5,
+        expectedScopeId: "project-a",
+        viewId: "desktop-main",
+      },
+    ])
+  })
+
+  test("rejects model-selected inactive Canvas ids for every Canvas tool", async () => {
+    const calls = { execute: 0, query: 0, resources: 0, view: 0 }
+    const snapshotViewIds: string[] = []
+    const provider = createCanvasAgentToolProvider({
+      application: {
+        async execute() {
+          calls.execute += 1
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          calls.query += 1
+          throw new Error("Unexpected query")
+        },
+      },
+      renderer: {
+        async getViewSnapshot(viewId) {
+          snapshotViewIds.push(viewId)
+          return activeCanvasSnapshot(7)
+        },
+        async executeView() {
+          calls.view += 1
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          calls.resources += 1
+          throw new Error("Unexpected resources")
+        },
+      },
+    })
+    const scope = { directory: "/project", scopeId: "project-a" }
+    const requests = [
+      ["canvas_query_nodes", { canvasId: "canvas-inactive" }],
+      [
+        "canvas_add_resources",
+        {
+          anchor: { x: 0, y: 0 },
+          canvasId: "canvas-inactive",
+          commandId: "inactive-add",
+          expectedRevision: 7,
+          sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
+        },
+      ],
+      [
+        "canvas_apply_primitive",
+        {
+          canvasId: "canvas-inactive",
+          command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
+          commandId: "inactive-move",
+          expectedRevision: 7,
+        },
+      ],
+      [
+        "canvas_view",
+        {
+          canvasId: "canvas-inactive",
+          command: { type: "selection.clear" },
+          expectedRevision: 7,
+        },
+      ],
+    ] as const
+
+    for (const [name, request] of requests) {
+      await expect(provider.callTool(scope, name, request)).rejects.toThrow(
+        "canvasId must match the live active Canvas",
+      )
+    }
+    expect(calls).toEqual({ execute: 0, query: 0, resources: 0, view: 0 })
+    expect(snapshotViewIds).toEqual(requests.map(() => "desktop-main"))
+  })
+
+  test("fails closed without a live Canvas or when the live Canvas belongs to another Project", async () => {
+    let liveSnapshot: CanvasViewSnapshot | null = null
+    let queryCalls = 0
+    const provider = createCanvasAgentToolProvider({
+      application: {
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          queryCalls += 1
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
+      },
+      renderer: {
+        async getViewSnapshot() {
+          return liveSnapshot
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          throw new Error("Unexpected resources")
+        },
+      },
+    })
+    const scope = { directory: "/project", scopeId: "project-a" }
+
+    await expect(
+      provider.callTool(scope, "canvas_query_nodes", {
+        canvasId: "canvas-main",
+      }),
+    ).rejects.toThrow("No live active Canvas")
+
+    liveSnapshot = activeCanvasSnapshot(0, { scopeId: "project-b" })
+    await expect(
+      provider.callTool(scope, "canvas_query_nodes", {
+        canvasId: "canvas-main",
+      }),
+    ).rejects.toThrow("outside the Agent Project scope")
+    expect(queryCalls).toBe(0)
+  })
+
+  test("rejects stale revisions before mutation or view execution", async () => {
+    const calls = { execute: 0, resources: 0, view: 0 }
+    const provider = createCanvasAgentToolProvider({
+      application: {
+        async execute() {
+          calls.execute += 1
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 8, storageVersion: "v8" }
+        },
+      },
+      renderer: {
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(8)
+        },
+        async executeView() {
+          calls.view += 1
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          calls.resources += 1
+          throw new Error("Unexpected resources")
+        },
+      },
+    })
+    const scope = { directory: "/project", scopeId: "project-a" }
+    const requests = [
+      [
+        "canvas_add_resources",
+        {
+          anchor: { x: 0, y: 0 },
+          canvasId: "canvas-main",
+          commandId: "stale-add",
+          expectedRevision: 7,
+          sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
+        },
+      ],
+      [
+        "canvas_apply_primitive",
+        {
+          canvasId: "canvas-main",
+          command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
+          commandId: "stale-move",
+          expectedRevision: 7,
+        },
+      ],
+      [
+        "canvas_view",
+        {
+          canvasId: "canvas-main",
+          command: { type: "selection.clear" },
+          expectedRevision: 7,
+        },
+      ],
+    ] as const
+
+    for (const [name, request] of requests) {
+      await expect(provider.callTool(scope, name, request)).rejects.toThrow("expectedRevision does not match")
+    }
+    expect(calls).toEqual({ execute: 0, resources: 0, view: 0 })
   })
 
   test("exposes business tools by default while validating unsafe view values", async () => {
     const provider = createCanvasAgentToolProvider({
       application: {
-        async execute() { throw new Error("Unexpected execute") },
-        async query() { return { nodes: [], revision: 0, storageVersion: "v0" } },
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
       },
       renderer: {
-        async executeView() { throw new Error("Unexpected view") },
-        async reloadDocument() { return false },
+        async getViewSnapshot() {
+          return null
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
       },
-      resources: { async addResources() { throw new Error("Unexpected resources") } },
+      resources: {
+        async addResources() {
+          throw new Error("Unexpected resources")
+        },
+      },
     })
     const definitions = await provider.listTools({ directory: "/project", scopeId: "project-a" })
     expect(definitions.map((tool) => tool.name)).toEqual([
@@ -107,36 +350,51 @@ describe("Canvas Agent tools", () => {
       "canvas_apply_primitive",
       "canvas_view",
     ])
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: "project-a" },
-      "canvas_view",
-      { canvasId: "canvas-main", command: { type: "viewport.zoom", zoom: 0 }, expectedRevision: 0 },
-    )).rejects.toThrow("command.zoom")
-    await expect(provider.callTool(
-      { directory: "/project", scopeId: "project-a" },
-      "canvas_add_resources",
-      {
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
+        canvasId: "canvas-main",
+        command: { type: "viewport.zoom", zoom: 0 },
+        expectedRevision: 0,
+      }),
+    ).rejects.toThrow("command.zoom")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_add_resources", {
         anchor: { x: 0, y: 0 },
         canvasId: "canvas-main",
         commandId: "invalid-view",
         expectedRevision: 0,
         sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
         view: { select: "yes" },
-      },
-    )).rejects.toThrow("view.select")
+      }),
+    ).rejects.toThrow("view.select")
   })
 
   test("publishes host file and directory source schemas without project-specific source kinds", async () => {
     const provider = createCanvasAgentToolProvider({
       application: {
-        async execute() { throw new Error("Unexpected execute") },
-        async query() { return { nodes: [], revision: 0, storageVersion: "v0" } },
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
       },
       renderer: {
-        async executeView() { throw new Error("Unexpected view") },
-        async reloadDocument() { return false },
+        async getViewSnapshot() {
+          return null
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
       },
-      resources: { async addResources() { throw new Error("Unexpected resources") } },
+      resources: {
+        async addResources() {
+          throw new Error("Unexpected resources")
+        },
+      },
     })
 
     const definitions = await provider.listTools({ directory: "/project", scopeId: "project-a" })
@@ -166,23 +424,33 @@ describe("Canvas Agent tools", () => {
         return { storageVersion }
       },
     })
-    const resources = new CanvasResourceBusinessService({
-      async prepare(request) {
-        preparationRequests.push(request)
-        return {
-          items: [{
-            id: "folder-source",
-            kind: "folder" as const,
-            name: "references",
-            path: "design/references",
-          }],
-        }
+    const resources = new CanvasResourceBusinessService(
+      {
+        async prepare(request) {
+          preparationRequests.push(request)
+          return {
+            items: [
+              {
+                id: "folder-source",
+                kind: "folder" as const,
+                name: "references",
+                path: "design/references",
+              },
+            ],
+          }
+        },
       },
-    }, application)
+      application,
+    )
     const provider = createCanvasAgentToolProvider({
       application,
       renderer: {
-        async executeView() { throw new Error("Unexpected view") },
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(0)
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
         async reloadDocument(ref) {
           reloadedRefs.push(ref)
           return true
@@ -191,24 +459,22 @@ describe("Canvas Agent tools", () => {
       resources,
     })
 
-    const result = await provider.callTool(
-      { directory: "/project", scopeId: "project-a" },
-      "canvas_add_resources",
-      {
-        anchor: { x: 80, y: 120 },
-        canvasId: "canvas-main",
-        commandId: "add-folder",
-        expectedRevision: 0,
-        sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder-source" }],
-      },
-    )
+    const result = await provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_add_resources", {
+      anchor: { x: 80, y: 120 },
+      canvasId: "canvas-main",
+      commandId: "add-folder",
+      expectedRevision: 0,
+      sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder-source" }],
+    })
 
     expect(result).toMatchObject({ changed: true, revision: 1, sync: { reloaded: true } })
-    expect(preparationRequests).toEqual([{
-      canvasId: "canvas-main",
-      scopeId: "project-a",
-      sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder-source" }],
-    }])
+    expect(preparationRequests).toEqual([
+      {
+        canvasId: "canvas-main",
+        scopeId: "project-a",
+        sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder-source" }],
+      },
+    ])
     expect(loadedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
     expect(savedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
     expect(reloadedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
@@ -223,12 +489,23 @@ describe("Canvas Agent tools", () => {
     let calls = 0
     const provider = createCanvasAgentToolProvider({
       application: {
-        async execute() { throw new Error("Unexpected execute") },
-        async query() { return { nodes: [], revision: 0, storageVersion: "v0" } },
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
       },
       renderer: {
-        async executeView() { throw new Error("Unexpected view") },
-        async reloadDocument() { return false },
+        async getViewSnapshot() {
+          return null
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
       },
       resources: {
         async addResources() {
@@ -245,22 +522,30 @@ describe("Canvas Agent tools", () => {
     }
     const scope = { directory: "/project", scopeId: "project-a" }
 
-    await expect(provider.callTool(scope, "canvas_add_resources", {
-      ...base,
-      sources: [{ kind: "host-directory", sourceId: "folder" }],
-    })).rejects.toThrow("sources[0].path")
-    await expect(provider.callTool(scope, "canvas_add_resources", {
-      ...base,
-      sources: [{ kind: "project-directory", path: "design", sourceId: "folder" }],
-    })).rejects.toThrow("Unsupported Canvas resource source: project-directory")
-    await expect(provider.callTool(scope, "canvas_add_resources", {
-      ...base,
-      sources: [{ kind: "host-file", path: "readme.md", sourceId: 1 }],
-    })).rejects.toThrow("sources[0].sourceId")
-    await expect(provider.callTool(scope, "canvas_add_resources", {
-      ...base,
-      sources: [{ kind: "remote-url", sourceId: "remote", url: "file:///tmp/private" }],
-    })).rejects.toThrow("must use HTTP or HTTPS")
+    await expect(
+      provider.callTool(scope, "canvas_add_resources", {
+        ...base,
+        sources: [{ kind: "host-directory", sourceId: "folder" }],
+      }),
+    ).rejects.toThrow("sources[0].path")
+    await expect(
+      provider.callTool(scope, "canvas_add_resources", {
+        ...base,
+        sources: [{ kind: "project-directory", path: "design", sourceId: "folder" }],
+      }),
+    ).rejects.toThrow("Unsupported Canvas resource source: project-directory")
+    await expect(
+      provider.callTool(scope, "canvas_add_resources", {
+        ...base,
+        sources: [{ kind: "host-file", path: "readme.md", sourceId: 1 }],
+      }),
+    ).rejects.toThrow("sources[0].sourceId")
+    await expect(
+      provider.callTool(scope, "canvas_add_resources", {
+        ...base,
+        sources: [{ kind: "remote-url", sourceId: "remote", url: "file:///tmp/private" }],
+      }),
+    ).rejects.toThrow("must use HTTP or HTTPS")
     expect(calls).toBe(0)
   })
 
@@ -268,12 +553,23 @@ describe("Canvas Agent tools", () => {
     const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 3 }
     const provider = createCanvasAgentToolProvider({
       application: {
-        async execute() { throw new Error("Unexpected execute") },
-        async query() { return { nodes: [], revision: 2, storageVersion: "v2" } },
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 2, storageVersion: "v2" }
+        },
       },
       renderer: {
-        async executeView() { throw new Error("View changed before reveal") },
-        async reloadDocument() { return true },
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(2)
+        },
+        async executeView() {
+          throw new Error("View changed before reveal")
+        },
+        async reloadDocument() {
+          return true
+        },
       },
       resources: {
         async addResources() {
@@ -289,18 +585,14 @@ describe("Canvas Agent tools", () => {
       },
     })
 
-    const result = await provider.callTool(
-      { directory: "/project", scopeId: "project-a" },
-      "canvas_add_resources",
-      {
-        anchor: { x: 0, y: 0 },
-        canvasId: "canvas-main",
-        commandId: "add-once",
-        expectedRevision: 2,
-        sources: [{ kind: "inline-text", sourceId: "source", text: "Saved" }],
-        view: { select: true },
-      },
-    )
+    const result = await provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_add_resources", {
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "add-once",
+      expectedRevision: 2,
+      sources: [{ kind: "inline-text", sourceId: "source", text: "Saved" }],
+      view: { select: true },
+    })
 
     expect(result).toMatchObject({
       changed: true,

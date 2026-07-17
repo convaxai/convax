@@ -15,6 +15,23 @@ export interface ManagedAgentSkill {
   skillFile: string
 }
 
+export interface AgentSkillInspectionFile {
+  content: Uint8Array
+  path: string
+}
+
+export interface AgentSkillInspection {
+  description: string
+  files: AgentSkillInspectionFile[]
+  name: string
+}
+
+export interface ManagedAgentSkillInspection extends AgentSkillInspection, ManagedAgentSkill {}
+
+export interface ManagedAgentSkillInstallOptions {
+  expectedName?: string
+}
+
 export const defaultManagedAgentSkillLimits: Readonly<ManagedAgentSkillLimits> = Object.freeze({
   maxFileBytes: 2 * 1024 * 1024,
   maxFiles: 512,
@@ -37,26 +54,23 @@ function errorCode(error: unknown) {
 
 function pathKey(value: string) {
   const normalized = value.normalize("NFC")
-  return process.platform === "win32" || process.platform === "darwin"
-    ? normalized.toLowerCase()
-    : normalized
+  return process.platform === "win32" || process.platform === "darwin" ? normalized.toLowerCase() : normalized
 }
 
 function isContained(parent: string, candidate: string) {
   const fromParent = relative(pathKey(parent), pathKey(candidate))
-  return fromParent === ""
-    || (fromParent !== ".." && !fromParent.startsWith(`..${sep}`) && !isAbsolute(fromParent))
+  return fromParent === "" || (fromParent !== ".." && !fromParent.startsWith(`..${sep}`) && !isAbsolute(fromParent))
 }
 
 function assertSafeSegment(segment: string) {
   if (
-    !segment
-    || segment === "."
-    || segment === ".."
-    || segment.includes("\0")
-    || /[\\/:*?"<>|\u0000-\u001f]/u.test(segment)
-    || /[. ]$/u.test(segment)
-    || windowsReservedName.test(segment)
+    !segment ||
+    segment === "." ||
+    segment === ".." ||
+    segment.includes("\0") ||
+    /[\\/:*?"<>|\u0000-\u001f]/u.test(segment) ||
+    /[. ]$/u.test(segment) ||
+    windowsReservedName.test(segment)
   ) {
     throw new Error(`Skill package contains an unsafe path segment: ${JSON.stringify(segment)}`)
   }
@@ -239,11 +253,11 @@ async function readDirectoryFiles(source: string, limits: ManagedAgentSkillLimit
       }
       const after = await lstat(absolute)
       if (
-        !after.isFile()
-        || after.isSymbolicLink()
-        || after.dev !== info.dev
-        || after.ino !== info.ino
-        || after.size !== content.byteLength
+        !after.isFile() ||
+        after.isSymbolicLink() ||
+        after.dev !== info.dev ||
+        after.ino !== info.ino ||
+        after.size !== content.byteLength
       ) {
         throw new Error(`Skill package changed while it was being imported: ${entrySegments.join("/")}`)
       }
@@ -258,6 +272,31 @@ async function readDirectoryFiles(source: string, limits: ManagedAgentSkillLimit
   await visit(source, [])
   assertFileInventory(files, limits)
   return files
+}
+
+function skillMetadata(files: readonly SkillFile[]) {
+  const skillFiles = files.filter((file) => file.path.toLowerCase() === "skill.md")
+  if (skillFiles.length !== 1 || skillFiles[0]!.path !== "SKILL.md") {
+    throw new Error("Skill package must contain exactly one root SKILL.md")
+  }
+  return parseFrontmatter(skillFiles[0]!.content)
+}
+
+function inspectedFiles(files: readonly SkillFile[]): AgentSkillInspectionFile[] {
+  return files
+    .map((file) => ({ content: Uint8Array.from(file.content), path: file.path }))
+    .sort((left, right) => left.path.localeCompare(right.path))
+}
+
+export async function inspectAgentSkillDirectory(
+  sourceDirectory: string,
+  limits?: Partial<ManagedAgentSkillLimits>,
+): Promise<AgentSkillInspection> {
+  if (!sourceDirectory || sourceDirectory.includes("\0") || !isAbsolute(sourceDirectory)) {
+    throw new Error("Skill inspection source must be an absolute path")
+  }
+  const files = await readDirectoryFiles(resolve(sourceDirectory), checkedLimits(limits))
+  return { ...skillMetadata(files), files: inspectedFiles(files) }
 }
 
 /** A bounded, non-executable store for OpenCode-compatible user Skill directories. */
@@ -297,21 +336,31 @@ export class ManagedAgentSkillStore {
     }
     const source = resolve(sourceDirectory)
     const files = await readDirectoryFiles(source, this.limits)
-    const metadata = this.metadata(files)
+    const metadata = skillMetadata(files)
     if (basename(source) !== metadata.name) {
       throw new Error("Skill directory name must exactly match the SKILL.md name")
     }
     return this.install(files, metadata)
   }
 
-  async installFromFiles(input: Readonly<Record<string, string | Uint8Array>>) {
+  async installFromFiles(
+    input: Readonly<Record<string, string | Uint8Array>>,
+    options?: Readonly<ManagedAgentSkillInstallOptions>,
+  ) {
     const files = Object.entries(input).map(([path, content]) => ({
       content: typeof content === "string" ? new TextEncoder().encode(content) : Uint8Array.from(content),
       mode: 0o644,
       path: normalizePackagePath(path),
     }))
     assertFileInventory(files, this.limits)
-    return this.install(files, this.metadata(files))
+    const metadata = skillMetadata(files)
+    if (options?.expectedName !== undefined) {
+      assertSkillName(options.expectedName)
+      if (metadata.name !== options.expectedName) {
+        throw new Error(`Skill package name does not match the expected name: ${options.expectedName}`)
+      }
+    }
+    return this.install(files, metadata)
   }
 
   async list(): Promise<ManagedAgentSkill[]> {
@@ -326,11 +375,22 @@ export class ManagedAgentSkillStore {
       }
       const directory = join(this.userDirectory, entry.name)
       const files = await readDirectoryFiles(directory, this.limits)
-      const metadata = this.metadata(files)
-      if (metadata.name !== entry.name) throw new Error(`Managed Skill directory does not match its name: ${entry.name}`)
+      const metadata = skillMetadata(files)
+      if (metadata.name !== entry.name)
+        throw new Error(`Managed Skill directory does not match its name: ${entry.name}`)
       skills.push(this.record(metadata))
     }
     return skills.sort((left, right) => left.name.localeCompare(right.name))
+  }
+
+  async inspect(name: string): Promise<ManagedAgentSkillInspection> {
+    assertSkillName(name)
+    await this.ensureRoot()
+    const directory = join(this.userDirectory, name)
+    const files = await readDirectoryFiles(directory, this.limits)
+    const metadata = skillMetadata(files)
+    if (metadata.name !== name) throw new Error(`Managed Skill directory does not match its name: ${name}`)
+    return { ...this.record(metadata), files: inspectedFiles(files) }
   }
 
   async uninstall(name: string) {
@@ -349,14 +409,6 @@ export class ManagedAgentSkillStore {
     }
     await rm(target, { recursive: true })
     return true
-  }
-
-  private metadata(files: readonly SkillFile[]) {
-    const skillFiles = files.filter((file) => file.path.toLowerCase() === "skill.md")
-    if (skillFiles.length !== 1 || skillFiles[0]!.path !== "SKILL.md") {
-      throw new Error("Skill package must contain exactly one root SKILL.md")
-    }
-    return parseFrontmatter(skillFiles[0]!.content)
   }
 
   private record(metadata: { description: string; name: string }): ManagedAgentSkill {

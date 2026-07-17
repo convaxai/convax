@@ -75,7 +75,9 @@ function renderWithEditor(
     document: createCanvasDocument({ id: "canvas-test", nodes: [node] }),
     duplicateNode: () => {},
     endGesture: () => {},
+    executeSelectionAction: () => {},
     fileRenderers,
+    isSelectionActionPending: () => false,
     quickConnect: () => {},
     readOnly,
     removeNode: () => {},
@@ -83,6 +85,7 @@ function renderWithEditor(
     selectNodes: () => {},
     selection: currentSelection,
     selectionContext: deriveCanvasSelectionContext(currentSelection),
+    visibleSelectionActions: [],
   }
   const services = createCanvasServices({
     assistant: { render: () => <div data-assistant-toolbar /> },

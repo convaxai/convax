@@ -3,16 +3,10 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { ManagedAgentSkillStore } from "../src/node/managed-skill-store"
+import { inspectAgentSkillDirectory, ManagedAgentSkillStore } from "../src/node/managed-skill-store"
 
-const skillDocument = (name: string, description = "A managed test skill") => [
-  "---",
-  `name: ${name}`,
-  `description: ${description}`,
-  "---",
-  "",
-  "Follow the workflow.",
-].join("\n")
+const skillDocument = (name: string, description = "A managed test skill") =>
+  ["---", `name: ${name}`, `description: ${description}`, "---", "", "Follow the workflow."].join("\n")
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "managed-agent-skill-"))
@@ -32,14 +26,17 @@ describe("ManagedAgentSkillStore", () => {
   test("imports, parses, lists, and locates a bounded user Skill directory", async () => {
     const setup = await fixture()
     try {
-      const source = await setup.skill("image-remix", [
-        "---",
-        "name: image-remix",
-        "description: >-",
-        "  Remix an image while",
-        "  preserving its intent.",
-        "---",
-      ].join("\n"))
+      const source = await setup.skill(
+        "image-remix",
+        [
+          "---",
+          "name: image-remix",
+          "description: >-",
+          "  Remix an image while",
+          "  preserving its intent.",
+          "---",
+        ].join("\n"),
+      )
       await mkdir(join(source, "references"))
       await writeFile(join(source, "references", "guide.md"), "reference")
       const store = new ManagedAgentSkillStore(setup.config)
@@ -54,6 +51,17 @@ describe("ManagedAgentSkillStore", () => {
       })
       expect(await readFile(join(installed.directory, "references", "guide.md"), "utf8")).toBe("reference")
       expect(await store.list()).toEqual([installed])
+      const inspection = await store.inspect("image-remix")
+      expect(inspection).toMatchObject({
+        description: "Remix an image while preserving its intent.",
+        directory: installed.directory,
+        name: "image-remix",
+      })
+      expect(inspection.files.map((file) => file.path).sort()).toEqual(["SKILL.md", "references/guide.md"])
+      expect(await inspectAgentSkillDirectory(source)).toMatchObject({
+        description: "Remix an image while preserving its intent.",
+        name: "image-remix",
+      })
       expect(store.isManagedLocation(installed.directory)).toBe(true)
       expect(store.isManagedLocation(installed.skillFile)).toBe(true)
       expect(store.isManagedLocation(store.userDirectory)).toBe(false)
@@ -72,12 +80,32 @@ describe("ManagedAgentSkillStore", () => {
         "references/checklist.md": new TextEncoder().encode("check framing"),
       })
 
-      await expect(store.installFromFiles({ "SKILL.md": skillDocument("storyboard-review") }))
-        .rejects.toThrow("already installed")
-      expect(await readFile(join(installed.directory, "references", "checklist.md"), "utf8"))
-        .toBe("check framing")
+      await expect(store.installFromFiles({ "SKILL.md": skillDocument("storyboard-review") })).rejects.toThrow(
+        "already installed",
+      )
+      expect(await readFile(join(installed.directory, "references", "checklist.md"), "utf8")).toBe("check framing")
       const entries = await readdir(store.userDirectory)
       expect(entries.filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects an unexpected package name before creating managed storage", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+
+      await expect(
+        store.installFromFiles(
+          {
+            "SKILL.md": skillDocument("bundle-name"),
+          },
+          { expectedName: "expected-name" },
+        ),
+      ).rejects.toThrow("expected name")
+
+      await expect(lstat(setup.config)).rejects.toMatchObject({ code: "ENOENT" })
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }
@@ -97,6 +125,7 @@ describe("ManagedAgentSkillStore", () => {
       await writeFile(join(target, "secret.md"), "outside")
       await symlink(target, join(source, "references"), process.platform === "win32" ? "junction" : "dir")
       await expect(store.importFromDirectory(source)).rejects.toThrow("cannot contain symlinks")
+      await expect(inspectAgentSkillDirectory(source)).rejects.toThrow("cannot contain symlinks")
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }
@@ -123,22 +152,27 @@ describe("ManagedAgentSkillStore", () => {
       const store = new ManagedAgentSkillStore(setup.config)
       const mismatch = await setup.skill("source-name", skillDocument("manifest-name"))
       await expect(store.importFromDirectory(mismatch)).rejects.toThrow("directory name")
-      await expect(store.installFromFiles({ "SKILL.md": skillDocument("Not-Kebab") }))
-        .rejects.toThrow("kebab-case")
+      await expect(store.installFromFiles({ "SKILL.md": skillDocument("Not-Kebab") })).rejects.toThrow("kebab-case")
 
       for (const path of ["CON.txt", "COM¹.log", "references/clip:stream", "references/trailing. ", "../outside.md"]) {
-        await expect(store.installFromFiles({
-          "SKILL.md": skillDocument("windows-safe"),
-          [path]: "unsafe",
-        })).rejects.toThrow(/unsafe path|path is invalid/u)
+        await expect(
+          store.installFromFiles({
+            "SKILL.md": skillDocument("windows-safe"),
+            [path]: "unsafe",
+          }),
+        ).rejects.toThrow(/unsafe path|path is invalid/u)
       }
-      await expect(store.installFromFiles({
-        "SKILL.md": skillDocument("windows-safe"),
-        "references\\outside.md": "unsafe",
-      })).rejects.toThrow("path is invalid")
-      await expect(store.installFromFiles({
-        "SKILL.md": skillDocument("description-limit", "x".repeat(1_025)),
-      })).rejects.toThrow("1024")
+      await expect(
+        store.installFromFiles({
+          "SKILL.md": skillDocument("windows-safe"),
+          "references\\outside.md": "unsafe",
+        }),
+      ).rejects.toThrow("path is invalid")
+      await expect(
+        store.installFromFiles({
+          "SKILL.md": skillDocument("description-limit", "x".repeat(1_025)),
+        }),
+      ).rejects.toThrow("1024")
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }
@@ -154,23 +188,26 @@ describe("ManagedAgentSkillStore", () => {
         maxTotalBytes: document.length + 3,
       })
 
-      await expect(store.installFromFiles({
-        "SKILL.md": document,
-        "one.txt": "1",
-        "two.txt": "2",
-      })).rejects.toThrow("file limit")
-      await expect(store.installFromFiles({
-        "SKILL.md": document,
-        "large.txt": "1234",
-      })).rejects.toThrow("total limit")
+      await expect(
+        store.installFromFiles({
+          "SKILL.md": document,
+          "one.txt": "1",
+          "two.txt": "2",
+        }),
+      ).rejects.toThrow("file limit")
+      await expect(
+        store.installFromFiles({
+          "SKILL.md": document,
+          "large.txt": "1234",
+        }),
+      ).rejects.toThrow("total limit")
 
       const fileLimited = new ManagedAgentSkillStore(join(setup.root, "other-config"), {
         maxFileBytes: 3,
         maxFiles: 4,
         maxTotalBytes: 100,
       })
-      await expect(fileLimited.installFromFiles({ "SKILL.md": document }))
-        .rejects.toThrow("byte file limit")
+      await expect(fileLimited.installFromFiles({ "SKILL.md": document })).rejects.toThrow("byte file limit")
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test"
 import type { InstalledWebPluginSummary, WebPluginManifest } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { WebPluginManager } from "./plugin-manager"
+import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
 type TestIpcEvent = { sender: { id: number } }
@@ -90,10 +91,23 @@ const catalogEntry = (id: string, version = "1.0.0"): DesktopBuiltinPluginBundle
 function createManager(installed: InstalledWebPluginSummary[] = []) {
   return {
     install: mock(async (_source: string) => manifest("imported-plugin")),
-    installBundle: mock(async (_bundle: unknown) => manifest("catalog-plugin")),
+    installOrUpdateBuiltinBundle: mock(async (_bundle: unknown) => manifest("catalog-plugin")),
+    isBuiltinBundleInstalled: mock(async () => false),
     list: mock(async () => installed),
     uninstall: mock(async (_id: string) => true),
   } as unknown as WebPluginManager
+}
+
+function createRemoteCatalog() {
+  return {
+    installPlugin: mock(async (id: string) => manifest(id)),
+    listPluginCatalog: mock(async (installedIds: ReadonlySet<string>) => [
+      {
+        ...manifest("remote-plugin"),
+        installed: installedIds.has("remote-plugin"),
+      },
+    ]),
+  } satisfies RemotePluginCatalogPort
 }
 
 function invoke(channel: string, input?: unknown, event: TestIpcEvent = { sender: { id: 1 } }) {
@@ -171,6 +185,7 @@ if (isIsolatedRun)
         ],
         installed: [installed],
       })
+      expect(manager.isBuiltinBundleInstalled).not.toHaveBeenCalled()
 
       dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
       await expect(invoke(pluginManagementIpcChannels.importPlugin)).resolves.toMatchObject({ id: "imported-plugin" })
@@ -180,7 +195,7 @@ if (isIsolatedRun)
       await expect(
         invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: "catalog-plugin" }),
       ).resolves.toMatchObject({ id: "catalog-plugin" })
-      expect(manager.installBundle).toHaveBeenCalledWith(catalog[1]!.bundle)
+      expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledWith(catalog[1]!.bundle)
       await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
       expect(manager.uninstall).toHaveBeenCalledWith("installed-plugin")
       expect(sent.webContents.send).toHaveBeenCalledTimes(3)
@@ -214,7 +229,7 @@ if (isIsolatedRun)
         ],
       })
       await invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: "installed-plugin" })
-      expect(manager.installBundle).toHaveBeenCalledWith(catalog[0]!.bundle, { replaceExisting: true })
+      expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledWith(catalog[0]!.bundle)
       expect(sent.webContents.send).toHaveBeenCalledTimes(1)
 
       const sameManager = createManager([{ ...installed, version: "0.0.1-convax.2" }])
@@ -225,11 +240,10 @@ if (isIsolatedRun)
       await expect(
         invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: "installed-plugin" }),
       ).rejects.toThrow("already installed")
-      expect(sameManager.installBundle).not.toHaveBeenCalled()
+      expect(sameManager.installOrUpdateBuiltinBundle).not.toHaveBeenCalled()
       expect(sameWindow.webContents.send).not.toHaveBeenCalled()
       disposeSame()
     })
-
     test("does not publish canceled imports and removes every handler on dispose", async () => {
       const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
       const manager = createManager()
@@ -246,5 +260,51 @@ if (isIsolatedRun)
       expect(registered).toHaveLength(4)
       expect(removedHandlers.sort()).toEqual(registered.sort())
       expect(handlers).toHaveLength(0)
+    })
+
+    test("merges remote catalog entries and routes remote installs by id without accepting a URL", async () => {
+      const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+      const manager = createManager([manifest("remote-plugin")])
+      const remote = createRemoteCatalog()
+      const target = testWindow()
+      windows.push(target)
+      const dispose = registerPluginManagementIpc(manager, [catalogEntry("builtin-plugin")], () => true, remote)
+
+      await expect(invoke(pluginManagementIpcChannels.listPlugins)).resolves.toEqual({
+        catalog: [
+          { ...manifest("builtin-plugin"), installed: false },
+          { ...manifest("remote-plugin"), installed: true },
+        ],
+        installed: [manifest("remote-plugin")],
+      })
+      expect(remote.listPluginCatalog).toHaveBeenCalledWith(new Set(["remote-plugin"]))
+
+      await expect(
+        invoke(pluginManagementIpcChannels.installCatalogPlugin, {
+          id: "remote-plugin",
+          url: "https://attacker.invalid/plugin.zip",
+        }),
+      ).resolves.toMatchObject({ id: "remote-plugin" })
+      expect(remote.installPlugin).toHaveBeenCalledWith("remote-plugin")
+      expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+
+      await invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: "builtin-plugin" })
+      expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledTimes(1)
+      expect(remote.installPlugin).toHaveBeenCalledTimes(1)
+      dispose()
+    })
+
+    test("keeps built-ins available when the remote catalog cannot be loaded", async () => {
+      const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+      const remote = createRemoteCatalog()
+      remote.listPluginCatalog.mockRejectedValueOnce(new Error("network unavailable"))
+      const manager = createManager()
+      const dispose = registerPluginManagementIpc(manager, [catalogEntry("builtin-plugin")], () => true, remote)
+
+      await expect(invoke(pluginManagementIpcChannels.listPlugins)).resolves.toEqual({
+        catalog: [{ ...manifest("builtin-plugin"), installed: false }],
+        installed: [],
+      })
+      dispose()
     })
   })

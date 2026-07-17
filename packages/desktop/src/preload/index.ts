@@ -5,6 +5,7 @@ import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/proj
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
+import type { JianyingRendererClient } from "../jianying-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import {
@@ -64,6 +65,8 @@ const agentChannels = {
 
 const agentSkillChannels = {
   changed: "agent:skills-changed",
+  getSkillDetails: "agent:skill-details",
+  getSkillShowcase: "agent:skill-showcase",
   importSkill: "agent:skill-import",
   installCatalogSkill: "agent:skill-catalog-install",
   installPluginSkill: "agent:skill-plugin-install",
@@ -82,6 +85,12 @@ const pluginChannels = {
   installCatalogPlugin: "plugin:catalog-install",
   listPlugins: "plugin:list",
   uninstallPlugin: "plugin:uninstall",
+} as const
+
+const jianyingChannels = {
+  cancelCanvasMediaExport: "jianying:canvas-media-export-cancel",
+  exportCanvasMedia: "jianying:canvas-media-export",
+  getDraftStatus: "jianying:draft-status",
 } as const
 
 const desktopProtocolClient = {
@@ -137,11 +146,12 @@ const projectFilesClient = {
   createEntry: (input) => ipcRenderer.invoke(projectFilesChannels.createEntry, input),
   createImportToken,
   deleteEntries: (input) => ipcRenderer.invoke(projectFilesChannels.deleteEntries, input),
-  importEntries: (input) => ipcRenderer.invoke(projectFilesChannels.importEntries, {
-    destinationPath: input.destinationPath,
-    projectId: input.projectId,
-    sourcePaths: consumeImportTokens(input.sourceTokens),
-  }),
+  importEntries: (input) =>
+    ipcRenderer.invoke(projectFilesChannels.importEntries, {
+      destinationPath: input.destinationPath,
+      projectId: input.projectId,
+      sourcePaths: consumeImportTokens(input.sourceTokens),
+    }),
   listDirectory: (input) => ipcRenderer.invoke(projectFilesChannels.listDirectory, input),
   moveEntries: (input) => ipcRenderer.invoke(projectFilesChannels.moveEntries, input),
   onDidChange: (listener) => {
@@ -191,6 +201,8 @@ const agentClient = {
 } satisfies AgentClient
 
 const agentSkillClient = {
+  getSkillDetails: (input) => ipcRenderer.invoke(agentSkillChannels.getSkillDetails, input),
+  getSkillShowcase: (input) => ipcRenderer.invoke(agentSkillChannels.getSkillShowcase, input),
   importSkill: () => ipcRenderer.invoke(agentSkillChannels.importSkill),
   installCatalogSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installCatalogSkill, input),
   installPluginSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installPluginSkill, input),
@@ -244,9 +256,16 @@ const pluginClient = {
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
 
+const jianyingClient = {
+  cancelCanvasMediaExport: (input) => ipcRenderer.send(jianyingChannels.cancelCanvasMediaExport, input),
+  exportCanvasMedia: (input) => ipcRenderer.invoke(jianyingChannels.exportCanvasMedia, input),
+  getDraftStatus: () => ipcRenderer.invoke(jianyingChannels.getDraftStatus),
+} satisfies JianyingRendererClient
+
 contextBridge.exposeInMainWorld("convax", {
   agent: { ...agentClient, skills: agentSkillClient },
   canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
+  jianying: jianyingClient,
   platform: process.platform,
   plugins: pluginClient,
   projectFiles: projectFilesClient,

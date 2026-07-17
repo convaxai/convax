@@ -1,8 +1,4 @@
-import {
-  getCanvasTextFileFormat,
-  type CanvasMediaKind,
-  type CanvasUploadItem,
-} from "@convax/canvas/core"
+import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
 import type {
   CanvasResourcePreparationPort,
   CanvasResourcePreparationRequest,
@@ -10,9 +6,14 @@ import type {
   CanvasResourceSource,
 } from "@convax/canvas/application"
 import type { ProjectFileInfo, ProjectFilesClient } from "@convax/project-files/contracts"
-import { projectFileReferenceKey } from "../../canvas/project-resources"
+import {
+  isProjectCanvasManagedAssetPath,
+  projectCanvasManagedAssetDirectory,
+  projectFileReferenceKey,
+  requireProjectCanvasResourcePath,
+} from "../../canvas/project-resources"
 
-const managedAssetDirectory = ".convax/assets"
+const managedAssetDirectory = projectCanvasManagedAssetDirectory
 
 export type ProjectCanvasResourceHost = Pick<
   ProjectFilesClient,
@@ -80,7 +81,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       }
     }
 
-    const sourcePath = portableProjectPath(source.path)
+    const sourcePath = requireProjectCanvasResourcePath(source.path)
     if (source.kind === "host-directory") {
       await this.project.listDirectory({ path: sourcePath, projectId })
       return {
@@ -110,15 +111,16 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
     const asset = await this.materializeAsset(projectId, sourcePath, sourceInfo)
     const kind = mediaKindForMimeType(asset.mimeType)
-    const inspection = kind !== "file" && this.mediaInspector
-      ? await this.mediaInspector.inspect({
-          kind,
-          mimeType: asset.mimeType,
-          name: asset.name,
-          path: asset.path,
-          projectId,
-        })
-      : undefined
+    const inspection =
+      kind !== "file" && this.mediaInspector
+        ? await this.mediaInspector.inspect({
+            kind,
+            mimeType: asset.mimeType,
+            name: asset.name,
+            path: asset.path,
+            projectId,
+          })
+        : undefined
     return {
       durationMs: inspection?.durationMs,
       height: inspection?.height,
@@ -138,7 +140,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     sourcePath: string,
     sourceInfo: ProjectFileInfo,
   ): Promise<ProjectFileInfo> {
-    if (isManagedAssetPath(sourcePath)) {
+    if (isProjectCanvasManagedAssetPath(sourcePath)) {
       return { ...sourceInfo, mimeType: normalizeMimeType(sourceInfo.mimeType), path: sourcePath }
     }
 
@@ -150,8 +152,8 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (copied.targetPaths?.length !== 1) {
       throw new Error(`Project resource copy did not produce one asset: ${sourcePath}`)
     }
-    const assetPath = portableProjectPath(copied.targetPaths[0]!)
-    if (!isManagedAssetPath(assetPath)) {
+    const assetPath = requireProjectCanvasResourcePath(copied.targetPaths[0]!)
+    if (!isProjectCanvasManagedAssetPath(assetPath)) {
       throw new Error(`Project resource copy escaped the managed asset directory: ${assetPath}`)
     }
     const assetInfo = await this.project.readFileInfo({ path: assetPath, projectId })
@@ -170,49 +172,11 @@ function normalizeMimeType(value?: string) {
   return (value ?? "").split(";", 1)[0]!.trim().toLowerCase()
 }
 
-function isManagedAssetPath(value: string) {
-  return value.startsWith(`${managedAssetDirectory}/`)
-}
-
 function remoteResourceName(value: URL) {
   try {
     const name = value.pathname.split("/").filter(Boolean).at(-1)
     return name ? decodeURIComponent(name) : undefined
   } catch {
     return undefined
-  }
-}
-
-/** Normalize to the portable POSIX paths used by the Project contract. */
-function portableProjectPath(value: string) {
-  const input = value.replaceAll("\\", "/")
-  if (!input || input.includes("\0") || input.startsWith("/") || /^[a-zA-Z]:\//.test(input)) {
-    throw new Error(`Invalid portable project path: ${value}`)
-  }
-  const segments: string[] = []
-  for (const segment of input.split("/")) {
-    if (!segment || segment === ".") continue
-    if (segment === "..") {
-      if (!segments.length) throw new Error(`Project path escapes its root: ${value}`)
-      segments.pop()
-      continue
-    }
-    assertPortableSegment(segment)
-    segments.push(segment)
-  }
-  if (!segments.length) throw new Error(`Invalid portable project path: ${value}`)
-  if (segments[0]?.toLowerCase() === ".convax"
-    && (segments[0] !== ".convax" || segments[1] !== "assets" || segments.length < 3)) {
-    throw new Error(`Project private storage cannot be used as a Canvas resource: ${value}`)
-  }
-  return segments.join("/")
-}
-
-function assertPortableSegment(value: string) {
-  const stem = value.split(".")[0]?.toUpperCase()
-  if (/[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value)
-    || /[. ]$/.test(value)
-    || stem && /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/.test(stem)) {
-    throw new Error(`Invalid portable project path segment: ${value}`)
   }
 }

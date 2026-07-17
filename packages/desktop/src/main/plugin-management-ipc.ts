@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialo
 import { compareWebPluginVersions, type WebPluginClient } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { WebPluginManager } from "./plugin-manager"
+import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
 type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChange">> = Parameters<
   WebPluginClient[Method]
@@ -24,6 +25,7 @@ export function registerPluginManagementIpc(
   manager: WebPluginManager,
   catalog: readonly DesktopBuiltinPluginBundle[],
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
+  remoteCatalog?: RemotePluginCatalogPort,
 ) {
   const register = <Input, Result>(
     channel: string,
@@ -44,20 +46,29 @@ export function registerPluginManagementIpc(
   const listPlugins = async (): ReturnType<WebPluginClient["listPlugins"]> => {
     const installed = await manager.list()
     const installedById = new Map(installed.map((plugin) => [plugin.id, plugin]))
+    const installedIds = new Set(installedById.keys())
+    const remote = (await remoteCatalog?.listPluginCatalog(installedIds).catch(() => [])) ?? []
     return {
-      catalog: catalog.map(({ manifest }) => {
-        const current = installedById.get(manifest.id)
-        return {
-          ...manifest,
-          installed: Boolean(current),
-          ...(current
-            ? {
-                installedVersion: current.version,
-                updateAvailable: compareWebPluginVersions(manifest.version, current.version) > 0,
-              }
-            : {}),
-        }
-      }),
+      catalog: [
+        ...catalog.map(({ companionSkillName, manifest }) => {
+          const current = installedById.get(manifest.id)
+          return {
+            ...manifest,
+            ...(companionSkillName ? { companionSkillName } : {}),
+            // Installation presence and trusted built-in provenance are distinct.
+            // Legacy sandboxed Plugins remain installed even when they predate the
+            // host marker; native capabilities still use isBuiltinBundleInstalled.
+            installed: Boolean(current),
+            ...(current
+              ? {
+                  installedVersion: current.version,
+                  updateAvailable: compareWebPluginVersions(manifest.version, current.version) > 0,
+                }
+              : {}),
+          }
+        }),
+        ...remote,
+      ],
       installed,
     }
   }
@@ -87,15 +98,21 @@ export function registerPluginManagementIpc(
       pluginManagementIpcChannels.installCatalogPlugin,
       (_event, input) => {
         const item = catalog.find((candidate) => candidate.manifest.id === input.id)
-        if (!item) throw new Error(`Plugin catalog item was not found: ${input.id}`)
-        return changed(async () => {
-          const current = (await manager.list()).find((plugin) => plugin.id === item.manifest.id)
-          if (!current) return manager.installBundle(item.bundle)
-          if (compareWebPluginVersions(item.manifest.version, current.version) <= 0) {
-            throw new Error(`Plugin is already installed: ${item.manifest.id}`)
-          }
-          return manager.installBundle(item.bundle, { replaceExisting: true })
-        })
+        if (item) {
+          return changed(async () => {
+            const current = (await manager.list()).find((plugin) => plugin.id === item.manifest.id)
+            if (current && compareWebPluginVersions(item.manifest.version, current.version) <= 0) {
+              throw new Error(`Plugin is already installed: ${item.manifest.id}`)
+            }
+            return "legacyBundleDigests" in item
+              ? manager.installOrUpdateBuiltinBundle(item.bundle, {
+                  legacyBundleDigests: item.legacyBundleDigests,
+                })
+              : manager.installOrUpdateBuiltinBundle(item.bundle)
+          })
+        }
+        if (remoteCatalog) return changed(() => remoteCatalog.installPlugin(input.id))
+        throw new Error(`Plugin catalog item was not found: ${input.id}`)
       },
     ),
     register<PluginClientInput<"uninstallPlugin">, Awaited<ReturnType<WebPluginClient["uninstallPlugin"]>>>(

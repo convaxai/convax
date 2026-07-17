@@ -28,6 +28,14 @@ Canvas owns document and editor semantics independently of Project and Agent.
   packages, permissions, iframe transport, Project/Agent calls and package storage
   belong to the host. A Web Plugin renderer still produces a `file` node and must
   mutate the document through the same editor/application APIs as built-in UI.
+- Selection action surfaces accept only explicit host-owned actions over an immutable
+  document/selection snapshot. Canvas may render them in the multi-selection toolbar
+  and an eligible single file-node toolbar. Canvas owns visibility isolation,
+  duplicate-click prevention and pending state, and aborts the action signal when
+  that snapshot is replaced or its surface unmounts. It does not know which Plugin
+  or native integration supplied an action. Hosts crossing IPC must translate cancellation
+  into their own cloneable protocol and cancel safely interruptible external work;
+  Canvas must not own an operation-id registry.
 
 Run `bun typecheck && bun test`. For public command, plugin or export changes also
 run root `bun run pack:check`.

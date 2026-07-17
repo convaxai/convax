@@ -39,6 +39,7 @@ import {
   Video as VideoIcon,
   Volume2,
   VolumeX,
+  Workflow,
 } from "lucide-react"
 import { Component, type ReactNode, useEffect, useRef, useState } from "react"
 import { updateCanvasNodeData } from "../commands"
@@ -690,6 +691,9 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
     inputRef.current?.click()
   }
   const supportsFit = data.kind === "image" || data.kind === "video"
+  const selectionActions = editor.selection.nodeIds.size === 1 && editor.selection.nodeIds.has(props.id)
+    ? editor.visibleSelectionActions
+    : []
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
       <ToolbarButton
@@ -718,6 +722,19 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         label={`Download ${mediaLabel(data.kind)}`}
         onClick={() => downloadMedia(data)}
       />
+      {selectionActions.length > 0 ? <ToolbarDivider /> : null}
+      {selectionActions.map((action) => {
+        const pending = editor.isSelectionActionPending(action.id)
+        return (
+          <ToolbarButton
+            key={action.id}
+            disabled={pending}
+            icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+            label={action.label}
+            onClick={() => editor.executeSelectionAction(action)}
+          />
+        )
+      })}
       <ToolbarDivider />
       <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
       <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />

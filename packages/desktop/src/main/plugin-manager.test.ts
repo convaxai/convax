@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -52,6 +53,26 @@ async function writePackage(root: string, value: Record<string, unknown> = manif
   await fs.writeFile(path.join(root, "web", "index.html"), "<!doctype html><title>Director</title>")
   await fs.writeFile(path.join(root, "web", "runtime.js"), "globalThis.director = true")
   await fs.writeFile(path.join(root, "skills", "director", "SKILL.md"), "# Director\n")
+}
+
+function testBundleDigest(bundle: { files: Readonly<Record<string, string | Uint8Array>> }) {
+  const digest = createHash("sha256")
+  const files = Object.entries(bundle.files)
+    .map(([relativePath, content]) => ({
+      content: typeof content === "string" ? Buffer.from(content) : Buffer.from(content),
+      relativePath,
+    }))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+  for (const file of files) {
+    digest.update(String(Buffer.byteLength(file.relativePath)))
+    digest.update(":")
+    digest.update(file.relativePath)
+    digest.update(":")
+    digest.update(String(file.content.byteLength))
+    digest.update(":")
+    digest.update(file.content)
+  }
+  return digest.digest("hex")
 }
 
 describe("parseWebPluginManifest", () => {
@@ -182,6 +203,100 @@ describe("WebPluginManager", () => {
     expect(await fs.readFile(await manager.resolveAsset(installed.id, "SKILL.md"), "utf8")).toContain("Bundled skill")
   })
 
+  test("reserves catalog ids and marks only host-installed built-in bundles as trusted", async () => {
+    const root = await temporaryRoot()
+    const source = path.join(root, "source")
+    await writePackage(source)
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, ["director-stage"])
+    await expect(manager.install(source)).rejects.toThrow("reserved for a built-in")
+
+    const bundle = {
+      files: {
+        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined })),
+        "index.html": "<!doctype html><title>Built-in</title>",
+      },
+    }
+    await expect(manager.installBundle(bundle)).rejects.toThrow("reserved for a built-in")
+    const installed = await manager.installOrUpdateBuiltinBundle(bundle)
+    expect(installed.trustedBuiltin).toBe(true)
+    expect(await manager.isBuiltinBundleInstalled(bundle)).toBe(true)
+    expect(await manager.list()).toEqual([installed])
+
+    const updatedBundle = {
+      files: {
+        ...bundle.files,
+        "index.html": "<!doctype html><title>Updated built-in</title>",
+        "manifest.json": JSON.stringify(
+          manifest({ entry: "index.html", skill: undefined, version: "1.2.3-beta.2+desktop" }),
+        ),
+      },
+    }
+    await expect(
+      manager.installOrUpdateBuiltinBundle(updatedBundle, {
+        legacyBundleDigests: [
+          { bundleDigest: testBundleDigest(bundle), version: "1.2.3-beta.1+desktop" },
+        ],
+      }),
+    ).resolves.toMatchObject({ trustedBuiltin: true })
+    expect(await manager.isBuiltinBundleInstalled(bundle)).toBe(false)
+    expect(await manager.isBuiltinBundleInstalled(updatedBundle)).toBe(true)
+
+    const legacyRoot = path.join(root, "legacy")
+    await new WebPluginManager(legacyRoot).installBundle(bundle)
+    const legacy = new WebPluginManager(legacyRoot, {}, ["director-stage"])
+    await expect(legacy.installOrUpdateBuiltinBundle(bundle)).resolves.toMatchObject({ trustedBuiltin: true })
+    expect(await legacy.isBuiltinBundleInstalled(bundle)).toBe(true)
+  })
+
+  test("adopts only an exact host-listed legacy bundle before upgrading it", async () => {
+    const root = await temporaryRoot()
+    const oldBundle = {
+      files: {
+        "index.html": "<!doctype html><title>Legacy built-in</title>",
+        "manifest.json": JSON.stringify(
+          manifest({ entry: "index.html", skill: undefined, version: "1.0.0" }),
+        ),
+      },
+    }
+    const currentBundle = {
+      files: {
+        "index.html": "<!doctype html><title>Current built-in</title>",
+        "manifest.json": JSON.stringify(
+          manifest({ entry: "index.html", skill: undefined, version: "2.0.0" }),
+        ),
+      },
+    }
+    const legacyBundleDigests = [{ bundleDigest: testBundleDigest(oldBundle), version: "1.0.0" }]
+
+    const installRoot = path.join(root, "installed")
+    await new WebPluginManager(installRoot).installBundle(oldBundle)
+    const manager = new WebPluginManager(installRoot, {}, ["director-stage"])
+    await expect(
+      manager.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests }),
+    ).resolves.toMatchObject({ trustedBuiltin: true, version: "2.0.0" })
+    expect(await manager.isBuiltinBundleInstalled(currentBundle)).toBe(true)
+
+    const forgedRoot = path.join(root, "forged")
+    await new WebPluginManager(forgedRoot).installBundle({
+      files: { ...oldBundle.files, "index.html": "<!doctype html><title>Forged</title>" },
+    })
+    const forged = new WebPluginManager(forgedRoot, {}, ["director-stage"])
+    await expect(
+      forged.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests }),
+    ).rejects.toThrow("non-built-in Plugin")
+
+    await fs.writeFile(path.join(installRoot, "director-stage", "index.html"), "tampered")
+    const nextBundle = {
+      files: {
+        ...currentBundle.files,
+        "manifest.json": JSON.stringify(
+          manifest({ entry: "index.html", skill: undefined, version: "3.0.0" }),
+        ),
+      },
+    }
+    await expect(manager.installOrUpdateBuiltinBundle(nextBundle)).rejects.toThrow("do not match their provenance")
+  })
+
   test("requires real HTML and SKILL.md files and leaves no staging state on failure", async () => {
     const root = await temporaryRoot()
     const source = path.join(root, "source")
@@ -304,5 +419,10 @@ describe("WebPluginManager", () => {
         files: { asset: "x", "asset/file.txt": "x", "index.html": "x", "manifest.json": manifestJson },
       }),
     ).rejects.toThrow("both a file and directory")
+    await expect(
+      manager.installBundle({
+        files: { ".Convax-Builtin.json": "{}", "index.html": "x", "manifest.json": manifestJson },
+      }),
+    ).rejects.toThrow("reserved by the host")
   })
 })

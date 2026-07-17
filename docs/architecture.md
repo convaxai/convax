@@ -64,10 +64,16 @@ name `convax.canvas-workspace/1` exists only as a migration input.
 ### Skill and Plugin
 
 An OpenCode Skill is a trusted instruction bundle discovered and executed by the
-existing Agent runtime. A Convax Plugin is a user-installed, sandboxed product
-surface composed by Desktop from existing Canvas, Project and Agent capabilities.
-They may be installed together, but they are not the same extension mechanism:
-Skills never implement UI, and Plugins never become OpenCode plugins.
+existing Agent runtime. A Convax Plugin is an installable product surface or
+integration composed by Desktop from existing Canvas, Project and Agent
+capabilities. Third-party Web Plugin code remains sandboxed. A built-in integration
+may additionally have a trusted Desktop adapter, but its static package cannot invoke
+that adapter and does not grant the same privilege to imported packages. Trusted
+built-in status is host-authored provenance over the exact catalog bundle, never a
+manifest id/version claim. Plugins may provide a separately managed companion Skill,
+but they are not the same extension mechanism: Skills describe Agent workflows and
+select tools; they never implement UI or native behavior, and Plugins never become
+OpenCode plugins.
 
 ## 3. Packages and dependency graph
 
@@ -159,8 +165,13 @@ interaction contract and adapter rules.
 ```text
 Electron userData/
   projects.json                         per-user bindings and recency
+  default-capabilities.json             one-time default Plugin/Skill provisioning receipt
+  capability-registry/index-v1.json     last-known-good official remote catalog cache
   opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
   plugins/<plugin-id>/                  validated static Plugin packages
+    .convax-builtin.json                host-authored catalog provenance, when applicable
+
+~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
 
 browser localStorage                    per-user Workbench/renderer preferences
 
@@ -177,6 +188,11 @@ Agent tools, and general Project Files operations do not read or write its JSON.
 Managed assets are the explicit exception: they are imported/copied through the
 scoped Project Files capability into `.convax/assets`, while the rest of `.convax`
 remains hidden and protected.
+
+The remote capability catalog cache is Desktop-owned, user-global, and
+non-authoritative. It contains only a previously validated official Registry
+document plus transport metadata. Losing it never removes installed capabilities;
+an invalid or rolled-back network response never replaces it.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
 application services. A schema change needs a version, a migration path, and tests
@@ -260,14 +276,30 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Primitive and view tools remain available when the request needs exact control.
 - Desktop prepares structured resources, binds the active Project scope, and exposes
   the MCP/tool schema. `@convax/agent-runtime` remains unaware of Convax semantics.
-- Tool arguments cannot select another Project or expand the host-provided scope.
+- Tool arguments cannot select another Project or Canvas or expand the host-provided
+  scope. A Canvas-specific tool resolves the live active Canvas from the host and
+  treats any model-provided Canvas id/revision only as a consistency assertion.
 - Canvas attachments are validated read-only snapshots. Agents mutate through tools,
   never by shell/file edits under `.convax`.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
   executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
   discovery state without replacing durable sessions.
-- A Plugin companion Skill is installed explicitly through the same managed Skill
-  lifecycle. It does not gain extra Plugin permissions or bypass typed capabilities.
+- Skill management may inspect a selected managed or globally discovered Skill as a
+  bounded, non-executable directory for its file tree and text preview. Global Skills
+  remain read-only, symlinks fail closed, and renderer IPC identifies the Skill but
+  never carries a native path. Showcase media is separate presentation metadata:
+  fixed bundled assets for built-ins or digest-verified Release sidecars for remote
+  Skills, loaded lazily and played only while visible.
+- A Plugin companion Skill uses the same managed Skill lifecycle. User-installed
+  companions are explicit. A catalog item may request one-time default provisioning;
+  Desktop records the completed Plugin and Skill independently so later user removal
+  is respected. A companion never gains extra Plugin permissions or bypasses typed
+  capabilities.
+- The official remote Registry is fetched only by Desktop main from its fixed
+  origin. Renderer requests carry stable catalog ids, never URLs, paths or digests.
+  Desktop verifies catalog sequence, compatibility, immutable artifact metadata,
+  bounded download size, SHA-256 and a safe ZIP inventory before calling the same
+  local Plugin and managed-Skill installers used by checked-in bundles.
 
 ## 8. Plugin host boundary
 
@@ -275,6 +307,14 @@ Canvas already owns the file renderer and node-toolbar registries. Desktop may m
 validated Plugin manifest into those registries; it must not add another extension
 bus, Canvas node role, or parallel mutation API. A Plugin surface remains a `file`
 node and calls existing clients/controllers through a narrow host adapter.
+
+Canvas also exposes one explicit host-neutral selection action slot. It renders an
+action in an eligible single file-node toolbar or the multi-selection toolbar against
+an immutable document/selection snapshot, isolates visibility failures, prevents
+duplicate execution, and aborts stale work. Desktop may use this slot for a concrete
+trusted integration such as JianYing. This is not a manifest
+function-call bridge: sandboxed Plugin frames cannot register or invoke selection
+actions, receive native paths, or select a native adapter by string.
 
 Third-party Plugin code is static HTML/JavaScript rendered in an iframe with exactly
 `sandbox="allow-scripts"`. It is never imported into the renderer bundle, loaded as
@@ -299,6 +339,65 @@ supplies a Project path and never receives a general Canvas snapshot. Browser
 features such as fullscreen are likewise enabled per manifest; all other iframe
 feature-policy denials remain in force.
 
+### JianYing trusted built-in
+
+JianYing is a concrete trusted built-in integration, not a new Plugin RPC capability.
+Its static Plugin package participates in install/uninstall and companion-Skill
+lifecycle only; native detection, staging and Deep Link dispatch are compiled into
+Desktop main. Runtime enablement requires macOS and a byte-for-byte match with the
+catalog bundle's host-authored provenance. Ordinary imports cannot use the reserved
+id, author the provenance marker, or enable the native adapter by matching a
+version. Catalog installation presence remains separate from this trust decision: a
+valid legacy sandboxed Plugin is still shown as installed, but cannot enable native
+tools.
+
+Marker-free catalog installations from an older Convax build are claimed only after
+their complete canonical digest matches the current bundle or a compiled historical
+fingerprint. Missing packages remain missing, so this migration cannot undo a user
+uninstall.
+
+The Canvas toolbar action appears for one or more selected image/video nodes backed
+by managed Project references under `.convax/assets`: single media uses its node
+toolbar and multiple media use the selection toolbar. Main reloads the live active
+Canvas, checks the expected revision and selected nodes,
+validates matching image/video MIME and regular contained files, and only then
+resolves native paths and stages copies. Remote-only media and other private
+`.convax` paths are ineligible. On an active draft the toolbar imports directly. If
+there is no active draft, Desktop first dispatches JianYing's force-create route and
+proves that a newly created directory became active before sending any media.
+Creating a new draft while another draft is open is an explicit macOS WIP and fails
+before native mutation; the Agent asks the user to return JianYing home, inspects
+again, and proceeds only from a no-active/not-running observation. Ambiguous or
+unsafe draft observations fail closed, and an unverified create never falls back to
+the previously active draft.
+
+Desktop does not drive JianYing UI and requires no Accessibility, Apple Events, JXA
+or `AXPress` access. New-draft export uses two ordered native Deep Links: force-create
+and verify, then the same current-draft material import used by toolbar export. For
+the duration of the material dispatch, main binds a media server to `127.0.0.1` on a
+random port. Each staged item is exposed only at its own unguessable opaque-token
+URL, and the import payload contains only those loopback URLs. Unknown routes and
+unscoped files remain inaccessible. Main keeps the server alive while the bounded
+operation awaits every requested transfer, then closes it after all items complete
+or when the bounded operation fails.
+The currently supported JianYing Deep Link imports each item into both the material
+panel and the timeline; it exposes no verified panel-only parameter, so Convax must
+not promise panel-only behavior.
+
+The native adapter boundary reserves Windows explicitly, but its current Windows
+implementation is WIP and fails closed as unsupported without attempting a fallback
+automation path. This platform limitation does not widen the static Plugin package
+or companion Skill.
+
+The companion Agent workflow first inspects draft state. If a draft is active, the
+Agent asks the user to choose that draft or a new one and submits the short-lived
+observation token for a current-draft export. If the user chooses new, the Agent
+explains the active-to-new WIP boundary, asks the user to return JianYing home, then
+inspects again before submitting a new-draft export. Its tool schema does not accept
+a Project or Canvas id; Desktop injects the currently mounted Canvas and rejects a
+stale revision. The companion Skill explains this workflow but grants no tool or
+native permission and remains independently installable/removable from the Plugin.
+
 ## 9. Workbench layout boundary
 
 Workbench owns the generic state transition: part size, visibility, collapse
@@ -319,9 +418,20 @@ window coordination; keep the product's visual implementation in the host.
   no Node/Electron imports.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
-Project Canvas, Canvas documents/views, and Agent runtime. Incompatible bridge changes
-must bump the Desktop protocol version so stale main/preload/renderer combinations
-fail visibly instead of hanging.
+Project Canvas, Canvas documents/views, Agent runtime, and narrow trusted native
+integrations such as `jianying`. The JianYing bridge accepts only a Project/Canvas
+reference, revision, node ids and a constrained target; native paths remain in main.
+Renderer assigns every export an opaque `operationId`; it keeps the live
+`AbortSignal` in the renderer realm and sends only cloneable start/cancel messages
+through preload. Cancellation is scoped to the originating trusted renderer and is
+honored through validation, staging and the final pre-dispatch check. Cancellation
+before Deep Link dispatch is safe. Once dispatch may have produced a JianYing side
+effect, Desktop lets the bounded transfer finish and reports its observable outcome;
+an unknown or partial post-dispatch outcome must never be retried automatically.
+Main also cancels pre-dispatch work on renderer destruction or IPC disposal and
+re-resolves the live active Canvas before starting.
+Incompatible bridge changes must bump the Desktop protocol version so stale
+main/preload/renderer combinations fail visibly instead of hanging.
 
 ## 11. Portable paths and trust boundaries
 

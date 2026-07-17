@@ -48,9 +48,13 @@ export interface WebPluginManifest {
 }
 
 /** Contains only validated, portable values and is safe to expose to a renderer. */
-export interface InstalledWebPluginSummary extends WebPluginManifest {}
+export interface InstalledWebPluginSummary extends WebPluginManifest {
+  /** Host-authored provenance marker; imported packages can never set this field. */
+  trustedBuiltin?: true
+}
 
 export interface WebPluginCatalogItem extends WebPluginManifest {
+  companionSkillName?: string
   installed: boolean
   /** Validated installed version when the catalog id is already present. */
   installedVersion?: string

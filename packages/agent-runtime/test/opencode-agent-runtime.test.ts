@@ -15,14 +15,10 @@ import protectedPathPlugin from "../src/node/protected-path-plugin"
 
 async function writeSkill(directory: string, name: string, description = `${name} description`) {
   await mkdir(directory, { recursive: true })
-  await writeFile(join(directory, "SKILL.md"), [
-    "---",
-    `name: ${name}`,
-    `description: ${description}`,
-    "---",
-    "",
-    `Use the ${name} workflow.`,
-  ].join("\n"))
+  await writeFile(
+    join(directory, "SKILL.md"),
+    ["---", `name: ${name}`, `description: ${description}`, "---", "", `Use the ${name} workflow.`].join("\n"),
+  )
 }
 
 function restoreTestEnvironment(name: string, value: string | undefined) {
@@ -79,17 +75,21 @@ describe("OpenCode agent runtime boundaries", () => {
       },
     }
     const runtime = new OpenCodeAgentRuntime({ config })
-    const bounded = (runtime as unknown as {
-      options: { config: typeof config }
-    }).options.config
+    const bounded = (
+      runtime as unknown as {
+        options: { config: typeof config }
+      }
+    ).options.config
 
     expect(bounded.skills?.paths).toEqual(["/managed/skills"])
     expect(bounded.skills?.urls).toEqual([])
     expect(config.skills.urls).toEqual(["https://example.com/skills"])
     const runtimeWithoutPaths = new OpenCodeAgentRuntime()
-    const boundedWithoutPaths = (runtimeWithoutPaths as unknown as {
-      options: { config: { skills?: { paths?: string[]; urls?: string[] } } }
-    }).options.config
+    const boundedWithoutPaths = (
+      runtimeWithoutPaths as unknown as {
+        options: { config: { skills?: { paths?: string[]; urls?: string[] } } }
+      }
+    ).options.config
     expect("paths" in boundedWithoutPaths.skills!).toBe(false)
     await Promise.all([runtime.dispose(), runtimeWithoutPaths.dispose()])
   })
@@ -134,10 +134,13 @@ describe("OpenCode agent runtime boundaries", () => {
       await symlink(".host", join(directory, "chain-two"), "dir")
       await symlink("../.host", join(directory, "src", "protected-alias"), "dir")
 
-      const hooks = await protectedPathPlugin({ directory }, {
-        marker: ".agent-runtime-protected-path-guard-test",
-        paths: [".host"],
-      })
+      const hooks = await protectedPathPlugin(
+        { directory },
+        {
+          marker: ".agent-runtime-protected-path-guard-test",
+          paths: [".host"],
+        },
+      )
       const execute = (tool: string, args?: unknown) => hooks["tool.execute.before"]({ tool }, { args })
 
       await expect(execute("read", { filePath: ".host/secret.txt" })).rejects.toThrow("host-protected")
@@ -148,9 +151,11 @@ describe("OpenCode agent runtime boundaries", () => {
       await expect(execute("read", { filePath: "chain-one/secret.txt" })).rejects.toThrow("host-protected")
       await expect(execute("edit", { filePath: "alias/new.txt" })).rejects.toThrow("host-protected")
       await expect(execute("edit", { filePath: "dangling" })).rejects.toThrow("host-protected")
-      await expect(execute("apply_patch", {
-        patchText: "*** Begin Patch\n*** Update File: alias/secret.txt\n@@\n-private\n+changed\n*** End Patch",
-      })).rejects.toThrow("host-protected")
+      await expect(
+        execute("apply_patch", {
+          patchText: "*** Begin Patch\n*** Update File: alias/secret.txt\n@@\n-private\n+changed\n*** End Patch",
+        }),
+      ).rejects.toThrow("host-protected")
       await expect(execute("grep", { path: ".", pattern: "private" })).rejects.toThrow("recursive tool")
       await expect(execute("glob", { path: "alias", pattern: "**/*" })).rejects.toThrow("recursive tool")
       await expect(execute("list", { path: "." })).rejects.toThrow("recursive tool")
@@ -208,6 +213,12 @@ describe("OpenCode agent runtime boundaries", () => {
       expect(names).toContain("managed-skill")
       expect(names).toContain("configured-skill")
       expect(names).not.toContain("project-external-skill")
+      expect(skills.find((skill) => skill.name === "global-skill")?.location).toBe(
+        join(xdgConfig, "opencode", "skills", "global-skill", "SKILL.md"),
+      )
+      expect(skills.find((skill) => skill.name === "managed-skill")?.location).toBe(
+        join(configDirectory, "skills", "managed-skill", "SKILL.md"),
+      )
       expect(process.env.OPENCODE_CONFIG_DIR).toBe("parent-config-must-be-restored")
       expect(process.env.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBe("parent-value-must-be-restored")
     } finally {
@@ -304,21 +315,27 @@ describe("OpenCode agent runtime boundaries", () => {
     const skillDirectory = join(directory, ".opencode", "skills", "workspace-extension-probe")
     await mkdir(toolDirectory, { recursive: true })
     await mkdir(skillDirectory, { recursive: true })
-    await writeFile(join(toolDirectory, "workspace_extension_probe.ts"), [
-      "export default {",
-      "  description: 'Workspace extension probe',",
-      "  args: {},",
-      "  execute: async () => 'loaded',",
-      "}",
-    ].join("\n"))
-    await writeFile(join(skillDirectory, "SKILL.md"), [
-      "---",
-      "name: workspace-extension-probe",
-      "description: Workspace extension probe",
-      "---",
-      "",
-      "This workspace-local skill must remain outside the host runtime boundary.",
-    ].join("\n"))
+    await writeFile(
+      join(toolDirectory, "workspace_extension_probe.ts"),
+      [
+        "export default {",
+        "  description: 'Workspace extension probe',",
+        "  args: {},",
+        "  execute: async () => 'loaded',",
+        "}",
+      ].join("\n"),
+    )
+    await writeFile(
+      join(skillDirectory, "SKILL.md"),
+      [
+        "---",
+        "name: workspace-extension-probe",
+        "description: Workspace extension probe",
+        "---",
+        "",
+        "This workspace-local skill must remain outside the host runtime boundary.",
+      ].join("\n"),
+    )
 
     const runtime = new OpenCodeAgentRuntime({
       protectedPaths: [".host"],
@@ -328,11 +345,13 @@ describe("OpenCode agent runtime boundaries", () => {
         async callTool(_scope, _name, input) {
           return input
         },
-        listTools: () => [{
-          description: "Echo input",
-          inputSchema: { type: "object" },
-          name: "echo",
-        }],
+        listTools: () => [
+          {
+            description: "Echo input",
+            inputSchema: { type: "object" },
+            name: "echo",
+          },
+        ],
       },
     })
     try {
@@ -350,14 +369,16 @@ describe("OpenCode agent runtime boundaries", () => {
 
   test("inlines host-prepared structured resource content without a second MCP lookup", async () => {
     const content = JSON.stringify({ documentId: "document-1", section: "summary" })
-    const [part] = await prepareAgentResourceParts("/directory/that/does/not/exist", [{
-      clientName: "host",
-      content,
-      kind: "resource",
-      mime: "application/json",
-      name: "Launch brief",
-      uri: "host://documents/document-1/sections/summary",
-    }])
+    const [part] = await prepareAgentResourceParts("/directory/that/does/not/exist", [
+      {
+        clientName: "host",
+        content,
+        kind: "resource",
+        mime: "application/json",
+        name: "Launch brief",
+        uri: "host://documents/document-1/sections/summary",
+      },
+    ])
 
     expect(part?.filename).toBe("Launch brief")
     expect(part?.mime).toBe("text/plain")
@@ -366,12 +387,16 @@ describe("OpenCode agent runtime boundaries", () => {
   })
 
   test("rejects invalid host-prepared structured resource metadata", async () => {
-    await expect(prepareAgentResourceParts("/unused", [{
-      clientName: "host",
-      content: "{}",
-      kind: "resource",
-      mime: "application/json",
-      uri: "not a URI",
-    }])).rejects.toThrow("URI is invalid")
+    await expect(
+      prepareAgentResourceParts("/unused", [
+        {
+          clientName: "host",
+          content: "{}",
+          kind: "resource",
+          mime: "application/json",
+          uri: "not a URI",
+        },
+      ]),
+    ).rejects.toThrow("URI is invalid")
   })
 })

@@ -2,11 +2,23 @@ export type DesktopSkillSource = "global" | "managed"
 
 export interface DesktopSkillSummary {
   description?: string
+  displayName?: string
   location: string
   managed: boolean
   name: string
   source: DesktopSkillSource
 }
+
+export type DesktopSkillTarget =
+  | {
+      id: string
+      kind: "catalog"
+    }
+  | {
+      kind: "installed"
+      name: string
+      source: DesktopSkillSource
+    }
 
 export interface DesktopSkillCatalogItem {
   description: string
@@ -20,7 +32,43 @@ export interface DesktopSkillInventory {
   skills: DesktopSkillSummary[]
 }
 
+export type DesktopSkillFilePreview =
+  | {
+      content: string
+      kind: "text"
+      path: string
+      size: number
+    }
+  | {
+      kind: "binary"
+      path: string
+      size: number
+    }
+
+export interface DesktopSkillDetails {
+  description: string
+  files: DesktopSkillFilePreview[]
+  id: string
+  name: string
+  version?: string
+}
+
+export type DesktopSkillShowcaseMedia = "animation" | "poster"
+export type DesktopSkillShowcaseMimeType = "image/gif" | "image/jpeg" | "image/png" | "image/webp" | "video/mp4"
+
+export interface DesktopSkillShowcase {
+  altText: string
+  bytes: Uint8Array
+  mimeType: DesktopSkillShowcaseMimeType
+  size: number
+}
+
 export interface DesktopSkillClient {
+  getSkillDetails(input: { target: DesktopSkillTarget }): Promise<DesktopSkillDetails>
+  getSkillShowcase(input: {
+    media: DesktopSkillShowcaseMedia
+    target: DesktopSkillTarget
+  }): Promise<DesktopSkillShowcase | null>
   importSkill(): Promise<DesktopSkillSummary | null>
   installCatalogSkill(input: { id: string }): Promise<DesktopSkillSummary>
   installPluginSkill(input: { pluginId: string }): Promise<DesktopSkillSummary>

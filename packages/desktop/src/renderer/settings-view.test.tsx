@@ -8,6 +8,10 @@ import { SettingsView } from "./settings-view"
 const noop = () => undefined
 
 const skillClient: DesktopSkillClient = {
+  getSkillDetails: mock(async () => {
+    throw new Error("not used")
+  }),
+  getSkillShowcase: mock(async () => null),
   importSkill: mock(async () => null),
   installCatalogSkill: mock(async () => ({
     location: "/managed/storyboard/SKILL.md",

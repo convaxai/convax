@@ -7,12 +7,14 @@ import type { ProjectFilesClient } from "@convax/project-files"
 import type { DesktopProtocolClient } from "../desktop-protocol"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
+import type { JianyingRendererClient } from "../jianying-contracts"
 
 declare global {
   interface Window {
     convax: {
       agent: AgentClient & { skills: DesktopSkillClient }
       canvas: { documents: CanvasDocumentClient; renderer: CanvasRendererClient }
+      jianying: JianyingRendererClient
       platform: NodeJS.Platform
       plugins: WebPluginClient
       projectFiles: ProjectFilesClient

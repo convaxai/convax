@@ -87,18 +87,26 @@ const primitiveCommandSchema = {
       edgeIds: stringArraySchema,
       nodeIds: stringArraySchema,
     }),
-    commandSchema("nodes.move", {
-      delta: pointSchema,
-      nodeIds: stringArraySchema,
-    }, ["delta", "nodeIds"]),
-    commandSchema("nodes.connect", {
-      connection: {
-        additionalProperties: false,
-        properties: { label: { type: "string" }, source: nonEmptyStringSchema, target: nonEmptyStringSchema },
-        required: ["source", "target"],
-        type: "object",
+    commandSchema(
+      "nodes.move",
+      {
+        delta: pointSchema,
+        nodeIds: stringArraySchema,
       },
-    }, ["connection"]),
+      ["delta", "nodeIds"],
+    ),
+    commandSchema(
+      "nodes.connect",
+      {
+        connection: {
+          additionalProperties: false,
+          properties: { label: { type: "string" }, source: nonEmptyStringSchema, target: nonEmptyStringSchema },
+          required: ["source", "target"],
+          type: "object",
+        },
+      },
+      ["connection"],
+    ),
     commandSchema("nodes.group", { label: { type: "string" }, nodeIds: stringArraySchema }, ["nodeIds"]),
     commandSchema("nodes.ungroup", { nodeId: nonEmptyStringSchema }, ["nodeId"]),
     commandSchema("nodes.layout", {
@@ -106,24 +114,36 @@ const primitiveCommandSchema = {
       layout: { enum: ["grid", "horizontal", "vertical"], type: "string" },
       nodeIds: stringArraySchema,
     }),
-    commandSchema("nodes.align", {
-      direction: { enum: ["left", "center", "right", "top", "middle", "bottom"], type: "string" },
-      nodeIds: stringArraySchema,
-    }, ["direction", "nodeIds"]),
-    commandSchema("nodes.distribute", {
-      axis: { enum: ["horizontal", "vertical"], type: "string" },
-      nodeIds: stringArraySchema,
-    }, ["axis", "nodeIds"]),
+    commandSchema(
+      "nodes.align",
+      {
+        direction: { enum: ["left", "center", "right", "top", "middle", "bottom"], type: "string" },
+        nodeIds: stringArraySchema,
+      },
+      ["direction", "nodeIds"],
+    ),
+    commandSchema(
+      "nodes.distribute",
+      {
+        axis: { enum: ["horizontal", "vertical"], type: "string" },
+        nodeIds: stringArraySchema,
+      },
+      ["axis", "nodeIds"],
+    ),
   ],
 }
 const viewCommandSchema = {
   oneOf: [
-    commandSchema("nodes.reveal", {
-      animation: animationSchema,
-      fit: { enum: ["center", "contain", "none"], type: "string" },
-      nodeIds: stringArraySchema,
-      select: { type: "boolean" },
-    }, ["nodeIds"]),
+    commandSchema(
+      "nodes.reveal",
+      {
+        animation: animationSchema,
+        fit: { enum: ["center", "contain", "none"], type: "string" },
+        nodeIds: stringArraySchema,
+        select: { type: "boolean" },
+      },
+      ["nodeIds"],
+    ),
     commandSchema("selection.clear", {}),
     commandSchema("selection.set", { edgeIds: stringArraySchema, nodeIds: stringArraySchema }),
     commandSchema("viewport.fit", {
@@ -132,20 +152,32 @@ const viewCommandSchema = {
       nodeIds: stringArraySchema,
       padding: { minimum: 0, type: "number" },
     }),
-    commandSchema("viewport.center", {
-      animation: animationSchema,
-      position: pointSchema,
-      zoom: { exclusiveMinimum: 0, type: "number" },
-    }, ["position"]),
-    commandSchema("viewport.zoom", {
-      animation: animationSchema,
-      zoom: { exclusiveMinimum: 0, type: "number" },
-    }, ["zoom"]),
-    commandSchema("notification.show", {
-      description: { type: "string" },
-      kind: { enum: ["error", "info", "success", "warning"], type: "string" },
-      title: nonEmptyStringSchema,
-    }, ["kind", "title"]),
+    commandSchema(
+      "viewport.center",
+      {
+        animation: animationSchema,
+        position: pointSchema,
+        zoom: { exclusiveMinimum: 0, type: "number" },
+      },
+      ["position"],
+    ),
+    commandSchema(
+      "viewport.zoom",
+      {
+        animation: animationSchema,
+        zoom: { exclusiveMinimum: 0, type: "number" },
+      },
+      ["zoom"],
+    ),
+    commandSchema(
+      "notification.show",
+      {
+        description: { type: "string" },
+        kind: { enum: ["error", "info", "success", "warning"], type: "string" },
+        title: nonEmptyStringSchema,
+      },
+      ["kind", "title"],
+    ),
   ],
 }
 const canvasFields = {
@@ -173,7 +205,8 @@ const tools = [
   },
   {
     name: "canvas_add_resources",
-    description: "Preferred business tool for adding inline text, host files or directories, images, media, or remote URLs. It prepares assets, inspects media, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
+    description:
+      "Preferred business tool for adding inline text, host files or directories, images, media, or remote URLs. It prepares assets, inspects media, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -217,13 +250,15 @@ const tools = [
   },
   {
     name: "canvas_apply_primitive",
-    description: "Advanced low-level Canvas mutations: remove, move, connect, group, ungroup, layout, align, or distribute. Prefer business tools when one matches the task.",
+    description:
+      "Advanced low-level Canvas mutations: remove, move, connect, group, ungroup, layout, align, or distribute. Prefer business tools when one matches the task.",
     inputSchema: {
       additionalProperties: false,
       properties: {
         canvasId: canvasFields.canvasId,
         command: {
-          description: "A Canvas primitive command with type elements.remove or nodes.move/connect/group/ungroup/layout/align/distribute.",
+          description:
+            "A Canvas primitive command with type elements.remove or nodes.move/connect/group/ungroup/layout/align/distribute.",
           ...primitiveCommandSchema,
         },
         commandId: { minLength: 1, type: "string" },
@@ -235,7 +270,8 @@ const tools = [
   },
   {
     name: "canvas_view",
-    description: "Control a live Canvas view: reveal/select nodes, fit/center/zoom the viewport, clear selection, or show a notification. UI actions are valid Agent capabilities.",
+    description:
+      "Control a live Canvas view: reveal/select nodes, fit/center/zoom the viewport, clear selection, or show a notification. UI actions are valid Agent capabilities.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -260,7 +296,7 @@ export function createCanvasAgentToolProvider(input: {
 }): AgentToolProvider {
   return {
     async callTool(scope, name, value) {
-      if (name === "canvas_query_nodes") return queryNodes(input.application, scope, value)
+      if (name === "canvas_query_nodes") return queryNodes(input.application, input.renderer, scope, value)
       if (name === "canvas_add_resources") return addResources(input.resources, input.renderer, scope, value)
       if (name === "canvas_apply_primitive") return applyPrimitive(input.application, input.renderer, scope, value)
       if (name === "canvas_view") return executeView(input.renderer, scope, value)
@@ -270,16 +306,25 @@ export function createCanvasAgentToolProvider(input: {
   }
 }
 
-async function queryNodes(application: CanvasApplicationPort, scope: AgentToolScope, input: Record<string, unknown>) {
+async function queryNodes(
+  application: CanvasApplicationPort,
+  renderer: CanvasRendererBridge,
+  scope: AgentToolScope,
+  input: Record<string, unknown>,
+) {
   const canvasId = requiredString(input.canvasId, "canvasId")
   const kind = optionalString(input.kind, "kind")
   const relatedToNodeId = optionalString(input.relatedToNodeId, "relatedToNodeId")
-  return application.query(ref(scope, canvasId), {
+  const query = {
     ids: optionalStringArray(input.nodeIds, "nodeIds"),
     kinds: kind ? [kind] : undefined,
     limit: optionalInteger(input.limit, "limit", 1, 500),
     relatedToNodeIds: relatedToNodeId ? [relatedToNodeId] : undefined,
     text: optionalString(input.text, "text"),
+  }
+  await assertLiveActiveCanvas(renderer, scope, canvasId)
+  return application.query(ref(scope, canvasId), {
+    ...query,
   })
 }
 
@@ -290,17 +335,19 @@ async function addResources(
   input: Record<string, unknown>,
 ) {
   const canvasId = requiredString(input.canvasId, "canvasId")
+  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
   const reveal = resourceRevealOptions(input.view)
   const request: CanvasAddResourceSourcesRequest = {
     actor: actor(scope),
     anchor: point(input.anchor, "anchor"),
     canvasId,
     commandId: requiredString(input.commandId, "commandId"),
-    expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
+    expectedRevision,
     scopeId: scope.scopeId,
     relation: relation(input.relation),
     sources: resourceSources(input.sources),
   }
+  await assertLiveActiveCanvas(renderer, scope, canvasId, expectedRevision)
   const result = await resources.addResources(request)
   const sync = await syncRenderer(renderer, ref(scope, canvasId))
   const warnings = [...result.warnings]
@@ -345,108 +392,162 @@ async function applyPrimitive(
   input: Record<string, unknown>,
 ) {
   const canvasId = requiredString(input.canvasId, "canvasId")
-  const result = await application.execute({
+  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
+  const request = {
     canvasId,
     envelope: {
       actor: actor(scope),
       command: primitive(input.command),
       commandId: requiredString(input.commandId, "commandId"),
-      expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
+      expectedRevision,
     },
     scopeId: scope.scopeId,
-  })
-  return { ...mutationSummary(result), sync: result.changed ? await syncRenderer(renderer, ref(scope, canvasId)) : undefined }
+  }
+  await assertLiveActiveCanvas(renderer, scope, canvasId, expectedRevision)
+  const result = await application.execute(request)
+  return {
+    ...mutationSummary(result),
+    sync: result.changed ? await syncRenderer(renderer, ref(scope, canvasId)) : undefined,
+  }
 }
 
-function executeView(renderer: CanvasRendererBridge, scope: AgentToolScope, input: Record<string, unknown>) {
+async function executeView(renderer: CanvasRendererBridge, scope: AgentToolScope, input: Record<string, unknown>) {
+  const canvasId = requiredString(input.canvasId, "canvasId")
+  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
   const request: CanvasViewCommandRequest = {
     command: viewCommand(input.command),
-    expectedDocumentId: requiredString(input.canvasId, "canvasId"),
-    expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
+    expectedDocumentId: canvasId,
+    expectedRevision,
     expectedScopeId: scope.scopeId,
     viewId: optionalString(input.viewId, "viewId") ?? "desktop-main",
   }
+  await assertLiveActiveCanvas(renderer, scope, canvasId, expectedRevision)
   return renderer.executeView(request)
+}
+
+async function assertLiveActiveCanvas(
+  renderer: CanvasRendererBridge,
+  scope: AgentToolScope,
+  canvasId: string,
+  expectedRevision?: number,
+) {
+  const snapshot = await renderer.getViewSnapshot("desktop-main")
+  if (!snapshot) throw new Error("No live active Canvas is available")
+  if (snapshot.scopeId !== scope.scopeId) {
+    throw new Error("The live active Canvas is outside the Agent Project scope")
+  }
+  if (snapshot.documentId !== canvasId) {
+    throw new Error("canvasId must match the live active Canvas")
+  }
+  if (expectedRevision !== undefined && snapshot.revision !== expectedRevision) {
+    throw new Error("expectedRevision does not match the live active Canvas revision")
+  }
 }
 
 function primitive(value: unknown): CanvasPrimitiveCommand {
   const input = record(value, "command")
   const type = requiredString(input.type, "command.type")
-  if (type === "elements.remove") return {
-    type,
-    edgeIds: optionalStringArray(input.edgeIds, "command.edgeIds"),
-    nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
-  }
-  if (type === "nodes.move") return { type, delta: point(input.delta, "command.delta"), nodeIds: stringArray(input.nodeIds, "command.nodeIds") }
+  if (type === "elements.remove")
+    return {
+      type,
+      edgeIds: optionalStringArray(input.edgeIds, "command.edgeIds"),
+      nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
+    }
+  if (type === "nodes.move")
+    return { type, delta: point(input.delta, "command.delta"), nodeIds: stringArray(input.nodeIds, "command.nodeIds") }
   if (type === "nodes.connect") {
     const connection = record(input.connection, "command.connection")
-    return { type, connection: {
-      label: optionalString(connection.label, "command.connection.label"),
-      source: requiredString(connection.source, "command.connection.source"),
-      target: requiredString(connection.target, "command.connection.target"),
-    } }
+    return {
+      type,
+      connection: {
+        label: optionalString(connection.label, "command.connection.label"),
+        source: requiredString(connection.source, "command.connection.source"),
+        target: requiredString(connection.target, "command.connection.target"),
+      },
+    }
   }
-  if (type === "nodes.group") return { type, label: optionalString(input.label, "command.label"), nodeIds: stringArray(input.nodeIds, "command.nodeIds") }
+  if (type === "nodes.group")
+    return {
+      type,
+      label: optionalString(input.label, "command.label"),
+      nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
+    }
   if (type === "nodes.ungroup") return { type, nodeId: requiredString(input.nodeId, "command.nodeId") }
-  if (type === "nodes.layout") return {
-    type,
-    gap: optionalNumber(input.gap, "command.gap", 0),
-    layout: optionalEnum(input.layout, "command.layout", ["grid", "horizontal", "vertical"] as const),
-    nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
-  }
-  if (type === "nodes.align") return {
-    type,
-    direction: requiredEnum(input.direction, "command.direction", ["left", "center", "right", "top", "middle", "bottom"] as const),
-    nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
-  }
-  if (type === "nodes.distribute") return {
-    type,
-    axis: requiredEnum(input.axis, "command.axis", ["horizontal", "vertical"] as const),
-    nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
-  }
+  if (type === "nodes.layout")
+    return {
+      type,
+      gap: optionalNumber(input.gap, "command.gap", 0),
+      layout: optionalEnum(input.layout, "command.layout", ["grid", "horizontal", "vertical"] as const),
+      nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
+    }
+  if (type === "nodes.align")
+    return {
+      type,
+      direction: requiredEnum(input.direction, "command.direction", [
+        "left",
+        "center",
+        "right",
+        "top",
+        "middle",
+        "bottom",
+      ] as const),
+      nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
+    }
+  if (type === "nodes.distribute")
+    return {
+      type,
+      axis: requiredEnum(input.axis, "command.axis", ["horizontal", "vertical"] as const),
+      nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
+    }
   throw new Error(`Unsupported Canvas primitive command: ${type}`)
 }
 
 function viewCommand(value: unknown): CanvasViewCommand {
   const input = record(value, "command")
   const type = requiredString(input.type, "command.type")
-  if (type === "nodes.reveal") return {
-    type,
-    animation: animation(input.animation),
-    fit: optionalEnum(input.fit, "command.fit", ["center", "contain", "none"] as const),
-    nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
-    select: optionalBoolean(input.select, "command.select"),
-  }
+  if (type === "nodes.reveal")
+    return {
+      type,
+      animation: animation(input.animation),
+      fit: optionalEnum(input.fit, "command.fit", ["center", "contain", "none"] as const),
+      nodeIds: stringArray(input.nodeIds, "command.nodeIds"),
+      select: optionalBoolean(input.select, "command.select"),
+    }
   if (type === "selection.clear") return { type }
-  if (type === "selection.set") return {
-    type,
-    edgeIds: optionalStringArray(input.edgeIds, "command.edgeIds"),
-    nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
-  }
-  if (type === "viewport.fit") return {
-    type,
-    animation: animation(input.animation),
-    maxZoom: optionalNumber(input.maxZoom, "command.maxZoom", Number.MIN_VALUE),
-    nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
-    padding: optionalNumber(input.padding, "command.padding", 0),
-  }
-  if (type === "viewport.center") return {
-    type,
-    animation: animation(input.animation),
-    position: point(input.position, "command.position"),
-    zoom: optionalNumber(input.zoom, "command.zoom", Number.MIN_VALUE),
-  }
-  if (type === "viewport.zoom") return {
-    type,
-    animation: animation(input.animation),
-    zoom: requiredNumber(input.zoom, "command.zoom", Number.MIN_VALUE),
-  }
-  if (type === "notification.show") return {
-    type,
-    description: optionalString(input.description, "command.description"),
-    kind: requiredEnum(input.kind, "command.kind", ["error", "info", "success", "warning"] as const),
-    title: requiredString(input.title, "command.title"),
-  }
+  if (type === "selection.set")
+    return {
+      type,
+      edgeIds: optionalStringArray(input.edgeIds, "command.edgeIds"),
+      nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
+    }
+  if (type === "viewport.fit")
+    return {
+      type,
+      animation: animation(input.animation),
+      maxZoom: optionalNumber(input.maxZoom, "command.maxZoom", Number.MIN_VALUE),
+      nodeIds: optionalStringArray(input.nodeIds, "command.nodeIds"),
+      padding: optionalNumber(input.padding, "command.padding", 0),
+    }
+  if (type === "viewport.center")
+    return {
+      type,
+      animation: animation(input.animation),
+      position: point(input.position, "command.position"),
+      zoom: optionalNumber(input.zoom, "command.zoom", Number.MIN_VALUE),
+    }
+  if (type === "viewport.zoom")
+    return {
+      type,
+      animation: animation(input.animation),
+      zoom: requiredNumber(input.zoom, "command.zoom", Number.MIN_VALUE),
+    }
+  if (type === "notification.show")
+    return {
+      type,
+      description: optionalString(input.description, "command.description"),
+      kind: requiredEnum(input.kind, "command.kind", ["error", "info", "success", "warning"] as const),
+      title: requiredString(input.title, "command.title"),
+    }
   throw new Error(`Unsupported Canvas view command: ${type}`)
 }
 
@@ -568,7 +669,7 @@ function optionalStringArray(value: unknown, label: string) {
 }
 
 function requiredNumber(value: unknown, label: string, minimum?: number) {
-  if (typeof value !== "number" || !Number.isFinite(value) || minimum !== undefined && value < minimum) {
+  if (typeof value !== "number" || !Number.isFinite(value) || (minimum !== undefined && value < minimum)) {
     throw new Error(`${label} must be a finite number${minimum === undefined ? "" : ` >= ${minimum}`}`)
   }
   return value
@@ -580,7 +681,8 @@ function optionalNumber(value: unknown, label: string, minimum?: number) {
 
 function requiredInteger(value: unknown, label: string, minimum?: number, maximum?: number) {
   const number = requiredNumber(value, label, minimum)
-  if (!Number.isSafeInteger(number) || maximum !== undefined && number > maximum) throw new Error(`${label} must be an integer`)
+  if (!Number.isSafeInteger(number) || (maximum !== undefined && number > maximum))
+    throw new Error(`${label} must be an integer`)
   return number
 }
 
@@ -598,7 +700,11 @@ function optionalBoolean(value: unknown, label: string) {
   return value as boolean | undefined
 }
 
-function requiredEnum<const Values extends readonly string[]>(value: unknown, label: string, values: Values): Values[number] {
+function requiredEnum<const Values extends readonly string[]>(
+  value: unknown,
+  label: string,
+  values: Values,
+): Values[number] {
   const string = requiredString(value, label)
   if (!values.includes(string)) throw new Error(`${label} must be one of ${values.join(", ")}`)
   return string

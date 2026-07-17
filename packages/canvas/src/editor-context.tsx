@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useContext } from "react"
 import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
 import type { CanvasSelectionContext } from "./selection-context"
+import type { CanvasSelectionAction } from "./selection-actions"
 import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
 
 export interface CanvasConnectionNodeType {
@@ -16,11 +17,14 @@ export interface CanvasEditorController {
   canUpload: boolean
   fileRenderers: CanvasFileRendererRegistry
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
+  visibleSelectionActions: readonly CanvasSelectionAction[]
   beginGesture: () => void
   cancelGesture: () => void
   endGesture: () => void
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
   duplicateNode: (nodeId: string) => void
+  executeSelectionAction: (action: CanvasSelectionAction) => void
+  isSelectionActionPending: (actionId: string) => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
   removeNode: (nodeId: string) => void
   replaceNodeMedia: (nodeId: string, file: File) => void
