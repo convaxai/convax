@@ -13,6 +13,8 @@ const removedHandlers: string[] = []
 const windows: TestWindow[] = []
 let dialogResult: { canceled: boolean; filePaths: string[] } = { canceled: true, filePaths: [] }
 let dialogOwner: TestWindow | undefined
+let openPathError = ""
+const openedPaths: string[] = []
 
 interface TestWindow {
   isDestroyed(): boolean
@@ -57,6 +59,12 @@ if (!isIsolatedRun) {
         handlers.delete(channel)
       },
     },
+    shell: {
+      openPath: async (path: string) => {
+        openedPaths.push(path)
+        return openPathError
+      },
+    },
   }))
 
   afterEach(() => {
@@ -65,6 +73,8 @@ if (!isIsolatedRun) {
     windows.splice(0)
     dialogResult = { canceled: true, filePaths: [] }
     dialogOwner = undefined
+    openPathError = ""
+    openedPaths.splice(0)
   })
 }
 
@@ -105,6 +115,9 @@ function createManager(inventory: DesktopSkillInventory = { catalog: [], skills:
       source: "managed" as const,
     })),
     list: mock(async (_directory?: string) => inventory),
+    resolveSkillLocation: mock(
+      async (name: string, directory?: string) => `${directory ?? "/default"}/${name}/SKILL.md`,
+    ),
     subscribe: mock((listener: () => void) => {
       changeListener = listener
       return unsubscribe
@@ -203,6 +216,7 @@ if (isIsolatedRun)
         installCatalogSkill: "agent:skill-catalog-install",
         installPluginSkill: "agent:skill-plugin-install",
         listSkills: "agent:skills-list",
+        openSkill: "agent:skill-open",
         uninstallSkill: "agent:skill-uninstall",
       })
     })
@@ -225,6 +239,7 @@ if (isIsolatedRun)
         skillManagementIpcChannels.importSkill,
         skillManagementIpcChannels.installCatalogSkill,
         skillManagementIpcChannels.installPluginSkill,
+        skillManagementIpcChannels.openSkill,
         skillManagementIpcChannels.uninstallSkill,
       ]) {
         await expect(Promise.resolve().then(() => invoke(channel, {}, { sender: { id: 2 } }))).rejects.toThrow(
@@ -236,7 +251,7 @@ if (isIsolatedRun)
       dispose()
     })
 
-    test("resolves Project scope and routes import, catalog, plugin Skill, and uninstall operations", async () => {
+    test("resolves Project scope and routes import, catalog, plugin Skill, open, and uninstall operations", async () => {
       const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
       const setup = createManager()
       const projects = {
@@ -259,8 +274,34 @@ if (isIsolatedRun)
       await invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "director-stage" })
       expect(plugins.resolveAsset).toHaveBeenCalledWith("director-stage", "skills/director/SKILL.md")
       expect(setup.manager.importFromDirectory).toHaveBeenLastCalledWith("/plugins/director-stage/skills/director")
+      await invoke(skillManagementIpcChannels.openSkill, {
+        name: "review",
+        path: "/renderer/must-not-control-this.md",
+        scopeId: "project-one",
+      })
+      expect(setup.manager.resolveSkillLocation).toHaveBeenCalledWith("review", "/projects/project-one")
+      expect(openedPaths).toEqual(["/projects/project-one/review/SKILL.md"])
       await invoke(skillManagementIpcChannels.uninstallSkill, { name: "storyboard" })
       expect(setup.manager.uninstall).toHaveBeenCalledWith("storyboard")
+      dispose()
+    })
+
+    test("surfaces native errors while opening a resolved Skill location", async () => {
+      const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
+      const setup = createManager()
+      openPathError = "No application is registered"
+      const dispose = registerSkillManagementIpc(
+        setup.manager,
+        { resolveEntryPath: mock(async () => "/project") },
+        createPlugins(),
+        () => true,
+      )
+
+      await expect(invoke(skillManagementIpcChannels.openSkill, { name: "review" })).rejects.toThrow(
+        "Open Skill failed: No application is registered",
+      )
+      expect(setup.manager.resolveSkillLocation).toHaveBeenCalledWith("review", undefined)
+      expect(openedPaths).toEqual(["/default/review/SKILL.md"])
       dispose()
     })
 
@@ -316,7 +357,7 @@ if (isIsolatedRun)
       const registered = [...handlers.keys()]
       dispose()
       expect(setup.unsubscribe).toHaveBeenCalledTimes(1)
-      expect(registered).toHaveLength(7)
+      expect(registered).toHaveLength(8)
       expect(removedHandlers.sort()).toEqual(registered.sort())
       expect(handlers).toHaveLength(0)
     })

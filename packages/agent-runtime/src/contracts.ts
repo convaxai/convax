@@ -25,6 +25,7 @@ export type AgentToolState =
 
 export type AgentMessagePart =
   | { id: string; type: "text"; text: string; synthetic?: boolean }
+  | { id: string; type: "skill"; name: string }
   | { id: string; type: "reasoning"; text: string }
   | { id: string; type: "file"; filename?: string; mime: string; url: string }
   | { id: string; type: "tool"; tool: string; callId: string; state: AgentToolState }

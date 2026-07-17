@@ -16,6 +16,7 @@ import {
   type ServerOptions,
   type Session,
   type SessionStatus,
+  type TextPartInput,
   type ToolState,
 } from "@opencode-ai/sdk/v2"
 
@@ -132,6 +133,7 @@ const binaryMimeByExtension: Record<string, string> = {
 const supportedBinaryMimes = new Set(Object.values(binaryMimeByExtension))
 const textFileLimit = 5 * 1024 * 1024
 const binaryFileLimit = 20 * 1024 * 1024
+const skillPartMetadataKey = "convax.agent.skill"
 
 type OpenCodeConfig = NonNullable<ServerOptions["config"]>
 type OpenCodePermission = NonNullable<OpenCodeConfig["permission"]>
@@ -157,9 +159,7 @@ function protectPathPatterns(
   patterns: readonly string[],
   fallback?: OpenCodePermissionAction,
 ) {
-  const existing = typeof rule === "string"
-    ? { "*": rule }
-    : rule ?? (fallback ? { "*": fallback } : {})
+  const existing = typeof rule === "string" ? { "*": rule } : (rule ?? (fallback ? { "*": fallback } : {}))
   const protectedRule: Record<string, OpenCodePermissionAction> = { ...existing }
   for (const pattern of patterns) protectedRule[pattern] = "deny"
   return protectedRule
@@ -224,13 +224,14 @@ export function withProtectedPathGuard(
     return specifier !== pluginSpecifier
   })
   const permission = config?.permission
-  const guardedPermission = permission === "deny"
-    ? permission
-    : {
-        ...(typeof permission === "string" ? { "*": permission } : permission ?? {}),
-        bash: "deny" as const,
-        lsp: "deny" as const,
-      }
+  const guardedPermission =
+    permission === "deny"
+      ? permission
+      : {
+          ...(typeof permission === "string" ? { "*": permission } : (permission ?? {})),
+          bash: "deny" as const,
+          lsp: "deny" as const,
+        }
 
   return {
     ...config,
@@ -365,10 +366,18 @@ function mapToolState(state: ToolState): AgentToolState {
   }
 }
 
+function skillNameFromPart(part: Extract<Part, { type: "text" }>) {
+  const name = part.metadata?.[skillPartMetadataKey]
+  return typeof name === "string" && name.trim() ? name.trim() : undefined
+}
+
 function mapPart(part: Part): AgentMessagePart {
   switch (part.type) {
-    case "text":
+    case "text": {
+      const skillName = skillNameFromPart(part)
+      if (skillName) return { id: part.id, type: "skill", name: skillName }
       return { id: part.id, type: "text", text: part.text, synthetic: part.synthetic }
+    }
     case "reasoning":
       return { id: part.id, type: "reasoning", text: part.text }
     case "file":
@@ -459,11 +468,13 @@ function inferMime(file: string): string {
 }
 
 function isTextMime(mime: string) {
-  return mime.startsWith("text/")
-    || mime === "application/json"
-    || mime === "application/javascript"
-    || mime === "application/xml"
-    || mime === "application/yaml"
+  return (
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime === "application/javascript" ||
+    mime === "application/xml" ||
+    mime === "application/yaml"
+  )
 }
 
 async function looksLikeText(file: string) {
@@ -479,7 +490,7 @@ async function looksLikeText(file: string) {
 
 async function inlineMime(file: string, requestedMime: string | undefined, size: number) {
   let mime = (requestedMime ?? inferMime(file)).trim().toLowerCase()
-  if (mime === "application/octet-stream" && size <= textFileLimit && await looksLikeText(file)) mime = "text/plain"
+  if (mime === "application/octet-stream" && size <= textFileLimit && (await looksLikeText(file))) mime = "text/plain"
 
   if (isTextMime(mime)) {
     if (size > textFileLimit) {
@@ -559,9 +570,8 @@ export async function prepareAgentResourceParts(
     const pathFromRoot = relative(workspaceRoot, absolute) || "."
     const displayPath = pathFromRoot.split(sep).join("/")
     const sourceText = `@${displayPath}`
-    const mime = resource.kind === "directory"
-      ? "application/x-directory"
-      : await inlineMime(absolute, resource.mime, info.size)
+    const mime =
+      resource.kind === "directory" ? "application/x-directory" : await inlineMime(absolute, resource.mime, info.size)
 
     result.push({
       type: "file",
@@ -613,9 +623,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     if (options.configDirectory !== undefined && !options.configDirectory.trim()) {
       throw new Error("OpenCode config directory is required")
     }
-    const configDirectory = options.configDirectory === undefined
-      ? undefined
-      : resolve(options.configDirectory.trim())
+    const configDirectory = options.configDirectory === undefined ? undefined : resolve(options.configDirectory.trim())
     this.options = {
       ...options,
       config,
@@ -642,12 +650,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   }
 
   private drainSkillRefresh() {
-    if (
-      this.disposed
-      || this.activePromptCount > 0
-      || this.skillRefreshInFlight
-      || !this.skillRefreshRequested
-    ) return
+    if (this.disposed || this.activePromptCount > 0 || this.skillRefreshInFlight || !this.skillRefreshRequested) return
 
     this.skillRefreshRequested = false
     const waiters = this.skillRefreshWaiters.splice(0)
@@ -730,13 +733,18 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     const password = randomBytes(32).toString("base64url")
     this.startup = (async () => {
       const config = await this.serverConfig()
-      const server = await startAuthenticatedServer({
-        hostname: this.options.hostname ?? "127.0.0.1",
-        port: this.options.port ?? 0,
-        timeout: this.options.timeout ?? 10_000,
-        config,
-        signal: this.controller.signal,
-      }, username, password, this.options.configDirectory)
+      const server = await startAuthenticatedServer(
+        {
+          hostname: this.options.hostname ?? "127.0.0.1",
+          port: this.options.port ?? 0,
+          timeout: this.options.timeout ?? 10_000,
+          config,
+          signal: this.controller.signal,
+        },
+        username,
+        password,
+        this.options.configDirectory,
+      )
       if (this.disposed || generation !== this.connectionGeneration) {
         server.close()
         throw new Error("OpenCode agent runtime was disposed while starting")
@@ -817,18 +825,21 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     const registration = (async () => {
       const endpoint = await this.toolServer!.registerScope({ directory, scopeId })
       const operation = `Register ${this.toolServerName} tools`
-      const statuses = unwrap(await client.mcp.add({
-        config: {
-          enabled: true,
-          headers: endpoint.headers,
-          oauth: false,
-          timeout: this.options.timeout ?? 10_000,
-          type: "remote",
-          url: endpoint.url,
-        },
-        directory,
-        name: this.toolServerName,
-      }), operation)
+      const statuses = unwrap(
+        await client.mcp.add({
+          config: {
+            enabled: true,
+            headers: endpoint.headers,
+            oauth: false,
+            timeout: this.options.timeout ?? 10_000,
+            type: "remote",
+            url: endpoint.url,
+          },
+          directory,
+          name: this.toolServerName,
+        }),
+        operation,
+      )
       const status = statuses[this.toolServerName]
       if (status?.status === "failed") throw new Error(`${operation}: ${status.error}`)
     })()
@@ -903,36 +914,20 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       const attachments = await prepareAgentResourceParts(directory, resources)
       const skills = [...new Set(selectedSkills)].filter(Boolean)
 
-      let useSkillTool = skills.length > 1
-      if (skills.length === 1) {
-        const commands = unwrap(await client.command.list({ directory }), "List OpenCode commands")
-        const matchingCommand = commands.find((command) => command.name === skills[0])
-        useSkillTool = matchingCommand !== undefined && matchingCommand.source !== "skill"
-
-        if (!useSkillTool) {
-          const response = unwrap(
-            await client.session.command({
-              directory,
-              sessionID: input.sessionId,
-              command: skills[0],
-              arguments: [input.text, ...instructions].filter((part) => part.trim()).join("\n\n"),
-              parts: attachments,
-              agent: input.agent,
-              model: input.model ? `${input.model.providerId}/${input.model.modelId}` : undefined,
-              variant: input.variant,
-            }),
-            `Run OpenCode skill ${skills[0]}`,
-          )
-          return mapMessage(response)
-        }
+      if (skills.length > 0) {
+        const discovered = unwrap(await client.app.skills({ directory }), "List OpenCode skills")
+        const available = new Set(discovered.map((skill) => skill.name))
+        const missing = skills.filter((skill) => !available.has(skill))
+        if (missing.length > 0) throw new Error(`OpenCode skill was not found: ${missing.join(", ")}`)
       }
 
-      const parts: Array<{ type: "text"; text: string; synthetic?: boolean } | FilePartInput> = []
-      if (useSkillTool) {
+      const parts: Array<TextPartInput | FilePartInput> = []
+      for (const skill of skills) {
         parts.push({
           type: "text",
           synthetic: true,
-          text: `Use the skill tool to load each of these skills before handling the request: ${skills.join(", ")}.`,
+          text: `Use the skill tool to load the Skill named ${JSON.stringify(skill)} before handling the request.`,
+          metadata: { [skillPartMetadataKey]: skill },
         })
       }
       for (const instruction of instructions) {
@@ -985,18 +980,18 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     const client = await this.getClient()
     await this.ensureProtectedPathGuard(client, directory)
     await this.ensureToolScope(client, directory, input.scopeId)
-    const [skills, toolsResult] = await Promise.all([
-      this.listSkills({ directory }),
-      client.tool.ids({ directory }),
-    ])
+    const [skills, toolsResult] = await Promise.all([this.listSkills({ directory }), client.tool.ids({ directory })])
     const toolIds = unwrap(toolsResult, "List OpenCode tools")
-    const visibleToolIds = (this.options.protectedPaths?.length ?? 0) > 0
-      ? toolIds.filter((tool) => tool !== "bash" && tool !== "shell" && tool !== "lsp")
-      : toolIds
-    const hostToolIds = this.options.toolProvider && input.scopeId
-      ? (await this.options.toolProvider.listTools({ directory, scopeId: input.scopeId }))
-          .map((tool) => `${this.toolServerName}_${tool.name}`)
-      : []
+    const visibleToolIds =
+      (this.options.protectedPaths?.length ?? 0) > 0
+        ? toolIds.filter((tool) => tool !== "bash" && tool !== "shell" && tool !== "lsp")
+        : toolIds
+    const hostToolIds =
+      this.options.toolProvider && input.scopeId
+        ? (await this.options.toolProvider.listTools({ directory, scopeId: input.scopeId })).map(
+            (tool) => `${this.toolServerName}_${tool.name}`,
+          )
+        : []
     return {
       skills,
       toolIds: [...new Set([...visibleToolIds, ...hostToolIds])],
@@ -1029,10 +1024,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   async rejectQuestion(input: AgentRuntimeRejectQuestionInput): Promise<void> {
     const directory = workspaceDirectory(input.directory)
     const client = await this.getClient()
-    unwrap(
-      await client.question.reject({ directory, requestID: input.requestId }),
-      "Reject OpenCode question",
-    )
+    unwrap(await client.question.reject({ directory, requestID: input.requestId }), "Reject OpenCode question")
   }
 
   async dispose(): Promise<void> {

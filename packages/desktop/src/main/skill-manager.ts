@@ -170,6 +170,16 @@ export class DesktopSkillManager {
     return this.finishInstall(installed, directory)
   }
 
+  async resolveSkillLocation(name: string, directory = this.defaultDirectory) {
+    const requestedName = name.trim()
+    if (!requestedName) throw new Error("Skill name is required")
+    const skill = (await this.list(directory)).skills.find((candidate) => candidate.name === requestedName)
+    if (!skill) throw new Error(`Skill was not found: ${requestedName}`)
+    const location = skill.location.trim()
+    if (!location) throw new Error(`Skill location is unavailable: ${requestedName}`)
+    return location
+  }
+
   async uninstall(name: string) {
     const removed = await this.store.uninstall(name)
     if (!removed) return false

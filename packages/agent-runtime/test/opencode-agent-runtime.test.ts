@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -24,6 +24,21 @@ async function writeSkill(directory: string, name: string, description = `${name
 function restoreTestEnvironment(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
+}
+
+function completedAssistantMessage(sessionId: string) {
+  const now = Date.now()
+  return {
+    data: {
+      info: {
+        id: "assistant-message",
+        role: "assistant" as const,
+        sessionID: sessionId,
+        time: { completed: now, created: now },
+      },
+      parts: [],
+    },
+  }
 }
 
 describe("OpenCode agent runtime boundaries", () => {
@@ -305,6 +320,163 @@ describe("OpenCode agent runtime boundaries", () => {
       expect((await runtime.listSessions({ directory })).map((item) => item.id)).toEqual([session.id])
     } finally {
       releasePrompt()
+      await runtime.dispose()
+    }
+  })
+
+  test("loads a selected Skill through a synthetic skill-tool instruction", async () => {
+    const runtime = new OpenCodeAgentRuntime()
+    const prompt = mock(async () => completedAssistantMessage("skill-session"))
+    const command = mock(async () => {
+      throw new Error("The Skill command endpoint must not be used")
+    })
+    ;(runtime as unknown as { client: unknown }).client = {
+      app: {
+        skills: async () => ({ data: [{ name: "review", location: "/skills/review/SKILL.md" }] }),
+      },
+      session: { command, prompt },
+    }
+
+    try {
+      await runtime.prompt({
+        directory: "/workspace",
+        resources: [{ kind: "skill", name: "review" }],
+        sessionId: "skill-session",
+        text: "Review this change",
+      })
+
+      expect(command).not.toHaveBeenCalled()
+      expect(prompt).toHaveBeenCalledTimes(1)
+      const request = prompt.mock.calls[0]?.[0] as { parts: unknown[] }
+      expect(request.parts).toEqual([
+        {
+          metadata: { "convax.agent.skill": "review" },
+          synthetic: true,
+          text: 'Use the skill tool to load the Skill named "review" before handling the request.',
+          type: "text",
+        },
+        { text: "Review this change", type: "text" },
+      ])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("deduplicates multiple Skills while keeping one semantic instruction for each", async () => {
+    const runtime = new OpenCodeAgentRuntime()
+    const prompt = mock(async () => completedAssistantMessage("multi-skill-session"))
+    ;(runtime as unknown as { client: unknown }).client = {
+      app: {
+        skills: async () => ({ data: [{ name: "review" }, { name: "release" }] }),
+      },
+      session: { prompt },
+    }
+
+    try {
+      await runtime.prompt({
+        directory: "/workspace",
+        resources: [
+          { kind: "skill", name: "review" },
+          { kind: "skill", name: "release" },
+          { kind: "skill", name: "review" },
+        ],
+        sessionId: "multi-skill-session",
+        text: "Prepare the release",
+      })
+
+      const request = prompt.mock.calls[0]?.[0] as { parts: Array<{ metadata?: Record<string, unknown> }> }
+      expect(request.parts.slice(0, 2).map((part) => part.metadata)).toEqual([
+        { "convax.agent.skill": "review" },
+        { "convax.agent.skill": "release" },
+      ])
+      expect(request.parts).toHaveLength(3)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("rejects a selected Skill that is not in OpenCode discovery", async () => {
+    const runtime = new OpenCodeAgentRuntime()
+    const prompt = mock(async () => completedAssistantMessage("missing-skill-session"))
+    ;(runtime as unknown as { client: unknown }).client = {
+      app: { skills: async () => ({ data: [{ name: "review" }] }) },
+      session: { prompt },
+    }
+
+    try {
+      await expect(
+        runtime.prompt({
+          directory: "/workspace",
+          resources: [{ kind: "skill", name: "missing" }],
+          sessionId: "missing-skill-session",
+          text: "Use it",
+        }),
+      ).rejects.toThrow("OpenCode skill was not found: missing")
+      expect(prompt).not.toHaveBeenCalled()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("restores semantic Skill parts from persisted text metadata", async () => {
+    const runtime = new OpenCodeAgentRuntime()
+    const now = Date.now()
+    const sessionId = "history-skill-session"
+    ;(runtime as unknown as { client: unknown }).client = {
+      permission: { list: async () => ({ data: [] }) },
+      question: { list: async () => ({ data: [] }) },
+      session: {
+        get: async () => ({
+          data: {
+            directory: "/workspace",
+            id: sessionId,
+            time: { created: now, updated: now },
+            title: "Skill history",
+          },
+        }),
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                agent: "build",
+                id: "user-message",
+                model: { modelID: "model", providerID: "provider" },
+                role: "user",
+                sessionID: sessionId,
+                time: { created: now },
+              },
+              parts: [
+                {
+                  id: "skill-part",
+                  messageID: "user-message",
+                  metadata: { "convax.agent.skill": "review" },
+                  sessionID: sessionId,
+                  synthetic: true,
+                  text: "Hidden Skill instruction",
+                  type: "text",
+                },
+                {
+                  id: "text-part",
+                  messageID: "user-message",
+                  sessionID: sessionId,
+                  text: "Review this change",
+                  type: "text",
+                },
+              ],
+            },
+          ],
+        }),
+        status: async () => ({ data: { [sessionId]: { type: "idle" } } }),
+      },
+    }
+
+    try {
+      const state = await runtime.getSessionState({ directory: "/workspace", sessionId })
+      expect(state.messages[0]?.parts).toEqual([
+        { id: "skill-part", name: "review", type: "skill" },
+        { id: "text-part", synthetic: undefined, text: "Review this change", type: "text" },
+      ])
+    } finally {
       await runtime.dispose()
     }
   })

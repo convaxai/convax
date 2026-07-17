@@ -74,5 +74,6 @@ export interface DesktopSkillClient {
   installPluginSkill(input: { pluginId: string }): Promise<DesktopSkillSummary>
   listSkills(input?: { scopeId?: string }): Promise<DesktopSkillInventory>
   onDidChange(listener: () => void): () => void
+  openSkill(input: { name: string; scopeId?: string }): Promise<void>
   uninstallSkill(input: { name: string }): Promise<boolean>
 }

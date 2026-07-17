@@ -71,6 +71,7 @@ const agentSkillChannels = {
   installCatalogSkill: "agent:skill-catalog-install",
   installPluginSkill: "agent:skill-plugin-install",
   listSkills: "agent:skills-list",
+  openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
 } as const
 
@@ -212,6 +213,7 @@ const agentSkillClient = {
     ipcRenderer.on(agentSkillChannels.changed, handleChange)
     return () => ipcRenderer.removeListener(agentSkillChannels.changed, handleChange)
   },
+  openSkill: (input) => ipcRenderer.invoke(agentSkillChannels.openSkill, input),
   uninstallSkill: (input) => ipcRenderer.invoke(agentSkillChannels.uninstallSkill, input),
 } satisfies DesktopSkillClient
 

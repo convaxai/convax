@@ -105,6 +105,7 @@ const skillClient: DesktopSkillClient = {
   installPluginSkill: mock(async () => skillInventory.skills[0]!),
   listSkills: mock(async () => skillInventory),
   onDidChange: mock(() => noop),
+  openSkill: mock(async () => undefined),
   uninstallSkill: mock(async () => true),
 }
 

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
 import { dirname } from "node:path"
 import type {
   DesktopSkillClient,
@@ -22,6 +22,7 @@ export const skillManagementIpcChannels = {
   installCatalogSkill: "agent:skill-catalog-install",
   installPluginSkill: "agent:skill-plugin-install",
   listSkills: "agent:skills-list",
+  openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
 } as const
 
@@ -172,6 +173,15 @@ export function registerSkillManagementIpc(
         if (!plugin.skill) throw new Error(`Plugin does not include a companion Skill: ${input.pluginId}`)
         const skillFile = await plugins.resolveAsset(plugin.id, plugin.skill)
         return manager.importFromDirectory(dirname(skillFile))
+      },
+    ),
+    register<SkillClientInput<"openSkill">, Awaited<ReturnType<DesktopSkillClient["openSkill"]>>>(
+      skillManagementIpcChannels.openSkill,
+      async (_event, input) => {
+        const directory = input.scopeId ? await projects.resolveEntryPath({ projectId: input.scopeId }) : undefined
+        const location = await manager.resolveSkillLocation(input.name, directory)
+        const error = await shell.openPath(location)
+        if (error) throw new Error(`Open Skill failed: ${error}`)
       },
     ),
     register<SkillClientInput<"uninstallSkill">, Awaited<ReturnType<DesktopSkillClient["uninstallSkill"]>>>(

@@ -27,6 +27,7 @@ const skillClient: DesktopSkillClient = {
   })),
   listSkills: mock(async () => ({ catalog: [], skills: [] })),
   onDidChange: mock(() => noop),
+  openSkill: mock(async () => undefined),
   uninstallSkill: mock(async () => true),
 }
 

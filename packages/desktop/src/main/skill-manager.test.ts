@@ -105,6 +105,23 @@ describe("DesktopSkillManager", () => {
     }
   })
 
+  test("resolves only a discovered Skill name to its host-owned location", async () => {
+    const setup = await fixture([
+      { location: " /global/review/SKILL.md ", name: "review" },
+      { name: "location-unavailable" },
+    ])
+    try {
+      expect(await setup.manager.resolveSkillLocation(" review ")).toBe("/global/review/SKILL.md")
+      await expect(setup.manager.resolveSkillLocation("missing")).rejects.toThrow("Skill was not found: missing")
+      await expect(setup.manager.resolveSkillLocation("location-unavailable")).rejects.toThrow(
+        "Skill location is unavailable: location-unavailable",
+      )
+      await expect(setup.manager.resolveSkillLocation("  ")).rejects.toThrow("Skill name is required")
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
   test("publishes changes after durable mutations", async () => {
     const setup = await fixture()
     try {
