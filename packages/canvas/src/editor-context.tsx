@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext } from "react"
 import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
+import type { CanvasSelectionContext } from "./selection-context"
 import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
 
 export interface CanvasConnectionNodeType {
@@ -10,6 +11,7 @@ export interface CanvasConnectionNodeType {
 export interface CanvasEditorController {
   document: CanvasDocument
   selection: CanvasSelection
+  selectionContext: CanvasSelectionContext
   readOnly: boolean
   canUpload: boolean
   fileRenderers: CanvasFileRendererRegistry
