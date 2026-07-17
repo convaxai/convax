@@ -14,16 +14,16 @@ OpenCode plugins are Agent-runtime hooks and are not Convax Plugins.
 
 ## Ownership
 
-| Concern | Owner |
-| --- | --- |
-| Skill discovery and execution | `@convax/agent-runtime` through OpenCode |
-| Managed Skill validation/copy/removal | `@convax/agent-runtime/node` |
-| Canvas renderer and node-toolbar registration | existing `@convax/canvas` registries |
-| Plugin package discovery, static assets and native import dialogs | Desktop main |
-| Plugin iframe rendering and scoped host calls | Desktop renderer composition |
-| Global settings, language and capability management UI | Desktop renderer preferences/views |
-| Active Project and Canvas | existing Project and Workbench controllers |
-| Project/Canvas/Agent invariants | their existing typed services and clients |
+| Concern                                                           | Owner                                      |
+| ----------------------------------------------------------------- | ------------------------------------------ |
+| Skill discovery and execution                                     | `@convax/agent-runtime` through OpenCode   |
+| Managed Skill validation/copy/removal                             | `@convax/agent-runtime/node`               |
+| Canvas renderer and node-toolbar registration                     | existing `@convax/canvas` registries       |
+| Plugin package discovery, static assets and native import dialogs | Desktop main                               |
+| Plugin iframe rendering and scoped host calls                     | Desktop renderer composition               |
+| Global settings, language and capability management UI            | Desktop renderer preferences/views         |
+| Active Project and Canvas                                         | existing Project and Workbench controllers |
+| Project/Canvas/Agent invariants                                   | their existing typed services and clients  |
 
 There is no new Workspace aggregate, extension bus, service locator, Canvas node
 role, or alternate Agent runtime. A Plugin renderer remains a Canvas `file` node.
@@ -63,10 +63,27 @@ Desktop `resources`, never from `src/main` or `node_modules`. A Plugin companion
 Skill is a second explicit copy into the managed Skill root and remains
 independently removable.
 
+Installed built-ins are never overwritten on application startup. When the catalog
+contains a newer SemVer, management shows the installed and target versions and the
+user may explicitly update through the existing catalog-install action. The manager
+fully validates a staging copy, switches same-root directories, and restores the old
+directory if the second rename fails. Imported packages still cannot replace an
+installed id, and equal-version or downgrade catalog replacements are rejected.
+
 An installed Plugin package is global to the user. A Canvas document stores only a
 stable plugin id/version reference and namespaced portable instance state. Removing
 a Plugin therefore does not destroy Canvas nodes; they fall back to the unknown-file
 renderer and recover after reinstall.
+
+Portable instance state is a bounded, atomic JSON snapshot on the owning node. It
+is the canonical state used by reload, node duplication, Canvas cloning and Agent
+resources; iframe `localStorage`/`IndexedDB` is not. The Plugin adapter owns a schema
+version and explicit migrations, and must fail closed without overwriting an unknown
+or invalid snapshot. A Plugin may keep its domain document and portable presentation
+state in separate fields of that snapshot—for example a 3D scene graph and the
+director viewport camera—without turning selection, animation or transient errors
+into Canvas state. Binary media is imported into managed Project assets and is
+represented here only by portable references.
 
 ## Skill lifecycle
 
@@ -111,8 +128,9 @@ surfaces:
   the existing Canvas query, resource business, primitive and view tools.
 - **3D Director Desk** embeds the MIT-licensed StoryAI director surface for spatial
   character, geometry, camera, panorama and shot-preview work. Its portable scene
-  graph is stored in the owning Canvas node through `canvas.node.updateState`; its
-  companion Skill reviews the same snapshot through normal Canvas Agent resources.
+  graph and director viewport camera are stored as separate fields in the owning
+  Canvas node through `canvas.node.updateState`; its companion Skill reviews the
+  same snapshot through normal Canvas Agent resources.
 - **Panorama Viewer** is an original offline WebGL2 surface for equirectangular 360°
   images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
   image nodes connected into its own Canvas node through a narrow host capability.
@@ -140,8 +158,10 @@ contributions required by this product slice:
 Plugin ids are kebab-case. All package paths are relative and validated inside the
 package root. Installation rejects symlinks/reparse-point escapes, traversal,
 Windows reserved names and alternate data stream syntax. Installation uses staging
-and an atomic rename; replacing an installed version is deferred until update policy
-exists. The renderer never imports plugin JavaScript into the host bundle.
+and a same-root directory switch with rollback. Only an explicit newer built-in
+catalog version may replace an installation; automatic updates and imported-package
+replacement remain disallowed. The renderer never imports plugin JavaScript into
+the host bundle.
 
 ## Web surface isolation
 
@@ -157,19 +177,27 @@ the manifest allowlist and current host scope.
 
 The initial direct-call surface is intentionally narrow:
 
-| Method | Required capability | Scope |
-| --- | --- | --- |
-| `host.context.get` | none | current Project, Canvas and own node |
-| `canvas.connectedImages.list` | `canvas.connectedImages.read` | metadata for image nodes connected into the own node only |
-| `canvas.connectedImage.read` | `canvas.connectedImages.read` | one listed embedded image or managed Project image, atomically type-checked and limited to 16 MiB in main |
-| `canvas.node.get` | `canvas.node.read` | own node only |
-| `canvas.node.updateState` | `canvas.node.write` | own namespaced state only |
-| `project.file.readText` | `project.files.read` | current Project relative path |
-| `agent.prompt` | `agent.prompt` | current Project with own node resource |
+| Method                        | Required capability           | Scope                                                                                                     |
+| ----------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `host.context.get`            | none                          | current Project, Canvas and own node                                                                      |
+| `canvas.connectedImages.list` | `canvas.connectedImages.read` | metadata for image nodes connected into the own node only                                                 |
+| `canvas.connectedImage.read`  | `canvas.connectedImages.read` | one listed embedded image or managed Project image, atomically type-checked and limited to 16 MiB in main |
+| `canvas.node.get`             | `canvas.node.read`            | own node only                                                                                             |
+| `canvas.node.updateState`     | `canvas.node.write`           | own namespaced state only                                                                                 |
+| `project.file.readText`       | `project.files.read`          | current Project relative path                                                                             |
+| `agent.prompt`                | `agent.prompt`                | current Project with own node resource                                                                    |
 
 These are adapters over existing clients/controllers. They do not expose private
 Project JSON, absolute paths, arbitrary target-node mutation, Electron, or a generic
 function-call escape hatch.
+
+`canvas.node.updateState` replaces the Plugin's own snapshot atomically. A surface
+may throttle continuous changes, but must flush after pointer/keyboard gesture end,
+when hidden, and before teardown; failures use finite retry and visible error UI.
+Copies include the latest snapshot accepted by Canvas, not uncommitted iframe memory.
+The host delays its one-shot MessagePort transfer until iframe scripts and passive
+effects have installed their listener, while new surfaces register that listener
+before rendering.
 
 The optional `ui.fullscreen` capability does not add an RPC method. It only lets the
 host add `fullscreen *` to that Plugin iframe's feature policy and set
