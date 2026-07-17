@@ -1,6 +1,7 @@
 import type { AgentResource, AgentSession } from "@convax/agent-runtime"
 import { describe, expect, mock, test } from "bun:test"
 import {
+  AgentSessionStateRequestTracker,
   canvasAgentResource,
   EmbeddedConversationSessionCache,
   containEmbeddedResourceDrag,
@@ -9,7 +10,10 @@ import {
   embeddedConversationTitlePrefix,
   filterStandaloneAgentSessions,
   forgetStaleEmbeddedConversation,
+  agentSessionContentKey,
+  isAgentScrollNearBottom,
   mergeAgentResources,
+  selectAgentSessionAfterRefresh,
   type StorageLike,
 } from "./agent-panel-state"
 
@@ -54,13 +58,7 @@ describe("mergeAgentResources", () => {
       { kind: "resource", name: "Duplicate node", uri: "convax://canvas/canvas-1/node/node-1" },
     ]
 
-    expect(mergeAgentResources(locked, attached)).toEqual([
-      locked[0],
-      locked[1],
-      locked[2],
-      attached[1],
-      attached[2],
-    ])
+    expect(mergeAgentResources(locked, attached)).toEqual([locked[0], locked[1], locked[2], attached[1], attached[2]])
   })
 
   test("does not mutate any input group", () => {
@@ -147,9 +145,7 @@ describe("EmbeddedConversationSessionCache", () => {
   })
 
   test("uses an unambiguous composite key", () => {
-    expect(embeddedConversationSessionKey("a:b", "c")).not.toBe(
-      embeddedConversationSessionKey("a", "b:c"),
-    )
+    expect(embeddedConversationSessionKey("a:b", "c")).not.toBe(embeddedConversationSessionKey("a", "b:c"))
   })
 
   test("forgets only the matching stale mapping but retains its hidden id", () => {
@@ -183,5 +179,60 @@ describe("embedded session visibility", () => {
     ]
 
     expect(filterStandaloneAgentSessions(sessions, cache).map((item) => item.id)).toEqual(["normal"])
+  })
+})
+
+describe("parallel session presentation", () => {
+  const sessions = [session("latest", "Latest"), session("background", "Background")]
+
+  test("background completion never steals a still-valid current selection", () => {
+    expect(selectAgentSessionAfterRefresh(sessions, "latest", "background")).toBe("latest")
+    expect(selectAgentSessionAfterRefresh(sessions, undefined, "background")).toBe("background")
+  })
+
+  test("falls back only when the selected session disappeared", () => {
+    expect(selectAgentSessionAfterRefresh(sessions, "missing", "also-missing")).toBe("latest")
+  })
+})
+
+describe("agent message scrolling", () => {
+  test("follows only when the viewport is genuinely near the bottom", () => {
+    expect(isAgentScrollNearBottom({ clientHeight: 400, scrollHeight: 1_000, scrollTop: 584 })).toBeTrue()
+    expect(isAgentScrollNearBottom({ clientHeight: 400, scrollHeight: 1_000, scrollTop: 550 })).toBeFalse()
+  })
+
+  test("uses a stable key for equivalent polling results", () => {
+    const state = {
+      messages: [],
+      pendingPermissions: [],
+      pendingQuestions: [],
+      session: session("one", "One"),
+      status: { type: "busy" as const },
+    }
+    expect(agentSessionContentKey(state)).toBe(agentSessionContentKey(structuredClone(state)))
+    expect(agentSessionContentKey({ ...state, status: { type: "idle" } })).not.toBe(agentSessionContentKey(state))
+  })
+})
+
+describe("parallel session state requests", () => {
+  test("invalidates only an older request for the same scope and session", () => {
+    const tracker = new AgentSessionStateRequestTracker()
+    const firstA = tracker.begin("project-a", "session-a")
+    const firstB = tracker.begin("project-a", "session-b")
+    const otherScopeA = tracker.begin("project-b", "session-a")
+    const secondA = tracker.begin("project-a", "session-a")
+
+    expect(firstA()).toBeFalse()
+    expect(secondA()).toBeTrue()
+    expect(firstB()).toBeTrue()
+    expect(otherScopeA()).toBeTrue()
+
+    tracker.clear()
+    expect(secondA()).toBeFalse()
+    expect(firstB()).toBeFalse()
+
+    const afterClearA = tracker.begin("project-a", "session-a")
+    expect(afterClearA()).toBeTrue()
+    expect(secondA()).toBeFalse()
   })
 })

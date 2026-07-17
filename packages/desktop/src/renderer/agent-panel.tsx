@@ -7,25 +7,23 @@ import type {
   AgentSession,
   AgentSessionState,
 } from "@convax/agent-runtime"
+import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
-import {
-  parseProjectCanvasDrag,
-  PROJECT_CANVAS_DRAG_TYPE,
-  type ProjectCanvas,
-} from "@convax/project/canvas"
+import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
 import { Button, cn, Tooltip, TooltipProvider } from "@convax/ui"
 import {
   Bot,
   Check,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   FileText,
   Folder,
   History,
+  ListTree,
   LoaderCircle,
   MessageSquare,
   PanelsTopLeft,
-  Paperclip,
   Plus,
   Send,
   ShieldAlert,
@@ -34,13 +32,15 @@ import {
   Wrench,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   createAgentCanvasInstructions,
   isAgentCanvasResource,
   shouldFlushAgentCanvasContext,
 } from "../agent-canvas-context"
 import {
+  agentSessionContentKey,
+  AgentSessionStateRequestTracker,
   agentResourceKey,
   canvasAgentResource,
   containEmbeddedResourceDrag,
@@ -48,14 +48,171 @@ import {
   embeddedConversationSessions,
   filterStandaloneAgentSessions,
   forgetStaleEmbeddedConversation,
+  isAgentScrollNearBottom,
   mergeAgentResources,
+  selectAgentSessionAfterRefresh,
 } from "./agent-panel-state"
+import {
+  agentComposerSkills,
+  agentComposerText,
+  emptyAgentComposerDraft,
+  filterAgentResourcePickerOptions,
+  findAgentSkillSlashQuery,
+  hasAgentComposerContent,
+  normalizeAgentComposerDraft,
+  selectableAgentResourcePickerOptions,
+  shouldDismissAgentResourcePicker,
+  shouldShowAgentComposerPlaceholder,
+  type AgentComposerDraft,
+  type AgentResourcePickerOption,
+} from "./agent-composer-state"
 import { AgentMarkdown } from "./agent-markdown"
+import { buildAgentConversationTurns, type AgentConversationTurn } from "./agent-conversation-presentation"
 import { getAgentToolPresentation } from "./agent-tool-presentation"
 
 const resourceDragType = "application/x-convax-agent-resource"
+const skillMentionAttribute = "data-agent-skill"
+
+interface ComposerSlashRange {
+  end: number
+  node: Text
+  start: number
+}
+
+interface FailedAgentSubmission {
+  attachments: AgentResource[]
+  draft: AgentComposerDraft
+  id: number
+  message: string
+  sessionId: string
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function appendComposerText(segments: AgentComposerDraft["segments"], text: string) {
+  if (!text) return
+  const previous = segments.at(-1)
+  if (previous?.type === "text") previous.text += text
+  else segments.push({ text, type: "text" })
+}
+
+function readComposerDraft(root: HTMLElement): AgentComposerDraft {
+  const segments: AgentComposerDraft["segments"] = []
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendComposerText(segments, node.textContent ?? "")
+      return
+    }
+    if (!(node instanceof HTMLElement)) return
+    const skill = node.getAttribute(skillMentionAttribute)
+    if (skill) {
+      segments.push({ name: skill, type: "skill" })
+      return
+    }
+    if (node.tagName === "BR") {
+      appendComposerText(segments, "\n")
+      return
+    }
+    const block = node !== root && (node.tagName === "DIV" || node.tagName === "P")
+    if (block && segments.length) appendComposerText(segments, "\n")
+    for (const child of node.childNodes) visit(child)
+  }
+  for (const child of root.childNodes) visit(child)
+  return normalizeAgentComposerDraft({ segments })
+}
+
+function createSkillMention(name: string) {
+  const mention = document.createElement("span")
+  mention.setAttribute(skillMentionAttribute, name)
+  mention.setAttribute("contenteditable", "false")
+  mention.setAttribute("role", "button")
+  mention.setAttribute("title", `Open ${name} Skill`)
+  mention.className =
+    "mx-0.5 inline-flex cursor-pointer select-none items-center rounded-md bg-primary/10 px-1.5 py-0.5 align-baseline text-xs font-medium text-primary hover:bg-primary/15"
+  mention.textContent = `✦ ${name}`
+  return mention
+}
+
+function writeComposerDraft(root: HTMLElement, draft: AgentComposerDraft) {
+  const nodes = normalizeAgentComposerDraft(draft).segments.map((segment) =>
+    segment.type === "skill" ? createSkillMention(segment.name) : document.createTextNode(segment.text),
+  )
+  root.replaceChildren(...nodes)
+}
+
+function composerSlashRange(root: HTMLElement): (ComposerSlashRange & { query: string }) | undefined {
+  const selection = window.getSelection()
+  if (!selection?.isCollapsed || selection.rangeCount === 0) return undefined
+  const range = selection.getRangeAt(0)
+  if (!(range.startContainer instanceof Text) || !root.contains(range.startContainer)) return undefined
+  const match = findAgentSkillSlashQuery(range.startContainer.data, range.startOffset)
+  return match ? { ...match, node: range.startContainer } : undefined
+}
+
+function insertComposerSkill(root: HTMLElement, name: string, slash?: ComposerSlashRange) {
+  const selection = window.getSelection()
+  const range = document.createRange()
+  const selected = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+  if (slash?.node.isConnected && root.contains(slash.node)) {
+    range.setStart(slash.node, slash.start)
+    range.setEnd(slash.node, slash.end)
+  } else if (selected && composerContainsRange(root, selected)) {
+    range.setStart(selected.startContainer, selected.startOffset)
+    range.setEnd(selected.endContainer, selected.endOffset)
+  } else {
+    range.selectNodeContents(root)
+    range.collapse(false)
+  }
+  range.deleteContents()
+  const mention = createSkillMention(name)
+  const spacer = document.createTextNode("\u00a0")
+  range.insertNode(spacer)
+  range.insertNode(mention)
+  range.setStart(spacer, spacer.data.length)
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  root.focus()
+}
+
+function removeComposerSlash(root: HTMLElement, slash?: ComposerSlashRange) {
+  if (!slash?.node.isConnected || !root.contains(slash.node)) return
+  const selection = window.getSelection()
+  const range = document.createRange()
+  range.setStart(slash.node, slash.start)
+  range.setEnd(slash.node, slash.end)
+  range.deleteContents()
+  range.collapse(true)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  root.focus()
+}
+
+function insertComposerPlainText(root: HTMLElement, text: string) {
+  const selection = window.getSelection()
+  if (!selection) return
+  const selected = selection.rangeCount ? selection.getRangeAt(0) : undefined
+  const range = document.createRange()
+  if (selected && composerContainsRange(root, selected)) {
+    range.setStart(selected.startContainer, selected.startOffset)
+    range.setEnd(selected.endContainer, selected.endOffset)
+  } else {
+    range.selectNodeContents(root)
+    range.collapse(false)
+  }
+  range.deleteContents()
+  const node = document.createTextNode(text)
+  range.insertNode(node)
+  range.setStart(node, node.data.length)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+function composerContainsRange(root: HTMLElement, range: Range) {
+  return root.contains(range.startContainer) && root.contains(range.endContainer)
 }
 
 function resourceLabel(resource: AgentResource) {
@@ -74,12 +231,11 @@ function parseResource(value: string): AgentResource | null {
     const parsed = JSON.parse(value) as { resource?: AgentResource; version?: number }
     if (parsed.version !== 1 || !parsed.resource) return null
     const resource = parsed.resource
-    if (resource.kind === "skill") return typeof resource.name === "string" ? { kind: "skill", name: resource.name } : null
+    if (resource.kind === "skill")
+      return typeof resource.name === "string" ? { kind: "skill", name: resource.name } : null
     if (!(["directory", "file", "resource"] as string[]).includes(resource.kind)) return null
     if (resource.kind === "resource") {
-      return typeof resource.uri === "string"
-        ? { kind: "resource", name: resource.name, uri: resource.uri }
-        : null
+      return typeof resource.uri === "string" ? { kind: "resource", name: resource.name, uri: resource.uri } : null
     }
     if (typeof resource.path !== "string") return null
     if (resource.kind === "directory") return { kind: "directory", path: resource.path, name: resource.name }
@@ -92,9 +248,11 @@ function parseResource(value: string): AgentResource | null {
 
 function supportsResourceDrop(dataTransfer: DataTransfer) {
   const types = Array.from(dataTransfer.types)
-  return types.includes(PROJECT_ENTRY_DRAG_TYPE)
-    || types.includes(PROJECT_CANVAS_DRAG_TYPE)
-    || types.includes(resourceDragType)
+  return (
+    types.includes(PROJECT_ENTRY_DRAG_TYPE) ||
+    types.includes(PROJECT_CANVAS_DRAG_TYPE) ||
+    types.includes(resourceDragType)
+  )
 }
 
 export interface AgentPanelLayout {
@@ -128,31 +286,49 @@ export function AgentPanel(props: AgentPanelProps) {
   const conversationScope = JSON.stringify([
     props.projectId ?? null,
     embedded ? "embedded" : "panel",
-    embedded ? props.conversationKey ?? null : null,
+    embedded ? (props.conversationKey ?? null) : null,
   ])
   const contextResources = mergeAgentResources(props.contextResources ?? [])
   const lockedResourceKeys = new Set(contextResources.map(agentResourceKey))
   const open = embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
+  const [showActivity, setShowActivity] = useState(false)
   const [resourcePickerOpen, setResourcePickerOpen] = useState(false)
+  const [skillSlashQuery, setSkillSlashQuery] = useState<string>()
+  const [skillSlashIndex, setSkillSlashIndex] = useState(0)
+  const [composerFocused, setComposerFocused] = useState(false)
   const [dropActive, setDropActive] = useState(false)
-  const [draft, setDraft] = useState("")
-  const [resources, setResources] = useState<AgentResource[]>([])
+  const [composerDraft, setComposerDraft] = useState<AgentComposerDraft>(emptyAgentComposerDraft)
+  const [attachments, setAttachments] = useState<AgentResource[]>([])
+  const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([])
+  const [projectEntriesLoading, setProjectEntriesLoading] = useState(false)
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [sessionId, setSessionId] = useState<string>()
   const [sessionState, setSessionState] = useState<AgentSessionState>()
   const [capabilities, setCapabilities] = useState<AgentCapabilities>()
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [sending, setSending] = useState(false)
+  const [promptingSessionIds, setPromptingSessionIds] = useState<Set<string>>(() => new Set())
+  const [failedSubmissions, setFailedSubmissions] = useState<FailedAgentSubmission[]>([])
   const [creatingSession, setCreatingSession] = useState(false)
+  const [followingLatest, setFollowingLatest] = useState(true)
   const [error, setError] = useState<string>()
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
+  const composerSurfaceRef = useRef<HTMLDivElement>(null)
+  const composerDraftRef = useRef(composerDraft)
+  const attachmentsRef = useRef(attachments)
+  const skillSlashRangeRef = useRef<ComposerSlashRange | undefined>(undefined)
+  const scrollViewportRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
-  const activeRequestRef = useRef(0)
+  const activeSessionIdRef = useRef(sessionId)
+  const promptingSessionIdsRef = useRef(promptingSessionIds)
+  const failedSubmissionIdRef = useRef(0)
+  const sessionStateRequestRef = useRef(new AgentSessionStateRequestTracker())
   const sessionListRequestRef = useRef(0)
   const activeProjectRef = useRef(props.projectId)
   const activeScopeRef = useRef(conversationScope)
+  const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
+  const projectEntriesRequestRef = useRef(0)
   const generationRef = useRef(0)
   const mountedRef = useRef(false)
   const creatingSessionRef = useRef(false)
@@ -161,66 +337,96 @@ export function AgentPanel(props: AgentPanelProps) {
   const sessionScopeRef = useRef<string | undefined>(undefined)
   activeProjectRef.current = props.projectId
   activeScopeRef.current = conversationScope
+  activeSessionIdRef.current = sessionId
+  composerDraftRef.current = composerDraft
+  attachmentsRef.current = attachments
+  promptingSessionIdsRef.current = promptingSessionIds
+
+  const selectSession = useCallback((nextSessionId?: string) => {
+    activeSessionIdRef.current = nextSessionId
+    setSessionId(nextSessionId)
+  }, [])
+
+  const replaceComposerDraft = useCallback((next: AgentComposerDraft) => {
+    const normalized = normalizeAgentComposerDraft(next)
+    composerDraftRef.current = normalized
+    setComposerDraft(normalized)
+    if (composerRef.current) writeComposerDraft(composerRef.current, normalized)
+  }, [])
+
+  const setSessionPrompting = useCallback((targetSessionId: string, prompting: boolean) => {
+    const next = new Set(promptingSessionIdsRef.current)
+    if (prompting) next.add(targetSessionId)
+    else next.delete(targetSessionId)
+    promptingSessionIdsRef.current = next
+    if (mountedRef.current) setPromptingSessionIds(next)
+  }, [])
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       generationRef.current += 1
-      activeRequestRef.current += 1
+      sessionStateRequestRef.current.clear()
       sessionListRequestRef.current += 1
+      projectEntriesRequestRef.current += 1
     }
   }, [])
 
-  const refreshSessions = useCallback(async (preferredSessionId?: string) => {
-    if (embedded || !props.projectId) return []
-    const scopeId = props.projectId
-    const scope = conversationScope
-    const request = ++sessionListRequestRef.current
-    const result = filterStandaloneAgentSessions(
-      await window.convax.agent.listSessions({ scopeId, limit: 60 }),
-    )
-    if (
-      !mountedRef.current
-      || activeProjectRef.current !== scopeId
-      || activeScopeRef.current !== scope
-      || request !== sessionListRequestRef.current
-    ) return result
-    setSessions(result)
-    const selected = preferredSessionId && result.some((session) => session.id === preferredSessionId)
-      ? preferredSessionId
-      : result[0]?.id
-    sessionProjectRef.current = scopeId
-    sessionScopeRef.current = scope
-    setSessionId(selected)
-    return result
-  }, [conversationScope, embedded, props.projectId])
+  const refreshSessions = useCallback(
+    async (preferredSessionId?: string) => {
+      if (embedded || !props.projectId) return []
+      const scopeId = props.projectId
+      const scope = conversationScope
+      const request = ++sessionListRequestRef.current
+      const result = filterStandaloneAgentSessions(await window.convax.agent.listSessions({ scopeId, limit: 60 }))
+      if (
+        !mountedRef.current ||
+        activeProjectRef.current !== scopeId ||
+        activeScopeRef.current !== scope ||
+        request !== sessionListRequestRef.current
+      )
+        return result
+      setSessions(result)
+      const selected = selectAgentSessionAfterRefresh(result, activeSessionIdRef.current, preferredSessionId)
+      sessionProjectRef.current = scopeId
+      sessionScopeRef.current = scope
+      selectSession(selected)
+      return result
+    },
+    [conversationScope, embedded, props.projectId, selectSession],
+  )
 
-  const refreshSessionState = useCallback(async (targetSessionId = sessionId) => {
-    if (!props.projectId || !targetSessionId) {
-      setSessionState(undefined)
-      return
-    }
-    const request = ++activeRequestRef.current
-    const scopeId = props.projectId
-    const scope = conversationScope
-    const result = await window.convax.agent.getSessionState({
-      scopeId,
-      sessionId: targetSessionId,
-      limit: 200,
-    })
-    if (
-      request === activeRequestRef.current
-      && mountedRef.current
-      && activeProjectRef.current === scopeId
-      && activeScopeRef.current === scope
-    ) setSessionState(result)
-    return result
-  }, [conversationScope, props.projectId, sessionId])
+  const refreshSessionState = useCallback(
+    async (targetSessionId = sessionId) => {
+      if (!props.projectId || !targetSessionId) {
+        setSessionState(undefined)
+        return
+      }
+      const scopeId = props.projectId
+      const scope = conversationScope
+      const isLatestRequest = sessionStateRequestRef.current.begin(scope, targetSessionId)
+      const result = await window.convax.agent.getSessionState({
+        scopeId,
+        sessionId: targetSessionId,
+        limit: 200,
+      })
+      if (
+        isLatestRequest() &&
+        mountedRef.current &&
+        activeProjectRef.current === scopeId &&
+        activeScopeRef.current === scope &&
+        activeSessionIdRef.current === targetSessionId
+      )
+        setSessionState(result)
+      return result
+    },
+    [conversationScope, props.projectId, sessionId],
+  )
 
   useEffect(() => {
     generationRef.current += 1
-    activeRequestRef.current += 1
+    sessionStateRequestRef.current.clear()
     sessionListRequestRef.current += 1
     sessionProjectRef.current = undefined
     sessionScopeRef.current = undefined
@@ -233,19 +439,29 @@ export function AgentPanel(props: AgentPanelProps) {
       sessionScopeRef.current = conversationScope
     }
     restoredSessionRef.current = cachedSessionId
-    setSessionId(cachedSessionId)
+    selectSession(cachedSessionId)
     setSessionState(undefined)
     setCapabilities(undefined)
+    capabilitiesRequestRef.current = undefined
+    projectEntriesRequestRef.current += 1
+    setProjectEntries([])
+    setProjectEntriesLoading(false)
     setHistoryVisible(false)
     setResourcePickerOpen(false)
+    setSkillSlashQuery(undefined)
+    setComposerFocused(false)
     setDropActive(false)
-    setResources([])
-    setDraft("")
-    setSending(false)
+    setAttachments([])
+    replaceComposerDraft(emptyAgentComposerDraft())
+    promptingSessionIdsRef.current = new Set()
+    setPromptingSessionIds(new Set())
+    setFailedSubmissions([])
+    stickToBottomRef.current = true
+    setFollowingLatest(true)
     setError(undefined)
     setCapabilitiesLoading(false)
     setLoading(false)
-  }, [conversationScope])
+  }, [conversationScope, replaceComposerDraft, selectSession])
 
   useEffect(() => {
     if (embedded || !open || !props.projectId) {
@@ -257,33 +473,40 @@ export function AgentPanel(props: AgentPanelProps) {
     let stale = false
     const request = ++sessionListRequestRef.current
     setLoading(true)
-    void window.convax.agent.listSessions({ scopeId, limit: 60 }).then((listedSessions) => {
-      const result = filterStandaloneAgentSessions(listedSessions)
-      if (
-        stale
-        || !mountedRef.current
-        || activeProjectRef.current !== scopeId
-        || activeScopeRef.current !== scope
-        || request !== sessionListRequestRef.current
-      ) return
-      setSessions(result)
-      sessionProjectRef.current = scopeId
-      sessionScopeRef.current = scope
-      setSessionId(result[0]?.id)
-    }).catch((cause) => {
-      if (!stale) setError(errorMessage(cause))
-    }).finally(() => {
-      if (!stale) setLoading(false)
-    })
-    return () => { stale = true }
-  }, [conversationScope, embedded, open, props.projectId])
+    void window.convax.agent
+      .listSessions({ scopeId, limit: 60 })
+      .then((listedSessions) => {
+        const result = filterStandaloneAgentSessions(listedSessions)
+        if (
+          stale ||
+          !mountedRef.current ||
+          activeProjectRef.current !== scopeId ||
+          activeScopeRef.current !== scope ||
+          request !== sessionListRequestRef.current
+        )
+          return
+        setSessions(result)
+        sessionProjectRef.current = scopeId
+        sessionScopeRef.current = scope
+        selectSession(result[0]?.id)
+      })
+      .catch((cause) => {
+        if (!stale) setError(errorMessage(cause))
+      })
+      .finally(() => {
+        if (!stale) setLoading(false)
+      })
+    return () => {
+      stale = true
+    }
+  }, [conversationScope, embedded, open, props.projectId, selectSession])
 
   useEffect(() => {
     if (
-      !props.projectId
-      || !sessionId
-      || sessionProjectRef.current !== props.projectId
-      || sessionScopeRef.current !== conversationScope
+      !props.projectId ||
+      !sessionId ||
+      sessionProjectRef.current !== props.projectId ||
+      sessionScopeRef.current !== conversationScope
     ) {
       setSessionState(undefined)
       return
@@ -292,43 +515,55 @@ export function AgentPanel(props: AgentPanelProps) {
     const scope = conversationScope
     let stale = false
     setLoading(true)
-    void refreshSessionState(sessionId).then(() => {
-      if (restoredSessionRef.current === sessionId) restoredSessionRef.current = undefined
-    }).catch((cause) => {
-      if (
-        stale
-        || !mountedRef.current
-        || activeProjectRef.current !== scopeId
-        || activeScopeRef.current !== scope
-      ) return
-      const recovered = embedded
-        && restoredSessionRef.current === sessionId
-        && forgetStaleEmbeddedConversation(
-          embeddedConversationSessions,
-          scopeId,
-          props.conversationKey,
-          sessionId,
-        )
-      if (recovered) {
-        activeRequestRef.current += 1
-        restoredSessionRef.current = undefined
-        sessionProjectRef.current = undefined
-        sessionScopeRef.current = undefined
-        setSessionId(undefined)
-        setSessionState(undefined)
-        setError(undefined)
-        return
-      }
-      setError(errorMessage(cause))
-    }).finally(() => {
-      if (!stale && mountedRef.current && activeProjectRef.current === scopeId && activeScopeRef.current === scope) setLoading(false)
-    })
-    return () => { stale = true }
-  }, [conversationScope, embedded, props.conversationKey, props.projectId, refreshSessionState, sessionId])
+    void refreshSessionState(sessionId)
+      .then(() => {
+        if (restoredSessionRef.current === sessionId) restoredSessionRef.current = undefined
+      })
+      .catch((cause) => {
+        if (stale || !mountedRef.current || activeProjectRef.current !== scopeId || activeScopeRef.current !== scope)
+          return
+        const recovered =
+          embedded &&
+          restoredSessionRef.current === sessionId &&
+          forgetStaleEmbeddedConversation(embeddedConversationSessions, scopeId, props.conversationKey, sessionId)
+        if (recovered) {
+          restoredSessionRef.current = undefined
+          sessionProjectRef.current = undefined
+          sessionScopeRef.current = undefined
+          selectSession(undefined)
+          setSessionState(undefined)
+          setError(undefined)
+          return
+        }
+        setError(errorMessage(cause))
+      })
+      .finally(() => {
+        if (!stale && mountedRef.current && activeProjectRef.current === scopeId && activeScopeRef.current === scope)
+          setLoading(false)
+      })
+    return () => {
+      stale = true
+    }
+  }, [
+    conversationScope,
+    embedded,
+    props.conversationKey,
+    props.projectId,
+    refreshSessionState,
+    selectSession,
+    sessionId,
+  ])
 
-  const runtimeBusy = sending || sessionState?.status.type === "busy" || sessionState?.status.type === "retry"
+  const runtimeBusy =
+    Boolean(sessionId && promptingSessionIds.has(sessionId)) ||
+    sessionState?.status.type === "busy" ||
+    sessionState?.status.type === "retry"
+  const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
   const interactionDisabled = runtimeBusy || loading || creatingSession
-  const displayedResources = mergeAgentResources(contextResources, resources)
+  const displayedResources = mergeAgentResources(contextResources, attachments).filter(
+    (resource) => resource.kind !== "skill",
+  )
+  const sessionContentKey = useMemo(() => agentSessionContentKey(sessionState), [sessionState])
   useEffect(() => {
     if (!runtimeBusy || !sessionId) return
     let stopped = false
@@ -349,8 +584,30 @@ export function AgentPanel(props: AgentPanelProps) {
   }, [refreshSessionState, runtimeBusy, sessionId])
 
   useEffect(() => {
-    if (stickToBottomRef.current) messagesEndRef.current?.scrollIntoView({ block: "end" })
-  }, [sending, sessionState?.messages, sessionState?.pendingPermissions, sessionState?.pendingQuestions])
+    const viewport = scrollViewportRef.current
+    if (!viewport || !stickToBottomRef.current) return
+    const frame = window.requestAnimationFrame(() => {
+      viewport.scrollTop = viewport.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [historyVisible, open, runtimeBusy, sessionContentKey, showActivity])
+
+  useEffect(() => {
+    const viewport = scrollViewportRef.current
+    if (!viewport) return
+    const settleDisclosureScroll = () => {
+      window.requestAnimationFrame(() => {
+        if (stickToBottomRef.current) viewport.scrollTop = viewport.scrollHeight
+        else {
+          const next = isAgentScrollNearBottom(viewport)
+          stickToBottomRef.current = next
+          setFollowingLatest(next)
+        }
+      })
+    }
+    viewport.addEventListener("toggle", settleDisclosureScroll, true)
+    return () => viewport.removeEventListener("toggle", settleDisclosureScroll, true)
+  }, [historyVisible, open])
 
   const addResources = useCallback((next: readonly AgentResource[]) => {
     setResources((current) => mergeAgentResources(current, next).filter(

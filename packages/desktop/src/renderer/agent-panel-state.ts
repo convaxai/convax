@@ -1,4 +1,4 @@
-import type { AgentResource, AgentSession } from "@convax/agent-runtime"
+import type { AgentResource, AgentSession, AgentSessionState } from "@convax/agent-runtime"
 import { agentCanvasResourceUri } from "../agent-canvas-context"
 
 const embeddedConversationStorageKey = "convax:agent:embedded-conversations:v1"
@@ -36,12 +36,14 @@ function readStoredConversations(storage: StorageLike | undefined, storageKey: s
     if (!value) return empty
     const parsed = JSON.parse(value) as Partial<StoredEmbeddedConversations>
     if (parsed.version !== 1 || !parsed.conversations || !Array.isArray(parsed.sessionIds)) return empty
-    const conversations = new Map(Object.entries(parsed.conversations).filter(
-      (entry): entry is [string, string] => Boolean(entry[0]) && typeof entry[1] === "string" && Boolean(entry[1]),
-    ))
-    const sessionIds = new Set(parsed.sessionIds.filter(
-      (sessionId): sessionId is string => typeof sessionId === "string" && Boolean(sessionId),
-    ))
+    const conversations = new Map(
+      Object.entries(parsed.conversations).filter(
+        (entry): entry is [string, string] => Boolean(entry[0]) && typeof entry[1] === "string" && Boolean(entry[1]),
+      ),
+    )
+    const sessionIds = new Set(
+      parsed.sessionIds.filter((sessionId): sessionId is string => typeof sessionId === "string" && Boolean(sessionId)),
+    )
     for (const sessionId of conversations.values()) sessionIds.add(sessionId)
     return { conversations, sessionIds }
   } catch {
@@ -81,10 +83,7 @@ export function canvasAgentResource(canvas: { id: string; name?: string }): Agen
   }
 }
 
-export function containEmbeddedResourceDrag(
-  embedded: boolean,
-  event: Pick<Event, "stopPropagation">,
-) {
+export function containEmbeddedResourceDrag(embedded: boolean, event: Pick<Event, "stopPropagation">) {
   if (embedded) event.stopPropagation()
 }
 
@@ -176,6 +175,54 @@ export function filterStandaloneAgentSessions(
   cache: EmbeddedConversationSessionCache = embeddedConversationSessions,
 ) {
   return sessions.filter((session) => !isEmbeddedConversationSession(session, cache))
+}
+
+/** Preserve an explicit current selection when a background session refresh completes. */
+export function selectAgentSessionAfterRefresh(
+  sessions: readonly AgentSession[],
+  currentSessionId?: string,
+  preferredSessionId?: string,
+) {
+  if (currentSessionId && sessions.some((session) => session.id === currentSessionId)) return currentSessionId
+  if (preferredSessionId && sessions.some((session) => session.id === preferredSessionId)) return preferredSessionId
+  return sessions[0]?.id
+}
+
+export function isAgentScrollNearBottom(
+  metrics: Pick<HTMLElement, "clientHeight" | "scrollHeight" | "scrollTop">,
+  threshold = 16,
+) {
+  return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight <= threshold
+}
+
+/**
+ * OpenCode polling returns fresh arrays even when nothing changed. A stable
+ * content key prevents those no-op polls from repeatedly forcing scroll work.
+ */
+export function agentSessionContentKey(state: AgentSessionState | undefined) {
+  if (!state) return ""
+  return JSON.stringify({
+    messages: state.messages,
+    permissions: state.pendingPermissions,
+    questions: state.pendingQuestions,
+    status: state.status,
+  })
+}
+
+export class AgentSessionStateRequestTracker {
+  readonly #generations = new Map<string, number>()
+  #nextGeneration = 0
+
+  begin(scope: string, sessionId: string) {
+    const key = JSON.stringify([scope, sessionId])
+    const generation = ++this.#nextGeneration
+    this.#generations.set(key, generation)
+    return () => this.#generations.get(key) === generation
+  }
+
+  clear() {
+    this.#generations.clear()
+  }
 }
 
 /** Returns true only when the failed session is still the cached session. */
