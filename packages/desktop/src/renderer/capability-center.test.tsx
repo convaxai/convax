@@ -31,12 +31,14 @@ const baseDialogProps = {
 } satisfies CapabilityCenterDialogProps
 
 const skillInventory: DesktopSkillInventory = {
-  catalog: [{
-    description: "Plan a visual sequence with Canvas tools.",
-    id: "storyboard",
-    installed: true,
-    name: "Canvas Storyboard",
-  }],
+  catalog: [
+    {
+      description: "Plan a visual sequence with Canvas tools.",
+      id: "storyboard",
+      installed: true,
+      name: "Canvas Storyboard",
+    },
+  ],
   skills: [
     {
       description: "Installed by Convax",
@@ -56,28 +58,32 @@ const skillInventory: DesktopSkillInventory = {
 }
 
 const pluginInventory: WebPluginInventory = {
-  catalog: [{
-    capabilities: ["canvas.node.read", "agent.prompt"],
-    contributes: { canvas: { renderer: { create: true } } },
-    description: "Compose shots in a sandboxed director surface.",
-    entry: "index.html",
-    id: "director-stage",
-    installed: true,
-    name: "3D Director Stage",
-    schema: "convax.plugin/1",
-    skill: "SKILL.md",
-    version: "1.0.0",
-  }],
-  installed: [{
-    capabilities: [],
-    contributes: { canvas: { renderer: { nodeKinds: ["timeline"] } } },
-    description: "An imported timeline renderer.",
-    entry: "timeline.html",
-    id: "timeline-viewer",
-    name: "Timeline Viewer",
-    schema: "convax.plugin/1",
-    version: "0.2.0",
-  }],
+  catalog: [
+    {
+      capabilities: ["canvas.node.read", "agent.prompt"],
+      contributes: { canvas: { renderer: { create: true } } },
+      description: "Compose shots in a sandboxed director surface.",
+      entry: "index.html",
+      id: "director-stage",
+      installed: true,
+      name: "3D Director Stage",
+      schema: "convax.plugin/1",
+      skill: "SKILL.md",
+      version: "1.0.0",
+    },
+  ],
+  installed: [
+    {
+      capabilities: [],
+      contributes: { canvas: { renderer: { nodeKinds: ["timeline"] } } },
+      description: "An imported timeline renderer.",
+      entry: "timeline.html",
+      id: "timeline-viewer",
+      name: "Timeline Viewer",
+      schema: "convax.plugin/1",
+      version: "0.2.0",
+    },
+  ],
 }
 
 const skillClient: DesktopSkillClient = {
@@ -99,9 +105,7 @@ const pluginClient: WebPluginClient = {
 
 describe("CapabilityCenter", () => {
   test("renders a compact entry without opening the management surface", () => {
-    const markup = renderToStaticMarkup(
-      <CapabilityCenter pluginClient={pluginClient} skillClient={skillClient} />,
-    )
+    const markup = renderToStaticMarkup(<CapabilityCenter pluginClient={pluginClient} skillClient={skillClient} />)
 
     expect(markup).toContain("Skill &amp; Plugin")
     expect(markup).not.toContain('role="dialog"')
@@ -119,9 +123,7 @@ describe("CapabilityCenter", () => {
   })
 
   test("distinguishes managed Skills from global read-only Skills", () => {
-    const markup = renderToStaticMarkup(
-      <CapabilityCenterDialog {...baseDialogProps} skills={skillInventory} />,
-    )
+    const markup = renderToStaticMarkup(<CapabilityCenterDialog {...baseDialogProps} skills={skillInventory} />)
 
     expect(markup).toContain("Canvas Storyboard")
     expect(markup).toContain("Global · read only")
@@ -132,11 +134,7 @@ describe("CapabilityCenter", () => {
 
   test("keeps a Plugin companion Skill as an explicit separate install", () => {
     const markup = renderToStaticMarkup(
-      <CapabilityCenterDialog
-        {...baseDialogProps}
-        plugins={pluginInventory}
-        tab="plugins"
-      />,
+      <CapabilityCenterDialog {...baseDialogProps} plugins={pluginInventory} tab="plugins" />,
     )
 
     expect(markup).toContain("3D Director Stage")
@@ -144,7 +142,9 @@ describe("CapabilityCenter", () => {
     expect(markup).toContain("Install companion Skill")
     expect(markup).toContain("Plugin installed")
     expect(markup).toContain("Global · this device")
-    expect(markup).toContain("Ready on Canvas · Return to Canvas, then right-click or press Tab to add 3D Director Stage.")
+    expect(markup).toContain(
+      "Ready on Canvas · Return to Canvas, then right-click or press Tab to add 3D Director Stage.",
+    )
     expect(markup).toContain(appMessage("en", "capabilities.pluginsDescription"))
   })
 
@@ -174,14 +174,33 @@ describe("CapabilityCenter", () => {
     expect(skillMarkup).toContain("Install Skill")
   })
 
-  test("localizes host copy without changing Plugin-owned metadata", () => {
+  test("shows an explicit catalog update without pretending the target version is installed", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog
         {...baseDialogProps}
-        locale="zh-CN"
-        plugins={pluginInventory}
+        plugins={{
+          catalog: [
+            {
+              ...pluginInventory.catalog[0]!,
+              installedVersion: "0.9.0",
+              updateAvailable: true,
+            },
+          ],
+          installed: [],
+        }}
         tab="plugins"
       />,
+    )
+
+    expect(markup).toContain("Installed v0.9.0")
+    expect(markup).toContain("Update available")
+    expect(markup).toContain("Update Plugin")
+    expect(markup).toContain("v1.0.0")
+  })
+
+  test("localizes host copy without changing Plugin-owned metadata", () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} locale="zh-CN" plugins={pluginInventory} tab="plugins" />,
     )
 
     expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginsDescription"))
@@ -197,9 +216,7 @@ describe("CapabilityCenter", () => {
     const loading = renderToStaticMarkup(
       <CapabilityCenterDialog {...baseDialogProps} loading plugins={null} skills={null} />,
     )
-    const failed = renderToStaticMarkup(
-      <CapabilityCenterDialog {...baseDialogProps} error="Skill discovery failed" />,
-    )
+    const failed = renderToStaticMarkup(<CapabilityCenterDialog {...baseDialogProps} error="Skill discovery failed" />)
 
     expect(loading).toContain("Loading capabilities")
     expect(failed).toContain("Skill discovery failed")

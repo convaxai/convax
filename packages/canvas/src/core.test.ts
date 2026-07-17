@@ -20,6 +20,7 @@ import {
 } from "./clipboard"
 import { getConnectedCanvasFileNodeIds, getIncomingConnectedCanvasFileNodeIds } from "./connections"
 import {
+  cloneCanvasDocument,
   createAgentNode,
   createCanvasDocument,
   createFolderNode,
@@ -32,6 +33,19 @@ import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
 describe("canvas history", () => {
+  test("clones portable Plugin node state with the Canvas document", () => {
+    const pluginState = { directorProject: { objects: [{ id: "cube" }] }, schemaVersion: 1 }
+    const node = createTextNode({
+      id: "director-node",
+      metadata: { convaxPluginState: pluginState },
+      position: { x: 10, y: 20 },
+    })
+    const cloned = cloneCanvasDocument(createCanvasDocument({ id: "canvas-clone", nodes: [node] }))
+
+    expect(cloned.nodes[0]?.data.metadata).toEqual(node.data.metadata)
+    expect(cloned.nodes[0]?.data.metadata).not.toBe(node.data.metadata)
+  })
+
   test("hydrates a persisted revision without turning it into an undoable edit", () => {
     const initial = createCanvasDocument({ id: "canvas_hydrate" })
     const hydrated = canvasHistoryReducer(createCanvasHistory(initial), {
@@ -51,61 +65,81 @@ describe("canvas history", () => {
 
   test("keeps file and agent as the only user-facing node types", () => {
     const registry = createDefaultCanvasNodeRegistry()
-    expect(registry.list().map((definition) => definition.type)).toEqual([
-      "file",
-      "agent",
-    ])
+    expect(registry.list().map((definition) => definition.type)).toEqual(["file", "agent"])
     const fileDefinition = registry.get("file")!
     expect(() => registry.register({ ...fileDefinition, type: "plugin-role" as "file" })).toThrow("file or agent")
-    expect(createDefaultCanvasFileRendererRegistry().list().map((definition) => definition.id)).toEqual([
-      "audio",
-      "file",
-      "folder",
-      "image",
-      "text",
-      "video",
-    ])
+    expect(
+      createDefaultCanvasFileRendererRegistry()
+        .list()
+        .map((definition) => definition.id),
+    ).toEqual(["audio", "file", "folder", "image", "text", "video"])
     expect(createTextNode({ position: { x: 0, y: 0 } }).type).toBe("file")
-    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image", url: "" } }).type).toBe("file")
+    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image", url: "" } }).type).toBe(
+      "file",
+    )
     expect(createAgentNode({ position: { x: 0, y: 0 } }).type).toBe("agent")
 
     const text = createTextNode({ position: { x: 0, y: 0 } })
-    expect(parseCanvasDocument({
-      ...createCanvasDocument({ id: "legacy-role", nodes: [text] }),
-      nodes: [{ ...text, type: "legacy-plugin-role" }],
-    })?.nodes[0].type).toBe("file")
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "legacy-role", nodes: [text] }),
+        nodes: [{ ...text, type: "legacy-plugin-role" }],
+      })?.nodes[0].type,
+    ).toBe("file")
   })
 
   test("rejects malformed persisted documents before they reach the editor", () => {
     expect(parseCanvasDocument({})).toBeNull()
     expect(parseCanvasDocument(createCanvasDocument({ id: "one" }), "two")).toBeNull()
     expect(parseCanvasDocument(createCanvasDocument({ id: "one" }), "one")?.id).toBe("one")
-    const first = createGroupNode({ id: "first", label: "First", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "second" })
-    const second = createGroupNode({ id: "second", label: "Second", position: { x: 0, y: 0 }, width: 100, height: 100, parentId: "first" })
+    const first = createGroupNode({
+      id: "first",
+      label: "First",
+      position: { x: 0, y: 0 },
+      width: 100,
+      height: 100,
+      parentId: "second",
+    })
+    const second = createGroupNode({
+      id: "second",
+      label: "Second",
+      position: { x: 0, y: 0 },
+      width: 100,
+      height: 100,
+      parentId: "first",
+    })
     expect(parseCanvasDocument(createCanvasDocument({ id: "cycle", nodes: [first, second] }))).toBeNull()
     const text = createTextNode({ id: "text", position: { x: 0, y: 0 } })
-    expect(parseCanvasDocument({
-      ...createCanvasDocument({ id: "rich-text", nodes: [text] }),
-      nodes: [{ ...text, data: { ...text.data, richText: { type: "doc", content: "invalid" } } }],
-    })).toBeNull()
-    expect(parseCanvasDocument({
-      ...createCanvasDocument({ id: "bad-folder", nodes: [text] }),
-      nodes: [{ ...text, data: { kind: "folder", label: "Folder", name: {} } }],
-    })).toBeNull()
-    expect(parseCanvasDocument({
-      ...createCanvasDocument({ id: "bad-agent", nodes: [text] }),
-      nodes: [{ ...text, data: { agentId: [], kind: "agent", label: "Agent" } }],
-    })).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "rich-text", nodes: [text] }),
+        nodes: [{ ...text, data: { ...text.data, richText: { type: "doc", content: "invalid" } } }],
+      }),
+    ).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "bad-folder", nodes: [text] }),
+        nodes: [{ ...text, data: { kind: "folder", label: "Folder", name: {} } }],
+      }),
+    ).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "bad-agent", nodes: [text] }),
+        nodes: [{ ...text, data: { agentId: [], kind: "agent", label: "Agent" } }],
+      }),
+    ).toBeNull()
   })
   test("migrates legacy notes into text nodes", () => {
     const legacy = {
       ...createCanvasDocument({ id: "legacy" }),
-      nodes: [{
-        id: "legacy_note",
-        type: "note",
-        position: { x: 20, y: 30 },
-        data: { kind: "note", label: "Note", text: "Keep this thought", tone: "yellow" },
-      }],
+      nodes: [
+        {
+          id: "legacy_note",
+          type: "note",
+          position: { x: 20, y: 30 },
+          data: { kind: "note", label: "Note", text: "Keep this thought", tone: "yellow" },
+        },
+      ],
     }
     const parsed = parseCanvasDocument(legacy)
 
@@ -118,9 +152,13 @@ describe("canvas history", () => {
       position: { x: 0, y: 0 },
       resource: { id: "empty-video", kind: "video", url: "" },
     })
-    expect(parseCanvasDocument(createCanvasDocument({
-      nodes: [{ ...media, data: { ...media.data, label: "Media" } }],
-    }))?.nodes[0].data.label).toBe("Video")
+    expect(
+      parseCanvasDocument(
+        createCanvasDocument({
+          nodes: [{ ...media, data: { ...media.data, label: "Media" } }],
+        }),
+      )?.nodes[0].data.label,
+    ).toBe("Video")
   })
 
   test("preserves imported text formats", () => {
@@ -136,10 +174,12 @@ describe("canvas history", () => {
     })
     expect(node.style).toEqual({ width: 360, height: 240 })
     expect(createTextNode({ position: { x: 0, y: 0 } }).data).toMatchObject({ text: "" })
-    expect(createMediaNode({
-      position: { x: 0, y: 0 },
-      resource: { id: "empty", kind: "video", url: "" },
-    }).data).toMatchObject({ label: "Video" })
+    expect(
+      createMediaNode({
+        position: { x: 0, y: 0 },
+        resource: { id: "empty", kind: "video", url: "" },
+      }).data,
+    ).toMatchObject({ label: "Video" })
   })
   test("undoes and redoes committed documents", () => {
     const initial = createCanvasDocument({ id: "canvas_test" })
@@ -181,7 +221,9 @@ describe("canvas history", () => {
   test("persists committed gesture previews while keeping one undo entry", () => {
     const initial = createCanvasDocument({ id: "canvas_typing" })
     const first = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
-    const withNode = addCanvasNodes(first.document, [createTextNode({ id: "typed", position: { x: 0, y: 0 } })]).document
+    const withNode = addCanvasNodes(first.document, [
+      createTextNode({ id: "typed", position: { x: 0, y: 0 } }),
+    ]).document
     const previewed = canvasHistoryReducer(first, { type: "commit", document: withNode })
     expect(previewed.document.revision).toBe(1)
     expect(previewed.past).toHaveLength(0)
@@ -196,7 +238,7 @@ describe("canvas history", () => {
       type: "preview-or-commit-update",
       update: (document) => ({
         ...document,
-        nodes: document.nodes.map((node) => node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node),
+        nodes: document.nodes.map((node) => (node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node)),
       }),
     })
     expect(committed.document.revision).toBe(1)
@@ -207,7 +249,7 @@ describe("canvas history", () => {
       type: "preview-or-commit-update",
       update: (document) => ({
         ...document,
-        nodes: document.nodes.map((node) => node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node),
+        nodes: document.nodes.map((node) => (node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node)),
       }),
     })
     expect(previewed.document.revision).toBe(0)
@@ -298,7 +340,15 @@ describe("canvas commands", () => {
   })
 
   test("duplicates selected nodes and remaps their internal edges", () => {
-    const first = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
+    const pluginState = {
+      directorProject: { objects: [{ id: "cube" }] },
+      schemaVersion: 1,
+    }
+    const first = createTextNode({
+      id: "node_a",
+      metadata: { convaxPluginState: pluginState },
+      position: { x: 0, y: 0 },
+    })
     const second = createTextNode({ id: "node_b", position: { x: 320, y: 0 } })
     const initial = connectCanvasNodes(createCanvasDocument({ nodes: [first, second] }), {
       id: "edge_a",
@@ -315,6 +365,8 @@ describe("canvas commands", () => {
     expect(result.selectedNodeIds).toEqual(clones.map((node) => node.id))
     expect(clones.map((node) => node.id)).toContain(cloneEdge.source)
     expect(clones.map((node) => node.id)).toContain(cloneEdge.target)
+    expect(clones[0]?.data.metadata).toEqual(first.data.metadata)
+    expect(clones[0]?.data.metadata).not.toBe(first.data.metadata)
   })
 
   test("recursively removes group descendants and connected edges", () => {
@@ -331,7 +383,10 @@ describe("canvas commands", () => {
 
   test("aligns nodes against shared horizontal and vertical centers", () => {
     const first = { ...createTextNode({ id: "node_a", position: { x: 40, y: 30 } }), style: { width: 100, height: 80 } }
-    const second = { ...createTextNode({ id: "node_b", position: { x: 300, y: 250 } }), style: { width: 200, height: 120 } }
+    const second = {
+      ...createTextNode({ id: "node_b", position: { x: 300, y: 250 } }),
+      style: { width: 200, height: 120 },
+    }
     const initial = createCanvasDocument({ nodes: [first, second] })
     const centered = alignCanvasNodes(initial, [first.id, second.id], "center")
     const aligned = alignCanvasNodes(centered, [first.id, second.id], "middle")
@@ -344,19 +399,33 @@ describe("canvas commands", () => {
 
   test("distributes and lays out selected nodes on both axes", () => {
     const first = { ...createTextNode({ id: "node_a", position: { x: 0, y: 0 } }), style: { width: 100, height: 80 } }
-    const second = { ...createTextNode({ id: "node_b", position: { x: 160, y: 120 } }), style: { width: 80, height: 60 } }
-    const third = { ...createTextNode({ id: "node_c", position: { x: 400, y: 320 } }), style: { width: 100, height: 80 } }
+    const second = {
+      ...createTextNode({ id: "node_b", position: { x: 160, y: 120 } }),
+      style: { width: 80, height: 60 },
+    }
+    const third = {
+      ...createTextNode({ id: "node_c", position: { x: 400, y: 320 } }),
+      style: { width: 100, height: 80 },
+    }
     const initial = createCanvasDocument({ nodes: [first, second, third] })
     const horizontal = distributeCanvasNodes(initial, [first.id, second.id, third.id], "horizontal")
     const distributed = distributeCanvasNodes(horizontal, [first.id, second.id, third.id], "vertical")
 
     expect(distributed.nodes[1].position).toEqual({ x: 210, y: 170 })
-    expect(layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "horizontal", gap: 20 }).nodes.map((node) => node.position)).toEqual([
+    expect(
+      layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "horizontal", gap: 20 }).nodes.map(
+        (node) => node.position,
+      ),
+    ).toEqual([
       { x: 0, y: 0 },
       { x: 120, y: 0 },
       { x: 240, y: 0 },
     ])
-    expect(layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "vertical", gap: 20 }).nodes.map((node) => node.position)).toEqual([
+    expect(
+      layoutCanvasNodes(initial, { nodeIds: [first.id, second.id, third.id], layout: "vertical", gap: 20 }).nodes.map(
+        (node) => node.position,
+      ),
+    ).toEqual([
       { x: 0, y: 0 },
       { x: 0, y: 100 },
       { x: 0, y: 200 },
@@ -371,10 +440,10 @@ describe("canvas commands", () => {
       extent: "parent" as const,
       parentId: group.id,
     }
-    const arranged = layoutCanvasNodes(
-      createCanvasDocument({ nodes: [standalone, group, child] }),
-      { layout: "horizontal", gap: 20 },
-    )
+    const arranged = layoutCanvasNodes(createCanvasDocument({ nodes: [standalone, group, child] }), {
+      layout: "horizontal",
+      gap: 20,
+    })
 
     expect(arranged.nodes.map((node) => node.position)).toEqual([
       { x: 0, y: 0 },
@@ -399,13 +468,25 @@ describe("canvas clipboard", () => {
     const inlineText = createTextNode({ id: "inline", position: { x: 0, y: 0 } })
 
     expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [folder], edges: [] }, "two")).toBeTrue()
-    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [sourcedText], edges: [] }, "two")).toBeTrue()
-    expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [inlineText], edges: [] }, "two")).toBeFalse()
+    expect(
+      canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [sourcedText], edges: [] }, "two"),
+    ).toBeTrue()
+    expect(
+      canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [inlineText], edges: [] }, "two"),
+    ).toBeFalse()
     expect(canvasClipboardHasScopeConflict({ version: 1, scope: "one", nodes: [folder], edges: [] }, "one")).toBeFalse()
   })
 
   test("round trips a graph fragment with fresh identifiers", () => {
-    const first = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
+    const pluginState = {
+      directorProject: { objects: [{ id: "cube" }] },
+      schemaVersion: 1,
+    }
+    const first = createTextNode({
+      id: "node_a",
+      metadata: { convaxPluginState: pluginState },
+      position: { x: 0, y: 0 },
+    })
     const second = createTextNode({ id: "node_b", position: { x: 320, y: 0 } })
     const initial = connectCanvasNodes(createCanvasDocument({ nodes: [first, second] }), {
       source: first.id,
@@ -420,6 +501,8 @@ describe("canvas clipboard", () => {
     expect(pasted.document.nodes).toHaveLength(4)
     expect(pasted.document.edges).toHaveLength(2)
     expect(pasted.selectedNodeIds.every((id) => ![first.id, second.id].includes(id))).toBeTrue()
+    const pastedFirst = pasted.document.nodes.find((node) => node.id === pasted.selectedNodeIds[0])
+    expect(pastedFirst?.data.metadata).toEqual(first.data.metadata)
   })
 
   test("rejects unrelated clipboard data", () => {

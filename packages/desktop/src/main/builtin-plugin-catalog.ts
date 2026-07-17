@@ -8,6 +8,8 @@ import manifestDocument from "../../resources/plugins/storyai-3d-director-desk/m
 import skill from "../../resources/plugins/storyai-3d-director-desk/SKILL.md?raw"
 import upstream from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.md?raw"
 import upstreamPatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.patch?raw"
+import upstreamStatePatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.state.patch?raw"
+import upstreamViewPatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.view.patch?raw"
 import panoramaApp from "../../resources/plugins/panorama-viewer/assets/app.js?raw"
 import panoramaImage from "../../resources/plugins/panorama-viewer/assets/panorama-image.js?raw"
 import panoramaRenderer from "../../resources/plugins/panorama-viewer/assets/panorama-renderer.js?raw"
@@ -30,6 +32,8 @@ const directorStageBundle: WebPluginBundle = {
     "SKILL.md": skill,
     "UPSTREAM.md": upstream,
     "UPSTREAM.patch": upstreamPatch,
+    "UPSTREAM.state.patch": upstreamStatePatch,
+    "UPSTREAM.view.patch": upstreamViewPatch,
   },
 }
 

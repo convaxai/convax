@@ -71,17 +71,17 @@ Skills never implement UI, and Plugins never become OpenCode plugins.
 
 ## 3. Packages and dependency graph
 
-| Package | Responsibility |
-| --- | --- |
-| `@convax/ui` | Product-agnostic components, styling primitives, and theme |
-| `@convax/project-files` | Renderer-safe scoped file contracts, controller, and drag protocol |
-| `@convax/canvas` | Canvas core, application/business layer, view layer, editor and plugins |
-| `@convax/project` | Project lifecycle/registry/private storage and Project capability composition |
+| Package                  | Responsibility                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| `@convax/ui`             | Product-agnostic components, styling primitives, and theme                      |
+| `@convax/project-files`  | Renderer-safe scoped file contracts, controller, and drag protocol              |
+| `@convax/canvas`         | Canvas core, application/business layer, view layer, editor and plugins         |
+| `@convax/project`        | Project lifecycle/registry/private storage and Project capability composition   |
 | `@convax/project/canvas` | Project Canvas catalog, relationships, controller, drag and resource references |
-| `@convax/project/node` | Native Project, Project Files, private storage, and Canvas persistence adapters |
-| `@convax/workbench` | Headless window Input/Selection/Surface and layout state machines |
-| `@convax/agent-runtime` | Host-agnostic OpenCode integration and protected execution boundary |
-| `@convax/desktop` | Electron composition root, IPC, adapters, coordinators and product shell |
+| `@convax/project/node`   | Native Project, Project Files, private storage, and Canvas persistence adapters |
+| `@convax/workbench`      | Headless window Input/Selection/Surface and layout state machines               |
+| `@convax/agent-runtime`  | Host-agnostic OpenCode integration and protected execution boundary             |
+| `@convax/desktop`        | Electron composition root, IPC, adapters, coordinators and product shell        |
 
 Allowed internal runtime dependencies:
 
@@ -129,18 +129,19 @@ boundary checker fails closed until those admissions are complete.
 
 ## 4. Canonical state
 
-| State | Canonical owner | Notes |
-| --- | --- | --- |
-| Active Project | `ProjectController` | Project lifecycle only |
-| Project file tree, expansion, file selection and preview | `ProjectFilesController` | Scoped and reset by Project id |
-| Project Canvas catalog | `ProjectCanvasController` | CRUD/relationships only; no active Canvas |
-| Active Canvas/file | `WorkbenchController.activeInput/surface` | Sole source for the displayed primary content |
-| Canvas node selection | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view |
-| Canvas document and revision | Canvas application service/repository | Mutations use commands and conflict checks |
-| Top-level sidebar size/visibility/resize transaction | `WorkbenchLayoutController` | Desktop supplies pixels, events, animation and persistence |
-| Agent sessions | `@convax/agent-runtime` scoped by the host | Never stored in Project Canvas state |
-| OpenCode Skill discovery | `@convax/agent-runtime` | Desktop owns only the managed install adapter and UI |
-| Installed Plugin packages | Desktop main | Global static packages; no active Project/Canvas state |
+| State                                                    | Canonical owner                              | Notes                                                                    |
+| -------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------ |
+| Active Project                                           | `ProjectController`                          | Project lifecycle only                                                   |
+| Project file tree, expansion, file selection and preview | `ProjectFilesController`                     | Scoped and reset by Project id                                           |
+| Project Canvas catalog                                   | `ProjectCanvasController`                    | CRUD/relationships only; no active Canvas                                |
+| Active Canvas/file                                       | `WorkbenchController.activeInput/surface`    | Sole source for the displayed primary content                            |
+| Canvas node selection                                    | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view                            |
+| Canvas document and revision                             | Canvas application service/repository        | Mutations use commands and conflict checks                               |
+| Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage |
+| Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence               |
+| Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
+| OpenCode Skill discovery                                 | `@convax/agent-runtime`                      | Desktop owns only the managed install adapter and UI                     |
+| Installed Plugin packages                                | Desktop main                                 | Global static packages; no active Project/Canvas state                   |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -180,6 +181,20 @@ node kind plus a stable Plugin reference and namespaced portable instance state.
 Uninstalling a Plugin therefore leaves recoverable Canvas data and falls back to the
 unknown-file renderer. Managed Skills are copied into Convax's OpenCode config root;
 normal external global Skills remain visible and read-only.
+
+Plugin node state is one atomic, bounded JSON snapshot. The Plugin adapter owns its
+schema version and migrations; an unknown or invalid schema is preserved and must
+not be replaced with defaults. Node/Canvas copy carries the latest snapshot already
+committed to Canvas. Continuous iframe edits may be throttled, but semantic gesture
+completion and frame teardown must request an immediate commit. Large images,
+models, captures, and other binary payloads belong in managed Project assets; node
+state stores only portable references to them.
+
+Portable Plugin presentation state may share that namespaced snapshot while staying
+separate from the Plugin's domain document. A 3D director camera/orbit is portable;
+focus, hover, in-progress gestures, animation and error notices are transient. A
+newer installed Plugin stamps its version reference only when it successfully writes
+the migrated node snapshot; installation itself never rewrites Canvas documents.
 
 ## 6. Core flows
 
