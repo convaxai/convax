@@ -43,8 +43,12 @@ interface DebugTarget {
   webSocketDebuggerUrl?: string
 }
 
-function randomPort() {
-  return 41_000 + Math.floor(Math.random() * 8_000)
+function reservePort() {
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: { data() {} },
+  })
 }
 
 async function waitForTarget(port: number, predicate: (target: DebugTarget) => boolean) {
@@ -234,9 +238,12 @@ const seededDirectorManifest = JSON.parse(await fs.readFile(seededDirectorManife
 seededDirectorManifest.version = "0.0.1-convax.1"
 await fs.writeFile(seededDirectorManifestPath, `${JSON.stringify(seededDirectorManifest, null, 2)}\n`)
 
-const rendererPort = randomPort()
-let inspectorPort = randomPort()
-while (inspectorPort === rendererPort) inspectorPort = randomPort()
+const rendererPortReservation = reservePort()
+const inspectorPortReservation = reservePort()
+const rendererPort = rendererPortReservation.port
+const inspectorPort = inspectorPortReservation.port
+rendererPortReservation.stop(true)
+inspectorPortReservation.stop(true)
 const child = Bun.spawn(
   [electronBinary, `--inspect=${inspectorPort}`, `--remote-debugging-port=${rendererPort}`, desktopRoot],
   {
