@@ -1537,24 +1537,46 @@ export function AgentPanel(props: AgentPanelProps) {
   )
 }
 
-function ConversationHistory(props: { disabled: boolean; loading: boolean; onSelect: (id: string) => void; selectedId?: string; sessions: AgentSession[] }) {
+function ConversationHistory(props: {
+  busySessionIds: ReadonlySet<string>
+  disabled: boolean
+  loading: boolean
+  onSelect: (id: string) => void
+  selectedId?: string
+  sessions: AgentSession[]
+}) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-2">
-      <div className="px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Conversation history</div>
-      {props.loading && props.sessions.length === 0 ? <div className="p-4 text-xs text-muted-foreground">Loading…</div> : null}
-      {props.sessions.length === 0 && !props.loading ? <div className="p-4 text-xs text-muted-foreground">No conversations yet.</div> : null}
+      <div className="px-2 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Conversation history
+      </div>
+      {props.loading && props.sessions.length === 0 ? (
+        <div className="p-4 text-xs text-muted-foreground">Loading…</div>
+      ) : null}
+      {props.sessions.length === 0 && !props.loading ? (
+        <div className="p-4 text-xs text-muted-foreground">No conversations yet.</div>
+      ) : null}
       {props.sessions.map((session) => (
         <button
-          className={cn("mb-1 flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-60", session.id === props.selectedId && "bg-accent text-accent-foreground")}
+          className={cn(
+            "mb-1 flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-60",
+            session.id === props.selectedId && "bg-accent text-accent-foreground",
+          )}
           disabled={props.disabled}
           key={session.id}
           onClick={() => props.onSelect(session.id)}
           type="button"
         >
-          <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
+          {props.busySessionIds.has(session.id) ? (
+            <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
+          ) : (
+            <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
+          )}
           <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-medium">{session.title || "New conversation"}</span>
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">{new Date(session.updatedAt).toLocaleString()}</span>
+            <span className="mt-0.5 block text-[10px] text-muted-foreground">
+              {new Date(session.updatedAt).toLocaleString()}
+            </span>
           </span>
           <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
         </button>
@@ -1566,126 +1588,410 @@ function ConversationHistory(props: { disabled: boolean; loading: boolean; onSel
 function EmptyState(props: { description: string; icon: React.ReactNode; title: string }) {
   return (
     <div className="m-auto max-w-64 text-center">
-      <div className="mx-auto mb-3 grid size-9 place-items-center rounded-full bg-accent text-primary [&_svg]:size-4">{props.icon}</div>
+      <div className="mx-auto mb-3 grid size-9 place-items-center rounded-full bg-accent text-primary [&_svg]:size-4">
+        {props.icon}
+      </div>
       <div className="text-sm font-medium">{props.title}</div>
       <div className="mt-1.5 text-xs leading-5 text-muted-foreground">{props.description}</div>
     </div>
   )
 }
 
-function MessageView({ message }: { message: AgentMessage }) {
-  const user = message.role === "user"
-  const visibleParts = message.parts.filter((part) => part.type !== "step-start" && part.type !== "step-finish")
+export function ConversationTurnView(props: {
+  awaitingInput?: boolean
+  busy: boolean
+  onOpenSkill: (name: string) => Promise<void>
+  onShowActivity: () => void
+  showActivity: boolean
+  turn: AgentConversationTurn
+}) {
   return (
-    <article className={cn("flex", user ? "justify-end" : "justify-start")}>
-      <div className={cn("min-w-0 max-w-[92%] space-y-2 text-sm", user ? "rounded-xl bg-accent px-3 py-2 text-accent-foreground" : "w-full")}>
-        {!user ? <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"><Bot className="size-3" />Agent</div> : null}
-        {visibleParts.map((part) => <MessagePartView key={part.id} part={part} />)}
-        {message.error ? <div className="rounded-md border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive">{message.error}</div> : null}
+    <section className="space-y-3">
+      {props.turn.user ? <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.user} user /> : null}
+      {props.showActivity && props.turn.activity.length ? (
+        <AgentActivity
+          awaitingInput={props.awaitingInput}
+          busy={props.busy}
+          onOpenSkill={props.onOpenSkill}
+          turn={props.turn}
+        />
+      ) : null}
+      {props.turn.delivery && !props.busy ? (
+        <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.delivery} />
+      ) : null}
+      {!props.awaitingInput &&
+      !props.busy &&
+      !props.showActivity &&
+      (props.turn.interrupted || props.turn.tools.failed > 0) ? (
+        <AgentActivityNotice
+          failed={props.turn.tools.failed}
+          interrupted={props.turn.interrupted}
+          onShowActivity={props.onShowActivity}
+        />
+      ) : null}
+      {props.turn.errors.map((entry) => (
+        <div
+          className="rounded-md border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive"
+          key={`${entry.message.id}:${entry.text}`}
+        >
+          {entry.text}
+        </div>
+      ))}
+    </section>
+  )
+}
+
+export function AgentActivityNotice(props: { failed: number; interrupted?: boolean; onShowActivity: () => void }) {
+  return (
+    <button
+      className={cn(
+        "w-full rounded-md border p-2 text-left text-xs",
+        props.interrupted
+          ? "border-amber-500/30 bg-amber-500/5 text-amber-800 hover:bg-amber-500/10 dark:text-amber-300"
+          : "border-destructive/25 bg-destructive/5 text-destructive hover:bg-destructive/10",
+      )}
+      onClick={props.onShowActivity}
+      type="button"
+    >
+      {props.interrupted ? "Earlier run was interrupted" : null}
+      {props.interrupted && props.failed ? " · " : null}
+      {props.failed ? `${props.failed} tool ${props.failed === 1 ? "call failed" : "calls failed"}` : null}. Show
+      activity for details.
+    </button>
+  )
+}
+
+function MessageSliceView(props: {
+  onOpenSkill: (name: string) => Promise<void>
+  slice: { message: AgentMessage; parts: AgentMessage["parts"] }
+  user?: boolean
+}) {
+  return (
+    <article className={cn("flex", props.user ? "justify-end" : "justify-start")}>
+      <div
+        className={cn(
+          "min-w-0 max-w-[92%] space-y-2 text-sm",
+          props.user ? "rounded-xl bg-accent px-3 py-2 text-accent-foreground" : "w-full",
+        )}
+      >
+        {!props.user ? (
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <Bot className="size-3" />
+            Agent
+          </div>
+        ) : null}
+        {props.slice.parts.map((part) => (
+          <MessagePartView key={part.id} onOpenSkill={props.onOpenSkill} part={part} />
+        ))}
       </div>
     </article>
   )
 }
 
-function MessagePartView({ part }: { part: AgentMessage["parts"][number] }) {
+function AgentActivity(props: {
+  awaitingInput?: boolean
+  busy: boolean
+  onOpenSkill: (name: string) => Promise<void>
+  turn: AgentConversationTurn
+}) {
+  const tools = props.turn.tools.count
+  const label = props.busy
+    ? "Working"
+    : props.awaitingInput
+      ? "Waiting for your response"
+      : props.turn.interrupted
+        ? "Interrupted activity"
+        : props.turn.tools.failed
+          ? "Activity completed with errors"
+          : "Activity"
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/25 px-2.5 py-2 text-xs" data-agent-activity>
+      <div className="flex items-center gap-2 text-muted-foreground">
+        {props.busy ? (
+          <LoaderCircle className="size-3.5 animate-spin text-primary motion-reduce:animate-none" />
+        ) : props.awaitingInput || props.turn.interrupted ? (
+          <ShieldAlert className="size-3.5 text-amber-600" />
+        ) : props.turn.tools.outcome === "failure" ? (
+          <X className="size-3.5 text-destructive" />
+        ) : (
+          <Check className="size-3.5 text-emerald-600" />
+        )}
+        <span className="min-w-0 flex-1">
+          {label}
+          {tools ? ` · ${tools} tool${tools === 1 ? "" : "s"}` : ""}
+        </span>
+      </div>
+      <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
+        {props.turn.activity.flatMap((slice) =>
+          slice.parts.map((part) => (
+            <MessagePartView key={`${slice.message.id}:${part.id}`} onOpenSkill={props.onOpenSkill} part={part} />
+          )),
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function MessagePartView({
+  onOpenSkill,
+  part,
+}: {
+  onOpenSkill: (name: string) => Promise<void>
+  part: AgentMessage["parts"][number]
+}) {
+  if (part.type === "skill") return <SkillBadge name={part.name} onOpen={() => onOpenSkill(part.name)} />
   if (part.type === "text") return part.synthetic ? null : <AgentMarkdown text={part.text} />
-  if (part.type === "reasoning") return <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs"><summary className="cursor-pointer text-muted-foreground">Reasoning</summary><div className="mt-2 whitespace-pre-wrap leading-5">{part.text}</div></details>
-  if (part.type === "file") return <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs"><FileText className="size-3.5" /><span className="truncate">{part.filename ?? "File"}</span></div>
+  if (part.type === "reasoning")
+    return (
+      <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs">
+        <summary className="cursor-pointer text-muted-foreground">Reasoning</summary>
+        <div className="mt-2 whitespace-pre-wrap leading-5">{part.text}</div>
+      </details>
+    )
+  if (part.type === "file")
+    return (
+      <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+        <FileText className="size-3.5" />
+        <span className="truncate">{part.filename ?? "File"}</span>
+      </div>
+    )
   if (part.type === "tool") {
     const state = part.state
     const presentation = getAgentToolPresentation(part)
     const pending = presentation.outcome === "pending" || presentation.outcome === "running"
     return (
-      <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs">
+      <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs" data-agent-tool-call>
         <summary className="flex cursor-pointer list-none items-center gap-2">
-          {pending ? <LoaderCircle className="size-3.5 animate-spin text-primary" /> : presentation.outcome === "success" ? <Check className="size-3.5 text-emerald-600" /> : <X className="size-3.5 text-destructive" />}
+          {pending ? (
+            <LoaderCircle className="size-3.5 animate-spin text-primary" />
+          ) : presentation.outcome === "success" ? (
+            <Check className="size-3.5 text-emerald-600" />
+          ) : (
+            <X className="size-3.5 text-destructive" />
+          )}
           <Wrench className="size-3.5 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">{"title" in state && state.title ? state.title : part.tool}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </summary>
-        {presentation.detail ? <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border pt-2 font-mono text-[11px] leading-4">{presentation.detail}</pre> : null}
+        {presentation.detail ? (
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border pt-2 font-mono text-[11px] leading-4">
+            {presentation.detail}
+          </pre>
+        ) : null}
       </details>
     )
   }
   return null
 }
 
-function ResourcePicker(props: {
-  activeCanvasId?: string
-  canvases: ProjectCanvas[]
-  capabilities?: AgentCapabilities
-  loading: boolean
-  onAdd: (resources: AgentResource[]) => void
-}) {
-  return (
-    <div className="absolute inset-x-3 bottom-[calc(100%+4px)] z-50 max-h-72 overflow-auto rounded-lg border border-border bg-popover p-2 text-popover-foreground shadow-xl">
-      <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Canvases</div>
-      {props.canvases.map((canvas) => {
-        const resource = canvasAgentResource(canvas)
-        return <ResourceRow active={canvas.id === props.activeCanvasId} icon={<PanelsTopLeft />} key={canvas.id} onAdd={() => props.onAdd([resource])} resource={resource} />
-      })}
-      <div className="mt-1 border-t border-border px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Skills</div>
-      {props.loading ? <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" />Discovering OpenCode skills…</div> : props.capabilities?.skills.length ? props.capabilities.skills.map((skill) => {
-        const resource: AgentResource = { kind: "skill", name: skill.name }
-        return <ResourceRow description={skill.description} icon={<Sparkles />} key={skill.name} onAdd={() => props.onAdd([resource])} resource={resource} />
-      }) : <div className="px-2 py-2 text-xs text-muted-foreground">No skills discovered by OpenCode.</div>}
-    </div>
-  )
-}
-
-function ResourceRow(props: { active?: boolean; description?: string; icon: React.ReactNode; onAdd: () => void; resource: AgentResource }) {
+function SkillBadge(props: { name: string; onOpen: () => Promise<void> }) {
   return (
     <button
-      className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted"
-      draggable
-      onClick={props.onAdd}
-      onDragStart={(event) => {
-        event.dataTransfer.effectAllowed = "copy"
-        event.dataTransfer.setData(resourceDragType, serializeResource(props.resource))
-        event.dataTransfer.setData("text/plain", resourceLabel(props.resource))
-      }}
+      className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-1.5 py-1 text-xs font-medium text-primary hover:bg-primary/15"
+      onClick={() => void props.onOpen()}
+      title={`Open ${props.name} Skill`}
       type="button"
     >
-      <span className="mt-0.5 text-primary [&_svg]:size-3.5">{props.icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5 text-xs font-medium"><span className="truncate">{resourceLabel(props.resource)}</span>{props.active ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">active</span> : null}</span>
-        {props.description ? <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">{props.description}</span> : null}
-      </span>
+      <Sparkles className="size-3" />
+      <span className="truncate">{props.name}</span>
+      <ExternalLink className="size-3 opacity-65" />
     </button>
   )
 }
 
+function ResourcePicker(props: {
+  activeIndex: number
+  loadingProject: boolean
+  loadingSkills: boolean
+  onOpenSkill: (name: string) => Promise<void>
+  onSelect: (resource: AgentResource) => void
+  options: AgentResourcePickerOption[]
+  query: string
+}) {
+  const sections = [
+    { id: "skills" as const, label: "Skills" },
+    { id: "project" as const, label: "Project files and folders" },
+    { id: "canvases" as const, label: "Canvases" },
+  ]
+  let optionIndex = 0
+  return (
+    <div
+      aria-label="Context and Skill picker"
+      className="absolute inset-x-0 bottom-[calc(100%+6px)] z-50 max-h-72 overflow-auto rounded-2xl border border-border/60 bg-popover p-2 text-popover-foreground shadow-xl shadow-black/10"
+      role="listbox"
+    >
+      <div className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        <Plus className="size-3" />
+        Add context or Skill
+        {props.query ? <span className="normal-case tracking-normal">matching /{props.query}</span> : null}
+      </div>
+      {sections.map((section, sectionIndex) => {
+        const options = props.options.filter((option) => option.section === section.id)
+        const loading =
+          (section.id === "skills" && props.loadingSkills) || (section.id === "project" && props.loadingProject)
+        if (!loading && options.length === 0 && props.query) return null
+        return (
+          <div className={cn(sectionIndex > 0 && "mt-1 border-t border-border/60 pt-1")} key={section.id}>
+            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              {section.label}
+            </div>
+            {loading ? (
+              <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
+                <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
+                Loading…
+              </div>
+            ) : options.length ? (
+              options.map((option) => {
+                const index = optionIndex++
+                const skillName = option.resource.kind === "skill" ? option.resource.name : undefined
+                const icon =
+                  option.section === "skills" ? (
+                    <Sparkles />
+                  ) : option.section === "canvases" ? (
+                    <PanelsTopLeft />
+                  ) : option.resource.kind === "directory" ? (
+                    <Folder />
+                  ) : (
+                    <FileText />
+                  )
+                return (
+                  <ResourceRow
+                    active={option.active}
+                    description={option.description}
+                    icon={icon}
+                    key={option.id}
+                    onAdd={() => props.onSelect(option.resource)}
+                    onOpen={skillName ? () => props.onOpenSkill(skillName) : undefined}
+                    resource={option.resource}
+                    selected={index === props.activeIndex}
+                  />
+                )
+              })
+            ) : (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">None available.</div>
+            )}
+          </div>
+        )
+      })}
+      {!props.loadingProject && !props.loadingSkills && props.options.length === 0 && props.query ? (
+        <div className="px-2 py-2 text-xs text-muted-foreground">No matching resources.</div>
+      ) : null}
+    </div>
+  )
+}
+
+function ResourceRow(props: {
+  active?: boolean
+  description?: string
+  icon: React.ReactNode
+  onAdd: () => void
+  onOpen?: () => Promise<void>
+  resource: AgentResource
+  selected?: boolean
+}) {
+  return (
+    <div className={cn("flex items-center rounded-md hover:bg-muted", props.selected && "bg-muted")}>
+      <button
+        className="flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left"
+        draggable
+        onClick={props.onAdd}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = "copy"
+          event.dataTransfer.setData(resourceDragType, serializeResource(props.resource))
+          event.dataTransfer.setData("text/plain", resourceLabel(props.resource))
+        }}
+        type="button"
+      >
+        <span className="mt-0.5 text-primary [&_svg]:size-3.5">{props.icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-xs font-medium">
+            <span className="truncate">{resourceLabel(props.resource)}</span>
+            {props.active ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">active</span> : null}
+          </span>
+          {props.description ? (
+            <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
+              {props.description}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {props.onOpen ? (
+        <Tooltip content="Open Skill file">
+          <Button
+            aria-label={`Open ${resourceLabel(props.resource)} Skill`}
+            onClick={() => void props.onOpen?.()}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <ExternalLink />
+          </Button>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+}
+
 function ResourceChip(props: { locked?: boolean; onRemove?: () => void; resource: AgentResource }) {
-  const icon = props.resource.kind === "directory"
-    ? <Folder />
-    : isAgentCanvasResource(props.resource)
-      ? <PanelsTopLeft />
-      : props.resource.kind === "skill"
-        ? <Sparkles />
-        : <FileText />
+  const icon =
+    props.resource.kind === "directory" ? (
+      <Folder />
+    ) : isAgentCanvasResource(props.resource) ? (
+      <PanelsTopLeft />
+    ) : props.resource.kind === "skill" ? (
+      <Sparkles />
+    ) : (
+      <FileText />
+    )
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-1 text-[11px]">
       <span className="text-primary [&_svg]:size-3">{icon}</span>
       <span className="max-w-40 truncate">{resourceLabel(props.resource)}</span>
       {props.locked ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">context</span> : null}
-      {props.onRemove ? <button aria-label={`Remove ${resourceLabel(props.resource)}`} className="rounded hover:bg-background" onClick={props.onRemove} type="button"><X className="size-3" /></button> : null}
+      {props.onRemove ? (
+        <button
+          aria-label={`Remove ${resourceLabel(props.resource)}`}
+          className="rounded hover:bg-background"
+          onClick={props.onRemove}
+          type="button"
+        >
+          <X className="size-3" />
+        </button>
+      ) : null}
     </span>
   )
 }
 
-function PermissionCard(props: { onReply: (reply: "always" | "once" | "reject") => Promise<unknown>; request: AgentPermissionRequest }) {
+function PermissionCard(props: {
+  onReply: (reply: "always" | "once" | "reject") => Promise<unknown>
+  request: AgentPermissionRequest
+}) {
   const [replying, setReplying] = useState(false)
   const [replyError, setReplyError] = useState<string>()
   const reply = async (value: "always" | "once" | "reject") => {
     setReplying(true)
     setReplyError(undefined)
-    try { await props.onReply(value) } catch (cause) { setReplyError(errorMessage(cause)) } finally { setReplying(false) }
+    try {
+      await props.onReply(value)
+    } catch (cause) {
+      setReplyError(errorMessage(cause))
+    } finally {
+      setReplying(false)
+    }
   }
   return (
     <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-      <div className="flex items-center gap-2 font-medium"><ShieldAlert className="size-4 text-amber-600" />Permission required</div>
-      <div className="mt-2 text-muted-foreground">OpenCode wants permission to <span className="font-medium text-foreground">{props.request.permission}</span>.</div>
-      {props.request.patterns.length ? <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">{props.request.patterns.join(", ")}</div> : null}
+      <div className="flex items-center gap-2 font-medium">
+        <ShieldAlert className="size-4 text-amber-600" />
+        Permission required
+      </div>
+      <div className="mt-2 text-muted-foreground">
+        OpenCode wants permission to <span className="font-medium text-foreground">{props.request.permission}</span>.
+      </div>
+      {props.request.patterns.length ? (
+        <div className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+          {props.request.patterns.join(", ")}
+        </div>
+      ) : null}
       {props.request.always.length ? (
         <div className="mt-2 rounded border border-amber-500/20 bg-background/70 p-2 text-[10px] text-muted-foreground">
           <span className="font-semibold text-foreground">Always allow scope: </span>
@@ -1694,15 +2000,27 @@ function PermissionCard(props: { onReply: (reply: "always" | "once" | "reject") 
       ) : null}
       {replyError ? <div className="mt-2 text-destructive">{replyError}</div> : null}
       <div className="mt-3 flex flex-wrap gap-1.5">
-        <Button disabled={replying} onClick={() => void reply("once")} size="sm">Allow once</Button>
-        {props.request.always.length ? <Button disabled={replying} onClick={() => void reply("always")} size="sm" variant="outline">Always allow</Button> : null}
-        <Button disabled={replying} onClick={() => void reply("reject")} size="sm" variant="ghost">Deny</Button>
+        <Button disabled={replying} onClick={() => void reply("once")} size="sm">
+          Allow once
+        </Button>
+        {props.request.always.length ? (
+          <Button disabled={replying} onClick={() => void reply("always")} size="sm" variant="outline">
+            Always allow
+          </Button>
+        ) : null}
+        <Button disabled={replying} onClick={() => void reply("reject")} size="sm" variant="ghost">
+          Deny
+        </Button>
       </div>
     </div>
   )
 }
 
-function QuestionCard(props: { onReject: () => Promise<unknown>; onReply: (answers: string[][]) => Promise<unknown>; request: AgentQuestionRequest }) {
+function QuestionCard(props: {
+  onReject: () => Promise<unknown>
+  onReply: (answers: string[][]) => Promise<unknown>
+  request: AgentQuestionRequest
+}) {
   const [answers, setAnswers] = useState<string[][]>(() => props.request.questions.map(() => []))
   const [customAnswers, setCustomAnswers] = useState<string[]>(() => props.request.questions.map(() => ""))
   const [replying, setReplying] = useState(false)
@@ -1712,26 +2030,42 @@ function QuestionCard(props: { onReject: () => Promise<unknown>; onReply: (answe
     return custom ? [...answer, custom] : answer
   })
   const update = (index: number, value: string, multiple = false) => {
-    if (!multiple) setCustomAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? "" : answer))
-    setAnswers((current) => current.map((answer, answerIndex) => {
-      if (answerIndex !== index) return answer
-      if (!multiple) return [value]
-      return answer.includes(value) ? answer.filter((item) => item !== value) : [...answer, value]
-    }))
+    if (!multiple)
+      setCustomAnswers((current) => current.map((answer, answerIndex) => (answerIndex === index ? "" : answer)))
+    setAnswers((current) =>
+      current.map((answer, answerIndex) => {
+        if (answerIndex !== index) return answer
+        if (!multiple) return [value]
+        return answer.includes(value) ? answer.filter((item) => item !== value) : [...answer, value]
+      }),
+    )
   }
   const updateCustom = (index: number, value: string, multiple = false) => {
-    setCustomAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? value : answer))
-    if (!multiple && value) setAnswers((current) => current.map((answer, answerIndex) => answerIndex === index ? [] : answer))
+    setCustomAnswers((current) => current.map((answer, answerIndex) => (answerIndex === index ? value : answer)))
+    if (!multiple && value)
+      setAnswers((current) => current.map((answer, answerIndex) => (answerIndex === index ? [] : answer)))
   }
   const submit = async () => {
     setReplying(true)
     setReplyError(undefined)
-    try { await props.onReply(resolvedAnswers) } catch (cause) { setReplyError(errorMessage(cause)) } finally { setReplying(false) }
+    try {
+      await props.onReply(resolvedAnswers)
+    } catch (cause) {
+      setReplyError(errorMessage(cause))
+    } finally {
+      setReplying(false)
+    }
   }
   const reject = async () => {
     setReplying(true)
     setReplyError(undefined)
-    try { await props.onReject() } catch (cause) { setReplyError(errorMessage(cause)) } finally { setReplying(false) }
+    try {
+      await props.onReject()
+    } catch (cause) {
+      setReplyError(errorMessage(cause))
+    } finally {
+      setReplying(false)
+    }
   }
   return (
     <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs">
@@ -1742,16 +2076,44 @@ function QuestionCard(props: { onReject: () => Promise<unknown>; onReply: (answe
           <div className="mt-2 flex flex-wrap gap-1.5">
             {question.options.map((option) => {
               const selected = answers[index]?.includes(option.label)
-              return <button className={cn("rounded-md border border-border bg-background px-2 py-1.5 text-left hover:bg-muted", selected && "border-primary bg-accent text-accent-foreground")} key={option.label} onClick={() => update(index, option.label, question.multiple)} title={option.description} type="button">{option.label}</button>
+              return (
+                <button
+                  className={cn(
+                    "rounded-md border border-border bg-background px-2 py-1.5 text-left hover:bg-muted",
+                    selected && "border-primary bg-accent text-accent-foreground",
+                  )}
+                  key={option.label}
+                  onClick={() => update(index, option.label, question.multiple)}
+                  title={option.description}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              )
             })}
           </div>
-          {question.custom ? <input className="mt-2 h-8 w-full rounded-md border border-input bg-background px-2 outline-none focus:border-ring" onChange={(event) => updateCustom(index, event.currentTarget.value, question.multiple)} placeholder="Type another answer" value={customAnswers[index] ?? ""} /> : null}
+          {question.custom ? (
+            <input
+              className="mt-2 h-8 w-full rounded-md border border-input bg-background px-2 outline-none focus:border-ring"
+              onChange={(event) => updateCustom(index, event.currentTarget.value, question.multiple)}
+              placeholder="Type another answer"
+              value={customAnswers[index] ?? ""}
+            />
+          ) : null}
         </div>
       ))}
       {replyError ? <div className="mt-2 text-destructive">{replyError}</div> : null}
       <div className="mt-3 flex gap-1.5">
-        <Button disabled={replying || resolvedAnswers.some((answer) => answer.length === 0)} onClick={() => void submit()} size="sm">Submit</Button>
-        <Button disabled={replying} onClick={() => void reject()} size="sm" variant="ghost">Cancel</Button>
+        <Button
+          disabled={replying || resolvedAnswers.some((answer) => answer.length === 0)}
+          onClick={() => void submit()}
+          size="sm"
+        >
+          Submit
+        </Button>
+        <Button disabled={replying} onClick={() => void reject()} size="sm" variant="ghost">
+          Cancel
+        </Button>
       </div>
     </div>
   )
