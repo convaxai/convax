@@ -72,6 +72,13 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       path: input.path,
       size: 0,
     })),
+    readManagedImageFile: mock(async (input: Parameters<ProjectFilesClient["readManagedImageFile"]>[0]) => ({
+      dataUrl: "data:image/png;base64,",
+      mimeType: "image/png",
+      name: input.path,
+      path: input.path,
+      size: 0,
+    })),
     readTextFile: mock(async (input: Parameters<ProjectFilesClient["readTextFile"]>[0]) => ({
       content: "",
       exists: false,

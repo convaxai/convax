@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto"
-import { watch as watchFileSystem, type FSWatcher } from "node:fs"
+import { constants as fsConstants, watch as watchFileSystem, type BigIntStats, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { isManagedProjectAssetPath } from "../canvas/project-resources"
 import type {
   ProjectChangeEvent,
   ProjectDirectoryListing,
@@ -105,6 +106,7 @@ function privateTextVersion(content: string) {
 }
 
 export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
+  private managedImageReads = 0
   private readonly now: () => number
   private registryQueue: Promise<unknown> = Promise.resolve()
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
@@ -540,14 +542,48 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   }
 
   async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
-    const info = await this.readFileInfo(input)
-    const { absolutePath } = await this.resolveExisting(input.projectId, info.path)
+    const relativePath = requireEntryPath(input.path)
+    const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
-    if (info.size > maxBytes) throw new Error(`Project file is too large to preview: ${info.path}`)
-    const content = await fs.readFile(absolutePath)
+    const content = await readStableFile(absolutePath, relativePath, maxBytes)
+    const mimeType = mimeTypeForPath(relativePath)
     return {
-      ...info,
-      dataUrl: `data:${info.mimeType};base64,${content.toString("base64")}`,
+      dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
+      mimeType,
+      name: path.basename(absolutePath),
+      path: relativePath,
+      size: content.byteLength,
+    }
+  }
+
+  async readManagedImageFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
+    if (!isManagedProjectAssetPath(input.path)) {
+      throw new Error(`Project image is not a managed Canvas asset: ${input.path}`)
+    }
+    const relativePath = requireEntryPath(input.path)
+    const mimeType = mimeTypeForPath(relativePath).toLowerCase()
+    if (!managedImageMimeTypes.has(mimeType)) {
+      throw new Error(`Managed Canvas image type is not supported: ${relativePath}`)
+    }
+    if (this.managedImageReads >= maximumConcurrentManagedImageReads) {
+      throw new Error("Too many managed Canvas image reads are already in progress")
+    }
+    this.managedImageReads += 1
+    try {
+      const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
+      const content = await readStableFile(absolutePath, relativePath, maximumManagedImageBytes)
+      if (!hasManagedImageSignature(content, mimeType)) {
+        throw new Error(`Managed Canvas image contents do not match its file type: ${relativePath}`)
+      }
+      return {
+        dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
+        mimeType,
+        name: path.basename(absolutePath),
+        path: relativePath,
+        size: content.byteLength,
+      }
+    } finally {
+      this.managedImageReads -= 1
     }
   }
 
@@ -856,4 +892,76 @@ async function ensureSafeDirectory(directory: string, description: string) {
   const stat = await fs.lstat(directory)
   if (stat.isSymbolicLink()) throw new Error(`${description} cannot be a symbolic link: ${directory}`)
   if (!stat.isDirectory()) throw new Error(`${description} is not a directory: ${directory}`)
+}
+
+const maximumManagedImageBytes = 16 * 1024 * 1024
+const maximumConcurrentManagedImageReads = 2
+const managedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
+
+async function readStableFile(absolutePath: string, relativePath: string, maximumBytes: number) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    throw new Error("Project file byte limit must be a positive integer")
+  }
+  const pathBeforeOpen = await fs.lstat(absolutePath, { bigint: true })
+  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink()) {
+    throw new Error(`Project path is not a regular file: ${relativePath}`)
+  }
+  const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW
+  const handle = await fs.open(absolutePath, fsConstants.O_RDONLY | noFollow)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || !sameFileIdentity(pathBeforeOpen, before)) {
+      throw new Error(`Project file changed before it could be read: ${relativePath}`)
+    }
+    if (before.size > BigInt(maximumBytes)) {
+      throw new Error(`Project file is too large to preview: ${relativePath}`)
+    }
+    const size = Number(before.size)
+    const content = Buffer.allocUnsafe(size)
+    let offset = 0
+    while (offset < size) {
+      const { bytesRead } = await handle.read(content, offset, size - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    const extra = Buffer.allocUnsafe(1)
+    const { bytesRead: extraBytes } = await handle.read(extra, 0, 1, size)
+    const after = await handle.stat({ bigint: true })
+    const pathAfterRead = await fs.lstat(absolutePath, { bigint: true })
+    const resolvedAfterRead = await fs.realpath(absolutePath)
+    if (offset !== size
+      || extraBytes !== 0
+      || !sameFileSnapshot(before, after)
+      || !sameFileIdentity(after, pathAfterRead)
+      || !sameNativePath(resolvedAfterRead, absolutePath)) {
+      throw new Error(`Project file changed while it was being read: ${relativePath}`)
+    }
+    return content
+  } finally {
+    await handle.close()
+  }
+}
+
+function sameFileIdentity(left: BigIntStats, right: BigIntStats) {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
+  return sameFileIdentity(left, right)
+    && left.size === right.size
+    && left.mtimeNs === right.mtimeNs
+    && left.ctimeNs === right.ctimeNs
+}
+
+function hasManagedImageSignature(content: Buffer, mimeType: string) {
+  if (mimeType === "image/jpeg") {
+    return content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff
+  }
+  if (mimeType === "image/png") {
+    return content.length >= 8
+      && content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  }
+  return content.length >= 12
+    && content.subarray(0, 4).toString("ascii") === "RIFF"
+    && content.subarray(8, 12).toString("ascii") === "WEBP"
 }
