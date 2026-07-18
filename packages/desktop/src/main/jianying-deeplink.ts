@@ -47,6 +47,8 @@ export interface JianyingMaterialImportInput {
 
 export type JianyingOpenDeepLink = (url: string, signal?: AbortSignal) => Promise<void>
 
+type JianyingScheduleTimeout = (callback: () => void, timeoutMs: number) => () => void
+
 export type JianyingDeepLinkDispatchErrorCode = "cancelled" | "dispatch_failed" | "timeout" | "transport_failed"
 
 export class JianyingDeepLinkDispatchError extends Error {
@@ -80,10 +82,18 @@ class TransferTimeoutError extends Error {}
 
 export class MacOSJianyingDeepLinkTransport {
   private readonly openDeepLink: JianyingOpenDeepLink
+  private readonly scheduleTimeout: JianyingScheduleTimeout
   private readonly timeoutMs: number
 
-  constructor(options: { openDeepLink?: JianyingOpenDeepLink; timeoutMs?: number } = {}) {
+  constructor(
+    options: {
+      openDeepLink?: JianyingOpenDeepLink
+      scheduleTimeout?: JianyingScheduleTimeout
+      timeoutMs?: number
+    } = {},
+  ) {
     this.openDeepLink = options.openDeepLink ?? openMacOSJianyingDeepLink
+    this.scheduleTimeout = options.scheduleTimeout ?? scheduleRealTimeout
     this.timeoutMs = options.timeoutMs ?? defaultTransferTimeoutMs
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > 10 * 60_000) {
       throw new Error("JianYing Deep Link timeout must be an integer between 1 and 600000 milliseconds")
@@ -113,7 +123,7 @@ export class MacOSJianyingDeepLinkTransport {
     const allCompleted = new Promise<void>((resolve) => {
       resolveCompleted = resolve
     })
-    const operation = createOperationSignal(signal, this.timeoutMs)
+    const operation = createOperationSignal(signal, this.timeoutMs, this.scheduleTimeout)
     const sockets = new Set<Socket>()
     const server = createLoopbackServer(prepared, states, operation.signal, () => {
       if (states.every((state, index) => coveredBytes(state.intervals) >= prepared[index].size)) {
@@ -394,7 +404,11 @@ function snapshotEvidence(
   }
 }
 
-function createOperationSignal(external: AbortSignal | undefined, timeoutMs: number) {
+function createOperationSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+  scheduleTimeout: JianyingScheduleTimeout,
+) {
   const controller = new AbortController()
   let timedOut = false
   const cancel = () => controller.abort(abortReason(external!))
@@ -403,18 +417,23 @@ function createOperationSignal(external: AbortSignal | undefined, timeoutMs: num
   } else {
     external?.addEventListener("abort", cancel, { once: true })
   }
-  const timer = setTimeout(() => {
+  const disposeTimeout = scheduleTimeout(() => {
     timedOut = true
     controller.abort(new TransferTimeoutError())
   }, timeoutMs)
   return {
     dispose() {
-      clearTimeout(timer)
+      disposeTimeout()
       external?.removeEventListener("abort", cancel)
     },
     signal: controller.signal,
     timedOut: () => timedOut,
   }
+}
+
+function scheduleRealTimeout(callback: () => void, timeoutMs: number) {
+  const timer = setTimeout(callback, timeoutMs)
+  return () => clearTimeout(timer)
 }
 
 function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

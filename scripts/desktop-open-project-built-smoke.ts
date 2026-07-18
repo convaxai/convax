@@ -311,8 +311,8 @@ try {
   const result = await evaluateStable(
     rendererDebugger,
     `(async () => {
-    const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
+      const deadline = Date.now() + ${timeoutMs}
       while (Date.now() < deadline) {
         const value = await read()
         if (value) return value
@@ -324,8 +324,9 @@ try {
       .find((button) => button.textContent?.trim() === text)
     const buttonContainingText = (text) => [...document.querySelectorAll("button")]
       .find((button) => button.textContent?.includes(text))
+    const preloadDeadline = Date.now() + ${timeoutMs}
     while (!window.convax) {
-      if (Date.now() >= deadline) throw new Error("The preload bridge did not become ready")
+      if (Date.now() >= preloadDeadline) throw new Error("The preload bridge did not become ready")
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     await waitFor(() => buttonWithText("Open project"), "the empty Project surface")
@@ -725,8 +726,8 @@ try {
     mainDebugger,
     "storyai-3d-director-desk",
     `(async () => {
-      const deadline = Date.now() + ${timeoutMs}
       const waitFor = async (read, label) => {
+        const deadline = Date.now() + ${timeoutMs}
         while (Date.now() < deadline) {
           const value = read()
           if (value) return value
@@ -951,8 +952,8 @@ try {
   const panoramaSeed = await evaluateStable(
     rendererDebugger,
     `(async () => {
-    const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
+      const deadline = Date.now() + ${timeoutMs}
       while (Date.now() < deadline) {
         const value = await read()
         if (value) return value
@@ -1108,8 +1109,8 @@ try {
   const panoramaResult = await evaluateStable(
     reloadedRendererDebugger,
     `(async () => {
-    const deadline = Date.now() + ${timeoutMs}
     const waitFor = async (read, label) => {
+      const deadline = Date.now() + ${timeoutMs}
       while (Date.now() < deadline) {
         const value = await read()
         if (value) return value
@@ -1117,8 +1118,9 @@ try {
       }
       throw new Error("Timed out waiting for " + label)
     }
+    const preloadDeadline = Date.now() + ${timeoutMs}
     while (!window.convax) {
-      if (Date.now() >= deadline) throw new Error("The preload bridge did not recover after reload")
+      if (Date.now() >= preloadDeadline) throw new Error("The preload bridge did not recover after reload")
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     const projectId = ${JSON.stringify(seed.projectId)}

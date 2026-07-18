@@ -243,19 +243,40 @@ describe("MacOSJianyingDeepLinkTransport", () => {
     const root = await temporaryRoot()
     const first = await stagedMedia(root, "first.png", "first", "image", "image/png")
     const second = await stagedMedia(root, "second.png", "second", "image", "image/png")
-    let unrequestedUrl = ""
+    let resolveMediaUrls!: (urls: readonly string[]) => void
+    const mediaUrls = new Promise<readonly string[]>((resolve) => {
+      resolveMediaUrls = resolve
+    })
+    let expire!: () => void
     const transport = new MacOSJianyingDeepLinkTransport({
       openDeepLink: async (deepLink) => {
         const infos = decodeFeatureEntry(deepLink).feature_context.material_infos
-        expect(await (await fetch(infos[0].material_uri)).text()).toBe("first")
-        unrequestedUrl = infos[1].material_uri
+        resolveMediaUrls(infos.map(({ material_uri }) => material_uri))
+      },
+      scheduleTimeout: (callback, timeoutMs) => {
+        expect(timeoutMs).toBe(40)
+        let active = true
+        expire = () => {
+          if (!active) return
+          active = false
+          callback()
+        }
+        return () => {
+          active = false
+        }
       },
       timeoutMs: 40,
     })
 
-    const failure = await transport
+    const pendingFailure = transport
       .dispatchMaterialImport({ media: [first, second], target: "current" })
       .catch((error: unknown) => error)
+    const [firstUrl, unrequestedUrl] = await mediaUrls
+    expect(await (await fetch(firstUrl)).text()).toBe("first")
+    expect((await fetch(unrequestedUrl, { method: "HEAD" })).status).toBe(200)
+    expire()
+
+    const failure = await pendingFailure
     expect(failure).toBeInstanceOf(JianyingDeepLinkDispatchError)
     expect(failure).toMatchObject({
       code: "timeout",
@@ -275,18 +296,25 @@ describe("MacOSJianyingDeepLinkTransport", () => {
     const root = await temporaryRoot()
     const image = await stagedMedia(root, "cancel.png", "cancel-me", "image", "image/png")
     const controller = new AbortController()
-    let mediaUrl = ""
+    let resolveMediaUrl!: (url: string) => void
+    const mediaUrlReady = new Promise<string>((resolve) => {
+      resolveMediaUrl = resolve
+    })
     const transport = new MacOSJianyingDeepLinkTransport({
       openDeepLink: async (deepLink) => {
-        mediaUrl = decodeFeatureEntry(deepLink).feature_context.material_infos[0].material_uri
-        setTimeout(() => controller.abort(new DOMException("Selection changed", "AbortError")), 10)
+        resolveMediaUrl(decodeFeatureEntry(deepLink).feature_context.material_infos[0].material_uri)
       },
       timeoutMs: 5_000,
     })
 
-    const failure = await transport
+    const pendingFailure = transport
       .dispatchMaterialImport({ media: [image], target: "current" }, controller.signal)
       .catch((error: unknown) => error)
+    const mediaUrl = await mediaUrlReady
+    expect((await fetch(mediaUrl, { method: "HEAD" })).status).toBe(200)
+    controller.abort(new DOMException("Selection changed", "AbortError"))
+
+    const failure = await pendingFailure
     expect(failure).toBeInstanceOf(JianyingDeepLinkDispatchError)
     expect(failure).toMatchObject({
       code: "cancelled",

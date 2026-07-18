@@ -16,6 +16,7 @@ import {
 import { app, BrowserWindow, net, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
+import { registerWillQuitCleanup } from "./application-lifecycle"
 import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
@@ -25,6 +26,11 @@ import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
 import { desktopBuiltinSkillPresentations } from "./builtin-skill-presentations"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
+import {
+  desktopDevelopmentCachePolicy,
+  quarantineLegacyDevelopmentCaches,
+  removeQuarantinedDevelopmentCaches,
+} from "./development-cache-policy"
 import { createWebPluginAssetHandler, webPluginAssetPrivileges, webPluginAssetScheme } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { WebPluginManager } from "./plugin-manager"
@@ -50,6 +56,14 @@ type CloseGate = "approved" | "flushing" | "idle"
 let quitGate: CloseGate = "idle"
 const rendererUrl = process.env.ELECTRON_RENDERER_URL
 const trustedRendererUrl = rendererUrl ?? pathToFileURL(join(import.meta.dirname, "../renderer/index.html")).href
+const developmentCachePolicy = desktopDevelopmentCachePolicy({
+  isPackaged: app.isPackaged,
+  rendererUrl,
+})
+
+for (const commandLineSwitch of developmentCachePolicy.switches) {
+  app.commandLine.appendSwitch(commandLineSwitch.name, commandLineSwitch.value)
+}
 
 app.setName(desktopProductName)
 
@@ -86,6 +100,7 @@ function createWindow(projectManager: NodeProjectManager) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      v8CacheOptions: developmentCachePolicy.v8CacheOptions,
     },
   })
   const webContentsId = window.webContents.id
@@ -126,6 +141,15 @@ function createWindow(projectManager: NodeProjectManager) {
 }
 
 function startApplication() {
+  const userDataDirectory = app.getPath("userData")
+  const quarantinedDevelopmentCaches = quarantineLegacyDevelopmentCaches(
+    userDataDirectory,
+    developmentCachePolicy.legacyDirectoryNames,
+  )
+  for (const failure of quarantinedDevelopmentCaches.failures) {
+    console.warn(`Could not quarantine obsolete Convax development cache ${failure.directoryName}`, failure.error)
+  }
+
   protocol.registerSchemesAsPrivileged([
     {
       scheme: "convax-asset",
@@ -144,7 +168,6 @@ function startApplication() {
   void app.whenReady().then(async () => {
     if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
 
-    const userDataDirectory = app.getPath("userData")
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
     const projectManager = new NodeProjectManager({
       registryFile: join(userDataDirectory, "projects.json"),
@@ -313,17 +336,23 @@ function startApplication() {
         return new Response("Asset was not found", { status: 404 })
       }
     })
-    app.once("will-quit", () => protocol.unhandle("convax-asset"))
-    app.once("will-quit", () => protocol.unhandle(webPluginAssetScheme))
-    app.once("will-quit", disposeDesktopProtocolIpc)
-    app.once("will-quit", disposeProjectIpc)
-    app.once("will-quit", disposeProjectCanvasIpc)
-    app.once("will-quit", disposeCanvasDocumentIpc)
-    app.once("will-quit", disposeJianyingIpc)
-    app.once("will-quit", disposePluginManagementIpc)
-    app.once("will-quit", disposeSkillManagementIpc)
-    app.once("will-quit", disposeAgentIpc)
-    app.once("will-quit", () => canvasRenderer.dispose())
+    registerWillQuitCleanup(
+      app,
+      [
+        () => protocol.unhandle("convax-asset"),
+        () => protocol.unhandle(webPluginAssetScheme),
+        disposeDesktopProtocolIpc,
+        disposeProjectIpc,
+        disposeProjectCanvasIpc,
+        disposeCanvasDocumentIpc,
+        disposeJianyingIpc,
+        disposePluginManagementIpc,
+        disposeSkillManagementIpc,
+        disposeAgentIpc,
+        () => canvasRenderer.dispose(),
+      ],
+      (error, index) => console.warn(`Convax will-quit cleanup ${index + 1} failed`, error),
+    )
     app.on("before-quit", (event) => {
       if (quitGate === "approved") return
       event.preventDefault()
@@ -343,6 +372,13 @@ function startApplication() {
     })
 
     createWindow(projectManager)
+    if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
+      setTimeout(() => {
+        void removeQuarantinedDevelopmentCaches(userDataDirectory).catch((error) => {
+          console.warn("Could not remove quarantined Convax development caches", error)
+        })
+      }, 30_000).unref()
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length > 0) return

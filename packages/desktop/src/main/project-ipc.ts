@@ -192,23 +192,37 @@ export async function registerProjectIpc(
     }
   }
 
+  const ensureWatchingProject = (projectId: string) => {
+    const existing = watchers.get(projectId)
+    if (existing) return existing
+    let watcher: Promise<StopWatching>
+    watcher = Promise.resolve()
+      .then(() => manager.watchProject(projectId, publishChange))
+      .catch((error: unknown) => {
+        if (watchers.get(projectId) === watcher) watchers.delete(projectId)
+        console.error(`Failed to watch project ${projectId}`, error)
+        return () => undefined
+      })
+    watchers.set(projectId, watcher)
+    return watcher
+  }
+
   const ensureWatching = (project: ProjectRecord) => {
-    if (project.missing || watchers.has(project.id)) return
-    const watcher = Promise.resolve(manager.watchProject(project.id, publishChange)).catch((error: unknown) => {
-      watchers.delete(project.id)
-      console.error(`Failed to watch project ${project.id}`, error)
-      return () => undefined
-    })
-    watchers.set(project.id, watcher)
+    if (project.missing) return
+    void ensureWatchingProject(project.id)
+  }
+
+  const withProjectWatcher = async <Result>(projectId: string, operation: () => Promise<Result>) => {
+    await ensureWatchingProject(projectId)
+    return operation()
   }
 
   const listProjects = async () => {
     const projects = await manager.list()
-    const activeIds = new Set(projects.filter((project) => !project.missing).map((project) => project.id))
+    const availableIds = new Set(projects.filter((project) => !project.missing).map((project) => project.id))
     for (const projectId of watchers.keys()) {
-      if (!activeIds.has(projectId)) await stopWatching(projectId)
+      if (!availableIds.has(projectId)) await stopWatching(projectId)
     }
-    for (const project of projects) ensureWatching(project)
     return projects
   }
 
@@ -219,7 +233,9 @@ export async function registerProjectIpc(
   })
 
   handlerDisposers.push(
-    registerHandler(projectIpcChannels.listProjects, options.isTrustedSender, async () => ({ projects: await listProjects() })),
+    registerHandler(projectIpcChannels.listProjects, options.isTrustedSender, async () => ({
+      projects: await listProjects(),
+    })),
     registerHandler(projectIpcChannels.openProject, options.isTrustedSender, async (event) => {
       const result = await showDirectoryDialog(event, {
         buttonLabel: "Open Project",
@@ -251,32 +267,56 @@ export async function registerProjectIpc(
       if (removed) await stopWatching(input.projectId)
       return { projects: await listProjects(), removed }
     }),
-    registerHandler(projectFilesIpcChannels.listDirectory, options.isTrustedSender, (_event, input) => manager.listDirectory(input)),
-    registerHandler(projectFilesIpcChannels.copyEntries, options.isTrustedSender, (_event, input) => manager.copyEntries(input)),
-    registerHandler(projectFilesIpcChannels.createEntry, options.isTrustedSender, (_event, input) => manager.createEntry(input)),
-    registerHandler(projectFilesIpcChannels.renameEntry, options.isTrustedSender, (_event, input) => manager.renameEntry(input)),
-    registerHandler(projectFilesIpcChannels.moveEntries, options.isTrustedSender, (_event, input) => manager.moveEntries(input)),
-    registerHandler(projectFilesIpcChannels.deleteEntries, options.isTrustedSender, (_event, input) => manager.deleteEntries(input)),
+    registerHandler(projectFilesIpcChannels.listDirectory, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.listDirectory(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.copyEntries, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.copyEntries(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.createEntry, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.createEntry(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.renameEntry, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.renameEntry(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.moveEntries, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.moveEntries(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.deleteEntries, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.deleteEntries(input)),
+    ),
     registerHandler(projectFilesIpcChannels.importEntries, options.isTrustedSender, async (_event, input) => {
-      const result = await manager.importEntries(input)
+      const result = await withProjectWatcher(input.projectId, () => manager.importEntries(input))
       return { ...result, sourcePaths: undefined }
     }),
-    registerHandler(projectFilesIpcChannels.readFile, options.isTrustedSender, (_event, input) => manager.readFile(input)),
-    registerHandler(projectFilesIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) => manager.readFileInfo(input)),
-    registerHandler(projectFilesIpcChannels.readManagedImageFile, options.isTrustedSender, (_event, input) => manager.readManagedImageFile(input)),
-    registerHandler(projectFilesIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) => manager.readTextPreview(input)),
-    registerHandler(projectFilesIpcChannels.readTextFile, options.isTrustedSender, (_event, input) => manager.readTextFile(input)),
-    registerHandler(projectFilesIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) => manager.writeTextFile(input)),
+    registerHandler(projectFilesIpcChannels.readFile, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.readFile(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.readFileInfo, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.readFileInfo(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.readManagedImageFile, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.readManagedImageFile(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.readTextPreview, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.readTextPreview(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.readTextFile, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.readTextFile(input)),
+    ),
+    registerHandler(projectFilesIpcChannels.writeTextFile, options.isTrustedSender, (_event, input) =>
+      withProjectWatcher(input.projectId, () => manager.writeTextFile(input)),
+    ),
     registerHandler(projectFilesIpcChannels.revealEntry, options.isTrustedSender, async (_event, input) => {
-      shell.showItemInFolder(await manager.resolveEntryPath(input))
+      shell.showItemInFolder(await withProjectWatcher(input.projectId, () => manager.resolveEntryPath(input)))
     }),
     registerHandler(projectFilesIpcChannels.openEntry, options.isTrustedSender, async (_event, input) => {
-      const error = await shell.openPath(await manager.resolveEntryPath(input))
+      const error = await shell.openPath(
+        await withProjectWatcher(input.projectId, () => manager.resolveEntryPath(input)),
+      )
       return error ? { error } : {}
     }),
   )
-
-  for (const project of await manager.list()) ensureWatching(project)
 
   return () => {
     for (const dispose of handlerDisposers) dispose()

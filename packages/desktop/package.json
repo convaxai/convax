@@ -10,7 +10,7 @@
     "dev": "bun scripts/ensure-electron-runtime.ts && electron-vite dev",
     "build": "electron-vite build",
     "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
