@@ -112,6 +112,7 @@ export function registerSkillManagementIpc(
     }
   }
   const unsubscribe = manager.subscribe(publishChange)
+  const unsubscribeRemote = remoteCatalog?.subscribe?.(publishChange)
   const disposers = [
     register<SkillClientInput<"getSkillDetails">, Awaited<ReturnType<DesktopSkillClient["getSkillDetails"]>>>(
       skillManagementIpcChannels.getSkillDetails,
@@ -191,6 +192,7 @@ export function registerSkillManagementIpc(
   ]
   return () => {
     unsubscribe()
+    unsubscribeRemote?.()
     disposers.forEach((dispose) => dispose())
   }
 }

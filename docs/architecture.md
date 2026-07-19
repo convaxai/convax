@@ -169,6 +169,9 @@ Electron userData/
   projects.json                         per-user bindings and recency
   default-capabilities.json             one-time default Plugin/Skill provisioning receipt
   capability-registry/index-v1.json     last-known-good official remote catalog cache
+  capability-registry/showcase-v1.json  verified showcase index for the current catalog revision
+  capability-registry/showcase-media-v1/<sha256>
+                                        bounded content-addressed showcase media cache
   opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
   plugins/<plugin-id>/                  validated static Plugin packages
     .convax-builtin.json                host-authored catalog provenance, when applicable
@@ -191,10 +194,14 @@ Managed assets are the explicit exception: they are imported/copied through the
 scoped Project Files capability into `.convax/assets`, while the rest of `.convax`
 remains hidden and protected.
 
-The remote capability catalog cache is Desktop-owned, user-global, and
-non-authoritative. It contains only a previously validated official Registry
-document plus transport metadata. Losing it never removes installed capabilities;
-an invalid or rolled-back network response never replaces it.
+The remote capability catalog and showcase caches are Desktop-owned, user-global,
+and non-authoritative. Catalog reads may return the validated local snapshot
+immediately while Main single-flights a bounded background ETag revalidation;
+install/update operations still request a network-first Registry view. Showcase
+indexes publish monotonically with their Registry identity. Media is cached across
+restarts by its verified SHA-256 in a bounded LRU and is rechecked for declared size,
+digest and MIME bytes on every admission. Losing any cache never removes installed
+capabilities; an invalid or rolled-back network response never replaces it.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
 application services. A schema change needs a version, a migration path, and tests

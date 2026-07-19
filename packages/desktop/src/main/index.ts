@@ -46,6 +46,7 @@ import { registerJianyingIpc } from "./jianying-ipc"
 import { createJianyingNativeAdapter, JianyingIntegrationService } from "./jianying-service"
 import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
+import { FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
 import { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
@@ -261,6 +262,10 @@ function startApplication() {
       registry: new RemoteCapabilityRegistryClient({
         cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
         fetch: createElectronRemoteCapabilityFetch(net),
+        showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),
+        showcaseMediaCache: new FileRemoteShowcaseMediaCache(
+          join(userDataDirectory, "capability-registry", "showcase-media-v1"),
+        ),
       }),
       skillManager,
     })

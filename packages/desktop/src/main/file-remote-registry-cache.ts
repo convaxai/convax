@@ -2,21 +2,30 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import type { RemoteRegistryCache, RemoteRegistryCacheEntry } from "./remote-capability-registry"
+import {
+  RemoteRegistryCacheCorruptionError,
+  type RemoteRegistryCache,
+  type RemoteRegistryCacheEntry,
+} from "./remote-capability-registry"
 
-const maxCacheFileBytes = 3 * 1024 * 1024
+const maxCacheBodyBytes = 2 * 1024 * 1024
+// `body` is embedded as a JSON string. A one-byte control character can expand to
+// a six-byte `\u00xx` escape, so this covers every body accepted by write(), plus
+// bounded metadata and formatting overhead.
+const maxCacheFileBytes = maxCacheBodyBytes * 6 + 4 * 1024
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error
 }
 
 function parseCacheEntry(value: unknown): RemoteRegistryCacheEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Remote registry cache must be an object")
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Remote registry cache must be an object")
   const input = value as Record<string, unknown>
   const allowed = new Set(["body", "etag", "sha256"])
   const unknown = Object.keys(input).find((key) => !allowed.has(key))
   if (unknown) throw new Error(`Remote registry cache contains an unsupported field: ${unknown}`)
-  if (typeof input.body !== "string" || Buffer.byteLength(input.body) > 2 * 1024 * 1024) {
+  if (typeof input.body !== "string" || Buffer.byteLength(input.body) > maxCacheBodyBytes) {
     throw new Error("Remote registry cache body is invalid")
   }
   if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
@@ -24,7 +33,10 @@ function parseCacheEntry(value: unknown): RemoteRegistryCacheEntry {
   }
   if (
     input.etag !== undefined &&
-    (typeof input.etag !== "string" || !input.etag || input.etag.length > 256 || /[\u0000-\u001f\u007f]/.test(input.etag))
+    (typeof input.etag !== "string" ||
+      !input.etag ||
+      input.etag.length > 256 ||
+      /[\u0000-\u001f\u007f]/.test(input.etag))
   ) {
     throw new Error("Remote registry cache ETag is invalid")
   }
@@ -66,17 +78,24 @@ export class FileRemoteRegistryCache implements RemoteRegistryCache {
     }
     try {
       const stat = await handle.stat()
-      if (!stat.isFile() || stat.size > maxCacheFileBytes) throw new Error("Remote registry cache is not a bounded regular file")
+      if (!stat.isFile()) throw new Error("Remote registry cache is not a bounded regular file")
+      if (stat.size > maxCacheFileBytes) {
+        throw new RemoteRegistryCacheCorruptionError("Remote registry cache exceeds the size limit")
+      }
       let value: unknown
       try {
         value = JSON.parse(await handle.readFile("utf8"))
       } catch (error) {
         if (error instanceof SyntaxError) {
-          throw new Error("Remote registry cache is not valid JSON", { cause: error })
+          throw new RemoteRegistryCacheCorruptionError("Remote registry cache is not valid JSON", { cause: error })
         }
         throw error
       }
-      return parseCacheEntry(value)
+      try {
+        return parseCacheEntry(value)
+      } catch (error) {
+        throw new RemoteRegistryCacheCorruptionError("Remote registry cache entry is invalid", { cause: error })
+      }
     } finally {
       await handle.close()
     }

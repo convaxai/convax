@@ -114,7 +114,9 @@ function createManager(inventory: DesktopSkillInventory = { catalog: [], skills:
 }
 
 function createRemoteCatalog() {
-  return {
+  let changeListener: (() => void) | undefined
+  const unsubscribe = mock(() => undefined)
+  const catalog = {
     getSkillDetails: mock(async (id: string) => ({
       description: "Remote workflow",
       files: [{ content: "# Remote", kind: "text" as const, path: "SKILL.md", size: 8 }],
@@ -142,7 +144,12 @@ function createRemoteCatalog() {
         name: "Remote Review",
       },
     ]),
+    subscribe: mock((listener: () => void) => {
+      changeListener = listener
+      return unsubscribe
+    }),
   } satisfies RemoteSkillCatalogPort
+  return { ...catalog, emitChange: () => changeListener?.(), unsubscribe }
 }
 
 function createPlugins() {
@@ -320,21 +327,25 @@ describe("registerSkillManagementIpc", () => {
     const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
     const setup = createManager()
     const live = testWindow()
+    const remote = createRemoteCatalog()
     windows.push(live, testWindow({ destroyed: true }), testWindow({ webContentsDestroyed: true }))
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
       createPlugins(),
       () => true,
+      remote,
     )
 
     setup.emitChange()
-    expect(live.webContents.send).toHaveBeenCalledTimes(1)
+    remote.emitChange()
+    expect(live.webContents.send).toHaveBeenCalledTimes(2)
     expect(live.webContents.send).toHaveBeenCalledWith(skillManagementIpcChannels.changed)
 
     const registered = [...handlers.keys()]
     dispose()
     expect(setup.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(remote.unsubscribe).toHaveBeenCalledTimes(1)
     expect(registered).toHaveLength(8)
     expect(removedHandlers.sort()).toEqual(registered.sort())
     expect(handlers).toHaveLength(0)

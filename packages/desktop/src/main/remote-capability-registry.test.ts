@@ -11,8 +11,10 @@ import {
   type RemoteCapabilityPackage,
   type RemoteCapabilityFetch,
   type RemoteRegistryCache,
+  type RemoteShowcaseMediaCache,
   MemoryRemoteRegistryCache,
   RemoteCapabilityRegistryClient,
+  RemoteRegistryCacheCorruptionError,
   RemoteRegistryTimeoutError,
   RemoteRegistryValidationError,
   parseRemoteCapabilityShowcase,
@@ -201,6 +203,20 @@ function fetchMock(
   return async (input, init) => implementation(input, init)
 }
 
+function memoryShowcaseMediaCache() {
+  const entries = new Map<string, Uint8Array>()
+  const cache: RemoteShowcaseMediaCache = {
+    async read({ sha256, size }) {
+      const bytes = entries.get(sha256)
+      return bytes?.byteLength === size ? Uint8Array.from(bytes) : null
+    },
+    async write({ bytes, sha256 }) {
+      entries.set(sha256, Uint8Array.from(bytes))
+    },
+  }
+  return { cache, entries }
+}
+
 function packageWithZip(zip: Uint8Array, overrides: Record<string, unknown> = {}) {
   return parseRemoteCapabilityRegistry(
     registry([
@@ -331,6 +347,261 @@ describe("parseRemoteCapabilityShowcase", () => {
 })
 
 describe("RemoteCapabilityRegistryClient", () => {
+  test("serves a validated Registry cache immediately and single-flights background revalidation", async () => {
+    const cache = new MemoryRemoteRegistryCache()
+    const body = JSON.stringify(registry())
+    await cache.write({
+      body,
+      etag: '"revision-1"',
+      sha256: createHash("sha256").update(body).digest("hex"),
+    })
+    let now = 10_000
+    let requests = 0
+    let resolveResponse!: (response: Response) => void
+    const response = new Promise<Response>((resolve) => {
+      resolveResponse = resolve
+    })
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => {
+        requests += 1
+        return response
+      }),
+      now: () => now,
+      registryRevalidateMs: 5_000,
+    })
+
+    expect((await client.fetchRegistry({ cachePolicy: "cache-first" })).source).toBe("cache")
+    expect((await client.fetchRegistry({ cachePolicy: "cache-first" })).source).toBe("cache")
+    expect(requests).toBe(1)
+    resolveResponse(new Response(null, { headers: { etag: '"revision-1"' }, status: 304 }))
+    expect((await client.fetchRegistry()).source).toBe("not-modified")
+
+    now += 4_999
+    expect((await client.fetchRegistry({ cachePolicy: "cache-first" })).source).toBe("cache")
+    expect(requests).toBe(1)
+  })
+
+  test("single-flights concurrent cold Registry requests", async () => {
+    let requests = 0
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(() => {
+        requests += 1
+        return jsonResponse(registry())
+      }),
+    })
+
+    const [first, second] = await Promise.all([client.fetchRegistry(), client.fetchRegistry()])
+    expect(first.registry).toEqual(second.registry)
+    expect(requests).toBe(1)
+  })
+
+  test("repairs malformed persistent Registry cache after a valid network response", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-registry-repair-"))
+    temporaryRoots.push(root)
+    const stateFile = path.join(root, "capability-registry", "index-v1.json")
+    await fs.mkdir(path.dirname(stateFile), { recursive: true })
+    await fs.writeFile(stateFile, "{truncated")
+    const cache = new FileRemoteRegistryCache(stateFile)
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => jsonResponse(registry())),
+    })
+
+    expect((await client.fetchRegistry()).source).toBe("network")
+    const repaired = await cache.read()
+    expect(repaired).not.toBeNull()
+    expect(parseRemoteCapabilityRegistry(JSON.parse(repaired!.body))).toEqual(parseRemoteCapabilityRegistry(registry()))
+  })
+
+  test("does not roll back a newer Registry when publication reread has a transient failure", async () => {
+    const initialBody = JSON.stringify(registry([], { revision: "1".repeat(40), sequence: 1 }))
+    let entry: Awaited<ReturnType<RemoteRegistryCache["read"]>> = {
+      body: initialBody,
+      sha256: createHash("sha256").update(initialBody).digest("hex"),
+    }
+    let failNextRead = false
+    const cache: RemoteRegistryCache = {
+      async read() {
+        if (failNextRead) {
+          failNextRead = false
+          throw new Error("transient cache read failure")
+        }
+        return entry
+      },
+      async write(next) {
+        entry = next
+      },
+    }
+    let resolveSlow!: (response: Response) => void
+    let markSlowStarted!: () => void
+    const slowStarted = new Promise<void>((resolve) => {
+      markSlowStarted = resolve
+    })
+    const slowResponse = new Promise<Response>((resolve) => {
+      resolveSlow = resolve
+    })
+    let requests = 0
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => {
+        requests += 1
+        if (requests === 1) {
+          markSlowStarted()
+          return slowResponse
+        }
+        return jsonResponse(registry([], { revision: "3".repeat(40), sequence: 3 }))
+      }),
+    })
+    const slow = client.fetchRegistry({ signal: new AbortController().signal })
+    await slowStarted
+    expect((await client.fetchRegistry({ signal: new AbortController().signal })).registry.sequence).toBe(3)
+
+    failNextRead = true
+    resolveSlow(jsonResponse(registry([], { revision: "2".repeat(40), sequence: 2 })))
+    await expect(slow).resolves.toMatchObject({
+      registry: { sequence: 3 },
+      source: "cache",
+      staleReason: "transient cache read failure",
+    })
+    expect(parseRemoteCapabilityRegistry(JSON.parse(entry!.body)).sequence).toBe(3)
+  })
+
+  test("keeps the in-process Registry high-watermark when the published cache becomes corrupt", async () => {
+    const initialBody = JSON.stringify(registry([], { revision: "1".repeat(40), sequence: 1 }))
+    let entry: Awaited<ReturnType<RemoteRegistryCache["read"]>> = {
+      body: initialBody,
+      sha256: createHash("sha256").update(initialBody).digest("hex"),
+    }
+    let corruptNextRead = false
+    const cache: RemoteRegistryCache = {
+      async read() {
+        if (corruptNextRead) {
+          corruptNextRead = false
+          throw new RemoteRegistryCacheCorruptionError("corrupt cache")
+        }
+        return entry
+      },
+      async write(next) {
+        entry = next
+      },
+    }
+    let resolveSlow!: (response: Response) => void
+    let markSlowStarted!: () => void
+    const slowStarted = new Promise<void>((resolve) => {
+      markSlowStarted = resolve
+    })
+    const slowResponse = new Promise<Response>((resolve) => {
+      resolveSlow = resolve
+    })
+    let requests = 0
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => {
+        requests += 1
+        if (requests === 1) {
+          markSlowStarted()
+          return slowResponse
+        }
+        return jsonResponse(registry([], { revision: "3".repeat(40), sequence: 3 }))
+      }),
+    })
+    const slow = client.fetchRegistry({ signal: new AbortController().signal })
+    await slowStarted
+    expect((await client.fetchRegistry({ signal: new AbortController().signal })).registry.sequence).toBe(3)
+
+    corruptNextRead = true
+    resolveSlow(jsonResponse(registry([], { revision: "2".repeat(40), sequence: 2 })))
+    await expect(slow).rejects.toThrow("roll back")
+    expect(parseRemoteCapabilityRegistry(JSON.parse(entry!.body)).sequence).toBe(3)
+  })
+
+  test("never lets a slower concurrent response roll back a newer published Registry", async () => {
+    const cache = new MemoryRemoteRegistryCache()
+    const initialBody = JSON.stringify(registry([], { revision: "1".repeat(40), sequence: 1 }))
+    await cache.write({
+      body: initialBody,
+      sha256: createHash("sha256").update(initialBody).digest("hex"),
+    })
+    let requests = 0
+    let resolveSlow!: (response: Response) => void
+    const slowResponse = new Promise<Response>((resolve) => {
+      resolveSlow = resolve
+    })
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => {
+        requests += 1
+        return requests === 1 ? slowResponse : jsonResponse(registry([], { revision: "3".repeat(40), sequence: 3 }))
+      }),
+    })
+    let changes = 0
+    const unsubscribe = client.subscribe(() => {
+      changes += 1
+    })
+
+    await client.fetchRegistry({ cachePolicy: "cache-first" })
+    const explicit = await client.fetchRegistry({ signal: new AbortController().signal })
+    expect(explicit.registry.sequence).toBe(3)
+    expect(changes).toBe(1)
+    const slow = client.fetchRegistry()
+    resolveSlow(jsonResponse(registry([], { revision: "2".repeat(40), sequence: 2 })))
+    await expect(slow).rejects.toThrow("roll back")
+
+    const published = await cache.read()
+    expect(parseRemoteCapabilityRegistry(JSON.parse(published!.body)).sequence).toBe(3)
+    expect(changes).toBe(1)
+    unsubscribe()
+  })
+
+  test("rejects a caller aborted while its validated Registry waits to publish", async () => {
+    let entry: Awaited<ReturnType<RemoteRegistryCache["read"]>> = null
+    let writes = 0
+    let releaseFirstWrite!: () => void
+    let markFirstWriteStarted!: () => void
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      markFirstWriteStarted = resolve
+    })
+    const firstWriteRelease = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve
+    })
+    const cache: RemoteRegistryCache = {
+      async read() {
+        return entry
+      },
+      async write(next) {
+        writes += 1
+        if (writes === 1) {
+          markFirstWriteStarted()
+          await firstWriteRelease
+        }
+        entry = next
+      },
+    }
+    let requests = 0
+    const client = new RemoteCapabilityRegistryClient({
+      cache,
+      fetch: fetchMock(() => {
+        requests += 1
+        const sequence = requests + 1
+        return jsonResponse(registry([], { revision: String(sequence).repeat(40), sequence }))
+      }),
+    })
+    const firstController = new AbortController()
+    const first = client.fetchRegistry({ signal: firstController.signal })
+    await firstWriteStarted
+
+    const secondController = new AbortController()
+    const second = client.fetchRegistry({ signal: secondController.signal })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    secondController.abort()
+    releaseFirstWrite()
+
+    expect((await first).registry.sequence).toBe(2)
+    await expect(second).rejects.toMatchObject({ name: "AbortError" })
+    expect(parseRemoteCapabilityRegistry(JSON.parse(entry!.body)).sequence).toBe(3)
+  })
+
   test("uses ETag revalidation and a validated 304 cache hit", async () => {
     const requests: Array<{ etag: string | null; url: string }> = []
     let call = 0
@@ -498,6 +769,118 @@ describe("RemoteCapabilityRegistryClient", () => {
     expect(calls.filter((url) => url === "https://showcase.test/index.json")).toHaveLength(1)
     expect(calls.filter((url) => url.endsWith("hello-agent-showcase.gif"))).toHaveLength(2)
     expect(calls.filter((url) => url.endsWith("hello-agent-showcase.png"))).toHaveLength(1)
+  })
+
+  test("single-flights showcase downloads and reuses verified index and media caches across clients", async () => {
+    const gif = Uint8Array.from(Buffer.from("GIF89a-safe-preview"))
+    const digest = createHash("sha256").update(gif).digest("hex")
+    const current = parseRemoteCapabilityRegistry(registry())
+    const item = current.packages.find((candidate) => candidate.kind === "skill")!
+    const sidecar = showcase({
+      packages: [
+        {
+          ...showcase().packages[0],
+          animation: showcaseMedia("animation", { sha256: digest, size: gif.byteLength }),
+        },
+      ],
+    })
+    const showcaseCache = new MemoryRemoteRegistryCache()
+    const { cache: showcaseMediaCache } = memoryShowcaseMediaCache()
+    const calls: string[] = []
+    const first = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock((url) => {
+        calls.push(url)
+        return url === "https://showcase.test/index.json"
+          ? jsonResponse(sidecar)
+          : new Response(gif, { headers: { "content-type": "image/gif" } })
+      }),
+      showcaseCache,
+      showcaseMediaCache,
+      showcaseUrl: "https://showcase.test/index.json",
+    })
+
+    const [left, right] = await Promise.all([
+      first.downloadSkillShowcase(current, item),
+      first.downloadSkillShowcase(current, item),
+    ])
+    expect(left).toEqual(right)
+    expect(calls.filter((url) => url === "https://showcase.test/index.json")).toHaveLength(1)
+    expect(calls.filter((url) => url.endsWith("hello-agent-showcase.gif"))).toHaveLength(1)
+
+    const restarted = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(() => {
+        throw new Error("persistent cache should avoid the network")
+      }),
+      showcaseCache,
+      showcaseMediaCache,
+      showcaseUrl: "https://showcase.test/index.json",
+    })
+    await expect(restarted.downloadSkillShowcase(current, item)).resolves.toEqual(left)
+
+    const cancelled = new AbortController()
+    cancelled.abort(new DOMException("cancelled cache hit", "AbortError"))
+    await expect(restarted.downloadSkillShowcase(current, item, { signal: cancelled.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    })
+  })
+
+  test("does not let an older slow showcase overwrite a newer Registry identity", async () => {
+    const gif = Uint8Array.from(Buffer.from("GIF89a-safe-preview"))
+    const digest = createHash("sha256").update(gif).digest("hex")
+    const older = parseRemoteCapabilityRegistry(registry())
+    const newer = parseRemoteCapabilityRegistry(registry(undefined, { revision: "2".repeat(40), sequence: 2 }))
+    const olderSidecar = showcase({
+      packages: [
+        {
+          ...showcase().packages[0],
+          animation: showcaseMedia("animation", { sha256: digest, size: gif.byteLength }),
+        },
+      ],
+    })
+    const newerSidecar = { ...olderSidecar, revision: newer.revision, sequence: newer.sequence }
+    const showcaseCache = new MemoryRemoteRegistryCache()
+    let indexRequests = 0
+    let markOlderStarted!: () => void
+    let resolveOlder!: (response: Response) => void
+    const olderStarted = new Promise<void>((resolve) => {
+      markOlderStarted = resolve
+    })
+    const olderResponse = new Promise<Response>((resolve) => {
+      resolveOlder = resolve
+    })
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock((url) => {
+        if (url === "https://showcase.test/index.json") {
+          indexRequests += 1
+          if (indexRequests === 1) {
+            markOlderStarted()
+            return olderResponse
+          }
+          return jsonResponse(newerSidecar)
+        }
+        return new Response(gif, { headers: { "content-type": "image/gif" } })
+      }),
+      showcaseCache,
+      showcaseUrl: "https://showcase.test/index.json",
+    })
+    const olderItem = older.packages.find((candidate) => candidate.kind === "skill")!
+    const newerItem = newer.packages.find((candidate) => candidate.kind === "skill")!
+
+    const slow = client.downloadSkillShowcase(older, olderItem)
+    await olderStarted
+    await expect(client.downloadSkillShowcase(newer, newerItem)).resolves.toMatchObject({ bytes: gif })
+    resolveOlder(jsonResponse(olderSidecar))
+    await expect(slow).resolves.toMatchObject({ bytes: gif })
+
+    const persisted = await showcaseCache.read()
+    expect(JSON.parse(persisted!.body)).toMatchObject({ revision: newer.revision, sequence: newer.sequence })
+    const invalidBody = "{}"
+    await showcaseCache.write({
+      body: invalidBody,
+      sha256: createHash("sha256").update(invalidBody).digest("hex"),
+    })
+    await expect(client.downloadSkillShowcase(newer, newerItem)).resolves.toMatchObject({ bytes: gif })
+    expect(indexRequests).toBe(2)
   })
 
   test("rejects showcase metadata drift, unsafe redirects, MIME mismatches, and digest changes", async () => {
@@ -696,6 +1079,17 @@ describe("FileRemoteRegistryCache", () => {
     const cache = new FileRemoteRegistryCache(path.join(root, "capability-registry", "index-v1.json"))
     const body = JSON.stringify(registry())
     const entry = { body, etag: '"one"', sha256: createHash("sha256").update(body).digest("hex") }
+    await cache.write(entry)
+    expect(await cache.read()).toEqual(entry)
+  })
+
+  test("round-trips a maximum-size body with worst-case JSON escaping", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-registry-cache-escaped-"))
+    temporaryRoots.push(root)
+    const cache = new FileRemoteRegistryCache(path.join(root, "capability-registry", "index-v1.json"))
+    const body = "\0".repeat(2 * 1024 * 1024)
+    const entry = { body, sha256: createHash("sha256").update(body).digest("hex") }
+
     await cache.write(entry)
     expect(await cache.read()).toEqual(entry)
   })

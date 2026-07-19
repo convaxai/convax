@@ -22,6 +22,7 @@ export interface RemoteCapabilityRegistryPort {
   downloadBundle: RemoteCapabilityRegistryClient["downloadBundle"]
   downloadSkillShowcase: RemoteCapabilityRegistryClient["downloadSkillShowcase"]
   fetchRegistry: RemoteCapabilityRegistryClient["fetchRegistry"]
+  subscribe?(listener: () => void): () => void
 }
 
 export interface RemotePluginCatalogPort {
@@ -34,6 +35,8 @@ export interface RemoteSkillCatalogPort {
   getSkillShowcase(id: string, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null>
   installSkill(id: string): Promise<DesktopSkillSummary>
   listSkillCatalog(installedNames: ReadonlySet<string>): Promise<DesktopSkillCatalogItem[]>
+  /** Shared remote Registry invalidation for the combined Skill & Plugin catalog UI. */
+  subscribe?(listener: () => void): () => void
 }
 
 export interface RemoteCapabilityInstallerOptions {
@@ -122,8 +125,12 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     this.#builtinSkillIdentities = reservedIdentities(options.builtinSkills)
   }
 
-  async #packages() {
-    return (await this.#registry.fetchRegistry()).registry.packages
+  subscribe(listener: () => void) {
+    return this.#registry.subscribe?.(listener) ?? (() => undefined)
+  }
+
+  async #packages(cachePolicy: "cache-first" | "network-first" = "network-first") {
+    return (await this.#registry.fetchRegistry({ cachePolicy })).registry.packages
   }
 
   #plugins(packages: readonly RemoteCapabilityPackage[]) {
@@ -149,7 +156,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   }
 
   async listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]> {
-    return this.#plugins(await this.#packages()).map((item) => ({
+    return this.#plugins(await this.#packages("cache-first")).map((item) => ({
       ...item.manifest,
       installed: installedIds.has(item.id),
     }))
@@ -164,7 +171,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   }
 
   async listSkillCatalog(installedNames: ReadonlySet<string>): Promise<DesktopSkillCatalogItem[]> {
-    return this.#skills(await this.#packages()).map((item) => ({
+    return this.#skills(await this.#packages("cache-first")).map((item) => ({
       description: item.description,
       id: item.id,
       installed: installedNames.has(item.id),
@@ -193,7 +200,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
 
   async getSkillShowcase(id: string, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null> {
     try {
-      const { registry } = await this.#registry.fetchRegistry()
+      const { registry } = await this.#registry.fetchRegistry({ cachePolicy: "cache-first" })
       const item = this.#skills(registry.packages).find((candidate) => candidate.id === id)
       if (!item) return null
       return await this.#registry.downloadSkillShowcase(registry, item, { media })

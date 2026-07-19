@@ -46,6 +46,9 @@ Packaged Convax application/
 Electron userData/
   default-capabilities.json                    one-time default provisioning receipt
   capability-registry/index-v1.json            last-known-good official Registry cache
+  capability-registry/showcase-v1.json         verified showcase index cache
+  capability-registry/showcase-media-v1/<sha256>
+                                               bounded verified media cache
   opencode/
     skills/
       user/<skill-name>/...                 managed Skills, including explicitly installed companions
@@ -352,10 +355,15 @@ Showcase media is presentation metadata rather than installable Skill content.
 Checked-in Skills use fixed host-bundled assets, while remote Skills use the verified
 Registry sidecar and immutable Release assets. Main reads or downloads the selected
 poster or animation; renderer requests carry only a typed Skill identity and media
-kind. Media loads lazily, an animation plays only while its card is visible, and a
-reduced-motion preference keeps the poster static. A discovered Skill without known
-presentation metadata uses the neutral placeholder but still exposes its real file
-tree and content preview.
+kind. The verified sidecar is persisted per Registry revision, and remote media is
+published monotonically so an older in-flight response cannot replace a newer
+revision. Remote media is stored across launches in a 256 MiB LRU,
+content-addressed Main cache keyed by its declared SHA-256; cache reads are admitted
+only after size, digest and MIME-byte checks. Media loads
+lazily, an animation plays only while its card is visible, and a reduced-motion
+preference keeps the poster static. A discovered Skill without known presentation
+metadata uses the neutral placeholder but still exposes its real file tree and
+content preview.
 
 ## Agent relationship
 

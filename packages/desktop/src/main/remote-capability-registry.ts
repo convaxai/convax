@@ -110,6 +110,11 @@ export interface RemoteRegistryCache {
   write(entry: RemoteRegistryCacheEntry): Promise<void>
 }
 
+export interface RemoteShowcaseMediaCache {
+  read(input: { sha256: string; size: number }): Promise<Uint8Array | null>
+  write(input: { bytes: Uint8Array; sha256: string }): Promise<void>
+}
+
 export interface RemoteRegistryFetchResult {
   etag?: string
   registry: RemoteCapabilityRegistry
@@ -124,8 +129,13 @@ export interface RemoteCapabilityBundle {
 export interface RemoteCapabilityRegistryClientOptions {
   cache?: RemoteRegistryCache
   fetch?: RemoteCapabilityFetch
+  /** Main-owned test seam for the cache-first Registry revalidation clock. */
+  now?: () => number
   /** Main-owned test seam. Production composition must use the official default. */
   registryUrl?: string
+  registryRevalidateMs?: number
+  showcaseCache?: RemoteRegistryCache
+  showcaseMediaCache?: RemoteShowcaseMediaCache
   /** Main-owned test seam. Production composition must use the official default. */
   showcaseUrl?: string
   timeoutMs?: number
@@ -146,8 +156,18 @@ export interface RemoteShowcaseDownloadOptions {
   timeoutMs?: number
 }
 
+export interface RemoteRegistryFetchOptions {
+  cachePolicy?: "cache-first" | "network-first"
+  signal?: AbortSignal
+}
+
 export class RemoteRegistryValidationError extends Error {
   override readonly name = "RemoteRegistryValidationError"
+}
+
+/** Replaceable on-disk cache content corruption; I/O/trust-boundary errors use their original type. */
+export class RemoteRegistryCacheCorruptionError extends Error {
+  override readonly name = "RemoteRegistryCacheCorruptionError"
 }
 
 export class RemoteRegistryTimeoutError extends Error {
@@ -636,7 +656,13 @@ async function withTimeout<T>(
     controller.abort()
   }, timeoutMs)
   try {
-    return await operation(controller.signal)
+    const result = await operation(controller.signal)
+    // An operation can finish CPU/cache publication work after its signal was
+    // aborted. Preserve safe cache side effects, but never report that cancelled
+    // or timed-out caller as successful.
+    if (externalSignal?.aborted) throw abortError(externalSignal)
+    if (timedOut) throw new RemoteRegistryTimeoutError(`Remote capability request timed out after ${timeoutMs}ms`)
+    return result
   } catch (error) {
     if (externalSignal?.aborted) throw abortError(externalSignal)
     if (timedOut) throw new RemoteRegistryTimeoutError(`Remote capability request timed out after ${timeoutMs}ms`)
@@ -778,6 +804,27 @@ function readValidCache(entry: RemoteRegistryCacheEntry | null) {
   }
 }
 
+function readValidShowcaseCache(entry: RemoteRegistryCacheEntry | null, registry: RemoteCapabilityRegistry) {
+  if (
+    !entry ||
+    typeof entry.body !== "string" ||
+    typeof entry.sha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(entry.sha256) ||
+    sha256(entry.body) !== entry.sha256
+  ) {
+    return null
+  }
+  try {
+    return { entry, showcase: parseShowcaseBody(entry.body, registry) }
+  } catch {
+    return null
+  }
+}
+
+function showcaseBytesAreValid(bytes: Uint8Array, media: RemoteShowcaseMedia<RemoteShowcaseMime>) {
+  return bytes.byteLength === media.size && sha256(bytes) === media.sha256 && bytesMatchShowcaseMime(bytes, media.mime)
+}
+
 function sameRegistry(left: RemoteCapabilityRegistry, right: RemoteCapabilityRegistry) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -798,21 +845,152 @@ export class MemoryRemoteRegistryCache implements RemoteRegistryCache {
 export class RemoteCapabilityRegistryClient {
   readonly #cache: RemoteRegistryCache
   readonly #fetch: RemoteCapabilityFetch
+  #lastRegistryRefreshStartedAt = Number.NEGATIVE_INFINITY
+  readonly #now: () => number
+  #registryCachePublication: Promise<void> = Promise.resolve()
+  #registryHighWatermark?: NonNullable<ReturnType<typeof readValidCache>>
+  readonly #registryListeners = new Set<() => void>()
+  readonly #registryRevalidateMs: number
+  #registryRequest?: Promise<RemoteRegistryFetchResult>
   readonly #registryUrl: string
   #showcaseCache?: RemoteCapabilityShowcase
+  readonly #showcaseIndexCache: RemoteRegistryCache
+  #showcaseCachePublication: Promise<void> = Promise.resolve()
+  #showcaseLatestRegistry?: { revision: string; sequence: number }
+  readonly #showcaseMediaCache?: RemoteShowcaseMediaCache
+  readonly #showcaseMediaRequests = new Map<string, Promise<Uint8Array>>()
+  #showcaseRequest?: { identity: string; promise: Promise<RemoteCapabilityShowcase> }
   readonly #showcaseUrl: string
   readonly #timeoutMs: number
 
   constructor(options: RemoteCapabilityRegistryClientOptions = {}) {
     this.#cache = options.cache ?? new MemoryRemoteRegistryCache()
     this.#fetch = options.fetch ?? globalThis.fetch
+    this.#now = options.now ?? Date.now
+    this.#registryRevalidateMs = options.registryRevalidateMs ?? 5 * 60_000
+    if (
+      !Number.isSafeInteger(this.#registryRevalidateMs) ||
+      this.#registryRevalidateMs < 1_000 ||
+      this.#registryRevalidateMs > 24 * 60 * 60_000
+    ) {
+      throw new Error("Remote registry revalidation interval must be an integer between 1000 and 86400000 milliseconds")
+    }
     this.#registryUrl = assertConfiguredRegistryUrl(options.registryUrl ?? officialRemoteRegistryIndexUrl)
+    this.#showcaseIndexCache = options.showcaseCache ?? new MemoryRemoteRegistryCache()
+    this.#showcaseMediaCache = options.showcaseMediaCache
     this.#showcaseUrl = assertConfiguredRegistryUrl(options.showcaseUrl ?? officialRemoteShowcaseIndexUrl)
     this.#timeoutMs = options.timeoutMs ?? 10_000
   }
 
-  async fetchRegistry(options: { signal?: AbortSignal } = {}): Promise<RemoteRegistryFetchResult> {
-    const cached = readValidCache(await this.#cache.read().catch(() => null))
+  #withRegistryCachePublication<T>(operation: () => Promise<T>) {
+    const result = this.#registryCachePublication.then(operation)
+    this.#registryCachePublication = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  #withShowcaseCachePublication(operation: () => Promise<void>) {
+    const result = this.#showcaseCachePublication.then(operation)
+    this.#showcaseCachePublication = result.catch(() => undefined)
+    return result
+  }
+
+  async #readRegistryForPublication() {
+    try {
+      return readValidCache(await this.#cache.read())
+    } catch (error) {
+      if (error instanceof RemoteRegistryCacheCorruptionError) return null
+      throw error
+    }
+  }
+
+  #latestObservedRegistry(candidate: ReturnType<typeof readValidCache>) {
+    const highWatermark = this.#registryHighWatermark
+    if (!candidate) return highWatermark ? structuredClone(highWatermark) : null
+    if (!highWatermark || candidate.registry.sequence > highWatermark.registry.sequence) {
+      this.#registryHighWatermark = structuredClone(candidate)
+      return candidate
+    }
+    if (candidate.registry.sequence < highWatermark.registry.sequence) return structuredClone(highWatermark)
+    if (!sameRegistry(candidate.registry, highWatermark.registry)) return structuredClone(highWatermark)
+    this.#registryHighWatermark = structuredClone(candidate)
+    return candidate
+  }
+
+  subscribe(listener: () => void) {
+    this.#registryListeners.add(listener)
+    return () => this.#registryListeners.delete(listener)
+  }
+
+  #publishRegistryChange() {
+    for (const listener of this.#registryListeners) {
+      try {
+        listener()
+      } catch {
+        // A presentation refresh cannot invalidate an already-published cache.
+      }
+    }
+  }
+
+  #publishRegistry(body: string, etag: string | undefined, registry: RemoteCapabilityRegistry) {
+    return this.#withRegistryCachePublication(async () => {
+      const latest = this.#latestObservedRegistry(await this.#readRegistryForPublication())
+      if (latest) {
+        if (registry.sequence < latest.registry.sequence) {
+          validationError("Remote registry sequence would roll back the cache")
+        }
+        if (registry.sequence === latest.registry.sequence && !sameRegistry(registry, latest.registry)) {
+          validationError("Remote registry changed without increasing its sequence")
+        }
+      }
+      const entry = cacheEntry(body, etag)
+      await this.#cache.write(entry)
+      this.#latestObservedRegistry({ entry, registry })
+      return Boolean(latest && !sameRegistry(registry, latest.registry))
+    }).then((changed) => {
+      if (changed) this.#publishRegistryChange()
+    })
+  }
+
+  #publishNotModified(cached: NonNullable<ReturnType<typeof readValidCache>>, etag: string | undefined) {
+    return this.#withRegistryCachePublication(async (): Promise<RemoteRegistryFetchResult> => {
+      const onDisk = await this.#readRegistryForPublication()
+      const latest = this.#latestObservedRegistry(onDisk)
+      if (latest && latest.registry.sequence > cached.registry.sequence) {
+        if (
+          !onDisk ||
+          onDisk.entry.body !== latest.entry.body ||
+          onDisk.entry.etag !== latest.entry.etag ||
+          !sameRegistry(onDisk.registry, latest.registry)
+        ) {
+          await this.#cache.write(latest.entry)
+        }
+        return {
+          ...(latest.entry.etag ? { etag: latest.entry.etag } : {}),
+          registry: latest.registry,
+          source: "cache",
+        }
+      }
+      if (latest?.registry.sequence === cached.registry.sequence && !sameRegistry(latest.registry, cached.registry)) {
+        validationError("Remote registry changed without increasing its sequence")
+      }
+      const body = latest?.registry.sequence === cached.registry.sequence ? latest.entry.body : cached.entry.body
+      const effectiveEtag = etag ?? cached.entry.etag
+      const entry = cacheEntry(body, effectiveEtag)
+      if (!onDisk || onDisk.entry.body !== body || onDisk.entry.etag !== effectiveEtag) {
+        await this.#cache.write(entry)
+      }
+      this.#latestObservedRegistry({ entry, registry: cached.registry })
+      return { ...(effectiveEtag ? { etag: effectiveEtag } : {}), registry: cached.registry, source: "not-modified" }
+    })
+  }
+
+  async #fetchRegistryNetwork(
+    cached: ReturnType<typeof readValidCache>,
+    signal?: AbortSignal,
+  ): Promise<RemoteRegistryFetchResult> {
     try {
       return await withTimeout(
         async (signal) => {
@@ -829,8 +1007,7 @@ export class RemoteCapabilityRegistryClient {
           if (response.status === 304) {
             if (!cached) validationError("Remote registry returned 304 without a valid cached index")
             const etag = validEtag(response.headers.get("etag")) ?? cached.entry.etag
-            if (etag !== cached.entry.etag) await this.#cache.write(cacheEntry(cached.entry.body, etag))
-            return { ...(etag ? { etag } : {}), registry: cached.registry, source: "not-modified" }
+            return this.#publishNotModified(cached, etag)
           }
           if (response.status !== 200)
             throw new RemoteRegistryTransportError(`Remote registry returned HTTP ${response.status}`)
@@ -850,31 +1027,94 @@ export class RemoteCapabilityRegistryClient {
             }
           }
           const etag = validEtag(response.headers.get("etag"))
-          await this.#cache.write(cacheEntry(body, etag))
+          await this.#publishRegistry(body, etag, registry)
           return { ...(etag ? { etag } : {}), registry, source: "network" }
         },
         this.#timeoutMs,
-        options.signal,
+        signal,
       )
     } catch (error) {
-      if (options.signal?.aborted) throw abortError(options.signal)
+      if (signal?.aborted) throw abortError(signal)
       if (error instanceof RemoteRegistryValidationError || !cached) throw error
+      const fallback = this.#latestObservedRegistry(cached)
+      if (!fallback) throw error
       return {
-        ...(cached.entry.etag ? { etag: cached.entry.etag } : {}),
-        registry: cached.registry,
+        ...(fallback.entry.etag ? { etag: fallback.entry.etag } : {}),
+        registry: fallback.registry,
         source: "cache",
         staleReason: error instanceof Error ? error.message : "Remote registry request failed",
       }
     }
   }
 
-  async #fetchShowcase(
+  #requestRegistryNetwork(cached: ReturnType<typeof readValidCache>, signal?: AbortSignal) {
+    if (signal) return this.#fetchRegistryNetwork(cached, signal)
+    if (this.#registryRequest) return this.#registryRequest
+    this.#lastRegistryRefreshStartedAt = this.#now()
+    const request = this.#fetchRegistryNetwork(cached).finally(() => {
+      if (this.#registryRequest === request) this.#registryRequest = undefined
+    })
+    this.#registryRequest = request
+    return request
+  }
+
+  #revalidateCachedRegistry(cached: NonNullable<ReturnType<typeof readValidCache>>) {
+    if (this.#registryRequest || this.#now() - this.#lastRegistryRefreshStartedAt < this.#registryRevalidateMs) return
+    void this.#requestRegistryNetwork(cached).catch(() => undefined)
+  }
+
+  async fetchRegistry(options: RemoteRegistryFetchOptions = {}): Promise<RemoteRegistryFetchResult> {
+    if (options.signal?.aborted) throw abortError(options.signal)
+    const cached = this.#latestObservedRegistry(readValidCache(await this.#cache.read().catch(() => null)))
+    if (options.signal?.aborted) throw abortError(options.signal)
+    if (options.cachePolicy === "cache-first" && cached) {
+      this.#revalidateCachedRegistry(cached)
+      return {
+        ...(cached.entry.etag ? { etag: cached.entry.etag } : {}),
+        registry: cached.registry,
+        source: "cache",
+      }
+    }
+    return this.#requestRegistryNetwork(cached, options.signal)
+  }
+
+  #observeShowcaseRegistry(registry: RemoteCapabilityRegistry) {
+    const latest = this.#showcaseLatestRegistry
+    if (!latest || registry.sequence > latest.sequence) {
+      this.#showcaseLatestRegistry = { revision: registry.revision, sequence: registry.sequence }
+      return
+    }
+    if (registry.sequence === latest.sequence && registry.revision !== latest.revision) {
+      validationError("Remote showcase Registry changed without increasing its sequence")
+    }
+  }
+
+  #isLatestShowcase(showcase: RemoteCapabilityShowcase) {
+    const latest = this.#showcaseLatestRegistry
+    return Boolean(latest && showcase.sequence === latest.sequence && showcase.revision === latest.revision)
+  }
+
+  #rememberShowcase(showcase: RemoteCapabilityShowcase) {
+    if (this.#isLatestShowcase(showcase)) this.#showcaseCache = showcase
+  }
+
+  #publishShowcase(body: string, showcase: RemoteCapabilityShowcase) {
+    return this.#withShowcaseCachePublication(async () => {
+      if (!this.#isLatestShowcase(showcase)) return
+      await this.#showcaseIndexCache.write(cacheEntry(body)).catch(() => undefined)
+      this.#rememberShowcase(showcase)
+    })
+  }
+
+  async #loadShowcase(
     registry: RemoteCapabilityRegistry,
     options: RemoteShowcaseDownloadOptions,
   ): Promise<RemoteCapabilityShowcase> {
-    if (this.#showcaseCache?.sequence === registry.sequence && this.#showcaseCache.revision === registry.revision) {
-      return this.#showcaseCache
-    }
+    if (options.signal?.aborted) throw abortError(options.signal)
+    const cached = readValidShowcaseCache(await this.#showcaseIndexCache.read().catch(() => null), registry)
+    if (options.signal?.aborted) throw abortError(options.signal)
+    if (cached) return cached.showcase
+    let body = ""
     const showcase = await withTimeout(
       async (signal) => {
         const response = await fetchWithRedirects(
@@ -889,7 +1129,6 @@ export class RemoteCapabilityRegistryClient {
           throw new RemoteRegistryTransportError(`Remote showcase index returned HTTP ${response.status}`)
         }
         const bytes = await readBoundedBody(response, maxShowcaseIndexBytes, "Remote showcase index", signal)
-        let body: string
         try {
           body = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
         } catch {
@@ -900,28 +1139,45 @@ export class RemoteCapabilityRegistryClient {
       options.timeoutMs ?? this.#timeoutMs,
       options.signal,
     )
-    this.#showcaseCache = showcase
+    await this.#publishShowcase(body, showcase)
     return showcase
   }
 
-  async downloadSkillShowcase(
-    registryValue: RemoteCapabilityRegistry,
-    packageValue: RemoteSkillPackage,
-    options: RemoteShowcaseDownloadOptions = {},
-  ): Promise<RemoteSkillShowcaseDownload | null> {
-    const registry = parseRemoteCapabilityRegistry(registryValue)
-    const packageItem = parseRemoteCapabilityPackage(packageValue)
-    if (packageItem.kind !== "skill") validationError("Remote Skill showcase requires a Skill package")
-    const current = registry.packages.find((item) => item.kind === "skill" && item.id === packageItem.id)
-    if (!current || JSON.stringify(current) !== JSON.stringify(packageItem) || current.yanked) {
-      validationError("Remote Skill showcase package does not match the current Registry")
+  async #fetchShowcase(
+    registry: RemoteCapabilityRegistry,
+    options: RemoteShowcaseDownloadOptions,
+  ): Promise<RemoteCapabilityShowcase> {
+    if (options.signal?.aborted) throw abortError(options.signal)
+    this.#observeShowcaseRegistry(registry)
+    if (this.#showcaseCache?.sequence === registry.sequence && this.#showcaseCache.revision === registry.revision) {
+      return this.#showcaseCache
     }
-    const showcase = await this.#fetchShowcase(registry, options)
-    const mediaRole = options.media ?? "animation"
-    const media = showcase.packages.find(
-      (item) => item.kind === "skill" && item.id === packageItem.id && item.version === packageItem.version,
-    )?.[mediaRole]
-    if (!media) return null
+    const identity = `${registry.sequence}:${registry.revision}`
+    if (!options.signal && options.timeoutMs === undefined && this.#showcaseRequest?.identity === identity) {
+      return this.#showcaseRequest.promise
+    }
+    const load = this.#loadShowcase(registry, options)
+    const request = load.then((showcase) => {
+      this.#rememberShowcase(showcase)
+      return showcase
+    })
+    if (!options.signal && options.timeoutMs === undefined) {
+      const tracked = request.finally(() => {
+        if (this.#showcaseRequest?.promise === tracked) this.#showcaseRequest = undefined
+      })
+      this.#showcaseRequest = { identity, promise: tracked }
+      return tracked
+    }
+    const showcase = await request
+    this.#rememberShowcase(showcase)
+    return showcase
+  }
+
+  async #downloadShowcaseMedia(media: RemoteShowcaseMedia<RemoteShowcaseMime>, options: RemoteShowcaseDownloadOptions) {
+    if (options.signal?.aborted) throw abortError(options.signal)
+    const cached = await this.#showcaseMediaCache?.read({ sha256: media.sha256, size: media.size }).catch(() => null)
+    if (options.signal?.aborted) throw abortError(options.signal)
+    if (cached && showcaseBytesAreValid(cached, media)) return Uint8Array.from(cached)
     const bytes = await withTimeout(
       async (signal) => {
         const response = await fetchShowcaseMediaWithRedirects(
@@ -946,6 +1202,44 @@ export class RemoteCapabilityRegistryClient {
     if (!bytesMatchShowcaseMime(bytes, media.mime)) {
       validationError(`Remote showcase media bytes do not match ${media.mime}`)
     }
+    await this.#showcaseMediaCache?.write({ bytes, sha256: media.sha256 }).catch(() => undefined)
+    return bytes
+  }
+
+  async #readOrDownloadShowcaseMedia(
+    media: RemoteShowcaseMedia<RemoteShowcaseMime>,
+    options: RemoteShowcaseDownloadOptions,
+  ) {
+    if (options.signal || options.timeoutMs !== undefined) return this.#downloadShowcaseMedia(media, options)
+    const identity = `${media.sha256}:${media.size}:${media.mime}`
+    const existing = this.#showcaseMediaRequests.get(identity)
+    if (existing) return Uint8Array.from(await existing)
+    const request = this.#downloadShowcaseMedia(media, options).finally(() => {
+      if (this.#showcaseMediaRequests.get(identity) === request) this.#showcaseMediaRequests.delete(identity)
+    })
+    this.#showcaseMediaRequests.set(identity, request)
+    return Uint8Array.from(await request)
+  }
+
+  async downloadSkillShowcase(
+    registryValue: RemoteCapabilityRegistry,
+    packageValue: RemoteSkillPackage,
+    options: RemoteShowcaseDownloadOptions = {},
+  ): Promise<RemoteSkillShowcaseDownload | null> {
+    const registry = parseRemoteCapabilityRegistry(registryValue)
+    const packageItem = parseRemoteCapabilityPackage(packageValue)
+    if (packageItem.kind !== "skill") validationError("Remote Skill showcase requires a Skill package")
+    const current = registry.packages.find((item) => item.kind === "skill" && item.id === packageItem.id)
+    if (!current || JSON.stringify(current) !== JSON.stringify(packageItem) || current.yanked) {
+      validationError("Remote Skill showcase package does not match the current Registry")
+    }
+    const showcase = await this.#fetchShowcase(registry, options)
+    const mediaRole = options.media ?? "animation"
+    const media = showcase.packages.find(
+      (item) => item.kind === "skill" && item.id === packageItem.id && item.version === packageItem.version,
+    )?.[mediaRole]
+    if (!media) return null
+    const bytes = await this.#readOrDownloadShowcaseMedia(media, options)
     return {
       altText: media.alt,
       bytes,
@@ -1012,9 +1306,27 @@ export async function downloadBundle(
   packageValue: RemoteCapabilityPackage,
   options: RemoteCapabilityDownloadOptions & RemoteCapabilityRegistryClientOptions = {},
 ) {
-  const { cache, fetch, registryUrl, showcaseUrl, timeoutMs, ...downloadOptions } = options
-  return new RemoteCapabilityRegistryClient({ cache, fetch, registryUrl, showcaseUrl, timeoutMs }).downloadBundle(
-    packageValue,
-    downloadOptions,
-  )
+  const {
+    cache,
+    fetch,
+    now,
+    registryRevalidateMs,
+    registryUrl,
+    showcaseCache,
+    showcaseMediaCache,
+    showcaseUrl,
+    timeoutMs,
+    ...downloadOptions
+  } = options
+  return new RemoteCapabilityRegistryClient({
+    cache,
+    fetch,
+    now,
+    registryRevalidateMs,
+    registryUrl,
+    showcaseCache,
+    showcaseMediaCache,
+    showcaseUrl,
+    timeoutMs,
+  }).downloadBundle(packageValue, downloadOptions)
 }

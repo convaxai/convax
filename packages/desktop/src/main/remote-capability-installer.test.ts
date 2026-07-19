@@ -135,7 +135,7 @@ describe("RemoteCapabilityInstaller", () => {
       skillPackage("remote-skill"),
       skillPackage("hidden-skill", { yanked: true }),
     ]
-    const { installer } = setup(packages)
+    const { installer, registry } = setup(packages)
 
     await expect(installer.listPluginCatalog(new Set(["remote-plugin"]))).resolves.toEqual([
       { ...manifest("remote-plugin", "1.1.0"), installed: true },
@@ -148,6 +148,8 @@ describe("RemoteCapabilityInstaller", () => {
         name: "remote-skill",
       },
     ])
+    expect(registry.fetchRegistry).toHaveBeenNthCalledWith(1, { cachePolicy: "cache-first" })
+    expect(registry.fetchRegistry).toHaveBeenNthCalledWith(2, { cachePolicy: "cache-first" })
   })
 
   test("rechecks the downloaded Plugin manifest before using the ordinary bundle installer", async () => {
@@ -161,6 +163,7 @@ describe("RemoteCapabilityInstaller", () => {
     await expect(setupResult.installer.installPlugin("remote-plugin")).resolves.toMatchObject({
       id: "remote-plugin",
     })
+    expect(setupResult.registry.fetchRegistry).toHaveBeenCalledWith({ cachePolicy: "network-first" })
     expect(setupResult.registry.downloadBundle).toHaveBeenCalledWith(item)
     expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith({ files })
 
