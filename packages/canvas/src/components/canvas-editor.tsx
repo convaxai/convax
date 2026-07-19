@@ -115,6 +115,7 @@ import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../sel
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
+import { CanvasReloadQueue } from "../reload-queue"
 import {
   CanvasSelectionActionExecutor,
   createCanvasSelectionActionContext,
@@ -315,8 +316,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const savePromiseRef = useRef<Promise<void> | undefined>(undefined)
   const saveRevisionRef = useRef<number | undefined>(undefined)
   const savedRevisionRef = useRef(history.document.revision)
-  const reloadPromiseRef = useRef<Promise<void> | undefined>(undefined)
+  const reloadQueueRef = useRef(new CanvasReloadQueue())
   const operationControllersRef = useRef(new Set<AbortController>())
+  const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const reactFlow = useReactFlow<CanvasNode>()
   const uploadService = useCanvasService("upload")
   const generateService = useCanvasService("generate")
@@ -443,15 +445,18 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     viewId: props.viewId ?? "",
     viewport: reactFlow.getViewport(),
   }), [props.viewId, props.viewScopeId, reactFlow])
+  const waitForStableLoad = useCallback(async () => {
+    while (true) {
+      const barrier = loadBarrierRef.current
+      await barrier.promise
+      if (barrier === loadBarrierRef.current && !hydratingRef.current) return
+    }
+  }, [])
   const executeViewCommand = useCallback(async (
     command: CanvasViewCommand,
     guard?: CanvasViewExecutionGuard,
   ): Promise<CanvasViewCommandResult> => {
-    while (true) {
-      const barrier = loadBarrierRef.current
-      await barrier.promise
-      if (barrier === loadBarrierRef.current && !hydratingRef.current) break
-    }
+    await waitForStableLoad()
     if (guard) assertCanvasViewGuard(getViewSnapshot(), guard)
     const document = documentRef.current
     const existingNodeIds = new Set(document.nodes.map((node) => node.id))
@@ -527,13 +532,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       })
     }
     return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
-  }, [getViewSnapshot, notificationService, reactFlow, updateSelection])
+  }, [getViewSnapshot, notificationService, reactFlow, updateSelection, waitForStableLoad])
   const viewSession = useMemo<CanvasViewSession | null>(() => props.viewId ? {
     execute: executeViewCommand,
     getSnapshot: getViewSnapshot,
-    whenReady: () => loadBarrierRef.current.promise,
+    whenReady: waitForStableLoad,
     viewId: props.viewId,
-  } : null, [executeViewCommand, getViewSnapshot, props.viewId])
+  } : null, [executeViewCommand, getViewSnapshot, props.viewId, waitForStableLoad])
   useEffect(() => {
     if (!props.viewRegistry || !viewSession) return
     return props.viewRegistry.register(viewSession)
@@ -588,6 +593,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     () => new AbortController(),
     [history.document, readOnly, selectedEdgeIds, selectedNodeIds],
   )
+  selectionActionControllerRef.current = selectionActionController
   const selectionActionContext = useMemo(
     () => createCanvasSelectionActionContext(
       history.document,
@@ -616,6 +622,13 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   }, [selectionActionController, selectionActionExecutor])
   const executeSelectionAction = useCallback(
     (action: CanvasSelectionAction) => {
+      if (
+        hydratingRef.current
+        || leavingRef.current
+        || selectionActionContext.document !== documentRef.current
+        || !equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds)
+        || !equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds)
+      ) return
       void selectionActionExecutor.execute(action, selectionActionContext)
     },
     [selectionActionContext, selectionActionExecutor],
@@ -667,6 +680,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     return pending
   }, [loadError, notifyError, persistenceService])
   const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
+    selectionActionControllerRef.current?.abort()
     hasLocalEditsRef.current = false
     savedRevisionRef.current = document.revision
     const hydrated = canvasHistoryReducer(historyRef.current, { type: "hydrate", document })
@@ -676,9 +690,9 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   }, [])
   const reloadDocument = useCallback(() => {
     if (!persistenceService) return Promise.resolve()
-    if (reloadPromiseRef.current) return reloadPromiseRef.current
-    const reload = (async () => {
-      await loadBarrierRef.current.promise
+    selectionActionControllerRef.current?.abort()
+    return reloadQueueRef.current.request(async () => {
+      await waitForStableLoad()
       if (loadError) throw new Error(loadError)
       const loadBarrier = createCanvasLoadBarrier()
       loadBarrierRef.current = loadBarrier
@@ -705,21 +719,15 @@ function CanvasEditorContent(props: CanvasEditorProps & {
         hydratingRef.current = false
         setHydrating(false)
       }
-    })()
-    reloadPromiseRef.current = reload
-    const clear = () => {
-      if (reloadPromiseRef.current === reload) reloadPromiseRef.current = undefined
-    }
-    void reload.then(clear, clear)
-    return reload
-  }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave])
+    })
+  }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad])
   useImperativeHandle(props.editorRef, () => ({
     async flush() {
-      await loadBarrierRef.current.promise
+      await waitForStableLoad()
       await startSave(historyRef.current.document)
     },
     async prepareToLeave() {
-      await loadBarrierRef.current.promise
+      await waitForStableLoad()
       leavingRef.current = true
       setLeaving(true)
       for (const controller of operationControllersRef.current) controller.abort()
@@ -741,7 +749,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       leavingRef.current = false
       setLeaving(false)
     },
-  }), [props.editorRef, reloadDocument, startSave])
+  }), [props.editorRef, reloadDocument, startSave, waitForStableLoad])
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
