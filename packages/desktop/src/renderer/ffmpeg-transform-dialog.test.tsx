@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { projectFileReferenceKey } from "@convax/project/canvas"
 import type { FfmpegTransformDialogRequest } from "./ffmpeg-selection-action"
 import { FfmpegTransformDialog, shouldCloseFfmpegDialogAfterFailure } from "./ffmpeg-transform-dialog"
+import { FfmpegPartialTransformError } from "./ffmpeg-transform-runner"
 
 function request(kind: FfmpegTransformDialogRequest["kind"]): FfmpegTransformDialogRequest {
   const node = createMediaNode({
@@ -48,7 +49,7 @@ describe("FfmpegTransformDialog", () => {
     expect(markup).toContain("00:00.000 – 00:10.000")
   })
 
-  test("renders audio separation as a no-parameter linked-card operation", () => {
+  test("renders audio/video separation as a no-parameter two-card operation", () => {
     const markup = renderToStaticMarkup(
       <FfmpegTransformDialog
         locale="zh-CN"
@@ -57,8 +58,11 @@ describe("FfmpegTransformDialog", () => {
         request={request("separate-audio")}
       />,
     )
-    expect(markup).toContain("音频分离")
-    expect(markup).toContain("新音频卡会在画布中自动连接到当前源视频")
+    expect(markup).toContain("音视频分离")
+    expect(markup).toContain("无声视频")
+    expect(markup).toContain("独立音频")
+    expect(markup).toContain("两张新卡片都会关联当前源视频，并在画布中彼此关联")
+    expect(markup).toContain("创建 2 个结果")
     expect(markup).not.toContain('type="number"')
   })
 
@@ -86,5 +90,21 @@ describe("FfmpegTransformDialog", () => {
     const freshContext = new AbortController()
     operation.abort(new DOMException("Canceled", "AbortError"))
     expect(shouldCloseFfmpegDialogAfterFailure(freshContext.signal, operation.signal)).toBeTrue()
+  })
+
+  test("keeps a partially completed transform open when its original selection context refreshes", () => {
+    const context = new AbortController()
+    const operation = new AbortController()
+    context.abort(new DOMException("Canvas document refreshed", "AbortError"))
+    const failure = new FfmpegPartialTransformError("Audio failed", {
+      createdNodeIds: ["silent-video"],
+      nextRequestIndex: 1,
+      revision: 4,
+      warnings: [],
+    })
+
+    expect(shouldCloseFfmpegDialogAfterFailure(context.signal, operation.signal, failure)).toBeFalse()
+    operation.abort(new DOMException("Canceled", "AbortError"))
+    expect(shouldCloseFfmpegDialogAfterFailure(context.signal, operation.signal, failure)).toBeTrue()
   })
 })

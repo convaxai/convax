@@ -9,9 +9,11 @@ import {
 import { projectFileReferenceKey } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
+  canResumeFfmpegAudioVideoSeparation,
   canRunFfmpegTransform,
   createFfmpegGenerateRequest,
-  createFfmpegTransformPreset,
+  createFfmpegGenerateRequests,
+  createFfmpegTransformPresets,
   ffmpegAudioToolId,
   ffmpegImageToolId,
   ffmpegResultAnchor,
@@ -103,6 +105,67 @@ describe("FFmpeg toolbar visibility", () => {
     expect(isManagedProjectVideoSelection(selection([remoteVideo.id]))).toBe(false)
   })
 
+  test("resumes a partial separation only while the source and completed video still match", () => {
+    const context = selection([managedVideo.id])
+    const request = { canvasId: "canvas", context, kind: "separate-audio" as const, projectId: "project" }
+    const completedVideo = createMediaNode({
+      id: "silent-video",
+      position: { x: 400, y: 60 },
+      resource: {
+        id: "silent-video-resource",
+        kind: "video",
+        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/silent-video.mp4" } },
+        mimeType: "video/mp4",
+        url: "convax-asset://project/silent-video.mp4",
+      },
+    })
+    const current = {
+      ...context.document,
+      edges: [
+        ...context.document.edges,
+        { id: "source-to-silent-video", source: managedVideo.id, target: completedVideo.id, type: "canvas" as const },
+      ],
+      nodes: [...context.document.nodes, completedVideo],
+      revision: 9,
+    }
+
+    expect(canResumeFfmpegAudioVideoSeparation(request, current, [completedVideo.id])).toBe(true)
+    expect(canResumeFfmpegAudioVideoSeparation(request, { ...current, edges: [] }, [completedVideo.id])).toBe(false)
+    expect(canResumeFfmpegAudioVideoSeparation(request, current, [])).toBe(false)
+    expect(canResumeFfmpegAudioVideoSeparation(request, current, ["missing-video"])).toBe(false)
+    expect(canResumeFfmpegAudioVideoSeparation(request, { ...current, id: "other-canvas" }, [completedVideo.id])).toBe(
+      false,
+    )
+    expect(
+      canResumeFfmpegAudioVideoSeparation(
+        request,
+        { ...current, nodes: current.nodes.filter((node) => node.id !== managedVideo.id) },
+        [completedVideo.id],
+      ),
+    ).toBe(false)
+    const replacementSource = createMediaNode({
+      id: managedVideo.id,
+      position: managedVideo.position,
+      resource: {
+        id: "replacement-resource",
+        kind: "video",
+        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/replacement.mp4" } },
+        mimeType: "video/mp4",
+        url: "convax-asset://project/replacement.mp4",
+      },
+    })
+    expect(
+      canResumeFfmpegAudioVideoSeparation(
+        request,
+        {
+          ...current,
+          nodes: current.nodes.map((node) => (node.id === managedVideo.id ? replacementSource : node)),
+        },
+        [completedVideo.id],
+      ),
+    ).toBe(false)
+  })
+
   test("requires the installed Plugin and the exact compatible tool declaration", () => {
     const context = selection([managedVideo.id])
     expect(canRunFfmpegTransform(context, [ffmpegPlugin()], "extract-frame")).toBe(true)
@@ -110,6 +173,17 @@ describe("FFmpeg toolbar visibility", () => {
     expect(canRunFfmpegTransform(context, [ffmpegPlugin()], "trim")).toBe(true)
     expect(canRunFfmpegTransform(context, [], "crop")).toBe(false)
     expect(canRunFfmpegTransform(context, [ffmpegPlugin({ tools: [] })], "extract-frame")).toBe(false)
+    expect(
+      canRunFfmpegTransform(
+        context,
+        [
+          ffmpegPlugin({
+            tools: ffmpegPlugin().contributes.generation?.tools.filter((tool) => tool.id !== "run.video"),
+          }),
+        ],
+        "separate-audio",
+      ),
+    ).toBe(false)
     expect(
       canRunFfmpegTransform(
         context,
@@ -134,7 +208,7 @@ describe("FFmpeg toolbar visibility", () => {
 
 describe("FFmpeg toolbar presets", () => {
   test("builds an image extraction argv without a shell or native path", () => {
-    const preset = createFfmpegTransformPreset("extract-frame", { timeSeconds: 1.23456 })
+    const preset = createFfmpegTransformPresets("extract-frame", { timeSeconds: 1.23456 })[0]
     expect(preset).toMatchObject({ output: "image", outputName: "frame.png", toolId: ffmpegImageToolId })
     expect(preset.arguments).toEqual([
       "-ss",
@@ -151,7 +225,7 @@ describe("FFmpeg toolbar presets", () => {
   })
 
   test("builds H.264 trim and crop presets with optional audio mapping", () => {
-    const trim = createFfmpegTransformPreset("trim", { durationSeconds: 4.5, startSeconds: 2 })
+    const trim = createFfmpegTransformPresets("trim", { durationSeconds: 4.5, startSeconds: 2 })[0]
     expect(trim).toMatchObject({ output: "video", outputName: "trimmed.mp4", toolId: ffmpegVideoToolId })
     expect(trim.arguments).toContain("0:a?")
     expect(trim.arguments).toContain("h264_videotoolbox")
@@ -159,20 +233,27 @@ describe("FFmpeg toolbar presets", () => {
     expect(trim.arguments.slice(0, 6)).toEqual(["-ss", "2", "-i", "{{input:0}}", "-t", "4.5"])
     expect(trim.arguments.at(-1)).toBe("{{output}}")
 
-    const crop = createFfmpegTransformPreset("crop", { height: 720, width: 1_280, x: 10, y: 20 })
+    const crop = createFfmpegTransformPresets("crop", { height: 720, width: 1_280, x: 10, y: 20 })[0]
     expect(crop).toMatchObject({ output: "video", outputName: "cropped.mp4", toolId: ffmpegVideoToolId })
     expect(crop.arguments.slice(0, 4)).toEqual(["-i", "{{input:0}}", "-vf", "crop=1280:720:10:20"])
     expect(crop.arguments.at(-1)).toBe("{{output}}")
   })
 
-  test("extracts one required audio stream into a linked Canvas audio request", () => {
-    const preset = createFfmpegTransformPreset("separate-audio", {})
-    expect(preset).toMatchObject({
+  test("creates linked silent-video and independent-audio requests from one separation action", () => {
+    const [videoPreset, audioPreset] = createFfmpegTransformPresets("separate-audio", {})
+    expect(videoPreset).toMatchObject({
+      output: "video",
+      outputName: "separated-video.mp4",
+      toolId: ffmpegVideoToolId,
+    })
+    expect(videoPreset?.arguments).toContain("-an")
+    expect(videoPreset?.arguments).toContain("h264_videotoolbox")
+    expect(audioPreset).toMatchObject({
       output: "audio",
       outputName: "separated-audio.m4a",
       toolId: ffmpegAudioToolId,
     })
-    expect(preset.arguments).toEqual([
+    expect(audioPreset?.arguments).toEqual([
       "-i",
       "{{input:0}}",
       "-map",
@@ -187,23 +268,41 @@ describe("FFmpeg toolbar presets", () => {
 
     const context = selection([managedVideo.id])
     const operationSignal = new AbortController().signal
-    const request = createFfmpegGenerateRequest(
+    const requests = createFfmpegGenerateRequests(
       { canvasId: "canvas", context, kind: "separate-audio", projectId: "project" },
       {},
       operationSignal,
     )
-    expect(request).toMatchObject({
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toMatchObject({
       context: {
         documentId: "canvas",
         selectedNodeIds: [managedVideo.id],
         source: "desktop:ffmpeg-toolbar:separate-audio",
       },
+      expectedOutputCount: 1,
+      output: "video",
+      references: [{ nodeId: managedVideo.id, role: "reference_video" }],
+      signal: operationSignal,
+      toolId: ffmpegVideoToolId,
+      toolInput: { output_name: "separated-video.mp4" },
+    })
+    expect(requests[1]).toMatchObject({
+      expectedOutputCount: 1,
       output: "audio",
       references: [{ nodeId: managedVideo.id, role: "reference_video" }],
       signal: operationSignal,
       toolId: ffmpegAudioToolId,
       toolInput: { output_name: "separated-audio.m4a" },
     })
+    expect(requests[1].anchor).toEqual({ x: requests[0].anchor.x, y: requests[0].anchor.y + 224 })
+    expect(() =>
+      createFfmpegGenerateRequest(
+        { canvasId: "canvas", context, kind: "separate-audio", projectId: "project" },
+        {},
+        operationSignal,
+      ),
+    ).toThrow("creates multiple Canvas results")
   })
 
   test("rejects invalid time ranges and crop geometry before execution", () => {
@@ -240,7 +339,7 @@ describe("FFmpeg toolbar presets", () => {
       toolInput: { output_name: "trimmed.mp4" },
     })
     expect(JSON.parse(String(request.toolInput?.arguments_json))).toEqual(
-      createFfmpegTransformPreset("trim", { durationSeconds: 3, startSeconds: 1 }).arguments,
+      createFfmpegTransformPresets("trim", { durationSeconds: 3, startSeconds: 1 })[0].arguments,
     )
   })
 

@@ -47,13 +47,20 @@ import { CanvasCardConversationPanel } from "./canvas-card-conversation-panel"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
 import {
+  canResumeFfmpegAudioVideoSeparation,
   canRunFfmpegTransform,
-  createFfmpegGenerateRequest,
+  createFfmpegGenerateRequests,
   type FfmpegTransformDialogRequest,
   type FfmpegTransformInput,
   isFfmpegDialogInScope,
 } from "./ffmpeg-selection-action"
 import { FfmpegTransformDialog, ffmpegTransformLabel } from "./ffmpeg-transform-dialog"
+import {
+  ffmpegSeparationCancellationNotice,
+  FfmpegPartialTransformError,
+  type FfmpegTransformProgress,
+  runFfmpegTransformSequence,
+} from "./ffmpeg-transform-runner"
 import {
   canExportSelectionToJianying,
   exportCanvasMediaToJianying,
@@ -159,6 +166,7 @@ function App() {
   )
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null)
   const [ffmpegDialog, setFfmpegDialog] = useState<FfmpegTransformDialogRequest | null>(null)
+  const ffmpegProgressRef = useRef(new WeakMap<FfmpegTransformDialogRequest, FfmpegTransformProgress>())
   const closeFfmpegDialog = useCallback(() => setFfmpegDialog(null), [])
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
@@ -662,12 +670,14 @@ function App() {
         try {
           const result = await window.convax.generation.generate({
             anchor: request.anchor,
+            ...(request.expectedOutputCount === undefined ? {} : { expectedOutputCount: request.expectedOutputCount }),
             expectedRevision: request.expectedRevision,
             operationId,
             ...(request.output ? { output: request.output } : {}),
             prompt: request.prompt,
             ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
             references: request.references,
+            ...(request.relationAnchorNodeIds?.length ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
             ...(request.toolId ? { toolId: request.toolId } : {}),
             ...(request.toolInput ? { toolInput: request.toolInput } : {}),
           })
@@ -813,22 +823,103 @@ function App() {
   const runFfmpegTransform = useCallback(
     async (request: FfmpegTransformDialogRequest, input: FfmpegTransformInput, signal: AbortSignal) => {
       if (signal.aborted) {
+        if (request.kind === "separate-audio") {
+          const notice = ffmpegSeparationCancellationNotice(locale, undefined)
+          setNotification({ description: notice.description, kind: "warning", title: notice.title })
+        }
         throw signal.reason ?? new DOMException("Canceled", "AbortError")
       }
-      const result = await services.require("generate").generate(createFfmpegGenerateRequest(request, input, signal))
+      const requests = createFfmpegGenerateRequests(request, input, signal)
+      let initialProgress = ffmpegProgressRef.current.get(request) ?? {
+        createdNodeIds: [],
+        nextRequestIndex: 0,
+        revision: request.context.document.revision,
+        warnings: [],
+      }
+      if (initialProgress.nextRequestIndex > 0) {
+        let snapshot: Awaited<ReturnType<typeof window.convax.canvas.documents.load>>
+        try {
+          await flushCanvasForAgent()
+          if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+          snapshot = await window.convax.canvas.documents.load({
+            canvasId: request.canvasId,
+            scopeId: request.projectId,
+          })
+          if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+        } catch (failure) {
+          if (signal.aborted) {
+            ffmpegProgressRef.current.delete(request)
+            const notice = ffmpegSeparationCancellationNotice(locale, initialProgress)
+            setNotification({ description: notice.description, kind: "warning", title: notice.title })
+            throw failure
+          }
+          const message =
+            locale === "zh-CN"
+              ? "暂时无法确认画布中的部分结果。可重试验证，已创建的视频不会重复生成。"
+              : "The partial Canvas result could not be verified yet. Retry validation without duplicating the completed video."
+          throw new FfmpegPartialTransformError(message, initialProgress, { cause: failure })
+        }
+        if (
+          !snapshot.document ||
+          !canResumeFfmpegAudioVideoSeparation(request, snapshot.document, initialProgress.createdNodeIds)
+        ) {
+          ffmpegProgressRef.current.delete(request)
+          setFfmpegDialog((current) => (current === request ? null : current))
+          setNotification({
+            description:
+              locale === "zh-CN"
+                ? "源视频或已创建的无声视频发生了变化，请重新选择源视频后再执行音视频分离。"
+                : "The source or completed silent video changed. Select the source video and start separation again.",
+            kind: "warning",
+            title: locale === "zh-CN" ? "无法继续音视频分离" : "Audio/video separation cannot continue",
+          })
+          throw new Error("FFmpeg separation cannot resume because its Canvas inputs changed")
+        }
+        initialProgress = { ...initialProgress, revision: snapshot.document.revision }
+        ffmpegProgressRef.current.set(request, initialProgress)
+      }
+      let progress: FfmpegTransformProgress
+      try {
+        progress = await runFfmpegTransformSequence({
+          generate: (generateRequest) => services.require("generate").generate(generateRequest),
+          initialProgress,
+          onProgress: (current) => ffmpegProgressRef.current.set(request, current),
+          partialFailureMessage: (failure) => {
+            const detail = failure instanceof Error ? failure.message : String(failure)
+            return locale === "zh-CN"
+              ? `已创建无声视频，但独立音频创建失败。可直接重试，已完成的视频不会重复创建。\n${detail}`
+              : `The silent video was created, but the independent audio failed. Retry to continue without duplicating the completed video.\n${detail}`
+          },
+          requests,
+          signal,
+        })
+      } catch (failure) {
+        const savedProgress = ffmpegProgressRef.current.get(request)
+        if (signal.aborted && request.kind === "separate-audio") {
+          ffmpegProgressRef.current.delete(request)
+          const notice = ffmpegSeparationCancellationNotice(locale, savedProgress)
+          setNotification({
+            description: notice.description,
+            kind: "warning",
+            title: notice.title,
+          })
+        }
+        throw failure
+      }
+      ffmpegProgressRef.current.delete(request)
       if (signal.aborted) return
       setFfmpegDialog((current) => (current === request ? null : current))
       setNotification({
-        description: result.warnings.length
-          ? result.warnings.join("\n")
+        description: progress.warnings.length
+          ? progress.warnings.join("\n")
           : locale === "zh-CN"
-            ? `已创建 ${result.createdNodeIds.length} 个新节点。`
-            : `${result.createdNodeIds.length} new node${result.createdNodeIds.length === 1 ? "" : "s"} created.`,
-        kind: result.warnings.length > 0 ? "warning" : "success",
+            ? `已创建 ${progress.createdNodeIds.length} 个新节点。`
+            : `${progress.createdNodeIds.length} new node${progress.createdNodeIds.length === 1 ? "" : "s"} created.`,
+        kind: progress.warnings.length > 0 ? "warning" : "success",
         title: locale === "zh-CN" ? "FFmpeg 处理完成" : "FFmpeg transform complete",
       })
     },
-    [locale, services],
+    [flushCanvasForAgent, locale, services],
   )
 
   const selectionActions = useMemo<readonly CanvasSelectionAction[]>(

@@ -447,6 +447,14 @@ function validateRequest(request: GenerationCanvasRequest) {
   if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
     throw new Error("Generation expected revision must be a non-negative integer")
   }
+  if (
+    request.expectedOutputCount !== undefined &&
+    (!Number.isSafeInteger(request.expectedOutputCount) ||
+      request.expectedOutputCount < 1 ||
+      request.expectedOutputCount > 16)
+  ) {
+    throw new Error("Generation expected output count must be an integer between 1 and 16")
+  }
   if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
     throw new Error("Generation anchor must contain finite coordinates")
   }
@@ -467,6 +475,16 @@ function validateRequest(request: GenerationCanvasRequest) {
     }
     roleCounts.set(reference.role, roleCount)
   }
+  if (!Array.isArray(request.relationAnchorNodeIds ?? []) || (request.relationAnchorNodeIds?.length ?? 0) > 32) {
+    throw new Error("Generation accepts at most 32 Canvas relation anchors")
+  }
+  const relationAnchorNodeIds = request.relationAnchorNodeIds ?? []
+  for (const nodeId of relationAnchorNodeIds) {
+    requireIdentifier(nodeId, "Generation relation anchor node id")
+  }
+  if (new Set(relationAnchorNodeIds).size !== relationAnchorNodeIds.length) {
+    throw new Error("Generation relation anchors contain a duplicate node id")
+  }
   if (request.toolId !== undefined) requireIdentifier(request.toolId, "Generation tool id")
   validateGenerationToolInputShape(request.toolInput)
   if (request.referenceConstraint !== undefined) {
@@ -474,6 +492,9 @@ function validateRequest(request: GenerationCanvasRequest) {
       throw new Error("Generation reference constraint is not supported")
     }
     requireIdentifier(request.referenceConstraint.ownerNodeId, "Generation reference owner node id")
+    if (request.relationAnchorNodeIds !== undefined) {
+      throw new Error("Constrained generation cannot include relation anchors")
+    }
   }
 }
 
@@ -666,6 +687,11 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
       source: generationReferenceSource(node),
     }
   })
+  const relationAnchors = (request.relationAnchorNodeIds ?? []).map((nodeId) => {
+    const node = document.nodes.find((candidate) => candidate.id === nodeId)
+    if (!node) throw new Error(`Generation relation anchor node was not found: ${nodeId}`)
+    return { kind: node.data.kind, nodeId, type: node.type }
+  })
   return stableJson({
     constraint: constraint
       ? {
@@ -675,6 +701,7 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
         }
       : null,
     references,
+    relationAnchors,
   })
 }
 
@@ -730,12 +757,14 @@ export class GenerationCanvasService {
     const key = JSON.stringify([request.ref.scopeId, request.ref.canvasId, actor.kind, actor.id, request.operationId])
     const fingerprint = stableJson({
       anchor: request.anchor,
+      expectedOutputCount: request.expectedOutputCount,
       expectedRevision: request.expectedRevision,
       output: request.output,
       prompt: request.prompt,
       ref: request.ref,
       referenceConstraint: request.referenceConstraint,
       references: request.references,
+      relationAnchorNodeIds: request.relationAnchorNodeIds ?? [],
       toolId: request.toolId,
       toolInput: request.toolInput ?? {},
     })
@@ -790,7 +819,10 @@ export class GenerationCanvasService {
         `Generation expected Canvas revision ${request.expectedRevision}, received ${snapshot.document.revision}`,
       )
     }
-    const requiresStableRevision = request.referenceConstraint !== undefined || request.references.length > 0
+    const requiresStableRevision =
+      request.referenceConstraint !== undefined ||
+      request.references.length > 0 ||
+      (request.relationAnchorNodeIds?.length ?? 0) > 0
     const referenceSnapshot = requiresStableRevision
       ? generationReferenceSnapshot(snapshot.document, request)
       : undefined
@@ -858,6 +890,12 @@ export class GenerationCanvasService {
         materializedDirectory,
         signal,
       )
+      const admittedOutputCount = admitted.files.length + admitted.texts.length
+      if (request.expectedOutputCount !== undefined && admittedOutputCount !== request.expectedOutputCount) {
+        throw new Error(
+          `Generation tool returned ${admittedOutputCount} outputs; expected exactly ${request.expectedOutputCount}`,
+        )
+      }
       await this.#assertStableReferences(request, referenceSnapshot, references, requiresStableRevision)
       await this.#assertLiveCanvas(request, requiresStableRevision)
       assertNotAborted(signal)
@@ -887,13 +925,19 @@ export class GenerationCanvasService {
           commandId: `generation:${request.operationId}`,
           conflictPolicy: requiresStableRevision ? "reject" : undefined,
           expectedRevision: request.expectedRevision,
-          relation: request.references.length
-            ? {
-                anchorNodeIds: [...new Set(request.references.map((reference) => reference.nodeId))],
-                direction: "from-anchor",
-                mode: "connect",
-              }
-            : undefined,
+          relation:
+            request.references.length || request.relationAnchorNodeIds?.length
+              ? {
+                  anchorNodeIds: [
+                    ...new Set([
+                      ...request.references.map((reference) => reference.nodeId),
+                      ...(request.relationAnchorNodeIds ?? []),
+                    ]),
+                  ],
+                  direction: "from-anchor",
+                  mode: "connect",
+                }
+              : undefined,
           scopeId: request.ref.scopeId,
           sources,
         })

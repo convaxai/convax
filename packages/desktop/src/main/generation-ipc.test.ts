@@ -236,6 +236,21 @@ describe("generation IPC", () => {
     dispose()
   })
 
+  test("preserves trusted host-only relation anchors without turning them into tool references", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const related = { ...request, expectedOutputCount: 1, relationAnchorNodeIds: ["silent-video"] }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, related))).resolves.toEqual(result)
+    expect(generate).toHaveBeenCalledWith(related, expect.any(AbortSignal))
+
+    dispose()
+  })
+
   test("passes only bounded scalar tool input to the Main executor", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const generate = mock(async () => result)
@@ -314,9 +329,26 @@ describe("generation IPC", () => {
       ],
       [{ ...request, anchor: { x: Number.POSITIVE_INFINITY, y: 0 } }, "anchor is invalid"],
       [{ ...request, expectedRevision: -1 }, "expected revision is invalid"],
+      [{ ...request, expectedOutputCount: 0 }, "expected output count is invalid"],
+      [{ ...request, expectedOutputCount: 17 }, "expected output count is invalid"],
+      [{ ...request, expectedOutputCount: 1.5 }, "expected output count is invalid"],
       [
         { ...request, referenceConstraint: { ownerNodeId: "plugin-card", type: "arbitrary" } },
         "reference constraint is invalid",
+      ],
+      [
+        {
+          ...request,
+          referenceConstraint: { ownerNodeId: "plugin-card", type: "direct-incoming" },
+          relationAnchorNodeIds: [],
+        },
+        "Constrained generation cannot include relation anchors",
+      ],
+      [{ ...request, relationAnchorNodeIds: ["silent-video", "silent-video"] }, "duplicate node id"],
+      [{ ...request, relationAnchorNodeIds: ["/native/path"] }, "relation anchor node id is invalid"],
+      [
+        { ...request, relationAnchorNodeIds: Array.from({ length: 33 }, (_, index) => `node-${index}`) },
+        "relation anchors are invalid",
       ],
       [{ ...request, toolInput: { prompt: "override" } }, "cannot override host field"],
       [{ ...request, toolInput: { quality: { provider: "hidden" } } }, "tool input value is invalid"],

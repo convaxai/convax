@@ -267,7 +267,7 @@ describe("GenerationCanvasService", () => {
       toolId: "creative-tools/write",
     }
     const { calls, service } = setup({ toolDescription })
-    const configured = request({ toolInput: { enhance: true, quality: "high", steps: 20 } })
+    const configured = request({ expectedOutputCount: 1, toolInput: { enhance: true, quality: "high", steps: 20 } })
 
     await service.generate(configured, { id: "renderer:1", kind: "ui" })
     expect(calls[0]).toMatchObject({
@@ -281,6 +281,15 @@ describe("GenerationCanvasService", () => {
         { ...configured, toolInput: { enhance: true, quality: "standard", steps: 20 } },
         { id: "renderer:1", kind: "ui" },
       ),
+    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+    await expect(
+      service.generate(
+        { ...configured, relationAnchorNodeIds: ["different-relation-anchor"] },
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+    await expect(
+      service.generate({ ...configured, expectedOutputCount: 2 }, { id: "renderer:1", kind: "ui" }),
     ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
     expect(calls).toHaveLength(1)
   })
@@ -325,6 +334,26 @@ describe("GenerationCanvasService", () => {
     )
     expect(prepared).toBe(1)
     expect(calls).toEqual([])
+  })
+
+  test("rejects invalid output cardinality and relation anchors on constrained requests before external work", async () => {
+    const { calls, service } = setup({})
+    const actor = { id: "renderer:1", kind: "ui" as const }
+
+    await expect(service.generate(request({ expectedOutputCount: 0 }), actor)).rejects.toThrow(
+      "expected output count must be an integer between 1 and 16",
+    )
+    await expect(
+      service.generate(
+        request({
+          operationId: "constrained-with-relations",
+          referenceConstraint: { ownerNodeId: "plugin-card", type: "direct-incoming" },
+          relationAnchorNodeIds: [],
+        }),
+        actor,
+      ),
+    ).rejects.toThrow("Constrained generation cannot include relation anchors")
+    expect(calls).toHaveLength(0)
   })
 
   test("scopes opaque sidecar operation ids to Project, Canvas, and actor", async () => {
@@ -491,6 +520,28 @@ describe("GenerationCanvasService", () => {
     expect(resourceRequests).toHaveLength(1)
     expect(result.warnings).toHaveLength(32)
     expect(result.warnings.at(-1)).toBe("1 additional generation warning was omitted.")
+  })
+
+  test("rejects unexpected admitted output counts before importing or committing resources", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const { imported, resourceRequests, service } = setup({
+      result: {
+        content: [
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+        ],
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    await expect(
+      service.generate(request({ expectedOutputCount: 1, output: "image", toolId: "creative-tools/draw" }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("returned 2 outputs; expected exactly 1")
+    expect(imported).toHaveLength(0)
+    expect(resourceRequests).toHaveLength(0)
   })
 
   test("stages managed image references and admits generated files as managed assets", async () => {
@@ -673,6 +724,25 @@ describe("GenerationCanvasService", () => {
 
     await expect(
       service.generate(request({ references: [{ nodeId: reference.id, role: "text" }] }), actor),
+    ).rejects.toThrow("references changed")
+    expect(calls).toHaveLength(0)
+  })
+
+  test("rechecks a same-revision relation anchor before starting the external tool", async () => {
+    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 0, y: 0 }, text: "Pair anchor" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [relationAnchor], title: "Canvas" })
+    const { calls, service } = setup({
+      document,
+      async prepareTool() {
+        document.nodes.splice(0, 1)
+      },
+    })
+
+    await expect(
+      service.generate(request({ relationAnchorNodeIds: [relationAnchor.id] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
     ).rejects.toThrow("references changed")
     expect(calls).toHaveLength(0)
   })
@@ -948,6 +1018,51 @@ describe("GenerationCanvasService", () => {
       conflictPolicy: "reject",
       relation: { anchorNodeIds: [reference.id], direction: "from-anchor", mode: "connect" },
     })
+  })
+
+  test("connects host-only relation anchors without exposing them to the generation tool", async () => {
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
+    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 360, y: 0 }, text: "Pair anchor" })
+    const document = createCanvasDocument({
+      id: "canvas-one",
+      nodes: [reference, relationAnchor],
+      title: "Canvas",
+    })
+    const { calls, resourceRequests, service } = setup({
+      document,
+      selectedTool: tool({ acceptedInputs: ["text"] }),
+    })
+
+    await service.generate(
+      request({
+        references: [{ nodeId: reference.id, role: "text" }],
+        relationAnchorNodeIds: [reference.id, relationAnchor.id],
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(calls[0]?.references).toEqual([{ kind: "text", node_id: reference.id, role: "text", text: "Stable brief" }])
+    expect(resourceRequests[0]).toMatchObject({
+      conflictPolicy: "reject",
+      relation: {
+        anchorNodeIds: [reference.id, relationAnchor.id],
+        direction: "from-anchor",
+        mode: "connect",
+      },
+    })
+  })
+
+  test("rejects a missing host-only relation anchor before starting the external tool", async () => {
+    const { calls, resourceRequests, service } = setup({})
+
+    await expect(
+      service.generate(request({ relationAnchorNodeIds: ["missing-node"] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("relation anchor node was not found")
+    expect(calls).toHaveLength(0)
+    expect(resourceRequests).toHaveLength(0)
   })
 
   test.each(["edge", "source", "revision"] as const)(

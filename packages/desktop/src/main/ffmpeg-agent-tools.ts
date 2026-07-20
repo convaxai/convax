@@ -35,6 +35,8 @@ const maximumArgumentLength = 1_024
 const maximumArgumentsJsonLength = 4_096
 const maximumOutputNameLength = 128
 const maximumReferences = 16
+const maximumRelationNodeIds = 16
+const canvasNodeIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u
 
 const outputExtensions: Readonly<Record<FfmpegOutputModality, readonly string[]>> = {
   audio: ["flac", "m4a", "mp3", "ogg", "wav"],
@@ -48,7 +50,7 @@ const ffmpegToolConfigs: readonly FfmpegAgentToolConfig[] = [
   { agentName: "ffmpeg_run_audio", output: "audio", toolId: `${ffmpegPluginId}/run.audio` },
 ]
 
-const topLevelFields = new Set(["anchor", "arguments", "outputName", "references"])
+const topLevelFields = new Set(["anchor", "arguments", "outputName", "references", "relationNodeIds"])
 
 /**
  * Direct Agent surface for the installed FFmpeg Tool Plugin. It intentionally
@@ -78,12 +80,14 @@ export function createFfmpegAgentToolProvider(
       const parsed = parseInput(input, tool, config.output)
       const request: GenerationCanvasRequest = {
         anchor: parsed.anchor,
+        expectedOutputCount: 1,
         expectedRevision: active.revision,
         operationId: `ffmpeg-${randomUUID()}`,
         output: config.output,
         prompt: `Run ${config.toolId} through the installed FFmpeg Tools Plugin.`,
         ref: { canvasId: active.canvasId, scopeId: active.scopeId },
         references: parsed.references,
+        ...(parsed.relationNodeIds.length ? { relationAnchorNodeIds: parsed.relationNodeIds } : {}),
         toolId: config.toolId,
         toolInput: {
           arguments_json: JSON.stringify(parsed.arguments),
@@ -165,6 +169,14 @@ function definition(config: FfmpegAgentToolConfig, tool: GenerationToolSummary):
           minItems: 1,
           type: "array",
         },
+        relationNodeIds: {
+          description:
+            "Optional Canvas nodes to connect to the result without staging them as FFmpeg inputs. Use this to link paired outputs.",
+          items: { minLength: 1, type: "string" },
+          maxItems: maximumRelationNodeIds,
+          type: "array",
+          uniqueItems: true,
+        },
       },
       required: ["arguments", "outputName", "references"],
       type: "object",
@@ -222,7 +234,18 @@ function parseInput(value: Record<string, unknown>, tool: GenerationToolSummary,
     arguments: arguments_,
     outputName: portableOutputName(value.outputName, output),
     references,
+    relationNodeIds: parseRelationNodeIds(value.relationNodeIds),
   }
+}
+
+function parseRelationNodeIds(value: unknown) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > maximumRelationNodeIds) {
+    throw new Error(`relationNodeIds must contain at most ${maximumRelationNodeIds} Canvas nodes`)
+  }
+  const nodeIds = value.map((nodeId, index) => canvasNodeId(nodeId, `relationNodeIds[${index}]`))
+  if (new Set(nodeIds).size !== nodeIds.length) throw new Error("relationNodeIds contains a duplicate node id")
+  return nodeIds
 }
 
 function parseArguments(value: unknown, referenceCount: number) {
@@ -266,7 +289,7 @@ function parseReferences(value: unknown, acceptedRoles: readonly GenerationInput
     const label = `references[${index}]`
     const input = record(item, label)
     rejectUnknownFields(input, new Set(["nodeId", "role"]), label)
-    const nodeId = requiredIdentifier(input.nodeId, `${label}.nodeId`)
+    const nodeId = canvasNodeId(input.nodeId, `${label}.nodeId`)
     if (!isAcceptedGenerationRole(input.role, accepted)) {
       throw new Error(`${label}.role is not accepted by the installed FFmpeg tool`)
     }
@@ -341,4 +364,10 @@ function requiredIdentifier(value: unknown, label: string) {
     throw new Error(`${label} must be a non-empty, trimmed string`)
   }
   return value
+}
+
+function canvasNodeId(value: unknown, label: string) {
+  const nodeId = requiredIdentifier(value, label)
+  if (!canvasNodeIdPattern.test(nodeId)) throw new Error(`${label} must be an opaque Canvas node id`)
+  return nodeId
 }

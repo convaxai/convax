@@ -63,8 +63,15 @@ export interface CanvasGenerationReference {
 export interface CanvasGenerateRequest {
   anchor: CanvasPoint
   expectedRevision: number
+  /** Trusted host output cardinality guard; this is never sent to the generation tool. */
+  expectedOutputCount?: number
   output?: CanvasGenerationOutput
   prompt: string
+  /**
+   * Existing Canvas nodes that should be connected to generated results but
+   * must not be staged or exposed as generation-tool inputs.
+   */
+  relationAnchorNodeIds?: readonly string[]
   references: readonly CanvasGenerationReference[]
   toolInput?: CanvasGenerationToolInput
   toolId?: string

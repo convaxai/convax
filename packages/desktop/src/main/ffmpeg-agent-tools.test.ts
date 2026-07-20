@@ -88,12 +88,19 @@ describe("direct FFmpeg Agent tools", () => {
     if (!schema || !schema.properties || typeof schema.properties !== "object" || Array.isArray(schema.properties)) {
       throw new Error("Expected the FFmpeg video tool to expose object properties")
     }
-    expect(Object.keys(schema.properties).sort()).toEqual(["anchor", "arguments", "outputName", "references"])
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "anchor",
+      "arguments",
+      "outputName",
+      "references",
+      "relationNodeIds",
+    ])
     expect(schema.required).toEqual(["arguments", "outputName", "references"])
     expect(schema.properties).toMatchObject({
       arguments: { items: { maxLength: 1_024 }, maxItems: 256 },
       outputName: { maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
       references: { maxItems: 16 },
+      relationNodeIds: { maxItems: 16, uniqueItems: true },
     })
     expect(tools[1]?.description).toContain("FFmpeg Tools Plugin directly")
     expect(tools[1]?.description).toContain("host derives the active Canvas and revision")
@@ -108,7 +115,7 @@ describe("direct FFmpeg Agent tools", () => {
     const result = await provider(service).callTool(
       scope,
       "ffmpeg_run_video",
-      validInput({ anchor: { x: 640, y: 200 } }),
+      validInput({ anchor: { x: 640, y: 200 }, relationNodeIds: ["paired-audio"] }),
       { signal: cancellation.signal },
     )
 
@@ -124,10 +131,12 @@ describe("direct FFmpeg Agent tools", () => {
       actor: { id: "opencode:project-one", kind: "agent" },
       request: {
         anchor: { x: 640, y: 200 },
+        expectedOutputCount: 1,
         expectedRevision: 9,
         output: "video",
         ref: { canvasId: "canvas-main", scopeId: "project-one" },
         references: [{ nodeId: "video-one", role: "reference_video" }],
+        relationAnchorNodeIds: ["paired-audio"],
         toolId: "ffmpeg-tools/run.video",
         toolInput: {
           arguments_json: JSON.stringify(validInput().arguments),
@@ -184,6 +193,10 @@ describe("direct FFmpeg Agent tools", () => {
         })),
       }),
       validInput({ references: [prototypeReference] }),
+      validInput({ references: [{ nodeId: "/native/path", role: "reference_video" }] }),
+      validInput({ relationNodeIds: ["silent-video", "silent-video"] }),
+      validInput({ relationNodeIds: ["/native/path"] }),
+      validInput({ relationNodeIds: Array.from({ length: 17 }, (_, index) => `node-${index}`) }),
       validInput({ expectedRevision: 9 }),
     ]) {
       const isolated = new FakeFfmpegService()

@@ -126,6 +126,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     value,
     [
       "anchor",
+      "expectedOutputCount",
       "expectedRevision",
       "operationId",
       "output",
@@ -133,6 +134,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       "ref",
       "referenceConstraint",
       "references",
+      "relationAnchorNodeIds",
       "toolId",
       "toolInput",
     ],
@@ -146,6 +148,16 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
   const expectedRevision = value.expectedRevision
   if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
     throw new Error("Generation expected revision is invalid")
+  }
+  const expectedOutputCount = value.expectedOutputCount
+  if (
+    expectedOutputCount !== undefined &&
+    (typeof expectedOutputCount !== "number" ||
+      !Number.isSafeInteger(expectedOutputCount) ||
+      expectedOutputCount < 1 ||
+      expectedOutputCount > 16)
+  ) {
+    throw new Error("Generation expected output count is invalid")
   }
   const prompt = value.prompt
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 64 * 1024 || prompt.includes("\0")) {
@@ -179,6 +191,19 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     return { nodeId, role }
   })
 
+  let relationAnchorNodeIds: string[] | undefined
+  if (value.relationAnchorNodeIds !== undefined) {
+    if (!Array.isArray(value.relationAnchorNodeIds) || value.relationAnchorNodeIds.length > 32) {
+      throw new Error("Generation relation anchors are invalid")
+    }
+    relationAnchorNodeIds = value.relationAnchorNodeIds.map((nodeId) =>
+      requireOpaqueId(nodeId, "Generation relation anchor node id"),
+    )
+    if (new Set(relationAnchorNodeIds).size !== relationAnchorNodeIds.length) {
+      throw new Error("Generation relation anchors contain a duplicate node id")
+    }
+  }
+
   let referenceConstraint: GenerationCanvasRequest["referenceConstraint"]
   if (value.referenceConstraint !== undefined) {
     const constraint = requireRecord(value.referenceConstraint, "Generation reference constraint")
@@ -189,9 +214,13 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       type: "direct-incoming",
     }
   }
+  if (referenceConstraint !== undefined && relationAnchorNodeIds !== undefined) {
+    throw new Error("Constrained generation cannot include relation anchors")
+  }
 
   return {
     anchor: { x: anchor.x, y: anchor.y },
+    ...(expectedOutputCount === undefined ? {} : { expectedOutputCount }),
     expectedRevision,
     operationId,
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
@@ -202,6 +231,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     },
     ...(referenceConstraint === undefined ? {} : { referenceConstraint }),
     references,
+    ...(relationAnchorNodeIds === undefined ? {} : { relationAnchorNodeIds }),
     ...(toolId === undefined ? {} : { toolId }),
     ...(value.toolInput === undefined ? {} : { toolInput: validateGenerationToolInputShape(value.toolInput) }),
   }

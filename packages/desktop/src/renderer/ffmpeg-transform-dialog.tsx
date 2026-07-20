@@ -1,5 +1,5 @@
 import { Button, Input } from "@convax/ui"
-import { AudioLines, Crop, ImageDown, LoaderCircle, Scissors, X } from "lucide-react"
+import { AudioLines, Crop, ImageDown, LoaderCircle, Scissors, Video, X } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react"
 import type { AppLocale } from "./app-language"
 import {
@@ -14,6 +14,7 @@ import {
   ffmpegTrimInputFromRange,
   normalizeFfmpegTimelineDuration,
 } from "./ffmpeg-trim-timeline-model"
+import { FfmpegPartialTransformError } from "./ffmpeg-transform-runner"
 
 export interface FfmpegTransformDialogProps {
   locale: AppLocale
@@ -38,6 +39,9 @@ interface DialogCopy {
   separateAudioDescription: string
   separateAudioHelp: string
   separateAudioTitle: string
+  separatedAudio: string
+  separatedVideo: string
+  separateRun: string
   startSeconds: string
   timeSeconds: string
   trimDescription: string
@@ -64,9 +68,13 @@ const englishCopy: DialogCopy = {
   previewUnavailable: "Preview unavailable — use the time fields below.",
   run: "Create result",
   selectedDuration: "Selected",
-  separateAudioDescription: "Extract the primary audio stream as a linked M4A node. The source video stays unchanged.",
-  separateAudioHelp: "The new audio card will remain connected to this source video on the Canvas.",
-  separateAudioTitle: "Separate audio",
+  separateAudioDescription:
+    "Create a silent MP4 card and an independent M4A audio card. The source video stays unchanged.",
+  separateAudioHelp: "Both new cards connect to the source video and to each other on the Canvas.",
+  separateAudioTitle: "Separate audio and video",
+  separatedAudio: "Independent audio",
+  separatedVideo: "Silent video",
+  separateRun: "Create 2 results",
   startSeconds: "Start (seconds)",
   timeSeconds: "Time (seconds)",
   trimDescription: "Create a new MP4 node from a time range in the selected video.",
@@ -98,9 +106,12 @@ const chineseCopy: DialogCopy = {
   previewUnavailable: "暂时无法预览，可使用下方时间输入继续截取。",
   run: "创建结果",
   selectedDuration: "已选时长",
-  separateAudioDescription: "将主音轨提取为关联的 M4A 卡片，原视频保持不变。",
-  separateAudioHelp: "新音频卡会在画布中自动连接到当前源视频。",
-  separateAudioTitle: "音频分离",
+  separateAudioDescription: "创建一个无音轨 MP4 视频卡片和一个独立 M4A 音频卡片，原视频保持不变。",
+  separateAudioHelp: "两张新卡片都会关联当前源视频，并在画布中彼此关联。",
+  separateAudioTitle: "音视频分离",
+  separatedAudio: "独立音频",
+  separatedVideo: "无声视频",
+  separateRun: "创建 2 个结果",
   startSeconds: "开始时间（秒）",
   timeSeconds: "时间点（秒）",
   trimDescription: "从所选视频的指定时间范围创建一个新的 MP4 节点。",
@@ -118,8 +129,12 @@ export function ffmpegTransformLabel(locale: AppLocale, kind: FfmpegTransformKin
   return copy.cropTitle
 }
 
-export function shouldCloseFfmpegDialogAfterFailure(contextSignal: AbortSignal, operationSignal: AbortSignal) {
-  return contextSignal.aborted || operationSignal.aborted
+export function shouldCloseFfmpegDialogAfterFailure(
+  contextSignal: AbortSignal,
+  operationSignal: AbortSignal,
+  failure?: unknown,
+) {
+  return operationSignal.aborted || (contextSignal.aborted && !(failure instanceof FfmpegPartialTransformError))
 }
 
 export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
@@ -141,6 +156,7 @@ export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
   const [trimDurationSeconds, setTrimDurationSeconds] = useState(durationHintSeconds)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
+  const [partialRetryAvailable, setPartialRetryAvailable] = useState(false)
   const operationControllerRef = useRef<AbortController | undefined>(undefined)
   const submittedRef = useRef(false)
   const previousFocusRef = useRef(
@@ -204,7 +220,7 @@ export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
       setError(copy.errors[validationError] ?? validationError)
       return
     }
-    if (props.request.context.signal.aborted) {
+    if (props.request.context.signal.aborted && !partialRetryAvailable) {
       props.onClose()
       return
     }
@@ -217,12 +233,13 @@ export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
       await props.onConfirm(input, operationController.signal)
       props.onClose()
     } catch (failure) {
-      if (shouldCloseFfmpegDialogAfterFailure(props.request.context.signal, operationController.signal)) {
+      if (shouldCloseFfmpegDialogAfterFailure(props.request.context.signal, operationController.signal, failure)) {
         props.onClose()
         return
       }
       operationControllerRef.current = undefined
       submittedRef.current = false
+      setPartialRetryAvailable(failure instanceof FfmpegPartialTransformError)
       setError(failure instanceof Error ? failure.message : String(failure))
       setBusy(false)
     }
@@ -289,11 +306,28 @@ export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
               value={first}
             />
           ) : props.request.kind === "separate-audio" ? (
-            <div className="flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm">
-              <span className="grid size-10 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
-                <AudioLines className="size-5" />
-              </span>
-              <p className="leading-5 text-muted-foreground">{copy.separateAudioHelp}</p>
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-sm">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/75 px-3 py-2.5">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+                    <Video className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-medium">{copy.separatedVideo}</span>
+                    <span className="block text-[11px] text-muted-foreground">MP4</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/75 px-3 py-2.5">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+                    <AudioLines className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-medium">{copy.separatedAudio}</span>
+                    <span className="block text-[11px] text-muted-foreground">M4A</span>
+                  </span>
+                </div>
+              </div>
+              <p className="mt-3 leading-5 text-muted-foreground">{copy.separateAudioHelp}</p>
             </div>
           ) : props.request.kind === "trim" ? (
             <>
@@ -373,7 +407,7 @@ export function FfmpegTransformDialog(props: FfmpegTransformDialogProps) {
             </Button>
             <Button disabled={busy} size="sm" type="submit">
               {busy ? <LoaderCircle className="animate-spin" /> : null}
-              {busy ? copy.processing : copy.run}
+              {busy ? copy.processing : props.request.kind === "separate-audio" ? copy.separateRun : copy.run}
             </Button>
           </div>
         </form>

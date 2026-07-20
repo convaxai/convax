@@ -96,6 +96,8 @@ export interface GenerationCanvasRequest {
     canvasId: string
   }
   expectedRevision: number
+  /** Trusted host-only output cardinality guard; this never enters the Tool Plugin input. */
+  expectedOutputCount?: number
   prompt: string
   /** Omit only when exactly one installed tool can satisfy the request. */
   toolId?: string
@@ -103,6 +105,8 @@ export interface GenerationCanvasRequest {
   toolInput?: GenerationToolInput
   output?: GenerationOutputModality
   references: readonly GenerationCanvasReference[]
+  /** Trusted host-only relation anchors; these never enter the Tool Plugin input. */
+  relationAnchorNodeIds?: readonly string[]
   /** Never accepted from sandboxed Plugin payloads; the trusted host derives it from the owning card. */
   referenceConstraint?: GenerationReferenceConstraint
   anchor: {
