@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { WebPluginManager } from "./plugin-manager"
+import type { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import type { DesktopSkillManager } from "./skill-manager"
 
 const schema = "convax.default-capabilities/1" as const
@@ -14,6 +15,26 @@ interface ProvisioningState {
   skills: string[]
 }
 
+export interface DefaultRemoteCapability {
+  companionSkillName?: string
+  pluginId: string
+}
+
+export interface DefaultCapabilityProvisioningFailure {
+  error: unknown
+  id: string
+  kind: "plugin" | "skill"
+}
+
+export interface DefaultCapabilityProvisioningResult {
+  failures: DefaultCapabilityProvisioningFailure[]
+}
+
+interface RemoteDefaultProvisioning {
+  catalog: readonly DefaultRemoteCapability[]
+  installer: Pick<RemoteCapabilityInstaller, "installPlugin">
+}
+
 export async function provisionDefaultCapabilities(input: {
   catalog: readonly DesktopBuiltinPluginBundle[]
   pluginManager: Pick<
@@ -22,7 +43,8 @@ export async function provisionDefaultCapabilities(input: {
   >
   skillManager: Pick<DesktopSkillManager, "installManagedAtStartup" | "listManaged">
   stateFile: string
-}) {
+  remote?: RemoteDefaultProvisioning
+}): Promise<DefaultCapabilityProvisioningResult> {
   const state = await readState(input.stateFile)
   for (const item of input.catalog) {
     if (!item.defaultInstall) continue
@@ -59,6 +81,48 @@ export async function provisionDefaultCapabilities(input: {
     state.skills.push(skillName)
     await writeState(input.stateFile, state)
   }
+
+  const failures: DefaultCapabilityProvisioningFailure[] = []
+  for (const item of input.remote?.catalog ?? []) {
+    let installed = (await input.pluginManager.list()).find((plugin) => plugin.id === item.pluginId)
+    if (state.plugins.includes(item.pluginId)) {
+      // A receipt plus a missing package means the user removed this default.
+      // Its companion must not be newly provisioned behind that choice.
+      if (!installed) continue
+    } else {
+      if (!installed) {
+        try {
+          installed = await input.remote!.installer.installPlugin(item.pluginId)
+        } catch (error) {
+          failures.push({ error, id: item.pluginId, kind: "plugin" })
+          continue
+        }
+      }
+      state.plugins.push(item.pluginId)
+      await writeState(input.stateFile, state)
+    }
+
+    const skillName = item.companionSkillName
+    if (!skillName || state.skills.includes(skillName)) continue
+    try {
+      if (!installed.skill)
+        throw new Error(`Default remote Plugin does not include its companion Skill: ${item.pluginId}`)
+      const managedSkills = await input.skillManager.listManaged()
+      if (!managedSkills.some((skill) => skill.name === skillName)) {
+        const skillFile = await input.pluginManager.resolveAsset(installed.id, installed.skill)
+        const companion = await input.skillManager.installManagedAtStartup(path.dirname(skillFile))
+        if (companion.name !== skillName) {
+          throw new Error(`Remote Plugin companion Skill name does not match its default metadata: ${item.pluginId}`)
+        }
+      }
+      state.skills.push(skillName)
+      await writeState(input.stateFile, state)
+    } catch (error) {
+      failures.push({ error, id: skillName, kind: "skill" })
+    }
+  }
+
+  return { failures }
 }
 
 async function readState(stateFile: string): Promise<ProvisioningState> {

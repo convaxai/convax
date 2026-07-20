@@ -5,6 +5,7 @@ import path from "node:path"
 
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
+import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
 
 const temporaryRoots: string[] = []
 
@@ -54,11 +55,11 @@ async function setup() {
       skillInstalled = true
       return { location: skillFile, managed: true, name: "jianying-editor", source: "managed" as const }
     }),
-    listManaged: mock(async () => (
+    listManaged: mock(async () =>
       skillInstalled
         ? [{ location: skillFile, managed: true, name: "jianying-editor", source: "managed" as const }]
-        : []
-    )),
+        : [],
+    ),
   }
   return {
     catalog,
@@ -67,6 +68,71 @@ async function setup() {
       installed = false
     },
     removeInstalledSkill: () => {
+      skillInstalled = false
+    },
+    root,
+    skillManager,
+    stateFile: path.join(root, "default-capabilities.json"),
+  }
+}
+
+async function setupRemote() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-default-remote-capabilities-"))
+  temporaryRoots.push(root)
+  const skillFile = path.join(root, "plugins", "ffmpeg-tools", "skills", "ffmpeg-canvas", "SKILL.md")
+  await fs.mkdir(path.dirname(skillFile), { recursive: true })
+  await fs.writeFile(skillFile, "---\nname: ffmpeg-canvas\n---\n")
+  const manifest = {
+    capabilities: [],
+    contributes: { canvas: { renderer: { nodeKinds: ["integration.ffmpeg"] } } },
+    description: "Local FFmpeg tools",
+    entry: "index.html",
+    id: "ffmpeg-tools",
+    name: "FFmpeg Tools",
+    schema: "convax.plugin/1" as const,
+    skill: "skills/ffmpeg-canvas/SKILL.md",
+    version: "1.0.0",
+  }
+  let installed = false
+  let skillInstalled = false
+  let installFailure: Error | undefined
+  const pluginManager = {
+    installOrUpdateBuiltinBundle: mock(async () => manifest),
+    isBuiltinBundleInstalled: mock(async () => false),
+    list: mock(async () => (installed ? [manifest] : [])),
+    resolveAsset: mock(async () => skillFile),
+  }
+  const remoteInstaller = {
+    installPlugin: mock(async () => {
+      if (installFailure) throw installFailure
+      installed = true
+      return manifest
+    }),
+  }
+  const skillManager = {
+    installManagedAtStartup: mock(async () => {
+      skillInstalled = true
+      return { location: skillFile, managed: true, name: "ffmpeg-canvas", source: "managed" as const }
+    }),
+    listManaged: mock(async () =>
+      skillInstalled ? [{ location: skillFile, managed: true, name: "ffmpeg-canvas", source: "managed" as const }] : [],
+    ),
+  }
+  return {
+    catalog: [],
+    failInstall(error?: Error) {
+      installFailure = error
+    },
+    pluginManager,
+    remote: {
+      catalog: desktopDefaultRemoteCapabilityCatalog,
+      installer: remoteInstaller,
+    },
+    remoteInstaller,
+    removeInstalledPlugin() {
+      installed = false
+    },
+    removeInstalledSkill() {
       skillInstalled = false
     },
     root,
@@ -99,5 +165,67 @@ describe("provisionDefaultCapabilities", () => {
     await fs.writeFile(input.stateFile, "not-json")
     await expect(provisionDefaultCapabilities(input)).rejects.toThrow("invalid JSON")
     expect(input.pluginManager.installOrUpdateBuiltinBundle).not.toHaveBeenCalled()
+  })
+
+  test("installs the default remote Plugin and its embedded companion Skill on first startup", async () => {
+    const input = await setupRemote()
+
+    expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
+
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.pluginManager.resolveAsset).toHaveBeenCalledWith("ffmpeg-tools", "skills/ffmpeg-canvas/SKILL.md")
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledWith(
+      path.join(input.root, "plugins", "ffmpeg-tools", "skills", "ffmpeg-canvas"),
+    )
+    expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toEqual({
+      plugins: ["ffmpeg-tools"],
+      schema: "convax.default-capabilities/1",
+      skills: ["ffmpeg-canvas"],
+    })
+  })
+
+  test("does not repeat remote installation on later startups", async () => {
+    const input = await setupRemote()
+    await provisionDefaultCapabilities(input)
+
+    expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
+
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
+  })
+
+  test("keeps remote Plugin and companion Skill removals durable", async () => {
+    const input = await setupRemote()
+    await provisionDefaultCapabilities(input)
+    input.removeInstalledSkill()
+
+    expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
+
+    input.removeInstalledPlugin()
+    expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
+  })
+
+  test("reports a remote failure without rejecting startup and retries while no receipt exists", async () => {
+    const input = await setupRemote()
+    const failure = new Error("registry unavailable")
+    input.failInstall(failure)
+
+    expect(await provisionDefaultCapabilities(input)).toEqual({
+      failures: [{ error: failure, id: "ffmpeg-tools", kind: "plugin" }],
+    })
+    expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
+    expect(await fs.readFile(input.stateFile, "utf8").catch((error: unknown) => error)).toMatchObject({
+      code: "ENOENT",
+    })
+
+    input.failInstall()
+    expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
   })
 })
