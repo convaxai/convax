@@ -127,7 +127,6 @@ function setup(
   files: Readonly<Record<string, Uint8Array>> = {},
   installed: WebPluginManifest[] = [],
   target: { arch: NodeJS.Architecture; platform: NodeJS.Platform } = { arch: "arm64", platform: "darwin" },
-  beforePluginPublish?: (pluginId: string) => Promise<void> | void,
 ) {
   const registry = {
     downloadBundle: mock(async (_item: RemoteCapabilityPackage) => ({ files })),
@@ -209,7 +208,6 @@ function setup(
   const installer = new RemoteCapabilityInstaller({
     arch: target.arch,
     authorizationStore,
-    beforePluginPublish,
     builtinPlugins,
     builtinSkills,
     companionStore,
@@ -279,23 +277,6 @@ describe("RemoteCapabilityInstaller", () => {
     })
     await expect(tampered.installer.installPlugin("remote-plugin")).rejects.toThrow("does not match the registry")
     expect(tampered.pluginManager.installBundle).not.toHaveBeenCalled()
-  })
-
-  test("drains an existing service authorization before remote Plugin publication", async () => {
-    const item = pluginPackage("remote-plugin")
-    const files = { "manifest.json": encoder.encode(JSON.stringify(item.manifest)) }
-    const beforePluginPublish = mock(async (_pluginId: string) => undefined)
-    const setupResult = setup(
-      [item],
-      files,
-      [],
-      { arch: "arm64", platform: "darwin" },
-      beforePluginPublish,
-    )
-
-    await setupResult.installer.installPlugin(item.id)
-    expect(beforePluginPublish).toHaveBeenCalledWith(item.id)
-    expect(beforePluginPublish).toHaveBeenCalledTimes(1)
   })
 
   test("lists and installs generation Tool Plugins through the same verified bundle path", async () => {

@@ -50,7 +50,6 @@ export interface RemoteSkillCatalogPort {
 export interface RemoteCapabilityInstallerOptions {
   arch?: NodeJS.Architecture
   authorizationStore: Pick<ToolPluginAuthorizationStore, "prepareInstall">
-  beforePluginPublish?(pluginId: string): Promise<void> | void
   builtinPlugins: readonly DesktopBuiltinPluginBundle[]
   builtinSkills: readonly DesktopBuiltinSkillBundle[]
   companionStore: Pick<ManagedPluginCompanionStore, "install" | "reconcile">
@@ -128,7 +127,6 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   readonly #builtinSkillIdentities: ReadonlySet<string>
   readonly #arch: NodeJS.Architecture
   readonly #authorizationStore: RemoteCapabilityInstallerOptions["authorizationStore"]
-  readonly #beforePluginPublish?: RemoteCapabilityInstallerOptions["beforePluginPublish"]
   readonly #companionStore: RemoteCapabilityInstallerOptions["companionStore"]
   readonly #platform: NodeJS.Platform
   readonly #pluginManager: RemoteCapabilityInstallerOptions["pluginManager"]
@@ -138,7 +136,6 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   constructor(options: RemoteCapabilityInstallerOptions) {
     this.#registry = options.registry
     this.#authorizationStore = options.authorizationStore
-    this.#beforePluginPublish = options.beforePluginPublish
     this.#pluginManager = options.pluginManager
     this.#companionStore = options.companionStore
     this.#platform = options.platform ?? process.platform
@@ -224,19 +221,10 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
       }
       const prepareAuthorization = async (plugin: InstalledWebPluginSummary) => {
         const managed = plugin.runtime ? managedBindings.get(plugin.runtime.command) : undefined
-        const authorization = await this.#authorizationStore.prepareInstall(
+        return this.#authorizationStore.prepareInstall(
           plugin,
           managed ? { binding: managed, kind: "managed" } : undefined,
         )
-        const beforePluginPublish = this.#beforePluginPublish
-        return {
-          commit: () => authorization.commit(),
-          async publish() {
-            await beforePluginPublish?.(plugin.id)
-            await authorization.publish()
-          },
-          rollback: () => authorization.rollback(),
-        }
       }
       const installed = current
         ? await this.#pluginManager.installBundle(bundle, {
