@@ -12,6 +12,7 @@ import {
   canRunFfmpegTransform,
   createFfmpegGenerateRequest,
   createFfmpegTransformPreset,
+  ffmpegAudioToolId,
   ffmpegImageToolId,
   ffmpegResultAnchor,
   ffmpegVideoToolId,
@@ -68,6 +69,13 @@ function ffmpegPlugin(
           },
           {
             acceptedInputs: ["reference_video"],
+            description: "Run FFmpeg and create audio.",
+            id: "run.audio",
+            output: "audio",
+            title: "FFmpeg audio",
+          },
+          {
+            acceptedInputs: ["reference_video"],
             description: "Run FFmpeg and create a video.",
             id: "run.video",
             output: "video",
@@ -98,6 +106,7 @@ describe("FFmpeg toolbar visibility", () => {
   test("requires the installed Plugin and the exact compatible tool declaration", () => {
     const context = selection([managedVideo.id])
     expect(canRunFfmpegTransform(context, [ffmpegPlugin()], "extract-frame")).toBe(true)
+    expect(canRunFfmpegTransform(context, [ffmpegPlugin()], "separate-audio")).toBe(true)
     expect(canRunFfmpegTransform(context, [ffmpegPlugin()], "trim")).toBe(true)
     expect(canRunFfmpegTransform(context, [], "crop")).toBe(false)
     expect(canRunFfmpegTransform(context, [ffmpegPlugin({ tools: [] })], "extract-frame")).toBe(false)
@@ -156,10 +165,57 @@ describe("FFmpeg toolbar presets", () => {
     expect(crop.arguments.at(-1)).toBe("{{output}}")
   })
 
+  test("extracts one required audio stream into a linked Canvas audio request", () => {
+    const preset = createFfmpegTransformPreset("separate-audio", {})
+    expect(preset).toMatchObject({
+      output: "audio",
+      outputName: "separated-audio.m4a",
+      toolId: ffmpegAudioToolId,
+    })
+    expect(preset.arguments).toEqual([
+      "-i",
+      "{{input:0}}",
+      "-map",
+      "0:a:0",
+      "-vn",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      "{{output}}",
+    ])
+
+    const context = selection([managedVideo.id])
+    const operationSignal = new AbortController().signal
+    const request = createFfmpegGenerateRequest(
+      { canvasId: "canvas", context, kind: "separate-audio", projectId: "project" },
+      {},
+      operationSignal,
+    )
+    expect(request).toMatchObject({
+      context: {
+        documentId: "canvas",
+        selectedNodeIds: [managedVideo.id],
+        source: "desktop:ffmpeg-toolbar:separate-audio",
+      },
+      output: "audio",
+      references: [{ nodeId: managedVideo.id, role: "reference_video" }],
+      signal: operationSignal,
+      toolId: ffmpegAudioToolId,
+      toolInput: { output_name: "separated-audio.m4a" },
+    })
+  })
+
   test("rejects invalid time ranges and crop geometry before execution", () => {
     expect(validateFfmpegTransformInput("extract-frame", { timeSeconds: -1 })).toBeDefined()
     expect(validateFfmpegTransformInput("trim", { durationSeconds: 0, startSeconds: 0 })).toBeDefined()
     expect(validateFfmpegTransformInput("trim", { durationSeconds: 1, startSeconds: Number.NaN })).toBeDefined()
+    expect(
+      validateFfmpegTransformInput("trim", { durationSeconds: 2, startSeconds: 8 }, { videoDurationSeconds: 10 }),
+    ).toBeUndefined()
+    expect(
+      validateFfmpegTransformInput("trim", { durationSeconds: 2.001, startSeconds: 8 }, { videoDurationSeconds: 10 }),
+    ).toBe("Trim end time cannot exceed the video duration.")
     expect(validateFfmpegTransformInput("crop", { height: 721, width: 1_280, x: 0, y: 0 })).toBeDefined()
     expect(validateFfmpegTransformInput("crop", { height: 720, width: 1_280, x: 1, y: 0 })).toBeDefined()
     expect(validateFfmpegTransformInput("crop", { height: 720, width: 1_280, x: 0, y: 0 })).toBeUndefined()

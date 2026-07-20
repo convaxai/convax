@@ -10,6 +10,7 @@ function request(kind: FfmpegTransformDialogRequest["kind"]): FfmpegTransformDia
     id: "video",
     position: { x: 0, y: 0 },
     resource: {
+      durationMs: 10_000,
       height: 720,
       id: "resource",
       kind: "video",
@@ -42,6 +43,23 @@ describe("FfmpegTransformDialog", () => {
     expect(ids.length).toBeGreaterThan(0)
     expect(ids.every((id) => !/\s/u.test(id))).toBe(true)
     expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('data-testid="ffmpeg-trim-timeline"')
+    expect(markup.match(/type="range"/gu)).toHaveLength(2)
+    expect(markup).toContain("00:00.000 – 00:10.000")
+  })
+
+  test("renders audio separation as a no-parameter linked-card operation", () => {
+    const markup = renderToStaticMarkup(
+      <FfmpegTransformDialog
+        locale="zh-CN"
+        onClose={() => undefined}
+        onConfirm={async () => undefined}
+        request={request("separate-audio")}
+      />,
+    )
+    expect(markup).toContain("音频分离")
+    expect(markup).toContain("新音频卡会在画布中自动连接到当前源视频")
+    expect(markup).not.toContain('type="number"')
   })
 
   test("requires even crop coordinates and dimensions in the form", () => {

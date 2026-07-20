@@ -14,13 +14,14 @@ import {
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
 export const ffmpegPluginId = "ffmpeg-tools"
+export const ffmpegAudioToolId = `${ffmpegPluginId}/run.audio`
 export const ffmpegImageToolId = `${ffmpegPluginId}/run.image`
 export const ffmpegVideoToolId = `${ffmpegPluginId}/run.video`
 
 const inputPlaceholder = "{{input:0}}"
 const outputPlaceholder = "{{output}}"
 
-export type FfmpegTransformKind = "extract-frame" | "trim" | "crop"
+export type FfmpegTransformKind = "extract-frame" | "separate-audio" | "trim" | "crop"
 
 export interface FfmpegExtractFrameInput {
   timeSeconds: number
@@ -38,13 +39,20 @@ export interface FfmpegCropInput {
   y: number
 }
 
+export type FfmpegSeparateAudioInput = Readonly<Record<string, never>>
+
 export interface FfmpegTransformInputMap {
   "extract-frame": FfmpegExtractFrameInput
+  "separate-audio": FfmpegSeparateAudioInput
   trim: FfmpegTrimInput
   crop: FfmpegCropInput
 }
 
 export type FfmpegTransformInput = FfmpegTransformInputMap[FfmpegTransformKind]
+
+export interface FfmpegTransformValidationContext {
+  videoDurationSeconds?: number
+}
 
 export interface FfmpegTransformPreset {
   arguments: readonly string[]
@@ -76,6 +84,7 @@ interface RequiredFfmpegTool {
 
 const requiredToolByKind: Readonly<Record<FfmpegTransformKind, RequiredFfmpegTool>> = {
   "extract-frame": { output: "image", toolId: ffmpegImageToolId },
+  "separate-audio": { output: "audio", toolId: ffmpegAudioToolId },
   crop: { output: "video", toolId: ffmpegVideoToolId },
   trim: { output: "video", toolId: ffmpegVideoToolId },
 }
@@ -128,7 +137,9 @@ export function canRunFfmpegTransform(
 export function validateFfmpegTransformInput(
   kind: FfmpegTransformKind,
   input: FfmpegTransformInput,
+  context: FfmpegTransformValidationContext = {},
 ): string | undefined {
+  if (kind === "separate-audio") return undefined
   if (kind === "extract-frame") {
     if (!("timeSeconds" in input)) return "Frame time must be zero or a positive number."
     const { timeSeconds } = input
@@ -142,6 +153,14 @@ export function validateFfmpegTransformInput(
     const { durationSeconds, startSeconds } = input
     if (!isNonNegativeFinite(startSeconds)) return "Start time must be zero or a positive number."
     if (!isPositiveFinite(durationSeconds)) return "Duration must be greater than zero."
+    const videoDurationSeconds = context.videoDurationSeconds
+    if (
+      typeof videoDurationSeconds === "number" &&
+      isPositiveFinite(videoDurationSeconds) &&
+      startSeconds + durationSeconds > videoDurationSeconds + 0.0005
+    ) {
+      return "Trim end time cannot exceed the video duration."
+    }
     return undefined
   }
   if (!("height" in input) || !("width" in input) || !("x" in input) || !("y" in input)) {
@@ -163,6 +182,16 @@ export function createFfmpegTransformPreset(
 ): FfmpegTransformPreset {
   const error = validateFfmpegTransformInput(kind, input)
   if (error) throw new Error(error)
+
+  if (kind === "separate-audio") {
+    return {
+      arguments: ["-i", inputPlaceholder, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "192k", outputPlaceholder],
+      output: "audio",
+      outputName: "separated-audio.m4a",
+      prompt: "Extract the primary audio stream from the video without changing the source.",
+      toolId: ffmpegAudioToolId,
+    }
+  }
 
   if (kind === "extract-frame") {
     if (!("timeSeconds" in input)) throw new Error("Frame time is missing.")

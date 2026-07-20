@@ -17,6 +17,7 @@ import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-fi
 import { ProjectCanvasController, hydrateProjectCanvasDocument, projectFileReferenceKey } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
+  AudioLines,
   CheckCircle2,
   Clapperboard,
   Crop,
@@ -876,6 +877,7 @@ function App() {
         [
           { icon: <ImageDown />, kind: "extract-frame" },
           { icon: <Scissors />, kind: "trim" },
+          { icon: <AudioLines />, kind: "separate-audio" },
           { icon: <Crop />, kind: "crop" },
         ] as const
       ).map(({ icon, kind }) => ({
