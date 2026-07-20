@@ -1,4 +1,9 @@
-import { type InstalledWebPluginSummary, type WebPluginCatalogItem, parseWebPluginManifest } from "../plugin-contracts"
+import {
+  compareWebPluginVersions,
+  type InstalledWebPluginSummary,
+  type WebPluginCatalogItem,
+  parseWebPluginManifest,
+} from "../plugin-contracts"
 import type {
   DesktopSkillCatalogItem,
   DesktopSkillDetails,
@@ -9,6 +14,8 @@ import type {
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { DesktopBuiltinSkillBundle } from "./builtin-skill-catalog"
 import type { WebPluginManager } from "./plugin-manager"
+import type { ManagedPluginCompanionStore } from "./managed-plugin-companions"
+import type { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import {
   type RemoteCapabilityPackage,
   type RemoteCapabilityRegistryClient,
@@ -20,6 +27,7 @@ import { createSkillFilePreviews } from "./skill-details"
 
 export interface RemoteCapabilityRegistryPort {
   downloadBundle: RemoteCapabilityRegistryClient["downloadBundle"]
+  downloadCompanionArtifact: RemoteCapabilityRegistryClient["downloadCompanionArtifact"]
   downloadSkillShowcase: RemoteCapabilityRegistryClient["downloadSkillShowcase"]
   fetchRegistry: RemoteCapabilityRegistryClient["fetchRegistry"]
   subscribe?(listener: () => void): () => void
@@ -40,9 +48,14 @@ export interface RemoteSkillCatalogPort {
 }
 
 export interface RemoteCapabilityInstallerOptions {
+  arch?: NodeJS.Architecture
+  authorizationStore: Pick<ToolPluginAuthorizationStore, "prepareInstall">
+  beforePluginPublish?(pluginId: string): Promise<void> | void
   builtinPlugins: readonly DesktopBuiltinPluginBundle[]
   builtinSkills: readonly DesktopBuiltinSkillBundle[]
-  pluginManager: Pick<WebPluginManager, "installBundle">
+  companionStore: Pick<ManagedPluginCompanionStore, "install" | "reconcile">
+  platform?: NodeJS.Platform
+  pluginManager: Pick<WebPluginManager, "installBundle" | "list">
   registry: RemoteCapabilityRegistryPort
   skillManager: Pick<DesktopSkillManager, "installFromFiles">
 }
@@ -113,13 +126,23 @@ function decodePluginManifest(item: RemotePluginPackage, files: Readonly<Record<
 export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, RemoteSkillCatalogPort {
   readonly #builtinPluginIdentities: ReadonlySet<string>
   readonly #builtinSkillIdentities: ReadonlySet<string>
+  readonly #arch: NodeJS.Architecture
+  readonly #authorizationStore: RemoteCapabilityInstallerOptions["authorizationStore"]
+  readonly #beforePluginPublish?: RemoteCapabilityInstallerOptions["beforePluginPublish"]
+  readonly #companionStore: RemoteCapabilityInstallerOptions["companionStore"]
+  readonly #platform: NodeJS.Platform
   readonly #pluginManager: RemoteCapabilityInstallerOptions["pluginManager"]
   readonly #registry: RemoteCapabilityRegistryPort
   readonly #skillManager: RemoteCapabilityInstallerOptions["skillManager"]
 
   constructor(options: RemoteCapabilityInstallerOptions) {
     this.#registry = options.registry
+    this.#authorizationStore = options.authorizationStore
+    this.#beforePluginPublish = options.beforePluginPublish
     this.#pluginManager = options.pluginManager
+    this.#companionStore = options.companionStore
+    this.#platform = options.platform ?? process.platform
+    this.#arch = options.arch ?? process.arch
     this.#skillManager = options.skillManager
     this.#builtinPluginIdentities = reservedIdentities(options.builtinPlugins.map((item) => item.manifest))
     this.#builtinSkillIdentities = reservedIdentities(options.builtinSkills)
@@ -165,9 +188,91 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   async installPlugin(id: string) {
     const item = this.#plugins(await this.#packages()).find((candidate) => candidate.id === id)
     if (!item) throw new Error(`Remote Plugin catalog item was not found: ${id}`)
+    const companionTargets = (item.companions ?? []).map((companion) => {
+      const target = companion.targets.find(
+        (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
+      )
+      if (!target) {
+        throw new Error(`Remote Plugin companion has no target for this host: ${this.#platform}/${this.#arch}`)
+      }
+      return { companion, target }
+    })
+    const current = (await this.#pluginManager.list()).find((plugin) => plugin.id === item.id)
+    if (current && compareWebPluginVersions(item.version, current.version) <= 0) {
+      throw new Error(`Remote Plugin update must have a newer version: ${item.id}`)
+    }
     const bundle = await this.#registry.downloadBundle(item)
     decodePluginManifest(item, bundle.files)
-    return this.#pluginManager.installBundle(bundle)
+    const companionTransactions: Awaited<ReturnType<ManagedPluginCompanionStore["install"]>>[] = []
+    const managedBindings = new Map<string, Awaited<ReturnType<ManagedPluginCompanionStore["install"]>>["binding"]>()
+    try {
+      for (const { companion, target } of companionTargets) {
+        const bytes = await this.#registry.downloadCompanionArtifact(item, companion, target)
+        const transaction = await this.#companionStore.install({
+          arch: target.arch,
+          bytes,
+          command: companion.command,
+          platform: target.platform,
+          pluginId: item.id,
+          pluginVersion: item.version,
+          sha256: target.artifact.sha256,
+          size: target.artifact.size,
+          version: companion.version,
+        })
+        companionTransactions.push(transaction)
+        managedBindings.set(companion.command, transaction.binding)
+      }
+      const prepareAuthorization = async (plugin: InstalledWebPluginSummary) => {
+        const managed = plugin.runtime ? managedBindings.get(plugin.runtime.command) : undefined
+        const authorization = await this.#authorizationStore.prepareInstall(
+          plugin,
+          managed ? { binding: managed, kind: "managed" } : undefined,
+        )
+        const beforePluginPublish = this.#beforePluginPublish
+        return {
+          commit: () => authorization.commit(),
+          async publish() {
+            await beforePluginPublish?.(plugin.id)
+            await authorization.publish()
+          },
+          rollback: () => authorization.rollback(),
+        }
+      }
+      const installed = current
+        ? await this.#pluginManager.installBundle(bundle, {
+            beforePublish: prepareAuthorization,
+            replaceExisting: true,
+          })
+        : await this.#pluginManager.installBundle(bundle, {
+            beforePublish: prepareAuthorization,
+          })
+      // Plugin publication is the point of no return. Companion commit only
+      // removes obsolete host-owned versions and must never turn that success
+      // into a rollback attempt against the now-current Plugin.
+      for (const transaction of companionTransactions) await transaction.commit().catch(() => undefined)
+      try {
+        await this.#companionStore.reconcile(await this.#pluginManager.list())
+      } catch {
+        // Publication already succeeded. Startup and lifecycle reconciliation
+        // will retry cleanup without invalidating the installed Plugin.
+      }
+      return installed
+    } catch (error) {
+      const rollbackFailures: unknown[] = []
+      for (const transaction of [...companionTransactions].reverse()) {
+        try {
+          await transaction.rollback()
+        } catch (rollbackError) {
+          rollbackFailures.push(rollbackError)
+        }
+      }
+      if (rollbackFailures.length) {
+        throw new AggregateError([error, ...rollbackFailures], `Remote Plugin companion rollback failed: ${item.id}`, {
+          cause: error,
+        })
+      }
+      throw error
+    }
   }
 
   async listSkillCatalog(installedNames: ReadonlySet<string>): Promise<DesktopSkillCatalogItem[]> {

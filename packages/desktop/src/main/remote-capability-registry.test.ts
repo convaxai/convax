@@ -107,6 +107,48 @@ function pluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginMa
   }
 }
 
+function generationPluginManifest(): WebPluginManifest {
+  return pluginManifest({
+    contributes: {
+      canvas: { renderer: { create: true } },
+      generation: {
+        tools: [
+          {
+            acceptedInputs: ["text", "reference_image"],
+            description: "Generate an image from a prompt and optional reference",
+            id: "generate-image",
+            output: "image",
+            title: "Generate image",
+          },
+        ],
+      },
+    },
+    runtime: { args: ["serve", "--stdio"], command: "example-image-tool", type: "mcp-stdio" },
+    schema: "convax.plugin/2",
+  })
+}
+
+function companion(overrides: Record<string, unknown> = {}) {
+  return {
+    command: "example-image-tool",
+    targets: [
+      {
+        arch: "arm64",
+        artifact: {
+          sha256: "b".repeat(64),
+          size: 61 * 1024 * 1024,
+          url:
+            "https://github.com/microvoid/convax-plugins/releases/download/plugin-hello-convax-v1.0.0/" +
+            "convax-companion-example-image-tool-2.0.0-darwin-arm64",
+        },
+        platform: "darwin",
+      },
+    ],
+    version: "2.0.0",
+    ...overrides,
+  }
+}
+
 function artifact(overrides: Record<string, unknown> = {}) {
   return {
     sha256: "a".repeat(64),
@@ -242,6 +284,135 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
+  test("accepts strict Plugin host/schema v1 and generation v2 compatibility pairs", () => {
+    const generationManifest = generationPluginManifest()
+    const parsed = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+          manifest: generationManifest,
+        }),
+      ]),
+    )
+
+    expect(parsed.packages[0]).toMatchObject({
+      compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+      manifest: {
+        runtime: { command: "example-image-tool", type: "mcp-stdio" },
+        schema: "convax.plugin/2",
+      },
+    })
+  })
+
+  test("binds companion commands and target assets to the exact generation manifest and Release path", () => {
+    const generationManifest = generationPluginManifest()
+    const parsed = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          companions: [companion()],
+          compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+          manifest: generationManifest,
+        }),
+      ]),
+    )
+    expect(parsed.packages[0]).toMatchObject({
+      companions: [
+        {
+          command: "example-image-tool",
+          targets: [{ arch: "arm64", platform: "darwin" }],
+          version: "2.0.0",
+        },
+      ],
+    })
+  })
+
+  test("rejects companion command drift, missing runtime, unsupported targets, duplicates, and oversized bytes", () => {
+    const generationManifest = generationPluginManifest()
+    const generationEntry = (companions: unknown) =>
+      pluginPackage({
+        companions,
+        compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+        manifest: generationManifest,
+      })
+    expect(() =>
+      parseRemoteCapabilityRegistry(registry([generationEntry([{ ...companion(), command: "different-tool" }])])),
+    ).toThrow("exactly match")
+    expect(() => parseRemoteCapabilityRegistry(registry([pluginPackage({ companions: [companion()] })]))).toThrow(
+      "matching external",
+    )
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          generationEntry([
+            companion({
+              targets: [{ ...companion().targets[0], platform: "freebsd" }],
+            }),
+          ]),
+        ]),
+      ),
+    ).toThrow("platform")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([generationEntry([companion({ targets: [companion().targets[0], companion().targets[0]] })])]),
+      ),
+    ).toThrow("duplicate target")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          generationEntry([
+            companion({
+              targets: [
+                {
+                  ...companion().targets[0],
+                  artifact: { ...companion().targets[0].artifact, size: 128 * 1024 * 1024 + 1 },
+                },
+              ],
+            }),
+          ]),
+        ]),
+      ),
+    ).toThrow("size")
+  })
+
+  test("requires the deterministic companion URL including Windows extension semantics", () => {
+    const generationManifest = generationPluginManifest()
+    const entry = (targets: unknown[]) =>
+      pluginPackage({
+        companions: [companion({ targets })],
+        compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+        manifest: generationManifest,
+      })
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          entry([
+            {
+              ...companion().targets[0],
+              artifact: { ...companion().targets[0].artifact, url: "https://example.com/companion" },
+            },
+          ]),
+        ]),
+      ),
+    ).toThrow("exactly match")
+    const windows = {
+      arch: "x64",
+      artifact: {
+        sha256: "c".repeat(64),
+        size: 10,
+        url:
+          "https://github.com/microvoid/convax-plugins/releases/download/plugin-hello-convax-v1.0.0/" +
+          "convax-companion-example-image-tool-2.0.0-win32-x64.exe",
+      },
+      platform: "win32",
+    }
+    expect(() => parseRemoteCapabilityRegistry(registry([entry([windows])]))).not.toThrow()
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([entry([{ ...windows, artifact: { ...windows.artifact, url: windows.artifact.url.slice(0, -4) } }])]),
+      ),
+    ).toThrow("exactly match")
+  })
+
   test("rejects malformed schemas, unknown fields, and incompatible entries", () => {
     expect(() => parseRemoteCapabilityRegistry(registry([], { schema: "convax.registry/2" }))).toThrow("schema")
     expect(() => parseRemoteCapabilityRegistry({ ...registry(), executable: true })).toThrow("unsupported field")
@@ -252,6 +423,26 @@ describe("parseRemoteCapabilityRegistry", () => {
         ]),
       ),
     ).toThrow("compatibility")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          pluginPackage({
+            compatibility: { pluginHost: "convax.plugin-host/1", pluginSchema: "convax.plugin/2" },
+            manifest: generationPluginManifest(),
+          }),
+        ]),
+      ),
+    ).toThrow("compatibility")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          pluginPackage({
+            compatibility: { pluginHost: "convax.plugin-host/1", pluginSchema: "convax.plugin/1" },
+            manifest: generationPluginManifest(),
+          }),
+        ]),
+      ),
+    ).toThrow("exactly match")
     expect(() => parseRemoteCapabilityRegistry(registry([pluginPackage({ description: "Mismatch" })]))).toThrow(
       "exactly match",
     )
@@ -940,6 +1131,62 @@ describe("RemoteCapabilityRegistryClient", () => {
       showcaseUrl: "https://showcase.test/index.json",
     })
     await expect(wrongDigest.downloadSkillShowcase(current, item)).rejects.toThrow("SHA-256")
+  })
+
+  test("downloads a companion as bounded raw bytes with exact size, digest, and redirect controls", async () => {
+    const bytes = new TextEncoder().encode("native companion bytes")
+    const digest = createHash("sha256").update(bytes).digest("hex")
+    const generationManifest = generationPluginManifest()
+    const item = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          companions: [
+            companion({
+              targets: [
+                {
+                  ...companion().targets[0],
+                  artifact: { ...companion().targets[0].artifact, sha256: digest, size: bytes.byteLength },
+                },
+              ],
+            }),
+          ],
+          compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+          manifest: generationManifest,
+        }),
+      ]),
+    ).packages[0]!
+    if (item.kind !== "plugin") throw new Error("expected Plugin")
+    const companionItem = item.companions![0]!
+    const target = companionItem.targets[0]!
+    const calls: string[] = []
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock((url) => {
+        calls.push(url)
+        return calls.length === 1
+          ? new Response(null, {
+              headers: { location: "https://release-assets.githubusercontent.com/release/companion" },
+              status: 302,
+            })
+          : new Response(bytes, { headers: { "content-length": String(bytes.byteLength) }, status: 200 })
+      }),
+    })
+    await expect(client.downloadCompanionArtifact(item, companionItem, target)).resolves.toEqual(bytes)
+    expect(calls).toHaveLength(2)
+
+    const short = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(() => new Response(bytes.slice(0, -1))),
+    })
+    await expect(short.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow("size mismatch")
+    const changed = new Uint8Array(bytes)
+    changed[0] ^= 0xff
+    const corrupt = new RemoteCapabilityRegistryClient({ fetch: fetchMock(() => new Response(changed)) })
+    await expect(corrupt.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow("SHA-256")
+    const redirecting = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () => new Response(null, { headers: { location: "https://attacker.invalid/companion" }, status: 302 }),
+      ),
+    })
+    await expect(redirecting.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow("redirect host")
   })
 
   test("downloads an allowlisted redirect, verifies bytes and returns install-ready files", async () => {

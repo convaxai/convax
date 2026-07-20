@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto"
 
-import { type WebPluginManifest, parseWebPluginManifest, requireWebPluginId } from "../plugin-contracts"
+import {
+  type WebPluginManifest,
+  parseWebPluginManifest,
+  requireWebPluginId,
+  webPluginManifestSchema,
+  webPluginManifestSchemaV2,
+} from "../plugin-contracts"
 import { type SafeZipLimits, unpackSafeZip } from "./safe-zip"
 
 export const officialRemoteRegistryIndexUrl =
@@ -10,10 +16,22 @@ export const officialRemoteShowcaseIndexUrl =
 export const remoteCapabilityRegistrySchema = "convax.registry/1" as const
 export const remoteCapabilityShowcaseSchema = "convax.showcase/1" as const
 export const remotePluginHostSchema = "convax.plugin-host/1" as const
+export const remotePluginHostSchemaV2 = "convax.plugin-host/2" as const
 export const remoteSkillSchema = "opencode.skill/1" as const
+
+export type RemotePluginCompatibility =
+  | {
+      pluginHost: typeof remotePluginHostSchema
+      pluginSchema: typeof webPluginManifestSchema
+    }
+  | {
+      pluginHost: typeof remotePluginHostSchemaV2
+      pluginSchema: typeof webPluginManifestSchemaV2
+    }
 
 const maxRegistryBytes = 2 * 1024 * 1024
 const maxArtifactBytes = 64 * 1024 * 1024
+export const maxRemoteCompanionBytes = 128 * 1024 * 1024
 const maxShowcaseIndexBytes = 2 * 1024 * 1024
 const maxShowcasePosterBytes = 4 * 1024 * 1024
 const maxShowcaseAnimationBytes = 24 * 1024 * 1024
@@ -26,12 +44,25 @@ export interface RemoteCapabilityArtifact {
   url: string
 }
 
+export type RemoteCompanionPlatform = "darwin" | "linux" | "win32"
+export type RemoteCompanionArch = "arm64" | "x64"
+
+export interface RemotePluginCompanionTarget {
+  arch: RemoteCompanionArch
+  artifact: RemoteCapabilityArtifact
+  platform: RemoteCompanionPlatform
+}
+
+export interface RemotePluginCompanion {
+  command: string
+  targets: RemotePluginCompanionTarget[]
+  version: string
+}
+
 export interface RemotePluginPackage {
   artifact: RemoteCapabilityArtifact
-  compatibility: {
-    pluginHost: typeof remotePluginHostSchema
-    pluginSchema: "convax.plugin/1"
-  }
+  companions?: RemotePluginCompanion[]
+  compatibility: RemotePluginCompatibility
   description: string
   id: string
   kind: "plugin"
@@ -148,6 +179,11 @@ export interface RemoteCapabilityDownloadOptions {
   signal?: AbortSignal
   timeoutMs?: number
   zipLimits?: SafeZipLimits
+}
+
+export interface RemoteCompanionDownloadOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
 }
 
 export interface RemoteShowcaseDownloadOptions {
@@ -270,6 +306,33 @@ function assertOfficialArtifactUrl(value: unknown) {
   return parsed.toString()
 }
 
+function expectedCompanionArtifactUrl(
+  pluginId: string,
+  pluginVersion: string,
+  companion: Pick<RemotePluginCompanion, "command" | "version">,
+  target: Pick<RemotePluginCompanionTarget, "arch" | "platform">,
+) {
+  const extension = target.platform === "win32" ? ".exe" : ""
+  return (
+    `https://github.com/microvoid/convax-plugins/releases/download/plugin-${pluginId}-v${pluginVersion}/` +
+    `convax-companion-${companion.command}-${companion.version}-${target.platform}-${target.arch}${extension}`
+  )
+}
+
+function assertOfficialCompanionArtifactUrl(
+  value: unknown,
+  pluginId: string,
+  pluginVersion: string,
+  companion: Pick<RemotePluginCompanion, "command" | "version">,
+  target: Pick<RemotePluginCompanionTarget, "arch" | "platform">,
+) {
+  const parsed = parseHttpsUrl(value, "Remote companion artifact URL")
+  if (parsed.search || parsed.toString() !== expectedCompanionArtifactUrl(pluginId, pluginVersion, companion, target)) {
+    validationError("Remote companion artifact URL must exactly match its Plugin, command, version, and target")
+  }
+  return parsed.toString()
+}
+
 function assertOfficialShowcaseMediaUrl(
   value: unknown,
   identity: Pick<RemoteCapabilityShowcasePackage, "id" | "kind" | "version">,
@@ -314,6 +377,32 @@ function assertAllowedArtifactRequestUrl(value: string, initial: boolean) {
   return parsed.toString()
 }
 
+function assertAllowedCompanionRequestUrl(value: string, initial: boolean) {
+  const parsed = parseHttpsUrl(value, "Remote companion artifact request URL")
+  if (initial) {
+    if (
+      parsed.hostname !== "github.com" ||
+      parsed.search ||
+      !/^\/microvoid\/convax-plugins\/releases\/download\/plugin-[a-z0-9]+(?:-[a-z0-9]+)*-v[0-9A-Za-z.+-]+\/convax-companion-[A-Za-z0-9][A-Za-z0-9._-]*-[0-9A-Za-z.+-]+-(?:darwin|linux|win32)-(?:arm64|x64)(?:\.exe)?$/.test(
+        parsed.pathname,
+      )
+    ) {
+      validationError("Remote companion artifacts must use their exact official GitHub Release asset path")
+    }
+    return parsed.toString()
+  }
+  if (!parsed.search && parsed.hostname === "github.com") {
+    return assertAllowedCompanionRequestUrl(parsed.toString(), true)
+  }
+  if (!["release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(parsed.hostname)) {
+    validationError(`Remote companion artifact redirect host is not allowed: ${parsed.hostname}`)
+  }
+  if (!parsed.pathname.startsWith("/") || parsed.pathname === "/") {
+    validationError("Remote companion artifact redirect path is invalid")
+  }
+  return parsed.toString()
+}
+
 function assertAllowedShowcaseMediaRequestUrl(value: string, initial: boolean) {
   const parsed = parseHttpsUrl(value, "Remote showcase media request URL")
   if (initial) {
@@ -350,17 +439,111 @@ function parseArtifact(value: unknown): RemoteCapabilityArtifact {
   return { sha256, size: input.size as number, url: assertOfficialArtifactUrl(input.url) }
 }
 
+function parseCompanions(
+  value: unknown,
+  identity: { id: string; version: string },
+  manifest: WebPluginManifest,
+): RemotePluginCompanion[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length < 1 || value.length > 16) {
+    validationError("Remote Plugin companions must be an array of between 1 and 16 entries")
+  }
+  const runtimeCommand = manifest.runtime?.type === "mcp-stdio" ? manifest.runtime.command : undefined
+  if (!runtimeCommand) validationError("Remote Plugin companions require a matching external MCP runtime")
+  const commands = new Set<string>()
+  return value.map((entry, companionIndex) => {
+    const input = asRecord(entry, `Remote Plugin companion ${companionIndex}`)
+    assertKeys(input, ["command", "targets", "version"], `Remote Plugin companion ${companionIndex}`)
+    const command = requireString(input.command, `Remote Plugin companion ${companionIndex} command`, 128)
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(command)) {
+      validationError(`Remote Plugin companion ${companionIndex} command must be a bare executable name`)
+    }
+    if (command !== runtimeCommand) {
+      validationError("Remote Plugin companion command must exactly match its manifest runtime command")
+    }
+    if (commands.has(command)) validationError(`Remote Plugin companions contain a duplicate command: ${command}`)
+    commands.add(command)
+    const version = requireSemver(input.version, `Remote Plugin companion ${companionIndex} version`)
+    if (!Array.isArray(input.targets) || input.targets.length < 1 || input.targets.length > 16) {
+      validationError(`Remote Plugin companion ${companionIndex} targets must contain between 1 and 16 entries`)
+    }
+    const targetIdentities = new Set<string>()
+    const targets = input.targets.map((entryTarget, targetIndex): RemotePluginCompanionTarget => {
+      const target = asRecord(entryTarget, `Remote Plugin companion ${companionIndex} target ${targetIndex}`)
+      assertKeys(
+        target,
+        ["arch", "artifact", "platform"],
+        `Remote Plugin companion ${companionIndex} target ${targetIndex}`,
+      )
+      if (!(["darwin", "linux", "win32"] as const).includes(target.platform as RemoteCompanionPlatform)) {
+        validationError(`Remote Plugin companion ${companionIndex} target platform is not supported`)
+      }
+      if (!(["arm64", "x64"] as const).includes(target.arch as RemoteCompanionArch)) {
+        validationError(`Remote Plugin companion ${companionIndex} target architecture is not supported`)
+      }
+      const platform = target.platform as RemoteCompanionPlatform
+      const arch = target.arch as RemoteCompanionArch
+      const targetIdentity = `${platform}/${arch}`
+      if (targetIdentities.has(targetIdentity)) {
+        validationError(`Remote Plugin companion ${companionIndex} contains a duplicate target: ${targetIdentity}`)
+      }
+      targetIdentities.add(targetIdentity)
+      const artifactInput = asRecord(target.artifact, `Remote Plugin companion ${companionIndex} artifact`)
+      assertKeys(artifactInput, ["sha256", "size", "url"], `Remote Plugin companion ${companionIndex} artifact`)
+      if (
+        !Number.isSafeInteger(artifactInput.size) ||
+        (artifactInput.size as number) < 1 ||
+        (artifactInput.size as number) > maxRemoteCompanionBytes
+      ) {
+        validationError(
+          `Remote Plugin companion artifact size must be an integer between 1 and ${maxRemoteCompanionBytes}`,
+        )
+      }
+      const sha256 = requireString(artifactInput.sha256, "Remote Plugin companion artifact SHA-256", 64)
+      if (!/^[a-f0-9]{64}$/.test(sha256)) {
+        validationError("Remote Plugin companion artifact SHA-256 must be 64 lowercase hex characters")
+      }
+      const companionIdentity = { command, version }
+      const targetIdentityParts = { arch, platform }
+      return {
+        arch,
+        artifact: {
+          sha256,
+          size: artifactInput.size as number,
+          url: assertOfficialCompanionArtifactUrl(
+            artifactInput.url,
+            identity.id,
+            identity.version,
+            companionIdentity,
+            targetIdentityParts,
+          ),
+        },
+        platform,
+      }
+    })
+    return { command, targets, version }
+  })
+}
+
 function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage {
-  assertKeys(
+  assertKeysWithOptional(
     input,
     ["artifact", "compatibility", "description", "id", "kind", "manifest", "name", "version", "yanked"],
+    ["companions"],
     "Remote Plugin package",
   )
   const compatibility = asRecord(input.compatibility, "Remote Plugin compatibility")
   assertKeys(compatibility, ["pluginHost", "pluginSchema"], "Remote Plugin compatibility")
-  if (compatibility.pluginHost !== remotePluginHostSchema || compatibility.pluginSchema !== "convax.plugin/1") {
+  const compatibleV1 =
+    compatibility.pluginHost === remotePluginHostSchema && compatibility.pluginSchema === webPluginManifestSchema
+  const compatibleV2 =
+    compatibility.pluginHost === remotePluginHostSchemaV2 && compatibility.pluginSchema === webPluginManifestSchemaV2
+  if (!compatibleV1 && !compatibleV2) {
     validationError("Remote Plugin compatibility is not supported by this host")
   }
+  const parsedCompatibility: RemotePluginCompatibility = compatibleV1
+    ? { pluginHost: remotePluginHostSchema, pluginSchema: webPluginManifestSchema }
+    : { pluginHost: remotePluginHostSchemaV2, pluginSchema: webPluginManifestSchemaV2 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)
@@ -377,6 +560,7 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
   const description = requireString(input.description, "Remote Plugin description", 2_000)
   const version = requireSemver(input.version, "Remote Plugin version")
   if (
+    parsedCompatibility.pluginSchema !== manifest.schema ||
     id !== manifest.id ||
     name !== manifest.name ||
     description !== manifest.description ||
@@ -384,9 +568,11 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
   ) {
     validationError("Remote Plugin identity fields must exactly match its manifest")
   }
+  const companions = parseCompanions(input.companions, { id, version }, manifest)
   return {
     artifact: parseArtifact(input.artifact),
-    compatibility: { pluginHost: remotePluginHostSchema, pluginSchema: "convax.plugin/1" },
+    ...(companions ? { companions } : {}),
+    compatibility: parsedCompatibility,
     description,
     id,
     kind: "plugin",
@@ -458,6 +644,16 @@ export function parseRemoteCapabilityRegistry(value: unknown): RemoteCapabilityR
       validationError(`Remote capability registry reuses an artifact URL: ${item.artifact.url}`)
     identities.add(identity)
     artifactUrls.add(item.artifact.url)
+    if (item.kind === "plugin") {
+      for (const companion of item.companions ?? []) {
+        for (const target of companion.targets) {
+          if (artifactUrls.has(target.artifact.url)) {
+            validationError(`Remote capability registry reuses an artifact URL: ${target.artifact.url}`)
+          }
+          artifactUrls.add(target.artifact.url)
+        }
+      }
+    }
   }
   return { packages, revision, schema: remoteCapabilityRegistrySchema, sequence: input.sequence as number }
 }
@@ -727,12 +923,13 @@ async function fetchWithRedirects(
   inputUrl: string,
   signal: AbortSignal,
   headers: Headers,
-  purpose: "artifact" | "registry",
+  purpose: "artifact" | "companion" | "registry",
   configuredRegistryUrl: string,
 ) {
   let currentUrl = inputUrl
   for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
     if (purpose === "artifact") assertAllowedArtifactRequestUrl(currentUrl, redirectCount === 0)
+    else if (purpose === "companion") assertAllowedCompanionRequestUrl(currentUrl, redirectCount === 0)
     else if (currentUrl !== configuredRegistryUrl)
       validationError("Remote registry redirected outside its configured index URL")
     let response: Response
@@ -744,7 +941,9 @@ async function fetchWithRedirects(
     }
     if (response.url) {
       if (purpose === "artifact") assertAllowedArtifactRequestUrl(response.url, response.url === inputUrl)
-      else if (response.url !== configuredRegistryUrl) validationError("Remote registry response URL is not trusted")
+      else if (purpose === "companion") {
+        assertAllowedCompanionRequestUrl(response.url, response.url === inputUrl)
+      } else if (response.url !== configuredRegistryUrl) validationError("Remote registry response URL is not trusted")
     }
     if (![301, 302, 303, 307, 308].includes(response.status)) return response
     const location = response.headers.get("location")
@@ -1246,6 +1445,58 @@ export class RemoteCapabilityRegistryClient {
       mimeType: media.mime,
       size: media.size,
     }
+  }
+
+  async downloadCompanionArtifact(
+    packageValue: RemotePluginPackage,
+    companionValue: RemotePluginCompanion,
+    targetValue: RemotePluginCompanionTarget,
+    options: RemoteCompanionDownloadOptions = {},
+  ): Promise<Uint8Array> {
+    const item = parseRemoteCapabilityPackage(packageValue)
+    if (item.kind !== "plugin") validationError("Remote companion download requires a Plugin package")
+    if (item.yanked) validationError("Remote Plugin package is yanked and cannot be installed")
+    const companion = item.companions?.find(
+      (candidate) =>
+        candidate.command === companionValue.command &&
+        candidate.version === companionValue.version &&
+        JSON.stringify(candidate) === JSON.stringify(companionValue),
+    )
+    if (!companion) validationError("Remote companion does not match its Plugin Registry entry")
+    const target = companion.targets.find(
+      (candidate) =>
+        candidate.platform === targetValue.platform &&
+        candidate.arch === targetValue.arch &&
+        JSON.stringify(candidate) === JSON.stringify(targetValue),
+    )
+    if (!target) validationError("Remote companion target does not match its Plugin Registry entry")
+    const bytes = await withTimeout(
+      async (signal) => {
+        const response = await fetchWithRedirects(
+          this.#fetch,
+          target.artifact.url,
+          signal,
+          new Headers({ accept: "application/octet-stream" }),
+          "companion",
+          this.#registryUrl,
+        )
+        if (response.status !== 200) {
+          throw new RemoteRegistryTransportError(`Remote companion artifact returned HTTP ${response.status}`)
+        }
+        return readBoundedBody(response, target.artifact.size, "Remote companion artifact", signal)
+      },
+      options.timeoutMs ?? this.#timeoutMs,
+      options.signal,
+    )
+    if (bytes.byteLength !== target.artifact.size) {
+      validationError(
+        `Remote companion artifact size mismatch: expected ${target.artifact.size}, received ${bytes.byteLength}`,
+      )
+    }
+    if (sha256(bytes) !== target.artifact.sha256) {
+      validationError("Remote companion artifact SHA-256 does not match the Registry")
+    }
+    return bytes
   }
 
   async downloadBundle(

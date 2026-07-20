@@ -3,12 +3,15 @@ import { describe, expect, mock, test } from "bun:test"
 import { parseWebPluginManifest, type WebPluginManifest } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { DesktopBuiltinSkillBundle } from "./builtin-skill-catalog"
+import type { WebPluginBundleInstallOptions } from "./plugin-manager"
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import {
   remoteCapabilityRegistrySchema,
   remotePluginHostSchema,
+  remotePluginHostSchemaV2,
   remoteSkillSchema,
   type RemoteCapabilityPackage,
+  type RemotePluginCompanion,
   type RemoteSkillShowcaseDownload,
 } from "./remote-capability-registry"
 
@@ -25,6 +28,53 @@ function manifest(id: string, version = "1.0.0", name = id): WebPluginManifest {
     schema: "convax.plugin/1",
     version,
   })
+}
+
+function generationManifest(id: string, version = "1.0.0", name = id): WebPluginManifest {
+  return parseWebPluginManifest({
+    capabilities: [],
+    contributes: {
+      canvas: { renderer: { create: true } },
+      generation: {
+        tools: [
+          {
+            acceptedInputs: ["text", "reference_image"],
+            description: `${id} image generation`,
+            id: "generate-image",
+            output: "image",
+            title: "Generate image",
+          },
+        ],
+      },
+    },
+    description: `${id} description`,
+    entry: "index.html",
+    id,
+    name,
+    runtime: { command: "example-image-tool", type: "mcp-stdio" },
+    schema: "convax.plugin/2",
+    version,
+  })
+}
+
+function companion(pluginId: string, pluginVersion = "1.0.0"): RemotePluginCompanion {
+  return {
+    command: "example-image-tool",
+    targets: [
+      {
+        arch: "arm64" as const,
+        artifact: {
+          sha256: "c".repeat(64),
+          size: 9,
+          url:
+            `https://github.com/microvoid/convax-plugins/releases/download/plugin-${pluginId}-v${pluginVersion}/` +
+            "convax-companion-example-image-tool-3.0.0-darwin-arm64",
+        },
+        platform: "darwin" as const,
+      },
+    ],
+    version: "3.0.0",
+  }
 }
 
 function pluginPackage(
@@ -72,9 +122,16 @@ function skillPackage(
   }
 }
 
-function setup(packages: RemoteCapabilityPackage[], files: Readonly<Record<string, Uint8Array>> = {}) {
+function setup(
+  packages: RemoteCapabilityPackage[],
+  files: Readonly<Record<string, Uint8Array>> = {},
+  installed: WebPluginManifest[] = [],
+  target: { arch: NodeJS.Architecture; platform: NodeJS.Platform } = { arch: "arm64", platform: "darwin" },
+  beforePluginPublish?: (pluginId: string) => Promise<void> | void,
+) {
   const registry = {
     downloadBundle: mock(async (_item: RemoteCapabilityPackage) => ({ files })),
+    downloadCompanionArtifact: mock(async () => encoder.encode("companion")),
     downloadSkillShowcase: mock(async (): Promise<RemoteSkillShowcaseDownload | null> => null),
     fetchRegistry: mock(async (_options: { signal?: AbortSignal } = {}) => ({
       registry: {
@@ -86,11 +143,43 @@ function setup(packages: RemoteCapabilityPackage[], files: Readonly<Record<strin
       source: "network" as const,
     })),
   } satisfies RemoteCapabilityRegistryPort
-  const pluginManager = {
-    installBundle: mock(async (bundle: { files: Readonly<Record<string, Uint8Array>> }) => {
-      const parsed = JSON.parse(new TextDecoder().decode(bundle.files["manifest.json"]))
-      return parseWebPluginManifest(parsed)
+  const authorizationTransactions: Array<{
+    commit: ReturnType<typeof mock>
+    publish: ReturnType<typeof mock>
+    rollback: ReturnType<typeof mock>
+  }> = []
+  const authorizationStore = {
+    prepareInstall: mock(async () => {
+      const transaction = {
+        commit: mock(async () => {}),
+        publish: mock(async () => {}),
+        rollback: mock(async () => {}),
+      }
+      authorizationTransactions.push(transaction)
+      return transaction
     }),
+  }
+  const pluginManager = {
+    installBundle: mock(
+      async (bundle: { files: Readonly<Record<string, Uint8Array>> }, options: WebPluginBundleInstallOptions = {}) => {
+        const parsed = JSON.parse(new TextDecoder().decode(bundle.files["manifest.json"]))
+        const plugin = parseWebPluginManifest(parsed)
+        const transaction = await options.beforePublish?.(plugin)
+        await transaction?.publish()
+        await transaction?.commit()
+        return plugin
+      },
+    ),
+    list: mock(async () => installed),
+  }
+  const companionTransactions: Array<{ commit: ReturnType<typeof mock>; rollback: ReturnType<typeof mock> }> = []
+  const companionStore = {
+    install: mock(async () => {
+      const transaction = { commit: mock(async () => {}), rollback: mock(async () => {}) }
+      companionTransactions.push(transaction)
+      return { binding: { path: "/managed/companion", sha256: "a".repeat(64), size: 9 }, ...transaction }
+    }),
+    reconcile: mock(async () => {}),
   }
   const skillManager = {
     installFromFiles: mock(
@@ -118,13 +207,27 @@ function setup(packages: RemoteCapabilityPackage[], files: Readonly<Record<strin
     },
   ]
   const installer = new RemoteCapabilityInstaller({
+    arch: target.arch,
+    authorizationStore,
+    beforePluginPublish,
     builtinPlugins,
     builtinSkills,
+    companionStore,
+    platform: target.platform,
     pluginManager,
     registry,
     skillManager,
   })
-  return { installer, pluginManager, registry, skillManager }
+  return {
+    authorizationStore,
+    authorizationTransactions,
+    companionStore,
+    companionTransactions,
+    installer,
+    pluginManager,
+    registry,
+    skillManager,
+  }
 }
 
 describe("RemoteCapabilityInstaller", () => {
@@ -165,7 +268,10 @@ describe("RemoteCapabilityInstaller", () => {
     })
     expect(setupResult.registry.fetchRegistry).toHaveBeenCalledWith({ cachePolicy: "network-first" })
     expect(setupResult.registry.downloadBundle).toHaveBeenCalledWith(item)
-    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith({ files })
+    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith(
+      { files },
+      expect.objectContaining({ beforePublish: expect.any(Function) }),
+    )
 
     const tampered = setup([item], {
       ...files,
@@ -173,6 +279,204 @@ describe("RemoteCapabilityInstaller", () => {
     })
     await expect(tampered.installer.installPlugin("remote-plugin")).rejects.toThrow("does not match the registry")
     expect(tampered.pluginManager.installBundle).not.toHaveBeenCalled()
+  })
+
+  test("drains an existing service authorization before remote Plugin publication", async () => {
+    const item = pluginPackage("remote-plugin")
+    const files = { "manifest.json": encoder.encode(JSON.stringify(item.manifest)) }
+    const beforePluginPublish = mock(async (_pluginId: string) => undefined)
+    const setupResult = setup(
+      [item],
+      files,
+      [],
+      { arch: "arm64", platform: "darwin" },
+      beforePluginPublish,
+    )
+
+    await setupResult.installer.installPlugin(item.id)
+    expect(beforePluginPublish).toHaveBeenCalledWith(item.id)
+    expect(beforePluginPublish).toHaveBeenCalledTimes(1)
+  })
+
+  test("lists and installs generation Tool Plugins through the same verified bundle path", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = {
+      "index.html": encoder.encode("<!doctype html>"),
+      "manifest.json": encoder.encode(JSON.stringify(pluginManifest)),
+    }
+    const setupResult = setup([item], files)
+
+    await expect(setupResult.installer.listPluginCatalog(new Set())).resolves.toEqual([
+      { ...pluginManifest, installed: false },
+    ])
+    await expect(setupResult.installer.installPlugin("generation-plugin")).resolves.toMatchObject({
+      id: "generation-plugin",
+      runtime: { command: "example-image-tool", type: "mcp-stdio" },
+      schema: "convax.plugin/2",
+    })
+    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith(
+      { files },
+      expect.objectContaining({ beforePublish: expect.any(Function) }),
+    )
+  })
+
+  test("selects and commits the exact current-platform companion before publishing its Plugin", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const companionItem = companion("generation-plugin")
+    companionItem.targets.push({
+      arch: "x64",
+      artifact: {
+        sha256: "d".repeat(64),
+        size: 10,
+        url:
+          "https://github.com/microvoid/convax-plugins/releases/download/plugin-generation-plugin-v1.0.0/" +
+          "convax-companion-example-image-tool-3.0.0-linux-x64",
+      },
+      platform: "linux",
+    })
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companionItem],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) }
+    const setupResult = setup([item], files)
+
+    await setupResult.installer.installPlugin(item.id)
+
+    expect(setupResult.registry.downloadCompanionArtifact).toHaveBeenCalledWith(
+      item,
+      companionItem,
+      companionItem.targets[0],
+    )
+    expect(setupResult.companionStore.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arch: "arm64",
+        command: "example-image-tool",
+        platform: "darwin",
+        pluginId: item.id,
+        pluginVersion: item.version,
+        version: "3.0.0",
+      }),
+    )
+    expect(setupResult.authorizationStore.prepareInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ id: item.id, version: item.version }),
+      {
+        binding: { path: "/managed/companion", sha256: "a".repeat(64), size: 9 },
+        kind: "managed",
+      },
+    )
+    expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
+  })
+
+  test("fails before any download when a declared companion has no exact host target", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const setupResult = setup([item], {}, [], { arch: "x64", platform: "linux" })
+
+    await expect(setupResult.installer.installPlugin(item.id)).rejects.toThrow("no target")
+    expect(setupResult.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(setupResult.registry.downloadCompanionArtifact).not.toHaveBeenCalled()
+    expect(setupResult.pluginManager.installBundle).not.toHaveBeenCalled()
+  })
+
+  test("rolls back a published companion when Plugin publication fails", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) }
+    const setupResult = setup([item], files)
+    setupResult.pluginManager.installBundle.mockRejectedValueOnce(new Error("Plugin publish failed"))
+
+    await expect(setupResult.installer.installPlugin(item.id)).rejects.toThrow("Plugin publish failed")
+    expect(setupResult.companionTransactions[0]!.rollback).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionTransactions[0]!.commit).not.toHaveBeenCalled()
+  })
+
+  test("does not report or attempt rollback after Plugin success when companion cleanup fails", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) }
+    const setupResult = setup([item], files)
+    const transaction = {
+      binding: { path: "/managed/companion", sha256: "a".repeat(64), size: 9 },
+      commit: mock(async () => {
+        throw new Error("obsolete cleanup failed")
+      }),
+      rollback: mock(async () => {}),
+    }
+    setupResult.companionStore.install.mockResolvedValueOnce(transaction)
+
+    await expect(setupResult.installer.installPlugin(item.id)).resolves.toMatchObject({ id: item.id })
+    expect(transaction.commit).toHaveBeenCalledTimes(1)
+    expect(transaction.rollback).not.toHaveBeenCalled()
+  })
+
+  test("does not roll back a published companion when post-publication Plugin listing fails", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const setupResult = setup([item], { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) })
+    setupResult.pluginManager.list.mockResolvedValueOnce([]).mockImplementationOnce(() => {
+      throw new Error("post-publication list failed")
+    })
+
+    await expect(setupResult.installer.installPlugin(item.id)).resolves.toMatchObject({
+      id: item.id,
+    })
+    expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
+  })
+
+  test("updates only to a newer Plugin version and uses the existing atomic replacement path", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const next = generationManifest("generation-plugin", "2.0.0")
+    const item = pluginPackage("generation-plugin", "2.0.0", {
+      companions: [companion("generation-plugin", "2.0.0")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: next,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(next)) }
+    const setupResult = setup([item], files, [current])
+
+    await setupResult.installer.installPlugin(item.id)
+    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith(
+      { files },
+      expect.objectContaining({ beforePublish: expect.any(Function), replaceExisting: true }),
+    )
+    expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
+
+    const same = setup(
+      [
+        pluginPackage("generation-plugin", "1.0.0", {
+          compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+          manifest: current,
+        }),
+      ],
+      { "manifest.json": encoder.encode(JSON.stringify(current)) },
+      [current],
+    )
+    await expect(same.installer.installPlugin("generation-plugin")).rejects.toThrow("newer version")
+    expect(same.registry.downloadBundle).not.toHaveBeenCalled()
   })
 
   test("installs Skills from verified files with the Registry id as the expected Skill name", async () => {
