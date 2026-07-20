@@ -401,9 +401,11 @@ independently if the Plugin is removed; the provisioning receipt is not an owner
 graph. It may explain the Plugin workflow and select existing business, primitive
 and view tools. It does not expose native code, register tools, confer trusted
 built-in provenance, or duplicate Canvas/Project invariants. Generation is the
-current example: `canvas_generate` is a thin Agent adapter over the same typed
-operation used by Toolbar and Plugin UI. Future Agent tools must preserve that
-pattern and host-bound Project/Canvas/node scope.
+current examples are the generic `canvas_generate` adapter and the dedicated
+`ffmpeg_run_*` transform adapters. Both call the same typed operation used by
+Toolbar and Plugin UI; a dedicated name never exposes the companion's raw MCP
+server or bypasses host-bound Project/Canvas/node scope. Future Agent tools must
+preserve that pattern.
 
 ## Deliberately deferred
 

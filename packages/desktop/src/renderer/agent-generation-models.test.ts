@@ -35,6 +35,17 @@ describe("Agent generation models", () => {
     expect(agentGenerationToolsForOutput(tools, "audio")).toEqual([])
   })
 
+  test("keeps FFmpeg direct Plugin tools out of the generation-model preference menu", () => {
+    const ffmpeg = tool({
+      id: "ffmpeg-tools/run.video",
+      output: "video",
+      pluginId: "ffmpeg-tools",
+      toolId: "run.video",
+    })
+    expect(agentGenerationToolsForOutput([ffmpeg], "video")).toEqual([])
+    expect(findAgentGenerationTool({ id: ffmpeg.id, output: "video" }, [ffmpeg])).toBeUndefined()
+  })
+
   test("fails a remembered choice closed when its installed id or output changes", () => {
     const selection = { id: "plugin.example:image.generate", output: "image" as const }
     expect(findAgentGenerationTool(selection, [tool()])?.title).toBe("Example Image Model")

@@ -19,6 +19,11 @@ export interface GenerationCanvasAgentPort {
   listTools(options?: { output?: GenerationOutputModality }): Promise<readonly GenerationToolSummary[]>
 }
 
+export interface GenerationAgentToolProviderOptions {
+  /** Tool Plugins with a dedicated Agent surface must not remain selectable through canvas_generate. */
+  excludedPluginIds?: readonly string[]
+}
+
 const toolName = "canvas_generate"
 const outputModalities = ["text", "image", "video", "audio"] as const satisfies readonly GenerationOutputModality[]
 const inputRoles = [
@@ -50,16 +55,22 @@ const topLevelFields = new Set([
  * remain the only executors, while the host supplies the authoritative Agent
  * Project scope and mutation actor.
  */
-export function createGenerationAgentToolProvider(service: GenerationCanvasAgentPort): AgentToolProvider {
+export function createGenerationAgentToolProvider(
+  service: GenerationCanvasAgentPort,
+  options: GenerationAgentToolProviderOptions = {},
+): AgentToolProvider {
+  const excludedPluginIds = new Set(options.excludedPluginIds ?? [])
+  const installedTools = async () =>
+    normalizeInstalledTools(await service.listTools()).filter((tool) => !excludedPluginIds.has(tool.pluginId))
   return {
     async listTools() {
-      const installed = normalizeInstalledTools(await service.listTools())
+      const installed = await installedTools()
       return installed.length ? [definition(installed)] : []
     },
 
     async callTool(scope, name, input, context) {
       if (name !== toolName) throw new Error(`Unknown generation tool: ${name}`)
-      const installed = normalizeInstalledTools(await service.listTools())
+      const installed = await installedTools()
       if (!installed.length) throw new Error("No generation Tool Plugin is installed")
       const request = generationRequest(scope, input, installed)
       let result: GenerationCanvasResult

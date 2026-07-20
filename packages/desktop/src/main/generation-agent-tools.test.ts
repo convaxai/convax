@@ -80,6 +80,23 @@ describe("generation Agent tool", () => {
     expect((await provider.listTools(scope)).map((tool) => tool.name)).toEqual(["canvas_generate"])
   })
 
+  test("excludes Tool Plugins that have a dedicated Agent surface", async () => {
+    const service = new FakeGenerationService([
+      generationTool({ id: "ffmpeg-tools/run.video", pluginId: "ffmpeg-tools", toolId: "run.video" }),
+      generationTool(),
+    ])
+    const provider = createGenerationAgentToolProvider(service, { excludedPluginIds: ["ffmpeg-tools"] })
+    const [definition] = await provider.listTools(scope)
+    const schema = definition?.inputSchema as { properties: { toolId: { enum: string[] } } }
+    expect(schema.properties.toolId.enum).toEqual(["image-tools/generate.image"])
+
+    service.tools = [generationTool({ id: "ffmpeg-tools/run.video", pluginId: "ffmpeg-tools", toolId: "run.video" })]
+    await expect(provider.listTools(scope)).resolves.toEqual([])
+    await expect(provider.callTool(scope, "canvas_generate", validInput())).rejects.toThrow(
+      "No generation Tool Plugin is installed",
+    )
+  })
+
   test("builds a dynamic schema from stable host tool ids without implementation labels", async () => {
     const service = new FakeGenerationService([
       generationTool({

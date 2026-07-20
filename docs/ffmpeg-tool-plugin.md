@@ -16,8 +16,8 @@ The first release provides:
   arguments through an argv array encoded in `arguments_json`;
 - image, video, and audio output tools so the existing generation contract retains
   a stable output modality;
-- host-owned video selection actions for extracting a frame, trimming a clip, and
-  cropping a clip;
+- host-owned video selection actions for extracting a frame, trimming a clip,
+  separating audio, and cropping a clip;
 - normal managed Canvas resources and nodes for every accepted output.
 
 Opening a Project never discovers or runs Project-local executables. The current
@@ -36,10 +36,13 @@ Install action.
 ## Ownership and execution flow
 
 ```text
-Agent canvas_generate or Desktop video selection action
-  -> CanvasGenerateService
-  -> generation IPC
-  -> GenerationCanvasService
+Agent ffmpeg_run_image/video/audio -----------------------------+
+                                                                 |
+Desktop video selection action -> CanvasGenerateService          |
+  -> generation IPC ---------------------------------------------+
+                                                                 |
+                                                                 v
+                                                    GenerationCanvasService
   -> managed Canvas references staged in a private operation directory
   -> GenerationPluginRuntime
   -> verified convax-ffmpeg-mcp launch snapshot
@@ -92,13 +95,17 @@ every output path before execution; it must not accept caller-selected paths.
 
 ## Toolbar presets
 
-The Desktop registers three `CanvasSelectionAction` entries only when the Plugin is
+The Desktop registers four `CanvasSelectionAction` entries only when the Plugin is
 installed and one managed video node is selected without an edge selection.
 
 - Extract frame: accepts a non-negative timestamp and returns PNG through
   `ffmpeg-tools/run.image`.
-- Trim: accepts a non-negative start and positive duration, then returns a fast-start
-  MP4 through `ffmpeg-tools/run.video`.
+- Trim: presents a real-duration thumbnail timeline with two accessible range
+  handles and manual start/end fallback fields, then returns a fast-start MP4
+  through `ffmpeg-tools/run.video`.
+- Separate audio: extracts the required primary audio stream as M4A through
+  `ffmpeg-tools/run.audio`; the normal reference relation connects the source video
+  to the new audio card.
 - Crop: accepts non-negative even x/y coordinates and positive even dimensions, then
   returns a fast-start MP4 through `ffmpeg-tools/run.video`.
 
@@ -170,3 +177,25 @@ validation, stale-scope recovery policy, and the generation request routed throu
 `CanvasGenerateService`. Existing generation service tests remain the owner of
 managed-input staging, output admission, rollback, revision, and Canvas commit
 behavior.
+
+## Direct Agent surface
+
+FFmpeg is a transform Plugin rather than a generative model. Desktop therefore
+exposes the installed declarations as `ffmpeg_run_image`, `ffmpeg_run_video`, and
+`ffmpeg_run_audio` on the Convax Agent MCP server. OpenCode displays these as
+`convax_ffmpeg_run_*`. The generic `canvas_generate` adapter excludes the FFmpeg
+Plugin, and FFmpeg tools do not appear in the Agent generation-model picker.
+
+The direct input contains ordered Canvas references, a literal argv array, a
+portable output basename, and an optional placement anchor. Active Project,
+Canvas, revision, actor, and operation identity are derived by the host at call
+time; the model cannot select or replay those fields. This removes stale
+revision/command-id retry loops without weakening the service's live reference
+checks.
+
+“Direct” describes the Agent-facing capability, not a bypass around the host. The
+adapter still calls `GenerationCanvasService`, which stages managed inputs, invokes
+the exact installed Tool Plugin, validates its artifact, imports it into managed
+Project storage, and atomically adds the normal node plus source relation. The raw
+companion MCP server and its native `output_directory` are never exposed to
+OpenCode.

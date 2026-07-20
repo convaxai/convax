@@ -27,7 +27,7 @@ own a catalog of providers or models.
 ```text
 Toolbar / Canvas UI -------- generation IPC ---------+
                                                      |
-OpenCode Agent -------- canvas_generate adapter -----+--> GenerationCanvasService
+OpenCode Agent -- generic or dedicated tool adapter -+--> GenerationCanvasService
                                                      |      | validate live scope/revision
 sandboxed Plugin -- plugin-host/2 generation calls --+      | stage selected inputs
                                                             | call installed MCP tool
@@ -74,6 +74,9 @@ Relevant implementation boundaries are:
   staging, result admission and Canvas resource mutation;
 - [`generation-agent-tools.ts`](../packages/desktop/src/main/generation-agent-tools.ts):
   the thin OpenCode-facing `canvas_generate` adapter;
+- [`ffmpeg-agent-tools.ts`](../packages/desktop/src/main/ffmpeg-agent-tools.ts): a
+  dedicated direct transform surface that fixes Plugin tool/output identity while
+  deriving live Canvas revision and operation identity in the host;
 - [`web-plugin-canvas.tsx`](../packages/desktop/src/renderer/web-plugin-canvas.tsx):
   the scoped sandboxed-Plugin caller adapter.
 

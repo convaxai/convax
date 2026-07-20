@@ -20,6 +20,7 @@ import { registerWillQuitCleanup } from "./application-lifecycle"
 import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
+import { createFfmpegAgentToolProvider } from "./ffmpeg-agent-tools"
 import { createGenerationAgentToolProvider } from "./generation-agent-tools"
 import { GenerationCanvasService } from "./generation-canvas-service"
 import { registerGenerationIpc } from "./generation-ipc"
@@ -294,7 +295,19 @@ function startApplication() {
           renderer: canvasRenderer,
           resources: canvasResources,
         }),
-        createGenerationAgentToolProvider(generation),
+        createGenerationAgentToolProvider(generation, { excludedPluginIds: ["ffmpeg-tools"] }),
+        createFfmpegAgentToolProvider(generation, {
+          async resolveActiveCanvas() {
+            const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+            return snapshot
+              ? {
+                  canvasId: snapshot.documentId,
+                  revision: snapshot.revision,
+                  scopeId: snapshot.scopeId,
+                }
+              : null
+          },
+        }),
         createJianyingAgentToolProvider(jianying, {
           isEnabled: async () => process.platform === "darwin" && (await isJianyingEnabled()),
           async resolveActiveCanvas() {

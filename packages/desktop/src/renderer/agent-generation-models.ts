@@ -11,12 +11,18 @@ export interface AgentGenerationToolSelection {
   output: AgentGenerationOutput
 }
 
+const dedicatedAgentSurfacePluginIds = new Set(["ffmpeg-tools"])
+
+function isGenerationPreferenceTool(tool: GenerationToolSummary) {
+  return !dedicatedAgentSurfacePluginIds.has(tool.pluginId)
+}
+
 export function isAgentGenerationOutput(output: GenerationOutputModality): output is AgentGenerationOutput {
   return (agentGenerationOutputs as readonly GenerationOutputModality[]).includes(output)
 }
 
 export function agentGenerationToolsForOutput(tools: readonly GenerationToolSummary[], output: AgentGenerationOutput) {
-  return tools.filter((tool) => tool.output === output)
+  return tools.filter((tool) => tool.output === output && isGenerationPreferenceTool(tool))
 }
 
 /**
@@ -29,7 +35,11 @@ export function findAgentGenerationTool(
 ) {
   if (!selection) return undefined
   const matches = tools.filter(
-    (tool) => tool.id === selection.id && tool.output === selection.output && isAgentGenerationOutput(tool.output),
+    (tool) =>
+      tool.id === selection.id &&
+      tool.output === selection.output &&
+      isAgentGenerationOutput(tool.output) &&
+      isGenerationPreferenceTool(tool),
   )
   return matches.length === 1 ? matches[0] : undefined
 }
