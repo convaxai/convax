@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -20,6 +21,7 @@ import {
   type GenerationPluginRuntimeOptions,
   type GenerationPluginSource,
 } from "./generation-plugin-runtime"
+import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import type { McpToolCallResult, McpToolDefinition, StdioMcpClientOptions } from "./stdio-mcp-client"
 
 async function rejection(promise: Promise<unknown>) {
@@ -157,6 +159,10 @@ function setup(
   const plugins = new FakePluginSource()
   plugins.installed = installed
   const clients: FakeMcpClient[] = []
+  const materializations: Array<{
+    binding: GenerationPluginExecutableBinding
+    bindingKind: Parameters<NonNullable<GenerationPluginRuntimeOptions["materializeExecutable"]>>[1]
+  }> = []
   const options: StdioMcpClientOptions[] = []
   const runtime = new GenerationPluginRuntime({
     createClient(clientOptions) {
@@ -174,17 +180,20 @@ function setup(
       PATH: "/usr/local/bin:/usr/bin",
       SECRET_API_KEY: "must-not-leak",
     },
-    materializeExecutable: async (binding) => ({
-      dispose() {},
-      path: binding.path,
-    }),
+    materializeExecutable: async (binding, bindingKind) => {
+      materializations.push({ binding, bindingKind })
+      return {
+        dispose() {},
+        path: binding.path,
+      }
+    },
     plugins,
     resolveExecutable,
     verifyAuthorization,
     ...runtimeOptions,
   })
   runtimes.add(runtime)
-  return { clients, options, plugins, runtime }
+  return { clients, materializations, options, plugins, runtime }
 }
 
 describe("GenerationPluginRuntime", () => {
@@ -473,13 +482,62 @@ describe("GenerationPluginRuntime", () => {
       },
       bindingKind: "managed",
     })
+    expect(setupResult.materializations).toEqual([
+      {
+        binding: {
+          path: "/managed/image-tool-cli",
+          sha256: "b".repeat(64),
+          size: 20,
+        },
+        bindingKind: "managed",
+      },
+    ])
     expect(setupResult.options[0]!.command).toBe("/managed/image-tool-cli")
+  })
+
+  test("keeps managed companion installations immutable while their launch snapshot is active", async () => {
+    if (process.platform === "win32") return
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-managed-generation-runtime-test-"))
+    try {
+      const bytes = new TextEncoder().encode("#!/bin/sh\nexit 0\n")
+      const store = new ManagedPluginCompanionStore(path.join(parent, "plugin-companions"))
+      const transaction = await store.install({
+        arch: process.arch,
+        bytes,
+        command: "image-tool-cli",
+        platform: process.platform,
+        pluginId: "image-tools",
+        pluginVersion: "1.0.0",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: bytes.byteLength,
+        version: "1.0.0",
+      })
+      await transaction.commit()
+      const installationDirectory = path.dirname(transaction.binding.path)
+      const setupResult = setup([generationPlugin()], ["generate.image"], async () => undefined, undefined, {
+        materializeExecutable: undefined,
+        resolveManagedExecutable: (pluginId, pluginVersion, command) => store.resolve(pluginId, pluginVersion, command),
+      })
+
+      await setupResult.runtime.callTool("image-tools/generate.image", {})
+
+      const snapshotPath = setupResult.options[0]!.command
+      expect(path.dirname(snapshotPath)).not.toBe(installationDirectory)
+      expect((await fs.readdir(installationDirectory)).sort()).toEqual(
+        [".convax-companion.json", "image-tool-cli"].sort(),
+      )
+      await expect(store.resolve("image-tools", "1.0.0", "image-tool-cli")).resolves.toEqual(transaction.binding)
+      setupResult.runtime.dispose()
+      await expect(fs.stat(snapshotPath)).rejects.toThrow()
+    } finally {
+      await fs.rm(parent, { force: true, recursive: true })
+    }
   })
 
   test("retains the explicit PATH integration when no managed companion is installed", async () => {
     let managedCalls = 0
     let pathCalls = 0
-    const { runtime } = setup(
+    const { materializations, runtime } = setup(
       [generationPlugin()],
       ["generate.image"],
       async () => undefined,
@@ -498,6 +556,7 @@ describe("GenerationPluginRuntime", () => {
     await runtime.callTool("image-tools/generate.image", {})
     expect(managedCalls).toBe(2)
     expect(pathCalls).toBe(2)
+    expect(materializations.map(({ bindingKind }) => bindingKind)).toEqual(["path"])
   })
 
   test("fails closed when a managed companion digest changes after installation verification", async () => {

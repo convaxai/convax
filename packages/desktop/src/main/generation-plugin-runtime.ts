@@ -68,6 +68,7 @@ export type GenerationPluginManagedExecutableResolver = (
 
 export type GenerationPluginExecutableMaterializer = (
   binding: GenerationPluginExecutableBinding,
+  bindingKind: ToolPluginExecutableBindingKind,
 ) => Promise<GenerationPluginExecutableSnapshot>
 
 export interface GenerationPluginRuntimeOptions {
@@ -206,18 +207,22 @@ async function sha256File(filePath: string) {
 }
 
 /**
- * Launch from a unique sibling copy so a later atomic replacement of the
- * install-authorized PATH entry cannot change which entrypoint bytes are executed. A
- * sibling preserves the original directory for CLIs with relative resources.
+ * Launch from a unique copy so a later atomic replacement of the install-authorized
+ * entrypoint cannot change which bytes are executed. PATH integrations use a sibling
+ * by default so CLIs can keep resolving relative resources. Registry-managed,
+ * single-file companions pass a private runtime directory instead, preserving the
+ * immutable two-file installation layout checked by ManagedPluginCompanionStore.
  */
 export async function materializeGenerationPluginExecutable(
   binding: GenerationPluginExecutableBinding,
+  options: { directory?: string } = {},
 ): Promise<GenerationPluginExecutableSnapshot> {
   if (process.platform === "win32") {
     throw new Error("Generation Tool Plugin execution on Windows requires a host Job Object and is not enabled")
   }
   const extension = path.extname(binding.path)
-  const snapshotPath = path.join(path.dirname(binding.path), `.convax-generation-${randomUUID()}${extension}`)
+  const snapshotDirectory = options.directory ? await fs.realpath(options.directory) : path.dirname(binding.path)
+  const snapshotPath = path.join(snapshotDirectory, `.convax-generation-${randomUUID()}${extension}`)
   let created = false
   try {
     await fs.copyFile(binding.path, snapshotPath, fsConstants.COPYFILE_EXCL)
@@ -385,6 +390,7 @@ export class GenerationPluginRuntime {
   readonly #cache = new Map<string, CachedPluginRuntime>()
   readonly #createClient: GenerationPluginMcpClientFactory
   readonly #environment: Record<string, string>
+  readonly #managedExecutableSnapshotDirectory: string
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
@@ -401,13 +407,20 @@ export class GenerationPluginRuntime {
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
     this.#resolveManagedExecutable = options.resolveManagedExecutable
-    this.#materializeExecutable = options.materializeExecutable ?? materializeGenerationPluginExecutable
     this.#platform = options.platform ?? process.platform
     this.#verifyAuthorization = (input) => options.verifyAuthorization(input)
     // Never resolve commands or relative interpreter arguments from a downloaded
     // Plugin package (or the shared temp root). Each app session gets an empty,
     // private cwd owned by this runtime.
     this.#workingDirectory = mkdtempSync(path.join(os.tmpdir(), "convax-generation-runtime-"))
+    this.#managedExecutableSnapshotDirectory = mkdtempSync(path.join(os.tmpdir(), "convax-generation-executables-"))
+    this.#materializeExecutable =
+      options.materializeExecutable ??
+      ((binding, bindingKind) =>
+        materializeGenerationPluginExecutable(
+          binding,
+          bindingKind === "managed" ? { directory: this.#managedExecutableSnapshotDirectory } : undefined,
+        ))
   }
 
   async listTools(options: { output?: GenerationOutputModality } = {}): Promise<readonly GenerationToolSummary[]> {
@@ -581,6 +594,7 @@ export class GenerationPluginRuntime {
     this.#starting.clear()
     for (const runtime of this.#cache.values()) this.#closeRuntime(runtime, true)
     this.#cache.clear()
+    rmSync(this.#managedExecutableSnapshotDirectory, { force: true, recursive: true })
     rmSync(this.#workingDirectory, { force: true, recursive: true })
   }
 
@@ -678,7 +692,7 @@ export class GenerationPluginRuntime {
         `Generation Plugin executable changed after installation; reinstall Plugin: ${plugin.manifest.id}`,
       )
     }
-    const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
+    const executableSnapshot = await this.#materializeExecutable(confirmed.binding, confirmed.kind)
     try {
       const client = this.#createClient({
         ...(declaredRuntime.args ? { args: [...declaredRuntime.args] } : {}),
