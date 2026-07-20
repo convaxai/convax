@@ -5,6 +5,7 @@ import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/proj
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
+import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
@@ -264,9 +265,17 @@ const jianyingClient = {
   getDraftStatus: () => ipcRenderer.invoke(jianyingChannels.getDraftStatus),
 } satisfies JianyingRendererClient
 
+const generationClient = {
+  cancel: (input) => ipcRenderer.send(generationIpcChannels.cancel, input),
+  describeTool: (input) => ipcRenderer.invoke(generationIpcChannels.describeTool, input),
+  generate: (input) => ipcRenderer.invoke(generationIpcChannels.generate, input),
+  listTools: (input) => ipcRenderer.invoke(generationIpcChannels.listTools, input),
+} satisfies GenerationClient
+
 contextBridge.exposeInMainWorld("convax", {
   agent: { ...agentClient, skills: agentSkillClient },
   canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
+  generation: generationClient,
   jianying: jianyingClient,
   platform: process.platform,
   plugins: pluginClient,

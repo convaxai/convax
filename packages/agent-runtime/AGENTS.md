@@ -25,3 +25,8 @@ Do not weaken the security boundary:
 Security and lifecycle changes require rejection, symlink, scope-isolation, and
 shutdown tests. Run `bun typecheck && bun test`; run root `bun run pack:check` for
 dependency or export changes.
+
+Host tools may be long-running. The loopback Streamable HTTP bridge emits bounded,
+content-free MCP progress only for a request's validated progress token, keeps the
+configured OpenCode timeout as an inactivity window, and still propagates explicit
+cancellation, transport closure and runtime disposal through `AbortSignal`.

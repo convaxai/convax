@@ -45,6 +45,7 @@ import { Component, type ReactNode, useEffect, useRef, useState } from "react"
 import { updateCanvasNodeData } from "../commands"
 import { getConnectedCanvasFileNodeIds } from "../connections"
 import { useCanvasEditor } from "../editor-context"
+import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import { useCanvasService } from "../services"
 import type {
@@ -810,20 +811,29 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 function FileAssistantAccessory(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
-  if (!assistant || !canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)) return null
+  const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
+  const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
+  if (!assistant || !ownsSingleNodeContext || (editor.readOnly && !editor.hydrating)) return null
   return (
-    <NodeToolbar
-      className="convax-node-assistant nodrag nowheel"
-      offset={28}
-      position={Position.Bottom}
-    >
+    <NodeToolbar className="convax-node-assistant nodrag nowheel" offset={28} position={Position.Bottom}>
       <div data-canvas-shortcuts="ignore">
-        {assistant.render({
-          document: editor.document,
-          mentionedNodeIds: [props.id],
-          mode: "file",
-          ownerNodeId: props.id,
-        })}
+        <fieldset
+          aria-busy={editor.hydrating || undefined}
+          className="m-0 size-full min-w-0 border-0 p-0"
+          disabled={editor.readOnly}
+          inert={editor.readOnly || undefined}
+        >
+          {assistant.render({
+            document: editor.document,
+            mentionedNodeIds: [props.id],
+            mode: "file",
+            onOwnerGenerationToolIdChange: (toolId) => {
+              editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
+            },
+            ownerGenerationToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
+            ownerNodeId: props.id,
+          })}
+        </fieldset>
       </div>
     </NodeToolbar>
   )

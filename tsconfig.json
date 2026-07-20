@@ -12,8 +12,6 @@
       "@convax/agent-runtime/*": ["./packages/agent-runtime/src/*"],
       "@convax/canvas": ["./packages/canvas/src/index.ts"],
       "@convax/canvas/*": ["./packages/canvas/src/*"],
-      "@convax/media-generation": ["./packages/media-generation/src/index.ts"],
-      "@convax/media-generation/*": ["./packages/media-generation/src/*"],
       "@convax/project": ["./packages/project/src/index.ts"],
       "@convax/project/*": ["./packages/project/src/*"],
       "@convax/project-files": ["./packages/project-files/src/index.ts"],

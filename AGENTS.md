@@ -21,16 +21,15 @@ files under `packages/` add local rules and inherit this contract.
 
 ## Package ownership
 
-| Package | Owns | Must not own |
-| --- | --- | --- |
-| `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads | Project registry, Canvas catalog/documents, Workbench state, Electron APIs |
-| `@convax/project` | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog and relationships | Active Canvas selection, Canvas document semantics, Agent sessions |
-| `@convax/canvas` | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
-| `@convax/workbench` | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage |
-| `@convax/media-generation` | Provider-neutral AI image/video generation contracts, model discovery, requests, responses, streams and async jobs | Provider implementations, credentials, routing registries, Canvas/Project state, Electron, OpenCode |
-| `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement | Convax Project/Canvas/UI policy or imports from other Convax packages |
-| `@convax/ui` | Product-agnostic visual primitives and theme | Project, Canvas, Workbench, Agent, persistence, or Electron behavior |
-| `@convax/desktop` | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring | New reusable domain semantics that belong in a published package |
+| Package                 | Owns                                                                                                                                                             | Must not own                                                                             |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
+| `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog and relationships | Active Canvas selection, Canvas document semantics, Agent sessions                       |
+| `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                    | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
+| `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                         | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
+| `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                  | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
+| `@convax/ui`            | Product-agnostic visual primitives and theme                                                                                                                     | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                     |
+| `@convax/desktop`       | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                         | New reusable domain semantics that belong in a published package                         |
 
 `Workspace` is intentionally not a current aggregate. Reserve that name for a
 future window/session that coordinates multiple Projects. Do not recreate a
@@ -42,10 +41,10 @@ The allowed internal runtime dependency graph is enforced by
 `bun run package:boundaries`:
 
 ```text
-desktop ──> agent-runtime, canvas, media-generation, project, project-files, ui, workbench
+desktop ──> agent-runtime, canvas, project, project-files, ui, workbench
 project ──> canvas, project-files, ui
 canvas  ──> ui
-agent-runtime, media-generation, project-files, ui, workbench ──> no Convax package
+agent-runtime, project-files, ui, workbench ──> no Convax package
 ```
 
 - Import another package only through an exported package subpath.
@@ -95,6 +94,8 @@ source, or ambient application state.
   Project Files capability.
 - Electron `userData/opencode/skills/user/<name>/`: Convax-managed OpenCode Skills.
 - Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
+- Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
+  execution receipts bound to the normalized manifest and exact executable bytes.
 - Browser storage: per-user Workbench input/layout and renderer preferences only.
 - In-memory controller state: loading, errors, selection, preview, and transition
   state. Do not silently turn it into durable shared state.
@@ -141,6 +142,19 @@ current schema.
 
 ## Plugin capability rules
 
+- Concrete generation vendors, models, credentials, and routing are never built into
+  Convax packages. An installed Tool Plugin plus its explicitly authorized external
+  executable is the complete vendor integration boundary.
+- Agent, Toolbar/UI, and Plugin callers use the same Desktop-main generation tool
+  executor. OpenCode is only the Agent-side tool client.
+- Do not expire an accepted generation job merely because it remains queued or
+  running. Generation sidecars own vendor polling until terminal success/failure or
+  caller cancellation; host progress keeps transport timeouts as inactivity guards.
+- Fingerprint the external executable before staging aggregate-bounded inputs and
+  recheck live reference/revision guards immediately before a billable call.
+- Generated media enters Canvas only through `CanvasResourceBusinessService` and
+  the managed `.convax/assets/` flow before existing `file` nodes reference it;
+  failed commits must roll back newly admitted assets.
 - Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
   surface is a `file` node; do not add an extension bus, service locator, or node
   role to route Plugin behavior.
@@ -164,8 +178,9 @@ current schema.
 - Main owns native filesystem, Electron, Project Node adapters, and Agent runtime.
 - Preload exposes a narrow typed bridge. Renderer code must not import Node/Electron.
 - Keep bridge namespaces separate: `projects`, `projectFiles`, `projects.canvases`,
-  `canvas`, `agent`, and `plugins`; keep IPC prefixes `project:*`, `project-files:*`,
-  `project:canvas-*`, `canvas:*`, `agent:*`, and `plugin:*`.
+  `canvas`, `generation`, `agent`, and `plugins`; keep IPC prefixes `project:*`,
+  `project-files:*`, `project:canvas-*`, `canvas:*`, `generation:*`, `agent:*`, and
+  `plugin:*`.
 - Bump the Desktop protocol version and update its compatibility tests when the
   preload/main contract changes incompatibly.
 - Desktop may coordinate packages, but reusable state machines and business rules

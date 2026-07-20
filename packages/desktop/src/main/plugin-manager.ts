@@ -46,6 +46,21 @@ export interface WebPluginLegacyBundleDigest {
   version: string
 }
 
+/** A host-owned side effect that participates in one Plugin package publication. */
+export interface WebPluginPublicationTransaction {
+  publish(): Promise<void>
+  commit(): Promise<void>
+  rollback(): Promise<void>
+}
+
+export interface WebPluginPublicationOptions {
+  beforePublish?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
+}
+
+export interface WebPluginBundleInstallOptions extends WebPluginPublicationOptions {
+  replaceExisting?: boolean
+}
+
 interface ResolvedLimits {
   maxEntryCount: number
   maxFileBytes: number
@@ -195,7 +210,7 @@ async function assertRegularInstalledFile(pluginRoot: string, relativePath: stri
 
 async function validateInstalledPackage(directory: string, limits: ResolvedLimits) {
   const manifest = await readManifest(directory, limits.maxFileBytes)
-  await assertRegularInstalledFile(directory, manifest.entry, "Plugin entry")
+  if (manifest.entry) await assertRegularInstalledFile(directory, manifest.entry, "Plugin entry")
   if (manifest.skill) {
     const skillPath = await assertRegularInstalledFile(directory, manifest.skill, "Plugin skill")
     if (path.basename(skillPath).toLocaleLowerCase("en-US") !== "skill.md") {
@@ -374,44 +389,96 @@ export class WebPluginManager {
   async #commitStaging(
     installationRoot: string,
     staging: string,
-    options: { expectedId?: string; replaceExisting?: boolean } = {},
+    options: WebPluginBundleInstallOptions & { expectedId?: string } = {},
   ) {
     const manifest = await validateInstalledPackage(staging, this.#limits)
     if (options.expectedId && manifest.id !== options.expectedId) {
       throw new Error("Plugin manifest changed while it was being installed")
     }
+    const summary = toInstalledWebPluginSummary(manifest)
     const target = path.join(installationRoot, manifest.id)
     const targetExists = await exists(target)
-    if (!options.replaceExisting) {
-      if (targetExists) throw new Error(`Plugin is already installed: ${manifest.id}`)
-      await fs.rename(staging, target)
-      return toInstalledWebPluginSummary(manifest)
+    if (!options.replaceExisting && targetExists) {
+      throw new Error(`Plugin is already installed: ${manifest.id}`)
     }
-    if (!targetExists) throw new Error(`Plugin is not installed: ${manifest.id}`)
+    if (options.replaceExisting) {
+      if (!targetExists) throw new Error(`Plugin is not installed: ${manifest.id}`)
+      const installedRoot = await assertPlainDirectory(target, "Installed plugin")
+      const installedManifest = await validateInstalledPackage(installedRoot, this.#limits)
+      if (installedManifest.id !== manifest.id) throw new Error("Installed plugin id does not match its directory")
+      if (compareWebPluginVersions(manifest.version, installedManifest.version) <= 0) {
+        throw new Error(`Plugin update must have a newer version: ${manifest.id}`)
+      }
+    }
 
-    const installedRoot = await assertPlainDirectory(target, "Installed plugin")
-    const installedManifest = await validateInstalledPackage(installedRoot, this.#limits)
-    if (installedManifest.id !== manifest.id) throw new Error("Installed plugin id does not match its directory")
-    if (compareWebPluginVersions(manifest.version, installedManifest.version) <= 0) {
-      throw new Error(`Plugin update must have a newer version: ${manifest.id}`)
+    const publication = await options.beforePublish?.(summary)
+    let publicationPublished = false
+    const publishAuthorization = async () => {
+      if (!publication) return
+      try {
+        await publication.publish()
+        publicationPublished = true
+      } catch (error) {
+        await publication.rollback().catch(() => undefined)
+        throw error
+      }
+    }
+    const rollbackAuthorization = async () => {
+      if (publicationPublished) await publication?.rollback()
+    }
+
+    if (!options.replaceExisting) {
+      await publishAuthorization()
+      try {
+        await fs.rename(staging, target)
+        await publication?.commit()
+      } catch (error) {
+        const failures: unknown[] = [error]
+        if (await exists(target)) {
+          try {
+            await fs.rename(target, staging)
+          } catch (rollbackError) {
+            failures.push(rollbackError)
+          }
+        }
+        try {
+          await rollbackAuthorization()
+        } catch (rollbackError) {
+          failures.push(rollbackError)
+        }
+        throw new AggregateError(failures, `Plugin publication rollback failed: ${manifest.id}`, { cause: error })
+      }
+      return summary
     }
 
     const backup = path.join(installationRoot, `.replaced-${manifest.id}-${randomUUID()}`)
-    await fs.rename(target, backup)
+    await publishAuthorization()
     try {
-      await fs.rename(staging, target)
+      await fs.rename(target, backup)
     } catch (error) {
-      try {
-        await fs.rename(backup, target)
-      } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], `Plugin update rollback failed: ${manifest.id}`, {
-          cause: error,
-        })
-      }
+      await rollbackAuthorization().catch(() => undefined)
       throw error
     }
+    try {
+      await fs.rename(staging, target)
+      await publication?.commit()
+    } catch (error) {
+      const failures: unknown[] = [error]
+      try {
+        if (await exists(target)) await fs.rename(target, staging)
+        await fs.rename(backup, target)
+      } catch (rollbackError) {
+        failures.push(rollbackError)
+      }
+      try {
+        await rollbackAuthorization()
+      } catch (rollbackError) {
+        failures.push(rollbackError)
+      }
+      throw new AggregateError(failures, `Plugin update publication rollback failed: ${manifest.id}`, { cause: error })
+    }
     await fs.rm(backup, { force: true, recursive: true }).catch(() => undefined)
-    return toInstalledWebPluginSummary(manifest)
+    return summary
   }
 
   async #replaceBuiltinStaging(installationRoot: string, staging: string, expectedId: string) {
@@ -445,7 +512,10 @@ export class WebPluginManager {
     return { ...toInstalledWebPluginSummary(manifest), trustedBuiltin: true } as const
   }
 
-  async install(sourceDirectory: string): Promise<InstalledWebPluginSummary> {
+  async install(
+    sourceDirectory: string,
+    options: WebPluginPublicationOptions = {},
+  ): Promise<InstalledWebPluginSummary> {
     const installationRoot = await this.#ensureRoot()
     const sourcePath = path.resolve(sourceDirectory)
     const sourceRoot = await assertPlainDirectory(sourcePath, "Plugin package")
@@ -467,7 +537,10 @@ export class WebPluginManager {
         sourceRoot,
         totalBytes: 0,
       })
-      return await this.#commitStaging(installationRoot, staging, { expectedId: sourceManifest.id })
+      return await this.#commitStaging(installationRoot, staging, {
+        ...(options.beforePublish ? { beforePublish: options.beforePublish } : {}),
+        expectedId: sourceManifest.id,
+      })
     } finally {
       await fs.rm(staging, { force: true, recursive: true })
     }
@@ -475,7 +548,7 @@ export class WebPluginManager {
 
   async installBundle(
     bundle: WebPluginBundle,
-    options: { replaceExisting?: boolean } = {},
+    options: WebPluginBundleInstallOptions = {},
   ): Promise<InstalledWebPluginSummary> {
     const manifest = bundleManifest(bundle)
     if (this.#reservedBuiltinIds.has(manifest.id)) {
@@ -548,8 +621,7 @@ export class WebPluginManager {
       installedManifest.version === manifest.version &&
       actualDigest === expectedDigest
     const approvedLegacy =
-      installedManifest.id === manifest.id &&
-      legacyBundleDigests.get(installedManifest.version) === actualDigest
+      installedManifest.id === manifest.id && legacyBundleDigests.get(installedManifest.version) === actualDigest
     if (!approvedCurrent && !approvedLegacy) {
       throw new Error(`A non-built-in Plugin is using the reserved catalog id: ${manifest.id}`)
     }
@@ -588,7 +660,7 @@ export class WebPluginManager {
     bundle: WebPluginBundle,
     provenance?: BuiltinProvenance,
     replaceBuiltin = false,
-    options: { replaceExisting?: boolean } = {},
+    options: WebPluginBundleInstallOptions = {},
   ): Promise<InstalledWebPluginSummary> {
     if (!bundle || typeof bundle !== "object" || !bundle.files || typeof bundle.files !== "object") {
       throw new Error("Plugin bundle files are required")
@@ -610,10 +682,7 @@ export class WebPluginManager {
       const directories = new Set<string>([""])
       const portableDirectories = new Map<string, string>()
       for (const file of files) {
-        if (
-          file.relativePath.toLocaleLowerCase("en-US") === portableBuiltinProvenanceFileName &&
-          !provenance
-        ) {
+        if (file.relativePath.toLocaleLowerCase("en-US") === portableBuiltinProvenanceFileName && !provenance) {
           throw new Error(`Plugin bundle path is reserved by the host: ${builtinProvenanceFileName}`)
         }
         const portablePath = file.relativePath.toLocaleLowerCase("en-US")

@@ -11,6 +11,7 @@ export interface CanvasConnectionNodeType {
 
 export interface CanvasEditorController {
   document: CanvasDocument
+  hydrating: boolean
   selection: CanvasSelection
   selectionContext: CanvasSelectionContext
   readOnly: boolean

@@ -10,7 +10,13 @@ import type {
 import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
-import { Button, cn, Tooltip, TooltipProvider } from "@convax/ui"
+import { Button, cn, createToolInputDefaultValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
+import type {
+  GenerationToolDescription,
+  GenerationToolInput,
+  GenerationToolInputValue,
+  GenerationToolSummary,
+} from "../generation-contracts"
 import {
   Bot,
   Check,
@@ -33,11 +39,17 @@ import {
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { isAgentCanvasResource, shouldFlushAgentCanvasContext } from "../agent-canvas-context"
+import { AgentGenerationModelPicker } from "./agent-generation-model-picker"
 import {
-  createAgentCanvasInstructions,
-  isAgentCanvasResource,
-  shouldFlushAgentCanvasContext,
-} from "../agent-canvas-context"
+  AgentGenerationCatalogRequestTracker,
+  createAgentPromptInstructions,
+  findAgentGenerationTool,
+  isAgentGenerationOutput,
+  reconcileAgentGenerationToolSelection,
+  type AgentGenerationOutput,
+  type AgentGenerationToolSelection,
+} from "./agent-generation-models"
 import {
   agentSessionContentKey,
   AgentSessionStateRequestTracker,
@@ -67,10 +79,16 @@ import {
   type AgentResourcePickerOption,
 } from "./agent-composer-state"
 import { AgentMarkdown } from "./agent-markdown"
+import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { buildAgentConversationTurns, type AgentConversationTurn } from "./agent-conversation-presentation"
 import { getAgentToolPresentation } from "./agent-tool-presentation"
 
 const resourceDragType = "application/x-convax-agent-resource"
+
+type GenerationDescriptionLoad =
+  | { scope: string; status: "loading" }
+  | { error: string; scope: string; status: "error" }
+  | { scope: string; status: "ready"; value: GenerationToolDescription }
 const skillMentionAttribute = "data-agent-skill"
 
 interface ComposerSlashRange {
@@ -276,6 +294,8 @@ export interface AgentPanelProps {
   contextResources?: readonly AgentResource[]
   conversationKey?: string
   embedded?: boolean
+  embeddedHeader?: boolean
+  generationCatalogVersion?: string
   layout?: AgentPanelLayout
   projectId?: string
   projectName?: string
@@ -283,6 +303,12 @@ export interface AgentPanelProps {
 
 export function AgentPanel(props: AgentPanelProps) {
   const embedded = props.embedded === true
+  const compactEmbeddedChrome = embedded && props.embeddedHeader === false
+  const sharedGenerationPreference = useAgentGenerationPreference()
+  const sharedGenerationSelection = sharedGenerationPreference?.selection
+  const setSharedGenerationSelection = sharedGenerationPreference?.setSelection
+  const generationCatalogVersion = props.generationCatalogVersion ?? ""
+  const generationCatalogScope = JSON.stringify([props.projectId ?? null, generationCatalogVersion])
   const conversationScope = JSON.stringify([
     props.projectId ?? null,
     embedded ? "embedded" : "panel",
@@ -294,6 +320,25 @@ export function AgentPanel(props: AgentPanelProps) {
   const [historyVisible, setHistoryVisible] = useState(false)
   const [showActivity, setShowActivity] = useState(false)
   const [resourcePickerOpen, setResourcePickerOpen] = useState(false)
+  const [generationModelPickerOpen, setGenerationModelPickerOpen] = useState(false)
+  const [generationOutput, setGenerationOutput] = useState<AgentGenerationOutput>("image")
+  const [generationTools, setGenerationTools] = useState<readonly GenerationToolSummary[]>([])
+  const [generationToolsLoading, setGenerationToolsLoading] = useState(false)
+  const [generationToolsError, setGenerationToolsError] = useState<string>()
+  const [localGenerationToolSelection, setLocalGenerationToolSelection] = useState<AgentGenerationToolSelection>()
+  const generationToolSelection = sharedGenerationPreference ? sharedGenerationSelection : localGenerationToolSelection
+  const setGenerationToolSelection = useCallback(
+    (selection?: AgentGenerationToolSelection) => {
+      if (setSharedGenerationSelection) setSharedGenerationSelection(selection)
+      else setLocalGenerationToolSelection(selection)
+    },
+    [setSharedGenerationSelection],
+  )
+  const [generationDescription, setGenerationDescription] = useState<GenerationDescriptionLoad>({
+    scope: "",
+    status: "loading",
+  })
+  const [generationToolInput, setGenerationToolInput] = useState<Record<string, GenerationToolInputValue>>({})
   const [skillSlashQuery, setSkillSlashQuery] = useState<string>()
   const [skillSlashIndex, setSkillSlashIndex] = useState(0)
   const [composerFocused, setComposerFocused] = useState(false)
@@ -329,6 +374,10 @@ export function AgentPanel(props: AgentPanelProps) {
   const activeScopeRef = useRef(conversationScope)
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
   const projectEntriesRequestRef = useRef(0)
+  const generationCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
+  const generationDescriptionRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
+  const generationToolSelectionRef = useRef(generationToolSelection)
+  const generationCatalogVersionRef = useRef(generationCatalogVersion)
   const generationRef = useRef(0)
   const mountedRef = useRef(false)
   const creatingSessionRef = useRef(false)
@@ -341,11 +390,40 @@ export function AgentPanel(props: AgentPanelProps) {
   composerDraftRef.current = composerDraft
   attachmentsRef.current = attachments
   promptingSessionIdsRef.current = promptingSessionIds
+  generationCatalogVersionRef.current = generationCatalogVersion
+  generationToolSelectionRef.current = generationToolSelection
+
+  const selectedGenerationTool = findAgentGenerationTool(generationToolSelection, generationTools)
+  const validatedGenerationToolSelection =
+    selectedGenerationTool && isAgentGenerationOutput(selectedGenerationTool.output)
+      ? { id: selectedGenerationTool.id, output: selectedGenerationTool.output }
+      : undefined
+  const generationDescriptionScope = selectedGenerationTool
+    ? JSON.stringify([generationCatalogScope, selectedGenerationTool.id])
+    : ""
+  const currentGenerationDescription =
+    generationDescriptionScope && generationDescription.scope === generationDescriptionScope
+      ? generationDescription
+      : undefined
+  const generationToolInputValidation =
+    currentGenerationDescription?.status === "ready"
+      ? validateToolInputValues(currentGenerationDescription.value.fields, generationToolInput)
+      : undefined
+  const generationConfigurationReady =
+    !validatedGenerationToolSelection ||
+    Boolean(currentGenerationDescription?.status === "ready" && generationToolInputValidation?.valid)
+  const validatedGenerationToolInput: GenerationToolInput | undefined = generationToolInputValidation?.valid
+    ? generationToolInputValidation.input
+    : undefined
 
   const selectSession = useCallback((nextSessionId?: string) => {
     activeSessionIdRef.current = nextSessionId
     setSessionId(nextSessionId)
   }, [])
+
+  useEffect(() => {
+    if (generationToolSelection) setGenerationOutput(generationToolSelection.output)
+  }, [generationToolSelection?.id, generationToolSelection?.output])
 
   const replaceComposerDraft = useCallback((next: AgentComposerDraft) => {
     const normalized = normalizeAgentComposerDraft(next)
@@ -367,11 +445,94 @@ export function AgentPanel(props: AgentPanelProps) {
     return () => {
       mountedRef.current = false
       generationRef.current += 1
+      generationCatalogRequestRef.current.invalidate()
+      generationDescriptionRequestRef.current.invalidate()
       sessionStateRequestRef.current.clear()
       sessionListRequestRef.current += 1
       projectEntriesRequestRef.current += 1
     }
   }, [])
+
+  const loadGenerationTools = useCallback(() => {
+    const scopeId = props.projectId
+    const isLatest = generationCatalogRequestRef.current.begin(generationCatalogScope)
+    setGenerationTools([])
+    setGenerationToolsError(undefined)
+    if (!scopeId) {
+      setGenerationToolsLoading(false)
+      return Promise.resolve<readonly GenerationToolSummary[]>([])
+    }
+    setGenerationToolsLoading(true)
+    return window.convax.generation
+      .listTools({ scopeId })
+      .then((listed) => {
+        const tools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
+        if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return tools
+        setGenerationTools(tools)
+        const current = generationToolSelectionRef.current
+        const reconciled = reconcileAgentGenerationToolSelection(current, tools)
+        if (current?.id !== reconciled?.id || current?.output !== reconciled?.output) {
+          setGenerationToolSelection(reconciled)
+        }
+        return tools
+      })
+      .catch((cause) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          setGenerationToolsError(errorMessage(cause))
+        }
+        return []
+      })
+      .finally(() => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          setGenerationToolsLoading(false)
+        }
+      })
+  }, [generationCatalogScope, props.projectId, setGenerationToolSelection])
+
+  useEffect(() => {
+    void loadGenerationTools()
+    return () => generationCatalogRequestRef.current.invalidate()
+  }, [loadGenerationTools])
+
+  useEffect(() => {
+    setGenerationToolInput({})
+    if (!props.projectId || !selectedGenerationTool || !generationDescriptionScope) {
+      generationDescriptionRequestRef.current.invalidate()
+      setGenerationDescription({ scope: "", status: "loading" })
+      return undefined
+    }
+    const scopeId = props.projectId
+    const selected = selectedGenerationTool
+    const isLatest = generationDescriptionRequestRef.current.begin(generationDescriptionScope)
+    setGenerationDescription({ scope: generationDescriptionScope, status: "loading" })
+    void window.convax.generation.describeTool({ scopeId, toolId: selected.id }).then(
+      (result) => {
+        if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
+        if (result.toolId !== selected.id) {
+          setGenerationDescription({
+            error: "The generation model returned a stale configuration.",
+            scope: generationDescriptionScope,
+            status: "error",
+          })
+          return
+        }
+        setGenerationToolInput(createToolInputDefaultValues(result.fields))
+        setGenerationDescription({ scope: generationDescriptionScope, status: "ready", value: result })
+      },
+      (cause) => {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          setGenerationDescription({
+            error: errorMessage(cause),
+            scope: generationDescriptionScope,
+            status: "error",
+          })
+        }
+      },
+    )
+    return () => {
+      if (isLatest()) generationDescriptionRequestRef.current.invalidate()
+    }
+  }, [generationDescriptionScope, props.projectId, selectedGenerationTool])
 
   const refreshSessions = useCallback(
     async (preferredSessionId?: string) => {
@@ -448,6 +609,7 @@ export function AgentPanel(props: AgentPanelProps) {
     setProjectEntriesLoading(false)
     setHistoryVisible(false)
     setResourcePickerOpen(false)
+    setGenerationModelPickerOpen(false)
     setSkillSlashQuery(undefined)
     setComposerFocused(false)
     setDropActive(false)
@@ -668,9 +830,27 @@ export function AgentPanel(props: AgentPanelProps) {
     setSkillSlashIndex(0)
   }, [])
 
+  const closeGenerationModelPicker = useCallback(() => {
+    setGenerationModelPickerOpen(false)
+  }, [])
+
   useEffect(() => {
-    if (interactionDisabled) closeResourcePicker()
-  }, [closeResourcePicker, interactionDisabled])
+    if (interactionDisabled) {
+      closeResourcePicker()
+      closeGenerationModelPicker()
+    }
+  }, [closeGenerationModelPicker, closeResourcePicker, interactionDisabled])
+
+  useEffect(() => {
+    if (!generationModelPickerOpen) return
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target instanceof Node) || !composerSurfaceRef.current?.contains(event.target)) {
+        closeGenerationModelPicker()
+      }
+    }
+    document.addEventListener("pointerdown", dismiss)
+    return () => document.removeEventListener("pointerdown", dismiss)
+  }, [closeGenerationModelPicker, generationModelPickerOpen])
 
   const syncComposerDraft = useCallback(() => {
     if (!composerRef.current) return
@@ -686,10 +866,11 @@ export function AgentPanel(props: AgentPanelProps) {
     setSkillSlashQuery(match?.query)
     setSkillSlashIndex(0)
     setResourcePickerOpen(false)
+    if (match) closeGenerationModelPicker()
     if (match) {
       loadResourceInventory()
     }
-  }, [loadResourceInventory])
+  }, [closeGenerationModelPicker, loadResourceInventory])
 
   const insertSkill = useCallback(
     (name: string, slash = false) => {
@@ -879,10 +1060,20 @@ export function AgentPanel(props: AgentPanelProps) {
     const text = agentComposerText(submittedDraft).trim()
     const submittedResources = mergeAgentResources(contextResources, attachments, agentComposerSkills(submittedDraft))
     if (!props.projectId || interactionDisabled || (!text && submittedResources.length === 0)) return
+    if (validatedGenerationToolSelection && !generationConfigurationReady) {
+      setError("Complete the selected generation model's required options before sending.")
+      closeResourcePicker()
+      setGenerationModelPickerOpen(true)
+      return
+    }
     closeResourcePicker()
+    closeGenerationModelPicker()
     const scopeId = props.projectId
     const scope = conversationScope
     const generation = generationRef.current
+    const submittedCatalogVersion = generationCatalogVersion
+    const submittedGenerationSelection = validatedGenerationToolSelection
+    const submittedGenerationToolInput = validatedGenerationToolInput
     const submittedAttachments = attachments
     const submittedActiveCanvas = props.activeCanvas
     const isCurrentScope = () =>
@@ -894,8 +1085,32 @@ export function AgentPanel(props: AgentPanelProps) {
       isCurrentScope() && activeSessionIdRef.current === targetSessionId
     let cleared = false
     let targetSessionId = sessionScopeRef.current === scope ? sessionId : undefined
+    let verifiedGenerationSelection = submittedGenerationSelection
+    let verifiedGenerationTools = generationTools
     setError(undefined)
     try {
+      if (submittedGenerationSelection) {
+        const listed = await window.convax.generation.listTools({ scopeId })
+        if (!isCurrentScope()) return
+        if (generationCatalogVersionRef.current !== submittedCatalogVersion) {
+          throw new Error("Installed generation models changed. Review the model selection and send again.")
+        }
+        verifiedGenerationTools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
+        setGenerationTools(verifiedGenerationTools)
+        verifiedGenerationSelection = reconcileAgentGenerationToolSelection(
+          submittedGenerationSelection,
+          verifiedGenerationTools,
+        )
+        if (
+          generationToolSelectionRef.current?.id !== verifiedGenerationSelection?.id ||
+          generationToolSelectionRef.current?.output !== verifiedGenerationSelection?.output
+        ) {
+          setGenerationToolSelection(verifiedGenerationSelection)
+        }
+        if (!verifiedGenerationSelection) {
+          throw new Error("The selected generation model is no longer installed. Choose another model or Auto.")
+        }
+      }
       if (!targetSessionId && embedded) {
         targetSessionId = embeddedConversationSessions.get(scopeId, props.conversationKey)
         if (targetSessionId) {
@@ -924,9 +1139,15 @@ export function AgentPanel(props: AgentPanelProps) {
       // beforePrompt can outlive the node that owns an embedded panel. Never
       // continue with a send after unmounting or switching Canvas scope.
       if (!isCurrentScope()) return
+      if (verifiedGenerationSelection && generationCatalogVersionRef.current !== submittedCatalogVersion) {
+        throw new Error("Installed generation models changed. Review the model selection and send again.")
+      }
       await window.convax.agent.prompt({
-        instructions: createAgentCanvasInstructions({
+        instructions: createAgentPromptInstructions({
           activeCanvas: submittedActiveCanvas,
+          generationSelection: verifiedGenerationSelection,
+          generationToolInput: verifiedGenerationSelection ? submittedGenerationToolInput : undefined,
+          generationTools: verifiedGenerationTools,
           resources: submittedResources,
         }),
         resources: submittedResources,
@@ -972,10 +1193,14 @@ export function AgentPanel(props: AgentPanelProps) {
   }, [
     attachments,
     contextResources,
+    closeGenerationModelPicker,
     closeResourcePicker,
     conversationScope,
     createSession,
     embedded,
+    generationCatalogVersion,
+    generationConfigurationReady,
+    generationTools,
     interactionDisabled,
     props.activeCanvas,
     props.beforePrompt,
@@ -986,7 +1211,10 @@ export function AgentPanel(props: AgentPanelProps) {
     replaceComposerDraft,
     selectSession,
     sessionId,
+    setGenerationToolSelection,
     setSessionPrompting,
+    validatedGenerationToolInput,
+    validatedGenerationToolSelection,
   ])
 
   const abort = useCallback(async () => {
@@ -1052,7 +1280,7 @@ export function AgentPanel(props: AgentPanelProps) {
       <aside
         className={cn(
           embedded
-            ? "relative flex h-80 min-h-64 w-full min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground"
+            ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card text-card-foreground"
             : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
           !embedded &&
             !props.layout?.resizing &&
@@ -1075,62 +1303,64 @@ export function AgentPanel(props: AgentPanelProps) {
             tabIndex={0}
           />
         ) : null}
-        <header
-          className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}
-        >
-          <Bot className="ml-1 size-4 text-primary" />
-          <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>
-            {embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}
-          </span>
-          {capabilities ? (
-            <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span>
-          ) : null}
-          <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
-            <Button
-              aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
-              onClick={() => setShowActivity((value) => !value)}
-              size="icon-sm"
-              variant={showActivity ? "secondary" : "ghost"}
-            >
-              <ListTree />
-            </Button>
-          </Tooltip>
-          {!embedded ? (
-            <Tooltip content="Conversation history">
+        {!compactEmbeddedChrome ? (
+          <header
+            className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}
+          >
+            <Bot className="ml-1 size-4 text-primary" />
+            <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>
+              {embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}
+            </span>
+            {capabilities ? (
+              <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span>
+            ) : null}
+            <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
               <Button
-                aria-label="Conversation history"
-                onClick={() => setHistoryVisible((value) => !value)}
+                aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
+                onClick={() => setShowActivity((value) => !value)}
                 size="icon-sm"
-                variant={historyVisible ? "secondary" : "ghost"}
+                variant={showActivity ? "secondary" : "ghost"}
               >
-                <History />
+                <ListTree />
               </Button>
             </Tooltip>
-          ) : null}
-          <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}>
-            <Button
-              aria-label={embedded ? "Restart embedded conversation" : "New conversation"}
-              disabled={!props.projectId || creatingSession}
-              onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
-              size="icon-sm"
-              variant="ghost"
-            >
-              <Plus />
-            </Button>
-          </Tooltip>
-          {!embedded ? (
-            <Tooltip content="Close agent">
+            {!embedded ? (
+              <Tooltip content="Conversation history">
+                <Button
+                  aria-label="Conversation history"
+                  onClick={() => setHistoryVisible((value) => !value)}
+                  size="icon-sm"
+                  variant={historyVisible ? "secondary" : "ghost"}
+                >
+                  <History />
+                </Button>
+              </Tooltip>
+            ) : null}
+            <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}>
               <Button
-                aria-label="Close agent"
-                onClick={() => props.layout?.onOpenChange(false)}
+                aria-label={embedded ? "Restart embedded conversation" : "New conversation"}
+                disabled={!props.projectId || creatingSession}
+                onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
                 size="icon-sm"
                 variant="ghost"
               >
-                <ChevronRight />
+                <Plus />
               </Button>
             </Tooltip>
-          ) : null}
-        </header>
+            {!embedded ? (
+              <Tooltip content="Close agent">
+                <Button
+                  aria-label="Close agent"
+                  onClick={() => props.layout?.onOpenChange(false)}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <ChevronRight />
+                </Button>
+              </Tooltip>
+            ) : null}
+          </header>
+        ) : null}
 
         {!embedded && historyVisible ? (
           <ConversationHistory
@@ -1315,7 +1545,33 @@ export function AgentPanel(props: AgentPanelProps) {
                 </div>
               ) : null}
               <div className="relative" ref={composerSurfaceRef}>
-                {resourcePickerVisible ? (
+                {generationModelPickerOpen ? (
+                  <AgentGenerationModelPicker
+                    activeOutput={generationOutput}
+                    description={
+                      currentGenerationDescription?.status === "ready" ? currentGenerationDescription.value : undefined
+                    }
+                    descriptionError={
+                      currentGenerationDescription?.status === "error" ? currentGenerationDescription.error : undefined
+                    }
+                    descriptionLoading={Boolean(
+                      validatedGenerationToolSelection &&
+                        (!currentGenerationDescription || currentGenerationDescription.status === "loading"),
+                    )}
+                    error={generationToolsError}
+                    loading={generationToolsLoading}
+                    onClose={closeGenerationModelPicker}
+                    onOutputChange={setGenerationOutput}
+                    onSelect={(selection) => {
+                      setGenerationToolSelection(selection)
+                      setGenerationToolInput({})
+                    }}
+                    onToolInputChange={setGenerationToolInput}
+                    selected={validatedGenerationToolSelection}
+                    toolInput={generationToolInput}
+                    tools={generationTools}
+                  />
+                ) : resourcePickerVisible ? (
                   <ResourcePicker
                     activeIndex={skillSlashIndex}
                     loadingProject={projectEntriesLoading}
@@ -1484,6 +1740,7 @@ export function AgentPanel(props: AgentPanelProps) {
                             closeResourcePicker()
                             return
                           }
+                          closeGenerationModelPicker()
                           skillSlashRangeRef.current = undefined
                           setSkillSlashQuery(undefined)
                           setSkillSlashIndex(0)
@@ -1496,9 +1753,54 @@ export function AgentPanel(props: AgentPanelProps) {
                         <Plus />
                       </Button>
                     </Tooltip>
-                    <span className="min-w-0 flex-1 truncate px-1 text-[10px] text-muted-foreground">
-                      Type / to add context or Skills · drop files or canvases
-                    </span>
+                    <button
+                      aria-expanded={generationModelPickerOpen}
+                      aria-haspopup="dialog"
+                      aria-label={`Select generation model, ${selectedGenerationTool?.title ?? "Auto"}`}
+                      className="flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={!props.projectId || interactionDisabled}
+                      onClick={() => {
+                        if (generationModelPickerOpen) {
+                          closeGenerationModelPicker()
+                          return
+                        }
+                        closeResourcePicker()
+                        setGenerationModelPickerOpen(true)
+                        if (generationToolsError) void loadGenerationTools()
+                      }}
+                      type="button"
+                    >
+                      <Sparkles className="size-3.5 shrink-0" />
+                      <span className="shrink-0 font-medium text-foreground">Models</span>
+                      <span className="truncate">{selectedGenerationTool?.title ?? "Auto"}</span>
+                      <ChevronDown className="size-3 shrink-0" />
+                    </button>
+                    {compactEmbeddedChrome ? (
+                      <>
+                        <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
+                          <Button
+                            aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
+                            onClick={() => setShowActivity((value) => !value)}
+                            size="icon-sm"
+                            variant={showActivity ? "secondary" : "ghost"}
+                          >
+                            <ListTree />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Restart conversation for this context">
+                          <Button
+                            aria-label="Restart embedded conversation"
+                            disabled={!props.projectId || creatingSession}
+                            onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
+                            size="icon-sm"
+                            variant="ghost"
+                          >
+                            <Plus />
+                          </Button>
+                        </Tooltip>
+                      </>
+                    ) : null}
+                    <span className="min-w-0 flex-1" />
                     {runtimeBusy ? (
                       <Tooltip content="Stop">
                         <Button
@@ -1517,6 +1819,7 @@ export function AgentPanel(props: AgentPanelProps) {
                           disabled={
                             !props.projectId ||
                             interactionDisabled ||
+                            !generationConfigurationReady ||
                             (!hasAgentComposerContent(composerDraft) && displayedResources.length === 0)
                           }
                           onClick={() => void send()}

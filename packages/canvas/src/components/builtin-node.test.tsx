@@ -5,9 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { createCanvasDocument } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
+import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import { deriveCanvasSelectionContext } from "../selection-context"
-import { CanvasServicesProvider, createCanvasServices } from "../services"
-import type { CanvasNode, CanvasSelection } from "../types"
+import { CanvasServicesProvider, createCanvasServices, type CanvasAssistantRequest } from "../services"
+import type { CanvasDocument, CanvasNode, CanvasSelection } from "../types"
 
 mock.module("@xyflow/react", () => ({
   Handle: (props: { children?: ReactNode }) => <div>{props.children}</div>,
@@ -56,6 +57,12 @@ function renderWithEditor(
   currentSelection: CanvasSelection,
   readOnly: boolean,
   child: (props: NodeProps<CanvasNode>) => ReactNode,
+  hydrating = false,
+  options: {
+    assistantRender?: (request: CanvasAssistantRequest) => ReactNode
+    commit?: CanvasEditorController["commit"]
+    document?: CanvasDocument
+  } = {},
 ) {
   const fileRenderers = createCanvasFileRendererRegistry([
     {
@@ -70,13 +77,14 @@ function renderWithEditor(
     beginGesture: () => {},
     cancelGesture: () => {},
     canUpload: false,
-    commit: () => {},
+    commit: options.commit ?? (() => {}),
     connectionNodeTypes: [],
-    document: createCanvasDocument({ id: "canvas-test", nodes: [node] }),
+    document: options.document ?? createCanvasDocument({ id: "canvas-test", nodes: [node] }),
     duplicateNode: () => {},
     endGesture: () => {},
     executeSelectionAction: () => {},
     fileRenderers,
+    hydrating,
     isSelectionActionPending: () => false,
     quickConnect: () => {},
     readOnly,
@@ -88,7 +96,7 @@ function renderWithEditor(
     visibleSelectionActions: [],
   }
   const services = createCanvasServices({
-    assistant: { render: () => <div data-assistant-toolbar /> },
+    assistant: { render: options.assistantRender ?? (() => <div data-assistant-toolbar />) },
   })
 
   return renderToStaticMarkup(
@@ -144,5 +152,40 @@ describe("built-in node toolbar visibility", () => {
     expect(
       toolbarCount(renderWithEditor(selection(["node-a"]), true, (props) => <BuiltinCanvasNode {...props} />)),
     ).toBe(0)
+  })
+
+  test("keeps the selected card assistant mounted but disabled during document hydration", () => {
+    const markup = renderWithEditor(selection(["node-a"]), true, (props) => <BuiltinCanvasNode {...props} />, true)
+
+    expect(toolbarCount(markup)).toBe(1)
+    expect(markup).not.toContain("data-contributed-toolbar")
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).toContain('disabled=""')
+    expect(markup).toContain('inert=""')
+    expect(markup).toContain("data-assistant-toolbar")
+  })
+
+  test("gives the file assistant only its owner's persisted generation-model setter", () => {
+    const stored = setCanvasNodeGenerationToolId(
+      createCanvasDocument({ id: "canvas-test", nodes: [node] }),
+      node.id,
+      "plugin.example:image.generate",
+    )
+    let request: CanvasAssistantRequest | undefined
+    let committed: CanvasDocument | undefined
+    renderWithEditor(selection([node.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      assistantRender: (next) => {
+        request = next
+        return <div data-assistant-toolbar />
+      },
+      commit: (update) => {
+        committed = update(stored)
+      },
+      document: stored,
+    })
+
+    expect(request?.ownerGenerationToolId).toBe("plugin.example:image.generate")
+    request?.onOwnerGenerationToolIdChange?.("plugin.example:image.alternate")
+    expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
   })
 })

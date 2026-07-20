@@ -19,16 +19,16 @@ OpenCode plugins are Agent-runtime hooks and are not Convax Plugins.
 
 ## Ownership
 
-| Concern                                                                                                | Owner                                      |
-| ------------------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| Skill discovery and execution                                                                          | `@convax/agent-runtime` through OpenCode   |
-| Managed Skill validation/copy/removal                                                                  | `@convax/agent-runtime/node`               |
-| Canvas renderer and node-toolbar registration                                                          | existing `@convax/canvas` registries       |
-| Plugin package discovery, static assets, native import dialogs, trusted provenance and native adapters | Desktop main                               |
-| Plugin iframe rendering and scoped host calls                                                          | Desktop renderer composition               |
-| Global settings, language and capability management UI                                                 | Desktop renderer preferences/views         |
-| Active Project and Canvas                                                                              | existing Project and Workbench controllers |
-| Project/Canvas/Agent invariants                                                                        | their existing typed services and clients  |
+| Concern                                                                                                                           | Owner                                      |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| Skill discovery and execution                                                                                                     | `@convax/agent-runtime` through OpenCode   |
+| Managed Skill validation/copy/removal                                                                                             | `@convax/agent-runtime/node`               |
+| Canvas renderer and node-toolbar registration                                                                                     | existing `@convax/canvas` registries       |
+| Plugin package discovery, static assets, generation tool processes, native import dialogs, trusted provenance and native adapters | Desktop main                               |
+| Plugin iframe rendering and scoped host calls                                                                                     | Desktop renderer composition               |
+| Global settings, language and capability management UI                                                                            | Desktop renderer preferences/views         |
+| Active Project and Canvas                                                                                                         | existing Project and Workbench controllers |
+| Project/Canvas/Agent invariants                                                                                                   | their existing typed services and clients  |
 
 There is no new Workspace aggregate, extension bus, service locator, Canvas node
 role, or alternate Agent runtime. A Plugin renderer remains a Canvas `file` node.
@@ -277,7 +277,7 @@ authority and not a way to select scope.
 
 ## Plugin package
 
-The first schema is `convax.plugin/1`. Its manifest uses the MiniMax-proven core of
+`convax.plugin/1` is the static Web Plugin schema. Its manifest uses the MiniMax-proven core of
 `id`, `name`, `description`, `version`, and an HTML `entry`, then adds only the
 contributions required by this product slice:
 
@@ -286,6 +286,15 @@ contributions required by this product slice:
 - node-toolbar commands delivered to the mounted surface;
 - an explicit capability allowlist;
 - an optional companion `SKILL.md` path.
+
+`convax.plugin/2` preserves the sandboxed Web surface and adds two narrowly
+separated generation roles. A Tool Plugin may declare a bare external `mcp-stdio`
+command plus generation tool contracts. A sandboxed caller may request
+`generation.execute`, which only lists and executes those tools through the shared
+host-owned Canvas generation operation. A runtime declaration does not grant caller
+authority, and caller authority does not expose arbitrary MCP or process access.
+See [`generation-tool-plugins.md`](generation-tool-plugins.md) for the exact
+manifest, staging, result, authorization and cancellation contract.
 
 Plugin ids are kebab-case. All package paths are relative and validated inside the
 package root. Installation rejects symlinks/reparse-point escapes, traversal,
@@ -319,6 +328,8 @@ The initial direct-call surface is intentionally narrow:
 | `canvas.node.updateState`     | `canvas.node.write`           | own namespaced state only                                                                                 |
 | `project.file.readText`       | `project.files.read`          | current Project relative path                                                                             |
 | `agent.prompt`                | `agent.prompt`                | current Project with own node resource                                                                    |
+| `generation.tools.list`       | `generation.execute`          | sanitized installed generation tools; optional output-modality filter                                     |
+| `generation.canvas.execute`   | `generation.execute`          | one scoped Canvas generation using only direct incoming typed references                                  |
 
 These are adapters over existing clients/controllers. They do not expose private
 Project JSON, absolute paths, arbitrary target-node mutation, Electron, or a generic
@@ -376,9 +387,10 @@ built-in catalog item, into the same managed user Skill store. It remains instal
 independently if the Plugin is removed; the provisioning receipt is not an ownership
 graph. It may explain the Plugin workflow and select existing business, primitive
 and view tools. It does not expose native code, register tools, confer trusted
-built-in provenance, or duplicate Canvas/Project invariants. A future Plugin command
-exposed as an Agent tool must be a thin Desktop adapter over the same typed operation
-used by the Plugin UI, with host-bound Project/Canvas/node scope.
+built-in provenance, or duplicate Canvas/Project invariants. Generation is the
+current example: `canvas_generate` is a thin Agent adapter over the same typed
+operation used by Toolbar and Plugin UI. Future Agent tools must preserve that
+pattern and host-bound Project/Canvas/node scope.
 
 ## Deliberately deferred
 

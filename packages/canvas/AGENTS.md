@@ -21,6 +21,12 @@ Canvas owns document and editor semantics independently of Project and Agent.
   command-id, revision and persistence rules.
 - View effects are valid capabilities but cannot turn a committed domain mutation
   into a failed mutation.
+- Ordinary document mutations such as adding, importing, duplicating, or generating
+  nodes preserve the mounted viewport. Fit, center, zoom, and reveal movement require
+  an explicit user action or view command.
+- A file-card generation model override belongs to its owning Canvas node as a
+  versioned namespaced metadata value containing only an opaque host tool id. Missing
+  means inherit the host preference; Canvas never owns the concrete model catalog.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
 - Plugins are disposable, deterministic and failure-isolated.

@@ -20,6 +20,14 @@ import { registerWillQuitCleanup } from "./application-lifecycle"
 import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
+import { createGenerationAgentToolProvider } from "./generation-agent-tools"
+import { GenerationCanvasService } from "./generation-canvas-service"
+import { registerGenerationIpc } from "./generation-ipc"
+import {
+  generationPluginEnvironment,
+  GenerationPluginRuntime,
+  resolveGenerationPluginExecutable,
+} from "./generation-plugin-runtime"
 import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
@@ -50,8 +58,10 @@ import { FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
 import { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
+import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 
 const trustedWebContents = new Set<number>()
+const agentHostToolInactivityTimeout = 60 * 60_000
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
@@ -179,6 +189,14 @@ function startApplication() {
       {},
       desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
     )
+    const generationEnvironment = generationPluginEnvironment(process.env)
+    const toolPluginAuthorizations = new ToolPluginAuthorizationStore(
+      join(userDataDirectory, "plugin-authorizations"),
+      {
+        environment: generationEnvironment,
+        resolveExecutable: resolveGenerationPluginExecutable,
+      },
+    )
     for (const item of desktopBuiltinPluginCatalog) {
       await pluginManager
         .claimInstalledBuiltinBundle(
@@ -189,6 +207,12 @@ function startApplication() {
           console.warn(`Could not claim installed built-in Plugin ${item.manifest.id}`, error)
         })
     }
+    await pluginManager
+      .list()
+      .then((plugins) => toolPluginAuthorizations.reconcile(plugins))
+      .catch((error) => {
+        console.warn("Could not reconcile installed Tool Plugin authorizations", error)
+      })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
@@ -222,16 +246,34 @@ function startApplication() {
       isTrustedSender: ipcSecurity.isTrustedSender,
       isTrustedWebContentsId: (id) => trustedWebContents.has(id),
     })
+    const generationRuntime = new GenerationPluginRuntime({
+      environment: generationEnvironment,
+      plugins: pluginManager,
+      verifyAuthorization: ({ binding, bindingKind, plugin }) =>
+        toolPluginAuthorizations.verify(plugin, bindingKind, binding),
+    })
+    const generation = new GenerationCanvasService({
+      documents: canvasDocuments,
+      projects: projectManager,
+      renderer: canvasRenderer,
+      resources: canvasResources,
+      tools: generationRuntime,
+    })
     const agentRuntime = new OpenCodeAgentRuntime({
       configDirectory: openCodeConfigDirectory,
       protectedPathPatterns: [".convax", ".convax/**", "**/.convax", "**/.convax/**"],
       protectedPaths: [".convax"],
+      // Progress heartbeats reset this inactivity guard, so accepted generation
+      // jobs have no absolute Agent deadline. OpenCode Stop still cancels the MCP
+      // request and propagates through the host AbortSignal.
+      toolCallTimeout: agentHostToolInactivityTimeout,
       toolProvider: createCompositeAgentToolProvider([
         createCanvasAgentToolProvider({
           application: canvasApplication,
           renderer: canvasRenderer,
           resources: canvasResources,
         }),
+        createGenerationAgentToolProvider(generation),
         createJianyingAgentToolProvider(jianying, {
           isEnabled: async () => process.platform === "darwin" && (await isJianyingEnabled()),
           async resolveActiveCanvas() {
@@ -281,6 +323,14 @@ function startApplication() {
     const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposeGenerationIpc = registerGenerationIpc(
+      {
+        describeTool: (request) => generation.describeTool(request.toolId),
+        generate: (request, signal) => generation.generate(request, { id: "desktop:renderer", kind: "ui" }, signal),
+        listTools: (request) => generation.listTools(request.output ? { output: request.output } : {}),
+      },
+      { isTrustedSender: ipcSecurity.isTrustedSender },
+    )
     const disposeJianyingIpc = registerJianyingIpc(jianying, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       async resolveActiveCanvas() {
@@ -299,6 +349,22 @@ function startApplication() {
       desktopBuiltinPluginCatalog,
       ipcSecurity.isTrustedSender,
       remoteCapabilities,
+      {
+        prepareInstall: (plugin) => toolPluginAuthorizations.prepareInstall(plugin),
+        revokeAuthorization: (pluginId) => toolPluginAuthorizations.revoke(pluginId),
+        async onDidChange(pluginId) {
+          generationRuntime.disposePlugin(pluginId)
+          await pluginManager
+            .list()
+            .then((plugins) => toolPluginAuthorizations.reconcile(plugins))
+            .catch((error) => {
+              console.warn("Could not reconcile changed Tool Plugin authorizations", error)
+            })
+          void agentRuntime.refreshHostTools().catch((error) => {
+            console.warn("Could not immediately refresh OpenCode generation tools", error)
+          })
+        },
+      },
     )
     const disposeSkillManagementIpc = registerSkillManagementIpc(
       skillManager,
@@ -350,10 +416,12 @@ function startApplication() {
         disposeProjectIpc,
         disposeProjectCanvasIpc,
         disposeCanvasDocumentIpc,
+        disposeGenerationIpc,
         disposeJianyingIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
         disposeAgentIpc,
+        () => generationRuntime.dispose(),
         () => canvasRenderer.dispose(),
       ],
       (error, index) => console.warn(`Convax will-quit cleanup ${index + 1} failed`, error),
@@ -367,6 +435,7 @@ function startApplication() {
         .flushPendingWrites()
         .then(async () => {
           await agentRuntime.dispose()
+          generationRuntime.dispose()
           quitGate = "approved"
           app.quit()
         })

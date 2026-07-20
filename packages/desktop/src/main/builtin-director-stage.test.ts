@@ -137,7 +137,7 @@ describe("built-in StoryAI 3D Director Desk", () => {
     expect(installed.id).toBe("storyai-3d-director-desk")
     expect(installed.version).toBe("0.0.1-convax.2")
     expect(installed.capabilities).toEqual(["canvas.node.write"])
-    expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry), "utf8")).toContain(
+    expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry!), "utf8")).toContain(
       "./assets/app.js",
     )
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/app.js"))).size).toBeGreaterThan(100_000)

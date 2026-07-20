@@ -17,12 +17,15 @@ import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore 
 import {
   requireWebPluginId,
   requireWebPluginRelativePath,
+  type InstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
   type WebPluginCapability,
+  type WebPluginGenerationInputRole,
+  type WebPluginGenerationModality,
 } from "../plugin-contracts"
 import {
-  desktopPluginHostProtocol,
   desktopPluginConnectedImagesChangedCommand,
+  desktopPluginHostProtocolForManifestSchema,
   isDesktopPluginHostRequest,
   pluginHostFailure,
   pluginHostSuccess,
@@ -204,9 +207,46 @@ export interface WebPluginAgentPromptResult {
   text: string
 }
 
+export interface WebPluginGenerationToolSummary {
+  acceptedInputs: readonly WebPluginGenerationInputRole[]
+  description: string
+  id: string
+  output: WebPluginGenerationModality
+  title: string
+}
+
+export interface WebPluginGenerationReference {
+  nodeId: string
+  role: WebPluginGenerationInputRole
+}
+
+export interface WebPluginGenerationCanvasResult {
+  createdNodeIds: readonly string[]
+  revision: number
+  toolId: string
+  warnings: readonly string[]
+}
+
 /** Narrow product ports supplied by the Desktop App; the plugin host owns no globals. */
 export interface WebPluginCanvasHost {
+  executeCanvasGeneration(
+    input: DesktopPluginFrameRef & {
+      anchor: { x: number; y: number }
+      expectedRevision: number
+      output?: WebPluginGenerationModality
+      prompt: string
+      references: readonly WebPluginGenerationReference[]
+      signal: AbortSignal
+      toolId?: string
+    },
+  ): Promise<WebPluginGenerationCanvasResult>
   getActiveContext(): WebPluginCanvasActiveContext | null
+  listGenerationTools(
+    input: DesktopPluginFrameRef & {
+      output?: WebPluginGenerationModality
+      signal: AbortSignal
+    },
+  ): Promise<readonly WebPluginGenerationToolSummary[]>
   promptAgent(
     input: DesktopPluginFrameRef & {
       pluginName: string
@@ -238,11 +278,31 @@ export interface WebPluginCanvasContributionOptions {
 export interface WebPluginHostRequestContext {
   connectedImageReadGate: { active: boolean }
   frame: DesktopPluginFrameRef
+  generationGate: { active: boolean }
   getActiveContext(): WebPluginCanvasActiveContext | null
   getConnectedImageNodes(): CanvasNode[]
+  getDocument(): CanvasDocument | undefined
   getNode(): CanvasNode | undefined
+  isCanvasWritable(): boolean
   limits?: WebPluginCanvasHostLimits
-  plugin: InstalledWebPluginSummary
+  plugin: InstalledWebPluginCanvasSurface
+  executeCanvasGeneration(
+    input: DesktopPluginFrameRef & {
+      anchor: { x: number; y: number }
+      expectedRevision: number
+      output?: WebPluginGenerationModality
+      prompt: string
+      references: readonly WebPluginGenerationReference[]
+      signal: AbortSignal
+      toolId?: string
+    },
+  ): Promise<WebPluginGenerationCanvasResult>
+  listGenerationTools(
+    input: DesktopPluginFrameRef & {
+      output?: WebPluginGenerationModality
+      signal: AbortSignal
+    },
+  ): Promise<readonly WebPluginGenerationToolSummary[]>
   promptAgent(
     input: DesktopPluginFrameRef & {
       pluginName: string
@@ -299,7 +359,7 @@ function assertMessageSize(value: unknown, maximum: number, label: string) {
   if (serializedBytes(value, label) > maximum) throw new Error(`${label} exceeds ${maximum} bytes`)
 }
 
-function validateJsonValue(value: unknown, depth = 0, stack = new WeakSet<object>()): void {
+function validateJsonValue(value: unknown, depth = 0, stack = new WeakSet()): void {
   if (value === null || typeof value === "string" || typeof value === "boolean") return
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error("Plugin state numbers must be finite")
@@ -325,7 +385,9 @@ function requirePluginState(value: unknown, maximumBytes: number) {
   if (!isRecord(value)) throw new Error("Plugin state must be an object")
   validateJsonValue(value)
   assertMessageSize(value, maximumBytes, "Plugin state")
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+  const cloned: unknown = JSON.parse(JSON.stringify(value))
+  if (!isRecord(cloned)) throw new Error("Plugin state must be an object")
+  return cloned
 }
 
 function requireProjectRelativePath(value: unknown) {
@@ -358,6 +420,198 @@ function requirePromptText(value: unknown) {
     throw new Error(`Agent prompt must contain between 1 and ${maximumPromptLength} characters`)
   }
   return value
+}
+
+const generationOutputs = new Set<WebPluginGenerationModality>(["text", "image", "video", "audio"])
+const generationInputRoles = new Set<WebPluginGenerationInputRole>([
+  "text",
+  "reference_image",
+  "reference_video",
+  "first_frame",
+  "last_frame",
+  "audio",
+])
+
+function requireGenerationPrompt(value: unknown) {
+  if (typeof value !== "string" || !value.trim() || value.length > maximumPromptLength || value.includes("\0")) {
+    throw new Error(`Generation prompt must contain between 1 and ${maximumPromptLength} characters`)
+  }
+  return value
+}
+
+function isGenerationOutput(value: unknown): value is WebPluginGenerationModality {
+  return value === "text" || value === "image" || value === "video" || value === "audio"
+}
+
+function isGenerationInputRole(value: unknown): value is WebPluginGenerationInputRole {
+  return (
+    value === "text" ||
+    value === "reference_image" ||
+    value === "reference_video" ||
+    value === "first_frame" ||
+    value === "last_frame" ||
+    value === "audio"
+  )
+}
+
+function requireGenerationOutput(value: unknown, label = "Generation output") {
+  if (!isGenerationOutput(value) || !generationOutputs.has(value)) {
+    throw new Error(`${label} is not supported`)
+  }
+  return value
+}
+
+function optionalGenerationOutput(value: unknown) {
+  return value === undefined ? undefined : requireGenerationOutput(value)
+}
+
+function requireGenerationIdentifier(value: unknown, label: string, maximum = 2_048) {
+  if (
+    typeof value !== "string"
+    || !value
+    || value !== value.trim()
+    || value.length > maximum
+    || /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error(`${label} must be a non-empty, trimmed string`)
+  }
+  return value
+}
+
+function generationRoleForNode(node: CanvasNode): WebPluginGenerationInputRole | undefined {
+  if (node.data.kind === "text") return "text"
+  if (node.data.kind === "image") return "reference_image"
+  if (node.data.kind === "video") return "reference_video"
+  if (node.data.kind === "audio") return "audio"
+  return undefined
+}
+
+function expectedGenerationNodeKind(role: WebPluginGenerationInputRole) {
+  if (role === "text") return "text"
+  if (role === "reference_video") return "video"
+  if (role === "audio") return "audio"
+  return "image"
+}
+
+function incomingGenerationNodes(document: CanvasDocument, ownerNodeId: string) {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  return getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId)
+    .map((id) => nodes.get(id))
+    .filter((node): node is CanvasNode => node !== undefined)
+}
+
+function requireGenerationReferences(
+  value: unknown,
+  document: CanvasDocument,
+  ownerNodeId: string,
+): readonly WebPluginGenerationReference[] {
+  const incoming = incomingGenerationNodes(document, ownerNodeId)
+  let references: readonly WebPluginGenerationReference[]
+  if (value === undefined) {
+    references = incoming.flatMap((node) => {
+      const role = generationRoleForNode(node)
+      return role ? [{ nodeId: node.id, role }] : []
+    })
+  } else {
+    if (!Array.isArray(value) || value.length > 32) {
+      throw new Error("Generation references must contain at most 32 items")
+    }
+    const incomingById = new Map(incoming.map((node) => [node.id, node]))
+    const pairs = new Set<string>()
+    references = value.map((candidate, index) => {
+      const reference = exactRecord(candidate, ["nodeId", "role"], `Generation reference ${index}`)
+      const nodeId = requireGenerationIdentifier(reference.nodeId, `Generation reference ${index} nodeId`)
+      if (!isGenerationInputRole(reference.role) || !generationInputRoles.has(reference.role)) {
+        throw new Error(`Generation reference ${index} role is not supported`)
+      }
+      const role = reference.role
+      const node = incomingById.get(nodeId)
+      if (!node) throw new Error("Generation references must be direct incoming Canvas file nodes")
+      const expectedKind = expectedGenerationNodeKind(role)
+      if (node.data.kind !== expectedKind) {
+        throw new Error(`Generation role ${role} requires a direct incoming ${expectedKind} node`)
+      }
+      const pair = `${nodeId}\0${role}`
+      if (pairs.has(pair)) throw new Error("Generation references contain a duplicate node and role")
+      pairs.add(pair)
+      return { nodeId, role }
+    })
+  }
+  if (references.length > 32) throw new Error("Generation references must contain at most 32 items")
+  for (const role of ["first_frame", "last_frame"] as const) {
+    if (references.filter((reference) => reference.role === role).length > 1) {
+      throw new Error(`Generation references contain more than one ${role}`)
+    }
+  }
+  return references
+}
+
+function finiteNodeDimension(...values: unknown[]) {
+  return values.find((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0)
+}
+
+/** Places generated output beside the owning file node; sandbox requests cannot choose coordinates. */
+export function generationAnchorForPluginNode(node: CanvasNode) {
+  const width = finiteNodeDimension(node.measured?.width, node.width, node.style?.width) ?? 320
+  return { x: node.position.x + width + 64, y: node.position.y }
+}
+
+function sanitizeGenerationTools(value: readonly WebPluginGenerationToolSummary[], output?: WebPluginGenerationModality) {
+  if (!Array.isArray(value) || value.length > 256) throw new Error("Generation tool catalog returned an invalid result")
+  const ids = new Set<string>()
+  return value.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error("Generation tool catalog returned an invalid result")
+    const id = requireGenerationIdentifier(candidate.id, `Generation tool ${index} id`, 256)
+    if (ids.has(id)) throw new Error("Generation tool catalog returned duplicate ids")
+    ids.add(id)
+    const toolOutput = requireGenerationOutput(candidate.output, `Generation tool ${index} output`)
+    if (output && output !== toolOutput) throw new Error("Generation tool catalog returned an unexpected output")
+    if (!Array.isArray(candidate.acceptedInputs) || candidate.acceptedInputs.length > generationInputRoles.size) {
+      throw new Error("Generation tool catalog returned invalid accepted inputs")
+    }
+    const acceptedInputs = candidate.acceptedInputs.map((role) => {
+      if (!isGenerationInputRole(role) || !generationInputRoles.has(role)) {
+        throw new Error("Generation tool catalog returned invalid accepted inputs")
+      }
+      return role
+    })
+    if (new Set(acceptedInputs).size !== acceptedInputs.length) {
+      throw new Error("Generation tool catalog returned invalid accepted inputs")
+    }
+    return {
+      acceptedInputs,
+      description: requireGenerationIdentifier(candidate.description, `Generation tool ${index} description`, 2_000),
+      id,
+      output: toolOutput,
+      title: requireGenerationIdentifier(candidate.title, `Generation tool ${index} title`, 120),
+    }
+  })
+}
+
+function sanitizeGenerationResult(value: WebPluginGenerationCanvasResult): WebPluginGenerationCanvasResult {
+  if (!isRecord(value)) throw new Error("Generation executor returned an invalid result")
+  if (!Array.isArray(value.createdNodeIds) || value.createdNodeIds.length === 0 || value.createdNodeIds.length > 32) {
+    throw new Error("Generation executor returned invalid created node ids")
+  }
+  const createdNodeIds = value.createdNodeIds.map((id, index) =>
+    requireGenerationIdentifier(id, `Generated node ${index} id`))
+  if (new Set(createdNodeIds).size !== createdNodeIds.length) {
+    throw new Error("Generation executor returned duplicate created node ids")
+  }
+  if (!Number.isSafeInteger(value.revision) || value.revision < 0) {
+    throw new Error("Generation executor returned an invalid revision")
+  }
+  if (!Array.isArray(value.warnings) || value.warnings.length > 32) {
+    throw new Error("Generation executor returned invalid warnings")
+  }
+  const warnings = value.warnings.map((warning, index) =>
+    requireGenerationIdentifier(warning, `Generation warning ${index}`, 2_000))
+  return {
+    createdNodeIds,
+    revision: value.revision,
+    toolId: requireGenerationIdentifier(value.toolId, "Generation result tool id", 256),
+    warnings,
+  }
 }
 
 const connectedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
@@ -510,7 +764,7 @@ function metadataOf(data: CanvasNodeData) {
   return isRecord(data.metadata) ? data.metadata : undefined
 }
 
-export function matchesWebPluginCanvasNode(plugin: InstalledWebPluginSummary, data: CanvasNodeData) {
+export function matchesWebPluginCanvasNode(plugin: InstalledWebPluginCanvasSurface, data: CanvasNodeData) {
   const renderer = plugin.contributes.canvas.renderer
   const rendererId = webPluginCanvasRendererId(plugin.id)
   if (data.kind === rendererId) return true
@@ -540,7 +794,7 @@ function pluginNodeSnapshot(node: CanvasNode) {
 
 export function updateWebPluginNodeState(
   document: CanvasDocument,
-  input: { canvasId: string; nodeId: string; plugin: InstalledWebPluginSummary },
+  input: { canvasId: string; nodeId: string; plugin: InstalledWebPluginCanvasSurface },
   state: Record<string, unknown>,
 ) {
   if (document.id !== input.canvasId) return document
@@ -668,6 +922,64 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: We
     }
     return result
   }
+  if (request.method === "generation.tools.list") {
+    requireCapability(context.plugin, "generation.execute")
+    const params = request.params === undefined
+      ? {}
+      : exactRecord(request.params, ["output"], "Generation tool list request")
+    const output = optionalGenerationOutput(params.output)
+    const tools = await context.listGenerationTools({
+      ...context.frame,
+      ...(output === undefined ? {} : { output }),
+      signal: context.signal,
+    })
+    assertCurrentFrame(context)
+    return { tools: sanitizeGenerationTools(tools, output) }
+  }
+  if (request.method === "generation.canvas.execute") {
+    requireCapability(context.plugin, "generation.execute")
+    if (context.generationGate.active) {
+      throw new Error("A Canvas generation is already in progress for this Plugin frame")
+    }
+    context.generationGate.active = true
+    try {
+      if (!context.isCanvasWritable()) throw new Error("Canvas is not writable in the current scope")
+      const params = exactRecord(
+        request.params,
+        ["output", "prompt", "references", "toolId"],
+        "Canvas generation request",
+      )
+      const document = context.getDocument()
+      if (!document || document.id !== context.frame.canvasId) {
+        throw new Error("Plugin frame is no longer attached to its Canvas document")
+      }
+      const output = optionalGenerationOutput(params.output)
+      const toolId = params.toolId === undefined
+        ? undefined
+        : requireGenerationIdentifier(params.toolId, "Generation tool id", 256)
+      const references = requireGenerationReferences(params.references, document, context.frame.nodeId)
+      let result: WebPluginGenerationCanvasResult
+      try {
+        result = await context.executeCanvasGeneration({
+          ...context.frame,
+          anchor: generationAnchorForPluginNode(current.node),
+          expectedRevision: document.revision,
+          ...(output === undefined ? {} : { output }),
+          prompt: requireGenerationPrompt(params.prompt),
+          references,
+          signal: context.signal,
+          ...(toolId === undefined ? {} : { toolId }),
+        })
+      } catch {
+        if (context.signal.aborted) throw new Error("Plugin frame was closed")
+        throw new Error("Canvas generation could not be completed")
+      }
+      assertCurrentFrame(context)
+      return sanitizeGenerationResult(result)
+    } finally {
+      context.generationGate.active = false
+    }
+  }
   requireCapability(context.plugin, "agent.prompt")
   const params = exactRecord(request.params, ["text"], "Agent prompt request")
   const result = await context.promptAgent({
@@ -693,6 +1005,7 @@ export async function dispatchWebPluginHostRequest(
 ): Promise<DesktopPluginHostResponse | null> {
   const id = requestId(value)
   if (!id) return null
+  const protocol = desktopPluginHostProtocolForManifestSchema(context.plugin.schema)
   try {
     assertMessageSize(
       value,
@@ -701,8 +1014,9 @@ export async function dispatchWebPluginHostRequest(
     )
     exactRecord(value, ["id", "method", "params", "protocol", "type"], "Plugin host request")
     if (!isDesktopPluginHostRequest(value)) throw new Error("Invalid plugin host request")
+    if (value.protocol !== protocol) throw new Error("Plugin host protocol does not match the installed Plugin schema")
     const result = await executeHostRequest(value, context)
-    const response = pluginHostSuccess(id, result)
+    const response = pluginHostSuccess(id, result, protocol)
     assertMessageSize(
       response,
       value.method === "canvas.connectedImage.read"
@@ -717,11 +1031,11 @@ export async function dispatchWebPluginHostRequest(
     return response
   } catch (error) {
     const message = error instanceof Error ? error.message.slice(0, 512) : "Plugin host request failed"
-    return pluginHostFailure(id, message)
+    return pluginHostFailure(id, message, protocol)
   }
 }
 
-export function webPluginEntryUrl(plugin: Pick<InstalledWebPluginSummary, "entry" | "id">) {
+export function webPluginEntryUrl(plugin: Pick<InstalledWebPluginCanvasSurface, "entry" | "id">) {
   const id = requireWebPluginId(plugin.id)
   const entry = requireWebPluginRelativePath(plugin.entry, "Plugin entry")
   const url = new URL(`convax-plugin://${id}/`)
@@ -730,12 +1044,12 @@ export function webPluginEntryUrl(plugin: Pick<InstalledWebPluginSummary, "entry
 }
 
 /** Force an installed Plugin upgrade to replace the live opaque-origin frame. */
-export function webPluginFrameKey(plugin: Pick<InstalledWebPluginSummary, "entry" | "id" | "version">) {
+export function webPluginFrameKey(plugin: Pick<InstalledWebPluginCanvasSurface, "entry" | "id" | "version">) {
   return `${requireWebPluginId(plugin.id)}:${plugin.version}:${requireWebPluginRelativePath(plugin.entry, "Plugin entry")}`
 }
 
 function createPluginNode(
-  plugin: InstalledWebPluginSummary,
+  plugin: InstalledWebPluginCanvasSurface,
   input: Parameters<NonNullable<CanvasFileRendererDefinition["create"]>>[0],
 ): CanvasNode {
   const renderer = plugin.contributes.canvas.renderer
@@ -769,7 +1083,7 @@ function createPluginNode(
 function WebPluginCanvasNode(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
-    plugin: InstalledWebPluginSummary
+    plugin: InstalledWebPluginCanvasSurface
   },
 ) {
   const editor = useCanvasEditor()
@@ -778,6 +1092,7 @@ function WebPluginCanvasNode(
   const cleanupRef = useRef<(() => void) | null>(null)
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
   const connectedImageReadGateRef = useRef({ active: false })
+  const generationGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
   const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
   const pointerReleaseFrameRef = useRef<number | null>(null)
@@ -793,6 +1108,7 @@ function WebPluginCanvasNode(
   editorRef.current = editor
 
   const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
+  const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
 
   useEffect(
     () => () => {
@@ -882,7 +1198,7 @@ function WebPluginCanvasNode(
         try {
           props.options.frameRegistry.send(frame, {
             command: desktopPluginConnectedImagesChangedCommand,
-            protocol: desktopPluginHostProtocol,
+            protocol: hostProtocol,
             type: "command",
           })
         } catch {
@@ -902,6 +1218,7 @@ function WebPluginCanvasNode(
     props.options.frameRegistry,
     props.options.host,
     props.plugin.id,
+    hostProtocol,
   ])
 
   const connectFrame = () => {
@@ -923,6 +1240,7 @@ function WebPluginCanvasNode(
     const controller = new AbortController()
     const channel = new MessageChannel()
     const connectedImageReadGate = connectedImageReadGateRef.current
+    const generationGate = generationGateRef.current
     const frame: DesktopPluginFrameRef = {
       canvasId: active.canvasId,
       nodeId: props.id,
@@ -959,7 +1277,9 @@ function WebPluginCanvasNode(
     channel.port1.onmessage = (event) => {
       void dispatchWebPluginHostRequest(event.data, {
         connectedImageReadGate,
+        executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
         frame,
+        generationGate,
         getActiveContext: () => props.options.host.getActiveContext(),
         getConnectedImageNodes: () => {
           const latest = editorRef.current
@@ -971,7 +1291,16 @@ function WebPluginCanvasNode(
           if (latest.document.id !== frame.canvasId) return undefined
           return latest.document.nodes.find((candidate) => candidate.id === frame.nodeId)
         },
+        getDocument: () => {
+          const latest = editorRef.current
+          return latest.document.id === frame.canvasId ? latest.document : undefined
+        },
+        isCanvasWritable: () => {
+          const latest = editorRef.current
+          return !latest.readOnly && latest.document.id === frame.canvasId
+        },
         limits: props.options.limits,
+        listGenerationTools: (input) => props.options.host.listGenerationTools(input),
         plugin: props.plugin,
         promptAgent: (input) => props.options.host.promptAgent(input),
         readManagedProjectImage: (input) => props.options.host.readManagedProjectImage(input),
@@ -1010,7 +1339,7 @@ function WebPluginCanvasNode(
     channel.port1.start()
     const connect = {
       pluginId: props.plugin.id,
-      protocol: desktopPluginHostProtocol,
+      protocol: hostProtocol,
       type: "connect",
     } satisfies DesktopPluginHostConnect
     // Sandboxed frames have an opaque origin; the transferred port is the scoped capability token.
@@ -1076,10 +1405,11 @@ export function getIncomingConnectedImageNodes(document: CanvasDocument, ownerNo
 function WebPluginCanvasToolbar(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
-    plugin: InstalledWebPluginSummary
+    plugin: InstalledWebPluginCanvasSurface
   },
 ) {
   const editor = useCanvasEditor()
+  const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
   useSyncExternalStore(
     props.options.frameRegistry.subscribe,
     props.options.frameRegistry.getVersion,
@@ -1116,7 +1446,7 @@ function WebPluginCanvasToolbar(
             try {
               props.options.frameRegistry.send(currentFrame, {
                 command: item.command,
-                protocol: desktopPluginHostProtocol,
+                protocol: hostProtocol,
                 type: "command",
               })
             } catch {
@@ -1130,7 +1460,7 @@ function WebPluginCanvasToolbar(
 }
 
 export function createWebPluginCanvasContribution(
-  plugin: InstalledWebPluginSummary,
+  plugin: InstalledWebPluginCanvasSurface,
   options: WebPluginCanvasContributionOptions,
 ): CanvasFileRendererPlugin {
   const renderer = plugin.contributes.canvas.renderer

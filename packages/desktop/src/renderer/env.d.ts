@@ -5,6 +5,7 @@ import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { DesktopProtocolClient } from "../desktop-protocol"
+import type { GenerationClient } from "../generation-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
@@ -14,6 +15,7 @@ declare global {
     convax: {
       agent: AgentClient & { skills: DesktopSkillClient }
       canvas: { documents: CanvasDocumentClient; renderer: CanvasRendererClient }
+      generation: GenerationClient
       jianying: JianyingRendererClient
       platform: NodeJS.Platform
       plugins: WebPluginClient

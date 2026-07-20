@@ -1,0 +1,376 @@
+import { afterEach, describe, expect, mock, test } from "bun:test"
+
+import type {
+  GenerationCanvasRequest,
+  GenerationCanvasResult,
+  GenerationListToolsRequest,
+  GenerationToolSummary,
+} from "../generation-contracts"
+
+type InvokeHandler = (event: TestEvent, input?: unknown) => unknown
+type EventHandler = (event: TestEvent, input?: unknown) => void
+
+interface TestEvent {
+  sender: TestSender
+}
+
+class TestSender {
+  readonly #listeners = new Map<string, Set<() => void>>()
+
+  constructor(readonly id: number) {}
+
+  once(event: string, listener: () => void) {
+    const listeners = this.#listeners.get(event) ?? new Set()
+    listeners.add(listener)
+    this.#listeners.set(event, listeners)
+  }
+
+  removeListener(event: string, listener: () => void) {
+    this.#listeners.get(event)?.delete(listener)
+  }
+
+  destroy() {
+    const listeners = [...(this.#listeners.get("destroyed") ?? [])]
+    this.#listeners.delete("destroyed")
+    listeners.forEach((listener) => listener())
+  }
+
+  listenerCount(event: string) {
+    return this.#listeners.get(event)?.size ?? 0
+  }
+}
+
+const handlers = new Map<string, InvokeHandler>()
+const listeners = new Map<string, EventHandler>()
+const removedHandlers: string[] = []
+const removedListeners: string[] = []
+
+void mock.module("electron", () => ({
+  ipcMain: {
+    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+    on: (channel: string, listener: EventHandler) => listeners.set(channel, listener),
+    removeHandler: (channel: string) => {
+      removedHandlers.push(channel)
+      handlers.delete(channel)
+    },
+    removeListener: (channel: string) => {
+      removedListeners.push(channel)
+      listeners.delete(channel)
+    },
+  },
+}))
+
+afterEach(() => {
+  handlers.clear()
+  listeners.clear()
+  removedHandlers.splice(0)
+  removedListeners.splice(0)
+})
+
+const request: GenerationCanvasRequest = {
+  anchor: { x: 40, y: -20 },
+  expectedRevision: 4,
+  operationId: "generation-1",
+  output: "image",
+  prompt: "Draw a quiet harbor at dawn",
+  ref: { canvasId: "canvas_1", scopeId: "project-1" },
+  references: [{ nodeId: "image_1", role: "reference_image" }],
+  toolId: "example-plugin/generate_image",
+}
+
+const result: GenerationCanvasResult = {
+  createdNodeIds: ["generated_1"],
+  revision: 5,
+  toolId: "example-plugin/generate_image",
+  warnings: [],
+}
+
+const tool: GenerationToolSummary = {
+  acceptedInputs: ["reference_image"],
+  description: "Generate an image",
+  id: "example-plugin/generate_image",
+  output: "image",
+  pluginId: "example-plugin",
+  pluginName: "Example",
+  title: "Image",
+  toolId: "generate_image",
+}
+
+const description = {
+  fields: [
+    {
+      choices: [
+        { label: "Square", value: "1:1" },
+        { label: "Landscape", value: "16:9" },
+      ],
+      id: "aspect_ratio",
+      kind: "select" as const,
+      label: "Aspect ratio",
+      required: false,
+    },
+  ],
+  toolId: tool.id,
+}
+
+function invoke(channel: string, input: unknown, source = new TestSender(1)) {
+  const handler = handlers.get(channel)
+  if (!handler) throw new Error(`Missing IPC handler: ${channel}`)
+  return handler({ sender: source }, input)
+}
+
+function send(channel: string, input: unknown, source = new TestSender(1)) {
+  const listener = listeners.get(channel)
+  if (!listener) throw new Error(`Missing IPC listener: ${channel}`)
+  listener({ sender: source }, input)
+}
+
+function rejectWhenAborted(signal?: AbortSignal) {
+  return new Promise<GenerationCanvasResult>((_resolve, reject) => {
+    if (!signal) return reject(new Error("Missing AbortSignal"))
+    if (signal.aborted) return reject(signal.reason)
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+  })
+}
+
+async function rejectionMessage(value: unknown) {
+  try {
+    await Promise.resolve(value)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error("Expected the operation to reject")
+}
+
+describe("generation IPC", () => {
+  test("lists tools through a narrow, trusted and validated request", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const listTools = mock(async (_input: GenerationListToolsRequest) => [tool])
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools },
+      { isTrustedSender: (event) => event.sender.id === 1 },
+    )
+
+    expect(
+      await Promise.resolve(invoke(generationIpcChannels.listTools, { output: "image", scopeId: "project-1" })),
+    ).toEqual([tool])
+    expect(listTools).toHaveBeenCalledWith({ output: "image", scopeId: "project-1" })
+
+    expect(
+      await rejectionMessage(
+        Promise.resolve().then(() =>
+          invoke(generationIpcChannels.listTools, { scopeId: "project-1", provider: "hidden" }),
+        ),
+      ),
+    ).toContain("tool list request is invalid")
+    expect(
+      await rejectionMessage(
+        Promise.resolve().then(() => invoke(generationIpcChannels.listTools, { scopeId: "/native/path" })),
+      ),
+    ).toContain("scope id is invalid")
+    expect(
+      await rejectionMessage(
+        Promise.resolve().then(() =>
+          invoke(generationIpcChannels.listTools, { scopeId: "project-1" }, new TestSender(2)),
+        ),
+      ),
+    ).toContain("untrusted renderer")
+    expect(listTools).toHaveBeenCalledTimes(1)
+
+    dispose()
+  })
+
+  test("describes one selected tool without exposing an arbitrary schema request", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const describeTool = mock(async () => description)
+    const dispose = registerGenerationIpc(
+      { describeTool, generate: async () => result, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+
+    await expect(
+      Promise.resolve(
+        invoke(generationIpcChannels.describeTool, {
+          scopeId: "project-1",
+          toolId: "example-plugin/generate_image",
+        }),
+      ),
+    ).resolves.toEqual(description)
+    expect(describeTool).toHaveBeenCalledWith({
+      scopeId: "project-1",
+      toolId: "example-plugin/generate_image",
+    })
+    await expect(
+      Promise.resolve().then(() =>
+        invoke(generationIpcChannels.describeTool, {
+          method: "tools/list",
+          scopeId: "project-1",
+          toolId: "example-plugin/generate_image",
+        }),
+      ),
+    ).rejects.toThrow("description request is invalid")
+    await expect(
+      Promise.resolve().then(() =>
+        invoke(generationIpcChannels.describeTool, { scopeId: "project-1", toolId: "callTool" }),
+      ),
+    ).rejects.toThrow("tool id is invalid")
+
+    dispose()
+  })
+
+  test("preserves a trusted host-derived direct incoming reference constraint", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const constrained = {
+      ...request,
+      referenceConstraint: { ownerNodeId: "plugin-card", type: "direct-incoming" as const },
+    }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, constrained))).resolves.toEqual(result)
+    expect(generate).toHaveBeenCalledWith(constrained, expect.any(AbortSignal))
+
+    dispose()
+  })
+
+  test("passes only bounded scalar tool input to the Main executor", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const configured = {
+      ...request,
+      toolInput: { enabled: true, quality: "high", seed: 42 },
+    }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, configured))).resolves.toEqual(result)
+    expect(generate).toHaveBeenCalledWith(configured, expect.any(AbortSignal))
+
+    dispose()
+  })
+
+  test("scopes duplicate ids and cancellation to the originating renderer", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const capturedSignals: AbortSignal[] = []
+    const generate = mock(async (_input: GenerationCanvasRequest, signal?: AbortSignal) => {
+      if (signal) capturedSignals.push(signal)
+      return rejectWhenAborted(signal)
+    })
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const owner = new TestSender(1)
+    const pending = Promise.resolve(invoke(generationIpcChannels.generate, request, owner))
+    const ownerRejection = rejectionMessage(pending)
+
+    expect(await rejectionMessage(Promise.resolve(invoke(generationIpcChannels.generate, request, owner)))).toContain(
+      "operation id is already active",
+    )
+
+    const otherOwner = new TestSender(2)
+    const otherPending = Promise.resolve(invoke(generationIpcChannels.generate, request, otherOwner))
+    const otherRejection = rejectionMessage(otherPending)
+    send(generationIpcChannels.cancel, { operationId: request.operationId }, otherOwner)
+    expect(await otherRejection).toContain("canceled")
+    expect(capturedSignals[0]?.aborted).toBeFalse()
+    send(generationIpcChannels.cancel, { operationId: request.operationId }, owner)
+    expect(await ownerRejection).toContain("canceled")
+    expect(generate).toHaveBeenCalledTimes(2)
+    expect(owner.listenerCount("destroyed")).toBe(0)
+    expect(otherOwner.listenerCount("destroyed")).toBe(0)
+
+    dispose()
+  })
+
+  test("rejects non-contract fields, paths, generic tools, and malformed multimodal inputs", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+
+    const invalidRequests: Array<[unknown, string]> = [
+      [{ ...request, path: "/tmp/output.png" }, "Generation request is invalid"],
+      [{ ...request, ref: { ...request.ref, scopeId: "C:\\Users\\owner" } }, "scope id is invalid"],
+      [{ ...request, toolId: "callTool" }, "tool id is invalid"],
+      [{ ...request, output: "model" }, "output modality is invalid"],
+      [{ ...request, references: [{ nodeId: "image_1", role: "provider_image" }] }, "reference role is invalid"],
+      [
+        {
+          ...request,
+          references: [
+            { nodeId: "image_1", role: "reference_image" },
+            { nodeId: "image_1", role: "reference_image" },
+          ],
+        },
+        "duplicate node and role",
+      ],
+      [{ ...request, anchor: { x: Number.POSITIVE_INFINITY, y: 0 } }, "anchor is invalid"],
+      [{ ...request, expectedRevision: -1 }, "expected revision is invalid"],
+      [
+        { ...request, referenceConstraint: { ownerNodeId: "plugin-card", type: "arbitrary" } },
+        "reference constraint is invalid",
+      ],
+      [{ ...request, toolInput: { prompt: "override" } }, "cannot override host field"],
+      [{ ...request, toolInput: { quality: { provider: "hidden" } } }, "tool input value is invalid"],
+      [{ ...request, toolInput: { quality: Number.POSITIVE_INFINITY } }, "tool input value is invalid"],
+    ]
+    for (const [input, message] of invalidRequests) {
+      expect(
+        await rejectionMessage(Promise.resolve().then(() => invoke(generationIpcChannels.generate, input))),
+      ).toContain(message)
+    }
+    expect(generate).not.toHaveBeenCalled()
+
+    dispose()
+  })
+
+  test("aborts every sender operation on destruction and removes all lifecycle hooks on disposal", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async (_input: GenerationCanvasRequest, signal?: AbortSignal) => rejectWhenAborted(signal))
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const owner = new TestSender(1)
+    const first = Promise.resolve(invoke(generationIpcChannels.generate, { ...request, operationId: "first" }, owner))
+    const second = Promise.resolve(invoke(generationIpcChannels.generate, { ...request, operationId: "second" }, owner))
+    const firstOutcome = first.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const secondOutcome = second.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(owner.listenerCount("destroyed")).toBe(1)
+    owner.destroy()
+    expect(await firstOutcome).toMatchObject({ name: "AbortError" })
+    expect(await secondOutcome).toMatchObject({ name: "AbortError" })
+
+    const thirdOwner = new TestSender(3)
+    const third = Promise.resolve(
+      invoke(generationIpcChannels.generate, { ...request, operationId: "third" }, thirdOwner),
+    )
+    const thirdOutcome = third.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(thirdOwner.listenerCount("destroyed")).toBe(1)
+    dispose()
+    dispose()
+    expect(await thirdOutcome).toMatchObject({ name: "AbortError" })
+    expect(thirdOwner.listenerCount("destroyed")).toBe(0)
+    expect(removedHandlers.sort()).toEqual(
+      [generationIpcChannels.describeTool, generationIpcChannels.generate, generationIpcChannels.listTools].sort(),
+    )
+    expect(removedListeners).toEqual([generationIpcChannels.cancel])
+  })
+})

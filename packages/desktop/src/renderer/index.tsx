@@ -5,6 +5,7 @@ import {
   createCanvasViewRegistry,
   createCanvasServices,
   type CanvasEditorHandle,
+  type CanvasGenerateService,
   type CanvasMediaKind,
   type CanvasNotification,
   type CanvasSelectionAction,
@@ -18,9 +19,10 @@ import { CheckCircle2, Clapperboard, Info, PanelLeftOpen, TriangleAlert, XCircle
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { agentCanvasNodeResourceUri, createAgentCanvasInstructions } from "../agent-canvas-context"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary } from "../plugin-contracts"
 import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { AgentPanel } from "./agent-panel"
+import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
 import {
   readAppLanguagePreference,
   resolveAppLocale,
@@ -29,6 +31,7 @@ import {
 } from "./app-language"
 import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { createInitialCanvasDocument } from "./canvas-document"
+import { CanvasCardConversationPanel } from "./canvas-card-conversation-panel"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
 import {
@@ -142,6 +145,21 @@ function App() {
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
+  const generationToolCatalogVersionRef = useRef("")
+  generationToolCatalogVersionRef.current = JSON.stringify(
+    installedPlugins.flatMap((plugin) =>
+      plugin.contributes.generation
+        ? [
+            {
+              id: plugin.id,
+              generation: plugin.contributes.generation,
+              runtime: plugin.runtime,
+              version: plugin.version,
+            },
+          ]
+        : [],
+    ),
+  )
   const pluginHostContextRef = useRef<{
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
@@ -309,6 +327,34 @@ function App() {
       if (signal.aborted) throw signal.reason ?? new Error("Plugin call was canceled")
     }
     return {
+      async executeCanvasGeneration(input) {
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        await flushCanvasForAgent()
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        const operationId = globalThis.crypto.randomUUID()
+        const cancel = () => window.convax.generation.cancel({ operationId })
+        input.signal.addEventListener("abort", cancel, { once: true })
+        try {
+          const result = await window.convax.generation.generate({
+            anchor: input.anchor,
+            expectedRevision: input.expectedRevision,
+            operationId,
+            ...(input.output ? { output: input.output } : {}),
+            prompt: input.prompt,
+            ref: { canvasId: input.canvasId, scopeId: input.projectId },
+            referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
+            references: input.references,
+            ...(input.toolId ? { toolId: input.toolId } : {}),
+          })
+          throwIfAborted(input.signal)
+          currentScope(input.projectId, input.canvasId)
+          return result
+        } finally {
+          input.signal.removeEventListener("abort", cancel)
+        }
+      },
       getActiveContext() {
         const current = pluginHostContextRef.current
         if (!current.activeProject || !current.activeCanvas) return null
@@ -318,6 +364,23 @@ function App() {
           projectId: current.activeProject.id,
           projectName: current.activeProject.name,
         }
+      },
+      async listGenerationTools(input) {
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        const tools = await window.convax.generation.listTools({
+          ...(input.output ? { output: input.output } : {}),
+          scopeId: input.projectId,
+        })
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        return tools.map((tool) => ({
+          acceptedInputs: tool.acceptedInputs,
+          description: tool.description,
+          id: tool.id,
+          output: tool.output,
+          title: tool.title,
+        }))
       },
       async promptAgent(input) {
         throwIfAborted(input.signal)
@@ -430,6 +493,7 @@ function App() {
   useEffect(() => {
     const disposers: Array<() => void> = []
     for (const plugin of installedPlugins) {
+      if (!hasWebPluginCanvasSurface(plugin)) continue
       try {
         disposers.push(
           canvasFileRendererRegistry.registerPlugin(
@@ -474,12 +538,14 @@ function App() {
     activeProject,
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
+    generationCatalogVersion: generationToolCatalogVersionRef.current,
   })
   assistantHostRef.current = {
     activeCanvas,
     activeProject,
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
+    generationCatalogVersion: generationToolCatalogVersionRef.current,
   }
   useEffect(
     () =>
@@ -515,6 +581,74 @@ function App() {
   const services = useMemo(() => {
     let storageVersion: string | null | undefined
     let saveQueue = Promise.resolve()
+    const generateService: CanvasGenerateService = {
+      get catalogVersion() {
+        return generationToolCatalogVersionRef.current
+      },
+      async describeTool(toolId, signal) {
+        if (!activeProjectId || !activeCanvasId) {
+          throw new Error("Open a Project Canvas before configuring a generation model")
+        }
+        if (signal?.aborted) throw signal.reason
+        const description = await window.convax.generation.describeTool({
+          scopeId: activeProjectId,
+          toolId,
+        })
+        if (signal?.aborted) throw signal.reason
+        return description
+      },
+      async listTools(query, signal) {
+        if (!activeProjectId || !activeCanvasId) return []
+        if (signal?.aborted) throw signal.reason
+        const tools = await window.convax.generation.listTools({
+          ...(query.output ? { output: query.output } : {}),
+          scopeId: activeProjectId,
+        })
+        if (signal?.aborted) throw signal.reason
+        return tools.map((tool) => ({
+          acceptedInputs: tool.acceptedInputs,
+          description: tool.description,
+          id: tool.id,
+          output: tool.output,
+          title: tool.title,
+        }))
+      },
+      async generate(request) {
+        if (!activeProjectId || !activeCanvasId) {
+          throw new Error("Open a Project Canvas before generating content")
+        }
+        if (request.context.documentId !== activeCanvasId) {
+          throw new Error("Generation must target the active Canvas")
+        }
+        if (request.signal.aborted) throw request.signal.reason
+        await flushCanvasForAgent()
+        if (request.signal.aborted) throw request.signal.reason
+        const live = pluginHostContextRef.current
+        if (live.activeProject?.id !== activeProjectId || live.activeCanvas?.id !== activeCanvasId) {
+          throw new Error("Generation must target the live active Canvas")
+        }
+        const operationId = globalThis.crypto.randomUUID()
+        const cancel = () => window.convax.generation.cancel({ operationId })
+        request.signal.addEventListener("abort", cancel, { once: true })
+        try {
+          const result = await window.convax.generation.generate({
+            anchor: request.anchor,
+            expectedRevision: request.expectedRevision,
+            operationId,
+            ...(request.output ? { output: request.output } : {}),
+            prompt: request.prompt,
+            ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
+            references: request.references,
+            ...(request.toolId ? { toolId: request.toolId } : {}),
+            ...(request.toolInput ? { toolInput: request.toolInput } : {}),
+          })
+          if (request.signal.aborted) throw request.signal.reason
+          return result
+        } finally {
+          request.signal.removeEventListener("abort", cancel)
+        }
+      },
+    }
     return createCanvasServices({
       assistant: {
         render(request) {
@@ -523,7 +657,7 @@ function App() {
             const node = request.document.nodes.find((candidate) => candidate.id === nodeId)
             return node ? [canvasNodeResource(request.document.id, node.id, node.data.label)] : []
           })
-          return (
+          const agent = (
             <AgentPanel
               activeCanvas={host.activeCanvas}
               beforePrompt={host.beforePrompt}
@@ -532,9 +666,21 @@ function App() {
               contextResources={contextResources}
               conversationKey={JSON.stringify([request.document.id, request.ownerNodeId])}
               embedded
+              embeddedHeader={request.mode !== "file"}
+              generationCatalogVersion={host.generationCatalogVersion}
               projectId={host.activeProject?.id}
               projectName={host.activeProject?.name}
             />
+          )
+          return request.mode === "file" ? (
+            <CanvasCardConversationPanel
+              agent={agent}
+              catalogVersion={host.generationCatalogVersion}
+              request={request}
+              service={generateService}
+            />
+          ) : (
+            agent
           )
         },
       },
@@ -567,26 +713,7 @@ function App() {
           })
         },
       },
-      generate: {
-        async generate(request) {
-          await new Promise<void>((resolve, reject) => {
-            const timeout = window.setTimeout(resolve, 650)
-            request.signal.addEventListener("abort", () => {
-              window.clearTimeout(timeout)
-              reject(request.signal.reason)
-            })
-          })
-          return [
-            {
-              nodeType: "text",
-              title: "Generated idea",
-              text: request.references.length
-                ? `${request.prompt}\n\nBuilt from ${request.references.length} selected reference${request.references.length === 1 ? "" : "s"}.`
-                : request.prompt,
-            },
-          ]
-        },
-      },
+      generate: generateService,
       persistence: {
         async load(documentId, signal) {
           if (!activeProjectId || !activeCanvasId) {
@@ -652,7 +779,7 @@ function App() {
         },
       },
     })
-  }, [activeCanvasId, activeProjectId])
+  }, [activeCanvasId, activeProjectId, flushCanvasForAgent])
 
   const selectionActions = useMemo<readonly CanvasSelectionAction[]>(
     () => [
@@ -815,7 +942,7 @@ function App() {
   ])
 
   return (
-    <>
+    <AgentGenerationPreferenceProvider storage={localStorage}>
       <main
         aria-hidden={settingsSection ? true : undefined}
         className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}
@@ -933,6 +1060,7 @@ function App() {
           activeCanvas={activeCanvas}
           beforePrompt={flushCanvasForAgent}
           canvases={projectCanvasSnapshot.canvases}
+          generationCatalogVersion={generationToolCatalogVersionRef.current}
           layout={{
             collapsedWidth: collapsedSecondarySidebarSize,
             maxWidth: secondarySidebarAvailableSize,
@@ -968,7 +1096,7 @@ function App() {
           skillClient={window.convax.agent.skills}
         />
       ) : null}
-    </>
+    </AgentGenerationPreferenceProvider>
   )
 }
 

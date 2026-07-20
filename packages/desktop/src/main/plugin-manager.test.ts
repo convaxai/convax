@@ -107,7 +107,7 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/2" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/3" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
@@ -177,7 +177,7 @@ describe("WebPluginManager", () => {
 
     const installed = await manager.install(source)
     expect(installed.id).toBe("director-stage")
-    expect(installed.contributes.canvas.renderer.extensions).toEqual([".scene"])
+    expect(installed.contributes.canvas!.renderer.extensions).toEqual([".scene"])
     expect(JSON.stringify(installed)).not.toContain(root)
     expect(await manager.list()).toEqual([installed])
     expect(await manager.resolveAsset("director-stage", "web/index.html")).toBe(
@@ -233,9 +233,7 @@ describe("WebPluginManager", () => {
     }
     await expect(
       manager.installOrUpdateBuiltinBundle(updatedBundle, {
-        legacyBundleDigests: [
-          { bundleDigest: testBundleDigest(bundle), version: "1.2.3-beta.1+desktop" },
-        ],
+        legacyBundleDigests: [{ bundleDigest: testBundleDigest(bundle), version: "1.2.3-beta.1+desktop" }],
       }),
     ).resolves.toMatchObject({ trustedBuiltin: true })
     expect(await manager.isBuiltinBundleInstalled(bundle)).toBe(false)
@@ -253,17 +251,13 @@ describe("WebPluginManager", () => {
     const oldBundle = {
       files: {
         "index.html": "<!doctype html><title>Legacy built-in</title>",
-        "manifest.json": JSON.stringify(
-          manifest({ entry: "index.html", skill: undefined, version: "1.0.0" }),
-        ),
+        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined, version: "1.0.0" })),
       },
     }
     const currentBundle = {
       files: {
         "index.html": "<!doctype html><title>Current built-in</title>",
-        "manifest.json": JSON.stringify(
-          manifest({ entry: "index.html", skill: undefined, version: "2.0.0" }),
-        ),
+        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined, version: "2.0.0" })),
       },
     }
     const legacyBundleDigests = [{ bundleDigest: testBundleDigest(oldBundle), version: "1.0.0" }]
@@ -271,9 +265,10 @@ describe("WebPluginManager", () => {
     const installRoot = path.join(root, "installed")
     await new WebPluginManager(installRoot).installBundle(oldBundle)
     const manager = new WebPluginManager(installRoot, {}, ["director-stage"])
-    await expect(
-      manager.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests }),
-    ).resolves.toMatchObject({ trustedBuiltin: true, version: "2.0.0" })
+    await expect(manager.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests })).resolves.toMatchObject({
+      trustedBuiltin: true,
+      version: "2.0.0",
+    })
     expect(await manager.isBuiltinBundleInstalled(currentBundle)).toBe(true)
 
     const forgedRoot = path.join(root, "forged")
@@ -281,17 +276,15 @@ describe("WebPluginManager", () => {
       files: { ...oldBundle.files, "index.html": "<!doctype html><title>Forged</title>" },
     })
     const forged = new WebPluginManager(forgedRoot, {}, ["director-stage"])
-    await expect(
-      forged.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests }),
-    ).rejects.toThrow("non-built-in Plugin")
+    await expect(forged.installOrUpdateBuiltinBundle(currentBundle, { legacyBundleDigests })).rejects.toThrow(
+      "non-built-in Plugin",
+    )
 
     await fs.writeFile(path.join(installRoot, "director-stage", "index.html"), "tampered")
     const nextBundle = {
       files: {
         ...currentBundle.files,
-        "manifest.json": JSON.stringify(
-          manifest({ entry: "index.html", skill: undefined, version: "3.0.0" }),
-        ),
+        "manifest.json": JSON.stringify(manifest({ entry: "index.html", skill: undefined, version: "3.0.0" })),
       },
     }
     await expect(manager.installOrUpdateBuiltinBundle(nextBundle)).rejects.toThrow("do not match their provenance")

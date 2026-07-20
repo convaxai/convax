@@ -86,7 +86,6 @@ OpenCode plugins.
 | `@convax/project/canvas` | Project Canvas catalog, relationships, controller, drag and resource references |
 | `@convax/project/node`   | Native Project, Project Files, private storage, and Canvas persistence adapters |
 | `@convax/workbench`      | Headless window Input/Selection/Surface and layout state machines               |
-| `@convax/media-generation` | Provider-neutral AI image/video generation contracts and model/job shapes     |
 | `@convax/agent-runtime`  | Host-agnostic OpenCode integration and protected execution boundary             |
 | `@convax/desktop`        | Electron composition root, IPC, adapters, coordinators and product shell        |
 
@@ -96,7 +95,6 @@ Allowed internal runtime dependencies:
 @convax/ui             -> none
 @convax/project-files  -> none
 @convax/workbench      -> none
-@convax/media-generation -> none
 @convax/agent-runtime  -> none
 @convax/canvas         -> @convax/ui
 @convax/project        -> @convax/canvas, @convax/project-files, @convax/ui
@@ -175,6 +173,7 @@ Electron userData/
   opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
   plugins/<plugin-id>/                  validated static Plugin packages
     .convax-builtin.json                host-authored catalog provenance, when applicable
+  plugin-authorizations/<plugin-id>/    install-time exact Tool execution receipts
 
 ~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
 
@@ -245,18 +244,36 @@ ProjectController activates Project
 Controllers use request generations/identities so late responses from the previous
 Project cannot overwrite current state.
 
-### AI media provider boundary
+### Generation tool boundary
 
-`@convax/media-generation` defines contracts only. One outer provider adapter may
-discover and execute many provider-owned model slugs. Image contracts preserve the
-buffered or streamed lifecycle; video contracts preserve create, retrieve and
-content as an asynchronous job lifecycle. The serializable request uses OpenRouter-
-style fields, while execution-only cancellation stays in separate call options.
+Generation is an installed Tool Plugin capability, not a built-in provider
+framework. Convax packages never hard-code vendor names, model ids, credentials,
+model catalogs, or routing. A validated `convax.plugin/2` manifest declares one or
+more generation tools and a bare external `mcp-stdio` command. Desktop resolves and
+fingerprints that command during installation, persists an exact authorization
+receipt, and silently re-verifies the same declaration and executable bytes before
+every runtime start.
 
-Desktop may later own concrete adapters, credentials, selection and fallback
-orchestration, then adapt completed output into the existing Canvas resource flow.
-The contract package does not implement HTTP, register providers, select defaults,
-persist signed URLs, or expose Canvas/Project types.
+Agent, Toolbar/UI, and sandboxed Plugin callers use the same scoped generation
+executor owned by Desktop main. OpenCode is only the Agent-side tool client.
+Desktop stages bounded typed Canvas references, rechecks live scope and revision
+before the external call, admits only bounded signature-checked results, and commits
+generated media through `CanvasResourceBusinessService` and managed
+`.convax/assets/`. Tool-specific controls come only from the selected MCP tool's
+current `tools/list.inputSchema`; Main projects bounded scalar fields across preload
+and validates them again immediately before execution.
+
+The Agent panel owns the host's default generation-tool preference. A newly opened
+file card inherits that opaque tool id, while a user selection on the card is stored
+as a namespaced node override and never writes back to the Agent preference. Missing
+or unavailable ids fail closed to an explicit valid selection; Canvas does not own
+the concrete tool catalog.
+
+Generation calls may remain queued or running without a host-imposed absolute
+deadline. The sidecar owns vendor polling until terminal success/failure, while
+caller cancellation, transport closure, Plugin disposal, and process exit still
+propagate through the shared runtime. The complete contract is documented in
+[`generation-tool-plugins.md`](generation-tool-plugins.md).
 
 ### Canvas mutation from UI or Agent
 
@@ -274,6 +291,9 @@ UI action or typed Agent tool
 The domain mutation commits before optional view behavior. Selection, reveal,
 fit-view, zoom, animation, and notification are legitimate Agent view capabilities;
 they remain explicitly scoped to the mounted view and cannot rewrite domain history.
+Ordinary mutations—including node creation, file drop/import, duplication, and
+generation—preserve the user's mounted viewport. Fit, center, zoom, and reveal move
+the viewport only when the user or an explicit view command requests them.
 
 ### Adding a resource to Canvas
 
@@ -440,8 +460,8 @@ window coordination; keep the product's visual implementation in the host.
   no Node/Electron imports.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
-Project Canvas, Canvas documents/views, Agent runtime, and narrow trusted native
-integrations such as `jianying`. The JianYing bridge accepts only a Project/Canvas
+Project Canvas, Canvas documents/views, generation, Agent runtime, and narrow
+trusted native integrations such as `jianying`. The JianYing bridge accepts only a Project/Canvas
 reference, revision, node ids and a constrained target; native paths remain in main.
 Renderer assigns every export an opaque `operationId`; it keeps the live
 `AbortSignal` in the renderer realm and sends only cloneable start/cancel messages

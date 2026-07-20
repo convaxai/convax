@@ -131,7 +131,7 @@ describe("built-in Panorama Viewer", () => {
 
     expect(installed).toEqual(catalogItem.manifest)
     expect(installed.name).toBe("Panorama Viewer")
-    expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry), "utf8"))
+    expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry!), "utf8"))
       .toContain("./assets/app.js")
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/app.js"))).size).toBeGreaterThan(10_000)
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/panorama-image.js"))).size).toBeGreaterThan(2_000)

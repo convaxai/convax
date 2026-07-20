@@ -52,6 +52,11 @@ describe("canvas application commands", () => {
     const applied = applyCanvasBusinessCommand(document, addResourcesCommand())
 
     expect(document.nodes).toHaveLength(1)
+    expect(applied.document.nodes.find((node) => node.id === "anchor")).toBe(anchor)
+    expect(applied.document.nodes.find((node) => node.id === "anchor")?.style).toEqual({
+      height: 180,
+      width: 320,
+    })
     expect(applied.document.revision).toBe(0)
     expect(applied.createdNodeIds).toEqual(["image_node", "text_node"])
     expect(applied.document.nodes.find((node) => node.id === "image_node")).toMatchObject({

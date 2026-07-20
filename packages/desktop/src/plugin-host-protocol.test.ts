@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   desktopPluginHostProtocol,
+  desktopPluginHostProtocolForManifestSchema,
+  desktopPluginHostProtocolV2,
   isDesktopPluginHostRequest,
   pluginHostFailure,
   pluginHostSuccess,
@@ -35,6 +37,30 @@ describe("desktop plugin host protocol", () => {
     })).toBe(false)
     expect(isDesktopPluginHostRequest({
       id: "request-1",
+      method: "generation.canvas.execute",
+      protocol: desktopPluginHostProtocol,
+      type: "request",
+    })).toBe(false)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
+      method: "generation.canvas.execute",
+      protocol: desktopPluginHostProtocolV2,
+      type: "request",
+    })).toBe(true)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
+      method: "generation.tools.list",
+      protocol: desktopPluginHostProtocolV2,
+      type: "request",
+    })).toBe(true)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
+      method: "canvas.node.get",
+      protocol: desktopPluginHostProtocolV2,
+      type: "request",
+    })).toBe(true)
+    expect(isDesktopPluginHostRequest({
+      id: "request-1",
       method: "canvas.node.get",
       protocol: "convax.plugin-host/0",
       type: "request",
@@ -55,6 +81,17 @@ describe("desktop plugin host protocol", () => {
       ok: false,
       protocol: desktopPluginHostProtocol,
       type: "response",
+    })
+  })
+
+  test("selects a protocol from the installed manifest schema", () => {
+    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/1")).toBe(desktopPluginHostProtocol)
+    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/2")).toBe(desktopPluginHostProtocolV2)
+    expect(pluginHostSuccess("request-v2", {}, desktopPluginHostProtocolV2)).toMatchObject({
+      protocol: desktopPluginHostProtocolV2,
+    })
+    expect(pluginHostFailure("request-v2", "denied", desktopPluginHostProtocolV2)).toMatchObject({
+      protocol: desktopPluginHostProtocolV2,
     })
   })
 })

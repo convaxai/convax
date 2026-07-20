@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "../document"
-import { CanvasCommandValidationError } from "./commands"
+import { CanvasCommandValidationError, CanvasRevisionConflictError } from "./commands"
 import {
   CanvasStorageConflictError,
   type CanvasDocumentRepository,
@@ -95,8 +95,11 @@ describe("canvas resource business service", () => {
     expect(result.warnings).toEqual(["metadata was normalized"])
     expect(saves).toHaveLength(1)
 
-    expect(await business.addResources(request)).toBe(result)
+    expect(await business.addResources({ ...request, conflictPolicy: "retry" })).toBe(result)
     expect(preparations).toHaveLength(1)
+    await expect(business.addResources({ ...request, conflictPolicy: "reject" })).rejects.toBeInstanceOf(
+      CanvasCommandIdConflictError,
+    )
     await expect(
       business.addResources({
         ...request,
@@ -220,6 +223,50 @@ describe("canvas resource business service", () => {
     expect(await business.addResources(request)).toBe(result)
     expect(preparationCalls).toBe(1)
     expect(saveCalls).toBe(2)
+  })
+
+  test.each([
+    ["revision", () => new CanvasRevisionConflictError(0, 1)],
+    ["storage", () => new CanvasStorageConflictError("v0", "v1")],
+  ] as const)("reject policy does not replay a %s conflict", async (_kind, createConflict) => {
+    let executeCalls = 0
+    let queryCalls = 0
+    let preparationCalls = 0
+    const conflict = createConflict()
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      {
+        async execute() {
+          executeCalls += 1
+          throw conflict
+        },
+        async query() {
+          queryCalls += 1
+          throw new Error("Reject policy must not query for a replay revision")
+        },
+      },
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "plugin-card", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: `reject-${_kind}`,
+        conflictPolicy: "reject",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      }),
+    ).rejects.toBe(conflict)
+    expect(preparationCalls).toBe(1)
+    expect(executeCalls).toBe(1)
+    expect(queryCalls).toBe(0)
   })
 
   test("rejects a replay when a concurrent edit removed a required relation anchor", async () => {

@@ -1,12 +1,17 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, type CanvasNode } from "@convax/canvas"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { InstalledWebPluginSummary, WebPluginCapability } from "../plugin-contracts"
-import { desktopPluginHostProtocol } from "../plugin-host-protocol"
+import type { InstalledWebPluginCanvasSurface, WebPluginCapability } from "../plugin-contracts"
+import {
+  desktopPluginHostProtocol,
+  desktopPluginHostProtocolV2,
+  type DesktopPluginHostProtocol,
+} from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import {
   createWebPluginCanvasContribution,
   dispatchWebPluginHostRequest,
+  generationAnchorForPluginNode,
   getIncomingConnectedImageNodes,
   matchesWebPluginCanvasNode,
   scheduleWebPluginFrameConnect,
@@ -24,6 +29,8 @@ import {
   webPluginStateMetadataKey,
   type WebPluginCanvasActiveContext,
   type WebPluginFrameConnectClock,
+  type WebPluginGenerationCanvasResult,
+  type WebPluginGenerationToolSummary,
   type WebPluginHostRequestContext,
   type WebPluginProjectFileResult,
 } from "./web-plugin-canvas"
@@ -55,7 +62,7 @@ function frameConnectClock() {
   return { clock, delays, frames }
 }
 
-function plugin(capabilities: WebPluginCapability[] = []): InstalledWebPluginSummary {
+function plugin(capabilities: WebPluginCapability[] = []): InstalledWebPluginCanvasSurface {
   return {
     capabilities,
     contributes: {
@@ -77,6 +84,13 @@ function plugin(capabilities: WebPluginCapability[] = []): InstalledWebPluginSum
     name: "Director Stage",
     schema: "convax.plugin/1",
     version: "1.2.3",
+  }
+}
+
+function generationCallerPlugin(): InstalledWebPluginCanvasSurface {
+  return {
+    ...plugin(["generation.execute"]),
+    schema: "convax.plugin/2",
   }
 }
 
@@ -124,17 +138,42 @@ function connectedImageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
   }
 }
 
-function request(method: string, params?: unknown) {
+function generationInputNode(kind: "text" | "video" | "audio", id: string): CanvasNode {
+  return kind === "text"
+    ? {
+        data: { kind, label: "Notes", text: "Keep the wide composition" },
+        id,
+        position: { x: -200, y: 0 },
+        type: "file",
+      }
+    : {
+        data: {
+          kind,
+          label: kind === "video" ? "Reference clip" : "Soundtrack",
+          mimeType: kind === "video" ? "video/mp4" : "audio/mpeg",
+          url: `convax-asset://project-1/${kind}`,
+        },
+        id,
+        position: { x: -200, y: 0 },
+        type: "file",
+      }
+}
+
+function request(
+  method: string,
+  params?: unknown,
+  protocol: DesktopPluginHostProtocol = desktopPluginHostProtocol,
+) {
   return {
     id: "request-1",
     method,
     ...(params === undefined ? {} : { params }),
-    protocol: desktopPluginHostProtocol,
+    protocol,
     type: "request",
   }
 }
 
-function hostContext(installedPlugin: InstalledWebPluginSummary, overrides: Partial<WebPluginHostRequestContext> = {}) {
+function hostContext(installedPlugin: InstalledWebPluginCanvasSurface, overrides: Partial<WebPluginHostRequestContext> = {}) {
   const active: WebPluginCanvasActiveContext = {
     canvasId: "canvas-1",
     canvasName: "Storyboard",
@@ -142,17 +181,36 @@ function hostContext(installedPlugin: InstalledWebPluginSummary, overrides: Part
     projectName: "Film",
   }
   const controller = new AbortController()
+  const document = createCanvasDocument({ id: active.canvasId, nodes: [canvasNode()] })
   return {
     connectedImageReadGate: { active: false },
+    executeCanvasGeneration: mock(async () => ({
+      createdNodeIds: ["generated-1"],
+      revision: 1,
+      toolId: "generation-tools/image.generate",
+      warnings: [],
+    })),
     frame: {
       canvasId: active.canvasId,
       nodeId: "node-1",
       pluginId: installedPlugin.id,
       projectId: active.projectId,
     },
+    generationGate: { active: false },
     getActiveContext: () => active,
     getConnectedImageNodes: () => [],
+    getDocument: () => document,
     getNode: () => canvasNode(),
+    isCanvasWritable: () => true,
+    listGenerationTools: mock(async (): Promise<readonly WebPluginGenerationToolSummary[]> => [
+      {
+        acceptedInputs: ["text", "reference_image"],
+        description: "Generate an image",
+        id: "generation-tools/image.generate",
+        output: "image",
+        title: "Generate image",
+      },
+    ]),
     plugin: installedPlugin,
     promptAgent: mock(async () => ({ text: "Use a wide shot." })),
     readManagedProjectImage: mock(async (input) => ({
@@ -205,7 +263,14 @@ describe("Canvas Web Plugin contribution", () => {
     const contribution = createWebPluginCanvasContribution(installedPlugin, {
       frameRegistry: new DesktopPluginFrameRegistry(),
       host: {
+        executeCanvasGeneration: async () => ({
+          createdNodeIds: [],
+          revision: 0,
+          toolId: "",
+          warnings: [],
+        }),
         getActiveContext: () => null,
+        listGenerationTools: async () => [],
         promptAgent: async () => ({ text: "" }),
         readManagedProjectImage: async (input) => ({
           dataUrl: "data:image/png;base64,",
@@ -765,6 +830,336 @@ describe("Canvas Web Plugin host requests", () => {
       ok: false,
       error: expect.stringContaining("no longer in the active Project and Canvas"),
     })
+  })
+
+  test("keeps generation calls on plugin-host/2 and capability-gates both narrow methods", async () => {
+    const caller = generationCallerPlugin()
+    const listGenerationTools = mock(async () => [
+      {
+        acceptedInputs: ["reference_image"] as const,
+        description: "Generate a still image",
+        id: "image-tools/generate",
+        output: "image" as const,
+        title: "Generate image",
+      },
+    ])
+    const context = hostContext(caller, { listGenerationTools })
+
+    const legacy = await dispatchWebPluginHostRequest(
+      request("generation.tools.list", undefined, desktopPluginHostProtocol),
+      context,
+    )
+    expect(legacy).toMatchObject({
+      ok: false,
+      protocol: desktopPluginHostProtocolV2,
+      error: expect.stringContaining("Invalid plugin host request"),
+    })
+
+    const listed = await dispatchWebPluginHostRequest(
+      request("generation.tools.list", { output: "image" }, desktopPluginHostProtocolV2),
+      context,
+    )
+    expect(listed).toEqual({
+      id: "request-1",
+      ok: true,
+      protocol: desktopPluginHostProtocolV2,
+      result: {
+        tools: [
+          {
+            acceptedInputs: ["reference_image"],
+            description: "Generate a still image",
+            id: "image-tools/generate",
+            output: "image",
+            title: "Generate image",
+          },
+        ],
+      },
+      type: "response",
+    })
+    expect(listGenerationTools).toHaveBeenCalledWith(expect.objectContaining({
+      canvasId: "canvas-1",
+      nodeId: "node-1",
+      output: "image",
+      pluginId: caller.id,
+      projectId: "project-1",
+      signal: expect.any(AbortSignal),
+    }))
+
+    const executableWithoutCallerCapability = {
+      ...caller,
+      capabilities: [] as WebPluginCapability[],
+      contributes: {
+        ...caller.contributes,
+        generation: {
+          tools: [{
+            acceptedInputs: ["text" as const],
+            description: "Generate text",
+            id: "text.generate",
+            output: "text" as const,
+            title: "Generate text",
+          }],
+        },
+      },
+      runtime: { command: "generation-mcp", type: "mcp-stdio" as const },
+    }
+    const denied = await dispatchWebPluginHostRequest(
+      request("generation.tools.list", undefined, desktopPluginHostProtocolV2),
+      hostContext(executableWithoutCallerCapability),
+    )
+    expect(denied).toMatchObject({
+      ok: false,
+      error: "Plugin capability is not granted: generation.execute",
+    })
+  })
+
+  test("derives generation scope, revision, placement, and explicit references from the live Canvas", async () => {
+    const owner = canvasNode({ style: { height: 460, width: 720 } })
+    const image = connectedImageNode()
+    const video = generationInputNode("video", "video-1")
+    const audio = generationInputNode("audio", "audio-1")
+    const document = {
+      ...createCanvasDocument({
+        edges: [
+          { id: "edge-image", source: image.id, target: owner.id, type: "canvas" },
+          { id: "edge-video", source: video.id, target: owner.id, type: "canvas" },
+          { id: "edge-audio", source: audio.id, target: owner.id, type: "canvas" },
+        ],
+        id: "canvas-1",
+        nodes: [owner, image, video, audio],
+      }),
+      revision: 7,
+    }
+    const executeCanvasGeneration = mock(async () => ({
+      createdNodeIds: ["generated-image"],
+      revision: 8,
+      toolId: "image-tools/generate",
+      warnings: [],
+    }))
+    const context = hostContext(generationCallerPlugin(), {
+      executeCanvasGeneration,
+      getDocument: () => document,
+      getNode: () => owner,
+    })
+
+    const response = await dispatchWebPluginHostRequest(
+      request(
+        "generation.canvas.execute",
+        {
+          output: "image",
+          prompt: "Paint the next frame",
+          references: [
+            { nodeId: image.id, role: "first_frame" },
+            { nodeId: audio.id, role: "audio" },
+          ],
+          toolId: "image-tools/generate",
+        },
+        desktopPluginHostProtocolV2,
+      ),
+      context,
+    )
+
+    expect(response).toMatchObject({
+      ok: true,
+      protocol: desktopPluginHostProtocolV2,
+      result: { createdNodeIds: ["generated-image"], revision: 8, toolId: "image-tools/generate" },
+    })
+    expect(generationAnchorForPluginNode(owner)).toEqual({ x: 794, y: 20 })
+    expect(executeCanvasGeneration).toHaveBeenCalledWith({
+      anchor: { x: 794, y: 20 },
+      canvasId: "canvas-1",
+      expectedRevision: 7,
+      nodeId: "node-1",
+      output: "image",
+      pluginId: "director-stage",
+      projectId: "project-1",
+      prompt: "Paint the next frame",
+      references: [
+        { nodeId: "image-1", role: "first_frame" },
+        { nodeId: "audio-1", role: "audio" },
+      ],
+      signal: expect.any(AbortSignal),
+      toolId: "image-tools/generate",
+    })
+
+    const authorityInjection = await dispatchWebPluginHostRequest(
+      request(
+        "generation.canvas.execute",
+        {
+          anchor: { x: 0, y: 0 },
+          expectedRevision: 0,
+          projectId: "another-project",
+          prompt: "escape",
+        },
+        desktopPluginHostProtocolV2,
+      ),
+      context,
+    )
+    expect(authorityInjection).toMatchObject({ ok: false, error: expect.stringContaining("unsupported field") })
+    expect(executeCanvasGeneration).toHaveBeenCalledTimes(1)
+  })
+
+  test("infers semantic references only from direct incoming file nodes in edge order", async () => {
+    const owner = canvasNode()
+    const image = connectedImageNode()
+    const video = generationInputNode("video", "video-1")
+    const audio = generationInputNode("audio", "audio-1")
+    const text = generationInputNode("text", "text-1")
+    const disconnected = connectedImageNode({ id: "image-disconnected" })
+    const outgoing = connectedImageNode({ id: "image-outgoing" })
+    const document = createCanvasDocument({
+      edges: [
+        { id: "edge-text", source: text.id, target: owner.id, type: "canvas" },
+        { id: "edge-image", source: image.id, target: owner.id, type: "canvas" },
+        { id: "edge-video", source: video.id, target: owner.id, type: "canvas" },
+        { id: "edge-audio", source: audio.id, target: owner.id, type: "canvas" },
+        { id: "edge-outgoing", source: owner.id, target: outgoing.id, type: "canvas" },
+      ],
+      id: "canvas-1",
+      nodes: [owner, disconnected, outgoing, audio, image, text, video],
+    })
+    const executeCanvasGeneration = mock(async () => ({
+      createdNodeIds: ["generated-1"],
+      revision: 1,
+      toolId: "mixed/generate",
+      warnings: [],
+    }))
+    const context = hostContext(generationCallerPlugin(), {
+      executeCanvasGeneration,
+      getDocument: () => document,
+      getNode: () => owner,
+    })
+
+    expect(await dispatchWebPluginHostRequest(
+      request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
+      context,
+    )).toMatchObject({ ok: true })
+    expect(executeCanvasGeneration).toHaveBeenCalledWith(expect.objectContaining({
+      references: [
+        { nodeId: "text-1", role: "text" },
+        { nodeId: "image-1", role: "reference_image" },
+        { nodeId: "video-1", role: "reference_video" },
+        { nodeId: "audio-1", role: "audio" },
+      ],
+    }))
+  })
+
+  test("rejects more than 32 inferred incoming generation references before the port", async () => {
+    const owner = canvasNode()
+    const inputs = Array.from({ length: 33 }, (_, index) => generationInputNode("text", `text-${index}`))
+    const document = createCanvasDocument({
+      edges: inputs.map((input, index) => ({
+        id: `edge-${index}`,
+        source: input.id,
+        target: owner.id,
+        type: "canvas" as const,
+      })),
+      id: "canvas-1",
+      nodes: [owner, ...inputs],
+    })
+    const executeCanvasGeneration = mock(async () => ({
+      createdNodeIds: ["generated-1"], revision: 1, toolId: "text/generate", warnings: [],
+    }))
+
+    const response = await dispatchWebPluginHostRequest(
+      request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
+      hostContext(generationCallerPlugin(), {
+        executeCanvasGeneration,
+        getDocument: () => document,
+        getNode: () => owner,
+      }),
+    )
+
+    expect(response).toMatchObject({ ok: false, error: expect.stringContaining("at most 32") })
+    expect(executeCanvasGeneration).not.toHaveBeenCalled()
+  })
+
+  test("rejects disconnected, mismatched, duplicate, and read-only generation references before the port", async () => {
+    const owner = canvasNode()
+    const image = connectedImageNode()
+    const document = createCanvasDocument({
+      edges: [{ id: "edge-image", source: image.id, target: owner.id, type: "canvas" }],
+      id: "canvas-1",
+      nodes: [owner, image, connectedImageNode({ id: "other-image" })],
+    })
+    const executeCanvasGeneration = mock(async () => ({
+      createdNodeIds: ["generated-1"], revision: 1, toolId: "image/generate", warnings: [],
+    }))
+    const base = {
+      executeCanvasGeneration,
+      getDocument: () => document,
+      getNode: () => owner,
+    }
+    for (const references of [
+      [{ nodeId: "other-image", role: "reference_image" }],
+      [{ nodeId: image.id, role: "audio" }],
+      [
+        { nodeId: image.id, role: "reference_image" },
+        { nodeId: image.id, role: "reference_image" },
+      ],
+    ]) {
+      const response = await dispatchWebPluginHostRequest(
+        request("generation.canvas.execute", { prompt: "Continue", references }, desktopPluginHostProtocolV2),
+        hostContext(generationCallerPlugin(), base),
+      )
+      expect(response).toMatchObject({ ok: false })
+    }
+    const readOnly = await dispatchWebPluginHostRequest(
+      request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
+      hostContext(generationCallerPlugin(), { ...base, isCanvasWritable: () => false }),
+    )
+    expect(readOnly).toMatchObject({ ok: false, error: expect.stringContaining("not writable") })
+    expect(executeCanvasGeneration).not.toHaveBeenCalled()
+  })
+
+  test("allows one generation in flight and rejects a stale result after the active Canvas changes", async () => {
+    let active: WebPluginCanvasActiveContext = { canvasId: "canvas-1", projectId: "project-1" }
+    let resolveGeneration!: (value: {
+      createdNodeIds: readonly string[]
+      revision: number
+      toolId: string
+      warnings: readonly string[]
+    }) => void
+    const executeCanvasGeneration = mock(() => new Promise<WebPluginGenerationCanvasResult>((resolve) => {
+      resolveGeneration = resolve
+    }))
+    const context = hostContext(generationCallerPlugin(), {
+      executeCanvasGeneration,
+      getActiveContext: () => active,
+    })
+    const first = dispatchWebPluginHostRequest(
+      request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
+      context,
+    )
+    const second = await dispatchWebPluginHostRequest(
+      { ...request("generation.canvas.execute", { prompt: "Again" }, desktopPluginHostProtocolV2), id: "request-2" },
+      context,
+    )
+    expect(second).toMatchObject({ ok: false, error: expect.stringContaining("already in progress") })
+
+    active = { canvasId: "canvas-2", projectId: "project-1" }
+    resolveGeneration({ createdNodeIds: ["generated-1"], revision: 1, toolId: "image/generate", warnings: [] })
+    expect(await first).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("no longer in the active Project and Canvas"),
+    })
+    expect(context.generationGate.active).toBe(false)
+    expect(executeCanvasGeneration).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not expose native paths or sidecar stderr through generation failures", async () => {
+    const executeCanvasGeneration = mock(async () => {
+      throw new Error("/private/var/tmp/convax-generation/secret.png: API_TOKEN=secret")
+    })
+    const context = hostContext(generationCallerPlugin(), { executeCanvasGeneration })
+
+    const response = await dispatchWebPluginHostRequest(
+      request("generation.canvas.execute", { prompt: "Generate" }, desktopPluginHostProtocolV2),
+      context,
+    )
+
+    expect(response).toMatchObject({ ok: false, error: "Canvas generation could not be completed" })
+    expect(JSON.stringify(response)).not.toContain("/private/var")
+    expect(JSON.stringify(response)).not.toContain("API_TOKEN")
   })
 
   test("rejects malformed and oversized messages without widening the protocol", async () => {

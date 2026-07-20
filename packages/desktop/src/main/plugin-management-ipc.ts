@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
-import { compareWebPluginVersions, type WebPluginClient } from "../plugin-contracts"
+import { compareWebPluginVersions, type InstalledWebPluginSummary, type WebPluginClient } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
-import type { WebPluginManager } from "./plugin-manager"
+import type { WebPluginManager, WebPluginPublicationTransaction } from "./plugin-manager"
 import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
 type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChange">> = Parameters<
@@ -26,6 +26,11 @@ export function registerPluginManagementIpc(
   catalog: readonly DesktopBuiltinPluginBundle[],
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
   remoteCatalog?: RemotePluginCatalogPort,
+  lifecycle?: {
+    onDidChange(pluginId: string): Promise<void> | void
+    prepareInstall?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
+    revokeAuthorization?(pluginId: string): Promise<void>
+  },
 ) {
   const register = <Input, Result>(
     channel: string,
@@ -72,8 +77,19 @@ export function registerPluginManagementIpc(
       installed,
     }
   }
-  const changed = async <Result>(operation: () => Promise<Result>) => {
+  const changed = async <Result>(
+    operation: () => Promise<Result>,
+    pluginId: (result: Result) => string | undefined,
+  ) => {
     const result = await operation()
+    const changedPluginId = pluginId(result)
+    if (changedPluginId) {
+      try {
+        await lifecycle?.onDidChange(changedPluginId)
+      } catch (error) {
+        console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
+      }
+    }
     publishChange()
     return result
   }
@@ -91,7 +107,14 @@ export function registerPluginManagementIpc(
           title: "Choose a Plugin folder containing manifest.json",
         })
         if (selected.canceled || !selected.filePaths[0]) return null
-        return changed(() => manager.install(selected.filePaths[0]!))
+        const sourceDirectory = selected.filePaths[0]
+        return changed(
+          () =>
+            lifecycle?.prepareInstall
+              ? manager.install(sourceDirectory, { beforePublish: lifecycle.prepareInstall })
+              : manager.install(sourceDirectory),
+          (plugin) => plugin.id,
+        )
       },
     ),
     register<PluginClientInput<"installCatalogPlugin">, Awaited<ReturnType<WebPluginClient["installCatalogPlugin"]>>>(
@@ -99,25 +122,41 @@ export function registerPluginManagementIpc(
       (_event, input) => {
         const item = catalog.find((candidate) => candidate.manifest.id === input.id)
         if (item) {
-          return changed(async () => {
-            const current = (await manager.list()).find((plugin) => plugin.id === item.manifest.id)
-            if (current && compareWebPluginVersions(item.manifest.version, current.version) <= 0) {
-              throw new Error(`Plugin is already installed: ${item.manifest.id}`)
-            }
-            return "legacyBundleDigests" in item
-              ? manager.installOrUpdateBuiltinBundle(item.bundle, {
-                  legacyBundleDigests: item.legacyBundleDigests,
-                })
-              : manager.installOrUpdateBuiltinBundle(item.bundle)
-          })
+          return changed(
+            async () => {
+              const current = (await manager.list()).find((plugin) => plugin.id === item.manifest.id)
+              if (current && compareWebPluginVersions(item.manifest.version, current.version) <= 0) {
+                throw new Error(`Plugin is already installed: ${item.manifest.id}`)
+              }
+              return "legacyBundleDigests" in item
+                ? manager.installOrUpdateBuiltinBundle(item.bundle, {
+                    legacyBundleDigests: item.legacyBundleDigests,
+                  })
+                : manager.installOrUpdateBuiltinBundle(item.bundle)
+            },
+            (plugin) => plugin.id,
+          )
         }
-        if (remoteCatalog) return changed(() => remoteCatalog.installPlugin(input.id))
+        if (remoteCatalog) {
+          return changed(
+            () => remoteCatalog.installPlugin(input.id),
+            (plugin) => plugin.id,
+          )
+        }
         throw new Error(`Plugin catalog item was not found: ${input.id}`)
       },
     ),
     register<PluginClientInput<"uninstallPlugin">, Awaited<ReturnType<WebPluginClient["uninstallPlugin"]>>>(
       pluginManagementIpcChannels.uninstallPlugin,
-      (_event, input) => changed(() => manager.uninstall(input.id)),
+      (_event, input) =>
+        changed(
+          async () => {
+            const removed = await manager.uninstall(input.id)
+            if (removed) await lifecycle?.revokeAuthorization?.(input.id).catch(() => undefined)
+            return removed
+          },
+          (removed) => (removed ? input.id : undefined),
+        ),
     ),
   ]
   return () => disposers.forEach((dispose) => dispose())

@@ -21,6 +21,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Shortcut,
   Tooltip,
   TooltipProvider,
@@ -109,7 +114,7 @@ import {
   serializeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
-import { createMediaNode, createTextNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
+import { createMediaNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
@@ -124,6 +129,11 @@ import {
 } from "../selection-actions"
 import {
   CanvasServicesProvider,
+  getCanvasGenerationReferenceError,
+  getCompatibleCanvasGenerationTools,
+  inferCanvasGenerationReferences,
+  type CanvasGenerationInputRole,
+  type CanvasGenerationToolSummary,
   type CanvasServices,
   useCanvasService,
 } from "../services"
@@ -143,6 +153,15 @@ import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from ".
 import { PendingConnectionMenu } from "./connection-node-menu"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
+
+type CanvasGenerationImageRole = Extract<
+  CanvasGenerationInputRole,
+  "reference_image" | "first_frame" | "last_frame"
+>
+
+function isCanvasGenerationImageRole(value: string): value is CanvasGenerationImageRole {
+  return value === "reference_image" || value === "first_frame" || value === "last_frame"
+}
 
 interface CanvasLoadBarrier {
   promise: Promise<void>
@@ -291,6 +310,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const [prompt, setPrompt] = useState("")
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
+  const [generationTools, setGenerationTools] = useState<readonly CanvasGenerationToolSummary[]>([])
+  const [generationToolsStatus, setGenerationToolsStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")
+  const [generationToolsError, setGenerationToolsError] = useState<string | null>(null)
+  const [generationToolsAttempt, setGenerationToolsAttempt] = useState(0)
+  const [selectedGenerationToolId, setSelectedGenerationToolId] = useState("")
+  const [generationImageRoles, setGenerationImageRoles] = useState<Readonly<Record<string, CanvasGenerationImageRole>>>({})
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempt, setSaveAttempt] = useState(0)
@@ -319,6 +344,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const reloadQueueRef = useRef(new CanvasReloadQueue())
   const operationControllersRef = useRef(new Set<AbortController>())
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
+  const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const reactFlow = useReactFlow<CanvasNode>()
   const uploadService = useCanvasService("upload")
   const generateService = useCanvasService("generate")
@@ -376,6 +402,28 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const canArrangeSelection = arrangeNodes.length >= 2
     && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId)
   const canDistributeSelection = canArrangeSelection && arrangeNodes.length >= 3
+  const inferredGenerationReferences = useMemo(
+    () => inferCanvasGenerationReferences(history.document.nodes, selectedNodeIds),
+    [history.document.nodes, selectedNodeIds],
+  )
+  const generationReferences = useMemo(
+    () => inferredGenerationReferences.map((reference) => reference.role === "reference_image" && generationImageRoles[reference.nodeId]
+      ? { ...reference, role: generationImageRoles[reference.nodeId] }
+      : reference),
+    [generationImageRoles, inferredGenerationReferences],
+  )
+  const generationReferenceError = useMemo(
+    () => getCanvasGenerationReferenceError(generationReferences),
+    [generationReferences],
+  )
+  const compatibleGenerationTools = useMemo(
+    () => getCompatibleCanvasGenerationTools(generationTools, generationReferences),
+    [generationReferences, generationTools],
+  )
+  const selectedGenerationTool = useMemo(
+    () => compatibleGenerationTools.find((tool) => tool.id === selectedGenerationToolId),
+    [compatibleGenerationTools, selectedGenerationToolId],
+  )
   const canvasNodeIds = useMemo(
     () => history.document.nodes.filter((node) => !node.parentId).map((node) => node.id),
     [history.document.nodes],
@@ -427,6 +475,52 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     ],
     [fileRendererRegistryVersion, props.fileRendererRegistry, props.nodeRegistry, registryVersion],
   )
+
+  useEffect(() => {
+    if (!generateOpen || !generateService) {
+      setGenerationToolsStatus("idle")
+      setGenerationToolsError(null)
+      if (!generateService) {
+        setGenerationTools([])
+        setSelectedGenerationToolId("")
+      }
+      return
+    }
+    const controller = new AbortController()
+    setGenerationToolsStatus("loading")
+    setGenerationToolsError(null)
+    void generateService.listTools({}, controller.signal).then(
+      (tools) => {
+        if (controller.signal.aborted) return
+        setGenerationTools(tools)
+        setGenerationToolsStatus("ready")
+      },
+      (error) => {
+        if (controller.signal.aborted) return
+        setGenerationTools([])
+        setGenerationToolsStatus("error")
+        setGenerationToolsError(error instanceof Error ? error.message : String(error))
+      },
+    )
+    return () => controller.abort()
+  }, [generateOpen, generateService, generateService?.catalogVersion, generationToolsAttempt])
+
+  useEffect(() => {
+    setSelectedGenerationToolId((current) => compatibleGenerationTools.some((tool) => tool.id === current)
+      ? current
+      : compatibleGenerationTools[0]?.id ?? "")
+  }, [compatibleGenerationTools])
+
+  useEffect(() => {
+    const active = generationControllerRef.current
+    if (active && active.documentId !== history.document.id) active.controller.abort()
+  }, [history.document.id])
+
+  useEffect(() => {
+    if (!generateOpen) generationControllerRef.current?.controller.abort()
+  }, [generateOpen])
+
+  useEffect(() => () => generationControllerRef.current?.controller.abort(), [generateService])
 
   const updateSelection = useCallback((nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
     const next = { nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) }
@@ -556,7 +650,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
     if (!bounds) return { x: 0, y: 0 }
     return reactFlow.screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
   }, [reactFlow])
-  const fitAfterRender = useCallback(() => {
+  const fitAfterLayout = useCallback(() => {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
       void reactFlow.fitView({ duration: 220, maxZoom: 1.1, padding: 0.3 })
     }))
@@ -864,12 +958,11 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       const result = addCanvasNodes(history.document, [node])
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
-      fitAfterRender()
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type } })
     },
-    [createNodeForType, fitAfterRender, history.document, nextInsertPoint, readOnly, selectNodes, telemetryService],
+    [createNodeForType, history.document, nextInsertPoint, readOnly, selectNodes, telemetryService],
   )
   const duplicate = useCallback(() => {
     if (!hasNodeOnlySelection) return
@@ -972,8 +1065,8 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const layoutCanvas = useCallback(() => {
     if (!canLayoutCanvas) return
     commit((document) => layoutCanvasNodes(document, { nodeIds: canvasNodeIds, layout: "grid" }))
-    fitAfterRender()
-  }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterRender])
+    fitAfterLayout()
+  }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterLayout])
   const copy = useCallback(() => {
     if (!hasNodeOnlySelection) return
     const payload = createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
@@ -1052,7 +1145,6 @@ function CanvasEditorContent(props: CanvasEditorProps & {
               update: (document) => applyCanvasBusinessCommand(document, command).document,
             })
             selectNodes(nodeIds)
-            fitAfterRender()
             notificationService?.show({ kind: "success", title: `${items.length} item${items.length === 1 ? "" : "s"} added` })
           },
           (error) => {
@@ -1061,7 +1153,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
         )
         .finally(() => operationControllersRef.current.delete(controller))
     },
-    [dispatch, fitAfterRender, notificationService, notifyError, pointAtCenter, readOnly, selectedNodeIds, selectNodes, uploadService],
+    [dispatch, notificationService, notifyError, pointAtCenter, readOnly, selectedNodeIds, selectNodes, uploadService],
   )
   const replaceNodeMedia = useCallback((nodeId: string, file: File) => {
     if (!uploadService || readOnly) return
@@ -1116,59 +1208,48 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       setGenerateOpen(true)
       return
     }
+    if (!selectedGenerationTool || generationToolsStatus !== "ready") {
+      setGenerateOpen(true)
+      return
+    }
+    generationControllerRef.current?.controller.abort()
     setGenerating(true)
     const controller = new AbortController()
     operationControllersRef.current.add(controller)
     const document = documentRef.current
     const documentId = document.id
+    const expectedRevision = document.revision
     const requestPrompt = prompt.trim()
     const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
-    const references = document.nodes
-      .filter((node) => selection.nodeIds.has(node.id))
-      .map((node) => ({
-        nodeId: node.id,
-        kind: node.data.kind,
-        text: "text" in node.data && typeof node.data.text === "string" ? node.data.text : undefined,
-        url: "url" in node.data && typeof node.data.url === "string" ? node.data.url : undefined,
-      }))
-    void generateService
-      .generate({
-        prompt: requestPrompt,
-        references,
+    generationControllerRef.current = { controller, documentId }
+    void (async () => {
+      await startSave(document)
+      if (controller.signal.aborted
+        || documentRef.current.id !== documentId
+        || documentRef.current.revision !== expectedRevision) return undefined
+      return generateService.generate({
+        anchor,
         context: { documentId, selectedNodeIds, source: "canvas" },
+        expectedRevision,
+        output: selectedGenerationTool.output,
+        prompt: requestPrompt,
+        references: generationReferences,
         signal: controller.signal,
+        toolId: selectedGenerationTool.id,
       })
+    })()
       .then(
-        (items) => {
-          if (controller.signal.aborted || documentRef.current.id !== documentId) return
-          const nodes = items.flatMap((item, index) => {
-            const position = { x: anchor.x + index * 36, y: anchor.y + index * 36 }
-            if (item.resource) return [createMediaNode({ label: item.title, position, resource: item.resource })]
-            if (!item.nodeType || item.nodeType === "text") {
-              return [createTextNode({ label: item.title ?? "Generated", position, text: item.text ?? requestPrompt })]
-            }
-            const node = createNodeForType(item.nodeType, position, {
-              ...item.metadata,
-              label: item.title,
-              text: item.text,
-            })
-            return node ? [node] : []
-          })
-          dispatch({
-            type: "commit-update",
-            update: (current) => {
-              const point = findOpenCanvasPoint(current, anchor)
-              return addCanvasNodes(current, nodes.map((node, index) => ({
-                ...node,
-                position: { x: point.x + index * 36, y: point.y + index * 36 },
-              }))).document
-            },
-          })
-          selectNodes(nodes.map((node) => node.id))
-          fitAfterRender()
+        (result) => {
+          if (!result || controller.signal.aborted || documentRef.current.id !== documentId) return
           setGenerateOpen(false)
           setPrompt("")
-          notificationService?.show({ kind: "success", title: "Generation complete" })
+          notificationService?.show({
+            description: result.warnings.length > 0 ? result.warnings.join("\n") : undefined,
+            kind: result.warnings.length > 0 ? "warning" : "success",
+            title: result.createdNodeIds.length > 0
+              ? `${result.createdNodeIds.length} generated item${result.createdNodeIds.length === 1 ? "" : "s"} added`
+              : "Generation complete",
+          })
         },
         (error) => {
           if (!controller.signal.aborted) notifyError("Generation failed", error)
@@ -1176,9 +1257,12 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       )
       .finally(() => {
         operationControllersRef.current.delete(controller)
-        if (!controller.signal.aborted) setGenerating(false)
+        if (generationControllerRef.current?.controller === controller) {
+          generationControllerRef.current = null
+          setGenerating(false)
+        }
       })
-  }, [createNodeForType, dispatch, fitAfterRender, generateService, insertPoint, notificationService, notifyError, pointAtCenter, prompt, readOnly, selectedNodeIds, selectNodes, selection.nodeIds])
+  }, [generateService, generationReferences, generationToolsStatus, insertPoint, notificationService, notifyError, pointAtCenter, prompt, readOnly, selectedGenerationTool, selectedNodeIds, startSave])
   const exportCanvas = useCallback(() => {
     if (!exportService) return
     const controller = new AbortController()
@@ -1227,6 +1311,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
   const controller = useMemo(
     () => ({
       document: history.document,
+      hydrating,
       selection,
       selectionContext,
       readOnly,
@@ -1252,6 +1337,7 @@ function CanvasEditorContent(props: CanvasEditorProps & {
       duplicateNode,
       executeSelectionAction,
       history.document,
+      hydrating,
       isSelectionActionPending,
       props.fileRendererRegistry,
       quickConnect,
@@ -1643,18 +1729,117 @@ function CanvasEditorContent(props: CanvasEditorProps & {
               {generateOpen ? (
                 <FloatingPanel className="left-1/2 top-20 w-[min(440px,calc(100%-32px))] -translate-x-1/2">
                   <form
-                    className="flex gap-2"
+                    className="flex flex-col gap-2"
                     onSubmit={(event: FormEvent) => {
                       event.preventDefault()
                       runGenerate()
                     }}
                   >
-                    <Input autoFocus data-canvas-shortcuts="ignore" onChange={(event) => setPrompt(event.currentTarget.value)} placeholder="Describe what to create..." value={prompt} />
-                    <Button aria-label="Run generation" disabled={generating || !prompt.trim()} size="icon" type="submit">
-                      {generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
-                    </Button>
+                    {generationToolsStatus === "loading" ? (
+                      <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground" role="status">
+                        <LoaderCircle className="size-4 animate-spin" />
+                        Loading generation tools…
+                      </div>
+                    ) : null}
+                    {generationToolsStatus === "error" ? (
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-xs text-destructive" role="alert">
+                        <span className="min-w-0 truncate">{generationToolsError ?? "Could not load generation tools."}</span>
+                        <Button onClick={() => setGenerationToolsAttempt((attempt) => attempt + 1)} size="sm" type="button" variant="outline">Retry</Button>
+                      </div>
+                    ) : null}
+                    {inferredGenerationReferences.some((reference) => reference.role === "reference_image") ? (
+                      <div className="flex flex-col gap-2 rounded-md border border-border px-3 py-2">
+                        <div className="text-xs font-medium text-foreground">Image roles</div>
+                        {inferredGenerationReferences
+                          .filter((reference) => reference.role === "reference_image")
+                          .map((reference) => (
+                            <div key={reference.nodeId} className="flex items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                                {nodeById.get(reference.nodeId)?.data.label ?? reference.nodeId}
+                              </span>
+                              <Select
+                                disabled={generating}
+                                onValueChange={(role) => setGenerationImageRoles((current) => {
+                                  if (!isCanvasGenerationImageRole(role)) return current
+                                  const selectedRole = role
+                                  const next = { ...current }
+                                  if (selectedRole === "first_frame" || selectedRole === "last_frame") {
+                                    Object.entries(next).forEach(([nodeId, currentRole]) => {
+                                      if (nodeId !== reference.nodeId && currentRole === selectedRole) delete next[nodeId]
+                                    })
+                                  }
+                                  next[reference.nodeId] = selectedRole
+                                  return next
+                                })}
+                                value={generationImageRoles[reference.nodeId] ?? "reference_image"}
+                              >
+                                <SelectTrigger aria-label={`Generation role for ${nodeById.get(reference.nodeId)?.data.label ?? reference.nodeId}`} className="w-36" data-canvas-shortcuts="ignore">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="reference_image">Reference</SelectItem>
+                                  <SelectItem value="first_frame">First frame</SelectItem>
+                                  <SelectItem value="last_frame">Last frame</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          ))}
+                      </div>
+                    ) : null}
+                    {generationToolsStatus === "ready" && compatibleGenerationTools.length > 1 ? (
+                      <Select disabled={generating} onValueChange={setSelectedGenerationToolId} value={selectedGenerationToolId}>
+                        <SelectTrigger aria-label="Generation tool" className="w-full" data-canvas-shortcuts="ignore">
+                          <SelectValue>{selectedGenerationTool?.title ?? "Choose a generation tool"}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {compatibleGenerationTools.map((tool) => (
+                            <SelectItem key={tool.id} value={tool.id}>
+                              <span className="flex min-w-0 flex-col">
+                                <span className="truncate">{tool.title}</span>
+                                <span className="truncate text-xs text-muted-foreground">{tool.output} · {tool.description}</span>
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : null}
+                    {generationToolsStatus === "ready" && compatibleGenerationTools.length === 1 ? (
+                      <div className="rounded-md border border-border px-3 py-2">
+                        <div className="text-sm font-medium">{compatibleGenerationTools[0]?.title}</div>
+                        <div className="mt-0.5 text-xs text-muted-foreground">{compatibleGenerationTools[0]?.output} · {compatibleGenerationTools[0]?.description}</div>
+                      </div>
+                    ) : null}
+                    {generationToolsStatus === "ready" && compatibleGenerationTools.length === 0 ? (
+                      <div className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground" role="status">
+                        {generationReferenceError ?? (generationTools.length === 0
+                          ? "No generation tools are installed. Install a Tool Plugin to generate content."
+                          : "No installed generation tool supports all selected references.")}
+                      </div>
+                    ) : null}
+                    <div className="flex gap-2">
+                      <Input
+                        autoFocus
+                        data-canvas-shortcuts="ignore"
+                        disabled={generating || generationToolsStatus !== "ready" || !selectedGenerationTool}
+                        onChange={(event) => setPrompt(event.currentTarget.value)}
+                        placeholder="Describe what to create..."
+                        value={prompt}
+                      />
+                      <Button
+                        aria-label="Run generation"
+                        disabled={generating || generationToolsStatus !== "ready" || !selectedGenerationTool || !prompt.trim()}
+                        size="icon"
+                        type="submit"
+                      >
+                        {generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+                      </Button>
+                    </div>
                   </form>
-                  <div className="mt-2 text-xs text-muted-foreground">{selectedNodeIds.length ? `${selectedNodeIds.length} selected node${selectedNodeIds.length === 1 ? "" : "s"} will be used as context.` : "No reference nodes selected."}</div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {generationReferences.length > 0
+                      ? `${generationReferences.length} selected reference${generationReferences.length === 1 ? "" : "s"} will be used as input.`
+                      : "No supported reference nodes selected."}
+                  </div>
                 </FloatingPanel>
               ) : null}
 

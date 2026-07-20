@@ -45,7 +45,6 @@ import {
   parseProjectManifest,
   projectIdForPath,
   projectManifestPath,
-  replaceFile,
   removePathWithRetries,
   requireEntryPath,
   requireProjectId,
@@ -462,6 +461,33 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return this.queueProjectMutation(input.projectId, () => this.deleteEntriesUnlocked(input))
   }
 
+  /** Main-only rollback boundary for files freshly admitted below `.convax/assets/`. */
+  deleteManagedAssets(input: { paths: string[]; projectId: string }) {
+    return this.queueProjectMutation(input.projectId, async () => {
+      const sourcePaths = [...new Set(input.paths)]
+      if (!sourcePaths.length || sourcePaths.some((sourcePath) => !isManagedProjectAssetPath(sourcePath))) {
+        throw new Error("Managed asset rollback paths are invalid")
+      }
+      const cleanupErrors: unknown[] = []
+      for (const relativePath of sourcePaths) {
+        try {
+          const item = await this.resolveExisting(input.projectId, relativePath)
+          const stat = await fs.lstat(item.absolutePath)
+          if (!stat.isFile() || stat.isSymbolicLink()) {
+            throw new Error(`Managed asset rollback accepts regular files only: ${relativePath}`)
+          }
+          await removePathWithRetries(item.absolutePath)
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== "ENOENT") cleanupErrors.push(error)
+        }
+      }
+      if (cleanupErrors.length) {
+        throw new AggregateError(cleanupErrors, "One or more managed generation assets could not be removed")
+      }
+      return mutation("delete", input.projectId, sourcePaths, sourcePaths)
+    })
+  }
+
   private async deleteEntriesUnlocked(input: { paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
     const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
     sourcePaths.forEach(assertUserMutationPath)
@@ -515,6 +541,11 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
       imports.push({ source: sourcePath, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
     }
+    // Never remove a published import target after an external failure. Node's
+    // portable filesystem API cannot atomically prove pathname identity and
+    // unlink it, so rollback could delete a concurrent writer's replacement.
+    // A failed directory import may conservatively leave a partial target; a
+    // later explicit user action can inspect and remove it safely.
     for (const item of imports) await copyPath(item.source, item.target)
     const targetPaths = imports.map((item) => item.targetPath)
     return mutation("import", input.projectId, targetPaths, sourcePaths, targetPaths)

@@ -13,12 +13,15 @@ it must not become the permanent home of reusable domain rules.
 
 ## Composition rules
 
-- Keep Project lifecycle, Project Files, Project Canvas, Canvas and Agent bridge/IPC
-  namespaces separate. Never re-add file methods to `window.convax.projects`.
+- Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation and Agent
+  bridge/IPC namespaces separate. Never re-add file methods to `window.convax.projects`.
 - Derive active Canvas/file from Workbench Surface only. Project Canvas owns catalog
   CRUD; Desktop coordinators own save-guard, fallback, rollback and preference flows.
 - Workbench layout owns generic resize/collapse state. Desktop owns concrete sizes,
   viewport constraints, pointer/keyboard events, CSS animation and localStorage.
+- The Agent generation-tool preference is the host default for new file-card
+  conversations. A card may persist its own opaque tool-id override, but card
+  changes never write back to the Agent preference or create a second catalog.
 - Agent tools are thin adapters over Canvas application/business and view ports.
   Host scope is authoritative; arguments cannot select another Project or Canvas.
   Resolve the live active Canvas from the mounted view, inject it at the adapter, and
@@ -42,6 +45,14 @@ it must not become the permanent home of reusable domain rules.
   Verify monotonic catalog sequence, compatibility, size, SHA-256 and a bounded safe
   ZIP inventory, then reuse the existing Plugin and managed-Skill installers. A
   remote package never enters the trusted built-in update/provenance path.
+- Generation `tools/call` has no host-imposed overall deadline. Keep initialization
+  and discovery bounded, but let the sidecar own queued vendor state until a terminal
+  result or caller cancellation. Agent transport relays content-free MCP progress so
+  its timeout remains an inactivity guard.
+- Tool-custom generation controls come only from the explicitly selected MCP tool's
+  current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
+  never raw JSON Schema, across preload; revalidate them in Main immediately before
+  execution and never allow them to replace the fixed generation-call envelope.
 - Bind Plugin RPC to its MessagePort and exact Project/Canvas/node scope. Enforce the
   manifest allowlist and delegate to existing typed clients; never add a generic
   IPC/function-call escape hatch.

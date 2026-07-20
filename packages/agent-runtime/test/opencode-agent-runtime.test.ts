@@ -190,6 +190,61 @@ describe("OpenCode agent runtime boundaries", () => {
     expect(() => new OpenCodeAgentRuntime({ toolServerName: "not a name" })).toThrow("Tool server name")
   })
 
+  test("validates the host tool call timeout", () => {
+    expect(() => new OpenCodeAgentRuntime({ toolCallTimeout: 0 })).toThrow("positive integer")
+  })
+
+  test("scopes the host tool timeout to its dynamically registered MCP server", async () => {
+    const add = mock(async () => ({ data: { bridge: { status: "connected" as const } } }))
+    const config = {
+      experimental: {
+        batch_tool: true,
+        mcp_timeout: 500,
+      },
+    }
+    const runtime = new OpenCodeAgentRuntime({
+      config,
+      timeout: 1_234,
+      toolCallTimeout: 60 * 60_000,
+      toolProvider: {
+        callTool: async () => undefined,
+        listTools: () => [{ description: "Wait for host work", inputSchema: {}, name: "wait" }],
+      },
+      toolServerName: "bridge",
+    })
+    ;(runtime as unknown as { client: unknown }).client = {
+      app: { skills: async () => ({ data: [] }) },
+      mcp: { add },
+      tool: { ids: async () => ({ data: [] }) },
+    }
+
+    const runtimeConfig = (
+      runtime as unknown as {
+        options: { config: { experimental?: { mcp_timeout?: number } } }
+      }
+    ).options.config
+
+    try {
+      const capabilities = await runtime.listCapabilities({ directory: "/workspace", scopeId: "scope-a" })
+
+      expect(capabilities.toolIds).toContain("bridge_wait")
+      expect(add).toHaveBeenCalledTimes(1)
+      expect(add.mock.calls[0]?.[0]).toMatchObject({
+        config: {
+          timeout: 60 * 60_000,
+          type: "remote",
+        },
+        directory: "/workspace",
+        name: "bridge",
+      })
+      expect(add.mock.calls[0]?.[0]).not.toMatchObject({ config: { timeout: 1_234 } })
+      expect(runtimeConfig.experimental).toMatchObject({ batch_tool: true, mcp_timeout: 500 })
+      expect(config.experimental.mcp_timeout).toBe(500)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test("discovers global and managed skills without project external skills", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-runtime-skills-"))
     const directory = join(root, "workspace")

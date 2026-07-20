@@ -57,6 +57,7 @@ export interface OpenCodeAgentRuntimeOptions {
   configDirectory?: string
   hostname?: string
   port?: number
+  /** Maximum time to wait for the OpenCode server process to start. */
   timeout?: number
   config?: ServerOptions["config"]
   /** Lexical OpenCode permission patterns. These are not a filesystem sandbox. */
@@ -66,6 +67,12 @@ export interface OpenCodeAgentRuntimeOptions {
    * Enabling this strong guard intentionally disables OpenCode's shell and LSP tools.
    */
   protectedPaths?: readonly string[]
+  /**
+   * OpenCode remote MCP inactivity timeout for injected host tools. The local
+   * transport emits progress heartbeats while a call remains active, so this is
+   * not an overall long-running tool deadline.
+   */
+  toolCallTimeout?: number
   toolProvider?: AgentToolProvider
   toolServerName?: string
 }
@@ -134,6 +141,7 @@ const supportedBinaryMimes = new Set(Object.values(binaryMimeByExtension))
 const textFileLimit = 5 * 1024 * 1024
 const binaryFileLimit = 20 * 1024 * 1024
 const skillPartMetadataKey = "convax.agent.skill"
+const defaultHostToolCallTimeout = 30_000
 
 type OpenCodeConfig = NonNullable<ServerOptions["config"]>
 type OpenCodePermission = NonNullable<OpenCodeConfig["permission"]>
@@ -620,6 +628,10 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     this.toolServerName = toolServerName
     const permissionConfig = withProtectedPathPermissions(options.config, options.protectedPathPatterns ?? [])
     const config = withSkillDiscoveryBoundary(permissionConfig)
+    const toolCallTimeout = options.toolCallTimeout ?? defaultHostToolCallTimeout
+    if (!Number.isSafeInteger(toolCallTimeout) || toolCallTimeout <= 0) {
+      throw new Error("Host tool call timeout must be a positive integer")
+    }
     if (options.configDirectory !== undefined && !options.configDirectory.trim()) {
       throw new Error("OpenCode config directory is required")
     }
@@ -629,6 +641,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       config,
       configDirectory,
       protectedPaths: normalizeProtectedPaths(options.protectedPaths ?? []),
+      toolCallTimeout,
       toolServerName,
     }
     if (options.toolProvider) this.toolServer = new AgentLocalToolServer(options.toolProvider, toolServerName)
@@ -677,8 +690,8 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       })
   }
 
-  /** Rebuild OpenCode's Skill registry without replacing its durable sessions. */
-  refreshSkills(): Promise<void> {
+  /** Rebuild OpenCode's discovered Skills and host-tool connections without replacing durable sessions. */
+  refreshCapabilities(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error("OpenCode agent runtime has been disposed"))
     this.skillRefreshRequested = true
     const result = new Promise<void>((resolve, reject) => {
@@ -686,6 +699,19 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     })
     this.drainSkillRefresh()
     return result
+  }
+
+  /** Backward-compatible Skill lifecycle name used by the managed Skill store. */
+  refreshSkills(): Promise<void> {
+    return this.refreshCapabilities()
+  }
+
+  /** Refresh dynamic host tools, but do not launch an otherwise unused OpenCode server. */
+  refreshHostTools(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error("OpenCode agent runtime has been disposed"))
+    this.toolRegistrations.clear()
+    if (!this.client && !this.startup && !this.server) return Promise.resolve()
+    return this.refreshCapabilities()
   }
 
   private materializeProtectedPathPlugin() {
@@ -831,7 +857,11 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
             enabled: true,
             headers: endpoint.headers,
             oauth: false,
-            timeout: this.options.timeout ?? 10_000,
+            // OpenCode applies this timeout to tools/call and resets it whenever
+            // AgentLocalToolServer emits progress. Keep it independent from the
+            // child-process startup deadline: host tools may run for hours while
+            // still retaining a bounded inactivity/transport failure guard.
+            timeout: this.options.toolCallTimeout,
             type: "remote",
             url: endpoint.url,
           },

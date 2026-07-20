@@ -66,6 +66,11 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   anchor: CanvasPoint
   commandId: string
+  /**
+   * Controls whether a concurrent Canvas change may replay this business
+   * operation on the latest document. Defaults to `retry`.
+   */
+  conflictPolicy?: "reject" | "retry"
   expectedRevision: number
   relation?: CanvasAddResourcesCommand["relation"]
   sources: readonly CanvasResourceSource[]
@@ -103,6 +108,7 @@ export class CanvasResourceBusinessService {
     ])
     const fingerprint = stableJson({
       anchor: request.anchor,
+      conflictPolicy: request.conflictPolicy ?? "retry",
       expectedRevision: request.expectedRevision,
       relation: request.relation,
       sources: request.sources,
@@ -131,6 +137,13 @@ export class CanvasResourceBusinessService {
     }
     if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
       throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
+    }
+    if (
+      request.conflictPolicy !== undefined &&
+      request.conflictPolicy !== "reject" &&
+      request.conflictPolicy !== "retry"
+    ) {
+      throw new CanvasCommandValidationError("Canvas resource conflict policy must be retry or reject")
     }
     validateCanvasResourceSources(request.sources)
     if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
@@ -175,7 +188,13 @@ export class CanvasResourceBusinessService {
           warnings: [...(prepared.warnings ?? []), ...result.warnings, ...replayWarning],
         }
       } catch (error) {
-        if (!isCanvasResourceConflict(error) || conflictRetries >= maxCanvasResourceConflictRetries) throw error
+        if (
+          !isCanvasResourceConflict(error) ||
+          request.conflictPolicy === "reject" ||
+          conflictRetries >= maxCanvasResourceConflictRetries
+        ) {
+          throw error
+        }
         conflictRetries += 1
         // A storage conflict has no document revision, so both conflict types use
         // one fresh query before reapplying the business command.

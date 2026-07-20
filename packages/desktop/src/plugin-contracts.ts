@@ -1,5 +1,8 @@
 export const webPluginManifestFileName = "manifest.json"
 export const webPluginManifestSchema = "convax.plugin/1" as const
+export const webPluginManifestSchemaV2 = "convax.plugin/2" as const
+
+export type WebPluginManifestSchema = typeof webPluginManifestSchema | typeof webPluginManifestSchemaV2
 
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
@@ -7,10 +10,43 @@ export const webPluginCapabilities = [
   "canvas.node.write",
   "project.files.read",
   "agent.prompt",
+  "generation.execute",
   "ui.fullscreen",
 ] as const
 
 export type WebPluginCapability = (typeof webPluginCapabilities)[number]
+
+export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
+export const webPluginGenerationInputRoles = [
+  "reference_image",
+  "reference_video",
+  "first_frame",
+  "last_frame",
+  "audio",
+  "text",
+] as const
+
+export type WebPluginGenerationModality = (typeof webPluginGenerationModalities)[number]
+export type WebPluginGenerationInputRole = (typeof webPluginGenerationInputRoles)[number]
+
+export interface WebPluginGenerationToolContribution {
+  acceptedInputs: WebPluginGenerationInputRole[]
+  description: string
+  id: string
+  output: WebPluginGenerationModality
+  title: string
+}
+
+export interface WebPluginGenerationContribution {
+  tools: WebPluginGenerationToolContribution[]
+}
+
+export interface WebPluginMcpStdioRuntime {
+  args?: string[]
+  /** A portable executable name resolved by the trusted host; never a path. */
+  command: string
+  type: "mcp-stdio"
+}
 
 export interface WebPluginCanvasRendererContribution {
   create?: boolean
@@ -31,19 +67,24 @@ export interface WebPluginToolbarContribution {
 export interface WebPluginManifest {
   capabilities: WebPluginCapability[]
   contributes: {
-    canvas: {
+    canvas?: {
       renderer: WebPluginCanvasRendererContribution
       toolbar?: WebPluginToolbarContribution[]
     }
+    /** Present only in a convax.plugin/2 manifest with a matching MCP runtime. */
+    generation?: WebPluginGenerationContribution
   }
   description: string
-  /** Sandboxed HTML entry, relative to the plugin package. */
-  entry: string
+  /** Sandboxed HTML entry, relative to the plugin package; absent for a headless Tool Plugin. */
+  entry?: string
   id: string
   name: string
-  schema: typeof webPluginManifestSchema
+  /** v1 remains static-only; v2 can call generation tools and/or declare one external runtime. */
+  schema: WebPluginManifestSchema
   /** Optional SKILL.md path relative to the plugin package. */
   skill?: string
+  /** Present only in a convax.plugin/2 manifest with executable contributions. */
+  runtime?: WebPluginMcpStdioRuntime
   version: string
 }
 
@@ -51,6 +92,19 @@ export interface WebPluginManifest {
 export interface InstalledWebPluginSummary extends WebPluginManifest {
   /** Host-authored provenance marker; imported packages can never set this field. */
   trustedBuiltin?: true
+}
+
+export type InstalledWebPluginCanvasSurface = InstalledWebPluginSummary & {
+  contributes: InstalledWebPluginSummary["contributes"] & {
+    canvas: NonNullable<InstalledWebPluginSummary["contributes"]["canvas"]>
+  }
+  entry: string
+}
+
+export function hasWebPluginCanvasSurface(
+  plugin: InstalledWebPluginSummary,
+): plugin is InstalledWebPluginCanvasSurface {
+  return typeof plugin.entry === "string" && plugin.contributes.canvas !== undefined
 }
 
 export interface WebPluginCatalogItem extends WebPluginManifest {
@@ -76,6 +130,8 @@ export interface WebPluginClient {
 }
 
 const allowedCapabilities = new Set<string>(webPluginCapabilities)
+const allowedGenerationModalities = new Set<string>(webPluginGenerationModalities)
+const allowedGenerationInputRoles = new Set<string>(webPluginGenerationInputRoles)
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 const semverPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
@@ -267,16 +323,122 @@ function parseToolbar(value: unknown): WebPluginToolbarContribution[] | undefine
   return toolbar
 }
 
+function isGenerationModality(value: unknown): value is WebPluginGenerationModality {
+  return typeof value === "string" && allowedGenerationModalities.has(value)
+}
+
+function isGenerationInputRole(value: unknown): value is WebPluginGenerationInputRole {
+  return typeof value === "string" && allowedGenerationInputRoles.has(value)
+}
+
+function parseGenerationInputRoles(value: unknown, label: string): WebPluginGenerationInputRole[] {
+  if (!Array.isArray(value) || value.length > webPluginGenerationInputRoles.length) {
+    throw new Error(`${label} contain an unsupported or duplicate role`)
+  }
+  const roles: WebPluginGenerationInputRole[] = []
+  for (const role of value) {
+    if (!isGenerationInputRole(role)) {
+      throw new Error(`${label} contain an unsupported or duplicate role`)
+    }
+    roles.push(role)
+  }
+  if (new Set(roles).size !== roles.length) {
+    throw new Error(`${label} contain an unsupported or duplicate role`)
+  }
+  return roles
+}
+
+function parseMcpStdioRuntime(value: unknown): WebPluginMcpStdioRuntime {
+  const input = asRecord(value, "Plugin runtime")
+  assertKeys(input, ["args", "command", "type"], "Plugin runtime")
+  if (input.type !== "mcp-stdio") throw new Error("Plugin runtime type must be mcp-stdio")
+  const command = requireString(input.command, "Plugin runtime command", 128)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(command)) {
+    throw new Error("Plugin runtime command must be a bare executable name")
+  }
+  validatePortablePluginSegment(command)
+  let args: string[] | undefined
+  if (input.args !== undefined) {
+    if (!Array.isArray(input.args) || input.args.length > 64) {
+      throw new Error("Plugin runtime args must be an array with at most 64 items")
+    }
+    args = input.args.map((value, index) => {
+      const argument = requireString(value, `Plugin runtime arg ${index}`, 1_024)
+      if (
+        /[\s"'`;|&`$(){}[\]<>]/.test(argument) ||
+        argument.includes("\\") ||
+        /(^|=)(?:\/|[A-Za-z]:)/.test(argument) ||
+        /(^|[=/])\.{1,2}(?:\/|$)/.test(argument)
+      ) {
+        throw new Error(
+          `Plugin runtime arg ${index} must be a static CLI token without code, native paths, or traversal`,
+        )
+      }
+      return argument
+    })
+  }
+  return {
+    ...(args === undefined ? {} : { args }),
+    command,
+    type: "mcp-stdio",
+  }
+}
+
+function parseGeneration(value: unknown): WebPluginGenerationContribution {
+  const input = asRecord(value, "Generation contribution")
+  assertKeys(input, ["tools"], "Generation contribution")
+  if (!Array.isArray(input.tools) || input.tools.length === 0 || input.tools.length > 64) {
+    throw new Error("Generation tools must be a non-empty array with at most 64 items")
+  }
+  const tools = input.tools.map((value, index) => {
+    const tool = asRecord(value, `Generation tool ${index}`)
+    assertKeys(tool, ["acceptedInputs", "description", "id", "output", "title"], `Generation tool ${index}`)
+    const id = requireString(tool.id, `Generation tool ${index} id`, 80)
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) throw new Error(`Invalid generation tool id: ${id}`)
+    if (!isGenerationModality(tool.output)) {
+      throw new Error(`Generation tool ${index} output is not supported`)
+    }
+    const acceptedInputs = parseGenerationInputRoles(tool.acceptedInputs, `Generation tool ${index} acceptedInputs`)
+    return {
+      acceptedInputs,
+      description: requireString(tool.description, `Generation tool ${index} description`, 2_000),
+      id,
+      output: tool.output,
+      title: requireString(tool.title, `Generation tool ${index} title`, 120),
+    }
+  })
+  if (new Set(tools.map((tool) => tool.id)).size !== tools.length) {
+    throw new Error("Generation tools contain duplicate ids")
+  }
+  return { tools }
+}
+
 export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const input = asRecord(value, "Plugin manifest")
+  const schema = input.schema
+  if (schema !== webPluginManifestSchema && schema !== webPluginManifestSchemaV2) {
+    throw new Error("Plugin manifest schema is not supported")
+  }
   assertKeys(
     input,
-    ["capabilities", "contributes", "description", "entry", "id", "name", "schema", "skill", "version"],
+    [
+      "capabilities",
+      "contributes",
+      "description",
+      "entry",
+      "id",
+      "name",
+      ...(schema === webPluginManifestSchemaV2 ? ["runtime"] : []),
+      "schema",
+      "skill",
+      "version",
+    ],
     "Plugin manifest",
   )
-  if (input.schema !== webPluginManifestSchema) throw new Error("Plugin manifest schema is not supported")
-  const entry = requireWebPluginRelativePath(input.entry, "Plugin entry")
-  if (!entry.toLowerCase().endsWith(".html")) throw new Error("Plugin entry must be an HTML file")
+  const hasEntry = input.entry !== undefined
+  const entry = hasEntry ? requireWebPluginRelativePath(input.entry, "Plugin entry") : undefined
+  if (entry !== undefined && !entry.toLowerCase().endsWith(".html"))
+    throw new Error("Plugin entry must be an HTML file")
   const version = requireString(input.version, "Plugin version", 128)
   if (!semverPattern.test(version)) throw new Error("Plugin version must be valid SemVer")
   const capabilities = input.capabilities === undefined ? [] : input.capabilities
@@ -288,25 +450,64 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   ) {
     throw new Error("Plugin capabilities contain an unsupported or duplicate capability")
   }
+  if (schema === webPluginManifestSchema && capabilities.includes("generation.execute")) {
+    throw new Error("generation.execute is available only to convax.plugin/2 manifests")
+  }
   const contributes = asRecord(input.contributes, "Plugin contributions")
-  assertKeys(contributes, ["canvas"], "Plugin contributions")
-  const canvas = asRecord(contributes.canvas, "Canvas contributions")
-  assertKeys(canvas, ["renderer", "toolbar"], "Canvas contributions")
-  const toolbar = parseToolbar(canvas.toolbar)
+  assertKeys(
+    contributes,
+    ["canvas", ...(schema === webPluginManifestSchemaV2 ? ["generation"] : [])],
+    "Plugin contributions",
+  )
+  const hasRuntime = input.runtime !== undefined
+  const hasGenerationContribution = contributes.generation !== undefined
+  const hasExecutableContribution = hasGenerationContribution
+  const hasCanvasContribution = contributes.canvas !== undefined
+  if (hasEntry !== hasCanvasContribution) {
+    throw new Error("Plugin entry and Canvas contribution must appear together")
+  }
+  if (schema === webPluginManifestSchema && !hasCanvasContribution) {
+    throw new Error("convax.plugin/1 requires a static Canvas surface")
+  }
+  if (capabilities.includes("generation.execute") && !hasCanvasContribution) {
+    throw new Error("generation.execute requires a sandboxed Canvas surface")
+  }
+  if (schema === webPluginManifestSchemaV2 && hasRuntime !== hasExecutableContribution) {
+    throw new Error("convax.plugin/2 runtime and executable contribution must appear together")
+  }
+  if (
+    schema === webPluginManifestSchemaV2 &&
+    !hasRuntime &&
+    !hasExecutableContribution &&
+    !capabilities.includes("generation.execute")
+  ) {
+    throw new Error("convax.plugin/2 must declare an executable contribution or request generation.execute")
+  }
+  const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined
+  if (canvas) assertKeys(canvas, ["renderer", "toolbar"], "Canvas contributions")
+  const toolbar = parseToolbar(canvas?.toolbar)
+  const generation = hasGenerationContribution ? parseGeneration(contributes.generation) : undefined
+  const runtime = hasRuntime ? parseMcpStdioRuntime(input.runtime) : undefined
   return {
     capabilities: [...capabilities] as WebPluginCapability[],
     contributes: {
-      canvas: {
-        renderer: parseRenderer(canvas.renderer),
-        ...(toolbar === undefined ? {} : { toolbar }),
-      },
+      ...(canvas === undefined
+        ? {}
+        : {
+            canvas: {
+              renderer: parseRenderer(canvas.renderer),
+              ...(toolbar === undefined ? {} : { toolbar }),
+            },
+          }),
+      ...(generation === undefined ? {} : { generation }),
     },
     description: requireString(input.description, "Plugin description", 2_000),
-    entry,
+    ...(entry === undefined ? {} : { entry }),
     id: requireWebPluginId(input.id),
     name: requireString(input.name, "Plugin name", 120),
-    schema: webPluginManifestSchema,
+    schema,
     ...(input.skill === undefined ? {} : { skill: requireWebPluginRelativePath(input.skill, "Plugin skill") }),
+    ...(runtime === undefined ? {} : { runtime }),
     version,
   }
 }

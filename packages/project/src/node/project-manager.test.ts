@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { NodeProjectManager } from "./project-manager"
+import { copyPath } from "./project-manager-helpers"
 import { ProjectPrivateStorageConflictError } from "./project-private-storage"
 
 let temporaryRoot = ""
@@ -263,6 +264,27 @@ describe("NodeProjectManager files", () => {
     await expect(manager.deleteEntries({ paths: [".convax"], projectId })).rejects.toThrow("reserved")
     await expect(manager.moveEntries({ destinationPath: ".convax/assets", paths: ["visible.txt"], projectId })).rejects.toThrow("reserved")
     expect(await fs.readFile(path.join(projectRoot, ".convax", "assets", "visible.txt"), "utf8")).toBe("visible")
+    await expect(manager.deleteManagedAssets({ paths: ["visible.txt"], projectId })).rejects.toThrow("invalid")
+    await manager.deleteManagedAssets({ paths: [".convax/assets/visible.txt"], projectId })
+    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "visible.txt"))).rejects.toThrow()
+
+    await fs.mkdir(path.join(projectRoot, ".convax", "assets", "invalid-directory"))
+    await fs.writeFile(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"), "generated")
+    await expect(manager.deleteManagedAssets({
+      paths: [".convax/assets/invalid-directory", ".convax/assets/later-cleanup.png"],
+      projectId,
+    })).rejects.toThrow("could not be removed")
+    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"))).rejects.toThrow()
+    expect(await fs.stat(path.join(projectRoot, ".convax", "assets", "invalid-directory")).then((stat) => stat.isDirectory())).toBe(true)
+  })
+
+  test("does not claim or remove a copy target that another writer already owns", async () => {
+    const source = path.join(temporaryRoot, "source.txt")
+    const target = path.join(temporaryRoot, "target.txt")
+    await fs.writeFile(source, "ours")
+    await fs.writeFile(target, "theirs")
+    await expect(copyPath(source, target)).rejects.toMatchObject({ code: "EEXIST" })
+    expect(await fs.readFile(target, "utf8")).toBe("theirs")
   })
 
   test("imports files and directories with stable collision names", async () => {

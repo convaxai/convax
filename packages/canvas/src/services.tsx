@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
-import type { CanvasDocument, CanvasPoint, CanvasResource, CanvasUploadItem } from "./types"
+import type { ToolInputField, ToolInputValue } from "@convax/ui"
+import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasUploadItem } from "./types"
 
 export interface CanvasServiceContext {
   documentId: string
@@ -22,31 +23,113 @@ export interface CanvasUploadService {
   upload: (request: CanvasUploadRequest) => Promise<readonly CanvasUploadItem[]>
 }
 
-export interface CanvasGenerationReference {
-  nodeId: string
-  kind: string
-  text?: string
-  url?: string
+export type CanvasGenerationOutput = "text" | "image" | "video" | "audio"
+
+export type CanvasGenerationInputRole =
+  | "text"
+  | "reference_image"
+  | "reference_video"
+  | "first_frame"
+  | "last_frame"
+  | "audio"
+
+/** Host-provided description of an installed generation tool. Canvas never knows its vendor or model. */
+export interface CanvasGenerationToolSummary {
+  id: string
+  title: string
+  description: string
+  output: CanvasGenerationOutput
+  acceptedInputs: readonly CanvasGenerationInputRole[]
 }
 
-export interface CanvasGenerationItem {
-  id?: string
-  nodeType?: string
-  title?: string
-  text?: string
-  resource?: CanvasResource
-  metadata?: Record<string, unknown>
+export interface CanvasGenerationToolQuery {
+  output?: CanvasGenerationOutput
+}
+
+export type CanvasGenerationToolInputField = ToolInputField
+export type CanvasGenerationToolInputValue = ToolInputValue
+export type CanvasGenerationToolInput = Readonly<Record<string, CanvasGenerationToolInputValue>>
+
+export interface CanvasGenerationToolDescription {
+  fields: readonly CanvasGenerationToolInputField[]
+  toolId: string
+}
+
+export interface CanvasGenerationReference {
+  nodeId: string
+  role: CanvasGenerationInputRole
 }
 
 export interface CanvasGenerateRequest {
+  anchor: CanvasPoint
+  expectedRevision: number
+  output?: CanvasGenerationOutput
   prompt: string
   references: readonly CanvasGenerationReference[]
+  toolInput?: CanvasGenerationToolInput
+  toolId?: string
   context: CanvasServiceContext
   signal: AbortSignal
 }
 
+export interface CanvasGenerateResult {
+  createdNodeIds: readonly string[]
+  revision: number
+  toolId: string
+  warnings: readonly string[]
+}
+
 export interface CanvasGenerateService {
-  generate: (request: CanvasGenerateRequest) => Promise<readonly CanvasGenerationItem[]>
+  /** Host-owned token that changes when installed generation declarations change. */
+  readonly catalogVersion?: string | number
+  describeTool: (toolId: string, signal?: AbortSignal) => Promise<CanvasGenerationToolDescription>
+  generate: (request: CanvasGenerateRequest) => Promise<CanvasGenerateResult>
+  listTools: (query: CanvasGenerationToolQuery, signal?: AbortSignal) => Promise<readonly CanvasGenerationToolSummary[]>
+}
+
+/**
+ * Converts selected public Canvas file nodes into semantic generation inputs.
+ * First/last-frame roles remain explicit choices for callers and are not guessed from selection order.
+ */
+export function inferCanvasGenerationReferences(
+  nodes: readonly CanvasNode[],
+  selectedNodeIds: readonly string[],
+): readonly CanvasGenerationReference[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  return [...new Set(selectedNodeIds)].flatMap((nodeId) => {
+    const node = nodeById.get(nodeId)
+    if (!node) return []
+    const role = inferCanvasGenerationInputRole(node)
+    return role ? [{ nodeId, role }] : []
+  })
+}
+
+export function getCompatibleCanvasGenerationTools(
+  tools: readonly CanvasGenerationToolSummary[],
+  references: readonly CanvasGenerationReference[],
+): readonly CanvasGenerationToolSummary[] {
+  if (getCanvasGenerationReferenceError(references)) return []
+  return tools.filter((tool) => references.every((reference) => tool.acceptedInputs.includes(reference.role)))
+}
+
+export function getCanvasGenerationReferenceError(
+  references: readonly CanvasGenerationReference[],
+): string | undefined {
+  if (references.length > 32) return "Choose at most 32 generation references."
+  for (const role of ["first_frame", "last_frame"] as const) {
+    if (references.filter((reference) => reference.role === role).length > 1) {
+      return role === "first_frame" ? "Choose at most one first frame." : "Choose at most one last frame."
+    }
+  }
+  return undefined
+}
+
+function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInputRole | undefined {
+  if (node.data.kind === "text") return "text"
+  if (node.data.kind === "image") return "reference_image"
+  if (node.data.kind === "video") return "reference_video"
+  if (node.data.kind === "audio") return "audio"
+  return undefined
 }
 
 export interface CanvasPersistenceService {
@@ -87,7 +170,11 @@ export interface CanvasAssistantRequest {
   document: CanvasDocument
   mentionedNodeIds: readonly string[]
   mode: "agent" | "file"
+  /** Persisted owner-node override. Missing means inherit the host's current default. */
+  ownerGenerationToolId?: string
   ownerNodeId: string
+  /** File-card-only mutation; clearing the id restores host-default inheritance. */
+  onOwnerGenerationToolIdChange?: (toolId?: string) => void
 }
 
 /** Host-rendered conversation surface. Canvas never imports an Agent implementation. */

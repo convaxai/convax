@@ -260,9 +260,19 @@ export interface AgentToolScope {
   scopeId: string
 }
 
+export interface AgentToolCallContext {
+  /** Aborted when the caller disconnects or the runtime transport shuts down. */
+  signal?: AbortSignal
+}
+
 /** Host-owned tools exposed to OpenCode through the runtime boundary. */
 export interface AgentToolProvider {
-  callTool(scope: AgentToolScope, name: string, input: Record<string, unknown>): Promise<unknown>
+  callTool(
+    scope: AgentToolScope,
+    name: string,
+    input: Record<string, unknown>,
+    context?: AgentToolCallContext,
+  ): Promise<unknown>
   listTools(scope: AgentToolScope): Promise<readonly AgentToolDefinition[]> | readonly AgentToolDefinition[]
 }
 

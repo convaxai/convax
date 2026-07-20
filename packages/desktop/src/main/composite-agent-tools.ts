@@ -11,10 +11,10 @@ export function createCompositeAgentToolProvider(providers: readonly AgentToolPr
       }
       return definitions
     },
-    async callTool(scope, name, input) {
+    async callTool(scope, name, input, context) {
       const provider = await providerForTool(providers, scope, name)
       if (!provider) throw new Error(`Unknown Agent tool: ${name}`)
-      return provider.callTool(scope, name, input)
+      return provider.callTool(scope, name, input, context)
     },
   }
 }
