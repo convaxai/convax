@@ -68,6 +68,8 @@ Relevant implementation boundaries are:
   schema and capability validation;
 - [`generation-plugin-runtime.ts`](../packages/desktop/src/main/generation-plugin-runtime.ts):
   installed-tool discovery, authorization and MCP process lifecycle;
+- [`managed-plugin-companions.ts`](../packages/desktop/src/main/managed-plugin-companions.ts):
+  verified Registry companion publication, resolution and reconciliation;
 - [`generation-canvas-service.ts`](../packages/desktop/src/main/generation-canvas-service.ts):
   staging, result admission and Canvas resource mutation;
 - [`generation-agent-tools.ts`](../packages/desktop/src/main/generation-agent-tools.ts):
@@ -144,9 +146,11 @@ The declaration rules are intentionally small:
   or expose multiple declared tools when the user needs distinct choices.
 
 `runtime.command` is always a bare executable name; it is never an absolute or
-package-relative path. Desktop resolves the command only through absolute entries
-in the Convax process's `PATH`; it does not guess Homebrew, user-local or
-vendor-specific locations.
+package-relative path. For an official Registry install, Desktop first looks for a
+host-managed companion bound to that exact Plugin id, Plugin version and command.
+If none exists, it preserves the explicit integration path by resolving the command
+only through absolute entries in the Convax process's `PATH`. Convax does not guess
+Homebrew, user-local or vendor-specific locations.
 
 In either case the host resolves the real executable, requires an executable regular
 file, and fingerprints its live bytes during installation. At execution it creates and verifies a
@@ -169,12 +173,31 @@ The Plugin package remains a validated static package with `manifest.json` plus 
 declared Web entry/assets. A headless Tool Plugin needs only its manifest. An
 executable is separate from the Plugin ZIP and is never served as a Plugin asset.
 
+An optional official Registry `companions` entry contains a command, companion
+SemVer and one or more target records. The command must exactly equal
+`manifest.runtime.command`; targets are limited to `darwin|linux|win32` and
+`arm64|x64`. Each target declares an immutable raw Release asset with exact byte
+size and SHA-256. Its URL must be exactly:
+
+```text
+https://github.com/microvoid/convax-plugins/releases/download/plugin-<plugin-id>-v<plugin-version>/convax-companion-<command>-<companion-version>-<platform>-<arch>[.exe]
+```
+
+Desktop selects only the exact current platform/architecture, enforces a 128 MiB
+download ceiling, and rechecks size and digest before publishing the executable
+below a private host-owned path keyed by Plugin and companion identity. A missing
+target, download failure, digest change, symlink, or Plugin publication failure
+leaves the previous installed Plugin/companion pair usable. Startup, update and
+uninstall reconcile stale companion versions and orphan Plugin directories.
+
 Choosing an explicit install or update is consent to execute only the exact Tool
 Plugin identity being published. Before publishing the package, Desktop resolves
-the explicit `PATH` command, fingerprints it, and
+either the managed companion or the explicit `PATH` fallback, fingerprints it, and
 transactionally coordinates a private authorization receipt with the package
-switch. The receipt binds the
-normalized manifest fingerprint, real path, size and SHA-256. An unresolved manual
+switch. The receipt binds the normalized manifest fingerprint, binding kind
+(`managed` or `path`), real path, size and SHA-256. A Registry Plugin with a
+companion requires that managed binding; it cannot silently authorize a same-named
+`PATH` executable. An unresolved manual
 import fails before the Plugin appears installed. Listing and installation never
 start the executable.
 
@@ -448,7 +471,8 @@ Changes to this boundary must preserve all of the following:
 - generated media entering Canvas only through the managed asset/resource flow;
 - strict v1/v2 manifest and Plugin-host protocol compatibility;
 - explicit install/update authorization, no first-call prompt and no shell execution;
-- exact executable path/size/digest checks and transactional authorization rollback;
+- exact Registry companion target/URL/size/digest checks, atomic rollback and
+  explicit `PATH` fallback;
 - cancellation, stale-scope, symlink, signature, size and process-disposal tests.
 
 Run the affected Desktop typecheck/tests and the repository boundary check after a

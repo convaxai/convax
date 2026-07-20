@@ -14,7 +14,7 @@ export interface ToolPluginExecutableBinding {
   size: number
 }
 
-export type ToolPluginExecutableBindingKind = "path"
+export type ToolPluginExecutableBindingKind = "managed" | "path"
 
 export interface ResolvedToolPluginExecutable {
   binding: ToolPluginExecutableBinding
@@ -25,6 +25,12 @@ export type ToolPluginExecutableResolver = (
   command: string,
   environment: Readonly<Record<string, string>>,
 ) => Promise<ToolPluginExecutableBinding>
+
+export type ToolPluginManagedExecutableResolver = (
+  pluginId: string,
+  pluginVersion: string,
+  command: string,
+) => Promise<ToolPluginExecutableBinding | null>
 
 export interface ToolPluginAuthorizationTransaction {
   /** Publishes the exact receipt immediately before the Plugin package is published. */
@@ -38,6 +44,7 @@ export interface ToolPluginAuthorizationTransaction {
 export interface ToolPluginAuthorizationStoreOptions {
   environment: Readonly<Record<string, string>>
   resolveExecutable: ToolPluginExecutableResolver
+  resolveManagedExecutable?: ToolPluginManagedExecutableResolver
 }
 
 interface ToolPluginAuthorizationReceipt {
@@ -165,7 +172,7 @@ function parseReceipt(value: unknown): ToolPluginAuthorizationReceipt {
   if (
     !requireExactKeys(input, expectedKeys) ||
     input.schema !== authorizationSchema ||
-    input.bindingKind !== "path" ||
+    (input.bindingKind !== "managed" && input.bindingKind !== "path") ||
     typeof input.command !== "string" ||
     typeof input.pluginId !== "string" ||
     typeof input.pluginVersion !== "string" ||
@@ -259,6 +266,7 @@ function reinstallError(pluginId: string) {
 export class ToolPluginAuthorizationStore {
   readonly #environment: Readonly<Record<string, string>>
   readonly #resolveExecutable: ToolPluginExecutableResolver
+  readonly #resolveManagedExecutable?: ToolPluginManagedExecutableResolver
   readonly #rootPath: string
 
   constructor(rootPath: string, options: ToolPluginAuthorizationStoreOptions) {
@@ -266,6 +274,7 @@ export class ToolPluginAuthorizationStore {
     this.#rootPath = path.resolve(rootPath)
     this.#environment = options.environment
     this.#resolveExecutable = options.resolveExecutable
+    this.#resolveManagedExecutable = options.resolveManagedExecutable
   }
 
   async #ensureRoot() {
@@ -286,10 +295,13 @@ export class ToolPluginAuthorizationStore {
 
   async #binding(plugin: InstalledWebPluginSummary): Promise<ResolvedToolPluginExecutable> {
     try {
-      return {
-        binding: requireBinding(await this.#resolveExecutable(plugin.runtime!.command, this.#environment)),
-        kind: "path",
-      }
+      const managed = await this.#resolveManagedExecutable?.(plugin.id, plugin.version, plugin.runtime!.command)
+      return managed
+        ? { binding: requireBinding(managed), kind: "managed" }
+        : {
+            binding: requireBinding(await this.#resolveExecutable(plugin.runtime!.command, this.#environment)),
+            kind: "path",
+          }
     } catch (error) {
       throw new Error(
         `Tool Plugin executable could not be verified during installation; reinstall Plugin: ${plugin.id}`,
@@ -303,8 +315,11 @@ export class ToolPluginAuthorizationStore {
   async #requiredBinding(plugin: InstalledWebPluginSummary, required: ResolvedToolPluginExecutable | undefined) {
     if (!required) return this.#binding(plugin)
     try {
-      const live = await this.#resolveExecutable(plugin.runtime!.command, this.#environment)
-      if (JSON.stringify(requireBinding(live)) !== JSON.stringify(requireBinding(required.binding))) {
+      const live =
+        required.kind === "managed"
+          ? await this.#resolveManagedExecutable?.(plugin.id, plugin.version, plugin.runtime!.command)
+          : await this.#resolveExecutable(plugin.runtime!.command, this.#environment)
+      if (!live || JSON.stringify(requireBinding(live)) !== JSON.stringify(requireBinding(required.binding))) {
         throw new Error("required executable binding is unavailable")
       }
       return { binding: requireBinding(live), kind: required.kind }

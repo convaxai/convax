@@ -65,12 +65,14 @@ function binding(digest = "a", executablePath = "/tools/image-tool"): ToolPlugin
 function store(
   root: string,
   options: {
+    managed?: ToolPluginExecutableBinding | null
     path?: ToolPluginExecutableBinding
   } = {},
 ) {
   return new ToolPluginAuthorizationStore(root, {
     environment: { PATH: "/tools" },
     resolveExecutable: async () => options.path ?? binding("a", "/tools/image-tool"),
+    resolveManagedExecutable: async () => options.managed ?? null,
   })
 }
 
@@ -122,6 +124,24 @@ describe("ToolPluginAuthorizationStore", () => {
     expect((changed as Error).message).not.toContain("/tools")
   })
 
+  test("binds managed consent to exact bytes and the managed binding source", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const executable = binding("a", "/managed/image-tool")
+    const authorization = store(authorizationRoot, { managed: executable })
+    const installedPlugin = plugin()
+    await installAuthorization(authorization, installedPlugin)
+
+    await expect(authorization.verify(installedPlugin, "managed", executable)).resolves.toBeUndefined()
+    await expect(authorization.verify(installedPlugin, "managed", binding("b", "/managed/image-tool"))).rejects.toThrow(
+      "reinstall Plugin",
+    )
+    await expect(authorization.verify(installedPlugin, "path", executable)).rejects.toThrow("reinstall Plugin")
+
+    const restarted = store(authorizationRoot, { managed: executable })
+    await expect(restarted.verify(installedPlugin, "managed", executable)).resolves.toBeUndefined()
+  })
+
   test("keeps the old receipt usable until an update commits and restores it on rollback", async () => {
     const root = await temporaryRoot()
     const authorizationRoot = path.join(root, "authorizations")
@@ -166,6 +186,18 @@ describe("ToolPluginAuthorizationStore", () => {
     expect(await receiptEntries(authorizationRoot)).toEqual([])
   })
 
+  test("never falls back to a same-named PATH command when a managed install is required", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const sameBytes = binding("a", "/tools/image-tool")
+    const authorization = store(authorizationRoot, { managed: null, path: sameBytes })
+
+    await expect(authorization.prepareInstall(plugin(), { binding: sameBytes, kind: "managed" })).rejects.toThrow(
+      "could not be verified during installation",
+    )
+    expect(await receiptEntries(authorizationRoot)).toEqual([])
+  })
+
   test("fails closed on a tampered receipt and removes authorization on uninstall", async () => {
     const root = await temporaryRoot()
     const authorizationRoot = path.join(root, "authorizations")
@@ -180,6 +212,21 @@ describe("ToolPluginAuthorizationStore", () => {
     await authorization.revoke(installedPlugin.id)
     await expect(authorization.verify(installedPlugin, "path", executable)).rejects.toThrow("reinstall Plugin")
     expect(await receiptEntries(authorizationRoot)).toEqual([])
+  })
+
+  test("reconcile never converts a PATH installation to an unexpected managed executable", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const executable = binding("a", "/tools/image-tool")
+    const pathStore = store(authorizationRoot, { path: executable })
+    const installedPlugin = plugin()
+    await installAuthorization(pathStore, installedPlugin)
+
+    const managed = binding("a", "/managed/image-tool")
+    const managedStore = store(authorizationRoot, { managed })
+    await managedStore.reconcile([installedPlugin])
+    await expect(managedStore.verify(installedPlugin, "managed", managed)).rejects.toThrow("reinstall Plugin")
+    await expect(pathStore.verify(installedPlugin, "path", executable)).rejects.toThrow("reinstall Plugin")
   })
 
   test("transient binding resolution failure leaves prior consent inert and recoverable", async () => {

@@ -94,8 +94,10 @@ source, or ambient application state.
   Project Files capability.
 - Electron `userData/opencode/skills/user/<name>/`: Convax-managed OpenCode Skills.
 - Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
+- Electron `userData/plugin-companions/<plugin-id>/<plugin-version>/`: Registry-verified,
+  host-owned executable companions; never Plugin package assets or renderer paths.
 - Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
-  execution receipts bound to the normalized manifest and exact executable bytes.
+  execution receipts bound to the normalized manifest and exact executable source/bytes.
 - Browser storage: per-user Workbench input/layout and renderer preferences only.
 - In-memory controller state: loading, errors, selection, preview, and transition
   state. Do not silently turn it into durable shared state.
@@ -145,13 +147,25 @@ current schema.
 - Concrete generation vendors, models, credentials, and routing are never built into
   Convax packages. An installed Tool Plugin plus its explicitly authorized external
   executable is the complete vendor integration boundary.
+- An official Registry Tool Plugin may declare a target-specific executable
+  companion whose command exactly matches its manifest runtime. Desktop verifies
+  the fixed Release URL, platform/architecture, size and SHA-256, publishes it to a
+  private versioned host directory, and resolves it before an explicit `PATH`
+  fallback. Missing targets and immutable-identity byte changes fail closed.
 - Agent, Toolbar/UI, and Plugin callers use the same Desktop-main generation tool
   executor. OpenCode is only the Agent-side tool client.
 - Do not expire an accepted generation job merely because it remains queued or
   running. Generation sidecars own vendor polling until terminal success/failure or
   caller cancellation; host progress keeps transport timeouts as inactivity guards.
-- Fingerprint the external executable before staging aggregate-bounded inputs and
-  recheck live reference/revision guards immediately before a billable call.
+- Treat an explicit Tool Plugin install/update as consent for only the normalized
+  manifest and executable binding verified during that publication. Persist the
+  binding kind, real path, size and SHA-256; runtime silently rechecks it and asks
+  for reinstall on missing or changed state, never for first-call approval.
+- Fingerprint the external Tool Plugin executable before staging aggregate-bounded
+  inputs. Recheck live reference/revision guards immediately before a billable call.
+  Launch the install-authorized entrypoint through a verified host-owned snapshot,
+  terminate the whole process tree on disposal, and fail closed on platforms where
+  the host lacks a process-tree ownership primitive.
 - Generated media enters Canvas only through `CanvasResourceBusinessService` and
   the managed `.convax/assets/` flow before existing `file` nodes reference it;
   failed commits must roll back newly admitted assets.

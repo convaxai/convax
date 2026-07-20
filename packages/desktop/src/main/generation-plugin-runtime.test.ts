@@ -149,7 +149,10 @@ function setup(
     sha256: "a".repeat(64),
     size: 4_096,
   }),
-  runtimeOptions: Pick<GenerationPluginRuntimeOptions, "materializeExecutable" | "platform"> = {},
+  runtimeOptions: Pick<
+    GenerationPluginRuntimeOptions,
+    "materializeExecutable" | "platform" | "resolveManagedExecutable"
+  > = {},
 ) {
   const plugins = new FakePluginSource()
   plugins.installed = installed
@@ -432,6 +435,94 @@ describe("GenerationPluginRuntime", () => {
     expect(clients).toHaveLength(1)
     expect(clients[0].listSignals).toEqual([controller.signal, undefined])
     expect(clients[0].calls).toHaveLength(2)
+  })
+
+  test("prefers the Plugin/version-scoped managed companion over the explicit PATH fallback", async () => {
+    const managedCalls: Array<[string, string, string]> = []
+    let pathCalls = 0
+    const verifications: Parameters<GenerationPluginRuntimeOptions["verifyAuthorization"]>[0][] = []
+    const setupResult = setup(
+      [generationPlugin({ version: "2.0.0" })],
+      ["generate.image"],
+      async (input) => {
+        verifications.push(input)
+      },
+      async () => {
+        pathCalls += 1
+        return { path: "/path/fallback", sha256: "f".repeat(64), size: 10 }
+      },
+      {
+        resolveManagedExecutable: async (pluginId, pluginVersion, command) => {
+          managedCalls.push([pluginId, pluginVersion, command])
+          return { path: "/managed/image-tool-cli", sha256: "b".repeat(64), size: 20 }
+        },
+      },
+    )
+
+    await setupResult.runtime.callTool("image-tools/generate.image", {})
+
+    expect(managedCalls).toEqual([
+      ["image-tools", "2.0.0", "image-tool-cli"],
+      ["image-tools", "2.0.0", "image-tool-cli"],
+    ])
+    expect(pathCalls).toBe(0)
+    expect(verifications[0]).toMatchObject({
+      binding: {
+        path: "/managed/image-tool-cli",
+        sha256: "b".repeat(64),
+      },
+      bindingKind: "managed",
+    })
+    expect(setupResult.options[0]!.command).toBe("/managed/image-tool-cli")
+  })
+
+  test("retains the explicit PATH integration when no managed companion is installed", async () => {
+    let managedCalls = 0
+    let pathCalls = 0
+    const { runtime } = setup(
+      [generationPlugin()],
+      ["generate.image"],
+      async () => undefined,
+      async (command) => {
+        pathCalls += 1
+        return { path: `/path/${command}`, sha256: "a".repeat(64), size: 10 }
+      },
+      {
+        resolveManagedExecutable: async () => {
+          managedCalls += 1
+          return null
+        },
+      },
+    )
+
+    await runtime.callTool("image-tools/generate.image", {})
+    expect(managedCalls).toBe(2)
+    expect(pathCalls).toBe(2)
+  })
+
+  test("fails closed when a managed companion digest changes after installation verification", async () => {
+    let resolutions = 0
+    let pathCalls = 0
+    const { clients, runtime } = setup(
+      [generationPlugin()],
+      ["generate.image"],
+      async () => undefined,
+      async () => {
+        pathCalls += 1
+        return { path: "/path/fallback", sha256: "f".repeat(64), size: 10 }
+      },
+      {
+        resolveManagedExecutable: async () => ({
+          path: "/managed/image-tool-cli",
+          sha256: (resolutions++ === 0 ? "a" : "b").repeat(64),
+          size: 20,
+        }),
+      },
+    )
+
+    await expect(runtime.callTool("image-tools/generate.image", {})).rejects.toThrow("changed after installation")
+    expect(pathCalls).toBe(0)
+    expect(clients).toHaveLength(0)
   })
 
   test("does not cache a failed installation authorization verification", async () => {

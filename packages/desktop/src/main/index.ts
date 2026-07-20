@@ -47,6 +47,7 @@ import { registerProjectIpc } from "./project-ipc"
 import { registerSkillManagementIpc } from "./skill-management-ipc"
 import { DesktopSkillManager } from "./skill-manager"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
+import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
 import { JianyingCanvasService } from "./jianying-canvas-service"
 import { createJianyingAgentToolProvider } from "./jianying-agent-tools"
 import { MacOSJianyingDeepLinkTransport } from "./jianying-deeplink"
@@ -58,6 +59,7 @@ import { FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
 import { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
+import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 
 const trustedWebContents = new Set<number>()
@@ -189,14 +191,31 @@ function startApplication() {
       {},
       desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
     )
+    const companionStore = new ManagedPluginCompanionStore(join(userDataDirectory, "plugin-companions"))
     const generationEnvironment = generationPluginEnvironment(process.env)
     const toolPluginAuthorizations = new ToolPluginAuthorizationStore(
       join(userDataDirectory, "plugin-authorizations"),
       {
         environment: generationEnvironment,
         resolveExecutable: resolveGenerationPluginExecutable,
+        resolveManagedExecutable: (pluginId, pluginVersion, command) =>
+          companionStore.resolve(pluginId, pluginVersion, command),
       },
     )
+    const reconcileToolPluginExecutionState = async (
+      installedPlugins: Awaited<ReturnType<typeof pluginManager.list>>,
+    ) => {
+      try {
+        await companionStore.reconcile(installedPlugins)
+      } catch (error) {
+        console.warn("Could not reconcile installed Tool Plugin companions", error)
+      }
+      try {
+        await toolPluginAuthorizations.reconcile(installedPlugins)
+      } catch (error) {
+        console.warn("Could not reconcile installed Tool Plugin authorizations", error)
+      }
+    }
     for (const item of desktopBuiltinPluginCatalog) {
       await pluginManager
         .claimInstalledBuiltinBundle(
@@ -209,9 +228,9 @@ function startApplication() {
     }
     await pluginManager
       .list()
-      .then((plugins) => toolPluginAuthorizations.reconcile(plugins))
+      .then(reconcileToolPluginExecutionState)
       .catch((error) => {
-        console.warn("Could not reconcile installed Tool Plugin authorizations", error)
+        console.warn("Could not list installed Tool Plugins for execution-state reconciliation", error)
       })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
@@ -249,6 +268,8 @@ function startApplication() {
     const generationRuntime = new GenerationPluginRuntime({
       environment: generationEnvironment,
       plugins: pluginManager,
+      resolveManagedExecutable: (pluginId, pluginVersion, command) =>
+        companionStore.resolve(pluginId, pluginVersion, command),
       verifyAuthorization: ({ binding, bindingKind, plugin }) =>
         toolPluginAuthorizations.verify(plugin, bindingKind, binding),
     })
@@ -298,8 +319,10 @@ function startApplication() {
       desktopBuiltinSkillPresentations,
     )
     const remoteCapabilities = new RemoteCapabilityInstaller({
+      authorizationStore: toolPluginAuthorizations,
       builtinPlugins: desktopBuiltinPluginCatalog,
       builtinSkills: desktopBuiltinSkillCatalog,
+      companionStore,
       pluginManager,
       registry: new RemoteCapabilityRegistryClient({
         cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
@@ -314,11 +337,22 @@ function startApplication() {
     await provisionDefaultCapabilities({
       catalog: desktopBuiltinPluginCatalog,
       pluginManager,
+      remote: {
+        catalog: desktopDefaultRemoteCapabilityCatalog,
+        installer: remoteCapabilities,
+      },
       skillManager,
       stateFile: join(userDataDirectory, "default-capabilities.json"),
-    }).catch((error) => {
-      console.error("Could not provision default Convax capabilities", error)
-    })
+    }).then(
+      ({ failures }) => {
+        for (const failure of failures) {
+          console.error(`Could not provision default remote ${failure.kind} ${failure.id}`, failure.error)
+        }
+      },
+      (error) => {
+        console.error("Could not provision default Convax capabilities", error)
+      },
+    )
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
@@ -356,9 +390,9 @@ function startApplication() {
           generationRuntime.disposePlugin(pluginId)
           await pluginManager
             .list()
-            .then((plugins) => toolPluginAuthorizations.reconcile(plugins))
+            .then(reconcileToolPluginExecutionState)
             .catch((error) => {
-              console.warn("Could not reconcile changed Tool Plugin authorizations", error)
+              console.warn("Could not list changed Tool Plugins for execution-state reconciliation", error)
             })
           void agentRuntime.refreshHostTools().catch((error) => {
             console.warn("Could not immediately refresh OpenCode generation tools", error)

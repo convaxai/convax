@@ -173,6 +173,8 @@ Electron userData/
   opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
   plugins/<plugin-id>/                  validated static Plugin packages
     .convax-builtin.json                host-authored catalog provenance, when applicable
+  plugin-companions/<plugin-id>/<plugin-version>/
+                                        Registry-verified host-owned Tool executables
   plugin-authorizations/<plugin-id>/    install-time exact Tool execution receipts
 
 ~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
@@ -249,10 +251,21 @@ Project cannot overwrite current state.
 Generation is an installed Tool Plugin capability, not a built-in provider
 framework. Convax packages never hard-code vendor names, model ids, credentials,
 model catalogs, or routing. A validated `convax.plugin/2` manifest declares one or
-more generation tools and a bare external `mcp-stdio` command. Desktop resolves and
-fingerprints that command during installation, persists an exact authorization
-receipt, and silently re-verifies the same declaration and executable bytes before
-every runtime start.
+more generation tools and a separately installed bare external `mcp-stdio` command.
+An official Registry entry may bind that exact command to one immutable executable
+companion per supported platform and architecture. Desktop selects only the current
+target, verifies the deterministic Release URL, size and SHA-256, and atomically
+publishes it below private versioned `userData/plugin-companions`. A missing target
+or changed immutable identity fails without replacing the working Plugin. Plugins
+without a managed target retain explicit `PATH` resolution as their fallback.
+
+Explicit Plugin install/update is the execution-consent event. Before publication,
+Desktop resolves and fingerprints the exact managed or `PATH` binding and persists
+an authorization receipt bound to the normalized manifest, binding kind, real path,
+size and SHA-256. Every runtime start silently re-resolves and re-verifies that
+identity. Missing or changed state fails closed with a reinstall request, never a
+first-call permission dialog. Startup, update and uninstall reconcile orphaned
+companion directories and receipts.
 
 Agent, Toolbar/UI, and sandboxed Plugin callers use the same scoped generation
 executor owned by Desktop main. OpenCode is only the Agent-side tool client.

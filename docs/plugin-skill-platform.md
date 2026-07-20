@@ -57,6 +57,8 @@ Electron userData/
       manifest.json
       <static package files>
       .convax-builtin.json                  host-authored catalog provenance, built-ins only
+  plugin-companions/<plugin-id>/<plugin-version>/<command>/<companion-version>/
+                                            verified host-owned Tool executable
 
 macOS user Movies directory/
   JianyingPro/ConvaxImports/...             validated media staged for bounded JianYing transfer
@@ -138,7 +140,8 @@ validated and staged by Convax before entering the same local lifecycle.
 
 The official catalog is published by `microvoid/convax-plugins`. GitHub Pages hosts
 the small versioned Registry index and immutable GitHub Release assets host one ZIP
-per Plugin or Skill version. Desktop main is the only network client. It uses a
+per Plugin or Skill version plus optional target-specific raw Tool companions.
+Desktop main is the only network client. It uses a
 fixed index URL, validates a monotonic Registry sequence and exact supported host
 schemas, and retains a last-known-good cache for offline listing.
 
@@ -161,8 +164,18 @@ installation boundary and repeat their normal manifest/frontmatter/path checks.
 Plugin ZIPs have `manifest.json` at their root and may carry a companion Skill at
 the manifest's `skill` path. Standalone Skill ZIPs have `SKILL.md` at their root.
 The catalog can present both together, but Plugin and Skill install, refresh,
-receipt and removal outcomes remain independent. The first remote slice installs
-only absent packages; replacement, downgrade and automatic update remain deferred.
+receipt and removal outcomes remain independent.
+
+A Tool Plugin Registry item may declare `companions` separately from its static ZIP.
+Each companion command must equal the v2 manifest's bare MCP runtime command and
+provides immutable `darwin|linux|win32` plus `arm64|x64` target records. Desktop
+requires an exact current-host target, deterministic Plugin Release URL, declared
+size at or below 128 MiB and matching SHA-256. It writes the raw executable only to
+private, versioned `userData/plugin-companions`, never to the served Plugin package.
+Plugin update publication is atomic with companion rollback: any pre-publication
+failure keeps the prior pair, while post-publication cleanup is best effort and can
+never roll back a successfully updated Plugin. Same-version byte changes and
+downgrades fail closed. Startup, update and uninstall reconcile orphan companions.
 
 ## Management surface
 

@@ -45,6 +45,16 @@ it must not become the permanent home of reusable domain rules.
   Verify monotonic catalog sequence, compatibility, size, SHA-256 and a bounded safe
   ZIP inventory, then reuse the existing Plugin and managed-Skill installers. A
   remote package never enters the trusted built-in update/provenance path.
+- A remote Tool Plugin executable is an optional Registry companion, never a file
+  inside the static Plugin ZIP. Select only an exact `process.platform`/`arch`
+  target, verify its deterministic Release URL plus declared size/SHA-256, and
+  publish immutable bytes below private versioned `userData/plugin-companions`.
+  Preserve the previous Plugin/companion pair on failure, clean orphans on
+  update/uninstall/startup, and keep explicit `PATH` commands as the fallback.
+  Installation must fingerprint the exact binding and transactionally coordinate
+  its receipt with Plugin publication. Runtime silently re-verifies the same
+  manifest, binding kind, real path, size and SHA-256 or fails closed and requests
+  reinstall. A required managed artifact must never fall back to `PATH`.
 - Generation `tools/call` has no host-imposed overall deadline. Keep initialization
   and discovery bounded, but let the sidecar own queued vendor state until a terminal
   result or caller cancellation. Agent transport relays content-free MCP progress so

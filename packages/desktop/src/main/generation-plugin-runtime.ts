@@ -60,6 +60,12 @@ export type GenerationPluginExecutableResolver = (
   environment: Readonly<Record<string, string>>,
 ) => Promise<GenerationPluginExecutableBinding>
 
+export type GenerationPluginManagedExecutableResolver = (
+  pluginId: string,
+  pluginVersion: string,
+  command: string,
+) => Promise<GenerationPluginExecutableBinding | null>
+
 export type GenerationPluginExecutableMaterializer = (
   binding: GenerationPluginExecutableBinding,
 ) => Promise<GenerationPluginExecutableSnapshot>
@@ -73,6 +79,8 @@ export interface GenerationPluginRuntimeOptions {
   resolveExecutable?: GenerationPluginExecutableResolver
   /** Copies the install-authorized entrypoint to a unique host-owned launch snapshot. */
   materializeExecutable?: GenerationPluginExecutableMaterializer
+  /** Resolves a Registry-managed, host-owned companion before the explicit PATH fallback. */
+  resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
   /** Test seam; Windows execution fails closed until the host owns a Job Object. */
   platform?: NodeJS.Platform
   /** Verifies installation-time consent for this exact declaration and executable. */
@@ -380,6 +388,7 @@ export class GenerationPluginRuntime {
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
+  readonly #resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
   readonly #resolveExecutable: GenerationPluginExecutableResolver
   readonly #starting = new Map<string, StartingPluginRuntime>()
   readonly #verifyAuthorization: GenerationPluginRuntimeOptions["verifyAuthorization"]
@@ -391,6 +400,7 @@ export class GenerationPluginRuntime {
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
+    this.#resolveManagedExecutable = options.resolveManagedExecutable
     this.#materializeExecutable = options.materializeExecutable ?? materializeGenerationPluginExecutable
     this.#platform = options.platform ?? process.platform
     this.#verifyAuthorization = (input) => options.verifyAuthorization(input)
@@ -635,12 +645,26 @@ export class GenerationPluginRuntime {
       throw new Error("Generation Tool Plugin execution on Windows requires a host Job Object and is not enabled")
     }
     const declaredRuntime = plugin.manifest.runtime!
-    const binding = await this.#resolveExecutable(declaredRuntime.command, this.#environment)
+    const resolveExecutable = async () => {
+      const managed = await this.#resolveManagedExecutable?.(
+        plugin.manifest.id,
+        plugin.manifest.version,
+        declaredRuntime.command,
+      )
+      return managed
+        ? { binding: managed, kind: "managed" as const }
+        : {
+            binding: await this.#resolveExecutable(declaredRuntime.command, this.#environment),
+            kind: "path" as const,
+          }
+    }
+    const resolved = await resolveExecutable()
+    const binding = resolved.binding
     if (this.#disposed || starting.canceled) {
       throw new Error(`Generation Plugin changed while resolving its executable: ${plugin.manifest.id}`)
     }
     const bindingFingerprint = executableBindingFingerprint(binding)
-    await this.#verifyAuthorization({ binding, bindingKind: "path", plugin: plugin.manifest })
+    await this.#verifyAuthorization({ binding, bindingKind: resolved.kind, plugin: plugin.manifest })
     if (this.#disposed || starting.canceled) {
       throw new Error(`Generation Plugin changed while verifying its installation: ${plugin.manifest.id}`)
     }
@@ -648,13 +672,13 @@ export class GenerationPluginRuntime {
     if (!path.isAbsolute(manifestPath)) throw new Error("Installed Plugin manifest path must be absolute")
     if (this.#disposed || starting.canceled)
       throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
-    const confirmed = await this.#resolveExecutable(declaredRuntime.command, this.#environment)
-    if (executableBindingFingerprint(confirmed) !== bindingFingerprint) {
+    const confirmed = await resolveExecutable()
+    if (confirmed.kind !== resolved.kind || executableBindingFingerprint(confirmed.binding) !== bindingFingerprint) {
       throw new Error(
         `Generation Plugin executable changed after installation; reinstall Plugin: ${plugin.manifest.id}`,
       )
     }
-    const executableSnapshot = await this.#materializeExecutable(confirmed)
+    const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
     try {
       const client = this.#createClient({
         ...(declaredRuntime.args ? { args: [...declaredRuntime.args] } : {}),
