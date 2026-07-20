@@ -66,4 +66,5 @@ bun check
 
 - [Architecture](docs/architecture.md)
 - [Plugin and Skill platform](docs/plugin-skill-platform.md)
+- [FFmpeg Tool Plugin](docs/ffmpeg-tool-plugin.md)
 - [Canvas selection and actions](docs/canvas-selection-context.md)

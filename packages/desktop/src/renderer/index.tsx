@@ -9,13 +9,24 @@ import {
   type CanvasMediaKind,
   type CanvasNotification,
   type CanvasSelectionAction,
+  type CanvasSelectionActionContext,
 } from "@convax/canvas"
 import type { AgentResource } from "@convax/agent-runtime"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
 import { ProjectCanvasController, hydrateProjectCanvasDocument, projectFileReferenceKey } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
-import { CheckCircle2, Clapperboard, Info, PanelLeftOpen, TriangleAlert, XCircle } from "lucide-react"
+import {
+  CheckCircle2,
+  Clapperboard,
+  Crop,
+  ImageDown,
+  Info,
+  PanelLeftOpen,
+  Scissors,
+  TriangleAlert,
+  XCircle,
+} from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { agentCanvasNodeResourceUri, createAgentCanvasInstructions } from "../agent-canvas-context"
@@ -34,6 +45,14 @@ import { createInitialCanvasDocument } from "./canvas-document"
 import { CanvasCardConversationPanel } from "./canvas-card-conversation-panel"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import {
+  canRunFfmpegTransform,
+  createFfmpegGenerateRequest,
+  type FfmpegTransformDialogRequest,
+  type FfmpegTransformInput,
+  isFfmpegDialogInScope,
+} from "./ffmpeg-selection-action"
+import { FfmpegTransformDialog, ffmpegTransformLabel } from "./ffmpeg-transform-dialog"
 import {
   canExportSelectionToJianying,
   exportCanvasMediaToJianying,
@@ -138,6 +157,8 @@ function App() {
     readAppLanguagePreference(localStorage),
   )
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null)
+  const [ffmpegDialog, setFfmpegDialog] = useState<FfmpegTransformDialogRequest | null>(null)
+  const closeFfmpegDialog = useCallback(() => setFfmpegDialog(null), [])
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
@@ -279,11 +300,12 @@ function App() {
     const openSettingsShortcut = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
       event.preventDefault()
+      closeFfmpegDialog()
       setSettingsSection("general")
     }
     window.addEventListener("keydown", openSettingsShortcut)
     return () => window.removeEventListener("keydown", openSettingsShortcut)
-  }, [])
+  }, [closeFfmpegDialog])
   useEffect(() => {
     if (!settingsSection) return
     const closeSettings = (event: KeyboardEvent) => {
@@ -313,7 +335,13 @@ function App() {
     activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
       ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
       : undefined
+  const activeFfmpegDialog = isFfmpegDialogInScope(ffmpegDialog, activeProjectId, activeCanvasId) ? ffmpegDialog : null
   pluginHostContextRef.current = { activeCanvas, activeProject }
+  useEffect(() => {
+    setFfmpegDialog((current) =>
+      current && !isFfmpegDialogInScope(current, activeProjectId, activeCanvasId) ? null : current,
+    )
+  }, [activeCanvasId, activeProjectId])
 
   const webPluginHost = useMemo<WebPluginCanvasHost>(() => {
     const currentScope = (projectId: string, canvasId: string) => {
@@ -781,6 +809,27 @@ function App() {
     })
   }, [activeCanvasId, activeProjectId, flushCanvasForAgent])
 
+  const runFfmpegTransform = useCallback(
+    async (request: FfmpegTransformDialogRequest, input: FfmpegTransformInput, signal: AbortSignal) => {
+      if (signal.aborted) {
+        throw signal.reason ?? new DOMException("Canceled", "AbortError")
+      }
+      const result = await services.require("generate").generate(createFfmpegGenerateRequest(request, input, signal))
+      if (signal.aborted) return
+      setFfmpegDialog((current) => (current === request ? null : current))
+      setNotification({
+        description: result.warnings.length
+          ? result.warnings.join("\n")
+          : locale === "zh-CN"
+            ? `已创建 ${result.createdNodeIds.length} 个新节点。`
+            : `${result.createdNodeIds.length} new node${result.createdNodeIds.length === 1 ? "" : "s"} created.`,
+        kind: result.warnings.length > 0 ? "warning" : "success",
+        title: locale === "zh-CN" ? "FFmpeg 处理完成" : "FFmpeg transform complete",
+      })
+    },
+    [locale, services],
+  )
+
   const selectionActions = useMemo<readonly CanvasSelectionAction[]>(
     () => [
       {
@@ -823,8 +872,26 @@ function App() {
           }
         },
       },
+      ...(
+        [
+          { icon: <ImageDown />, kind: "extract-frame" },
+          { icon: <Scissors />, kind: "trim" },
+          { icon: <Crop />, kind: "crop" },
+        ] as const
+      ).map(({ icon, kind }) => ({
+        id: `ffmpeg.${kind}`,
+        label: ffmpegTransformLabel(locale, kind),
+        icon,
+        visible(context: CanvasSelectionActionContext) {
+          return canRunFfmpegTransform(context, installedPlugins, kind)
+        },
+        execute(context: CanvasSelectionActionContext) {
+          if (!activeCanvasId || !activeProjectId) return
+          setFfmpegDialog({ canvasId: activeCanvasId, context, kind, projectId: activeProjectId })
+        },
+      })),
     ],
-    [activeCanvasId, activeProjectId, flushCanvasForAgent, installedPlugins],
+    [activeCanvasId, activeProjectId, flushCanvasForAgent, installedPlugins, locale],
   )
 
   useEffect(() => {
@@ -919,9 +986,13 @@ function App() {
       : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
   const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
-  const openSettings = useCallback((target: ApplicationMenuTarget) => {
-    setSettingsSection(target)
-  }, [])
+  const openSettings = useCallback(
+    (target: ApplicationMenuTarget) => {
+      closeFfmpegDialog()
+      setSettingsSection(target)
+    },
+    [closeFfmpegDialog],
+  )
   const changeLanguage = useCallback((preference: AppLanguagePreference) => {
     setLanguagePreference(preference)
     writeAppLanguagePreference(localStorage, preference)
@@ -944,9 +1015,9 @@ function App() {
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
       <main
-        aria-hidden={settingsSection ? true : undefined}
+        aria-hidden={settingsSection || activeFfmpegDialog ? true : undefined}
         className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}
-        inert={settingsSection ? true : undefined}
+        inert={Boolean(settingsSection || activeFfmpegDialog) || undefined}
       >
         <div
           className={`relative h-full shrink-0 overflow-hidden${!resizingPrimarySidebar || !primarySidebar.visible ? " transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}
@@ -1084,6 +1155,15 @@ function App() {
         />
         {notification ? <Toast notification={notification} /> : null}
       </main>
+      {activeFfmpegDialog && !settingsSection ? (
+        <FfmpegTransformDialog
+          key={`${activeFfmpegDialog.context.document.id}:${activeFfmpegDialog.context.document.revision}:${activeFfmpegDialog.kind}`}
+          locale={locale}
+          onClose={closeFfmpegDialog}
+          onConfirm={(input, signal) => runFfmpegTransform(activeFfmpegDialog, input, signal)}
+          request={activeFfmpegDialog}
+        />
+      ) : null}
       {settingsSection ? (
         <SettingsView
           className="fixed inset-0 z-[100]"
