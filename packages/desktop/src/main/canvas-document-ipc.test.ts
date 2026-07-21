@@ -2,7 +2,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test"
 import { CanvasResourcePartialFailureError, type CanvasResourceBusinessService } from "@convax/canvas/application"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import { ProjectTextFileConflictError } from "@convax/project-files"
-import { projectResourceReferenceKey } from "@convax/project/canvas"
+import { dehydrateProjectCanvasDocument, projectResourceReferenceKey } from "@convax/project/canvas"
 import {
   canvasResourcePartialFailureKind,
   canvasTextResourceConflictKind,
@@ -377,6 +377,66 @@ describe("Canvas document hydration IPC", () => {
       document: { nodes: [expect.objectContaining({ data: expect.objectContaining({ resourceState: { status: "ready", text: "# Hydrated" } }) })] },
       storageVersion: "storage-4",
     })
+  })
+
+  test("hydrates only stale resources for the invoking renderer's exact live document", async () => {
+    const document = textDocument()
+    const durable = dehydrateProjectCanvasDocument(document)
+    const hydrateStale = mock(async ({ document: requested }) => ({
+      ...requested,
+      nodes: requested.nodes.map((node: ReturnType<typeof textDocument>["nodes"][number]) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "fresh" } },
+      })),
+    }))
+    const event = { sender: { id: 27 } }
+    const load = mock(async () => ({ document: durable, storageVersion: "storage-4" }))
+    registerCanvasDocumentIpc(
+      { load, save: mock() },
+      { hydrate: mock(), hydrateStale },
+      {
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async (actualEvent) => {
+          expect(actualEvent.sender.id).toBe(27)
+          return { canvasId: "canvas-main", projectId: "project-one", revision: 4 }
+        },
+      },
+    )
+
+    const result = await handlers.get("canvas:resource-hydrate-stale")!(event, {
+      canvasId: "canvas-main",
+      revision: 4,
+    })
+
+    expect(load).toHaveBeenCalledWith({ canvasId: "canvas-main", scopeId: "project-one" })
+    expect(hydrateStale).toHaveBeenCalledWith({ document, projectId: "project-one" })
+    expect(result).toMatchObject({ nodes: [expect.objectContaining({ data: expect.objectContaining({ resourceState: { status: "ready", text: "fresh" } }) })] })
+  })
+
+  test("rejects renderer-supplied scope and document fields before a forged reference can be read", async () => {
+    const forged = textDocument({ kind: "project-file", path: "Secrets/forged.md" })
+    const load = mock(async () => ({ document: dehydrateProjectCanvasDocument(textDocument()), storageVersion: "storage-4" }))
+    const hydrateStale = mock(async () => {
+      throw new Error("forged reference was read")
+    })
+    registerCanvasDocumentIpc(
+      { load, save: mock() },
+      { hydrate: mock(), hydrateStale },
+      {
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 4 }),
+      },
+    )
+
+    await expect(
+      handlers.get("canvas:resource-hydrate-stale")!({ sender: { id: 27 } }, {
+        canvasId: "canvas-main",
+        document: forged,
+        projectId: "project-one",
+      }),
+    ).rejects.toThrow("unsupported field")
+    expect(load).not.toHaveBeenCalled()
+    expect(hydrateStale).not.toHaveBeenCalled()
   })
 })
 

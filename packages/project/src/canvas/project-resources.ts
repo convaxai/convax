@@ -199,9 +199,71 @@ export async function hydrateProjectCanvasDocument(
   document: CanvasDocument,
   resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
 ): Promise<CanvasDocument> {
+  return hydrateProjectCanvasResources(document, resolve, () => true, () => true)
+}
+
+export function markProjectCanvasResourcesStale(document: CanvasDocument): CanvasDocument {
+  let changed = false
+  const nodes = document.nodes.map((node) => {
+    if (!resourceNodeKinds.has(node.data.kind)) return node
+    const reference = getProjectResourceReference(node.data.metadata)
+    const resourceState = node.data.resourceState
+    if (
+      !reference ||
+      reference.kind === "managed-asset" ||
+      (resourceState !== null &&
+        typeof resourceState === "object" &&
+        "status" in resourceState &&
+        resourceState.status === "stale")
+    ) return node
+    changed = true
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        resourceState: {
+          ...(resourceState !== null && typeof resourceState === "object" ? resourceState : {}),
+          status: "stale" as const,
+        },
+      },
+    }
+  })
+  return changed ? { ...document, nodes } : document
+}
+
+export async function hydrateStaleProjectCanvasResources(
+  document: CanvasDocument,
+  resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
+): Promise<CanvasDocument> {
+  return hydrateProjectCanvasResources(
+    document,
+    resolve,
+    (_node, reference) => {
+      return reference.kind !== "managed-asset"
+    },
+    (node) => isStaleResourceNode(node),
+  )
+}
+
+function isStaleResourceNode(node: CanvasDocument["nodes"][number]) {
+  const resourceState = node.data.resourceState
+  return (
+    resourceState !== null &&
+    typeof resourceState === "object" &&
+    "status" in resourceState &&
+    resourceState.status === "stale"
+  )
+}
+
+async function hydrateProjectCanvasResources(
+  document: CanvasDocument,
+  resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
+  shouldHydrate: (node: CanvasDocument["nodes"][number], reference: ProjectResourceReference) => boolean,
+  shouldInspect: (node: CanvasDocument["nodes"][number]) => boolean,
+): Promise<CanvasDocument> {
   const nodes = await Promise.all(
     document.nodes.map(async (node) => {
-      if (!resourceNodeKinds.has(node.data.kind)) return node
+      if (!resourceNodeKinds.has(node.data.kind) || !shouldInspect(node)) return node
       const reference = getProjectResourceReference(node.data.metadata)
       if (!reference) {
         return {
@@ -212,6 +274,7 @@ export async function hydrateProjectCanvasDocument(
           },
         }
       }
+      if (!shouldHydrate(node, reference)) return node
       try {
         return {
           ...node,

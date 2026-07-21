@@ -1,7 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
 import { canvasResourcePartialFailureKind } from "../canvas-resource-private-contract"
 import { CanvasTextResourceConflictError } from "@convax/canvas"
-import { canvasTextResourceIpcChannel } from "../desktop-protocol"
+import { canvasResourceHydrateStaleIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
+import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
 function request(overrides: Record<string, unknown> = {}) {
@@ -37,6 +38,36 @@ function setup(
 }
 
 describe("preload Canvas resource client", () => {
+  test("requests stale runtime hydration without exposing a native path", async () => {
+    const document = createCanvasDocument({
+      id: "canvas-main",
+      nodes: [
+        createTextNode({
+          id: "note",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/a.md" } },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+      ],
+    })
+    const hydrated = {
+      ...document,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "fresh" } },
+      })),
+    }
+    const invoke = mock(async () => hydrated)
+    const { client } = setup(invoke)
+
+    await expect(client.hydrateStale({ canvasId: "canvas-main", revision: document.revision }))
+      .resolves.toEqual(hydrated)
+    expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
+      canvasId: "canvas-main",
+      revision: document.revision,
+    })
+  })
+
   test("consumes a local File token into a Main-private path without exposing it in the result", async () => {
     const { client, invoke } = setup()
     const file = new File(["outside"], "outside.png", { type: "image/png" })

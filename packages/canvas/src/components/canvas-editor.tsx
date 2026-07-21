@@ -159,6 +159,7 @@ import {
   type CanvasGenerationInputRole,
   type CanvasGenerationToolSummary,
   type CanvasResourceMutationRequest,
+  type CanvasResourceHydrationService,
   type CanvasServices,
   useCanvasService,
 } from "../services"
@@ -384,6 +385,7 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
   insertNode: (type: string) => string | undefined
+  invalidateResources: () => Promise<void>
   prepareToLeave: () => Promise<boolean>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
@@ -431,6 +433,182 @@ export function runCanvasReloadScopeEffect(input: {
   if (!isCanvasResourceMutationScopeCurrent(input.currentScope, input.reloadScope)) return false
   input.effect()
   return true
+}
+
+interface CanvasResourceRefreshSnapshot {
+  document: CanvasDocument
+  scope: CanvasResourceMutationScopeToken
+}
+
+interface CanvasResourceRefreshControllerOptions {
+  current(): CanvasResourceRefreshSnapshot
+  onError?(error: unknown): void
+  queue?: CanvasReloadQueue
+  replace(document: CanvasDocument): void
+  service: CanvasResourceHydrationService
+}
+
+export class CanvasResourceRefreshController {
+  readonly #controllers = new Set<AbortController>()
+  readonly #queue: CanvasReloadQueue
+  #disposed = false
+  #invalidationGeneration = 0
+
+  constructor(private readonly options: CanvasResourceRefreshControllerOptions) {
+    this.#queue = options.queue ?? new CanvasReloadQueue()
+  }
+
+  invalidateResources(): Promise<void> {
+    if (this.#disposed) return Promise.resolve()
+    const current = this.options.current()
+    this.options.replace(this.options.service.markStale(current.document))
+    this.#invalidationGeneration += 1
+    return this.#requestRefresh()
+  }
+
+  abort() {
+    for (const controller of this.#controllers) controller.abort()
+    this.#controllers.clear()
+  }
+
+  dispose() {
+    this.#disposed = true
+    this.abort()
+  }
+
+  #requestRefresh() {
+    const pending = this.#queue.request(() => this.#refresh())
+    void pending.catch((error) => this.options.onError?.(error))
+    return pending
+  }
+
+  async #refresh() {
+    if (this.#disposed) return
+    const invalidationGeneration = this.#invalidationGeneration
+    const requested = this.options.current()
+    const controller = new AbortController()
+    this.#controllers.add(controller)
+    let hydrated: CanvasDocument
+    try {
+      hydrated = await this.options.service.hydrateStale({
+        document: requested.document,
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (
+        !this.#disposed &&
+        !controller.signal.aborted &&
+        !isCanvasResourceRefreshTargetCurrent(requested, this.options.current())
+      ) {
+        void this.#requestRefresh()
+        return
+      }
+      throw error
+    } finally {
+      this.#controllers.delete(controller)
+    }
+    if (this.#disposed || controller.signal.aborted || invalidationGeneration !== this.#invalidationGeneration) return
+
+    const current = this.options.current()
+    const merged = mergeCanvasResourceRefresh(requested, current, hydrated)
+    if (!merged) {
+      void this.#requestRefresh()
+      return
+    }
+    this.options.replace(merged)
+  }
+}
+
+function mergeCanvasResourceRefresh(
+  requested: CanvasResourceRefreshSnapshot,
+  current: CanvasResourceRefreshSnapshot,
+  hydrated: CanvasDocument,
+): CanvasDocument | null {
+  if (
+    !isCanvasResourceRefreshTargetCurrent(requested, current) ||
+    hydrated.id !== requested.document.id ||
+    hydrated.revision !== requested.document.revision
+  ) {
+    return null
+  }
+
+  const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
+  const hydratedNodes = new Map(hydrated.nodes.map((node) => [node.id, node]))
+  let changed = false
+  let invalid = false
+  const nodes = current.document.nodes.map((currentNode) => {
+    const requestedNode = requested.document.nodes.find((node) => node.id === currentNode.id)
+    const requestedState = requestedNode ? canvasNodeResourceState(requestedNode) : undefined
+    if (!requestedNode || !isStaleCanvasResourceState(requestedState)) return currentNode
+    const hydratedNode = hydratedNodes.get(currentNode.id)
+    const currentState = canvasNodeResourceState(currentNode)
+    const hydratedState = hydratedNode ? canvasNodeResourceState(hydratedNode) : undefined
+    if (
+      !hydratedNode ||
+      !sameCanvasRuntimeValue(requestedNode.data.metadata, currentNode.data.metadata) ||
+      !sameCanvasRuntimeValue(requestedNode.data.metadata, hydratedNode.data.metadata) ||
+      !sameCanvasRuntimeValue(requestedState, currentState) ||
+      hydratedState === undefined
+    ) {
+      invalid = true
+      return currentNode
+    }
+    if (sameCanvasRuntimeValue(currentState, hydratedState)) return currentNode
+    changed = true
+    return { ...currentNode, data: { ...currentNode.data, resourceState: hydratedState } }
+  })
+
+  if (invalid) return null
+
+  for (const requestedNode of requested.document.nodes) {
+    if (
+      isStaleCanvasResourceState(canvasNodeResourceState(requestedNode)) &&
+      (!currentNodes.has(requestedNode.id) || !hydratedNodes.has(requestedNode.id))
+    ) {
+      return null
+    }
+  }
+  return changed ? { ...current.document, nodes } : current.document
+}
+
+function isCanvasResourceRefreshTargetCurrent(
+  requested: CanvasResourceRefreshSnapshot,
+  current: CanvasResourceRefreshSnapshot,
+) {
+  if (
+    !isCanvasResourceMutationScopeCurrent(() => current.scope, requested.scope) ||
+    current.document.id !== requested.document.id ||
+    current.document.revision !== requested.document.revision
+  )
+    return false
+  const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
+  return requested.document.nodes.every((requestedNode) => {
+    const requestedState = canvasNodeResourceState(requestedNode)
+    if (!isStaleCanvasResourceState(requestedState)) return true
+    const currentNode = currentNodes.get(requestedNode.id)
+    return Boolean(
+      currentNode &&
+        sameCanvasRuntimeValue(requestedNode.data.metadata, currentNode.data.metadata) &&
+        sameCanvasRuntimeValue(requestedState, canvasNodeResourceState(currentNode)),
+    )
+  })
+}
+
+function canvasNodeResourceState(node: CanvasNode): unknown {
+  return node.data.resourceState
+}
+
+function isStaleCanvasResourceState(value: unknown) {
+  return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
+}
+
+function sameCanvasRuntimeValue(left: unknown, right: unknown) {
+  if (left === right) return true
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
 }
 
 export function linkCanvasReloadAbortSignal(source: AbortSignal | undefined, target: AbortController) {
@@ -640,6 +818,7 @@ function CanvasEditorContent(
   const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
   const mutationService = useCanvasService("mutation")
+  const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
   const persistenceService = useCanvasService("persistence")
   const exportService = useCanvasService("export")
@@ -697,6 +876,12 @@ function CanvasEditorContent(
       hasLocalEditsRef.current = true
     }
     reduce(action)
+  }, [])
+  const replaceRuntimeDocument = useCallback((document: CanvasDocument) => {
+    const replaced = canvasHistoryReducer(historyRef.current, { document, type: "replace" })
+    historyRef.current = replaced
+    documentRef.current = replaced.document
+    reduce({ document, type: "replace" })
   }, [])
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
@@ -1069,6 +1254,23 @@ function CanvasEditorContent(
     },
     [notificationService],
   )
+  const resourceRefreshController = useMemo(
+    () =>
+      hydrationService
+        ? new CanvasResourceRefreshController({
+            current: () => ({
+              document: documentRef.current,
+              scope: resourceMutationScopeRef.current,
+            }),
+            onError: (error) => notifyError("Could not refresh canvas resources", error),
+            queue: reloadQueueRef.current,
+            replace: replaceRuntimeDocument,
+            service: hydrationService,
+          })
+        : undefined,
+    [hydrationService, notifyError, replaceRuntimeDocument],
+  )
+  useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
   const selectionActionsMountedRef = useRef(false)
   const selectionActionErrorRef = useRef(notifyError)
@@ -1810,6 +2012,9 @@ function CanvasEditorContent(
       insertNode(type) {
         return addNode(type)
       },
+      invalidateResources() {
+        return resourceRefreshController?.invalidateResources() ?? Promise.resolve()
+      },
       async prepareToLeave() {
         await waitForStableLoad()
         leavingRef.current = true
@@ -1841,6 +2046,7 @@ function CanvasEditorContent(
       props.editorRef,
       reloadDocument,
       reloadAuthoritativeDocument,
+      resourceRefreshController,
       startSave,
       waitForStableLoad,
     ],

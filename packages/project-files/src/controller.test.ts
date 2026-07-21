@@ -229,4 +229,70 @@ describe("ProjectFilesController", () => {
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(controller.getSnapshot().listings[""]?.entries[0]?.path).toBe("second.txt")
   })
+
+  test("prunes vanished directory listings after a successful parent refresh", async () => {
+    let rootEntries = [entry("assets", "directory")]
+    let rejectVanishedChild = false
+    const listDirectory = mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) => {
+      if (input.path === "assets" && rejectVanishedChild) throw new Error("ENOENT")
+      return input.path === "assets"
+        ? listing(input.projectId, "assets", [entry("assets/a.png")])
+        : listing(input.projectId, "", rootEntries)
+    })
+    const { client } = createClient({ listDirectory })
+    const controller = new ProjectFilesController(client)
+    await controller.setProject("one")
+    await controller.toggleDirectory("assets")
+    controller.selectEntry("assets/a.png", { range: false, toggle: false })
+
+    rootEntries = [entry("renamed", "directory")]
+    rejectVanishedChild = true
+    await controller.refreshVisibleDirectories()
+
+    expect(controller.getSnapshot().listings[""]?.entries.map((item) => item.path)).toEqual(["renamed"])
+    expect(controller.getSnapshot().listings).not.toHaveProperty("assets")
+    expect(controller.getSnapshot().expandedPaths).not.toContain("assets")
+    expect(controller.getSnapshot().selectedPaths).not.toContain("assets/a.png")
+    expect(controller.getSnapshot().error).toBeNull()
+    controller.dispose()
+  })
+
+  test("does not accept an old directory response after the same path is removed and recreated", async () => {
+    let rootEntries = [entry("assets", "directory")]
+    let resolveOld!: (value: ProjectDirectoryListing) => void
+    let resolveCurrent!: (value: ProjectDirectoryListing) => void
+    const oldListing = new Promise<ProjectDirectoryListing>((resolve) => {
+      resolveOld = resolve
+    })
+    const currentListing = new Promise<ProjectDirectoryListing>((resolve) => {
+      resolveCurrent = resolve
+    })
+    let assetsRequest = 0
+    const listDirectory = mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) => {
+      if (input.path !== "assets") return listing(input.projectId, "", rootEntries)
+      assetsRequest += 1
+      return assetsRequest === 1 ? oldListing : currentListing
+    })
+    const { client } = createClient({ listDirectory })
+    const controller = new ProjectFilesController(client)
+    await controller.setProject("one")
+
+    const oldRequest = controller.loadDirectory("assets")
+    await Promise.resolve()
+    rootEntries = []
+    await controller.loadDirectory("")
+    rootEntries = [entry("assets", "directory")]
+    await controller.loadDirectory("")
+
+    const currentRequest = controller.loadDirectory("assets")
+    resolveCurrent(listing("one", "assets", [entry("assets/current.png")]))
+    await currentRequest
+    resolveOld(listing("one", "assets", [entry("assets/obsolete.png")]))
+    await oldRequest
+
+    expect(controller.getSnapshot().listings.assets?.entries.map((item) => item.path)).toEqual([
+      "assets/current.png",
+    ])
+    controller.dispose()
+  })
 })

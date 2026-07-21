@@ -137,10 +137,12 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const { createCanvasDocument, createTextNode } = await import("../document")
+const { canvasHistoryReducer, createCanvasHistory } = await import("../history")
 const {
   abortCanvasReload,
   abortCanvasReloadBeforeWait,
   CanvasEditor,
+  CanvasResourceRefreshController,
   completeCanvasResourceMutation,
   handleCanvasResourceMutationFailure,
   linkCanvasReloadAbortSignal,
@@ -279,6 +281,185 @@ describe("CanvasEditor resource mutation", () => {
       text: "after",
     })
     expect(updated.nodes[0]!.data.metadata).toBe(document.nodes[0]!.data.metadata)
+  })
+
+  test("marks mounted resources stale synchronously and single-flights one trailing runtime refresh", async () => {
+    const initial = createCanvasDocument({
+      id: "canvas-watcher-refresh",
+      nodes: [
+        {
+          id: "note",
+          data: {
+            kind: "text",
+            label: "Note",
+            metadata: { resource: "Notes/a.md" },
+            resourceState: { status: "ready", text: "before" },
+          },
+          position: { x: 0, y: 0 },
+          type: "file",
+        },
+      ],
+    })
+    const older = createCanvasDocument({ id: "older" })
+    const newer = createCanvasDocument({ id: "newer" })
+    let history = { ...createCanvasHistory(initial), future: [newer], past: [older] }
+    const selection = { nodeIds: ["note"] }
+    const viewport = { x: 17, y: 29, zoom: 1.35 }
+    const persist = mock(() => undefined)
+    const pending: Array<{ resolve(document: typeof initial): void; promise: Promise<typeof initial> }> = []
+    const hydrateStale = mock((_input: { document: typeof initial }) => {
+      let resolve!: (document: typeof initial) => void
+      const promise = new Promise<typeof initial>((next) => {
+        resolve = next
+      })
+      pending.push({ promise, resolve })
+      return promise
+    })
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({
+        document: history.document,
+        scope: { documentId: history.document.id, generation: 0, scopeId: "project-one" },
+      }),
+      replace(document) {
+        history = canvasHistoryReducer(history, { document, type: "replace" })
+      },
+      service: {
+        hydrateStale,
+        markStale(document) {
+          return {
+            ...document,
+            nodes: document.nodes.map((node) => ({
+              ...node,
+              data: {
+                ...node.data,
+                resourceState: {
+                  ...(node.data.resourceState as Record<string, unknown>),
+                  status: "stale",
+                },
+              },
+            })),
+          }
+        },
+      },
+    })
+
+    const first = controller.invalidateResources()
+    expect((history.document.nodes[0]!.data.resourceState as { status: string }).status).toBe("stale")
+    const second = controller.invalidateResources()
+    expect(hydrateStale).toHaveBeenCalledTimes(1)
+
+    pending[0]!.resolve({
+      ...initial,
+      nodes: initial.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "first" } },
+      })),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(hydrateStale).toHaveBeenCalledTimes(2)
+
+    const trailingInput = hydrateStale.mock.calls[1]![0].document
+    pending[1]!.resolve({
+      ...trailingInput,
+      nodes: trailingInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "second" } },
+      })),
+    })
+    await Promise.all([first, second])
+
+    expect(history.document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "second" })
+    expect(history.document.revision).toBe(initial.revision)
+    expect(history.past).toEqual([older])
+    expect(history.future).toEqual([newer])
+    expect(selection).toEqual({ nodeIds: ["note"] })
+    expect(viewport).toEqual({ x: 17, y: 29, zoom: 1.35 })
+    expect(persist).not.toHaveBeenCalled()
+  })
+
+  test("discards a stale hydration result and schedules a trailing pass after scope, revision, or reference changes", async () => {
+    const initial = {
+      ...createCanvasDocument({
+        id: "canvas-stale-result",
+        nodes: [
+          {
+            id: "note",
+            data: {
+              kind: "text" as const,
+              label: "Note",
+              metadata: { resource: "Notes/a.md" },
+              resourceState: { status: "ready" as const },
+            },
+            position: { x: 0, y: 0 },
+            type: "file" as const,
+          },
+        ],
+      }),
+      revision: 4,
+    }
+    let document = initial
+    let scopeId = "project-one"
+    const requests: Array<{ input: typeof initial; resolve(document: typeof initial): void }> = []
+    const hydrateStale = mock(
+      (input: { document: typeof initial }) =>
+        new Promise<typeof initial>((resolve) => requests.push({ input: input.document, resolve })),
+    )
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({ document, scope: { documentId: document.id, generation: 0, scopeId } }),
+      replace(next) {
+        document = next as typeof initial
+      },
+      service: {
+        hydrateStale,
+        markStale(current) {
+          return {
+            ...current,
+            nodes: current.nodes.map((node) => ({
+              ...node,
+              data: { ...node.data, resourceState: { status: "stale" } },
+            })),
+          }
+        },
+      },
+    })
+
+    const refresh = controller.invalidateResources()
+    const firstInput = requests[0]!.input
+    scopeId = "project-two"
+    document = {
+      ...document,
+      revision: 5,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, metadata: { resource: "Notes/b.md" } },
+      })),
+    }
+    requests[0]!.resolve({
+      ...firstInput,
+      nodes: firstInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "obsolete" } },
+      })),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(hydrateStale).toHaveBeenCalledTimes(2)
+    expect(document.nodes[0]!.data.resourceState).not.toHaveProperty("text", "obsolete")
+    const trailingInput = requests[1]!.input
+    requests[1]!.resolve({
+      ...trailingInput,
+      nodes: trailingInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "current" } },
+      })),
+    })
+    await refresh
+
+    expect(document.revision).toBe(5)
+    expect(document.nodes[0]!.data.metadata).toEqual({ resource: "Notes/b.md" })
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "current" })
   })
 
   test("ignores delayed success and failure after switching to another scope with the same Canvas id", async () => {

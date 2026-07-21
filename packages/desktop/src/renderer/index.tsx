@@ -14,7 +14,11 @@ import {
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController } from "@convax/project-files"
-import { dehydrateProjectCanvasDocument, ProjectCanvasController } from "@convax/project/canvas"
+import {
+  dehydrateProjectCanvasDocument,
+  markProjectCanvasResourcesStale,
+  ProjectCanvasController,
+} from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
@@ -84,6 +88,7 @@ import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController } from "./service-catalog-controller"
+import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
@@ -334,6 +339,17 @@ function App() {
   )
     ? mediaOperationDialog
     : null
+  const activeProjectIdRef = useRef<string | null>(activeProjectId ?? null)
+  activeProjectIdRef.current = activeProjectId ?? null
+  useEffect(
+    () =>
+      subscribeMountedCanvasResourceInvalidation({
+        currentEditor: () => canvasEditorRef.current,
+        currentProjectId: () => activeProjectIdRef.current,
+        projectFiles: window.convax.projectFiles,
+      }),
+    [],
+  )
   pluginHostContextRef.current = { activeCanvas, activeProject }
   useEffect(() => {
     setMediaOperationDialog((current) =>
@@ -775,6 +791,21 @@ function App() {
             agent
           )
         },
+      },
+      hydration: {
+        async hydrateStale({ document, signal }) {
+          if (!activeProjectId || !activeCanvasId) {
+            throw new Error("Open a Project Canvas before refreshing resources")
+          }
+          if (signal.aborted) throw signal.reason
+          const hydrated = await window.convax.canvas.resources.hydrateStale({
+            canvasId: activeCanvasId,
+            revision: document.revision,
+          })
+          if (signal.aborted) throw signal.reason
+          return hydrated
+        },
+        markStale: markProjectCanvasResourcesStale,
       },
       mutation: {
         async add(request) {

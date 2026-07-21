@@ -191,4 +191,59 @@ describe("ProjectCanvasResourceHydrator", () => {
     expect(hydrated.nodes[0]!.data.metadata).toEqual({ [projectResourceReferenceKey]: reference })
     expect(hydrated.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "hello" })
   })
+
+  test("refreshes only stale mutable references and observes delete then recreate without a cache", async () => {
+    const target = path.join(projectRoot, "brief.txt")
+    await fs.writeFile(target, "before")
+    const reference = { kind: "project-file", path: "brief.txt" } as const
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-refresh",
+        nodes: [
+          createTextNode({
+            id: "brief",
+            metadata: { [projectResourceReferenceKey]: reference },
+            position: { x: 0, y: 0 },
+            resourceState: { status: "stale" },
+          }),
+          createTextNode({
+            id: "already-ready",
+            metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "untouched.txt" } },
+            position: { x: 20, y: 0 },
+            resourceState: { status: "ready", text: "keep" },
+          }),
+        ],
+      }),
+      revision: 11,
+    }
+
+    const first = await hydrator.hydrateStale({ document, projectId })
+    expect(first.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "before" })
+    expect(first.nodes[1]).toBe(document.nodes[1])
+
+    await fs.unlink(target)
+    const missing = await hydrator.hydrateStale({
+      document: {
+        ...first,
+        nodes: first.nodes.map((node) =>
+          node.id === "brief" ? { ...node, data: { ...node.data, resourceState: { status: "stale" } } } : node,
+        ),
+      },
+      projectId,
+    })
+    expect(missing.nodes[0]!.data.resourceState).toEqual({ status: "missing" })
+
+    await fs.writeFile(target, "after")
+    const recreated = await hydrator.hydrateStale({
+      document: {
+        ...missing,
+        nodes: missing.nodes.map((node) =>
+          node.id === "brief" ? { ...node, data: { ...node.data, resourceState: { status: "stale" } } } : node,
+        ),
+      },
+      projectId,
+    })
+    expect(recreated.revision).toBe(11)
+    expect(recreated.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "after" })
+  })
 })

@@ -1,10 +1,11 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import type { CanvasPoint } from "@convax/canvas/core"
+import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/18"
+export const desktopProtocolVersion = "convax.desktop-ipc/19"
 export const canvasResourceIpcChannel = "canvas:resource-add"
+export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasTextResourceIpcChannel = "canvas:text-resource-save"
 
 export type CanvasTextResourceClient = CanvasTextResourceService
@@ -38,6 +39,7 @@ export interface CanvasResourceAddInput {
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
+  hydrateStale(input: { canvasId: string; revision: number }): Promise<CanvasDocument>
 }
 
 export interface DesktopProtocolClient {

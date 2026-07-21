@@ -7,7 +7,11 @@ import {
   type CanvasResourceSource,
 } from "@convax/canvas/application"
 import type { CanvasPoint } from "@convax/canvas/core"
-import { getProjectResourceReference, requireProjectResourceReference } from "@convax/project/canvas"
+import {
+  getProjectResourceReference,
+  markProjectCanvasResourcesStale,
+  requireProjectResourceReference,
+} from "@convax/project/canvas"
 import type { ProjectCanvasResourceHydrator, ProjectCanvasResourcePreparation } from "@convax/project/node"
 import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
@@ -16,7 +20,11 @@ import {
   canvasTextResourceConflictKind,
   type CanvasResourcePartialFailureResponse,
 } from "../canvas-resource-private-contract"
-import { canvasResourceIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
+import {
+  canvasResourceHydrateStaleIpcChannel,
+  canvasResourceIpcChannel,
+  canvasTextResourceIpcChannel,
+} from "../desktop-protocol"
 import {
   canvasDocumentIpcChannels,
   type CanvasRendererCommandRequest,
@@ -24,16 +32,18 @@ import {
 
 const commandIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
+type CanvasDocumentHydrator = Pick<ProjectCanvasResourceHydrator, "hydrate"> &
+  Partial<Pick<ProjectCanvasResourceHydrator, "hydrateStale">>
+
 interface CanvasDocumentIpcOptions {
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+  resolveActiveCanvas?: (event: IpcMainInvokeEvent) => Promise<ActiveCanvasScope | null>
 }
 
 export function registerCanvasDocumentIpc(
   documents: CanvasDocumentClient,
-  applicationOrHydrator:
-    | Pick<CanvasApplicationService, "execute">
-    | Pick<ProjectCanvasResourceHydrator, "hydrate">,
-  hydratorOrOptions: Pick<ProjectCanvasResourceHydrator, "hydrate"> | CanvasDocumentIpcOptions,
+  applicationOrHydrator: Pick<CanvasApplicationService, "execute"> | CanvasDocumentHydrator,
+  hydratorOrOptions: CanvasDocumentHydrator | CanvasDocumentIpcOptions,
   maybeOptions?: CanvasDocumentIpcOptions,
 ) {
   const application = "execute" in applicationOrHydrator ? applicationOrHydrator : undefined
@@ -44,6 +54,7 @@ export function registerCanvasDocumentIpc(
         ? hydratorOrOptions
         : undefined
   const options = maybeOptions ?? (hydratorOrOptions as CanvasDocumentIpcOptions)
+  const disposers: Array<() => void> = []
   ipcMain.handle(canvasDocumentIpcChannels.load, (event, input) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     return Promise.resolve(documents.load(input)).then(async (result) => {
@@ -54,20 +65,23 @@ export function registerCanvasDocumentIpc(
       }
     })
   })
+  disposers.push(() => ipcMain.removeHandler(canvasDocumentIpcChannels.load))
   if (application) {
     ipcMain.handle(canvasDocumentIpcChannels.execute, (event, input: CanvasRendererCommandRequest) => {
       if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
       const request = requireRendererCommandRequest(input)
-      return Promise.resolve(application.execute({
-        canvasId: request.ref.canvasId,
-        envelope: {
-          actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
-          command: structuredClone(request.command),
-          commandId: request.commandId,
-          expectedRevision: request.expectedRevision,
-        },
-        scopeId: request.ref.scopeId,
-      })).then(async (result) =>
+      return Promise.resolve(
+        application.execute({
+          canvasId: request.ref.canvasId,
+          envelope: {
+            actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
+            command: structuredClone(request.command),
+            commandId: request.commandId,
+            expectedRevision: request.expectedRevision,
+          },
+          scopeId: request.ref.scopeId,
+        }),
+      ).then(async (result) =>
         hydrator
           ? {
               ...result,
@@ -79,11 +93,35 @@ export function registerCanvasDocumentIpc(
           : result,
       )
     })
+    disposers.push(() => ipcMain.removeHandler(canvasDocumentIpcChannels.execute))
   }
-  return () => {
-    if (application) ipcMain.removeHandler(canvasDocumentIpcChannels.execute)
-    ipcMain.removeHandler(canvasDocumentIpcChannels.load)
+  if (hydrator?.hydrateStale && options.resolveActiveCanvas) {
+    const hydrateStale = hydrator.hydrateStale.bind(hydrator)
+    const resolveActiveCanvas = options.resolveActiveCanvas
+    ipcMain.handle(canvasResourceHydrateStaleIpcChannel, async (event, value: unknown) => {
+      if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
+      const input = requireCanvasResourceHydrateStaleRequest(value)
+      const active = await resolveActiveCanvas(event)
+      if (!active || active.canvasId !== input.canvasId || active.revision !== input.revision) {
+        throw new Error("Canvas resource refresh does not match the invoking window's live Workbench scope")
+      }
+      const loaded = await documents.load({ canvasId: active.canvasId, scopeId: active.projectId })
+      if (!loaded.document || loaded.document.revision !== active.revision) {
+        throw new Error("Canvas resource refresh does not match the invoking window's live Workbench scope")
+      }
+      const hydrated = await hydrateStale({
+        document: markProjectCanvasResourcesStale(loaded.document),
+        projectId: active.projectId,
+      })
+      const current = await resolveActiveCanvas(event)
+      if (!sameActiveCanvasScope(active, current)) {
+        throw new Error("Canvas resource refresh does not match the invoking window's live Workbench scope")
+      }
+      return hydrated
+    })
+    disposers.push(() => ipcMain.removeHandler(canvasResourceHydrateStaleIpcChannel))
   }
+  return () => disposers.forEach((dispose) => dispose())
 }
 
 function requireRendererCommandRequest(value: unknown): CanvasRendererCommandRequest {
@@ -118,6 +156,20 @@ function requireRendererCommandRequest(value: unknown): CanvasRendererCommandReq
     throw new Error("Canvas command reference is invalid")
   }
   return value as CanvasRendererCommandRequest
+}
+
+function requireCanvasResourceHydrateStaleRequest(value: unknown) {
+  if (!isRecord(value)) throw new Error("Canvas resource refresh request must be an object")
+  for (const key of Object.keys(value)) {
+    if (key !== "canvasId" && key !== "revision") {
+      throw new Error(`Canvas resource refresh request contains unsupported field: ${key}`)
+    }
+  }
+  const canvasId = requireNonEmptyString(value.canvasId, "Canvas resource refresh canvas id")
+  if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 0) {
+    throw new Error("Canvas resource refresh revision must be a non-negative integer")
+  }
+  return { canvasId, revision: value.revision as number }
 }
 
 interface ActiveCanvasScope {

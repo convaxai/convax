@@ -900,7 +900,7 @@ function startApplication() {
       canvasDocuments,
       canvasApplication,
       canvasResourceHydrator,
-      ipcSecurity,
+      { ...ipcSecurity, resolveActiveCanvas },
     )
     const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {

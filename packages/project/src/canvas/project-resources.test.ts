@@ -6,7 +6,9 @@ import {
   dehydrateProjectCanvasDocument,
   getProjectResourceReference,
   hydrateProjectCanvasDocument,
+  hydrateStaleProjectCanvasResources,
   managedAssetPath,
+  markProjectCanvasResourcesStale,
   projectResourceBindingsKey,
   projectResourceReferenceKey,
   requireProjectResourceBindings,
@@ -714,6 +716,123 @@ describe("Project Canvas document hydration", () => {
     })
     expect(JSON.stringify(hydrated)).not.toContain("/native/")
     expect(dehydrateProjectCanvasDocument(hydrated)).toEqual(dehydrateProjectCanvasDocument(document))
+  })
+
+  test("marks every mutable Project snapshot stale while leaving managed assets unchanged", () => {
+    const projectFile = { kind: "project-file", path: "Notes/brief.md" } as const
+    const projectDirectory = { kind: "project-directory", path: "media" } as const
+    const managedAsset = {
+      kind: "managed-asset",
+      mediaType: "image/png",
+      name: "hero.png",
+      sha256: "f".repeat(64),
+    } as const
+    const document = createCanvasDocument({
+      id: "canvas-stale",
+      nodes: [
+        createTextNode({
+          id: "note",
+          metadata: { [projectResourceReferenceKey]: projectFile },
+          position: { x: 0, y: 0 },
+          resourceState: { contentRevision: "note-revision", status: "ready", text: "cached" },
+        }),
+        createFolderNode({
+          id: "folder",
+          position: { x: 20, y: 0 },
+          resource: {
+            id: "folder-resource",
+            kind: "folder",
+            metadata: { [projectResourceReferenceKey]: projectDirectory },
+            name: "media",
+            state: { name: "media", status: "missing" },
+          },
+        }),
+        createMediaNode({
+          id: "managed",
+          position: { x: 40, y: 0 },
+          resource: {
+            id: "managed-resource",
+            kind: "image",
+            metadata: { [projectResourceReferenceKey]: managedAsset },
+            state: { status: "ready", url: "convax-asset://managed" },
+          },
+        }),
+      ],
+    })
+
+    const stale = markProjectCanvasResourcesStale(document)
+
+    expect(stale).not.toBe(document)
+    expect(stale.revision).toBe(document.revision)
+    expect(stale.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: "note-revision",
+      status: "stale",
+      text: "cached",
+    })
+    expect(stale.nodes[1]!.data.resourceState).toEqual({ name: "media", status: "stale" })
+    expect(stale.nodes[2]).toBe(document.nodes[2])
+    expect((document.nodes[0]!.data.resourceState as { status: string }).status).toBe("ready")
+    expect((document.nodes[1]!.data.resourceState as { status: string }).status).toBe("missing")
+  })
+
+  test("hydrates only stale mutable Project references", async () => {
+    const references = {
+      managed: { kind: "managed-asset", name: "fixed.png", sha256: "a".repeat(64) } as const,
+      ready: { kind: "project-file", path: "Notes/ready.md" } as const,
+      staleDirectory: { kind: "project-directory", path: "media" } as const,
+      staleFile: { kind: "project-file", path: "Notes/stale.md" } as const,
+    }
+    const resourceNode = (
+      id: string,
+      reference: ProjectResourceReference,
+      status: "ready" | "stale",
+    ) =>
+      reference.kind === "project-directory"
+        ? createFolderNode({
+            id,
+            position: { x: 0, y: 0 },
+            resource: {
+              id: `${id}-resource`,
+              kind: "folder",
+              metadata: { [projectResourceReferenceKey]: reference },
+              name: id,
+              state: { status },
+            },
+          })
+        : createTextNode({
+            id,
+            metadata: { [projectResourceReferenceKey]: reference },
+            position: { x: 0, y: 0 },
+            resourceState: { status },
+          })
+    const document = createCanvasDocument({
+      id: "canvas-stale-only",
+      nodes: [
+        resourceNode("stale-file", references.staleFile, "stale"),
+        resourceNode("stale-directory", references.staleDirectory, "stale"),
+        resourceNode("ready-file", references.ready, "ready"),
+        resourceNode("managed", references.managed, "stale"),
+        createTextNode({
+          id: "ready-invalid-reference",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "../outside.md" } },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: "keep" },
+        }),
+      ],
+    })
+    const resolved: ProjectResourceReference[] = []
+
+    const hydrated = await hydrateStaleProjectCanvasResources(document, async (reference) => {
+      resolved.push(reference)
+      return { name: reference.kind === "project-directory" ? "media" : "stale.md", status: "ready" }
+    })
+
+    expect(resolved).toEqual([references.staleFile, references.staleDirectory])
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({ name: "stale.md", status: "ready" })
+    expect(hydrated.nodes[1]!.data.resourceState).toEqual({ name: "media", status: "ready" })
+    expect(hydrated.nodes[2]).toBe(document.nodes[2])
+    expect(hydrated.nodes[3]).toBe(document.nodes[3])
+    expect(hydrated.nodes[4]).toBe(document.nodes[4])
   })
 })
 

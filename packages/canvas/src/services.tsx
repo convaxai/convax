@@ -36,6 +36,11 @@ export interface CanvasResourceMutationService {
   }>
 }
 
+export interface CanvasResourceHydrationService {
+  markStale(document: CanvasDocument): CanvasDocument
+  hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
+}
+
 export class CanvasTextResourceConflictError extends Error {
   constructor(
     readonly expectedRevision: string,
@@ -353,6 +358,7 @@ export interface CanvasAssistantService {
 
 export interface CanvasServiceMap {
   assistant: CanvasAssistantService
+  hydration: CanvasResourceHydrationService
   mutation: CanvasResourceMutationService
   generate: CanvasGenerateService
   persistence: CanvasPersistenceService

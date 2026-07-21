@@ -4,6 +4,7 @@ import type { CanvasDocument } from "@convax/canvas/core"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
 import {
   hydrateProjectCanvasDocument,
+  hydrateStaleProjectCanvasResources,
   requireProjectResourceReference,
   type ProjectResourceReference,
   type ProjectResourceSnapshot,
@@ -59,6 +60,12 @@ export class ProjectCanvasResourceHydrator {
 
   hydrate(input: { document: CanvasDocument; projectId: string }) {
     return hydrateProjectCanvasDocument(input.document, (reference) =>
+      this.resolve({ projectId: input.projectId, reference }),
+    )
+  }
+
+  hydrateStale(input: { document: CanvasDocument; projectId: string }) {
+    return hydrateStaleProjectCanvasResources(input.document, (reference) =>
       this.resolve({ projectId: input.projectId, reference }),
     )
   }

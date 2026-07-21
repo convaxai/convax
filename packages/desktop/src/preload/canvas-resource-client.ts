@@ -1,5 +1,7 @@
 import { CanvasTextResourceConflictError } from "@convax/canvas"
+import { parseCanvasDocument } from "@convax/canvas/core"
 import {
+  canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
   canvasTextResourceIpcChannel,
   type CanvasResourceAddResult,
@@ -144,6 +146,17 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       const token = `canvas-resource_${randomUUID()}`
       tokens.set(token, { expiresAt: now() + localFileTokenLifetimeMs, path: filePath })
       return token
+    },
+    async hydrateStale(input) {
+      let result: unknown
+      try {
+        result = await options.invoke(canvasResourceHydrateStaleIpcChannel, input)
+      } catch {
+        throw new Error("Could not refresh Canvas resources")
+      }
+      const document = parseCanvasDocument(result, input.canvasId)
+      if (!document) throw new Error("Canvas resource refresh response is invalid")
+      return document
     },
   }
 }
