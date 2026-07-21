@@ -67,8 +67,10 @@ describe("project canvas document repository", () => {
     })
 
     expect(saved.storageVersion).toStartWith("version_")
-    expect(JSON.parse(getStored().content).nodes[0].data.url).toBe("")
-    expect(JSON.parse(getStored().content).nodes[0].data).not.toHaveProperty("posterUrl")
+    const storedEnvelope = JSON.parse(getStored().content)
+    expect(storedEnvelope.schemaVersion).toBe("convax.canvas/2")
+    expect(storedEnvelope.document.nodes[0].data.url).toBe("")
+    expect(storedEnvelope.document.nodes[0].data).not.toHaveProperty("posterUrl")
     expect((await repository.load({ canvasId: "canvas-main", scopeId: "project_one" })).document?.id).toBe("canvas-main")
     expect(getTouched()).toBe(1)
   })

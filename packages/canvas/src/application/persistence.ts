@@ -46,7 +46,7 @@ export class InvalidCanvasDocumentError extends Error {
 
 export class UnsupportedCanvasDocumentVersionError extends Error {
   constructor(readonly schemaVersion: unknown) {
-    super(`Canvas document schema is not supported: ${String(schemaVersion ?? "unversioned")}`)
+    super("Canvas document schema is not supported")
     this.name = "UnsupportedCanvasDocumentVersionError"
   }
 }

@@ -78,4 +78,23 @@ describe("canvas document persistence", () => {
       ),
     ).toThrow(InvalidCanvasDocumentError)
   })
+
+  test("preserves an object schema version without coercing it", () => {
+    const schemaVersion = { toString: null, valueOf: null }
+    let thrown: unknown
+    try {
+      parseStoredCanvasDocument(
+        JSON.stringify({ document: createCanvasDocument({ id: "canvas" }), schemaVersion }),
+        "canvas",
+      )
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(UnsupportedCanvasDocumentVersionError)
+    if (!(thrown instanceof UnsupportedCanvasDocumentVersionError)) {
+      throw new Error("Expected an unsupported Canvas document version")
+    }
+    expect(thrown.schemaVersion).toEqual(schemaVersion)
+  })
 })

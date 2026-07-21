@@ -33,10 +33,12 @@ describe("project canvas persistence integration", () => {
     const initialized = await service.load(ref)
     expect(initialized.document?.nodes).toEqual([])
     expect(initialized.storageVersion).toHaveLength(64)
-    expect(JSON.parse(await fs.readFile(
+    const storedEnvelope = JSON.parse(await fs.readFile(
       path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"),
       "utf8",
-    ))).toMatchObject({ id: "canvas-main", nodes: [], edges: [] })
+    ))
+    expect(storedEnvelope.schemaVersion).toBe("convax.canvas/2")
+    expect(storedEnvelope.document).toMatchObject({ id: "canvas-main", nodes: [], edges: [] })
 
     if (!initialized.document) throw new Error("Canvas was not initialized")
     const saved = await service.save({

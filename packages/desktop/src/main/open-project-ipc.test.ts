@@ -314,14 +314,19 @@ describe("desktop Project lifecycle IPC smoke", () => {
     )
     expect(storedCatalog).toMatchObject({ schemaVersion: "convax.project-canvases/2" })
     expect(storedCatalog).not.toHaveProperty("activeCanvasId")
-    expect(
-      JSON.parse(
-        await fs.readFile(
-          path.join(selectedProjectPath, ".convax", "canvases", "canvas-main", "document.json"),
-          "utf8",
-        ),
+    const storedCanvasEnvelope = JSON.parse(
+      await fs.readFile(
+        path.join(selectedProjectPath, ".convax", "canvases", "canvas-main", "document.json"),
+        "utf8",
       ),
-    ).toMatchObject({ edges: [], id: "canvas-main", nodes: [{ id: rendererNode.id }], revision: 1 })
+    )
+    expect(storedCanvasEnvelope.schemaVersion).toBe("convax.canvas/2")
+    expect(storedCanvasEnvelope.document).toMatchObject({
+      edges: [],
+      id: "canvas-main",
+      nodes: [{ id: rendererNode.id }],
+      revision: 1,
+    })
 
     const createdSelection = await exposedBridge.projects.createProject({ name: "Created project" })
     const createdProjectId = createdSelection.project?.id
