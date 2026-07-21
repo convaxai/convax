@@ -1,6 +1,13 @@
 import { parseCanvasDocument } from "../document"
 import type { CanvasDocument } from "../types"
 
+export const canvasDocumentSchemaVersion = "convax.canvas/2" as const
+
+interface StoredCanvasDocumentV2 {
+  document: unknown
+  schemaVersion: typeof canvasDocumentSchemaVersion
+}
+
 export interface CanvasDocumentRef {
   canvasId: string
   /** Host-defined isolation boundary (for example a project, tenant, or document space). */
@@ -37,6 +44,13 @@ export class InvalidCanvasDocumentError extends Error {
   }
 }
 
+export class UnsupportedCanvasDocumentVersionError extends Error {
+  constructor(readonly schemaVersion: unknown) {
+    super(`Canvas document schema is not supported: ${String(schemaVersion ?? "unversioned")}`)
+    this.name = "UnsupportedCanvasDocumentVersionError"
+  }
+}
+
 export class CanvasStorageConflictError extends Error {
   readonly actualStorageVersion: string | null
   readonly expectedStorageVersion: string | null
@@ -50,17 +64,37 @@ export class CanvasStorageConflictError extends Error {
 }
 
 export function parseStoredCanvasDocument(content: string, expectedCanvasId: string) {
+  let stored: unknown
   try {
-    const document = parseCanvasDocument(JSON.parse(content), expectedCanvasId)
-    if (document) return document
+    stored = JSON.parse(content)
   } catch {
-    // Report one stable domain error for malformed JSON and schema failures.
+    throw new InvalidCanvasDocumentError(expectedCanvasId)
   }
-  throw new InvalidCanvasDocumentError(expectedCanvasId)
+
+  if (!isRecord(stored)) throw new InvalidCanvasDocumentError(expectedCanvasId)
+  if (stored.schemaVersion !== canvasDocumentSchemaVersion) {
+    throw new UnsupportedCanvasDocumentVersionError(stored.schemaVersion)
+  }
+
+  const envelope: StoredCanvasDocumentV2 = {
+    document: stored.document,
+    schemaVersion: stored.schemaVersion,
+  }
+  const document = parseCanvasDocument(envelope.document, expectedCanvasId)
+  if (!document) throw new InvalidCanvasDocumentError(expectedCanvasId)
+  return document
 }
 
 export function serializeCanvasDocument(document: CanvasDocument) {
   const parsed = parseCanvasDocument(document, document.id)
   if (!parsed) throw new InvalidCanvasDocumentError(document.id)
-  return `${JSON.stringify(parsed, null, 2)}\n`
+  const envelope: StoredCanvasDocumentV2 = {
+    document: parsed,
+    schemaVersion: canvasDocumentSchemaVersion,
+  }
+  return `${JSON.stringify(envelope, null, 2)}\n`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
