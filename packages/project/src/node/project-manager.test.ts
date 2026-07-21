@@ -161,55 +161,6 @@ describe("NodeProjectManager files", () => {
     expect(await manager.readTextPreview({ path: "exact.txt", projectId })).toMatchObject({ truncated: false })
   })
 
-  test("reads only bounded, typed images from managed Canvas assets", async () => {
-    const assetRoot = path.join(projectRoot, ".convax", "assets")
-    const fixtures = [
-      { bytes: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), mimeType: "image/jpeg", name: "pano.jpg" },
-      { bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), mimeType: "image/png", name: "pano.png" },
-      { bytes: Buffer.from("RIFF\u0004\u0000\u0000\u0000WEBP", "binary"), mimeType: "image/webp", name: "pano.webp" },
-    ]
-    for (const fixture of fixtures) {
-      await fs.writeFile(path.join(assetRoot, fixture.name), fixture.bytes)
-      expect(await manager.readManagedImageFile({
-        path: `.convax/assets/${fixture.name}`,
-        projectId,
-      })).toMatchObject({
-        mimeType: fixture.mimeType,
-        name: fixture.name,
-        size: fixture.bytes.byteLength,
-      })
-    }
-  })
-
-  test("rejects forged, mismatched, and oversized managed Canvas image reads", async () => {
-    const assetRoot = path.join(projectRoot, ".convax", "assets")
-    await fs.writeFile(path.join(projectRoot, "secret.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "pano.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "mismatch.png"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "oversized.jpg"), Buffer.alloc(16 * 1024 * 1024 + 1, 0xff))
-
-    for (const filePath of [
-      "secret.jpg",
-      ".convax/project.json",
-      ".convax/assets/../project.json",
-      ".convax/assets/references/.convax/secret.jpg",
-      ".CONVAX/assets/pano.jpg",
-      ".convax\\assets\\pano.jpg",
-      ".convax/assets//pano.jpg",
-      "./.convax/assets/pano.jpg",
-    ]) {
-      await expect(manager.readManagedImageFile({ path: filePath, projectId })).rejects.toThrow()
-    }
-    await expect(manager.readManagedImageFile({
-      path: ".convax/assets/mismatch.png",
-      projectId,
-    })).rejects.toThrow("do not match")
-    await expect(manager.readManagedImageFile({
-      path: ".convax/assets/oversized.jpg",
-      projectId,
-    })).rejects.toThrow("too large")
-  })
-
   test("uses portable names and case-folded collision checks on every platform", async () => {
     for (const name of ["bad:name.txt", "bad?.txt", "trail.", "trail ", "NUL", "con.txt", "COM¹.txt", "lpt³", "control\u0001.txt"]) {
       await expect(manager.createEntry({ kind: "file", name, projectId })).rejects.toThrow("Invalid")
@@ -272,7 +223,7 @@ describe("NodeProjectManager files", () => {
     expect((await manager.listDirectory({ projectId })).entries).toEqual([])
   })
 
-  test("protects the Convax namespace while allowing managed canvas assets", async () => {
+  test("protects the Convax namespace from every general Project Files mutation", async () => {
     await manager.createEntry({ content: "visible", kind: "file", name: "visible.txt", projectId })
     await expect(manager.createEntry({ kind: "file", name: ".convax", projectId })).rejects.toThrow("reserved")
     await expect(manager.createEntry({ kind: "file", name: ".CONVAX", projectId })).rejects.toThrow("reserved")
@@ -282,25 +233,48 @@ describe("NodeProjectManager files", () => {
     await fs.writeFile(externalReserved, "external")
     await expect(manager.importEntries({ projectId, sourcePaths: [externalReserved] })).rejects.toThrow("reserved")
 
-    await manager.writeTextFile({ content: "", createParents: true, path: ".convax/assets/.keep", projectId })
-    await expect(manager.writeTextFile({ content: "corrupt", path: ".convax/project.json", projectId })).rejects.toThrow("reserved")
-    const copied = await manager.copyEntries({ destinationPath: ".convax/assets", paths: ["visible.txt"], projectId })
-    expect(copied.targetPaths).toEqual([".convax/assets/visible.txt"])
-    await expect(manager.deleteEntries({ paths: [".convax"], projectId })).rejects.toThrow("reserved")
-    await expect(manager.moveEntries({ destinationPath: ".convax/assets", paths: ["visible.txt"], projectId })).rejects.toThrow("reserved")
-    expect(await fs.readFile(path.join(projectRoot, ".convax", "assets", "visible.txt"), "utf8")).toBe("visible")
-    await expect(manager.deleteManagedAssets({ paths: ["visible.txt"], projectId })).rejects.toThrow("invalid")
-    await manager.deleteManagedAssets({ paths: [".convax/assets/visible.txt"], projectId })
-    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "visible.txt"))).rejects.toThrow()
+    const externalFile = path.join(temporaryRoot, "external-file.txt")
+    await fs.writeFile(externalFile, "external")
+    expect(await manager.readTextFile({ path: "missing.txt", projectId })).toEqual({
+      content: "",
+      exists: false,
+      path: "missing.txt",
+    })
+    const digestPath = "a".repeat(64)
+    for (const reservedRoot of [".convax", ".CONVAX", ".ConvAx"]) {
+      const assetRoot = `${reservedRoot}/assets`
+      const manifestPath = `${reservedRoot}/project.json`
+      await expect(manager.copyEntries({
+        destinationPath: assetRoot,
+        paths: ["visible.txt"],
+        projectId,
+      })).rejects.toThrow("reserved for Convax")
+      await expect(manager.importEntries({
+        destinationPath: assetRoot,
+        projectId,
+        sourcePaths: [externalFile],
+      })).rejects.toThrow("reserved for Convax")
+      await expect(manager.writeTextFile({
+        content: "must not be written",
+        createParents: true,
+        path: `${assetRoot}/blobs/${digestPath}`,
+        projectId,
+      })).rejects.toThrow("reserved for Convax")
+      await expect(manager.deleteEntries({ paths: [assetRoot], projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.moveEntries({
+        destinationPath: assetRoot,
+        paths: ["visible.txt"],
+        projectId,
+      })).rejects.toThrow("reserved for Convax")
+      await expect(manager.listDirectory({ path: assetRoot, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readTextPreview({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readFile({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readFileInfo({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readTextFile({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.resolveEntryPath({ path: assetRoot, projectId })).rejects.toThrow("reserved for Convax")
+    }
 
-    await fs.mkdir(path.join(projectRoot, ".convax", "assets", "invalid-directory"))
-    await fs.writeFile(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"), "generated")
-    await expect(manager.deleteManagedAssets({
-      paths: [".convax/assets/invalid-directory", ".convax/assets/later-cleanup.png"],
-      projectId,
-    })).rejects.toThrow("could not be removed")
-    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"))).rejects.toThrow()
-    expect(await fs.stat(path.join(projectRoot, ".convax", "assets", "invalid-directory")).then((stat) => stat.isDirectory())).toBe(true)
+    expect(await fs.readdir(path.join(projectRoot, ".convax", "assets"))).toEqual([])
   })
 
   test("does not claim or remove a copy target that another writer already owns", async () => {

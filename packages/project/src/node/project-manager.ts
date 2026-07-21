@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto"
 import { constants as fsConstants, watch as watchFileSystem, type BigIntStats, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { isManagedProjectAssetPath } from "../canvas/project-resources"
 import type {
   ProjectChangeEvent,
   ProjectDirectoryListing,
@@ -14,7 +13,6 @@ import type {
   ProjectTextPreviewContents,
 } from "../contracts"
 import {
-  assertCopyOrImportTarget,
   assertNoSymlinkSegments,
   assertNotProjectRoot,
   assertPortableTree,
@@ -29,12 +27,10 @@ import {
   isDirectory,
   isIgnoredName,
   isInsidePath,
-  isManagedAssetPath,
   isNodeError,
   isProjectRecord,
   isSafeProjectRoot,
   joinRelative,
-  managedAssetDirectory,
   mimeTypeForPath,
   movePath,
   mutation,
@@ -45,7 +41,6 @@ import {
   parseProjectManifest,
   projectIdForPath,
   projectManifestPath,
-  removePathWithRetries,
   requireEntryPath,
   requireProjectId,
   sameNativePath,
@@ -105,7 +100,6 @@ function privateTextVersion(content: string) {
 }
 
 export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
-  private managedImageReads = 0
   private readonly now: () => number
   private projectCreationQueue: Promise<void> = Promise.resolve()
   private registryQueue: Promise<unknown> = Promise.resolve()
@@ -315,6 +309,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async listDirectory(input: { path?: string; projectId: string }): Promise<ProjectDirectoryListing> {
     const relativePath = normalizeRelativePath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
     if (!stat.isDirectory()) throw new Error(`Project path is not a directory: ${relativePath}`)
@@ -448,8 +443,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   private async copyEntriesUnlocked(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
     const destinationPath = normalizeRelativePath(input.destinationPath)
-    const managedAssetCopy = destinationPath === managedAssetDirectory
-    if (!managedAssetCopy) assertUserMutationPath(destinationPath)
+    assertUserMutationPath(destinationPath)
     const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
     if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Copy destination is not a directory: ${destinationPath}`)
     const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
@@ -464,9 +458,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       const sourceName = validateName(path.posix.basename(sourcePath))
       await assertPortableTree(source)
-      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetCopy)
+      assertUserMutationPath(joinRelative(destinationPath, sourceName))
       const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
-      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetCopy)
+      assertUserMutationPath(joinRelative(destinationPath, path.basename(target)))
       reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
       copies.push({ source, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
     }
@@ -477,33 +471,6 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   deleteEntries(input: { paths: string[]; projectId: string }) {
     return this.queueProjectMutation(input.projectId, () => this.deleteEntriesUnlocked(input))
-  }
-
-  /** Main-only rollback boundary for files freshly admitted below `.convax/assets/`. */
-  deleteManagedAssets(input: { paths: string[]; projectId: string }) {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const sourcePaths = [...new Set(input.paths)]
-      if (!sourcePaths.length || sourcePaths.some((sourcePath) => !isManagedProjectAssetPath(sourcePath))) {
-        throw new Error("Managed asset rollback paths are invalid")
-      }
-      const cleanupErrors: unknown[] = []
-      for (const relativePath of sourcePaths) {
-        try {
-          const item = await this.resolveExisting(input.projectId, relativePath)
-          const stat = await fs.lstat(item.absolutePath)
-          if (!stat.isFile() || stat.isSymbolicLink()) {
-            throw new Error(`Managed asset rollback accepts regular files only: ${relativePath}`)
-          }
-          await removePathWithRetries(item.absolutePath)
-        } catch (error) {
-          if (!isNodeError(error) || error.code !== "ENOENT") cleanupErrors.push(error)
-        }
-      }
-      if (cleanupErrors.length) {
-        throw new AggregateError(cleanupErrors, "One or more managed generation assets could not be removed")
-      }
-      return mutation("delete", input.projectId, sourcePaths, sourcePaths)
-    })
   }
 
   private async deleteEntriesUnlocked(input: { paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
@@ -532,8 +499,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     sourcePaths: string[]
   }): Promise<ProjectMutationResult> {
     const destinationPath = normalizeRelativePath(input.destinationPath)
-    const managedAssetImport = destinationPath === managedAssetDirectory
-    if (!managedAssetImport) assertUserMutationPath(destinationPath)
+    assertUserMutationPath(destinationPath)
     const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
     if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Import destination is not a directory: ${destinationPath}`)
     const sourcePaths = [...new Set(input.sourcePaths.map((sourcePath) => {
@@ -553,9 +519,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       const sourceName = validateName(path.basename(sourcePath))
       await assertPortableTree(sourcePath)
-      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetImport)
+      assertUserMutationPath(joinRelative(destinationPath, sourceName))
       const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
-      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetImport)
+      assertUserMutationPath(joinRelative(destinationPath, path.basename(target)))
       reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
       imports.push({ source: sourcePath, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
     }
@@ -571,6 +537,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
@@ -592,6 +559,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
     const content = await readStableFile(absolutePath, relativePath, maxBytes)
@@ -605,39 +573,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     }
   }
 
-  async readManagedImageFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
-    if (!isManagedProjectAssetPath(input.path)) {
-      throw new Error(`Project image is not a managed Canvas asset: ${input.path}`)
-    }
-    const relativePath = requireEntryPath(input.path)
-    const mimeType = mimeTypeForPath(relativePath).toLowerCase()
-    if (!managedImageMimeTypes.has(mimeType)) {
-      throw new Error(`Managed Canvas image type is not supported: ${relativePath}`)
-    }
-    if (this.managedImageReads >= maximumConcurrentManagedImageReads) {
-      throw new Error("Too many managed Canvas image reads are already in progress")
-    }
-    this.managedImageReads += 1
-    try {
-      const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
-      const content = await readStableFile(absolutePath, relativePath, maximumManagedImageBytes)
-      if (!hasManagedImageSignature(content, mimeType)) {
-        throw new Error(`Managed Canvas image contents do not match its file type: ${relativePath}`)
-      }
-      return {
-        dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
-        mimeType,
-        name: path.basename(absolutePath),
-        path: relativePath,
-        size: content.byteLength,
-      }
-    } finally {
-      this.managedImageReads -= 1
-    }
-  }
-
   async readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
     if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
@@ -652,6 +590,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
     const output = await this.resolveOutput(input.projectId, relativePath)
     try {
@@ -676,7 +615,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     projectId: string
   }): Promise<ProjectMutationResult> {
     const relativePath = requireEntryPath(input.path)
-    assertCopyOrImportTarget(relativePath, isManagedAssetPath(relativePath))
+    assertUserMutationPath(relativePath)
     await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
       if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
         throw new Error(`Project text file is too large to write: ${relativePath}`)
@@ -693,7 +632,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   }
 
   async resolveEntryPath(input: { path?: string; projectId: string }) {
-    return (await this.resolveExisting(input.projectId, normalizeRelativePath(input.path))).absolutePath
+    const relativePath = normalizeRelativePath(input.path)
+    assertUserMutationPath(relativePath)
+    return (await this.resolveExisting(input.projectId, relativePath)).absolutePath
   }
 
   async resolveProjectRoot(input: { projectId: string }) {
@@ -943,10 +884,6 @@ async function ensureSafeDirectory(directory: string, description: string) {
   if (!stat.isDirectory()) throw new Error(`${description} is not a directory: ${directory}`)
 }
 
-const maximumManagedImageBytes = 16 * 1024 * 1024
-const maximumConcurrentManagedImageReads = 2
-const managedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
-
 async function readStableFile(absolutePath: string, relativePath: string, maximumBytes: number) {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     throw new Error("Project file byte limit must be a positive integer")
@@ -1000,17 +937,4 @@ function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
     && left.size === right.size
     && left.mtimeNs === right.mtimeNs
     && left.ctimeNs === right.ctimeNs
-}
-
-function hasManagedImageSignature(content: Buffer, mimeType: string) {
-  if (mimeType === "image/jpeg") {
-    return content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff
-  }
-  if (mimeType === "image/png") {
-    return content.length >= 8
-      && content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  }
-  return content.length >= 12
-    && content.subarray(0, 4).toString("ascii") === "RIFF"
-    && content.subarray(8, 12).toString("ascii") === "WEBP"
 }

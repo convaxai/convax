@@ -33,7 +33,6 @@ const ignoredNames = new Set([
   "release",
 ])
 
-export const managedAssetDirectory = ".convax/assets"
 export const projectManifestPath = ".convax/project.json"
 export const textPreviewBytes = 64 * 1024
 
@@ -73,19 +72,6 @@ export function assertUserMutationPath(relativePath: string) {
   if (relativePath.split("/").some(isReservedConvaxSegment)) {
     throw new Error(`Project path is reserved for Convax: ${relativePath}`)
   }
-}
-
-export function assertCopyOrImportTarget(relativePath: string, managedAssetMutation: boolean) {
-  const segments = relativePath.split("/")
-  if (managedAssetMutation
-    && segments[0] === ".convax"
-    && segments[1] === "assets"
-    && !segments.slice(2).some(isReservedConvaxSegment)) return
-  assertUserMutationPath(relativePath)
-}
-
-export function isManagedAssetPath(relativePath: string) {
-  return relativePath === managedAssetDirectory || relativePath.startsWith(`${managedAssetDirectory}/`)
 }
 
 function isReservedConvaxSegment(segment: string) {
@@ -193,22 +179,7 @@ export async function movePath(source: string, target: string) {
   }
 }
 
-export async function removePathWithRetries(target: string) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await fs.rm(target, { force: true, recursive: true })
-      return
-    } catch (error) {
-      if (attempt >= 3 || !isRetryableReplaceError(error)) throw error
-      await new Promise<void>((resolve) => setTimeout(resolve, 8 * (attempt + 1)))
-    }
-  }
-}
-
-export async function copyPath(
-  source: string,
-  target: string,
-): Promise<void> {
+export async function copyPath(source: string, target: string): Promise<void> {
   const stat = await fs.lstat(source)
   if (stat.isSymbolicLink()) throw new Error(`Symbolic links cannot be imported: ${source}`)
   if (stat.isFile()) {
