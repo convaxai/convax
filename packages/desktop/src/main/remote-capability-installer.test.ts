@@ -19,6 +19,7 @@ import {
   type RemoteCapabilityPackage,
   type RemotePluginCompanion,
   type RemoteSkillShowcaseDownload,
+  RemoteRegistryTimeoutError,
   RemoteRegistryValidationError,
 } from "./remote-capability-registry"
 
@@ -569,6 +570,28 @@ describe("RemoteCapabilityInstaller", () => {
     )
     expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
     expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
+  })
+
+  test("preserves the installed Plugin when its replacement companion download times out", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const next = generationManifest("generation-plugin", "2.0.0")
+    const item = pluginPackage("generation-plugin", "2.0.0", {
+      companions: [companion("generation-plugin", "2.0.0")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: next,
+    })
+    const setupResult = setup([item], { "manifest.json": encoder.encode(JSON.stringify(next)) }, [current])
+    setupResult.registry.downloadCompanionArtifact.mockRejectedValueOnce(
+      new RemoteRegistryTimeoutError("Remote companion artifact download stalled"),
+    )
+
+    await expect(setupResult.installer.installPlugin(item.id)).rejects.toThrow(
+      "Remote companion artifact download stalled",
+    )
+    expect(await setupResult.pluginManager.list()).toEqual([current])
+    expect(setupResult.companionStore.install).not.toHaveBeenCalled()
+    expect(setupResult.authorizationStore.prepareInstall).not.toHaveBeenCalled()
+    expect(setupResult.pluginManager.installBundle).not.toHaveBeenCalled()
   })
 
   test("fails before any download when a declared companion has no exact host target", async () => {
