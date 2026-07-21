@@ -81,7 +81,9 @@ export function listInstalledMediaOperationActions(
 ): readonly MediaOperationAction[] {
   return installedPlugins.flatMap((plugin) => {
     if (
-      (plugin.schema !== "convax.plugin/3" && plugin.schema !== "convax.plugin/4") ||
+      (plugin.schema !== "convax.plugin/3" &&
+        plugin.schema !== "convax.plugin/4" &&
+        plugin.schema !== "convax.plugin/5") ||
       plugin.runtime?.type !== "mcp-stdio"
     )
       return []

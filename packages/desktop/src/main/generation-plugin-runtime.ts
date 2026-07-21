@@ -16,6 +16,7 @@ import {
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
+  webPluginManifestSchemaV5,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
   type WebPluginServiceAction,
@@ -33,6 +34,11 @@ import {
   type ToolPluginExecutableBindingKind,
 } from "./tool-plugin-authorizations"
 import type { PluginServiceBrowserAuthorizationCompletion } from "./plugin-service-browser-authorization"
+import {
+  createToolPluginCanvasMcpBridge,
+  type ToolPluginCanvasCapabilityHost,
+  type ToolPluginCanvasMcpBridge,
+} from "./tool-plugin-canvas-capabilities"
 import { normalizeGenerationToolInputSchema, validateGenerationToolInput } from "./generation-tool-input-schema"
 
 export interface GenerationPluginSource {
@@ -94,6 +100,8 @@ export type GenerationPluginExecutableMaterializer = (
 ) => Promise<GenerationPluginExecutableSnapshot>
 
 export interface GenerationPluginRuntimeOptions {
+  /** Optional principal-bound reverse Canvas API for an already-running v5 Tool sidecar. */
+  canvasCapabilities?: ToolPluginCanvasCapabilityHost
   createClient?: GenerationPluginMcpClientFactory
   /** Source environment. Only the explicit host allowlist is inherited. */
   environment?: Readonly<Record<string, string | undefined>>
@@ -122,6 +130,7 @@ interface DiscoveredPlugin {
 interface CachedPluginRuntime {
   authorizationIdentity: string
   availableTools?: ReadonlyMap<string, McpToolDefinition>
+  canvasCapabilities?: ToolPluginCanvasMcpBridge
   client: GenerationPluginMcpClient
   executableSnapshot: GenerationPluginExecutableSnapshot
   fingerprint: string
@@ -321,12 +330,17 @@ export async function resolveGenerationPluginExecutable(
 
 function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginSummary & {
   runtime: NonNullable<InstalledWebPluginSummary["runtime"]>
-  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4
+  schema:
+    | typeof webPluginManifestSchemaV2
+    | typeof webPluginManifestSchemaV3
+    | typeof webPluginManifestSchemaV4
+    | typeof webPluginManifestSchemaV5
 } {
   return (
     (plugin.schema === webPluginManifestSchemaV2 ||
       plugin.schema === webPluginManifestSchemaV3 ||
-      plugin.schema === webPluginManifestSchemaV4) &&
+      plugin.schema === webPluginManifestSchemaV4 ||
+      plugin.schema === webPluginManifestSchemaV5) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )
@@ -337,11 +351,15 @@ function toolSummary(
   tool: WebPluginGenerationToolContribution,
 ): GenerationToolSummary {
   const model =
-    plugin.schema === webPluginManifestSchemaV3 || plugin.schema === webPluginManifestSchemaV4
+    plugin.schema === webPluginManifestSchemaV3 ||
+    plugin.schema === webPluginManifestSchemaV4 ||
+    plugin.schema === webPluginManifestSchemaV5
       ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
       : { name: tool.title, tool: tool.id }
   const agent =
-    plugin.schema === webPluginManifestSchemaV3 || plugin.schema === webPluginManifestSchemaV4
+    plugin.schema === webPluginManifestSchemaV3 ||
+    plugin.schema === webPluginManifestSchemaV4 ||
+    plugin.schema === webPluginManifestSchemaV5
       ? plugin.contributes.agent?.tools.find((candidate) => candidate.tool === tool.id)
       : undefined
   return {
@@ -425,6 +443,7 @@ export function generationPluginToolHostId(pluginId: string, toolId: string) {
  */
 export class GenerationPluginRuntime {
   readonly #cache = new Map<string, CachedPluginRuntime>()
+  readonly #canvasCapabilities?: ToolPluginCanvasCapabilityHost
   readonly #createClient: GenerationPluginMcpClientFactory
   readonly #environment: Record<string, string>
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
@@ -439,6 +458,7 @@ export class GenerationPluginRuntime {
 
   constructor(options: GenerationPluginRuntimeOptions) {
     this.#plugins = options.plugins
+    this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
@@ -830,19 +850,28 @@ export class GenerationPluginRuntime {
       )
     }
     const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
+    let canvasCapabilities: ToolPluginCanvasMcpBridge | undefined
     try {
+      canvasCapabilities = await createToolPluginCanvasMcpBridge(plugin.manifest, this.#canvasCapabilities)
+      if (this.#disposed || starting.canceled) {
+        canvasCapabilities?.close()
+        throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
+      }
       const client = this.#createClient({
         ...(declaredRuntime.args ? { args: [...declaredRuntime.args] } : {}),
         command: executableSnapshot.path,
         cwd: this.#workingDirectory,
         env: { ...this.#environment },
+        ...(canvasCapabilities ? { serverRequestHandler: canvasCapabilities.handler } : {}),
       })
       if (this.#disposed || starting.canceled) {
         closeQuietly(client)
+        canvasCapabilities?.close()
         throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
       }
       const cached: CachedPluginRuntime = {
         authorizationIdentity: toolPluginAuthorizationIdentity(plugin.manifest, confirmed.kind, confirmed.binding),
+        ...(canvasCapabilities ? { canvasCapabilities } : {}),
         client,
         executableSnapshot,
         fingerprint: plugin.fingerprint,
@@ -853,6 +882,7 @@ export class GenerationPluginRuntime {
       this.#cache.set(plugin.manifest.id, cached)
       return cached
     } catch (error) {
+      canvasCapabilities?.close()
       executableSnapshot.dispose()
       throw error
     }
@@ -874,6 +904,7 @@ export class GenerationPluginRuntime {
   }
 
   #closeRuntime(runtime: CachedPluginRuntime, force = false) {
+    runtime.canvasCapabilities?.close()
     closeQuietly(runtime.client, force)
     runtime.executableSnapshot.dispose()
   }

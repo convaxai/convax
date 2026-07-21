@@ -5,14 +5,24 @@ import type { InstalledWebPluginCanvasSurface, WebPluginCapability } from "../pl
 import {
   desktopPluginHostProtocol,
   desktopPluginHostProtocolV2,
+  pluginCapabilityProtocolV1,
   type DesktopPluginHostProtocol,
 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import {
-  createWebPluginCanvasContribution,
   dispatchWebPluginHostRequest,
   generationAnchorForPluginNode,
   getIncomingConnectedImageNodes,
+} from "../plugin-canvas-host"
+import type {
+  WebPluginCanvasActiveContext,
+  WebPluginGenerationCanvasResult,
+  WebPluginGenerationToolSummary,
+  WebPluginHostRequestContext,
+  WebPluginProjectFileResult,
+} from "../plugin-host-types"
+import {
+  createWebPluginCanvasContribution,
   matchesWebPluginCanvasNode,
   scheduleWebPluginFrameConnect,
   updateWebPluginNodeState,
@@ -27,13 +37,8 @@ import {
   webPluginIframeInteractionProps,
   webPluginIframeSandbox,
   webPluginStateMetadataKey,
-  type WebPluginCanvasActiveContext,
   type WebPluginFrameConnectClock,
-  type WebPluginGenerationCanvasResult,
-  type WebPluginGenerationToolSummary,
-  type WebPluginHostRequestContext,
-  type WebPluginProjectFileResult,
-} from "./web-plugin-canvas"
+} from "./web-plugin-node-renderer"
 
 function frameConnectClock() {
   let sequence = 0
@@ -159,11 +164,7 @@ function generationInputNode(kind: "text" | "video" | "audio", id: string): Canv
       }
 }
 
-function request(
-  method: string,
-  params?: unknown,
-  protocol: DesktopPluginHostProtocol = desktopPluginHostProtocol,
-) {
+function request(method: string, params?: unknown, protocol: DesktopPluginHostProtocol = desktopPluginHostProtocol) {
   return {
     id: "request-1",
     method,
@@ -173,7 +174,10 @@ function request(
   }
 }
 
-function hostContext(installedPlugin: InstalledWebPluginCanvasSurface, overrides: Partial<WebPluginHostRequestContext> = {}) {
+function hostContext(
+  installedPlugin: InstalledWebPluginCanvasSurface,
+  overrides: Partial<WebPluginHostRequestContext> = {},
+) {
   const active: WebPluginCanvasActiveContext = {
     canvasId: "canvas-1",
     canvasName: "Storyboard",
@@ -202,15 +206,18 @@ function hostContext(installedPlugin: InstalledWebPluginCanvasSurface, overrides
     getDocument: () => document,
     getNode: () => canvasNode(),
     isCanvasWritable: () => true,
-    listGenerationTools: mock(async (): Promise<readonly WebPluginGenerationToolSummary[]> => [
-      {
-        acceptedInputs: ["text", "reference_image"],
-        description: "Generate an image",
-        id: "generation-tools/image.generate",
-        output: "image",
-        title: "Generate image",
-      },
-    ]),
+    listGenerationTools: mock(
+      async (): Promise<readonly WebPluginGenerationToolSummary[]> => [
+        {
+          acceptedInputs: ["text", "reference_image"],
+          description: "Generate an image",
+          id: "generation-tools/image.generate",
+          output: "image",
+          title: "Generate image",
+        },
+      ],
+    ),
+    ownsNode: (node) => matchesWebPluginCanvasNode(installedPlugin, node.data),
     plugin: installedPlugin,
     promptAgent: mock(async () => ({ text: "Use a wide shot." })),
     readManagedProjectImage: mock(async (input) => ({
@@ -432,6 +439,25 @@ describe("Canvas Web Plugin contribution", () => {
 })
 
 describe("Canvas Web Plugin host requests", () => {
+  test("fails closed for V5 capability methods that are not handled by the legacy node adapter", async () => {
+    const installedPlugin = {
+      ...plugin(["projects.read"]),
+      schema: "convax.plugin/5",
+    } satisfies InstalledWebPluginCanvasSurface
+    const context = hostContext(installedPlugin)
+
+    const response = await dispatchWebPluginHostRequest(
+      request("projects.list", undefined, pluginCapabilityProtocolV1),
+      context,
+    )
+
+    expect(response).toMatchObject({
+      error: "Plugin host method is not available in this capability adapter: projects.list",
+      ok: false,
+    })
+    expect(context.promptAgent).not.toHaveBeenCalled()
+  })
+
   test("returns only active own-node context and applies capability checks", async () => {
     const context = hostContext(plugin())
     const contextResponse = await dispatchWebPluginHostRequest(request("host.context.get"), context)
@@ -876,14 +902,16 @@ describe("Canvas Web Plugin host requests", () => {
       },
       type: "response",
     })
-    expect(listGenerationTools).toHaveBeenCalledWith(expect.objectContaining({
-      canvasId: "canvas-1",
-      nodeId: "node-1",
-      output: "image",
-      pluginId: caller.id,
-      projectId: "project-1",
-      signal: expect.any(AbortSignal),
-    }))
+    expect(listGenerationTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canvasId: "canvas-1",
+        nodeId: "node-1",
+        output: "image",
+        pluginId: caller.id,
+        projectId: "project-1",
+        signal: expect.any(AbortSignal),
+      }),
+    )
 
     const executableWithoutCallerCapability = {
       ...caller,
@@ -891,13 +919,15 @@ describe("Canvas Web Plugin host requests", () => {
       contributes: {
         ...caller.contributes,
         generation: {
-          tools: [{
-            acceptedInputs: ["text" as const],
-            description: "Generate text",
-            id: "text.generate",
-            output: "text" as const,
-            title: "Generate text",
-          }],
+          tools: [
+            {
+              acceptedInputs: ["text" as const],
+              description: "Generate text",
+              id: "text.generate",
+              output: "text" as const,
+              title: "Generate text",
+            },
+          ],
         },
       },
       runtime: { command: "generation-mcp", type: "mcp-stdio" as const },
@@ -1029,18 +1059,22 @@ describe("Canvas Web Plugin host requests", () => {
       getNode: () => owner,
     })
 
-    expect(await dispatchWebPluginHostRequest(
-      request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
-      context,
-    )).toMatchObject({ ok: true })
-    expect(executeCanvasGeneration).toHaveBeenCalledWith(expect.objectContaining({
-      references: [
-        { nodeId: "text-1", role: "text" },
-        { nodeId: "image-1", role: "reference_image" },
-        { nodeId: "video-1", role: "reference_video" },
-        { nodeId: "audio-1", role: "audio" },
-      ],
-    }))
+    expect(
+      await dispatchWebPluginHostRequest(
+        request("generation.canvas.execute", { prompt: "Continue" }, desktopPluginHostProtocolV2),
+        context,
+      ),
+    ).toMatchObject({ ok: true })
+    expect(executeCanvasGeneration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        references: [
+          { nodeId: "text-1", role: "text" },
+          { nodeId: "image-1", role: "reference_image" },
+          { nodeId: "video-1", role: "reference_video" },
+          { nodeId: "audio-1", role: "audio" },
+        ],
+      }),
+    )
   })
 
   test("rejects more than 32 inferred incoming generation references before the port", async () => {
@@ -1057,7 +1091,10 @@ describe("Canvas Web Plugin host requests", () => {
       nodes: [owner, ...inputs],
     })
     const executeCanvasGeneration = mock(async () => ({
-      createdNodeIds: ["generated-1"], revision: 1, toolId: "text/generate", warnings: [],
+      createdNodeIds: ["generated-1"],
+      revision: 1,
+      toolId: "text/generate",
+      warnings: [],
     }))
 
     const response = await dispatchWebPluginHostRequest(
@@ -1082,7 +1119,10 @@ describe("Canvas Web Plugin host requests", () => {
       nodes: [owner, image, connectedImageNode({ id: "other-image" })],
     })
     const executeCanvasGeneration = mock(async () => ({
-      createdNodeIds: ["generated-1"], revision: 1, toolId: "image/generate", warnings: [],
+      createdNodeIds: ["generated-1"],
+      revision: 1,
+      toolId: "image/generate",
+      warnings: [],
     }))
     const base = {
       executeCanvasGeneration,
@@ -1119,9 +1159,12 @@ describe("Canvas Web Plugin host requests", () => {
       toolId: string
       warnings: readonly string[]
     }) => void
-    const executeCanvasGeneration = mock(() => new Promise<WebPluginGenerationCanvasResult>((resolve) => {
-      resolveGeneration = resolve
-    }))
+    const executeCanvasGeneration = mock(
+      () =>
+        new Promise<WebPluginGenerationCanvasResult>((resolve) => {
+          resolveGeneration = resolve
+        }),
+    )
     const context = hostContext(generationCallerPlugin(), {
       executeCanvasGeneration,
       getActiveContext: () => active,

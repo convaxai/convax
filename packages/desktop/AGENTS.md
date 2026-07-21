@@ -26,11 +26,16 @@ it must not become the permanent home of reusable domain rules.
   conversations. A card may persist its own opaque tool-id override, but card
   changes never write back to the Agent preference or create a second catalog.
 - Agent tools are thin adapters over Canvas application/business and view ports.
-  Host scope is authoritative; arguments cannot select another Project or Canvas.
-  Resolve the live active Canvas from the mounted view, inject it at the adapter, and
-  reject stale revisions rather than accepting a model-selected Canvas id.
+  Host Project scope is authoritative; document tools may select only a Canvas in
+  that Project's live catalog, while view tools resolve the mounted active Canvas.
+  Reject stale revisions and pass every document read/write through the renderer
+  flush/lock/reload barrier so an active editor cannot overwrite external work.
 - Renderer and Agent never edit private Canvas/Project JSON. Use typed clients and
   repository/application services. Only managed assets use the scoped file bridge.
+- Desktop may label and contribute the native media drag source, but Canvas owns the
+  persistent drag-out mode and selection interaction. Keep native staging, live
+  Project/Canvas/selection revalidation and Electron `startDrag` in Main; renderer
+  snapshots must publish the complete multi-selection synchronously.
 - Incompatible main/preload/renderer bridge changes update all three layers, tests,
   and `desktopProtocolVersion` together.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, and trusted
@@ -39,7 +44,8 @@ it must not become the permanent home of reusable domain rules.
   the Agent runtime's native discovery; Plugins compose existing Canvas file-renderer
   and toolbar registries. Standalone Skills and the legacy top-level `skill` field in
   `convax.plugin/1` through `/3` remain independently managed. A
-  `convax.plugin/4` `contributes.skills` entry is owned by its Plugin: Desktop keeps
+  `convax.plugin/4` and later `contributes.skills` entries are owned by their Plugin:
+  Desktop keeps
   the ownership binding and atomically publishes, updates, rolls back, and removes
   the materialized Skill with that Plugin. Owned Skills are visible as provided by
   the Plugin but cannot be managed separately. No Skill grants Plugin or native
@@ -51,7 +57,7 @@ it must not become the permanent home of reusable domain rules.
   ownership before Skill bytes after the switch. `commit` records the forward
   decision before cleanup. Startup converges exact remnants to the validated Plugin
   package selected by Plugin-package recovery; changed bytes and unknown backups fail
-  closed. A v1-v3 companion transfers to v4 ownership only after an exact old-package
+  closed. A v1-v3 companion transfers to v4-or-later ownership only after an exact old-package
   byte match. Package recovery must succeed before any dependent Skill journal is
   consumed. Serialize same-id Plugin install/update/uninstall publications, and
   serialize owned-Skill transactions with every standalone managed Skill mutation;
@@ -132,9 +138,24 @@ it must not become the permanent home of reusable domain rules.
   login. Never persist a browser profile or expose the request, URL or cookies
   through IPC. Drain the checkpoint/sidecar handoff before quit disposes the shared
   Tool Plugin runtime.
-- Bind Plugin RPC to its MessagePort and exact Project/Canvas/node scope. Enforce the
-  manifest allowlist and delegate to existing typed clients; never add a generic
-  IPC/function-call escape hatch.
+- V5 Project/Canvas RPC is owned by one transport-neutral main broker. Bind every
+  connection to the exact installed manifest identity and a host-issued Project
+  scope; revalidate identity, grants and the live Canvas catalog on every call.
+  Web MessagePorts, verified Tool sidecars and built-ins may only adapt to this
+  broker, never recreate its authorization or Canvas semantics.
+- Bound each connection's concurrent requests and pending subscriptions before
+  awaiting principal resolution. Serialize and deduplicate revision notifications,
+  and recheck the exact Canvas remains in the live catalog before delivery.
+- Web node methods remain bound to the exact MessagePort and Project/Canvas/node.
+  V5 document methods are not authorized by node ownership: they carry an explicit
+  portable Canvas ref and use bounded geometry/structure projections or atomic
+  resource-free transactions. Resource bytes/admission require a separate Project
+  business capability and never ride the document transaction escape hatch.
+- Main reserves inactive documents as well as mounted editors during an external
+  operation. Block Project/Canvas navigation while a reservation exists, cancel a
+  timed-out prepare explicitly, and propagate Agent/Tool cancellation to the final
+  durable checkpoint. Renderer reconciliation failure after commit must not report
+  the durable mutation as failed.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned managed-asset read, and reject stale or
   caller-selected paths.

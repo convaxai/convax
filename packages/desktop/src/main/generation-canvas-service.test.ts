@@ -179,6 +179,12 @@ function setup(options: {
     async reloadDocument() {
       return true
     },
+    async runDocumentMutation(_ref, mutate) {
+      return mutate()
+    },
+    async runDocumentRead(_ref, read) {
+      return read()
+    },
   }
   return {
     calls,

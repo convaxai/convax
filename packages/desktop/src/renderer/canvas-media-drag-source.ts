@@ -14,6 +14,7 @@ export interface CanvasMediaSelectionDragSourceOptions {
   flush: () => Promise<void>
   icon?: CanvasSelectionDragSource["icon"]
   label: string
+  mode?: CanvasSelectionDragSource["mode"]
   preparingLabel?: string
   scopeId: string
 }
@@ -49,6 +50,7 @@ export function createCanvasMediaSelectionDragSource(
     icon: options.icon,
     id: canvasMediaSelectionDragSourceId,
     label: options.label,
+    mode: options.mode,
     preparingLabel: options.preparingLabel,
     shortcutModifier: "meta",
     visible: isManagedCanvasMediaDragSelection,

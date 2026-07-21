@@ -3,12 +3,14 @@ export const webPluginManifestSchema = "convax.plugin/1" as const
 export const webPluginManifestSchemaV2 = "convax.plugin/2" as const
 export const webPluginManifestSchemaV3 = "convax.plugin/3" as const
 export const webPluginManifestSchemaV4 = "convax.plugin/4" as const
+export const webPluginManifestSchemaV5 = "convax.plugin/5" as const
 
 export type WebPluginManifestSchema =
   | typeof webPluginManifestSchema
   | typeof webPluginManifestSchemaV2
   | typeof webPluginManifestSchemaV3
   | typeof webPluginManifestSchemaV4
+  | typeof webPluginManifestSchemaV5
 
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
@@ -18,9 +20,22 @@ export const webPluginCapabilities = [
   "agent.prompt",
   "generation.execute",
   "ui.fullscreen",
+  "projects.read",
+  "canvas.catalog.read",
+  "canvas.document.read",
+  "canvas.document.write",
+  "canvas.events.subscribe",
 ] as const
 
 export type WebPluginCapability = (typeof webPluginCapabilities)[number]
+
+export const webPluginProjectCanvasCapabilities = [
+  "projects.read",
+  "canvas.catalog.read",
+  "canvas.document.read",
+  "canvas.document.write",
+  "canvas.events.subscribe",
+] as const satisfies readonly WebPluginCapability[]
 
 export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
 export const webPluginGenerationInputRoles = [
@@ -151,7 +166,7 @@ export interface WebPluginManifest {
     generation?: WebPluginGenerationContribution
     /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
-    /** Plugin-owned Skills are available only to convax.plugin/4. */
+    /** Plugin-owned Skills are available to convax.plugin/4 and later. */
     skills?: WebPluginSkillContribution[]
   }
   description: string
@@ -161,7 +176,7 @@ export interface WebPluginManifest {
   name: string
   /** v1 remains static-only; executable and declarative capabilities are introduced by later schemas. */
   schema: WebPluginManifestSchema
-  /** Legacy independently managed companion Skill; unavailable to convax.plugin/4. */
+  /** Legacy independently managed companion Skill; unavailable to convax.plugin/4 and later. */
   skill?: string
   /** Present only in a convax.plugin/2 or later manifest with executable contributions. */
   runtime?: WebPluginMcpStdioRuntime
@@ -535,10 +550,15 @@ function parseMcpStdioRuntime(value: unknown): WebPluginMcpStdioRuntime {
 
 function parseGeneration(
   value: unknown,
-  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4,
+  schema:
+    | typeof webPluginManifestSchemaV2
+    | typeof webPluginManifestSchemaV3
+    | typeof webPluginManifestSchemaV4
+    | typeof webPluginManifestSchemaV5,
 ): WebPluginGenerationContribution {
   const input = asRecord(value, "Generation contribution")
-  const declarativeSchema = schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
+  const declarativeSchema =
+    schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
   assertKeys(input, declarativeSchema ? ["models", "tools"] : ["tools"], "Generation contribution")
   if (declarativeSchema && !Object.prototype.hasOwnProperty.call(input, "models")) {
     throw new Error(`${schema} generation models must be declared explicitly`)
@@ -697,13 +717,19 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     schema !== webPluginManifestSchema &&
     schema !== webPluginManifestSchemaV2 &&
     schema !== webPluginManifestSchemaV3 &&
-    schema !== webPluginManifestSchemaV4
+    schema !== webPluginManifestSchemaV4 &&
+    schema !== webPluginManifestSchemaV5
   ) {
     throw new Error("Plugin manifest schema is not supported")
   }
   const executableSchema =
-    schema === webPluginManifestSchemaV2 || schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
-  const declarativeSchema = schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
+    schema === webPluginManifestSchemaV2 ||
+    schema === webPluginManifestSchemaV3 ||
+    schema === webPluginManifestSchemaV4 ||
+    schema === webPluginManifestSchemaV5
+  const declarativeSchema =
+    schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
+  const ownsSkills = schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
   assertKeys(
     input,
     [
@@ -715,7 +741,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
       "name",
       ...(executableSchema ? ["runtime"] : []),
       "schema",
-      ...(schema === webPluginManifestSchemaV4 ? [] : ["skill"]),
+      ...(ownsSkills ? [] : ["skill"]),
       "version",
     ],
     "Plugin manifest",
@@ -738,6 +764,11 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (schema === webPluginManifestSchema && capabilities.includes("generation.execute")) {
     throw new Error("generation.execute is available only to executable Plugin manifests")
   }
+  const v5Capabilities = new Set<WebPluginCapability>(webPluginProjectCanvasCapabilities)
+  if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => v5Capabilities.has(capability))) {
+    throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5")
+  }
+  const hasProjectCanvasCapability = capabilities.some((capability) => v5Capabilities.has(capability))
   const contributes = asRecord(input.contributes, "Plugin contributions")
   assertKeys(
     contributes,
@@ -745,7 +776,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
       ...(declarativeSchema ? ["agent"] : []),
-      ...(schema === webPluginManifestSchemaV4 ? ["skills"] : []),
+      ...(ownsSkills ? ["skills"] : []),
     ],
     "Plugin contributions",
   )
@@ -778,7 +809,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   }
   if (
     executableSchema &&
-    schema !== webPluginManifestSchemaV4 &&
+    !ownsSkills &&
     !hasRuntime &&
     !hasExecutableContribution &&
     !capabilities.includes("generation.execute")
@@ -790,15 +821,16 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (canvas && !hasRendererContribution && !selectionActions?.length) {
     throw new Error("Canvas contributions must declare a renderer or selection actions")
   }
-  const skills = schema === webPluginManifestSchemaV4 ? parsePluginSkills(contributes.skills) : undefined
+  const skills = ownsSkills ? parsePluginSkills(contributes.skills) : undefined
   if (
-    schema === webPluginManifestSchemaV4 &&
+    ownsSkills &&
     !hasRendererContribution &&
     !selectionActions?.length &&
     !hasExecutableContribution &&
-    !capabilities.includes("generation.execute")
+    !capabilities.includes("generation.execute") &&
+    !hasProjectCanvasCapability
   ) {
-    throw new Error("convax.plugin/4 must declare a Plugin capability beyond owned Skills")
+    throw new Error(`${schema} must declare a Plugin capability beyond owned Skills`)
   }
   const generation = hasGenerationContribution
     ? parseGeneration(
@@ -806,7 +838,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
         schema as
           | typeof webPluginManifestSchemaV2
           | typeof webPluginManifestSchemaV3
-          | typeof webPluginManifestSchemaV4,
+          | typeof webPluginManifestSchemaV4
+          | typeof webPluginManifestSchemaV5,
       )
     : undefined
   const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined

@@ -151,6 +151,15 @@ describe("ToolPluginAuthorizationStore", () => {
       }),
     )
   })
+  test("keeps v5 Canvas grants inside an existing Tool runtime authorization identity", () => {
+    expect(
+      isExecutableToolPlugin({
+        ...servicePlugin(),
+        capabilities: ["projects.read", "canvas.document.read"],
+        schema: "convax.plugin/5",
+      }),
+    ).toBe(true)
+  })
   test("persists install consent across restart without a runtime prompt", async () => {
     const root = await temporaryRoot()
     const executable = binding("a", "/tools/image-tool")

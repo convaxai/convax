@@ -72,11 +72,18 @@ that adapter and does not grant the same privilege to imported packages. Trusted
 built-in status is host-authored provenance over the exact catalog bundle, never a
 manifest id/version claim. A standalone Skill has its own package and lifecycle. The
 top-level `skill` field retained by `convax.plugin/1` through `/3` names a legacy
-independently managed companion. `convax.plugin/4` instead may own Skill directories
+independently managed companion. `convax.plugin/4` and later may own Skill directories
 through `contributes.skills`; those directories are atomically published and removed
 with the Plugin but remain ordinary OpenCode Skills at runtime. Skills describe Agent
 workflows and select tools; they never implement UI or native behavior, inherit
 Plugin authority, or turn Convax Plugins into OpenCode plugins.
+
+`convax.plugin/5` introduces the transport-neutral
+`convax.plugin-capability/1` authority model. Project/Canvas access comes from an
+exact installed Plugin principal plus explicit manifest grants, not from whether the
+Plugin happens to render a Web node. A sandboxed iframe is one transport adapter;
+verified Tool and built-in adapters must use the same main-owned broker instead of
+growing another Canvas API.
 
 ## 3. Packages and dependency graph
 
@@ -296,12 +303,13 @@ OpenCode session. Successful media output is prepared through
 `CanvasResourceBusinessService`, imported into managed `.convax/assets/`, and then
 referenced by the existing Canvas `file` node flow.
 
-Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` and
-`/4`: a validated manifest declares generation tools and a separately installed bare
-`mcp-stdio` command. V3 and v4 map pure model names and optional Agent/Canvas operation
+Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` through
+`/5`: a validated manifest declares generation tools and a separately installed bare
+`mcp-stdio` command. V3-v5 map pure model names and optional Agent/Canvas operation
 surfaces to those tools, so core code never identifies an operation by Plugin id. V4
-adds owned Skill lifecycle metadata without changing generation execution. An official
-Registry entry may additionally bind that exact command to immutable executable
+adds owned Skill lifecycle metadata without changing generation execution; v5 retains
+that behavior while adding the independent `convax.plugin-capability/1` boundary.
+An official Registry entry may additionally bind that exact command to immutable executable
 companions for specific `platform`/`arch` targets. Desktop verifies the deterministic
 Release URL, 128 MiB ceiling, exact size and SHA-256 before atomically publishing the
 selected bytes below private, versioned `userData/plugin-companions`; a missing exact
@@ -418,10 +426,10 @@ it. Cancellation, timeout and identity changes fail closed; no authorization URL
 cookie crosses preload. Quit drains any in-flight checkpoint/sidecar handoff before
 the shared Tool Plugin runtime is disposed.
 
-### Canvas mutation from UI or Agent
+### Canvas mutation from UI, Agent or Plugin
 
 ```text
-UI action or typed Agent tool
+UI action, typed Agent tool, or principal-bound Plugin call
   -> Canvas business operation (preferred) or explicit primitive
   -> CanvasApplicationService
   -> load document + revision
@@ -437,6 +445,31 @@ they remain explicitly scoped to the mounted view and cannot rewrite domain hist
 Ordinary UI mutations such as adding, importing, duplicating, or generating nodes
 preserve the user's current viewport. Moving, fitting, centering, or zooming the view
 requires a separate explicit user action or view command.
+
+Canvas application transactions execute a non-empty ordered command list against
+one starting revision, advance the revision once, and use one repository CAS save. This is the
+atomic boundary used by Plugin and advanced Agent callers; transports do not compose
+atomicity from repeated saves. Resource admission/replacement is deliberately outside
+the generic document transaction because it has separate Project lifecycle, lease,
+and rollback semantics.
+
+Whole-Canvas tidy is the `canvas.auto-layout` business operation. The built-in engine
+uses directed edges, heterogeneous node sizes, group ownership, cycle-tolerant
+layering and connected components. Directed strategies place otherwise unrelated
+nodes on a deterministic shelf so tidy remains visible on an edge-free media Canvas;
+the explicit conservative component-packing strategy preserves their mental map. Explicit
+grid/horizontal/vertical primitives require caller-selected node ids. The geometry
+phase of a future role- or domain-specific layout engine may implement the
+host-neutral layout-provider port and return a revision-bound geometry plan; Canvas
+remains the validator and atomic commit owner. When a complete role workflow also
+needs to create, reparent, resize, or remove groups, those operations must first be
+admitted as Canvas-owned structural commands and then compose with the geometry
+updates in one Canvas transaction instead of being hidden inside the provider.
+
+Fit and reveal compute world-space bounds from the authoritative Canvas document and
+set the viewport directly. They do not depend on React Flow nodes becoming measured
+after an arbitrary number of animation frames; this also keeps post-reload focus
+correct for newly added or moved off-screen nodes.
 
 ### Adding a resource to Canvas
 
@@ -459,11 +492,14 @@ Neither Project nor Workbench imports the other to implement this flow.
   second implementation of domain invariants.
 - Business tools are preferred so Agent and product UI remain behaviorally equal.
 - Primitive and view tools remain available when the request needs exact control.
-- Desktop prepares structured resources, binds the active Project scope, and exposes
+- Desktop prepares structured resources, binds the current Project scope, and exposes
   the MCP/tool schema. `@convax/agent-runtime` remains unaware of Convax semantics.
-- Tool arguments cannot select another Project or Canvas or expand the host-provided
-  scope. A Canvas-specific tool resolves the live active Canvas from the host and
-  treats any model-provided Canvas id/revision only as a consistency assertion.
+- Tool arguments cannot select another Project or expand the host-provided scope.
+  Document tools may explicitly select any Canvas from the current Project's live
+  catalog and still require revision guards. View tools resolve the live mounted
+  Canvas and fail when their requested Canvas is not active. Reads and mutations of
+  a mounted document pass through the same renderer flush/lock/reload lease used by
+  Plugin calls; inactive Canvases access persistence directly under the shared queue.
 - Canvas attachments are validated read-only snapshots. Agents mutate through tools,
   never by shell/file edits under `.convax`.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
@@ -479,7 +515,7 @@ Neither Project nor Workbench imports the other to implement this flow.
   in schema v1-v3 is a legacy companion with the same independent behavior; one-time
   default provisioning records the Plugin and Skill separately so later user removal
   is respected.
-- A v4 `contributes.skills` directory is owned by the declaring Plugin. Desktop
+- A v4-or-later `contributes.skills` directory is owned by the declaring Plugin. Desktop
   validates its complete Skill tree and exact name, rejects global/standalone/other-owner
   name collisions, and composes Skill publication with Plugin publication. Prepare
   stages bytes; pre-switch `publish` journals exact receipts; post-switch `activate`
@@ -507,10 +543,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   names. Standalone install/uninstall and Agent discovery refresh recheck settled
   ownership under the shared mutation coordinator; they cannot observe or mutate a
   partially published Plugin Skill tree.
-- Updating a v1-v3 legacy companion to a v4 owned Skill is allowed only when the
+- Updating a v1-v3 legacy companion to a v4-or-later owned Skill is allowed only when the
   current managed Skill tree exactly matches the old validated Plugin package. That
   verified transition is journaled before the package switch, so recovery can finish
-  the staged v4 Skill when the v4 package survives. Modified or unrelated same-name
+  the staged owned Skill when the new package survives. Modified or unrelated same-name
   Skills are never adopted.
 - Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
   typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
@@ -526,7 +562,9 @@ Neither Project nor Workbench imports the other to implement this flow.
 Canvas already owns the file renderer and node-toolbar registries. Desktop may map a
 validated Plugin manifest into those registries; it must not add another extension
 bus, Canvas node role, or parallel mutation API. A Plugin surface remains a `file`
-node and calls existing clients/controllers through a narrow host adapter.
+node and calls existing clients/controllers through a narrow host adapter. The Web
+renderer is therefore a presentation contribution, not the owner of Plugin identity,
+permissions, Canvas transactions, or Project scope.
 
 Canvas also exposes one explicit host-neutral selection action slot. It renders an
 action in an eligible single-node toolbar or the multi-selection toolbar against
@@ -542,11 +580,48 @@ an Electron `webview`, or given Node, Electron, same-origin, arbitrary network, 
 absolute-path access. A dedicated static protocol performs containment checks and
 fixed MIME/CSP handling.
 
-Each mounted node receives a fresh `MessageChannel`. The port is bound to the exact
-installed Plugin, active Project, active Canvas and owning node. Every direct call is
-versioned, size-limited, manifest-authorized and delegated to an existing typed
-Project/Canvas/Agent capability. Plugin state writes may update only that node's
-namespaced portable state.
+Each mounted node receives a fresh `MessageChannel`. Legacy node-scoped methods bind
+that port to the exact installed Plugin, active Project, active Canvas and owning
+node. Plugin instance-state writes may update only that node's namespaced portable
+state.
+
+V5 Project/Canvas methods leave the Web renderer immediately through an opaque,
+sender-scoped main connection. The main broker binds the connection to the exact
+installed manifest digest and a host-issued Project scope, then revalidates identity,
+grant, Project binding and Canvas catalog membership on every call. The independent
+grants are `projects.read`, `canvas.catalog.read`, `canvas.document.read`,
+`canvas.document.write`, and `canvas.events.subscribe`; a node or iframe never
+becomes the authorization root. A Plugin without `projects.read` remains scoped to
+the presentation Project, while that explicit grant permits pathless discovery of
+all currently bound Projects.
+
+An already-running verified v5 Tool sidecar may reach the same broker through a
+fixed reverse-MCP method family. Because it has no presentation Project, the adapter
+is created only with `projects.read`, uses an all-bound-Projects scope, and still
+filters every method by its independent Canvas grant. It extends an existing
+generation/service runtime rather than creating an implicit Canvas-only process
+lifecycle; runtime disposal closes the connection and all subscriptions. Built-in
+principal validation exists, while a direct built-in transport adapter remains
+future work.
+
+Document reads use bounded `geometry` or `structure` projections. Geometry contains
+only ids, topology, positions and sizes. Structure may add portable metadata and
+Project-relative resource references, but neither projection carries native paths,
+runtime URLs or resource bytes. Writes are bounded, revision-checked, resource-free
+Canvas application transactions. Resource read/admission is a separate Project
+business capability so a document command cannot forge a file reference or bypass
+asset lifecycle rules. Change events are revision-only invalidations; consumers
+re-query the projection they need.
+
+Before a broker read or write touches a Canvas, Main serializes it with other
+external document operations and reserves that document in the renderer. A mounted
+editor additionally quiesces: it blocks local edits, aborts pending work, finishes
+gestures and flushes. A successful external write reloads authoritative persistence
+without saving the stale editor snapshot; reads and failed writes release the lease
+as aborted. An inactive Canvas remains unmounted, but its reservation prevents a
+Project/Canvas navigation race until the operation finishes. Prepare timeout and
+caller cancellation use an explicit cancel handshake so a late flush cannot leave
+the editor locked. Agent and Tool signals are rechecked before durable Canvas saves.
 
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas
@@ -554,8 +629,10 @@ edge. Desktop derives the managed Project file reference from that node, preflig
 the exact `.convax/assets` reference, and delegates one bounded read to Main. Main
 opens one no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling, performs
 a fixed-length read and rejects identity changes before returning bytes. Desktop
-then rechecks scope, connectivity and the exact source reference. The Plugin never
-supplies a Project path and never receives a general Canvas snapshot. Browser
+then rechecks scope, connectivity and the exact source reference. This legacy
+connected-image method never accepts a Plugin-supplied Project path and does not
+return a document projection; separately granted v5 document reads use the bounded
+broker projections described above. Browser
 features such as fullscreen are likewise enabled per manifest; all other iframe
 feature-policy denials remain in force.
 
@@ -632,16 +709,19 @@ an owned `contributes.skills` entry.
 
 Canvas exposes a host-neutral selection drag-source lifecycle next to its existing
 selection actions. Desktop contributes that source only when the complete selection
-contains managed image, video or audio file nodes and no edges. Preparation is
-not started by selection alone: the user holds `Command-Shift` on macOS
-(`Control-Shift` reserved for Windows) and drags any selected node body. Either
-modifier release, window focus loss, Escape, scope changes and expiry cancel the
-gesture. The held chord is tracked at the window boundary, independently of
-focus and current selection eligibility. A user may therefore hold first and
-then point at or select one eligible media node; changing an eligible multi-selection
-while the chord remains held replaces only the prepared selection. Preparation is asynchronous,
-abortable and bound to the immutable document/selection snapshot; `dragstart` only
-consumes an already prepared source synchronously.
+contains managed image, video or audio file nodes and no edges. Preparation begins
+only after an explicit drag-out intent. The primary UI is the persistent **Drag to
+Other Apps** Canvas mode; `Command-Shift` on macOS (`Control-Shift` reserved for
+Windows) remains a transient compatibility gesture. The persistent mode preserves
+normal selection, box selection, pan and zoom, but disables in-Canvas node movement:
+dragging a ready selected media node publishes the complete selection to the operating
+system instead. Canvas keeps a top reminder and explicit exit action while the mode
+is active, and prepares a fresh one-use source after each completed native drag.
+Escape, explicit exit, scope changes and read-only transitions leave the mode.
+Modifier release and window focus loss cancel only the transient chord gesture.
+Selection changes synchronously update the live view snapshot and replace the
+prepared immutable multi-selection. Preparation is asynchronous and abortable;
+`dragstart` only consumes an already prepared source synchronously.
 
 Renderer and preload never receive a native path. Main re-resolves the live active
 Canvas and exact selection, verifies revision, managed `.convax/assets` references,
@@ -678,7 +758,8 @@ window coordination; keep the product's visual implementation in the host.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
-Services, and narrow trusted native integrations such as `jianying`. Plugin Services
+capabilities, Plugin Services, and narrow trusted native integrations such as
+`jianying`. Plugin Services
 accept only an installed Plugin id through fixed actions. The JianYing bridge accepts only a Project/Canvas
 reference, revision, node ids and a constrained target; native paths remain in main.
 The Canvas native-drag bridge is a two-phase exception required by Electron: an

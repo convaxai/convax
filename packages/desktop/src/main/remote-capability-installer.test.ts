@@ -11,6 +11,7 @@ import {
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import {
   remoteCapabilityRegistrySchema,
+  remotePluginCapabilitySchemaV1,
   remotePluginHostSchema,
   remotePluginHostSchemaV2,
   remotePluginHostSchemaV4,
@@ -406,6 +407,54 @@ describe("RemoteCapabilityInstaller", () => {
     expect(ownedTransaction.activate).toHaveBeenCalledTimes(1)
     expect(ownedTransaction.commit).toHaveBeenCalledTimes(1)
     expect(setupResult.authorizationTransactions[0]?.commit).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.rollback).not.toHaveBeenCalled()
+  })
+
+  test("installs a headless v5 Project/Canvas Plugin through the same owned-Skill transaction", async () => {
+    const ownedManifest = parseWebPluginManifest({
+      capabilities: ["canvas.catalog.read", "canvas.document.read", "canvas.document.write"],
+      contributes: {
+        skills: [{ name: "canvas-workflow", path: "skills/canvas-workflow" }],
+      },
+      description: "Project-wide Canvas workflow",
+      id: "canvas-tools",
+      name: "Canvas Tools",
+      schema: "convax.plugin/5",
+      version: "1.0.0",
+    })
+    const item = pluginPackage("canvas-tools", "1.0.0", {
+      compatibility: { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: "convax.plugin/5" },
+      manifest: ownedManifest,
+      name: ownedManifest.name,
+    })
+    const ownedTransaction = {
+      activate: mock(async () => undefined),
+      commit: mock(async () => undefined),
+      publish: mock(async () => undefined),
+      rollback: mock(async () => undefined),
+    }
+    const pluginSkillLifecycle = {
+      prepareInstall: mock(async () => ownedTransaction),
+      reconcileInstalled: mock(async () => undefined),
+    }
+    const files = {
+      "manifest.json": encoder.encode(JSON.stringify(ownedManifest)),
+      "skills/canvas-workflow/SKILL.md": encoder.encode(
+        "---\nname: canvas-workflow\ndescription: Coordinate project Canvases\n---\n",
+      ),
+    }
+    const setupResult = setup([item], files, [], undefined, undefined, pluginSkillLifecycle)
+
+    const installed = await setupResult.installer.installPlugin("canvas-tools")
+    expect(installed).toMatchObject({
+      id: "canvas-tools",
+      schema: "convax.plugin/5",
+    })
+    expect(installed.entry).toBeUndefined()
+    expect(pluginSkillLifecycle.prepareInstall).toHaveBeenCalledWith(ownedManifest, { root: "/staging/plugin" })
+    expect(ownedTransaction.publish).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.activate).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.commit).toHaveBeenCalledTimes(1)
     expect(ownedTransaction.rollback).not.toHaveBeenCalled()
   })
 

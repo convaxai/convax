@@ -209,6 +209,53 @@ describe("versioned Plugin manifest generation declarations", () => {
     }).toThrow("unsupported field")
   })
 
+  test("parses v5 transport-neutral Project and Canvas grants without requiring a Web surface", () => {
+    const manifest = {
+      capabilities: [
+        "projects.read",
+        "canvas.catalog.read",
+        "canvas.document.read",
+        "canvas.document.write",
+        "canvas.events.subscribe",
+      ],
+      contributes: {},
+      description: "Automates bound Project Canvases",
+      id: "canvas-automation",
+      name: "Canvas Automation",
+      schema: "convax.plugin/5",
+      version: "1.0.0",
+    }
+
+    expect(parseWebPluginManifest(manifest)).toMatchObject({
+      capabilities: manifest.capabilities,
+      contributes: {},
+      schema: "convax.plugin/5",
+    })
+    expect(() => parseWebPluginManifest({ ...manifest, schema: "convax.plugin/4" })).toThrow(
+      "available only to convax.plugin/5",
+    )
+
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        runtime: { command: "canvas-automation-mcp", type: "mcp-stdio" },
+      }),
+    ).toThrow("runtime and executable contribution must appear together")
+
+    expect(
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: { service: { actions: [] } },
+        runtime: { command: "canvas-automation-mcp", type: "mcp-stdio" },
+      }),
+    ).toMatchObject({
+      capabilities: manifest.capabilities,
+      contributes: { service: { actions: [] } },
+      runtime: { command: "canvas-automation-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/5",
+    })
+  })
+
   test("rejects ambiguous, unsafe, or standalone v4 Skill contributions", () => {
     const withSkills = (skills: unknown) => {
       const manifest = ownedSkillsManifest()

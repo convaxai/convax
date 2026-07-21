@@ -11,6 +11,7 @@ import {
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
+import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
@@ -273,6 +274,17 @@ const pluginClient = {
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
 
+const pluginCapabilityClient = {
+  call: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.call, input),
+  connect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.connect, input),
+  disconnect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.disconnect, input),
+  onEvent(listener) {
+    const handleEvent = (_event: Electron.IpcRendererEvent, input: Parameters<typeof listener>[0]) => listener(input)
+    ipcRenderer.on(pluginCapabilityIpcChannels.changed, handleEvent)
+    return () => ipcRenderer.removeListener(pluginCapabilityIpcChannels.changed, handleEvent)
+  },
+} satisfies PluginCapabilityRendererClient
+
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
@@ -310,6 +322,7 @@ contextBridge.exposeInMainWorld("convax", {
   generation: generationClient,
   jianying: jianyingClient,
   platform: process.platform,
+  pluginCapabilities: pluginCapabilityClient,
   plugins: pluginClient,
   pluginServices: pluginServiceClient,
   projectFiles: projectFilesClient,

@@ -1,7 +1,9 @@
 interface JsonRpcRequest {
-  id?: number
+  error?: { code?: number; message?: string }
+  id?: number | string
   method?: string
   params?: Record<string, unknown>
+  result?: unknown
 }
 
 let buffer = ""
@@ -15,6 +17,20 @@ const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
   ?.slice("--fork-descendant=".length)
 let descendantStarted = false
+const hostRequestMethod = process.argv
+  .find((argument) => argument.startsWith("--host-request-method="))
+  ?.slice("--host-request-method=".length)
+const hostRequestCount = Number.parseInt(
+  process.argv
+    .find((argument) => argument.startsWith("--host-request-count="))
+    ?.slice("--host-request-count=".length) ?? "1",
+  10,
+)
+let nextHostRequestId = 10_000
+const pendingHostRequests = new Map<
+  number,
+  { resolve: (response: { error?: JsonRpcRequest["error"]; result?: unknown }) => void }
+>()
 const protocolVersion =
   process.argv.find((argument) => argument.startsWith("--protocol-version="))?.slice("--protocol-version=".length) ??
   "2025-03-26"
@@ -28,7 +44,26 @@ function send(value: unknown) {
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
-function handle(request: JsonRpcRequest) {
+function requestHost(method: string, params: unknown) {
+  const id = nextHostRequestId++
+  return new Promise<{ error?: JsonRpcRequest["error"]; result?: unknown }>((resolve) => {
+    pendingHostRequests.set(id, { resolve })
+    send({ id, jsonrpc: "2.0", method, params })
+  })
+}
+
+async function handle(request: JsonRpcRequest) {
+  if (request.method === undefined && typeof request.id === "number") {
+    const pending = pendingHostRequests.get(request.id)
+    if (pending) {
+      pendingHostRequests.delete(request.id)
+      pending.resolve({
+        ...(request.error ? { error: request.error } : {}),
+        ...(request.result === undefined ? {} : { result: request.result }),
+      })
+    }
+    return
+  }
   if (request.method === "notifications/initialized" || request.method === "notifications/cancelled") return
   if (request.id === undefined) return
   if (request.method === "initialize") {
@@ -74,11 +109,9 @@ function handle(request: JsonRpcRequest) {
     })
     if (forkDescendantFile && !descendantStarted) {
       descendantStarted = true
-      const descendant = spawn(
-        process.execPath,
-        ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],
-        { stdio: "ignore" },
-      )
+      const descendant = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], {
+        stdio: "ignore",
+      })
       fs.writeFileSync(forkDescendantFile, String(descendant.pid))
       setImmediate(() => process.exit(0))
     }
@@ -86,6 +119,14 @@ function handle(request: JsonRpcRequest) {
   }
   if (request.method === "tools/call") {
     if (request.params?.name === "wait") return
+    const hostResponses = hostRequestMethod
+      ? await Promise.all(
+          Array.from(
+            { length: Number.isSafeInteger(hostRequestCount) && hostRequestCount > 0 ? hostRequestCount : 1 },
+            (_, index) => requestHost(hostRequestMethod, { index }),
+          ),
+        )
+      : undefined
     send({
       id: request.id,
       jsonrpc: "2.0",
@@ -94,7 +135,7 @@ function handle(request: JsonRpcRequest) {
           { text: JSON.stringify(request.params?.arguments ?? null), type: "text" },
           { data: "iVBORw0KGgo=", mimeType: "image/png", type: "image" },
         ],
-        structuredContent: { artifacts: [] },
+        structuredContent: { artifacts: [], ...(hostResponses === undefined ? {} : { hostResponses }) },
       },
     })
     return
@@ -110,7 +151,7 @@ process.stdin.on("data", (chunk: string) => {
     if (newline < 0) return
     const line = buffer.slice(0, newline).trim()
     buffer = buffer.slice(newline + 1)
-    if (line) handle(JSON.parse(line) as JsonRpcRequest)
+    if (line) void handle(JSON.parse(line) as JsonRpcRequest)
   }
 })
 import { spawn } from "node:child_process"

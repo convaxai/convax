@@ -6,6 +6,7 @@ import {
   desktopPluginHostProtocolV3,
   desktopPluginHostProtocolV4,
   isDesktopPluginHostRequest,
+  pluginCapabilityProtocolV1,
   pluginHostFailure,
   pluginHostSuccess,
 } from "./plugin-host-protocol"
@@ -96,6 +97,22 @@ describe("desktop plugin host protocol", () => {
     expect(
       isDesktopPluginHostRequest({
         id: "request-1",
+        method: "canvas.transaction.execute",
+        protocol: desktopPluginHostProtocolV4,
+        type: "request",
+      }),
+    ).toBe(false)
+    expect(
+      isDesktopPluginHostRequest({
+        id: "request-1",
+        method: "canvas.transaction.execute",
+        protocol: pluginCapabilityProtocolV1,
+        type: "request",
+      }),
+    ).toBe(true)
+    expect(
+      isDesktopPluginHostRequest({
+        id: "request-1",
         method: "canvas.node.get",
         protocol: "convax.plugin-host/0",
         type: "request",
@@ -125,6 +142,7 @@ describe("desktop plugin host protocol", () => {
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/2")).toBe(desktopPluginHostProtocolV2)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/3")).toBe(desktopPluginHostProtocolV3)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/4")).toBe(desktopPluginHostProtocolV4)
+    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/5")).toBe(pluginCapabilityProtocolV1)
     expect(pluginHostSuccess("request-v2", {}, desktopPluginHostProtocolV2)).toMatchObject({
       protocol: desktopPluginHostProtocolV2,
     })

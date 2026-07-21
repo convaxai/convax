@@ -1,8 +1,4 @@
-import type {
-  CanvasDocumentClient,
-  CanvasDocumentRef,
-  CanvasDocumentSaveRequest,
-} from "@convax/canvas/application"
+import type { CanvasDocumentClient, CanvasDocumentRef, CanvasDocumentSaveRequest } from "@convax/canvas/application"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 
 export const canvasDocumentIpcChannels = {
@@ -39,11 +35,27 @@ function registerHandler<Channel extends CanvasDocumentInvokeChannel>(
 
 export function registerCanvasDocumentIpc(
   repository: CanvasDocumentClient,
-  options: { isTrustedSender: (event: IpcMainInvokeEvent) => boolean },
+  options: {
+    isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+    onDidSave?: (
+      request: CanvasDocumentSaveRequest,
+      result: Awaited<ReturnType<CanvasDocumentClient["save"]>>,
+    ) => Promise<void> | void
+  },
 ) {
   const disposers = [
     registerHandler(canvasDocumentIpcChannels.load, options.isTrustedSender, (input) => repository.load(input)),
-    registerHandler(canvasDocumentIpcChannels.save, options.isTrustedSender, (input) => repository.save(input)),
+    registerHandler(canvasDocumentIpcChannels.save, options.isTrustedSender, async (input) => {
+      const result = await repository.save(input)
+      try {
+        await options.onDidSave?.(input, result)
+      } catch {
+        // Persistence is already authoritative. An invalidation observer must
+        // not make the renderer retry and report a successfully saved document
+        // as failed.
+      }
+      return result
+    }),
   ]
   return () => disposers.forEach((dispose) => dispose())
 }

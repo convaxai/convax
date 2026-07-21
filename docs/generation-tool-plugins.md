@@ -15,12 +15,13 @@ This design has two independent Plugin roles:
 - a **Generation Caller Plugin** is a sandboxed Canvas Web surface granted the
   narrow `generation.execute` capability so it can use installed generation tools.
 
-A `convax.plugin/2`, `/3`, or `/4` package may have either role or both. Declaring a
+A `convax.plugin/2`, `/3`, `/4`, or `/5` package may have either role or both. Declaring a
 runtime does not grant its iframe caller authority, and granting caller authority
 does not let an iframe start processes or issue arbitrary MCP calls. V4 preserves
-the v3 generation, operation, service, and execution semantics; its additional
-`contributes.skills` metadata is consumed only by the Desktop-owned Plugin/Skill
-lifecycle.
+the v3 generation, operation, service, and execution semantics while adding owned
+Skills. V5 preserves all of those semantics and adds independently granted
+Project/Canvas capabilities over `convax.plugin-capability/1`; it does not create a
+`convax.plugin-host/5` protocol.
 
 The same executable package may also declare a **Service contribution** for account
 connection and metering status. It shares the exact runtime, install-time executable authorization,
@@ -84,8 +85,13 @@ Relevant implementation boundaries are:
   the generic Agent adapter for manifest-declared operation tools;
 - [`media-operation-selection-action.ts`](../packages/desktop/src/renderer/media-operation-selection-action.ts):
   manifest-driven discovery and request construction for host-rendered media actions;
-- [`web-plugin-canvas.tsx`](../packages/desktop/src/renderer/web-plugin-canvas.tsx):
-  the scoped sandboxed-Plugin caller adapter.
+- [`web-plugin-node-renderer.tsx`](../packages/desktop/src/renderer/web-plugin-node-renderer.tsx):
+  the sandboxed iframe/file-renderer transport;
+- [`plugin-canvas-host.ts`](../packages/desktop/src/plugin-canvas-host.ts): the
+  transport-neutral legacy node-scoped capability handler;
+- [`plugin-host-connection.ts`](../packages/desktop/src/renderer/plugin-host-connection.ts):
+  the Web-to-main v5 capability connection. `web-plugin-canvas.tsx` is only a
+  compatibility re-export.
 
 ## `convax.plugin/2` manifest
 
@@ -142,15 +148,16 @@ caller-only package uses v2 with an `entry`, Canvas contribution and
 an executable contribution. A package may declare both roles when it genuinely owns
 both a Web surface and executable tools.
 
-## Declarative `convax.plugin/3` and `/4` catalogs and operations
+## Declarative `convax.plugin/3`, `/4`, and `/5` catalogs and operations
 
-`convax.plugin/3` and `/4` remove the legacy ambiguity between a generation model and
+`convax.plugin/3`, `/4`, and `/5` remove the legacy ambiguity between a generation model and
 a deterministic media operation. Their generation declaration must include `models`,
 which explicitly maps pure model display names to tool ids; an unreferenced tool is
 an operation. Existing v2 tools retain their original model semantics. The v4 host
 uses the same model, Agent-operation, Canvas selection-action, service, executable
-authorization, and output-admission paths as v3; owned Skills do not alter tool
-discovery or execution.
+authorization, and output-admission paths as v3; v5 keeps that behavior while its
+separate Canvas grants may be exposed to the same already-running verified Tool
+sidecar. Owned Skills and Canvas grants do not alter generation tool discovery.
 
 ```json
 {
@@ -577,16 +584,18 @@ Canvas commit rolls back newly imported assets. A low-level Project import copy
 failure may conservatively leave a partial target: the portable Node filesystem API
 cannot atomically prove pathname identity and remove it, so Convax never risks
 deleting a concurrent writer's replacement. Text output becomes a normal text
-resource. The sidecar never writes Canvas JSON or
-chooses Project scope, revision, placement or node ids.
+resource. The generation call/result-admission path never lets the sidecar write
+Canvas JSON or choose Project scope, revision, placement or node ids. A v5 sidecar
+with separate Canvas grants may make explicit broker calls, but those remain
+revision-checked application transactions rather than generation result admission.
 
 The entire temporary tree is removed after success, failure or cancellation.
 
 ## Sandboxed Plugin caller API
 
-A Web surface with `generation.execute` receives exactly two additional methods on
-the MessagePort version matching its manifest (`convax.plugin-host/2`, `/3`, or
-`/4`):
+A Web surface with `generation.execute` receives exactly two generation methods on
+the protocol matching its manifest (`convax.plugin-host/2`, `/3`, or `/4`; v5 uses
+`convax.plugin-capability/1`):
 
 | Method                      | Params                                                 | Result                                                              |
 | --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
@@ -599,7 +608,7 @@ Canvas edge to the Plugin's owning file node. When the field is omitted, the hos
 infers direct incoming text, image, video and audio nodes in edge order using their
 default roles. `first_frame` and `last_frame` are explicit image roles.
 
-The iframe cannot supply a Project/Canvas id, native path, revision, placement,
+For `generation.canvas.execute`, the iframe cannot supply a Project/Canvas id, native path, revision, placement,
 operation id or mutation actor. The host derives all of them from the live bound
 frame, rejects read-only/stale scope, rechecks scope after asynchronous work and
 allows only one generation call in flight per frame. A caller may omit `toolId` only
@@ -607,9 +616,11 @@ when exactly one installed tool accepts the requested output and reference roles
 For this direct-incoming mode, any Canvas revision, edge or referenced source change
 during generation fails the operation; it is never replayed onto a newer document.
 
-This capability does not expose process control, environment variables, arbitrary
-MCP methods, all Canvas nodes, or a general function-call bridge. The iframe remains
-static Web content in `sandbox="allow-scripts"`.
+The generation capability does not expose process control, environment variables,
+arbitrary MCP methods, unrelated Canvas nodes, or a general function-call bridge.
+A v5 Web Plugin may separately receive bounded Project/Canvas projections when its
+manifest declares those independent grants. The iframe remains static Web content in
+`sandbox="allow-scripts"`.
 
 ## Cancellation and long-running work
 
@@ -662,7 +673,8 @@ Changes to this boundary must preserve all of the following:
 - install-authorized and runtime-verified execution before staging, aggregate-bounded
   temporary inputs and bounded outputs;
 - generated media entering Canvas only through the managed asset/resource flow;
-- strict v1-v4 manifest and matching Plugin-host protocol compatibility;
+- strict v1-v5 manifest compatibility, `plugin-host/1-4` compatibility, and the
+  independent `plugin-capability/1` contract for v5;
 - explicit install/update authorization, no first-call prompt and no shell execution;
 - exact Registry companion target/URL/size/digest checks, atomic rollback and
   explicit `PATH` fallback;

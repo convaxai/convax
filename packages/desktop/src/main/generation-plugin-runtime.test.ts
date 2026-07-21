@@ -9,9 +9,11 @@ import {
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
+  webPluginManifestSchemaV5,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
 } from "../plugin-contracts"
+import type { PluginCanvasCapabilityClient } from "../plugin-capability-contracts"
 import {
   GenerationPluginRuntime,
   generationPluginEnvironment,
@@ -28,6 +30,7 @@ import type { McpToolCallResult, McpToolDefinition, StdioMcpClientOptions } from
 import { pluginServiceBrowserAuthorizationCompletionSchema } from "./plugin-service-browser-authorization"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { toolPluginAuthorizationIdentity } from "./tool-plugin-authorizations"
+import { toolPluginCanvasMcpMethods } from "./tool-plugin-canvas-capabilities"
 
 async function rejection(promise: Promise<unknown>) {
   try {
@@ -92,7 +95,10 @@ function staticPlugin(): InstalledWebPluginSummary {
 }
 
 function declarativeGenerationPlugin(
-  schema: typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4 = webPluginManifestSchemaV3,
+  schema:
+    | typeof webPluginManifestSchemaV3
+    | typeof webPluginManifestSchemaV4
+    | typeof webPluginManifestSchemaV5 = webPluginManifestSchemaV3,
 ): InstalledWebPluginSummary {
   return {
     capabilities: [],
@@ -213,7 +219,7 @@ function setup(
   }),
   runtimeOptions: Pick<
     GenerationPluginRuntimeOptions,
-    "materializeExecutable" | "platform" | "resolveManagedExecutable"
+    "canvasCapabilities" | "materializeExecutable" | "platform" | "resolveManagedExecutable"
   > = {},
 ) {
   const plugins = new FakePluginSource()
@@ -353,6 +359,92 @@ describe("GenerationPluginRuntime", () => {
         signal: undefined,
       },
     ])
+  })
+
+  test("injects the fixed reverse Canvas handler only for an all-bound v5 Tool principal", async () => {
+    const installed = {
+      ...declarativeGenerationPlugin(webPluginManifestSchemaV5),
+      capabilities: ["projects.read", "canvas.document.read"] as InstalledWebPluginSummary["capabilities"],
+    }
+    const capabilityClient: PluginCanvasCapabilityClient = {
+      async getDocument(ref) {
+        return {
+          document: { edges: [], id: ref.canvasId, nodes: [], revision: 1, title: "Main" },
+          projection: "geometry",
+          ref,
+          storageVersion: "v1",
+        }
+      },
+      async listCanvases(projectId) {
+        return { canvases: [], projectId }
+      },
+      async listProjects() {
+        return [{ available: true, id: "project-one", name: "One" }]
+      },
+      async queryNodes(ref) {
+        return { nodes: [], ref, revision: 1, storageVersion: "v1" }
+      },
+      async subscribe() {
+        return { close() {} }
+      },
+      async transact(request) {
+        return {
+          affectedNodeIds: [],
+          changed: false,
+          createdNodeIds: [],
+          ref: request.ref,
+          revision: request.expectedRevision,
+          storageVersion: "v1",
+          warnings: [],
+        }
+      },
+    }
+    const expectedPrincipals: InstalledWebPluginSummary[] = []
+    const canvasCapabilities: NonNullable<GenerationPluginRuntimeOptions["canvasCapabilities"]> = {
+      broker: {
+        async connect() {
+          return capabilityClient
+        },
+      },
+      principals: {
+        async issue(_pluginId, _runtime, expected) {
+          if (expected) expectedPrincipals.push(expected)
+          return {
+            manifestDigest: "a".repeat(64),
+            pluginId: installed.id,
+            pluginVersion: installed.version,
+            runtime: "tool",
+          }
+        },
+      },
+    }
+    const { options, runtime } = setup([installed], ["generate.image"], async () => undefined, undefined, {
+      canvasCapabilities,
+    })
+
+    await runtime.callTool("declarative-tools/generate.image", {})
+    expect(expectedPrincipals).toEqual([installed])
+    expect(options[0]?.serverRequestHandler?.methods).toEqual([
+      toolPluginCanvasMcpMethods.listProjects,
+      toolPluginCanvasMcpMethods.getDocument,
+      toolPluginCanvasMcpMethods.queryNodes,
+    ])
+    await expect(
+      options[0]!.serverRequestHandler!.handle(
+        { method: toolPluginCanvasMcpMethods.listProjects },
+        { sendNotification() {}, signal: new AbortController().signal },
+      ),
+    ).resolves.toEqual({ projects: [{ available: true, id: "project-one", name: "One" }] })
+
+    const noProjectScope = {
+      ...installed,
+      capabilities: ["canvas.document.read"] as InstalledWebPluginSummary["capabilities"],
+    }
+    const withoutScope = setup([noProjectScope], ["generate.image"], async () => undefined, undefined, {
+      canvasCapabilities,
+    })
+    await withoutScope.runtime.callTool("declarative-tools/generate.image", {})
+    expect(withoutScope.options[0]?.serverRequestHandler).toBeUndefined()
   })
 
   test("lazily describes only one selected tool through a bounded scalar schema", async () => {

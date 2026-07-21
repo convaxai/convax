@@ -400,6 +400,16 @@ function bundleDigest(bundle: WebPluginBundle) {
   return digest.digest("hex")
 }
 
+/**
+ * Capability authority comes only from the normalized manifest. Rehashing the
+ * complete static package on every Canvas call would make a batched document
+ * API scale with Plugin asset size instead of request size. Built-in provenance
+ * still verifies the complete package separately where native trust requires it.
+ */
+function capabilityManifestDigest(manifest: WebPluginManifest) {
+  return createHash("sha256").update(JSON.stringify(manifest)).digest("hex")
+}
+
 async function readBuiltinProvenance(directory: string, manifest: WebPluginManifest) {
   const markerPath = path.join(directory, builtinProvenanceFileName)
   const stat = await fs.lstat(markerPath)
@@ -1474,6 +1484,42 @@ export class WebPluginManager {
       }
     }
     return summaries.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+  }
+
+  /**
+   * Resolves one exact installed manifest identity under the per-Plugin
+   * publication lock. Capability connections bind to this digest and re-run
+   * the resolution on every call, so permission changes, update, or uninstall
+   * invalidate an existing connection without hashing unrelated static assets.
+   */
+  async resolveCapabilityIdentity(pluginId: string) {
+    const id = requireWebPluginId(pluginId)
+    return this.#runPluginMutation(id, async () => {
+      const installationRoot = await this.#ensureRoot()
+      const pluginRootPath = path.join(installationRoot, id)
+      if (!(await exists(pluginRootPath))) return null
+      const pluginRoot = await assertPlainDirectory(pluginRootPath, "Installed plugin")
+      const manifest = await validateInstalledPackage(pluginRoot, this.#limits)
+      if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
+      const digest = capabilityManifestDigest(manifest)
+      const verifiedManifest = await validateInstalledPackage(pluginRoot, this.#limits)
+      if (
+        verifiedManifest.id !== manifest.id ||
+        verifiedManifest.version !== manifest.version ||
+        capabilityManifestDigest(verifiedManifest) !== digest
+      ) {
+        throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
+      }
+      const summary = toInstalledWebPluginSummary(verifiedManifest)
+      const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
+        async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
+        () => false,
+      )
+      return {
+        digest,
+        plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,
+      }
+    })
   }
 
   async resolveAsset(pluginId: string, relativePath: string) {

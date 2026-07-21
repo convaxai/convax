@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
+import { type WebPluginManifest, compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
 import { WebPluginManager, WebPluginPublicationDeferredError } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
@@ -99,6 +99,27 @@ function ownedBundle(version: string, includeSkill = true) {
   }
 }
 
+function projectCanvasManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  return {
+    capabilities: [
+      "projects.read",
+      "canvas.catalog.read",
+      "canvas.document.read",
+      "canvas.document.write",
+      "canvas.events.subscribe",
+    ],
+    contributes: {
+      skills: [{ name: "director-workflow", path: "skills/director-workflow" }],
+    },
+    description: "Project-wide Canvas automation",
+    id: "director-tools",
+    name: "Director Tools",
+    schema: "convax.plugin/5",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
 const noOpPublication = async () => ({
   async activate() {},
   async commit() {},
@@ -187,11 +208,15 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/5" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/6" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
     expect(() => parseWebPluginManifest(manifest({ entry: "web/index.js" }))).toThrow("HTML")
+  })
+
+  test("parses a headless v5 Project/Canvas Plugin while preserving its owned Skills", () => {
+    expect(parseWebPluginManifest(projectCanvasManifest())).toEqual(projectCanvasManifest())
   })
 
   test("rejects undeclared capabilities and renderer or toolbar ambiguity", () => {
@@ -710,6 +735,42 @@ describe("WebPluginManager", () => {
         },
       }),
     ).rejects.toThrow("host publication lifecycle")
+  })
+
+  test("installs a headless v5 Project/Canvas Plugin through the inherited owned-Skill lifecycle", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const manifestV5 = projectCanvasManifest()
+
+    await expect(
+      manager.installBundle(
+        { files: { "manifest.json": JSON.stringify(manifestV5) } },
+        { beforePublish: noOpPublication },
+      ),
+    ).rejects.toThrow("Plugin-owned Skill director-workflow does not exist")
+
+    const installed = await manager.installBundle(
+      {
+        files: {
+          "manifest.json": JSON.stringify(manifestV5),
+          "skills/director-workflow/SKILL.md": [
+            "---",
+            "name: director-workflow",
+            "description: Direct a project Canvas",
+            "---",
+          ].join("\n"),
+        },
+      },
+      { beforePublish: noOpPublication },
+    )
+
+    expect(installed).toMatchObject({
+      capabilities: expect.arrayContaining(["canvas.document.read", "canvas.document.write"]),
+      contributes: { skills: [{ name: "director-workflow", path: "skills/director-workflow" }] },
+      id: "director-tools",
+      schema: "convax.plugin/5",
+    })
+    expect(installed.entry).toBeUndefined()
   })
 
   test("cannot bypass the owned-Skill lifecycle when an update removes the last Skill or uninstalls", async () => {

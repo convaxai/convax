@@ -156,6 +156,26 @@ function ownedSkillsPluginManifest(overrides: Partial<WebPluginManifest> = {}): 
   }
 }
 
+function projectCanvasPluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  return {
+    capabilities: ["canvas.catalog.read", "canvas.document.read", "canvas.document.write"],
+    contributes: {},
+    description: "Project-wide Canvas automation",
+    id: "hello-convax",
+    name: "Hello Convax",
+    schema: "convax.plugin/5",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
+function projectCanvasOwnedSkillsPluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  return projectCanvasPluginManifest({
+    contributes: { skills: [{ name: "hello-agent", path: "skills/hello-agent" }] },
+    ...overrides,
+  })
+}
+
 function companion(overrides: Record<string, unknown> = {}) {
   return {
     command: "example-image-tool",
@@ -312,7 +332,7 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
-  test("accepts strict Plugin host/schema compatibility pairs through owned-Skill v4", () => {
+  test("accepts strict Plugin host/schema compatibility pairs through Project/Canvas v5", () => {
     const generationManifest = generationPluginManifest()
     const parsed = parseRemoteCapabilityRegistry(
       registry([
@@ -368,9 +388,26 @@ describe("parseRemoteCapabilityRegistry", () => {
         expect.objectContaining({ kind: "skill", ownerPluginId: "hello-convax" }),
       ]),
     )
+
+    const projectCanvasManifest = projectCanvasPluginManifest()
+    const projectCanvas = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/5" },
+          manifest: projectCanvasManifest,
+        }),
+      ]),
+    )
+    expect(projectCanvas.packages[0]).toMatchObject({
+      compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/5" },
+      manifest: {
+        capabilities: expect.arrayContaining(["canvas.document.read", "canvas.document.write"]),
+        schema: "convax.plugin/5",
+      },
+    })
   })
 
-  test("binds owned remote Skills to exactly one matching v4 Plugin contribution", () => {
+  test("binds owned remote Skills to exactly one matching v4 or v5 Plugin contribution", () => {
     const owner = pluginPackage({
       compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
       manifest: ownedSkillsPluginManifest(),
@@ -404,6 +441,14 @@ describe("parseRemoteCapabilityRegistry", () => {
       version: secondManifest.version,
     })
     expect(() => parseRemoteCapabilityRegistry(registry([owner, second]))).toThrow("multiple Plugins")
+
+    const projectCanvasOwner = pluginPackage({
+      compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/5" },
+      manifest: projectCanvasOwnedSkillsPluginManifest(),
+    })
+    expect(() =>
+      parseRemoteCapabilityRegistry(registry([projectCanvasOwner, skillPackage({ ownerPluginId: "hello-convax" })])),
+    ).not.toThrow()
   })
 
   test("binds companion commands and target assets to the exact generation manifest and Release path", () => {
@@ -522,6 +567,26 @@ describe("parseRemoteCapabilityRegistry", () => {
       parseRemoteCapabilityRegistry(
         registry([
           pluginPackage({ compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/1" } }),
+        ]),
+      ),
+    ).toThrow("compatibility")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          pluginPackage({
+            compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/5" },
+            manifest: projectCanvasPluginManifest(),
+          }),
+        ]),
+      ),
+    ).toThrow("compatibility")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          pluginPackage({
+            compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/4" },
+            manifest: ownedSkillsPluginManifest(),
+          }),
         ]),
       ),
     ).toThrow("compatibility")
@@ -1346,6 +1411,29 @@ describe("RemoteCapabilityRegistryClient", () => {
     const item = packageWithZip(zip)
     const client = new RemoteCapabilityRegistryClient({ fetch: fetchMock(() => new Response(zip)) })
     await expect(client.downloadBundle(item)).rejects.toThrow("does not match")
+  })
+
+  test("requires an exact v5 manifest match before returning an install-ready archive", async () => {
+    const manifest = projectCanvasPluginManifest()
+    const zip = createTestZip([{ content: JSON.stringify(manifest), name: "manifest.json" }])
+    const compatibility = {
+      pluginHost: "convax.plugin-capability/1",
+      pluginSchema: "convax.plugin/5",
+    }
+    const item = packageWithZip(zip, { compatibility, manifest })
+    const client = new RemoteCapabilityRegistryClient({ fetch: fetchMock(() => new Response(zip)) })
+
+    await expect(client.downloadBundle(item)).resolves.toMatchObject({
+      files: { "manifest.json": expect.any(Uint8Array) },
+    })
+
+    const changedManifest = projectCanvasPluginManifest({ capabilities: ["canvas.catalog.read"] })
+    const changedZip = createTestZip([{ content: JSON.stringify(changedManifest), name: "manifest.json" }])
+    const signedItem = packageWithZip(changedZip, { compatibility, manifest })
+    const changedClient = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(() => new Response(changedZip)),
+    })
+    await expect(changedClient.downloadBundle(signedItem)).rejects.toThrow("does not match")
   })
 
   test("refuses to download a yanked package", async () => {

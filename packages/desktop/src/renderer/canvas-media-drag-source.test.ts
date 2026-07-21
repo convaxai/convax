@@ -127,11 +127,18 @@ describe("Canvas media external drag lifecycle", () => {
         calls.push("flush")
       },
       label: "Drag outside Convax",
+      mode: {
+        description: "Drag selected media to another app.",
+        exitLabel: "Exit",
+        label: "Drag to Other Apps",
+        preparingLabel: "Preparing selected media",
+      },
       scopeId: "project-1",
     })
 
     const prepared = await source.prepare(context([audio.id, image.id]))
     expect(source.shortcutModifier).toBe("meta")
+    expect(source.mode?.label).toBe("Drag to Other Apps")
     expect(calls).toEqual(["flush", "prepare"])
     expect(adapter.prepared).toEqual([
       {
