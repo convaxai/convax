@@ -103,6 +103,17 @@ export interface WebPluginServiceContribution {
   actions: WebPluginServiceAction[]
 }
 
+export interface WebPluginLlmModelContribution {
+  id: string
+  name: string
+}
+
+/** One OpenAI-compatible provider served by the Plugin's verified companion. */
+export interface WebPluginLlmContribution {
+  models: WebPluginLlmModelContribution[]
+  provider: { id: string; name: string }
+}
+
 export interface WebPluginMcpStdioRuntime {
   args?: string[]
   /** A portable executable name resolved by the trusted host; never a path. */
@@ -164,6 +175,8 @@ export interface WebPluginManifest {
     canvas?: WebPluginCanvasContribution
     /** Present only in an executable convax.plugin/2 or later manifest with a matching MCP runtime. */
     generation?: WebPluginGenerationContribution
+    /** Main-only provider metadata; connection details come from the verified runtime. */
+    llm?: WebPluginLlmContribution
     /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
     /** Plugin-owned Skills are available to convax.plugin/4 and later. */
@@ -679,6 +692,35 @@ function parseService(value: unknown): WebPluginServiceContribution {
   return { actions }
 }
 
+function parseLlm(value: unknown): WebPluginLlmContribution {
+  const input = asRecord(value, "LLM contribution")
+  assertKeys(input, ["models", "provider"], "LLM contribution")
+  const provider = asRecord(input.provider, "LLM provider")
+  assertKeys(provider, ["id", "name"], "LLM provider")
+  const providerId = requireString(provider.id, "LLM provider id", 80)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
+    throw new Error("LLM provider id must use kebab-case")
+  }
+  if (!Array.isArray(input.models) || input.models.length === 0 || input.models.length > 32) {
+    throw new Error("LLM models must be a non-empty array with at most 32 items")
+  }
+  const models = input.models.map((value, index) => {
+    const label = `LLM model ${index}`
+    const model = asRecord(value, label)
+    assertKeys(model, ["id", "name"], label)
+    const id = requireString(model.id, `${label} id`, 128)
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) throw new Error(`${label} id is invalid`)
+    return { id, name: requireString(model.name, `${label} name`, 120) }
+  })
+  if (new Set(models.map((model) => model.id)).size !== models.length) {
+    throw new Error("LLM models contain duplicate ids")
+  }
+  return {
+    models,
+    provider: { id: providerId, name: requireString(provider.name, "LLM provider name", 120) },
+  }
+}
+
 function validateDeclarativeToolReferences(input: {
   agent?: WebPluginAgentContribution
   generation?: WebPluginGenerationContribution
@@ -775,6 +817,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
+      ...(schema === webPluginManifestSchemaV5 ? ["llm"] : []),
       ...(declarativeSchema ? ["agent"] : []),
       ...(ownsSkills ? ["skills"] : []),
     ],
@@ -783,7 +826,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const hasRuntime = input.runtime !== undefined
   const hasGenerationContribution = contributes.generation !== undefined
   const hasServiceContribution = contributes.service !== undefined
-  const hasExecutableContribution = hasGenerationContribution || hasServiceContribution
+  const hasLlmContribution = contributes.llm !== undefined
+  const hasExecutableContribution = hasGenerationContribution || hasServiceContribution || hasLlmContribution
   const hasCanvasContribution = contributes.canvas !== undefined
   const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined
   if (canvas) {
@@ -844,6 +888,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     : undefined
   const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined
+  const llm = hasLlmContribution ? parseLlm(contributes.llm) : undefined
   const runtime = hasRuntime ? parseMcpStdioRuntime(input.runtime) : undefined
   if (declarativeSchema) {
     validateDeclarativeToolReferences({ agent, generation, selectionActions })
@@ -862,6 +907,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
             },
           }),
       ...(generation === undefined ? {} : { generation }),
+      ...(llm === undefined ? {} : { llm }),
       ...(service === undefined ? {} : { service }),
       ...(skills === undefined ? {} : { skills }),
     },

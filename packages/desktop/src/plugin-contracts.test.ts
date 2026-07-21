@@ -256,6 +256,37 @@ describe("versioned Plugin manifest generation declarations", () => {
     })
   })
 
+  test("parses a v5 LLM contribution without accepting connection or credential fields", () => {
+    const parsed = parseWebPluginManifest({
+      capabilities: [],
+      contributes: {
+        llm: {
+          models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+          provider: { id: "pippit-glm", name: "Pippit GLM" },
+        },
+      },
+      description: "External LLM provider",
+      id: "xiaoyunque-generation",
+      name: "XiaoYunque",
+      runtime: { command: "convax-xiaoyunque-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/5",
+      version: "0.4.0",
+    })
+    expect(parsed.contributes.llm).toEqual({
+      models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+      provider: { id: "pippit-glm", name: "Pippit GLM" },
+    })
+    expect(() =>
+      parseWebPluginManifest({
+        ...parsed,
+        contributes: {
+          ...parsed.contributes,
+          llm: { ...parsed.contributes.llm, baseUrl: "https://xyq.jianying.com" },
+        },
+      }),
+    ).toThrow("unsupported field")
+  })
+
   test("rejects ambiguous, unsafe, or standalone v4 Skill contributions", () => {
     const withSkills = (skills: unknown) => {
       const manifest = ownedSkillsManifest()

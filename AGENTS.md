@@ -191,10 +191,13 @@ current schema.
   guess by rolling back dependent Skills, authorization receipts, or companions.
   Release process-local locks while retaining their exact journals, require startup
   recovery, and let the selected canonical package drive every dependent outcome.
-- Concrete generation vendors, models, credentials, and routing are never built into
-  Convax packages. An installed Tool Plugin plus its explicitly authorized external
-  executable is the complete vendor integration boundary; do not add provider
-  classes or a parallel provider registry.
+- Concrete generation or LLM vendors, models, credentials, and routing are never
+  built into Convax packages. An installed Tool Plugin plus its explicitly
+  authorized external executable is the complete vendor integration boundary; do
+  not add vendor classes or a parallel provider registry. A v5 LLM contribution is
+  generic display metadata. Desktop may translate its verified sidecar's Main-only,
+  ephemeral loopback gateway into host-injected OpenCode configuration, while the
+  Agent runtime remains unaware of Plugin identity and vendor credentials.
 - An official Registry Tool Plugin may declare a target-specific executable
   companion whose command exactly matches its manifest runtime. Desktop verifies
   the fixed Release URL, platform/architecture, size and SHA-256, publishes it to a

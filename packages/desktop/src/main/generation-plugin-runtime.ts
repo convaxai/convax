@@ -75,6 +75,15 @@ export interface PluginServiceMcpCallResult extends McpToolCallResult {
   ) => Promise<McpToolCallResult>
 }
 
+export interface PluginLlmProviderConnection {
+  apiKey: string
+  baseUrl: string
+  models: Array<{ id: string; name: string }>
+  name: string
+  pluginId: string
+  providerId: string
+}
+
 export type GenerationPluginMcpClientFactory = (options: StdioMcpClientOptions) => GenerationPluginMcpClient
 
 export type GenerationPluginExecutableBinding = ToolPluginExecutableBinding
@@ -342,7 +351,9 @@ function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is Instal
       plugin.schema === webPluginManifestSchemaV4 ||
       plugin.schema === webPluginManifestSchemaV5) &&
     plugin.runtime?.type === "mcp-stdio" &&
-    (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
+    (Boolean(plugin.contributes.generation?.tools.length) ||
+      plugin.contributes.service !== undefined ||
+      plugin.contributes.llm !== undefined)
   )
 }
 
@@ -435,6 +446,48 @@ export function generationPluginToolHostId(pluginId: string, toolId: string) {
   return `${pluginId}/${requireGenerationToolId(toolId)}`
 }
 
+export function pluginLlmProviderHostId(pluginId: string, providerId: string) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(pluginId)) throw new Error(`Invalid Plugin id: ${pluginId}`)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) throw new Error(`Invalid LLM provider id: ${providerId}`)
+  return `plugin-${pluginId}-${providerId}`
+}
+
+function llmGatewayDescriptor(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Plugin LLM gateway returned an invalid descriptor")
+  }
+  const input = value as Record<string, unknown>
+  if (
+    Object.keys(input).length !== 3 ||
+    input.schema !== "convax.llm-gateway/1" ||
+    typeof input.api_key !== "string" ||
+    !/^[A-Za-z0-9_-]{32,256}$/.test(input.api_key) ||
+    typeof input.base_url !== "string" ||
+    input.base_url.length > 2_048
+  ) {
+    throw new Error("Plugin LLM gateway returned an invalid descriptor")
+  }
+  let url: URL
+  try {
+    url = new URL(input.base_url)
+  } catch {
+    throw new Error("Plugin LLM gateway returned an invalid descriptor")
+  }
+  if (
+    url.protocol !== "http:" ||
+    url.hostname !== "127.0.0.1" ||
+    !url.port ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/v1" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("Plugin LLM gateway returned an invalid descriptor")
+  }
+  return { apiKey: input.api_key, baseUrl: url.toString().replace(/\/$/, "") }
+}
+
 /**
  * Discovers executable contributions from installed Plugin manifests and lazily
  * executes their matching MCP tools. Generation and service surfaces share this
@@ -487,6 +540,42 @@ export class GenerationPluginRuntime {
           left.title.localeCompare(right.title) ||
           left.toolId.localeCompare(right.toolId),
       )
+  }
+
+  /** Starts only declared LLM sidecars and returns Main-only OpenCode connection material. */
+  async connectLlmProviders(signal?: AbortSignal): Promise<readonly PluginLlmProviderConnection[]> {
+    if (signal?.aborted) throw abortError(signal.reason)
+    const plugins = await this.#discover()
+    const connections: PluginLlmProviderConnection[] = []
+    for (const selected of plugins.values()) {
+      const contribution = selected.manifest.contributes.llm
+      if (!contribution) continue
+      const runtime = await this.#runtimeFor(selected)
+      try {
+        const availableTools = await this.#availableTools(runtime, signal)
+        if (!availableTools.has("llm.gateway.start")) {
+          throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.gateway.start`)
+        }
+        const current = (await this.#discover()).get(selected.manifest.id)
+        if (!current || current.fingerprint !== selected.fingerprint || this.#cache.get(selected.manifest.id) !== runtime) {
+          throw new Error(`Plugin LLM provider changed before its gateway started: ${selected.manifest.id}`)
+        }
+        const result = await runtime.client.callTool("llm.gateway.start", {}, signal)
+        if (result.isError) throw new Error(`Plugin LLM gateway failed to start: ${selected.manifest.id}`)
+        const descriptor = llmGatewayDescriptor(result.structuredContent)
+        connections.push({
+          ...descriptor,
+          models: contribution.models.map((model) => ({ ...model })),
+          name: contribution.provider.name,
+          pluginId: selected.manifest.id,
+          providerId: pluginLlmProviderHostId(selected.manifest.id, contribution.provider.id),
+        })
+      } catch (error) {
+        if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+        throw error
+      }
+    }
+    return connections.sort((left, right) => left.name.localeCompare(right.name) || left.providerId.localeCompare(right.providerId))
   }
 
   /** Lists installed service contributions without resolving or starting their sidecars. */

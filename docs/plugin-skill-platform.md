@@ -402,7 +402,12 @@ legacy `plugin-host/N` sequence. Web connections are presentation-Project scoped
 unless granted `projects.read`; already-running verified Tool sidecars require that
 grant and use a fixed reverse-MCP adapter. Reads are bounded pathless projections,
 writes are revision-checked resource-free Canvas transactions, and resource bytes
-remain a separate capability.
+remain a separate capability. The schema also adds `contributes.llm` with one bounded
+provider identity and model list. It contains no endpoint, header or credential.
+The verified sidecar exposes only the fixed `llm.gateway.start` control tool and
+returns an ephemeral, authenticated loopback OpenAI-compatible gateway to Desktop
+main. Desktop namespaces and injects the provider into OpenCode; concrete vendor
+routing and authentication remain entirely inside the companion.
 
 Plugin ids are kebab-case. All package paths are relative and validated inside the
 package root. Installation rejects symlinks/reparse-point escapes, traversal,

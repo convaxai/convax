@@ -152,6 +152,24 @@ function servicePlugin(
   }
 }
 
+function llmPlugin(): InstalledWebPluginSummary {
+  return {
+    capabilities: [],
+    contributes: {
+      llm: {
+        models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+        provider: { id: "pippit-glm", name: "Pippit GLM" },
+      },
+    },
+    description: "External LLM provider",
+    id: "xiaoyunque-generation",
+    name: "XiaoYunque",
+    runtime: { command: "convax-xiaoyunque-mcp", type: "mcp-stdio" },
+    schema: webPluginManifestSchemaV5,
+    version: "0.4.0",
+  }
+}
+
 class FakePluginSource implements GenerationPluginSource {
   installed: InstalledWebPluginSummary[] = []
   readonly resolutions: Array<[string, string]> = []
@@ -177,6 +195,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   closed = 0
   readonly forcedCloses: boolean[] = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
+  result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
 
   async callTool(
     name: string,
@@ -187,7 +206,17 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   ): Promise<McpToolCallResult> {
     onRequestStart?.()
     this.calls.push({ input, name, requestTimeoutMs, signal })
-    return { content: [{ text: "done", type: "text" }] }
+    if (name === "llm.gateway.start") {
+      return {
+        content: [{ text: "started", type: "text" }],
+        structuredContent: {
+          api_key: "a".repeat(43),
+          base_url: "http://127.0.0.1:43123/v1",
+          schema: "convax.llm-gateway/1",
+        },
+      }
+    }
+    return this.result
   }
 
   close(force = false) {
@@ -256,6 +285,19 @@ function setup(
 }
 
 describe("GenerationPluginRuntime", () => {
+  test("connects declared v5 LLM providers through a validated Main-only gateway descriptor", async () => {
+    const { clients, runtime } = setup([llmPlugin()], ["llm.gateway.start"])
+    expect(await runtime.connectLlmProviders()).toEqual([{
+      apiKey: "a".repeat(43),
+      baseUrl: "http://127.0.0.1:43123/v1",
+      models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+      name: "Pippit GLM",
+      pluginId: "xiaoyunque-generation",
+      providerId: "plugin-xiaoyunque-generation-pippit-glm",
+    }])
+    expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
+  })
+
   test("discovers only v2 generation contributions without starting their commands", async () => {
     const video = generationPlugin({
       id: "video-tools",

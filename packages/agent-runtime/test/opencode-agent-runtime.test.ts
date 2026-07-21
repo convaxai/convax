@@ -191,6 +191,40 @@ describe("OpenCode agent runtime boundaries", () => {
     }
   })
 
+  test("resolves host-owned provider configuration only when creating a server configuration", async () => {
+    let apiKey = "first-secret"
+    const resolveProviders = mock(async () => ({
+      "plugin-example-provider": {
+        models: { main: { name: "Main" } },
+        name: "Example",
+        npm: "@ai-sdk/openai-compatible",
+        options: { apiKey, baseURL: "http://127.0.0.1:43123/v1" },
+      },
+    }))
+    const runtime = new OpenCodeAgentRuntime({
+      config: { model: "builtin/default" },
+      resolveProviders,
+    })
+    const serverConfig = () => (runtime as unknown as {
+      serverConfig(): Promise<Record<string, unknown>>
+    }).serverConfig()
+    try {
+      const first = await serverConfig()
+      expect(first.model).toBe("builtin/default")
+      expect(first.provider).toMatchObject({
+        "plugin-example-provider": { options: { apiKey: "first-secret" } },
+      })
+      apiKey = "rotated-secret"
+      const second = await serverConfig()
+      expect(second.provider).toMatchObject({
+        "plugin-example-provider": { options: { apiKey: "rotated-secret" } },
+      })
+      expect(resolveProviders).toHaveBeenCalledTimes(2)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test("adds the explicit strong guard after caller plugins and disables unsafe built-ins", () => {
     const config = {
       permission: {

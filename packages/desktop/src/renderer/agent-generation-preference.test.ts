@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
   agentGenerationPreferenceStorageKey,
+  agentLlmPreferenceStorageKey,
   readAgentGenerationPreference,
+  readAgentLlmPreference,
   writeAgentGenerationPreference,
+  writeAgentLlmPreference,
 } from "./agent-generation-preference"
 
 describe("Agent generation preference", () => {
@@ -50,5 +53,28 @@ describe("Agent generation preference", () => {
         },
       }),
     ).toBeFalse()
+  })
+
+  test("round trips and clears the user-global LLM provider/model preference", () => {
+    let stored = ""
+    const selection = { modelId: "main", providerId: "plugin-xiaoyunque-generation-pippit-glm" }
+    expect(
+      writeAgentLlmPreference(
+        {
+          setItem(key, value) {
+            expect(key).toBe(agentLlmPreferenceStorageKey)
+            stored = value
+          },
+        },
+        selection,
+      ),
+    ).toBeTrue()
+    expect(readAgentLlmPreference({ getItem: () => stored })).toEqual(selection)
+
+    writeAgentLlmPreference({ setItem: (_key, value) => (stored = value) })
+    expect(readAgentLlmPreference({ getItem: () => stored })).toBeUndefined()
+    expect(
+      readAgentLlmPreference({ getItem: () => JSON.stringify({ modelId: " bad ", providerId: "ok", version: 1 }) }),
+    ).toBeUndefined()
   })
 })
