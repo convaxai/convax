@@ -12,6 +12,7 @@ import {
   useReactFlow,
   useViewport,
   type EdgeTypes,
+  type NodeChange,
   type NodeTypes,
 } from "@xyflow/react"
 import {
@@ -77,6 +78,7 @@ import {
 } from "lucide-react"
 import {
   type ChangeEvent,
+  type ClipboardEvent as ReactClipboardEvent,
   type ForwardedRef,
   type FormEvent,
   type ReactNode,
@@ -117,7 +119,9 @@ import {
   createCanvasClipboardPayload,
   parseCanvasClipboard,
   prepareCanvasClipboardPaste,
+  readCanvasClipboard,
   serializeCanvasClipboard,
+  writeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { createMediaNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
@@ -160,6 +164,7 @@ import {
 import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import {
   createCanvasShortcutHandler,
+  isCanvasEditableShortcutTarget,
   isCanvasExternalDragChordHeld,
   isCanvasExternalDragChordKey,
   resolveCanvasTidyShortcutScope,
@@ -181,6 +186,7 @@ import {
 } from "../view"
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { createCanvasCardConnection, PendingConnectionMenu } from "./connection-node-menu"
+import { createCanvasDuplicateDragPlan, remapCanvasDuplicateDragChanges } from "./duplicate-drag"
 import { getCanvasNodeInsertionItems } from "./insertion-items"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
@@ -404,7 +410,7 @@ function CanvasEditorContent(
   const connectionStartRef = useRef<ConnectionStart | null>(null)
   const connectionTargetNodeIdRef = useRef<string | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
-  const altDragRef = useRef<{ nodeIds: string[]; positions: Map<string, CanvasPoint> } | null>(null)
+  const altDragRef = useRef<{ duplicatedNodeIdBySourceId: ReadonlyMap<string, string> } | null>(null)
   const documentRef = useRef(history.document)
   const historyRef = useRef(history)
   const hasLocalEditsRef = useRef(false)
@@ -1630,51 +1636,96 @@ function CanvasEditorContent(
     },
     [runCanvasLayout],
   )
+  const getClipboardPayload = useCallback(() => {
+    if (!hasNodeOnlySelection) return null
+    return createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
+  }, [hasNodeOnlySelection, history.document, props.clipboardScope, selectedNodeIds])
+  const applyClipboardPayload = useCallback(
+    (payload: NonNullable<ReturnType<typeof createCanvasClipboardPayload>>) => {
+      if (canvasClipboardHasScopeConflict(payload, props.clipboardScope)) {
+        notificationService?.show({
+          kind: "warning",
+          title: "Referenced files cannot be pasted between scopes",
+          description: "Add the source file or folder to this scope so the host can create a valid local reference.",
+        })
+        return true
+      }
+      const roots = payload.nodes.filter((node) => !node.parentId)
+      const target = insertPoint ?? pointerRef.current
+      const offset =
+        target && roots.length
+          ? {
+              x: target.x - Math.min(...roots.map((node) => node.position.x)),
+              y: target.y - Math.min(...roots.map((node) => node.position.y)),
+            }
+          : undefined
+      const prepared = prepareCanvasClipboardPaste(payload, offset)
+      dispatch({
+        type: "commit-update",
+        update: (document) => ({
+          ...document,
+          edges: [...document.edges, ...prepared.edges],
+          nodes: [...document.nodes, ...prepared.nodes],
+        }),
+      })
+      selectNodes(prepared.selectedNodeIds)
+      return true
+    },
+    [dispatch, insertPoint, notificationService, props.clipboardScope, selectNodes],
+  )
   const copy = useCallback(() => {
-    if (!hasNodeOnlySelection) return
-    const payload = createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
+    const payload = getClipboardPayload()
     if (!payload) return
-    void navigator.clipboard.writeText(serializeCanvasClipboard(payload)).then(
+    rootRef.current?.focus({ preventScroll: true })
+    if (typeof document !== "undefined" && typeof document.execCommand === "function" && document.execCommand("copy"))
+      return
+    const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
+    if (!clipboard) {
+      notifyError("Could not copy selection", new Error("System clipboard is unavailable"))
+      return
+    }
+    void clipboard.writeText(serializeCanvasClipboard(payload)).then(
       () => notificationService?.show({ kind: "info", title: "Copied to clipboard" }),
       (error) => notifyError("Could not copy selection", error),
     )
-  }, [hasNodeOnlySelection, history.document, notificationService, notifyError, props.clipboardScope, selectedNodeIds])
+  }, [getClipboardPayload, notificationService, notifyError])
   const paste = useCallback(() => {
-    void navigator.clipboard.readText().then(
+    const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard
+    if (!clipboard) {
+      notifyError("Could not read clipboard", new Error("System clipboard is unavailable"))
+      return
+    }
+    void clipboard.readText().then(
       (value) => {
         const payload = parseCanvasClipboard(value)
-        if (!payload) return
-        if (canvasClipboardHasScopeConflict(payload, props.clipboardScope)) {
-          notificationService?.show({
-            kind: "warning",
-            title: "Referenced files cannot be pasted between scopes",
-            description: "Add the source file or folder to this scope so the host can create a valid local reference.",
-          })
-          return
-        }
-        const roots = payload.nodes.filter((node) => !node.parentId)
-        const target = insertPoint ?? pointerRef.current
-        const offset =
-          target && roots.length
-            ? {
-                x: target.x - Math.min(...roots.map((node) => node.position.x)),
-                y: target.y - Math.min(...roots.map((node) => node.position.y)),
-              }
-            : undefined
-        const prepared = prepareCanvasClipboardPaste(payload, offset)
-        dispatch({
-          type: "commit-update",
-          update: (document) => ({
-            ...document,
-            edges: [...document.edges, ...prepared.edges],
-            nodes: [...document.nodes, ...prepared.nodes],
-          }),
-        })
-        selectNodes(prepared.selectedNodeIds)
+        if (payload) applyClipboardPayload(payload)
       },
       (error) => notifyError("Could not read clipboard", error),
     )
-  }, [dispatch, insertPoint, notificationService, notifyError, props.clipboardScope, selectNodes])
+  }, [applyClipboardPayload, notifyError])
+  const onCanvasCopy = useCallback(
+    (event: ReactClipboardEvent<HTMLDivElement>) => {
+      if (isCanvasEditableShortcutTarget(event.target)) return
+      const payload = getClipboardPayload()
+      if (!payload) return
+      writeCanvasClipboard(event.clipboardData, payload)
+      event.preventDefault()
+      event.stopPropagation()
+      notificationService?.show({ kind: "info", title: "Copied to clipboard" })
+    },
+    [getClipboardPayload, notificationService],
+  )
+  const onCanvasPaste = useCallback(
+    (event: ReactClipboardEvent<HTMLDivElement>) => {
+      if (readOnly || isCanvasEditableShortcutTarget(event.target) || event.clipboardData.files.length > 0) return
+      const payload = readCanvasClipboard(event.clipboardData)
+      if (!payload) return
+      applyClipboardPayload(payload)
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    [applyClipboardPayload, readOnly],
+  )
 
   const uploadFiles = useCallback(
     (
@@ -1991,6 +2042,7 @@ function CanvasEditorContent(
                 spacePanning && "is-space-panning",
                 props.className,
               )}
+              onCopy={onCanvasCopy}
               onDragOver={(event) => {
                 if (!uploadService || readOnly) return
                 event.preventDefault()
@@ -2015,6 +2067,7 @@ function CanvasEditorContent(
                 addNode("text", reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
               }}
               onKeyDown={shortcutHandler}
+              onPaste={onCanvasPaste}
               onPointerMove={(event) => {
                 const connectionStart = connectionStartRef.current
                 if (connectionStart) {
@@ -2154,52 +2207,31 @@ function CanvasEditorContent(
                 onNodeDoubleClick={(_, node) => selectNodes([node.id])}
                 onNodeDragStart={(event, node) => {
                   dispatch({ type: "begin-gesture" })
-                  if (!(event instanceof MouseEvent) || !event.altKey) return
+                  altDragRef.current = null
+                  if (!event.altKey) return
                   const nodeIds = selection.nodeIds.has(node.id) ? selectedNodeIds : [node.id]
-                  altDragRef.current = {
-                    nodeIds,
-                    positions: new Map(
-                      history.document.nodes
-                        .filter((item) => nodeIds.includes(item.id))
-                        .map((item) => [item.id, item.position]),
-                    ),
-                  }
+                  const plan = createCanvasDuplicateDragPlan(history.document, nodeIds, event.metaKey || event.ctrlKey)
+                  if (!plan) return
+                  altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
+                  dispatch({ type: "commit", document: plan.document })
+                  selectNodes(plan.selectedNodeIds)
                 }}
                 onNodeDragStop={() => {
-                  if (altDragRef.current) {
-                    const duplicated = duplicateCanvasSelection(history.document, altDragRef.current.nodeIds, {
-                      x: 0,
-                      y: 0,
-                    })
-                    const positions = altDragRef.current.positions
-                    const appendedNodes = duplicated.document.nodes.slice(history.document.nodes.length)
-                    const appendedEdges = duplicated.document.edges.slice(history.document.edges.length)
-                    dispatch({
-                      type: "replace-update",
-                      update: (document) => ({
-                        ...document,
-                        edges: [...document.edges, ...appendedEdges],
-                        nodes: [
-                          ...document.nodes.map((node) =>
-                            positions.has(node.id)
-                              ? { ...node, position: positions.get(node.id) ?? node.position }
-                              : node,
-                          ),
-                          ...appendedNodes,
-                        ],
-                      }),
-                    })
-                    selectNodes(duplicated.selectedNodeIds)
-                    altDragRef.current = null
-                  }
+                  altDragRef.current = null
                   dispatch({ type: "end-gesture" })
                 }}
                 onNodesChange={(changes) => {
-                  const selectionChanges = changes.filter((change) => change.type === "select")
+                  const effectiveChanges = altDragRef.current
+                    ? remapCanvasDuplicateDragChanges(
+                        changes as readonly NodeChange<CanvasNode>[],
+                        altDragRef.current.duplicatedNodeIdBySourceId,
+                      )
+                    : changes
+                  const selectionChanges = effectiveChanges.filter((change) => change.type === "select")
                   if (selectionChanges.length > 0) {
                     replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
                   }
-                  const documentChanges = changes.filter(
+                  const documentChanges = effectiveChanges.filter(
                     (change) => change.type !== "select" && change.type !== "remove",
                   )
                   if (documentChanges.length === 0) return

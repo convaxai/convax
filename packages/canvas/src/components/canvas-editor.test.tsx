@@ -34,6 +34,8 @@ let keyDownOnCanvas:
       target: null
     }) => void)
   | undefined
+let copyOnCanvas: ((event: unknown) => void) | undefined
+let pasteOnCanvas: ((event: unknown) => void) | undefined
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 Object.defineProperty(globalThis, "window", {
@@ -71,11 +73,15 @@ mock.module("@convax/ui", () => ({
   ContextMenuTrigger: (props: { children?: ReactNode }) => {
     if (isValidElement(props.children)) {
       const canvas = props.children as ReactElement<{
+        onCopy?: typeof copyOnCanvas
         onDrop?: typeof dropOnCanvas
         onKeyDown?: typeof keyDownOnCanvas
+        onPaste?: typeof pasteOnCanvas
       }>
+      copyOnCanvas = canvas.props.onCopy
       dropOnCanvas = canvas.props.onDrop
       keyDownOnCanvas = canvas.props.onKeyDown
+      pasteOnCanvas = canvas.props.onPaste
     }
     return <>{props.children}</>
   },
@@ -132,8 +138,10 @@ const { createCanvasServices } = await import("../services")
 beforeEach(() => {
   buttonActions.clear()
   buttonContents.clear()
+  copyOnCanvas = undefined
   dropOnCanvas = undefined
   keyDownOnCanvas = undefined
+  pasteOnCanvas = undefined
   fitView.mockClear()
   setCenter.mockClear()
   setViewport.mockClear()
@@ -281,6 +289,13 @@ describe("CanvasEditor viewport ownership", () => {
 })
 
 describe("CanvasEditor insertion surfaces", () => {
+  test("wires native copy and paste events on the active Canvas surface", () => {
+    renderEditor()
+
+    expect(copyOnCanvas).toBeFunction()
+    expect(pasteOnCanvas).toBeFunction()
+  })
+
   test("offers concrete built-in cards and plugin cards without generic file or agent roles", () => {
     const fileRenderers = createDefaultCanvasFileRendererRegistry()
     const nodes = createDefaultCanvasNodeRegistry()

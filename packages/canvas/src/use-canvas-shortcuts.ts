@@ -38,10 +38,17 @@ export function resolveCanvasTidyShortcutScope(
 
 type CanvasExternalDragChordEvent = Pick<KeyboardEvent<HTMLElement>, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">
 
-function ignoresCanvasShortcuts(target: EventTarget | null) {
+export function isCanvasEditableShortcutTarget(target: EventTarget | null) {
   if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
-  return Boolean(target.closest("input, textarea, select, [data-canvas-shortcuts='ignore']"))
+  return Boolean(target.closest("input, textarea, select"))
+}
+
+export function ignoresCanvasShortcuts(target: EventTarget | null) {
+  if (isCanvasEditableShortcutTarget(target)) return true
+  return typeof HTMLElement !== "undefined" && target instanceof HTMLElement
+    ? Boolean(target.closest("[data-canvas-shortcuts='ignore']"))
+    : false
 }
 
 export function isCanvasExternalDragChordHeld(
@@ -78,6 +85,7 @@ export function createCanvasShortcutHandler(
       action()
     }
 
+    if (event.defaultPrevented || event.nativeEvent?.isComposing) return
     if (event.key === "Escape" && options.externalDragArmed) return run(actions.cancelExternalDrag)
     if (options.externalDragArmed && !["Meta", "Control", "Shift"].includes(event.key)) {
       actions.cancelExternalDrag()
@@ -93,25 +101,25 @@ export function createCanvasShortcutHandler(
       return
     }
     if (ignoresCanvasShortcuts(event.target)) return
-    if (mod && key === "0") return run(actions.fitView)
-    if (mod && ["=", "+"].includes(event.key)) return run(actions.zoomIn)
-    if (mod && event.key === "-") return run(actions.zoomOut)
-    if (mod && key === "a") return run(actions.selectAll)
-    if (mod && key === "f") return run(actions.openSearch)
-    if (mod && key === "c") return run(actions.copy)
+    if (mod && !event.altKey && !event.shiftKey && key === "0") return run(actions.fitView)
+    if (mod && !event.altKey && ["=", "+"].includes(event.key)) return run(actions.zoomIn)
+    if (mod && !event.altKey && ["-", "_"].includes(event.key)) return run(actions.zoomOut)
+    if (mod && !event.altKey && !event.shiftKey && key === "a") return run(actions.selectAll)
+    if (mod && !event.altKey && !event.shiftKey && key === "f") return run(actions.openSearch)
+    // Let the browser emit copy/paste events so Canvas can use the system DataTransfer protocol.
+    if (mod && !event.altKey && !event.shiftKey && (key === "c" || key === "v")) return
     if (event.key === "Escape") return run(actions.clearSelection)
-    if (!mod && key === "v") return run(actions.select)
+    if (!mod && !event.altKey && !event.shiftKey && key === "v") return run(actions.select)
     if (readOnly) return
-    if (mod && key === "z") return run(event.shiftKey ? actions.redo : actions.undo)
-    if (mod && key === "y") return run(actions.redo)
-    if (mod && event.shiftKey && key === "g") return run(actions.ungroup)
-    if (mod && key === "g") return run(actions.group)
-    if (mod && key === "v") return run(actions.paste)
-    if (mod && key === "d") return run(actions.duplicate)
-    if (mod && event.key === "Enter") return run(actions.generate)
-    if (event.altKey && event.shiftKey && key === "f") return run(actions.layout)
-    if (["Backspace", "Delete"].includes(event.key)) return run(actions.delete)
-    if (event.key === "Tab") return run(actions.addNode)
+    if (mod && !event.altKey && key === "z") return run(event.shiftKey ? actions.redo : actions.undo)
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && key === "y") return run(actions.redo)
+    if (mod && !event.altKey && event.shiftKey && key === "g") return run(actions.ungroup)
+    if (mod && !event.altKey && !event.shiftKey && key === "g") return run(actions.group)
+    if (mod && !event.altKey && !event.shiftKey && key === "d") return run(actions.duplicate)
+    if (mod && !event.altKey && !event.shiftKey && event.key === "Enter") return run(actions.generate)
+    if (!mod && event.altKey && event.shiftKey && key === "f") return run(actions.layout)
+    if (!mod && !event.altKey && ["Backspace", "Delete"].includes(event.key)) return run(actions.delete)
+    if (!mod && !event.altKey && !event.shiftKey && event.key === "Tab") return run(actions.addNode)
   }
 }
 

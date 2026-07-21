@@ -16,6 +16,16 @@ export interface CanvasNodeGeometryUpdate {
   size?: CanvasSize
 }
 
+export type CanvasDuplicateEdgeScope = "connected" | "internal"
+
+export interface CanvasDuplicateOptions {
+  edgeScope?: CanvasDuplicateEdgeScope
+}
+
+export interface CanvasDuplicateResult extends CanvasCommandResult {
+  duplicatedNodeIdBySourceId: ReadonlyMap<string, string>
+}
+
 function nodeMap(document: CanvasDocument) {
   return new Map(document.nodes.map((node) => [node.id, node]))
 }
@@ -165,9 +175,10 @@ export function duplicateCanvasSelection(
   document: CanvasDocument,
   nodeIds: readonly string[],
   offset: CanvasPoint = { x: 32, y: 32 },
-): CanvasCommandResult {
+  options: CanvasDuplicateOptions = {},
+): CanvasDuplicateResult {
   const included = collectNodeIds(document, nodeIds)
-  if (included.size === 0) return { document, selectedNodeIds: [] }
+  if (included.size === 0) return { document, duplicatedNodeIdBySourceId: new Map(), selectedNodeIds: [] }
   const ids = new Map([...included].map((id) => [id, createCanvasId("node")]))
   const clones = document.nodes
     .filter((node) => included.has(node.id))
@@ -183,7 +194,11 @@ export function duplicateCanvasSelection(
       } satisfies CanvasNode
     })
   const edges = document.edges
-    .filter((edge) => included.has(edge.source) && included.has(edge.target))
+    .filter((edge) => {
+      const sourceIncluded = included.has(edge.source)
+      const targetIncluded = included.has(edge.target)
+      return options.edgeScope === "internal" ? sourceIncluded && targetIncluded : sourceIncluded || targetIncluded
+    })
     .map((edge) => ({
       ...structuredClone(edge),
       id: createCanvasId("edge"),
@@ -197,6 +212,7 @@ export function duplicateCanvasSelection(
   })
   return {
     document: { ...document, nodes: [...document.nodes, ...clones], edges: [...document.edges, ...edges] },
+    duplicatedNodeIdBySourceId: ids,
     selectedNodeIds,
   }
 }
