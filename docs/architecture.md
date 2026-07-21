@@ -300,6 +300,19 @@ the new Canvas resource schema, content-addressed managed-asset layout and relat
 protocol replace their legacy forms without migration or compatibility reads, while
 unsupported documents and legacy assets remain untouched and outside new GC.
 
+Project Node serializes managed-reference commits and GC deletion through one
+Project-scoped coordinator. Before a Canvas commit can make a managed hash live, it
+durably clears that hash's old orphan timestamp; GC reloads the latest state under
+its exclusive deletion barrier. Managed path hashes are expected identities only:
+any authoritative content revision or external call hashes the actual bytes from a
+verified handle and fails closed on mismatch.
+
+The same in-process coordinator is not treated as crash atomicity. Canvas catalog
+create/delete uses a Project-owned WAL plus staged/quarantined Canvas directories.
+Project open recovers every transaction to a provable before/after state before
+exposing controllers or starting GC; ambiguous catalog digests or directory
+identities preserve all bytes and enter repair.
+
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
 Uninstalling a Plugin therefore leaves recoverable Canvas data and falls back to the

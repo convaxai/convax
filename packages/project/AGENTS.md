@@ -26,6 +26,9 @@ This package owns the durable Project aggregate and native Project adapters.
 - Browser creation requests carry only a Project name. The host injects a trusted
   parent directory; the Node adapter creates the child root, initializes identity,
   and publishes the registry binding without adopting an existing directory.
+- In-process queues and coordinators provide ordering only. Cross-file Project
+  mutations such as file/directory moves and Canvas catalog create/delete require a
+  durable WAL, exact-identity/no-clobber recovery, and must resolve before editing or GC.
 - `project.json` stores identity and the Canvas catalog stores no selection. Schema
   changes include versioned migration tests by default. An explicitly approved
   breaking cutover instead includes unsupported-version rejection tests and preserves

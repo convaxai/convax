@@ -112,6 +112,8 @@ source, or ambient application state.
   through Canvas repository/application ports implemented by `@convax/project/node`.
 - `<project>/.convax/assets/`: managed Canvas assets accessed through the scoped
   Project Files capability.
+- `<project>/.convax/transactions/`: short-lived Project Node WAL and staged or
+  quarantined state for cross-file moves and Canvas catalog create/delete recovery.
 - Electron `userData/opencode/skills/user/<name>/`: materialized Convax-managed
   OpenCode Skills, including independently managed standalone Skills and Plugin-owned
   Skills. Ownership is never inferred from this shared discovery path.
@@ -162,6 +164,9 @@ delete it. All successful writes use the current schema.
   state and the only persistent writer. Renderer edits are optimistic projections
   that submit element-level commands with `expectedRevision`; renderer never saves
   a whole document or arbitrates Main mutations.
+- A process-local mutation barrier is not crash atomicity. Project Node uses durable
+  WAL plus identity-checked recovery for file/directory moves and Canvas catalog
+  create/delete, and completes recovery before Canvas editing or managed-asset GC.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.

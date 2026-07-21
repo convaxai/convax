@@ -124,7 +124,10 @@ Canvas 文档不再持久化：
         document.json
 
     transactions/
-      file-move-<operation-id>.json
+      path-move-<operation-id>.json
+      canvas-catalog-<operation-id>/
+        transaction.json
+        canvas/
 
     assets/
       gc.json
@@ -143,7 +146,7 @@ Canvas 文档不再持久化：
 - `.convax/assets/blobs` 只保存从 Project 外部接纳的持久副本；
 - `.convax/assets/staging` 只保存尚未完成发布的临时文件；
 - `.convax/assets/gc.json` 只保存 GC 调度和孤儿宽限状态；
-- `.convax/transactions` 只保存尚未完成的短生命周期跨文件事务记录，成功后立即删除；
+- `.convax/transactions` 只保存尚未完成的短生命周期跨文件事务记录以及 create/delete Canvas 的 staged/quarantined 目录，成功恢复或提交后立即删除；
 - `.convax/assets` 不保存 Project 内已有文件的副本；
 - Project 可见文件永远不参与 managed asset 自动回收。
 
@@ -275,11 +278,13 @@ convax-asset://<project-id>/file?...&revision=<cache-revision>
 两类 revision 不得混用：
 
 - `cacheRevision` 可以由文件身份、大小、高精度修改时间和 watcher generation 组成，只用于缓存失效和 UI 刷新，不具有并发控制权威性；
-- `contentRevision` 是从同一个 no-follow 已验证句柄读取全部字节后计算的 SHA-256。managed asset 直接使用其路径哈希；可编辑 Project 文件必须返回该值；
+- `contentRevision` 是从同一个 no-follow 已验证句柄读取全部字节后计算的实际 SHA-256。可编辑 Project 文件必须返回该值；managed asset 的路径哈希只是 expected digest，不能直接作为已验证 revision 返回；
 - 文本保存、高风险外部调用和任何声称 expected revision 的 API 必须比较 `contentRevision`，不得只比较 mtime、size、inode/file id 或 watcher 序号；
 - 大型只读媒体可以延迟计算 `contentRevision`，但在计费调用、Plugin 外部执行或其他高风险边界前必须计算并复核。
 
 这保证相同大小、mtime 被保留或文件身份复用时仍能发现内容变化。它不能阻止不遵守 Convax 协调器的外部进程在最后一次校验后再次写文件，因此本文只对 Main-mediated 写入提供强 OCC；对任意外部编辑器提供内容级冲突检测和明确的剩余竞态说明，不宣称跨进程原子 compare-and-swap。
+
+解析 managed asset 时，Main 必须打开并验证 no-follow 句柄，从该句柄流式计算实际 SHA-256，再与引用和内容寻址路径中的 expected digest 比较。只有相等时才能返回该实际 digest 作为 `contentRevision` 或把字节交给高风险调用。普通渲染可以只返回 `cacheRevision` 并延迟内容哈希；任何没有实际读取字节的路径都不得声称拥有 `contentRevision`。digest 不匹配时返回类型化 `ManagedAssetCorruption`、不返回资源字节，并禁止把该文件当作合法 blob 自动删除或覆盖。
 
 ## 7. Project 内文件进入 Canvas
 
@@ -311,14 +316,18 @@ Project 外文件必须先进入受控 managed asset store，Canvas 不持久化
 ### 8.1 接纳流程
 
 1. Renderer 通过现有受控导入 token 授权选中的外部文件；
-2. Main 在 `.convax/assets/staging/<operation-id>` 创建专用临时文件；
+2. Main 在创建临时文件前，以 `operation-id` 获取 staging lease，再创建 `.convax/assets/staging/<operation-id>`；
 3. 单次流式复制文件，同时计算 SHA-256 和大小；
 4. 校验文件类型、大小限制和源文件读取前后身份；
 5. 根据 SHA-256 得到最终 blob 路径；
-6. 如果 blob 已存在，验证现有 blob 后删除 staging，并复用该哈希；
-7. 如果 blob 不存在，将 staging 原子发布到最终路径；
-8. 创建引用该 SHA-256 的 Canvas 节点；
-9. Canvas 提交成功后释放 admission lease。
+6. 在检查或发布最终 blob 前，通过 coordinator 的短 shared barrier 以 `operation-id + sha256` 注册 managed-blob lease；如果 GC 正持有 exclusive barrier，先等待其结束再重新检查 blob；
+7. 如果 blob 已存在，从实际 no-follow 句柄重新计算并验证 SHA-256 后删除 staging、复用该 blob；
+8. 如果 blob 不存在，在 managed-blob lease 保护下将 staging 原子发布到最终路径；
+9. staging 已删除或发布后释放 staging lease，但保持 managed-blob lease；
+10. 进入 shared resource commit barrier，预先清除该哈希的 GC orphan 记录，再创建和提交 Canvas 节点；
+11. Canvas commit 成功、失败或取消进入终态后释放 managed-blob lease。
+
+admission API 必须把“staging lease、哈希、coordinator-ordered managed-blob lease、发布、Canvas conflict retry 和终态释放”封装为一个 host-owned operation，不能向 Renderer/Plugin/Agent 返回一个无 lease 的 prepared managed reference。staging lease 从临时路径出现前持续到 staging 消失；managed-blob lease 从最终路径第一次检查前持续到 Canvas commit 终态，两者在发布交接阶段重叠。managed-blob lease 注册与 GC exclusive deletion 不能交错越界；Canvas CAS 重试期间它始终有效。发布后 commit 失败可以留下无引用 blob；释放 lease 后它从下一次完整扫描开始获得新的 7 天宽限期，不做即时删除。
 
 ### 8.2 并发去重
 
@@ -403,22 +412,40 @@ Project watcher 继续监听已打开 Project 根目录中的普通文件变化�
 
 ### 11.1 App 内移动或重命名
 
-App 内文件操作返回明确的源路径与目标路径。Desktop 协调器通过 Canvas application/repository 能力更新所有受影响 Canvas 文档中的 Project 文件引用。不得由 Project Files package 直接编辑 Canvas JSON。
+App 内文件或目录操作返回明确的源路径、目标路径和 entry kind。Desktop 协调器通过 Canvas application/repository 能力更新所有受影响 Canvas 文档中的 Project 引用。不得由 Project Files package 直接编辑 Canvas JSON。
 
 该操作通过后文同一个 Project resource commit coordinator 的 exclusive barrier 和短生命周期事务记录协调：
 
-1. 先 flush 当前 Canvas；无法 flush 或存在 revision conflict 时不开始移动；
+1. Desktop 先取得 Project edit-quiesce token，阻止新的 Renderer mutation，flush 该 Project 下所有已挂载 Canvas；任何 draft 无法 flush 或存在 revision conflict 时不开始移动；
 2. 获取 exclusive barrier，等待所有在途 Canvas/catalog/resource commit 完成，并阻止新提交；
-3. 加载所有包含源路径的 Canvas 文档及其 storage revision；
-4. 写入并 fsync `.convax/transactions/file-move-<operation-id>.json`，记录源/目标文件 identity、每个受影响节点、before storage revision、预期 after revision 和 phase；
-5. 执行文件系统移动并持久化 phase；
-6. 使用 exclusive callback 获得的不可伪造 mutation context，通过 Canvas application/repository 的内部 `saveWithinMutation` CAS 对每个文档只应用路径引用 patch，不替换整个旧文档，也不重入 shared barrier；
-7. 全部成功后 fsync 必要目录、删除事务记录、释放 barrier，再发布文件系统变动事件；
-8. 同进程失败时，逆向 patch 也必须基于当前 storage revision CAS，并只恢复本事务修改的资源引用；不得写回步骤 3 的整份文档快照；
-9. 如果任何 CAS guard 不匹配，停止自动回滚，保留文件和文档，进入显式 repair；
-10. 崩溃恢复必须在 Project 进入可编辑状态前、持有 exclusive barrier 时运行，并根据已记录 phase 与实际文件 identity 幂等完成或逆向 patch。
+3. 验证 source identity、target 不存在、目标不在源目录子树中，并要求平台 adapter 提供不覆盖目标的 `moveNoReplace`；无法保证 no-clobber 或跨 volume 时在任何 mutation 前失败；
+4. 加载所有 Canvas 文档及其 storage revision，按下述规则生成逐 slot rewrite plan；
+5. 写入并 fsync `.convax/transactions/path-move-<operation-id>.json`，记录 entry kind、源/目标及任何 case-only 临时路径的 identity、每个受影响 node/slot 的 before/after reference、before storage revision、预期 after revision 和 phase；
+6. 执行物理 `moveNoReplace(source, target)`，fsync 必要目录，并持久化 `physical-moved` phase；
+7. 使用 exclusive callback 获得的不可伪造 mutation context，通过 Canvas application/repository 的内部 `saveWithinMutation` CAS 对每个文档只应用 reference patch，不替换整个旧文档，也不重入 shared barrier；
+8. 全部成功后持久化 `references-updated`，删除事务记录、释放 barrier，再发布一次合并后的文件系统变动事件；
+9. 崩溃恢复必须在 Project 进入可编辑状态和启动 GC 前、持有 exclusive barrier 时运行，并根据 phase 与实际 identity 幂等完成或回滚。
 
-事务记录只承担一次移动的崩溃恢复，不是永久资源索引。它不保存可直接覆盖回去的 Canvas snapshot。文件操作在事务完成前不得向用户报告成功。
+目录移动的 rewrite plan 使用规范化 POSIX path segment 语义：
+
+- 文件移动只重写严格等于 source path 的 `project-file` reference；
+- 目录移动重写所有等于 source 或以 `source + "/"` 开头的 `project-file`，保留其 descendant suffix；
+- folder node 的 `project-directory` 同样按 segment prefix 重写；
+- `primary`、`poster` 和 Plugin resource bindings 使用同一 schema traversal，不能漏掉 metadata 中的第二套扫描；
+- managed SHA-256 不随目录移动变化；
+- 大小写敏感性跟随真实 Project filesystem；case-only rename 由 `moveNoReplace` 使用事务内临时路径分两跳完成，每一跳的路径、identity 和 phase 都写入 WAL，不通过字符串 lower-case 猜测；
+- rewrite 后出现非法路径、目标冲突、重复 slot 或目标落入 `.convax` 保护区时，物理移动前整体失败。
+
+失败回滚必须同时恢复物理位置和引用：
+
+1. 如果 phase 已到 `physical-moved`，先验证 target 仍是事务记录的 exact identity 且 source 仍不存在；
+2. 使用同一 no-clobber primitive 执行 `moveNoReplace(target, source)`，绝不覆盖外部进程新建的 source；
+3. fsync 后持久化 `physical-restored`；
+4. 对已提交的文档逐一执行基于当前 storage revision 的 inverse reference patch，只恢复本事务修改的 slot；
+5. 物理恢复和全部 inverse CAS 都成功后才删除事务记录；
+6. 任一 identity、no-clobber 或 CAS guard 不匹配时停止自动恢复，保留现状并进入显式 repair，绝不删除、覆盖或写回旧 Canvas snapshot。
+
+事务记录只承担一次移动的崩溃恢复，不是永久资源索引。它保存精确 reference patch，不保存可直接覆盖回去的 Canvas snapshot。事务完成前不得向用户报告成功，watcher 也不得把中间 phase 发布成多个用户可见操作；edit-quiesce token 在提交、完整回滚或进入 repair 后才释放。
 
 ### 11.2 App 外移动或重命名
 
@@ -450,6 +477,7 @@ GC 状态与 managed asset store 同目录：
 ```json
 {
   "schemaVersion": "convax.asset-gc/1",
+  "requiresFullScan": false,
   "lastSuccessfulScanAt": "2026-07-21T10:00:00.000Z",
   "orphans": {
     "abc123...": {
@@ -468,6 +496,23 @@ GC 状态与 managed asset store 同目录：
 - SHA-256 到路径的映射。
 
 这些信息从 Canvas 文档、固定内容寻址规则和实际文件实时推导。
+
+### 12.1 成功重新引用必须持久重置宽限期
+
+只靠 24 小时完整扫描无法观察“两个扫描之间短暂重新引用后又删除”的情况，因此 orphan reset 是 managed reference commit 的前置持久化步骤，不只是 GC 扫描的副作用。
+
+`@convax/project/node` 提供串行、CAS/原子替换的 `GcStateRepository.clearOrphansBeforeReference(hashes, mutationContext)`：
+
+1. Canvas repository 在 shared barrier 内比较旧/新文档的显式资源槽位，计算 `newlyAddedHashes = newManagedHashes - oldManagedHashes`；
+2. 对每个 `newlyAddedHashes`，在写 Canvas 文档前从 `orphans` 删除并 fsync/原子提交 `gc.json`；
+3. `gc.json` 更新成功后才允许 Canvas 文档原子提交；
+4. 如果随后 Canvas commit 失败，额外延长保留时间是安全的；
+5. 如果 GC 状态更新失败，必须在 Canvas 写入前终止 reference commit；
+6. reference removal 不直接复用旧时间；下一次完整扫描重新以当时的时间创建 orphan 记录。
+
+Project writer guard 保证只有一个 Main，`GcStateRepository` 自身再串行化 shared commit 间的状态更新，避免两个并发 reference commit 相互覆盖。`gc.json` 缺失时 clear 操作可以创建无 orphan、要求完整扫描的新状态；损坏时按第 18 节 fail safe 恢复，绝不继续使用其中的旧时间戳。
+
+因此，即使某哈希在两次 GC 扫描之间经历“引用成功 → 引用删除”，成功引用前已经持久删除旧 orphan 记录；后续扫描只能建立新的 `unreferencedSince`。
 
 ## 13. GC 时间参数
 
@@ -516,6 +561,15 @@ GC 使用事件触发加时间节流，不为每个 Project 创建持续高频�
 
 ```ts
 interface ProjectResourceCommitCoordinator {
+  acquireStagingLease(input: {
+    operationId: string
+    signal: AbortSignal
+  }): Promise<StagingLease>
+  acquireManagedLease(input: {
+    operationId: string
+    sha256: string
+    signal: AbortSignal
+  }): Promise<ManagedAssetLease>
   withReferenceCommit<T>(
     signal: AbortSignal,
     run: (context: ProjectResourceMutationContext) => Promise<T>,
@@ -527,11 +581,53 @@ interface ProjectResourceCommitCoordinator {
 }
 ```
 
-普通 Canvas/catalog/resource commit 在 shared barrier 内完成“读取 expected storage revision、校验资源/lease、原子替换文档或 catalog”的最终提交段。文件移动和 GC 删除使用 exclusive barrier；exclusive 请求到达后不再放行新的 shared 请求，避免删除饥饿。
+`acquireStagingLease` 在创建 staging 路径前通过同一 Project lease registry 注册，staging cleanup 在删除前也查询该 registry。`acquireManagedLease` 在一个短 shared barrier 内注册 lease 后返回幂等 release handle；它不在整个文件复制或 Canvas retry 期间占用 shared lock，但 exclusive GC 随后必定能观察到该 lease。若 GC 已先取得 exclusive barrier，lease acquisition 等待 GC 完成，调用方随后必须重新检查目标 blob 是否仍存在。两种 release 都是幂等的，取消/异常路径由 host operation 的 `finally` 统一收口。
+
+普通 Canvas document save、catalog rename/touch 和 resource binding commit 在 shared barrier 内完成“读取 expected storage revision、校验资源/lease、原子替换文档或 catalog”的最终提交段。Canvas catalog create/delete、文件移动和 GC 删除使用 exclusive barrier；exclusive 请求到达后不再放行新的 shared 请求，避免删除饥饿。
 
 `ProjectResourceMutationContext` 是 Project Node 内部不可构造的 capability。repository 和 asset store 提供仅供聚合内部使用的 `*WithinMutation(context, ...)` 操作；已经持有 exclusive barrier 的移动/GC 流程必须传递该 context，不能再次获取 shared barrier 造成死锁。公开 repository/client API 永远不能接收调用者自造的 context。
 
 这不是隐藏全局或 Desktop service locator：coordinator 由 Project Node adapter 拥有，并显式注入 repository、asset store 和 Desktop 协调器。打包版本已有应用级 single-instance lock；允许多实例的开发模式还必须使用 Project writer ownership guard，禁止两个 Main 同时以可写方式打开同一 Project。无法取得 guard 时不得启用 GC 或任何 Project 私有写入。
+
+### 14.4 Canvas catalog WAL 与崩溃恢复
+
+coordinator 只提供进程内顺序，不提供 catalog JSON 与 Canvas directory 之间的崩溃原子性。`@convax/project/node` 的 catalog manager 因此必须把 create/delete 实现为 durable WAL transaction；不能继续依赖 catch 中的 best-effort rename/remove。
+
+每个 `.convax/transactions/canvas-catalog-<operation-id>/transaction.json` 至少记录：
+
+- operation kind、canvas id 和目标 catalog entry；
+- before catalog storage version 与 before/after catalog digest；
+- staged 或 quarantined Canvas directory 的 exact identity；
+- 当前 phase；
+- transaction schema version。
+
+每次 phase 变化都通过临时文件、fsync 和原子替换持久化。create 流程：
+
+1. 在 exclusive barrier 内创建 transaction directory，先写入并 fsync `preparing` WAL；
+2. 构建完整的初始 Canvas directory 和当前 schema 的空 `document.json` 到 transaction 的 `canvas/`；
+3. fsync staged directory 并持久化 `prepared`；
+4. `moveNoReplace` 发布到 `.convax/canvases/<id>/`，持久化 `storage-published`；
+5. 用 before storage version CAS 写入包含新 entry 的 catalog；
+6. 持久化 `catalog-committed`，再删除 transaction directory 并 fsync transaction parent。
+
+新 Canvas 不再依赖首次 `load` 时懒创建 document；create 返回成功时 catalog entry 和合法 document 必须同时达到可恢复提交状态。
+
+delete 流程：
+
+1. 在 exclusive barrier 内验证 catalog entry 和 Canvas directory identity，写入 `prepared` WAL；
+2. `moveNoReplace` 将 Canvas directory 移入 transaction 的 `canvas/` 作为 quarantine，持久化 `storage-quarantined`；
+3. 用 before storage version CAS 写入移除 entry 的 catalog；
+4. 持久化 `catalog-committed`，再删除 quarantined directory 和 transaction directory，并 fsync transaction parent。
+
+catalog rename/touch 只原子 CAS 一个 catalog 文件，不创建跨文件 WAL。Project writer ownership guard 成功后、Project 对 controller 可见前，recovery 在 exclusive barrier 下扫描全部 catalog transaction：
+
+- catalog 已匹配 after digest 时完成 cleanup，不回滚已提交操作；
+- catalog 仍匹配 before digest 时，create 移除且只移除 exact operation-created directory，delete 使用 no-clobber 恢复 exact quarantined directory；
+- phase 落后但 catalog/directory 的实际状态可由 digest 和 identity 唯一证明时，按实际提交点幂等推进；
+- 任意 catalog version、digest、目录 identity、source/target 占用或 transaction schema 无法唯一证明时进入 Project repair，保留所有字节；
+- unresolved transaction 或 repair 状态会阻止 Canvas 编辑、catalog mutation 和 GC。
+
+GC 只能读取 recovery 完成后的 catalog/document 集合。这样 catalog 与 document 不需要假装具备单文件 ACID，但崩溃后必定先恢复成明确的 before/after 状态，或 fail closed 进入 repair。
 
 ## 15. 一次 GC 的完整执行流程
 
@@ -612,10 +708,14 @@ hash 不在 liveHashes，且宽限期已结束
 2. 在 barrier 内重新读取最新 catalog 和其中每一个 Canvas 文档；
 3. 使用唯一 schema traversal 重建完整 `liveHashes`，包括 Plugin bindings；任意错误立即放弃本轮全部删除；
 4. 重新读取当前全部 lease；
-5. 从候选集合剔除最新引用或 lease 覆盖的哈希；
-6. 对剩余候选再次执行 `lstat`、realpath、文件 identity 和 SHA-256 校验；
-7. 将仍满足全部条件的普通受管 blob 固化为 `confirmedCandidates`；
-8. 保持 exclusive barrier，进入阶段五完成同步删除和 `gc.json` 提交后才释放，随后才允许新的 reference commit。
+5. 重新读取 `GcStateRepository` 的最新持久状态，不能继续使用阶段一读取的旧 orphan snapshot；
+6. 在 barrier 内用最新 `liveHashes` 完整协调 orphan 状态：live hash 删除记录，首次确认无引用的 hash 以当前时间建记录；
+7. 只有最新持久状态中仍保留同一 `unreferencedSince`、当前仍无引用、无 lease 且宽限期已结束的哈希才继续；任何被 reference commit 预先 clear 的旧候选都退出本轮删除；
+8. 对剩余候选再次执行 `lstat`、realpath、文件 identity 和实际 SHA-256 校验；
+9. 将仍满足全部条件的普通受管 blob 固化为 `confirmedCandidates`；
+10. 保持 exclusive barrier，进入阶段五完成同步删除和 `gc.json` 提交后才释放，随后才允许新的 reference commit。
+
+步骤 8 的实际 digest 与路径哈希不符时，该文件从 `confirmedCandidates` 移除并报告 `ManagedAssetCorruption`；GC 不删除、覆盖或把它重新命名为另一个哈希。
 
 Canvas 添加 managed asset 时必须先创建 lease，再进入 shared barrier 提交节点或 Plugin binding；节点引用提交成功或失败后才释放 lease。因为所有合法引用写入、catalog 变化与 GC 删除都共享同一 coordinator，不存在“二次扫描完成后新增引用、blob 随后被删除”的提交窗口。
 
@@ -624,9 +724,9 @@ Canvas 添加 managed asset 时必须先创建 lease，再进入 shared barrier 
 仍在阶段四取得的 exclusive barrier 内执行：
 
 1. 同步删除 `confirmedCandidates` 中的 blob；
-2. 从内存状态移除对应 orphan 项；
+2. 基于阶段四重载的最新状态提交完整协调结果：删除 live hash 和已成功删除 blob 的 orphan 项，为首次无引用 hash 建立新时间，并保留未删除旧 orphan 的原时间；
 3. 设置 `lastSuccessfulScanAt`；
-4. 将新状态写入同目录临时文件；
+4. 设置 `requiresFullScan: false`，将新状态写入同目录临时文件；
 5. fsync 必要边界并原子替换 `gc.json`。
 
 如果 blob 删除成功但 `gc.json` 更新失败，旧 orphan 记录是无害的；下次扫描会发现文件不存在并移除记录。记录错误后释放 barrier，不得先宣告成功再异步执行不可观测删除。
@@ -636,8 +736,11 @@ Canvas 添加 managed asset 时必须先创建 lease，再进入 shared barrier 
 ```text
 7 月 1 日 10:00  最后一个 Canvas 引用被删除
 7 月 1 日 10:05  防抖扫描确认无引用，写入 unreferencedSince
-7 月 8 日 10:05  宽限期结束
-7 月 8～9 日      下一次成功扫描与二次确认后删除
+7 月 3 日 09:00  用户重新引用；commit 前持久 clear 旧 orphan
+7 月 3 日 09:02  用户再次删除引用
+7 月 3 日 09:07  防抖扫描写入新的 unreferencedSince
+7 月 10 日 09:07 新宽限期结束
+7 月 10～11 日    下一次成功扫描与二次确认后删除
 ```
 
 正常情况下，孤儿资产会在首次确认无引用后约 7～8 天被删除。如果 Project 长期没有打开，则 GC 延迟到下次打开；App 未运行时不会在后台删除文件。
@@ -646,7 +749,7 @@ Canvas 添加 managed asset 时必须先创建 lease，再进入 shared barrier 
 
 Staging 与正式 blob 使用不同规则：
 
-- 正在运行的操作通过 lease 保护 staging；
+- 正在运行的操作从 staging 路径创建前开始持有 staging lease；
 - 操作成功后 staging 被原子发布或删除；
 - 操作取消或失败后立即尝试删除 staging；
 - Project 打开和日常 GC 时扫描超过 24 小时且无 lease 的 staging；
@@ -657,14 +760,17 @@ Staging 与正式 blob 使用不同规则：
 
 `gc.json` 不是引用事实来源，因此丢失不能触发资产删除。
 
+如果 reference commit 在 GC 之前发现状态缺失或损坏，`GcStateRepository` 先原子安装一个 `requiresFullScan: true`、空 `orphans` 的安全状态，再执行 clear 并允许 Canvas commit。旧 orphan 时间不会被继承；如果安全状态也无法持久化，则 reference commit 在 Canvas 写入前失败。
+
 恢复流程：
 
-1. 完整扫描所有 Canvas 文档；
-2. 完整扫描所有合法 blob；
-3. 对当前无引用 blob 以“当前时间”建立新的 orphan 记录；
-4. 对当前有引用 blob 不建立记录；
-5. 原子写入新的 `gc.json`；
-6. 本次恢复扫描不删除任何 blob。
+1. 将状态视为 `requiresFullScan: true`，忽略所有无法验证的旧时间戳；
+2. 完整扫描所有 Canvas 文档；
+3. 完整扫描所有合法 blob；
+4. 对当前无引用 blob 以“当前时间”建立新的 orphan 记录；
+5. 对当前有引用 blob 不建立记录；
+6. 原子写入 `requiresFullScan: false` 的新 `gc.json`；
+7. 本次恢复扫描不删除任何 blob。
 
 结果只会延迟最多一个宽限期，不会提前删除资产。
 
@@ -730,6 +836,7 @@ Main 负责：
 - GC 扫描、lease、二次确认和删除；
 - 仅支持当前 schema 的 Canvas repository 访问；
 - 短生命周期文件移动事务记录与崩溃恢复；
+- Canvas catalog create/delete WAL、quarantine 与启动恢复；
 - 文件监听的 native adapter。
 
 ### `@convax/project-files`
@@ -742,7 +849,7 @@ Main 负责：
 
 - Electron composition、IPC 和 preload；
 - Renderer 文件 hydration 和编辑冲突 UI；
-- App 内文件移动后跨 Canvas 引用更新协调；
+- Project edit-quiesce、App 内文件/目录移动和跨 Canvas 引用更新协调；
 - GC 调度、空闲触发和存储使用 UI；
 - Agent、Plugin、JianYing 等边缘适配。
 
@@ -831,13 +938,23 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - Project 内文件进入 Canvas 不复制；
 - 相同外部内容、不同文件名只产生一个 blob；
 - 并发相同内容导入只发布一个 blob；
+- staging lease 在临时路径创建前取得并于 staging 消失后释放；managed-blob lease 在最终路径检查前取得并跨 Canvas CAS retry 保持；
+- 两种 lease 在发布交接时重叠，取消/异常/成功终态都各自只释放一次；
+- host API 不暴露脱离 lease 的 prepared managed reference；
 - staging 取消、失败和崩溃恢复；
 - 远程下载拒绝私网/loopback/metadata IPv4 与 IPv6、DNS rebinding、非法 redirect、非 HTTPS、自定义端口、超时和流式超限；
 - SHA-256 路径验证；
+- managed blob 实际内容与路径哈希不符时返回 corruption，既不返回 content revision/字节也不自动删除；
 - symlink replacement、Windows 路径和大小写碰撞；
 - App 内移动和重命名；
 - App 内移动事务的失败、CAS 逆向 patch 与崩溃恢复；
+- 文件移动失败后物理 target 被 no-clobber 恢复到 source；source 被外部占用或 identity 改变时进入 repair 且不覆盖；
+- 目录移动按 path segment 重写全部 descendant file/folder/Plugin binding 引用，managed hash 不变；
+- case-only rename、目标落入源子树、目标冲突和不支持 no-clobber/cross-volume 的前置失败；
 - 移动期间并发 Canvas commit 被阻塞，恢复冲突不会覆盖无关 Canvas 修改；
+- catalog create/delete 在 WAL 的每一个 crash phase 都恢复为完整 before/after 状态；
+- catalog digest、Canvas directory identity 或 transaction schema 不确定时阻止打开和 GC，不猜测 cleanup；
+- create 成功即已有当前 schema document，不依赖首次 load 懒创建；
 - 外部修改、移动、删除事件；
 - 相同 size/mtime 的文本内容变化仍触发 expected content revision 冲突；
 - Main-mediated 并发文本写入由 path mutex 和内容哈希 CAS 串行化；
@@ -854,11 +971,15 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - 无效 Plugin binding 或未知 resource provider 使整轮 GC fail closed；
 - 最后引用消失后首次扫描只标记；
 - 宽限期内重新引用移除 orphan 记录；
+- 两次扫描之间完成“重新引用并再次删除”时，reference pre-clear 仍让下一次扫描重新开始 7 天；
+- GC 在 exclusive barrier 内重载最新状态，不会把 reference commit 已 clear 的旧 orphan 写回；
+- 并发 reference commit 的 GC 状态更新串行且不丢失 clear；
+- GC 状态 pre-clear 持久化失败时 Canvas reference 尚未写入；
 - 7 天后仍无引用才删除；
 - 删除前新 lease 阻止删除；
 - 删除前新 Canvas 引用阻止删除；
 - exclusive barrier 等待在途 commit，并阻止扫描后新增引用越过删除边界；
-- catalog create/delete 与 GC 删除交错时仍以 barrier 内完整快照为准；
+- catalog create/delete 与 GC 删除交错时仍以 barrier 内完整快照为准，未恢复 WAL 时 GC 不启动；
 - 任意 Canvas 文档损坏时整轮 fail closed；
 - `gc.json` 缺失或损坏时重建但不删除；
 - 系统时钟回退不提前删除；
@@ -886,15 +1007,16 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 2. 定义覆盖全部现有 node kind、Plugin bindings 和唯一 traversal 的新 Canvas resource schema，并提升 schema version；
 3. 建立统一的 Project-scoped resource read/write/content-revision port；
 4. 实现 Project writer guard 和 shared/exclusive resource commit coordinator，并将所有 repository/catalog/asset 写路径接入；
-5. 改造 Project 内文件拖入流程为直接引用；
-6. 实现外部导入 staging、SHA-256 内容寻址、并发去重和远程 URL SSRF 防护；
-7. 改造 Canvas 文本为文件引用及 content-hash OCC 编辑；
-8. 将 Canvas 新建内容发布到 `Notes/`，将生成结果发布到 `Generated/`；
-9. 接入文件监听刷新、App 内受屏障保护的路径更新和外部 missing/relink；
-10. 实现 `.convax/assets/gc.json`、完整引用根扫描、exclusive 删除屏障、GC 调度和存储统计；
-11. 更新 Agent、Plugin 和原生集成的资源读取边界；
-12. 删除旧 schema、旧 managed asset、旧资源 API 和全部运行时兼容分支；
-13. 更新其余架构文档、IPC protocol、边界策略、发布说明和破坏性变更验收。
+5. 实现 Canvas catalog create/delete WAL、staged/quarantined directory 与启动恢复，移除首次 load 懒创建；
+6. 改造 Project 内文件拖入流程为直接引用；
+7. 实现外部导入 staging、精确定义的 admission lease、SHA-256 内容寻址、并发去重和远程 URL SSRF 防护；
+8. 改造 Canvas 文本为文件引用及 content-hash OCC 编辑，并验证 managed 实际 digest；
+9. 将 Canvas 新建内容发布到 `Notes/`，将生成结果发布到 `Generated/`；
+10. 接入文件监听刷新、文件/目录移动的 descendant rewrite、物理 no-clobber rollback 和外部 missing/relink；
+11. 实现 `.convax/assets/gc.json`、reference pre-clear、完整引用根扫描、exclusive 删除屏障、GC 调度和存储统计；
+12. 更新 Agent、Plugin 和原生集成的资源读取边界；
+13. 删除旧 schema、旧 managed asset、旧资源 API 和全部运行时兼容分支；
+14. 更新其余架构文档、IPC protocol、边界策略、发布说明和破坏性变更验收。
 
 实现过程中每个提交仍需通过其所有权边界的类型检查和测试，但不要求旧资源 Project 可打开。合入主线前必须确认生产代码中不存在旧资源 decoder、migration、fallback 或 dual-write。
 
@@ -910,10 +1032,14 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - 外部修改会刷新所有引用节点；
 - stale 文本编辑不会静默覆盖外部修改；
 - expected content revision 使用实际内容 SHA-256，相同 metadata 的内容变化也会冲突；
+- managed asset 只有在实际字节哈希匹配路径/引用哈希后才产生 content revision；
 - App 内移动后引用保持有效；
 - 移动失败或恢复不会用旧 Canvas snapshot 覆盖并发修改；
+- 文件移动失败会安全恢复物理位置，目录移动会重写所有 descendant typed references；
+- Canvas catalog create/delete 的任一 crash point 都可恢复为完整 before/after，无法证明时阻止编辑和 GC；
 - 外部删除产生可恢复 missing 状态；
 - 无引用 managed asset 首次只标记，7 天后经二次确认才删除；
+- 任意一次成功 managed reference commit 都在 Canvas 写入前持久重置旧 orphan 宽限期；
 - `gc.json` 损坏、Canvas 文档损坏或路径验证失败时不会删除资产；
 - GC 不删除 Project 可见文件、有效引用文件或活动 lease 文件；
 - primary、poster、Plugin binding 与 in-flight lease 共同构成完整 GC 引用根；
@@ -943,8 +1069,13 @@ Canvas 新建 / AI 生成
 
 GC
   -> 扫描所有 Canvas 文档获得真实引用
-  -> gc.json 只记录首次无引用时间
+  -> reference commit 在写 Canvas 前 clear 旧 orphan
+  -> gc.json 记录首次无引用时间与 full-scan guard
   -> 7 天宽限 + 删除前二次确认
+
+Project transactions
+  -> file/directory move WAL + physical no-clobber rollback
+  -> Canvas catalog create/delete WAL + startup recovery
 
 Cutover
   -> 只接受新 resource schema
