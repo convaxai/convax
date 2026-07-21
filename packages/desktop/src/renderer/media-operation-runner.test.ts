@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { CanvasGenerateRequest, CanvasGenerateResult } from "@convax/canvas"
 import {
-  ffmpegSeparationCancellationNotice,
-  FfmpegPartialTransformError,
-  type FfmpegTransformProgress,
-  runFfmpegTransformSequence,
-} from "./ffmpeg-transform-runner"
+  mediaOperationCancellationNotice,
+  MediaOperationPartialError,
+  type MediaOperationProgress,
+  runMediaOperationSequence,
+} from "./media-operation-runner"
 
 const signal = new AbortController().signal
 
@@ -18,38 +18,38 @@ function request(output: "audio" | "video"): CanvasGenerateRequest {
     prompt: output,
     references: [{ nodeId: "source", role: "reference_video" }],
     signal,
-    toolId: `ffmpeg/run.${output}`,
+    toolId: `media/run.${output}`,
   }
 }
 
-function initialProgress(): FfmpegTransformProgress {
+function initialProgress(): MediaOperationProgress {
   return { createdNodeIds: [], nextRequestIndex: 0, revision: 3, warnings: [] }
 }
 
 function result(nodeId: string, revision: number): CanvasGenerateResult {
-  return { createdNodeIds: [nodeId], revision, toolId: "ffmpeg", warnings: [] }
+  return { createdNodeIds: [nodeId], revision, toolId: "media", warnings: [] }
 }
 
-describe("runFfmpegTransformSequence", () => {
+describe("runMediaOperationSequence", () => {
   test("uses an honest cancellation notice even before the first result is confirmed", () => {
-    expect(ffmpegSeparationCancellationNotice("zh-CN", undefined)).toEqual({
-      description: "操作已取消或结果状态未确认，FFmpeg 可能已创建部分结果，请查看画布。",
-      title: "音视频分离状态未确认",
+    expect(mediaOperationCancellationNotice("zh-CN", undefined)).toEqual({
+      description: "操作已取消或结果状态未确认，插件可能已创建部分结果，请查看画布。",
+      title: "媒体操作状态未确认",
     })
     expect(
-      ffmpegSeparationCancellationNotice("en", {
+      mediaOperationCancellationNotice("en", {
         createdNodeIds: ["silent-video"],
         nextRequestIndex: 1,
         revision: 4,
         warnings: [],
       }).title,
-    ).toBe("Audio/video separation partially completed")
+    ).toBe("Media operation partially completed")
   })
 
   test("runs video then audio and carries revision and relation anchors forward", async () => {
     const calls: CanvasGenerateRequest[] = []
-    const snapshots: FfmpegTransformProgress[] = []
-    const progress = await runFfmpegTransformSequence({
+    const snapshots: MediaOperationProgress[] = []
+    const progress = await runMediaOperationSequence({
       generate: async (current) => {
         calls.push(current)
         return calls.length === 1 ? result("silent-video", 4) : result("audio", 5)
@@ -77,7 +77,7 @@ describe("runFfmpegTransformSequence", () => {
   test("does not run audio or report partial progress when video fails", async () => {
     const failure = new Error("video failed")
     let calls = 0
-    const operation = runFfmpegTransformSequence({
+    const operation = runMediaOperationSequence({
       generate: async () => {
         calls += 1
         throw failure
@@ -95,10 +95,10 @@ describe("runFfmpegTransformSequence", () => {
   })
 
   test("reports a typed partial failure and retries only audio", async () => {
-    const saved: FfmpegTransformProgress[] = []
+    const saved: MediaOperationProgress[] = []
     let calls = 0
     const requests = [request("video"), request("audio")]
-    const firstAttempt = runFfmpegTransformSequence({
+    const firstAttempt = runMediaOperationSequence({
       generate: async () => {
         calls += 1
         if (calls === 1) return result("silent-video", 4)
@@ -112,13 +112,13 @@ describe("runFfmpegTransformSequence", () => {
     })
 
     const failure = await firstAttempt.catch((caught: unknown) => caught)
-    expect(failure).toBeInstanceOf(FfmpegPartialTransformError)
-    if (!(failure instanceof FfmpegPartialTransformError)) throw failure
+    expect(failure).toBeInstanceOf(MediaOperationPartialError)
+    if (!(failure instanceof MediaOperationPartialError)) throw failure
     expect(failure.message).toBe("partial: audio failed")
     expect(failure.progress.nextRequestIndex).toBe(1)
 
     const retryCalls: CanvasGenerateRequest[] = []
-    const retried = await runFfmpegTransformSequence({
+    const retried = await runMediaOperationSequence({
       generate: async (current) => {
         retryCalls.push(current)
         return result("audio", 10)
@@ -142,9 +142,9 @@ describe("runFfmpegTransformSequence", () => {
 
   test("preserves completed progress when cancellation happens before audio", async () => {
     const controller = new AbortController()
-    const saved: FfmpegTransformProgress[] = []
+    const saved: MediaOperationProgress[] = []
     let calls = 0
-    const operation = runFfmpegTransformSequence({
+    const operation = runMediaOperationSequence({
       generate: async () => {
         calls += 1
         controller.abort(new DOMException("Canceled", "AbortError"))

@@ -172,7 +172,10 @@ function registerHandler<Channel extends ProjectInvokeChannel>(
 
 export async function registerProjectIpc(
   manager: DesktopProjectManager,
-  options: { isTrustedSender: (event: IpcMainInvokeEvent) => boolean },
+  options: {
+    isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+    projectCreationDirectory: string
+  },
 ) {
   const handlerDisposers: Array<() => void> = []
   const watchers = new Map<string, Promise<StopWatching>>()
@@ -247,14 +250,8 @@ export async function registerProjectIpc(
       ensureWatching(project)
       return selectionResult(false, project)
     }),
-    registerHandler(projectIpcChannels.createProject, options.isTrustedSender, async (event, input) => {
-      const result = await showDirectoryDialog(event, {
-        buttonLabel: "Create Here",
-        properties: ["openDirectory", "createDirectory"],
-        title: "Choose a location for the new project",
-      })
-      if (result.canceled || !result.filePaths[0]) return selectionResult(true)
-      const project = await manager.create(result.filePaths[0], input.name)
+    registerHandler(projectIpcChannels.createProject, options.isTrustedSender, async (_event, input) => {
+      const project = await manager.create(options.projectCreationDirectory, input.name)
       ensureWatching(project)
       return selectionResult(false, project)
     }),

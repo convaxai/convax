@@ -36,7 +36,7 @@ Canvas owns document and editor semantics independently of Project and Agent.
   mutate the document through the same editor/application APIs as built-in UI.
 - Selection action surfaces accept only explicit host-owned actions over an immutable
   document/selection snapshot. Canvas may render them in the multi-selection toolbar
-  and an eligible single file-node toolbar. Canvas owns visibility isolation,
+  and an eligible single-node toolbar. Canvas owns visibility isolation,
   duplicate-click prevention and pending state, and aborts the action signal when
   that snapshot is replaced or its surface unmounts. It does not know which Plugin
   or native integration supplied an action. Hosts crossing IPC must translate cancellation

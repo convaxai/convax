@@ -1,7 +1,7 @@
 import type { ProjectController } from "@convax/project"
 import { Button } from "@convax/ui"
 import { FolderOpen, FolderPlus, Layers3, LoaderCircle, X } from "lucide-react"
-import { useState } from "react"
+import { useRef, useState } from "react"
 
 interface ProjectEmptyStateProps {
   controller: ProjectController
@@ -27,6 +27,8 @@ export function ProjectEmptyState({ controller, initialized }: ProjectEmptyState
   const [projectName, setProjectName] = useState("")
   const [openingProject, setOpeningProject] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
+  const creatingProjectRef = useRef(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const openProject = async () => {
     if (openingProject || creatingProject) return
@@ -40,13 +42,20 @@ export function ProjectEmptyState({ controller, initialized }: ProjectEmptyState
 
   const createProject = async () => {
     const name = projectName.trim()
-    if (!name || openingProject || creatingProject) return
+    if (!name || openingProject || creatingProjectRef.current) return
+    creatingProjectRef.current = true
     setCreatingProject(true)
     try {
-      await controller.createProject(name)
+      const created = await controller.createProject(name)
+      if (!created) {
+        setCreateError(controller.getSnapshot().error ?? "Could not create the project.")
+        return
+      }
       setCreateProjectOpen(false)
       setProjectName("")
+      setCreateError(null)
     } finally {
+      creatingProjectRef.current = false
       setCreatingProject(false)
     }
   }
@@ -76,10 +85,14 @@ export function ProjectEmptyState({ controller, initialized }: ProjectEmptyState
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Convax project</p>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Create or open a project</h1>
           <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            Projects keep canvases and files together. Create a project, or open an existing project folder to continue.
+            New projects keep canvases and files together in Documents/Convax. You can also open an existing project folder.
           </p>
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-            <Button className="h-10 px-5" disabled={openingProject} onClick={() => setCreateProjectOpen(true)}>
+            <Button className="h-10 px-5" disabled={openingProject} onClick={() => {
+              controller.clearError()
+              setCreateError(null)
+              setCreateProjectOpen(true)
+            }}>
               <FolderPlus />
               Create project
             </Button>
@@ -129,11 +142,18 @@ export function ProjectEmptyState({ controller, initialized }: ProjectEmptyState
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/25"
                 disabled={creatingProject}
                 id="project-name"
-                onChange={(event) => setProjectName(event.currentTarget.value)}
+                onChange={(event) => {
+                  setProjectName(event.currentTarget.value)
+                  setCreateError(null)
+                }}
                 placeholder="My project"
                 value={projectName}
               />
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">Choose the parent folder after naming the project.</p>
+              {createError ? (
+                <p className="mt-2 text-xs leading-5 text-destructive" role="alert">{createError}</p>
+              ) : (
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">It will be created in your Documents/Convax workspace.</p>
+              )}
               <div className="mt-5 flex justify-end gap-2">
                 <Button disabled={creatingProject} onClick={() => setCreateProjectOpen(false)} size="sm" variant="ghost">Cancel</Button>
                 <Button disabled={!projectName.trim() || creatingProject} size="sm" type="submit">

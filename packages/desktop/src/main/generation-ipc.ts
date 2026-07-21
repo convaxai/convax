@@ -8,6 +8,7 @@ import {
   type GenerationInputRole,
   type GenerationListToolsRequest,
   type GenerationOutputModality,
+  type GenerationResultMode,
   type GenerationToolDescription,
   type GenerationToolSummary,
 } from "../generation-contracts"
@@ -102,6 +103,22 @@ function requireHostToolId(value: unknown) {
   return value
 }
 
+function requireResultMode(value: unknown): GenerationResultMode {
+  const mode = requireRecord(value, "Generation result mode")
+  if (mode.type === "add") {
+    requireExactKeys(mode, ["type"], ["type"], "Generation result mode")
+    return { type: "add" }
+  }
+  if (mode.type === "replace-node") {
+    requireExactKeys(mode, ["nodeId", "type"], ["nodeId", "type"], "Generation result mode")
+    return {
+      nodeId: requireOpaqueId(mode.nodeId, "Generation replacement node id"),
+      type: "replace-node",
+    }
+  }
+  throw new Error("Generation result mode is invalid")
+}
+
 export function parseGenerationListToolsRequest(input: unknown): GenerationListToolsRequest {
   const value = requireRecord(input, "Generation tool list request")
   requireExactKeys(value, ["output", "scopeId"], ["scopeId"], "Generation tool list request")
@@ -135,6 +152,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       "referenceConstraint",
       "references",
       "relationAnchorNodeIds",
+      "resultMode",
       "toolId",
       "toolInput",
     ],
@@ -232,6 +250,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     ...(referenceConstraint === undefined ? {} : { referenceConstraint }),
     references,
     ...(relationAnchorNodeIds === undefined ? {} : { relationAnchorNodeIds }),
+    ...(value.resultMode === undefined ? {} : { resultMode: requireResultMode(value.resultMode) }),
     ...(toolId === undefined ? {} : { toolId }),
     ...(value.toolInput === undefined ? {} : { toolInput: validateGenerationToolInputShape(value.toolInput) }),
   }

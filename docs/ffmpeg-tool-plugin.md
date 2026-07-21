@@ -6,9 +6,10 @@ or Canvas mutation path.
 
 ## Product scope
 
-The `ffmpeg-tools` package is a headless `convax.plugin/2` Tool Plugin distributed
+The `ffmpeg-tools` package is a headless `convax.plugin/3` Tool Plugin distributed
 from the public `convax-plugins` Registry. Its executable companion exposes FFmpeg
-through the existing generation tool boundary.
+through the shared executable-tool boundary. The manifest classifies every FFmpeg
+tool as an operation, so none appears as a generation model.
 
 The first release provides:
 
@@ -17,7 +18,7 @@ The first release provides:
 - image, video, and audio output tools so the existing generation contract retains
   a stable output modality;
 - host-owned video selection actions for extracting a frame, trimming a clip,
-  separating audio, and cropping a clip;
+  separating audio and video, and cropping a clip;
 - normal managed Canvas resources and nodes for every accepted output.
 
 Opening a Project never discovers or runs Project-local executables. The current
@@ -36,9 +37,9 @@ Install action.
 ## Ownership and execution flow
 
 ```text
-Agent ffmpeg_run_image/video/audio -----------------------------+
+Agent manifest operation tools ---------------------------------+
                                                                  |
-Desktop video selection action -> CanvasGenerateService          |
+Manifest-declared video action -> CanvasGenerateService          |
   -> generation IPC ---------------------------------------------+
                                                                  |
                                                                  v
@@ -60,15 +61,21 @@ existing Canvas and Project services.
 
 ## Tool contract
 
-The Plugin contributes three tools:
+The Plugin contributes three unrestricted, Agent-facing argv tools and five
+host-rendered high-level operation tools:
 
-| Tool                     | Output | Typical use                                 |
-| ------------------------ | ------ | ------------------------------------------- |
-| `ffmpeg-tools/run.image` | image  | frame extraction, thumbnails, image filters |
-| `ffmpeg-tools/run.video` | video  | trim, crop, transcode, mux, filter graphs   |
-| `ffmpeg-tools/run.audio` | audio  | extraction, trim, resample, filtering       |
+| Tool                               | Output | Surface / typical use                         |
+| ---------------------------------- | ------ | --------------------------------------------- |
+| `ffmpeg-tools/run.image`           | image  | Agent argv: frames, thumbnails, image filters |
+| `ffmpeg-tools/run.video`           | video  | Agent argv: transcode, mux, filter graphs     |
+| `ffmpeg-tools/run.audio`           | audio  | Agent argv: trim, resample, filtering         |
+| `ffmpeg-tools/frame.extract`       | image  | time-point selection action                   |
+| `ffmpeg-tools/video.trim`          | video  | timeline range selection action               |
+| `ffmpeg-tools/video.crop`          | video  | visual crop-region selection action           |
+| `ffmpeg-tools/video.without-audio` | video  | first audio/video separation step             |
+| `ffmpeg-tools/audio.extract`       | audio  | second audio/video separation step            |
 
-Each MCP input schema extends `convax.generation-call/1` with:
+The three `run.*` MCP input schemas extend `convax.generation-call/1` with:
 
 - `arguments_json`: a required JSON-encoded array of argument tokens;
 - `output_name`: a safe basename whose extension matches the declared tool output.
@@ -76,6 +83,11 @@ Each MCP input schema extends `convax.generation-call/1` with:
 Arguments are passed directly to FFmpeg in the supplied order. They are never
 parsed as a shell command. The companion prepends only non-interactive execution
 guards such as `-nostdin`, `-hide_banner`, and `-y`.
+
+The five high-level tools accept only their declared numeric fields. The sidecar,
+not Desktop, constructs their FFmpeg argv and output basename. This keeps codec and
+command knowledge inside the Plugin while allowing the host to render reusable
+time-point, time-range, crop-region, and confirmation editors.
 
 The following exact placeholders provide all file authority:
 
@@ -95,19 +107,20 @@ every output path before execution; it must not accept caller-selected paths.
 
 ## Toolbar presets
 
-The Desktop registers four `CanvasSelectionAction` entries only when the Plugin is
-installed and one managed video node is selected without an edge selection.
+The manifest declares four host-rendered selection actions. Desktop discovers them
+from any installed v3 Plugin and shows them when one managed video node is selected
+without an edge selection; it does not identify `ffmpeg-tools` in business code.
 
-- Extract frame: accepts a non-negative timestamp and returns PNG through
-  `ffmpeg-tools/run.image`.
+- Extract frame: accepts a non-negative timestamp and calls the declared
+  `frame.extract` operation.
 - Trim: presents a real-duration thumbnail timeline with two accessible range
-  handles and manual start/end fallback fields, then returns a fast-start MP4
-  through `ffmpeg-tools/run.video`.
-- Separate audio: extracts the required primary audio stream as M4A through
-  `ffmpeg-tools/run.audio`; the normal reference relation connects the source video
-  to the new audio card.
-- Crop: accepts non-negative even x/y coordinates and positive even dimensions, then
-  returns a fast-start MP4 through `ffmpeg-tools/run.video`.
+  handles, then calls the declared `video.trim` operation.
+- Separate audio and video: creates one silent MP4 and one independent M4A. Both
+  output cards connect to the source video and to each other, while each invocation
+  remains guarded to exactly one admitted output.
+- Crop: autoplays the selected video under a draggable eight-handle crop frame,
+  normalizes the result to even YUV 4:2:0 pixel values, and returns a fast-start MP4
+  through the declared `video.crop` operation.
 
 The dialog owns only presentation and preset construction. Confirmation calls the
 same `CanvasGenerateService` used by Agent generation. A stale selection closes an
@@ -172,7 +185,7 @@ literal path and URL rejection, output confinement, no-shell process execution,
 cancellation, bounded diagnostics, and result envelopes. Release smoke tests execute
 the embedded FFmpeg on every native target.
 
-Desktop tests cover Plugin-aware action visibility, preset construction, form
+Desktop tests cover manifest-driven action visibility, request construction, form
 validation, stale-scope recovery policy, and the generation request routed through
 `CanvasGenerateService`. Existing generation service tests remain the owner of
 managed-input staging, output admission, rollback, revision, and Canvas commit
@@ -180,22 +193,22 @@ behavior.
 
 ## Direct Agent surface
 
-FFmpeg is a transform Plugin rather than a generative model. Desktop therefore
-exposes the installed declarations as `ffmpeg_run_image`, `ffmpeg_run_video`, and
-`ffmpeg_run_audio` on the Convax Agent MCP server. OpenCode displays these as
-`convax_ffmpeg_run_*`. The generic `canvas_generate` adapter excludes the FFmpeg
-Plugin, and FFmpeg tools do not appear in the Agent generation-model picker.
+FFmpeg is a transform Plugin rather than a generative model. Its v3 manifest keeps
+`generation.models` empty and maps the three `run.*` operations to Agent ids.
+Desktop derives stable names such as `plugin_ffmpeg_tools_run_video` through the
+same generic operation adapter used by every Plugin. `canvas_generate` and the
+generation-model picker select only manifest-declared models; neither contains an
+FFmpeg exclusion or Plugin-id branch.
 
-The direct input contains ordered Canvas references, a literal argv array, a
-portable output basename, and an optional placement anchor. Active Project,
-Canvas, revision, actor, and operation identity are derived by the host at call
-time; the model cannot select or replay those fields. This removes stale
-revision/command-id retry loops without weakening the service's live reference
-checks.
+The generic operation input contains ordered Canvas references, bounded scalar
+`toolInput` fields (including the low-level JSON argv and output basename), optional
+relation nodes, and an optional placement anchor.
+Active Project, Canvas, revision, actor, and operation identity are derived by the
+host at call time; the model cannot select or replay those fields.
 
 “Direct” describes the Agent-facing capability, not a bypass around the host. The
 adapter still calls `GenerationCanvasService`, which stages managed inputs, invokes
 the exact installed Tool Plugin, validates its artifact, imports it into managed
-Project storage, and atomically adds the normal node plus source relation. The raw
+Project storage, and commits the normal node plus guarded relations. The raw
 companion MCP server and its native `output_directory` are never exposed to
 OpenCode.

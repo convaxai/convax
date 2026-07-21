@@ -9,6 +9,8 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     acceptedInputs: [],
     description: "Generate media",
     id: "plugin.example:image.generate",
+    kind: "model",
+    modelName: "Image Model",
     output: "image",
     pluginId: "plugin.example",
     pluginName: "Example Plugin",
@@ -45,6 +47,7 @@ describe("Agent generation model picker", () => {
     expect(markup).toMatch(/id="[^"]+-agent-generation-model-tab-video"[^>]*role="tab"[^>]*tabindex="-1"/)
     expect(markup).toContain("Auto")
     expect(markup).toContain("Image Model")
+    expect(markup).toContain("Generation services")
     expect(markup).toContain("Example Plugin")
     expect(markup).not.toContain("Video Model")
   })
@@ -78,7 +81,38 @@ describe("Agent generation model picker", () => {
         tools={[installed]}
       />,
     )
-    expect(empty).toContain("No installed audio generation tools.")
+    expect(empty).toContain("No installed audio generation services.")
+  })
+
+  test("renders services as the first level and their supported models as the second level", () => {
+    const markup = renderToStaticMarkup(
+      <AgentGenerationModelPicker
+        activeOutput="image"
+        loading={false}
+        onClose={mock(() => undefined)}
+        onOutputChange={mock(() => undefined)}
+        onSelect={mock(() => undefined)}
+        onToolInputChange={mock(() => undefined)}
+        toolInput={{}}
+        tools={[
+          tool({ modelName: "GPT Image 2", pluginId: "skylark", pluginName: "小云雀生成" }),
+          tool({
+            id: "skylark:nano",
+            modelName: "Nano Banana Pro 1",
+            pluginId: "skylark",
+            pluginName: "小云雀生成",
+          }),
+          tool({ id: "dreamina:seedream", modelName: "Seedream 4", pluginId: "dreamina", pluginName: "即梦" }),
+        ]}
+      />,
+    )
+
+    expect(markup.match(/<details/g)).toHaveLength(2)
+    expect(markup).toContain("小云雀生成")
+    expect(markup).toContain("即梦")
+    expect(markup).toContain("GPT Image 2")
+    expect(markup).toContain("Nano Banana Pro 1")
+    expect(markup).not.toContain("Image Model</span>")
   })
 
   test("uses instance-scoped tab relationships when multiple pickers are mounted", () => {

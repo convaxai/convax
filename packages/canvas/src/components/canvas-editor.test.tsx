@@ -8,16 +8,30 @@ const zoomIn = mock(async () => undefined)
 const zoomOut = mock(async () => undefined)
 const zoomTo = mock(async () => undefined)
 const buttonActions = new Map<string, () => void>()
-let dropOnCanvas: ((event: {
-  clientX: number
-  clientY: number
-  dataTransfer: {
-    files: File[]
-    getData(type: string): string
-    types: string[]
-  }
-  preventDefault(): void
-}) => void) | undefined
+let dropOnCanvas:
+  | ((event: {
+      clientX: number
+      clientY: number
+      dataTransfer: {
+        files: File[]
+        getData(type: string): string
+        types: string[]
+      }
+      preventDefault(): void
+    }) => void)
+  | undefined
+let keyDownOnCanvas:
+  | ((event: {
+      altKey: boolean
+      ctrlKey: boolean
+      key: string
+      metaKey: boolean
+      preventDefault(): void
+      shiftKey: boolean
+      stopPropagation(): void
+      target: null
+    }) => void)
+  | undefined
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 Object.defineProperty(globalThis, "window", {
@@ -51,7 +65,12 @@ mock.module("@convax/ui", () => ({
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: (props: { children?: ReactNode }) => {
     if (isValidElement(props.children)) {
-      dropOnCanvas = (props.children as ReactElement<{ onDrop?: typeof dropOnCanvas }>).props.onDrop
+      const canvas = props.children as ReactElement<{
+        onDrop?: typeof dropOnCanvas
+        onKeyDown?: typeof keyDownOnCanvas
+      }>
+      dropOnCanvas = canvas.props.onDrop
+      keyDownOnCanvas = canvas.props.onKeyDown
     }
     return <>{props.children}</>
   },
@@ -100,11 +119,14 @@ mock.module("@xyflow/react", () => ({
 
 const { createCanvasDocument } = await import("../document")
 const { CanvasEditor } = await import("./canvas-editor")
+const { getCanvasNodeInsertionItems } = await import("./insertion-items")
+const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
 
 beforeEach(() => {
   buttonActions.clear()
   dropOnCanvas = undefined
+  keyDownOnCanvas = undefined
   fitView.mockClear()
   setCenter.mockClear()
   zoomIn.mockClear()
@@ -120,10 +142,16 @@ function expectViewportUnchanged() {
   expect(zoomTo).not.toHaveBeenCalled()
 }
 
-function renderEditor(services = createCanvasServices()) {
+function renderEditor(
+  services = createCanvasServices(),
+  options: {
+    selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
+  } = {},
+) {
   renderToStaticMarkup(
     <CanvasEditor
       initialDocument={createCanvasDocument({ id: "canvas-viewport" })}
+      selectionDragSource={options.selectionDragSource}
       services={services}
     />,
   )
@@ -144,18 +172,20 @@ describe("CanvasEditor viewport ownership", () => {
     const finished = new Promise<void>((resolve) => {
       uploadFinished = resolve
     })
-    renderEditor(createCanvasServices({
-      notify: {
-        show(notification) {
-          if (notification.kind === "success") uploadFinished()
+    renderEditor(
+      createCanvasServices({
+        notify: {
+          show(notification) {
+            if (notification.kind === "success") uploadFinished()
+          },
         },
-      },
-      upload: {
-        async upload() {
-          return [{ id: "brief", kind: "text", name: "brief.txt", text: "Brief" }]
+        upload: {
+          async upload() {
+            return [{ id: "brief", kind: "text", name: "brief.txt", text: "Brief" }]
+          },
         },
-      },
-    }))
+      }),
+    )
 
     expect(dropOnCanvas).toBeFunction()
     dropOnCanvas?.({
@@ -171,5 +201,117 @@ describe("CanvasEditor viewport ownership", () => {
     await finished
 
     expectViewportUnchanged()
+  })
+})
+
+describe("CanvasEditor insertion surfaces", () => {
+  test("offers concrete built-in cards and plugin cards without generic file or agent roles", () => {
+    const fileRenderers = createDefaultCanvasFileRendererRegistry()
+    const nodes = createDefaultCanvasNodeRegistry()
+    fileRenderers.register({
+      component: () => null,
+      create: (input) => ({
+        data: { kind: "diagram", label: "Diagram" },
+        id: "diagram-node",
+        position: input.position,
+        type: "file",
+      }),
+      id: "diagram",
+      label: "Diagram",
+      matches: (data) => data.kind === "diagram",
+    })
+
+    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual([
+      "audio",
+      "diagram",
+      "image",
+      "text",
+      "video",
+    ])
+  })
+
+  test("shows concrete media actions in the top bar without Agent or Generate", () => {
+    renderEditor(
+      createCanvasServices({
+        generate: {
+          describeTool: async (toolId) => ({ fields: [], toolId }),
+          generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+          listTools: async () => [],
+        },
+      }),
+    )
+
+    expect(buttonActions.get("Text")).toBeFunction()
+    expect(buttonActions.get("Image")).toBeFunction()
+    expect(buttonActions.get("Video")).toBeFunction()
+    expect(buttonActions.get("Audio")).toBeFunction()
+    expect(buttonActions.get("Agent")).toBeUndefined()
+    expect(buttonActions.get("Generate")).toBeUndefined()
+  })
+})
+
+describe("CanvasEditor external drag mode", () => {
+  test("does not prepare until command-shift is held for a visible drag source", () => {
+    const prepare = mock(
+      () =>
+        new Promise<{
+          dispose(): void
+          start(): void
+        }>(() => undefined),
+    )
+    renderEditor(createCanvasServices(), {
+      selectionDragSource: {
+        id: "native-files",
+        label: "Drag outside Convax",
+        prepare,
+        visible: () => true,
+      },
+    })
+    const preventDefault = mock(() => undefined)
+    const stopPropagation = mock(() => undefined)
+
+    expect(prepare).not.toHaveBeenCalled()
+    expect(keyDownOnCanvas).toBeFunction()
+    keyDownOnCanvas?.({
+      altKey: false,
+      ctrlKey: false,
+      key: "Shift",
+      metaKey: true,
+      preventDefault,
+      shiftKey: true,
+      stopPropagation,
+      target: null,
+    })
+
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  test("holds without preparing when the current selection is not eligible", () => {
+    const prepare = mock(async () => ({ dispose: () => undefined, start: () => undefined }))
+    renderEditor(createCanvasServices(), {
+      selectionDragSource: {
+        id: "native-files",
+        label: "Drag outside Convax",
+        prepare,
+        visible: () => false,
+      },
+    })
+    const preventDefault = mock(() => undefined)
+
+    keyDownOnCanvas?.({
+      altKey: false,
+      ctrlKey: false,
+      key: "Shift",
+      metaKey: true,
+      preventDefault,
+      shiftKey: true,
+      stopPropagation: () => undefined,
+      target: null,
+    })
+
+    expect(prepare).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
   })
 })

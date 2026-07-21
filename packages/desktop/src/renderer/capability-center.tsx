@@ -209,7 +209,15 @@ function PluginCard({
         </div>
       </div>
       <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">{plugin.description}</p>
-      {installed && plugin.contributes.canvas?.renderer.create ? (
+      {(!installed || updateAvailable) && plugin.runtime ? (
+        <p
+          className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-foreground"
+          role="note"
+        >
+          {appMessage(locale, "capabilities.installToolConsent", { command: plugin.runtime.command })}
+        </p>
+      ) : null}
+      {installed && plugin.contributes.canvas?.renderer?.create ? (
         <p
           className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary"
           role="status"

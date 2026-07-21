@@ -16,6 +16,8 @@ interface TestWindow {
 
 const handlers = new Map<string, InvokeHandler>()
 const windows: TestWindow[] = []
+const projectCreationDirectory = "/Documents/Convax"
+const showOpenDialog = mock(async () => ({ canceled: true, filePaths: [] as string[] }))
 
 void mock.module("electron", () => ({
   BrowserWindow: {
@@ -23,7 +25,7 @@ void mock.module("electron", () => ({
     getAllWindows: () => windows,
   },
   dialog: {
-    showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+    showOpenDialog,
   },
   ipcMain: {
     handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
@@ -38,6 +40,7 @@ void mock.module("electron", () => ({
 afterEach(() => {
   handlers.clear()
   windows.splice(0)
+  showOpenDialog.mockClear()
 })
 
 function project(id: string, missing = false): ProjectRecord {
@@ -108,7 +111,7 @@ test("watches projects lazily when their files are first used", async () => {
   windows.push(sent)
 
   const { projectFilesIpcChannels, projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
-  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true })
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
 
   expect(list).not.toHaveBeenCalled()
   expect(watchProject).not.toHaveBeenCalled()
@@ -183,7 +186,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
   } satisfies DesktopProjectManager
 
   const { projectFilesIpcChannels, projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
-  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true })
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
 
   const firstFileRequest = Promise.resolve(
     invoke(projectFilesIpcChannels.listDirectory, { path: "", projectId: "one" }),
@@ -205,5 +208,67 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
   expect(reportError).toHaveBeenCalledWith("Failed to watch project one", expect.any(Error))
   expect(replacementStop).toHaveBeenCalledTimes(1)
   reportError.mockRestore()
+  dispose()
+})
+
+test("creates a named project in the injected user workspace without opening a directory dialog", async () => {
+  let projects: ProjectRecord[] = []
+  const created = project("storyboard")
+  const create = mock(async (parentPath: string, name: string) => {
+    projects = [{ ...created, name, rootPath: `${parentPath}/${name}` }]
+    return projects[0]!
+  })
+  const watchProject = mock(() => () => undefined)
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Unexpected Project manager call")
+  }
+  const manager = {
+    add: unsupported,
+    copyEntries: unsupported,
+    create,
+    createEntry: unsupported,
+    deleteEntries: unsupported,
+    forget: unsupported,
+    importEntries: unsupported,
+    list: async () => projects,
+    listDirectory: unsupported,
+    moveEntries: unsupported,
+    readFile: unsupported,
+    readFileInfo: unsupported,
+    readManagedImageFile: unsupported,
+    readTextFile: unsupported,
+    readTextPreview: unsupported,
+    rename: unsupported,
+    renameEntry: unsupported,
+    resolveEntryPath: unsupported,
+    watchProject,
+    writeTextFile: unsupported,
+  } satisfies DesktopProjectManager
+
+  const { projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
+
+  const result = await invoke(projectIpcChannels.createProject, { name: "Storyboard" })
+  await Bun.sleep(0)
+
+  expect(create).toHaveBeenCalledTimes(1)
+  expect(create).toHaveBeenCalledWith(projectCreationDirectory, "Storyboard")
+  expect(showOpenDialog).not.toHaveBeenCalled()
+  expect(watchProject).toHaveBeenCalledWith("storyboard", expect.any(Function))
+  expect(result).toMatchObject({
+    canceled: false,
+    project: { name: "Storyboard", rootPath: `${projectCreationDirectory}/Storyboard` },
+  })
+
+  create.mockImplementationOnce(async () => {
+    throw new Error("Project already exists: Storyboard")
+  })
+  await expect(invoke(projectIpcChannels.createProject, { name: "Storyboard" })).rejects.toThrow("Project already exists")
+  expect(showOpenDialog).not.toHaveBeenCalled()
+  expect(watchProject).toHaveBeenCalledTimes(1)
+
+  expect(await invoke(projectIpcChannels.openProject)).toMatchObject({ canceled: true })
+  expect(showOpenDialog).toHaveBeenCalledTimes(1)
+
   dispose()
 })

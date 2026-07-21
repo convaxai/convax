@@ -11,10 +11,14 @@ export interface AgentGenerationToolSelection {
   output: AgentGenerationOutput
 }
 
-const dedicatedAgentSurfacePluginIds = new Set(["ffmpeg-tools"])
+export interface AgentGenerationServiceGroup {
+  id: string
+  models: readonly GenerationToolSummary[]
+  name: string
+}
 
-function isGenerationPreferenceTool(tool: GenerationToolSummary) {
-  return !dedicatedAgentSurfacePluginIds.has(tool.pluginId)
+export function isGenerationModelTool(tool: GenerationToolSummary) {
+  return tool.kind === "model"
 }
 
 export function isAgentGenerationOutput(output: GenerationOutputModality): output is AgentGenerationOutput {
@@ -22,7 +26,27 @@ export function isAgentGenerationOutput(output: GenerationOutputModality): outpu
 }
 
 export function agentGenerationToolsForOutput(tools: readonly GenerationToolSummary[], output: AgentGenerationOutput) {
-  return tools.filter((tool) => tool.output === output && isGenerationPreferenceTool(tool))
+  return tools.filter((tool) => tool.output === output && isGenerationModelTool(tool))
+}
+
+export function groupAgentGenerationToolsByService(
+  tools: readonly GenerationToolSummary[],
+  output: AgentGenerationOutput,
+): readonly AgentGenerationServiceGroup[] {
+  const services = new Map<string, { id: string; models: GenerationToolSummary[]; name: string }>()
+  for (const tool of agentGenerationToolsForOutput(tools, output)) {
+    const service = services.get(tool.pluginId)
+    if (service) {
+      service.models.push(tool)
+    } else {
+      services.set(tool.pluginId, { id: tool.pluginId, models: [tool], name: tool.pluginName })
+    }
+  }
+  return [...services.values()]
+}
+
+export function agentGenerationModelDisplayTitle(tool: GenerationToolSummary) {
+  return tool.modelName ?? tool.title
 }
 
 /**
@@ -39,7 +63,7 @@ export function findAgentGenerationTool(
       tool.id === selection.id &&
       tool.output === selection.output &&
       isAgentGenerationOutput(tool.output) &&
-      isGenerationPreferenceTool(tool),
+      isGenerationModelTool(tool),
   )
   return matches.length === 1 ? matches[0] : undefined
 }

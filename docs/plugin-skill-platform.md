@@ -1,6 +1,6 @@
 # Plugin and Skill Platform
 
-Status: implementation contract for the first vertical slice.
+Status: implementation contract.
 
 This design deliberately uses two existing product concepts instead of combining
 them into a generic extension framework:
@@ -174,8 +174,9 @@ size at or below 128 MiB and matching SHA-256. It writes the raw executable only
 private, versioned `userData/plugin-companions`, never to the served Plugin package.
 Plugin update publication is atomic with companion rollback: any pre-publication
 failure keeps the prior pair, while post-publication cleanup is best effort and can
-never roll back a successfully updated Plugin. Same-version byte changes and
-downgrades fail closed. Startup, update and uninstall reconcile orphan companions.
+never roll back a successfully updated Plugin. Explicit newer remote versions may
+update through the catalog action; same-version byte changes and downgrades fail
+closed. Startup/update/uninstall reconcile orphan companion directories.
 
 ## Management surface
 
@@ -290,9 +291,9 @@ authority and not a way to select scope.
 
 ## Plugin package
 
-`convax.plugin/1` is the static Web Plugin schema. Its manifest uses the MiniMax-proven core of
-`id`, `name`, `description`, `version`, and an HTML `entry`, then adds only the
-contributions required by this product slice:
+`convax.plugin/1` is the static Web Plugin schema. Its manifest uses the
+MiniMax-proven core of `id`, `name`, `description`, `version`, and an HTML `entry`,
+then adds only the contributions required by that product slice:
 
 - Canvas file matching by extension or MIME;
 - an optional creatable Canvas plugin node;
@@ -300,12 +301,12 @@ contributions required by this product slice:
 - an explicit capability allowlist;
 - an optional companion `SKILL.md` path.
 
-`convax.plugin/2` preserves the sandboxed Web surface and adds two narrowly
-separated generation roles. A Tool Plugin may declare a bare external `mcp-stdio`
-command plus generation tool contracts. A sandboxed caller may request
+`convax.plugin/2` preserves that static sandbox and adds two narrowly separated
+generation roles. A Tool Plugin may declare a separately installed bare
+`mcp-stdio` command plus generation tool contracts. A sandboxed caller may request
 `generation.execute`, which only lists and executes those tools through the shared
 host-owned Canvas generation operation. A runtime declaration does not grant caller
-authority, and caller authority does not expose arbitrary MCP or process access.
+authority, and caller authority does not expose process or arbitrary MCP access.
 See [`generation-tool-plugins.md`](generation-tool-plugins.md) for the exact
 manifest, staging, result, authorization and cancellation contract.
 
@@ -330,7 +331,7 @@ port is the capability token: toolbar and RPC traffic cannot address another fra
 or node. Requests are versioned, size-limited, validated, and checked against both
 the manifest allowlist and current host scope.
 
-The initial direct-call surface is intentionally narrow:
+The versioned direct-call surface is intentionally narrow:
 
 | Method                        | Required capability           | Scope                                                                                                     |
 | ----------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -401,21 +402,24 @@ independently if the Plugin is removed; the provisioning receipt is not an owner
 graph. It may explain the Plugin workflow and select existing business, primitive
 and view tools. It does not expose native code, register tools, confer trusted
 built-in provenance, or duplicate Canvas/Project invariants. Generation is the
-current examples are the generic `canvas_generate` adapter and the dedicated
-`ffmpeg_run_*` transform adapters. Both call the same typed operation used by
-Toolbar and Plugin UI; a dedicated name never exposes the companion's raw MCP
-server or bypasses host-bound Project/Canvas/node scope. Future Agent tools must
-preserve that pattern.
+current example: `canvas_generate` is a thin Agent adapter over the same typed
+operation used by Toolbar and Plugin UI. Any future Plugin-facing command exposed
+to the Agent must preserve that pattern and host-bound Project/Canvas/node scope.
 
 ## Deliberately deferred
 
 - billing, reviews and automatic updates;
-- npm/native/Python execution from third-party packages;
+- installing or executing npm/native/Python payloads embedded in third-party Plugin
+  packages; a v2 generation command is installed as a separately verified companion,
+  with the user's install/update action serving as authorization, and is reached only
+  through the documented MCP boundary;
 - arbitrary React code in the renderer;
 - a generic global viewport/selection toolbar registry; the concrete host-owned
   selection action slot is intentionally narrower;
 - plugin-wide access to all Canvas nodes or Chat sessions;
 - project-local executable plugins or Skills;
-- network access, OAuth, secrets, camera/microphone and filesystem writes;
+- network access, OAuth, secrets, camera/microphone and filesystem writes for the
+  sandboxed iframe; an install-authorized generation sidecar may use its own
+  network/auth state with the user's OS authority;
 - a general `@convax/plugin` or `@convax/extensions` package before a second host
   proves that the install/domain contract is reusable outside Desktop composition.

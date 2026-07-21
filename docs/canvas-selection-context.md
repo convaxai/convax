@@ -133,11 +133,12 @@ Command execution                       显式的用户/Agent 意图与 revision
   `isVisible`，因为此时可见性不再只由 selection 推导。
 - Convax 继续拥有 selection。不能引入 `useOnSelectionChange` 作为第二份事实源，也不能
   将 React Flow selection 镜像到另一个 controller。
-- 当前固定在 viewport 上的 `SelectionToolbar` 继续作为 selection-level surface：它用于
-  multi-node aggregate，也在单选 group 时承载 Ungroup。若未来产品希望它贴近 selection
-  bounds，应只渲染一份 `NodeToolbar nodeId={selectedNodeIds} isVisible`；传入 `isVisible`
-  前必须先由 Convax 显式验证当前是允许该 surface 的 aggregate context。这里的覆盖是
-  aggregate toolbar 自身生命周期的一部分，不能用于每节点 toolbar。
+- `SelectionToolbar` 继续作为 selection-level surface：它用于 multi-node aggregate，也在
+  单选 group 时承载 Ungroup。Canvas 只渲染一份
+  `NodeToolbar nodeId={selectedNodeIds} isVisible position={Position.Top}`，由 React Flow 按
+  节点 absolute bounds 的联合包围盒锚定到选区顶部，并自动跟随节点移动、pan 与 zoom。
+  传入 `isVisible` 前必须先由 Convax 显式验证当前是允许该 surface 的 aggregate context；
+  这里的覆盖是 aggregate toolbar 自身生命周期的一部分，不能用于每节点 toolbar。
 
 ## 本次实现范围
 
@@ -161,7 +162,7 @@ multi-selection resize geometry 属于独立的产品决策。本次不把每节
 - 恰好选择一个节点且未选边：只允许该节点的内置、contributed 与 assistant contextual
   surfaces 显示；若该节点是 group，可同时显示承载 Ungroup 的 selection-level surface。
 - 选择两个及以上节点：不显示任何 per-node contextual toolbar；最多显示一份
-  selection-level action surface。
+  锚定在选区最小联合包围盒顶部的 selection-level action surface。
 - 同时选择节点和任意边：上下文为 `mixed`，不显示 node-local contextual toolbar。
 - 只选择一条或多条边：只允许未来的 edge actions 或 selection actions 显示。
 - read-only：mutation toolbar 保持隐藏。

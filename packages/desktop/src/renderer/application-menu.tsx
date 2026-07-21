@@ -1,15 +1,17 @@
 import { cn } from "@convax/ui"
-import { ChevronUp, Settings2, Sparkles } from "lucide-react"
+import { Bot, ChevronUp, Cloud, LoaderCircle, Settings2, Sparkles } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { appMessage, type AppLocale } from "./app-language"
+import type { ServiceCatalogEntry, ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-export type ApplicationMenuTarget = "general" | "capabilities"
+export type ApplicationMenuTarget = "general" | "services" | "capabilities"
 
 interface ApplicationMenuProps {
   compact?: boolean
   locale: AppLocale
   onOpenSettings(target: ApplicationMenuTarget): void
+  services?: ServiceCatalogSnapshot
 }
 
 interface MenuPosition {
@@ -22,11 +24,13 @@ export function ApplicationMenuPanel({
   onOpenSettings,
   panelRef,
   position,
+  services,
 }: {
   locale: AppLocale
   onOpenSettings(target: ApplicationMenuTarget): void
   panelRef?: React.Ref<HTMLDivElement>
   position?: MenuPosition
+  services?: ServiceCatalogSnapshot
 }) {
   return (
     <div
@@ -37,13 +41,62 @@ export function ApplicationMenuPanel({
       style={position ? { bottom: position.bottom, left: position.left, position: "fixed" } : undefined}
     >
       <div className="flex items-center gap-3 px-2.5 py-2.5">
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">CX</span>
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+          CX
+        </span>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{appMessage(locale, "appMenu.localWorkspace")}</p>
-          <p className="truncate text-[11px] text-muted-foreground">{appMessage(locale, "appMenu.localWorkspaceDescription")}</p>
+          <p className="truncate text-[11px] text-muted-foreground">
+            {appMessage(locale, "appMenu.localWorkspaceDescription")}
+          </p>
         </div>
       </div>
       <div className="my-1 h-px bg-border" />
+      <button
+        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+        onClick={() => onOpenSettings("services")}
+        role="menuitem"
+        type="button"
+      >
+        <Cloud className="size-4 text-muted-foreground" />
+        <span className="flex-1">{appMessage(locale, "appMenu.services")}</span>
+        {services ? (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+            {services.services.length}
+          </span>
+        ) : null}
+      </button>
+      {services?.services.length ? (
+        <div className="mb-1 max-h-52 space-y-0.5 overflow-y-auto px-1" data-application-services="true">
+          {services.services.map((service) => (
+            <button
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+              key={service.serviceId}
+              onClick={() => onOpenSettings("services")}
+              role="menuitem"
+              type="button"
+            >
+              <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                {service.kind === "builtin" ? <Bot className="size-3.5" /> : <Cloud className="size-3.5" />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-foreground">{service.name}</span>
+                <span className="block truncate text-[10px] text-muted-foreground">
+                  {service.capabilities
+                    .map((capability) => appMessage(locale, `services.capability.${capability}`))
+                    .join(" · ") || appMessage(locale, "services.unknown")}
+                </span>
+              </span>
+              <CompactServiceBadge locale={locale} service={service} />
+            </button>
+          ))}
+        </div>
+      ) : services?.loading ? (
+        <div className="mb-1 flex items-center gap-2 px-3 py-1.5 text-[11px] text-muted-foreground" role="status">
+          <LoaderCircle className="size-3 animate-spin" />
+          {appMessage(locale, "services.loading")}
+        </div>
+      ) : null}
       <button
         className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
         onClick={() => onOpenSettings("general")}
@@ -67,7 +120,35 @@ export function ApplicationMenuPanel({
   )
 }
 
-export function ApplicationMenu({ compact = false, locale, onOpenSettings }: ApplicationMenuProps) {
+function compactMetric(value: number, locale: AppLocale) {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value)
+}
+
+function CompactServiceBadge({ locale, service }: { locale: AppLocale; service: ServiceCatalogEntry }) {
+  let label: string
+  if (service.loading) label = "…"
+  else if (service.authentication === "required") label = appMessage(locale, "services.authRequired")
+  else if (service.billing.kind === "credits" && service.billing.remaining !== undefined) {
+    label = `${compactMetric(service.billing.remaining, locale)}${service.billing.unit ? ` ${service.billing.unit}` : ""}`
+  } else if (service.billing.kind === "free") label = appMessage(locale, "services.free")
+  else if (service.billing.kind === "subscription") {
+    label = service.billing.name ?? appMessage(locale, "services.subscription")
+  } else if (service.state === "attention") label = appMessage(locale, "services.attention")
+  else
+    label =
+      service.state === "connected"
+        ? appMessage(locale, "services.connected")
+        : service.state === "disconnected"
+          ? appMessage(locale, "services.disconnected")
+          : appMessage(locale, "services.unknown")
+  return (
+    <span className="max-w-24 shrink-0 truncate rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+      {label}
+    </span>
+  )
+}
+
+export function ApplicationMenu({ compact = false, locale, onOpenSettings, services }: ApplicationMenuProps) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<MenuPosition>({ bottom: 8, left: 8 })
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -81,7 +162,9 @@ export function ApplicationMenu({ compact = false, locale, onOpenSettings }: App
       ? Math.min(window.innerWidth - menuWidth - 8, bounds.right + 8)
       : Math.min(window.innerWidth - menuWidth - 8, bounds.left)
     setPosition({
-      bottom: compact ? Math.max(8, window.innerHeight - bounds.bottom) : Math.max(8, window.innerHeight - bounds.top + 8),
+      bottom: compact
+        ? Math.max(8, window.innerHeight - bounds.bottom)
+        : Math.max(8, window.innerHeight - bounds.top + 8),
       left: Math.max(8, left),
     })
   }, [compact])
@@ -132,21 +215,33 @@ export function ApplicationMenu({ compact = false, locale, onOpenSettings }: App
         title={compact ? appMessage(locale, "appMenu.localWorkspace") : undefined}
         type="button"
       >
-        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">CX</span>
+        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+          CX
+        </span>
         {compact ? null : (
           <>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs font-medium text-foreground">{appMessage(locale, "appMenu.localWorkspace")}</span>
+              <span className="block truncate text-xs font-medium text-foreground">
+                {appMessage(locale, "appMenu.localWorkspace")}
+              </span>
               <span className="block truncate text-[10px] text-muted-foreground">Convax</span>
             </span>
             <ChevronUp className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-180")} />
           </>
         )}
       </button>
-      {open && typeof document !== "undefined" ? createPortal(
-        <ApplicationMenuPanel locale={locale} onOpenSettings={openSettings} panelRef={panelRef} position={position} />,
-        document.body,
-      ) : null}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <ApplicationMenuPanel
+              locale={locale}
+              onOpenSettings={openSettings}
+              panelRef={panelRef}
+              position={position}
+              services={services}
+            />,
+            document.body,
+          )
+        : null}
     </>
   )
 }

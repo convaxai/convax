@@ -15,9 +15,14 @@ This design has two independent Plugin roles:
 - a **Generation Caller Plugin** is a sandboxed Canvas Web surface granted the
   narrow `generation.execute` capability so it can use installed generation tools.
 
-One `convax.plugin/2` package may have either role or both. Declaring a runtime does
-not grant its iframe caller authority, and granting caller authority does not let an
-iframe start processes or issue arbitrary MCP calls.
+A `convax.plugin/2` or `/3` package may have either role or both. Declaring a runtime
+does not grant its iframe caller authority, and granting caller authority does not
+let an iframe start processes or issue arbitrary MCP calls.
+
+The same executable package may also declare a **Service contribution** for account
+connection and metering status. It shares the exact runtime, install-time executable authorization,
+MCP client, invalidation and process disposal used by generation; it is not a second
+provider or process framework.
 
 ## Ownership and call path
 
@@ -27,9 +32,9 @@ own a catalog of providers or models.
 ```text
 Toolbar / Canvas UI -------- generation IPC ---------+
                                                      |
-OpenCode Agent -- generic or dedicated tool adapter -+--> GenerationCanvasService
+OpenCode Agent -- model or declared operation adapter +--> GenerationCanvasService
                                                      |      | validate live scope/revision
-sandboxed Plugin -- plugin-host/2 generation calls --+      | stage selected inputs
+sandboxed Plugin -- versioned host generation calls -+      | stage selected inputs
                                                             | call installed MCP tool
                                                             | admit output
                                                             v
@@ -51,16 +56,14 @@ headless tool and is never encoded in Canvas node types.
 
 The Desktop file-card surface composes one host-rendered **Generate** tab beside
 the existing **Agent** conversation. The Generate tab is a direct caller of this
-same service, groups image, video and audio in one surface, and treats the clicked
-card as a typed reference when its public node kind permits it. Its model picker is
-the installed generation-tool list; it is not a second model or provider registry.
+same service and groups image, video and audio in one surface. The clicked card is
+never an implicit reference: direct generation includes only nodes the user
+explicitly mentions. Agent mode may prepare its own scoped Canvas context. Its model
+picker is the installed generation-tool list; it is not a second model or provider registry.
 Tool-specific choices such as aspect ratio, resolution, duration and style come
 only from the selected MCP tool's own `tools/list.inputSchema`; they are not copied
 into the Plugin manifest or a host provider registry. Main projects that schema
 into bounded scalar controls and never exposes the raw JSON Schema to renderer.
-The Agent panel's selected tool is the default for newly opened cards. A card may
-persist its own opaque tool-id override in namespaced node metadata, but changing
-that override never mutates the Agent default.
 
 Relevant implementation boundaries are:
 
@@ -74,9 +77,10 @@ Relevant implementation boundaries are:
   staging, result admission and Canvas resource mutation;
 - [`generation-agent-tools.ts`](../packages/desktop/src/main/generation-agent-tools.ts):
   the thin OpenCode-facing `canvas_generate` adapter;
-- [`ffmpeg-agent-tools.ts`](../packages/desktop/src/main/ffmpeg-agent-tools.ts): a
-  dedicated direct transform surface that fixes Plugin tool/output identity while
-  deriving live Canvas revision and operation identity in the host;
+- [`plugin-operation-agent-tools.ts`](../packages/desktop/src/main/plugin-operation-agent-tools.ts):
+  the generic Agent adapter for manifest-declared operation tools;
+- [`media-operation-selection-action.ts`](../packages/desktop/src/renderer/media-operation-selection-action.ts):
+  manifest-driven discovery and request construction for host-rendered media actions;
 - [`web-plugin-canvas.tsx`](../packages/desktop/src/renderer/web-plugin-canvas.tsx):
   the scoped sandboxed-Plugin caller adapter.
 
@@ -86,9 +90,10 @@ Relevant implementation boundaries are:
 `generation.execute` caller capability require `convax.plugin/2`, whose mounted Web
 surface uses `convax.plugin-host/2`.
 
-A Tool Plugin must declare `runtime` together with a `contributes.generation`
-entry. A caller-only v2 Plugin omits both and requests `generation.execute`. A
-package that both contributes tools and calls generation declares all three roles.
+A Tool Plugin must declare `runtime` together with at least one executable
+`contributes.generation` or `contributes.service` entry. A caller-only v2 Plugin
+omits both and requests `generation.execute`. A package that both contributes tools
+and calls generation declares all three.
 
 This headless Tool Plugin example deliberately contains no Web surface, service or
 model identity:
@@ -134,6 +139,89 @@ caller-only package uses v2 with an `entry`, Canvas contribution and
 an executable contribution. A package may declare both roles when it genuinely owns
 both a Web surface and executable tools.
 
+## Declarative `convax.plugin/3` catalogs and operations
+
+`convax.plugin/3` and `convax.plugin-host/3` remove the legacy ambiguity between a
+generation model and a deterministic media operation. Its generation declaration
+must include `models`, which explicitly maps pure model display names to tool ids;
+an unreferenced tool is an operation. Existing v2 tools retain their original
+model semantics.
+
+```json
+{
+  "schema": "convax.plugin/3",
+  "id": "video-operations",
+  "name": "Video Operations",
+  "description": "Declarative video operations",
+  "version": "1.0.0",
+  "capabilities": [],
+  "contributes": {
+    "generation": {
+      "tools": [
+        {
+          "id": "video.transform",
+          "title": "Transform video",
+          "description": "Create one transformed video",
+          "output": "video",
+          "acceptedInputs": ["reference_video"]
+        }
+      ],
+      "models": []
+    },
+    "agent": {
+      "tools": [{ "id": "transform_video", "tool": "video.transform" }]
+    },
+    "canvas": {
+      "selectionActions": [
+        {
+          "id": "trim",
+          "title": { "default": "Trim", "zh-CN": "截取" },
+          "description": { "default": "Create a video from a selected time range" },
+          "target": "video",
+          "editor": "time-range",
+          "steps": [{ "tool": "video.transform" }]
+        }
+      ]
+    }
+  },
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "video-operations-mcp"
+  }
+}
+```
+
+Agent and Canvas selection-action references must resolve to declared operations;
+model tools cannot acquire operation surfaces. Host-rendered video selection actions
+accept only `time-point`, `time-range`, `crop-region`, or `confirmation` editors,
+and every step must reference a tool that accepts `reference_video`. The host derives
+scope, revision, assets, relationships, and execution identity exactly as it does for
+all other Tool Plugin calls; no Plugin id receives core special handling.
+
+A service contribution contains only an explicit subset of fixed host actions:
+
+```json
+{
+  "contributes": {
+    "service": {
+      "actions": ["sign_out"]
+    }
+  },
+  "runtime": {
+    "type": "mcp-stdio",
+    "command": "creative-tools-mcp"
+  }
+}
+```
+
+`service.status` is required whenever `contributes.service` exists. Optional action
+values map exactly to `service.authorize`, `service.reauthorize`,
+`service.authorization.cancel`, and `service.sign_out`; a manifest cannot rename a
+method or declare arbitrary calls. An empty action list is valid for a read-only
+status surface. Hosts render only declared actions, so lack of an application-safe
+authorization exchange is represented honestly rather than by a fake reauthorize
+button.
+
 The declaration rules are intentionally small:
 
 - output modalities are `text`, `image`, `video` and `audio`;
@@ -156,9 +244,10 @@ only through absolute entries in the Convax process's `PATH`. Convax does not gu
 Homebrew, user-local or vendor-specific locations.
 
 In either case the host resolves the real executable, requires an executable regular
-file, and fingerprints its live bytes during installation. At execution it creates and verifies a
-unique sibling launch snapshot, then runs that snapshot rather than resolving the
-original pathname again. The random verified snapshot protects against ordinary
+file, and fingerprints its live bytes during installation. At execution it creates
+and verifies a unique launch snapshot in its own private temporary directory outside
+the immutable companion or `PATH` installation, then runs that snapshot rather than
+resolving the original pathname again. The random verified snapshot protects against ordinary
 replacement of the install-verified entrypoint. It is not a same-account OS sandbox:
 another process already running as the same user can inspect Convax memory, read the
 CLI's login state, or race user-writable directory entries. Stronger isolation still
@@ -187,8 +276,10 @@ https://github.com/microvoid/convax-plugins/releases/download/plugin-<plugin-id>
 ```
 
 Desktop selects only the exact current platform/architecture, enforces a 128 MiB
-download ceiling, and rechecks size and digest before publishing the executable
-below a private host-owned path keyed by Plugin and companion identity. A missing
+download ceiling, and rechecks size and digest before writing. It publishes the
+executable with private permissions below a host-owned path keyed by Plugin,
+Plugin version, command and companion version. Existing bytes at the same immutable
+identity must match exactly; different bytes require a version bump. A missing
 target, download failure, digest change, symlink, or Plugin publication failure
 leaves the previous installed Plugin/companion pair usable. Startup, update and
 uninstall reconcile stale companion versions and orphan Plugin directories.
@@ -197,10 +288,10 @@ Choosing an explicit install or update is consent to execute only the exact Tool
 Plugin identity being published. Before publishing the package, Desktop resolves
 either the managed companion or the explicit `PATH` fallback, fingerprints it, and
 transactionally coordinates a private authorization receipt with the package
-switch. The receipt binds the normalized manifest fingerprint, binding kind
-(`managed` or `path`), real path, size and SHA-256. A Registry Plugin with a
-companion requires that managed binding; it cannot silently authorize a same-named
-`PATH` executable. An unresolved manual
+switch. The receipt binds the
+normalized manifest fingerprint, binding kind (`managed` or `path`), real path,
+size and SHA-256. A Registry Plugin with a companion requires that managed binding;
+it cannot silently authorize a same-named PATH executable. An unresolved manual
 import fails before the Plugin appears installed. Listing and installation never
 start the executable.
 
@@ -255,6 +346,99 @@ CLI diagnostics may contain cookies, tokens or native paths. Writing non-JSON da
 to stdout, duplicate tool ids, oversized messages, unsupported result content, or a
 missing declared tool fails the call. A single JSON message is currently limited to
 64 MiB, so large media should be returned as files rather than inline base64.
+
+### Service status and actions
+
+Service calls receive exactly `{}`. A successful `service.status` or service action
+returns `structuredContent` using `convax.plugin-service-status/1`:
+
+```json
+{
+  "schema": "convax.plugin-service-status/1",
+  "state": "connected",
+  "credential": { "configured": true, "verification": "verified" },
+  "account": { "availability": "unavailable" },
+  "credits": { "availability": "available", "remaining": 80, "unit": "credits" },
+  "usage": { "availability": "unavailable" }
+}
+```
+
+Account availability may instead include one bounded `displayName`. Usage
+availability may include bounded non-negative `consumed`, `unit`, and optional
+`period`. Missing or unsupported account, credit, or usage APIs must use
+`availability: "unavailable"`; the host does not infer or scrape those values.
+
+Main rejects unknown fields, impossible credential/connection states, unbounded
+numbers, URLs, native paths and malformed display text. It discards normal MCP
+`content`, stderr, and raw errors rather than forwarding them to preload. The
+renderer can pass only a validated Plugin id to one fixed bridge method per action.
+Plugin updates or uninstalls invalidate in-flight results, and renderer destruction
+cancels outstanding calls. The Services settings page is host-rendered; it never
+loads Plugin HTML. `sign_out` requires an explicit host confirmation because it may
+delete the sidecar's local credential.
+
+The application menu and Services settings share one Desktop-owned read model.
+For a Plugin service, capability badges and model rows are projected from the same
+static `contributes.generation.tools` declarations used by generation execution;
+listing them does not start the sidecar. OpenCode appears as the existing built-in
+LLM runtime and lists only the bounded provider/model projection supplied by
+`@convax/agent-runtime`. This display catalog has no generic execute method and does
+not alter either tool selection or Agent model routing.
+
+An `authorize` or `reauthorize` action may instead request a main-owned browser
+exchange. This is a two-phase fixed protocol, not a general MCP callback. The first
+action still receives `{}` and may return exactly:
+
+```json
+{
+  "schema": "convax.plugin-service-browser-authorization/1",
+  "authorization_id": "request_0123456789abcdef",
+  "login_url": "https://accounts.example.com/sign-in",
+  "cookie_origin": "https://accounts.example.com",
+  "cookie_names": ["session_id"],
+  "timeout_seconds": 300
+}
+```
+
+Both URLs must be canonical HTTPS without credentials or fragments, and the login
+URL must have exactly the requested cookie origin. Cookie names are a unique,
+bounded RFC token allowlist. Main opens the URL in a fresh non-persistent Electron
+session with Node disabled, sandboxing enabled, permissions and downloads denied,
+and non-HTTPS navigation blocked. Installing the Tool Plugin and choosing Configure
+is the explicit consent for this fixed tool flow; completing sign-in continues
+automatically when an allowlisted Cookie appears, with no second command prompt.
+HTTPS login popups retain their real opener while inheriting the same temporary
+session and recursive security guards. A child popup closing never settles the root
+authorization.
+
+Main then queries only that exact origin, drops every cookie whose name is not in
+the request allowlist, enforces per-value and aggregate bounds, and makes the one
+fixed internal `service.authorization.complete` call:
+
+```json
+{
+  "schema": "convax.plugin-service-browser-authorization-completion/1",
+  "authorization_id": "request_0123456789abcdef",
+  "cookie_origin": "https://accounts.example.com",
+  "cookies": [{ "name": "session_id", "value": "..." }]
+}
+```
+
+That tool is not a manifest action and cannot be selected by renderer input. Its
+one-shot continuation is bound to the exact manifest, executable snapshot and MCP
+client that returned the request. Cancellation, timeout, window destruction,
+Plugin update/uninstall, missing approved cookies, or an invalid completion status
+fail closed. A remote root close gets a short bounded exact-origin recheck grace so
+Chromium can publish a final Cookie mutation. Before the temporary browser session
+is cleared, Main atomically stores only the already-filtered envelope in a private
+mode-0600, short-lived recovery checkpoint bound to the manifest and verified executable bytes.
+The checkpoint is deleted only after the sidecar durably accepts it; a crash or
+sidecar restart in between can replay it into a fresh authorization id without
+opening another login page. Explicit cancellation/sign-out and Plugin update or
+uninstall delete it. This is never a persistent Chromium profile. Authorization
+requests, URLs and cookie values remain in main; they never enter preload, renderer
+status, logs, or caller-visible errors. App quit first drains any in-flight
+checkpoint/sidecar handoff, then disposes the shared Tool Plugin runtime.
 
 ### Tool input
 

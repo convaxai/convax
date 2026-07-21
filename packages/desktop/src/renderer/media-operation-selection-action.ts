@@ -1,0 +1,321 @@
+import {
+  getCanvasNodeSize,
+  type CanvasDocument,
+  type CanvasGenerateRequest,
+  type CanvasGenerationOutput,
+  type CanvasNode,
+  type CanvasPoint,
+  type CanvasSelectionActionContext,
+} from "@convax/canvas"
+import {
+  getProjectFileReference,
+  isProjectCanvasManagedAssetPath,
+  requireProjectCanvasResourcePath,
+} from "@convax/project/canvas"
+import type { InstalledWebPluginSummary } from "../plugin-contracts"
+
+export type MediaOperationEditor = "confirmation" | "crop-region" | "time-point" | "time-range"
+
+export interface MediaOperationLocalizedText {
+  default: string
+  "zh-CN"?: string
+}
+
+export interface MediaOperationStep {
+  output: CanvasGenerationOutput
+  toolId: string
+}
+
+export interface MediaOperationAction {
+  description: MediaOperationLocalizedText
+  editor: MediaOperationEditor
+  id: string
+  pluginId: string
+  steps: readonly MediaOperationStep[]
+  title: MediaOperationLocalizedText
+}
+
+export interface MediaOperationExtractFrameInput {
+  timeSeconds: number
+}
+
+export interface MediaOperationTimeRangeInput {
+  durationSeconds: number
+  startSeconds: number
+}
+
+export interface MediaOperationCropInput {
+  height: number
+  width: number
+  x: number
+  y: number
+}
+
+export type MediaOperationConfirmationInput = Readonly<Record<string, never>>
+
+export type MediaOperationInput =
+  | MediaOperationConfirmationInput
+  | MediaOperationCropInput
+  | MediaOperationExtractFrameInput
+  | MediaOperationTimeRangeInput
+
+export interface MediaOperationValidationContext {
+  videoHeight?: number
+  videoWidth?: number
+  videoDurationSeconds?: number
+}
+
+export interface MediaOperationDialogRequest {
+  action: MediaOperationAction
+  canvasId: string
+  context: CanvasSelectionActionContext
+  projectId: string
+}
+
+export function localizedMediaOperationText(text: MediaOperationLocalizedText, locale: "en" | "zh-CN") {
+  return locale === "zh-CN" ? (text["zh-CN"] ?? text.default) : text.default
+}
+
+export function listInstalledMediaOperationActions(
+  installedPlugins: readonly InstalledWebPluginSummary[],
+): readonly MediaOperationAction[] {
+  return installedPlugins.flatMap((plugin) => {
+    if (plugin.schema !== "convax.plugin/3" || plugin.runtime?.type !== "mcp-stdio") return []
+    const generationTools = plugin.contributes.generation?.tools ?? []
+    const actions = plugin.contributes.canvas?.selectionActions ?? []
+    return actions.flatMap((action) => {
+      if (!("target" in action) || action.target !== "video") return []
+      const steps = action.steps.flatMap((step) => {
+        if (!("tool" in step)) return []
+        const tool = generationTools.find((candidate) => candidate.id === step.tool)
+        return tool?.acceptedInputs.includes("reference_video")
+          ? [{ output: tool.output, toolId: `${plugin.id}/${tool.id}` }]
+          : []
+      })
+      if (steps.length !== action.steps.length || steps.length === 0) return []
+      return [
+        {
+          description: action.description,
+          editor: action.editor,
+          id: action.id,
+          pluginId: plugin.id,
+          steps,
+          title: action.title,
+        },
+      ]
+    })
+  })
+}
+
+export function isMediaOperationDialogInScope(
+  request: MediaOperationDialogRequest | null,
+  projectId: string | undefined,
+  canvasId: string | undefined,
+) {
+  return Boolean(request && request.projectId === projectId && request.canvasId === canvasId)
+}
+
+export function isManagedProjectVideoSelection(context: CanvasSelectionActionContext) {
+  if (
+    context.selectedEdgeIds.length !== 0 ||
+    context.selectedNodeIds.length !== 1 ||
+    context.selectedNodes.length !== 1
+  ) {
+    return false
+  }
+  return managedProjectMediaPath(context.selectedNodes[0], "video") !== undefined
+}
+
+export function canRunMediaOperation(context: CanvasSelectionActionContext, action: MediaOperationAction) {
+  return action.steps.length > 0 && isManagedProjectVideoSelection(context)
+}
+
+export function canResumeMediaOperation(
+  request: MediaOperationDialogRequest,
+  document: CanvasDocument,
+  createdNodeIds: readonly string[],
+) {
+  if (
+    request.action.steps.length < 2 ||
+    document.id !== request.canvasId ||
+    createdNodeIds.length < 1 ||
+    createdNodeIds.length >= request.action.steps.length
+  ) {
+    return false
+  }
+  const originalSource = request.context.selectedNodes[0]
+  const liveSource = document.nodes.find((node) => node.id === originalSource?.id)
+  const originalSourcePath = originalSource ? managedProjectMediaPath(originalSource, "video") : undefined
+  if (!originalSourcePath || !liveSource || originalSourcePath !== managedProjectMediaPath(liveSource, "video")) {
+    return false
+  }
+  return createdNodeIds.every((nodeId, index) => {
+    const completed = document.nodes.find((node) => node.id === nodeId)
+    const expectedOutput = request.action.steps[index]?.output
+    return (
+      completed !== undefined &&
+      expectedOutput !== undefined &&
+      managedProjectMediaPath(completed, expectedOutput) !== undefined &&
+      document.edges.some((edge) => edge.source === originalSource.id && edge.target === completed.id)
+    )
+  })
+}
+
+export function validateMediaOperationInput(
+  editor: MediaOperationEditor,
+  input: MediaOperationInput,
+  context: MediaOperationValidationContext = {},
+): string | undefined {
+  if (editor === "confirmation") return undefined
+  if (editor === "time-point") {
+    if (!("timeSeconds" in input) || !isNonNegativeFinite(input.timeSeconds)) {
+      return "Frame time must be zero or a positive number."
+    }
+    return undefined
+  }
+  if (editor === "time-range") {
+    if (!("durationSeconds" in input) || !("startSeconds" in input)) {
+      return "Start time must be zero or a positive number."
+    }
+    const { durationSeconds, startSeconds } = input
+    if (!isNonNegativeFinite(startSeconds)) return "Start time must be zero or a positive number."
+    if (!isPositiveFinite(durationSeconds)) return "Duration must be greater than zero."
+    const videoDurationSeconds = context.videoDurationSeconds
+    if (
+      typeof videoDurationSeconds === "number" &&
+      isPositiveFinite(videoDurationSeconds) &&
+      startSeconds + durationSeconds > videoDurationSeconds + 0.0005
+    ) {
+      return "Trim end time cannot exceed the video duration."
+    }
+    return undefined
+  }
+  if (!("height" in input) || !("width" in input) || !("x" in input) || !("y" in input)) {
+    return "Crop position must use non-negative even pixel values."
+  }
+  const { height, width, x, y } = input
+  if (!isNonNegativeEvenInteger(x) || !isNonNegativeEvenInteger(y)) {
+    return "Crop position must use non-negative even pixel values."
+  }
+  if (!isPositiveEvenInteger(width) || !isPositiveEvenInteger(height)) {
+    return "Crop width and height must be positive even pixel values."
+  }
+  const { videoHeight, videoWidth } = context
+  if (
+    (typeof videoWidth === "number" && isPositiveFinite(videoWidth) && x + width > videoWidth) ||
+    (typeof videoHeight === "number" && isPositiveFinite(videoHeight) && y + height > videoHeight)
+  ) {
+    return "Crop area cannot exceed the video dimensions."
+  }
+  return undefined
+}
+
+export function createMediaOperationGenerateRequest(
+  request: MediaOperationDialogRequest,
+  input: MediaOperationInput,
+  signal: AbortSignal = request.context.signal,
+): CanvasGenerateRequest {
+  const requests = createMediaOperationGenerateRequests(request, input, signal)
+  if (requests.length !== 1) {
+    throw new Error("This media operation creates multiple Canvas results; execute its request list instead.")
+  }
+  return requests[0]
+}
+
+export function createMediaOperationGenerateRequests(
+  request: MediaOperationDialogRequest,
+  input: MediaOperationInput,
+  signal: AbortSignal = request.context.signal,
+): readonly CanvasGenerateRequest[] {
+  const validationError = validateMediaOperationInput(request.action.editor, input)
+  if (validationError) throw new Error(validationError)
+  const node = requireRequestVideoNode(request)
+  const anchor = mediaOperationResultAnchor(node, request.context.document.nodes)
+  const toolInput = editorToolInput(request.action.editor, input)
+  return request.action.steps.map((step, index) => ({
+    anchor: { x: anchor.x, y: anchor.y + index * 224 },
+    context: {
+      documentId: request.context.document.id,
+      selectedNodeIds: [...request.context.selectedNodeIds],
+      source: `desktop:plugin-selection-action:${request.action.pluginId}/${request.action.id}`,
+    },
+    expectedOutputCount: 1,
+    expectedRevision: request.context.document.revision,
+    output: step.output,
+    prompt: request.action.description.default,
+    references: [{ nodeId: node.id, role: "reference_video" }],
+    signal,
+    toolId: step.toolId,
+    ...(toolInput ? { toolInput } : {}),
+  }))
+}
+
+export function mediaOperationResultAnchor(node: CanvasNode, nodes: readonly CanvasNode[] = [node]): CanvasPoint {
+  const size = getCanvasNodeSize(node)
+  const nodeById = new Map(nodes.map((candidate) => [candidate.id, candidate]))
+  const visited = new Set<string>()
+  let current: CanvasNode | undefined = node
+  let x = 0
+  let y = 0
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    x += current.position.x
+    y += current.position.y
+    current = current.parentId ? nodeById.get(current.parentId) : undefined
+  }
+  return { x: x + size.width + 64, y }
+}
+
+function editorToolInput(
+  editor: MediaOperationEditor,
+  input: MediaOperationInput,
+): Readonly<Record<string, string | number | boolean>> | undefined {
+  if (editor === "confirmation") return undefined
+  if (editor === "time-point") {
+    if (!("timeSeconds" in input)) throw new Error("Frame time is missing.")
+    return { time_seconds: input.timeSeconds }
+  }
+  if (editor === "time-range") {
+    if (!("durationSeconds" in input) || !("startSeconds" in input)) throw new Error("Time range is missing.")
+    return { duration_seconds: input.durationSeconds, start_seconds: input.startSeconds }
+  }
+  if (!("height" in input) || !("width" in input) || !("x" in input) || !("y" in input)) {
+    throw new Error("Crop geometry is missing.")
+  }
+  return { height: input.height, width: input.width, x: input.x, y: input.y }
+}
+
+function requireRequestVideoNode(request: MediaOperationDialogRequest) {
+  if (!isManagedProjectVideoSelection(request.context)) {
+    throw new Error("The selected video is no longer available as a managed Project asset.")
+  }
+  return request.context.selectedNodes[0]
+}
+
+function managedProjectMediaPath(node: CanvasNode, output: CanvasGenerationOutput) {
+  if (node.type !== "file" || node.data.kind !== output) return undefined
+  const reference = getProjectFileReference(node.data.metadata)
+  if (!reference) return undefined
+  try {
+    const path = requireProjectCanvasResourcePath(reference.path)
+    return isProjectCanvasManagedAssetPath(path) ? path : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isNonNegativeFinite(value: number) {
+  return Number.isFinite(value) && value >= 0
+}
+
+function isPositiveFinite(value: number) {
+  return Number.isFinite(value) && value > 0
+}
+
+function isNonNegativeEvenInteger(value: number) {
+  return Number.isInteger(value) && value >= 0 && value % 2 === 0
+}
+
+function isPositiveEvenInteger(value: number) {
+  return Number.isInteger(value) && value > 0 && value % 2 === 0
+}

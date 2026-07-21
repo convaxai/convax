@@ -11,6 +11,7 @@ function generationTool(input: Partial<GenerationToolSummary> = {}): GenerationT
     acceptedInputs: ["reference_image", "text"],
     description: "Do not leak this implementation description",
     id: "image-tools/generate.image",
+    kind: "model",
     output: "image",
     pluginId: "image-tools",
     pluginName: "Do not leak this implementation name",
@@ -80,17 +81,31 @@ describe("generation Agent tool", () => {
     expect((await provider.listTools(scope)).map((tool) => tool.name)).toEqual(["canvas_generate"])
   })
 
-  test("excludes Tool Plugins that have a dedicated Agent surface", async () => {
+  test("exposes only declared models and never accepts operation tool ids", async () => {
     const service = new FakeGenerationService([
-      generationTool({ id: "ffmpeg-tools/run.video", pluginId: "ffmpeg-tools", toolId: "run.video" }),
+      generationTool({
+        agentId: "transform_video",
+        id: "media-operations/transform.video",
+        kind: "operation",
+        pluginId: "media-operations",
+        toolId: "transform.video",
+      }),
       generationTool(),
     ])
-    const provider = createGenerationAgentToolProvider(service, { excludedPluginIds: ["ffmpeg-tools"] })
+    const provider = createGenerationAgentToolProvider(service)
     const [definition] = await provider.listTools(scope)
     const schema = definition?.inputSchema as { properties: { toolId: { enum: string[] } } }
     expect(schema.properties.toolId.enum).toEqual(["image-tools/generate.image"])
 
-    service.tools = [generationTool({ id: "ffmpeg-tools/run.video", pluginId: "ffmpeg-tools", toolId: "run.video" })]
+    service.tools = [
+      generationTool({
+        agentId: "transform_video",
+        id: "media-operations/transform.video",
+        kind: "operation",
+        pluginId: "media-operations",
+        toolId: "transform.video",
+      }),
+    ]
     await expect(provider.listTools(scope)).resolves.toEqual([])
     await expect(provider.callTool(scope, "canvas_generate", validInput())).rejects.toThrow(
       "No generation Tool Plugin is installed",

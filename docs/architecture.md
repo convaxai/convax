@@ -175,7 +175,11 @@ Electron userData/
     .convax-builtin.json                host-authored catalog provenance, when applicable
   plugin-companions/<plugin-id>/<plugin-version>/
                                         Registry-verified host-owned Tool executables
-  plugin-authorizations/<plugin-id>/    install-time exact Tool execution receipts
+  plugin-authorizations/<plugin-id>/
+                                        install-time exact Tool execution receipts
+  plugin-service-authorization-checkpoints/<plugin-id>.json
+                                        private crash-recovery Cookie handoff; never a browser profile
+  canvas-external-drags/                short-lived host-owned native drag copies
 
 ~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
 
@@ -188,6 +192,13 @@ browser localStorage                    per-user Workbench/renderer preferences
     canvases/<canvas-id>/document.json  Canvas document
     assets/                             managed Canvas resources
 ```
+
+`Create Project` receives only a portable project name from renderer and creates a
+new root at `<user Documents>/Convax/<project name>` without opening a native folder
+picker. `Open Project` is the explicit path-binding flow and keeps the native folder
+picker for an existing portable Project directory. The default creation directory is
+a Desktop host policy; Project's native adapter still owns name validation, safe
+directory creation, identity initialization, and registry publication.
 
 Private Project metadata is owned by `@convax/project/node`. Renderer, preload,
 Agent tools, and general Project Files operations do not read or write its JSON.
@@ -231,6 +242,24 @@ the migrated node snapshot; installation itself never rewrites Canvas documents.
 
 ## 6. Core flows
 
+### Project creation and opening
+
+```text
+Create Project(name)
+  -> Desktop injects the user-visible Documents/Convax parent
+  -> @convax/project/node creates and initializes one new child directory
+  -> registry binding is published and the Project is activated
+
+Open Project
+  -> Desktop asks the user for an existing directory
+  -> @convax/project/node validates or initializes its Project identity
+  -> registry binding is published and the Project is activated
+```
+
+Creation never asks the renderer for a native path and never falls back to the Open
+Project picker. An existing portable directory is not overwritten or silently
+adopted by Create; the user opens it explicitly through Open Project.
+
 ### Project activation
 
 ```text
@@ -250,43 +279,137 @@ Project cannot overwrite current state.
 
 Generation is an installed Tool Plugin capability, not a built-in provider
 framework. Convax packages never hard-code vendor names, model ids, credentials,
-model catalogs, or routing. A validated `convax.plugin/2` manifest declares one or
-more generation tools and a separately installed bare external `mcp-stdio` command.
-An official Registry entry may bind that exact command to one immutable executable
-companion per supported platform and architecture. Desktop selects only the current
-target, verifies the deterministic Release URL, size and SHA-256, and atomically
-publishes it below private versioned `userData/plugin-companions`. A missing target
-or changed immutable identity fails without replacing the working Plugin. Plugins
-without a managed target retain explicit `PATH` resolution as their fallback.
+model catalogs, or routing. Each installed Tool Plugin and its explicitly authorized
+external command compose the complete concrete integration behind the declared tool
+contract; there is no parallel provider registry.
 
-Explicit Plugin install/update is the execution-consent event. Before publication,
-Desktop resolves and fingerprints the exact managed or `PATH` binding and persists
-an authorization receipt bound to the normalized manifest, binding kind, real path,
-size and SHA-256. Every runtime start silently re-resolves and re-verifies that
-identity. Missing or changed state fails closed with a reinstall request, never a
-first-call permission dialog. Startup, update and uninstall reconcile orphaned
-companion directories and receipts.
+Agent, Toolbar/UI, and sandboxed Plugin entry points call the same scoped generation
+tool executor owned by Desktop main. OpenCode is only the Agent-side tool client: it
+does not own generation execution, and direct product actions do not require an
+OpenCode session. Successful media output is prepared through
+`CanvasResourceBusinessService`, imported into managed `.convax/assets/`, and then
+referenced by the existing Canvas `file` node flow.
 
-Agent, Toolbar/UI, and sandboxed Plugin callers use the same scoped generation
-executor owned by Desktop main. OpenCode is only the Agent-side tool client.
-Desktop stages bounded typed Canvas references, rechecks live scope and revision
-before the external call, admits only bounded signature-checked results, and commits
-generated media through `CanvasResourceBusinessService` and managed
-`.convax/assets/`. Tool-specific controls come only from the selected MCP tool's
-current `tools/list.inputSchema`; Main projects bounded scalar fields across preload
-and validates them again immediately before execution.
+Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3`: a
+validated manifest declares generation tools and a separately installed bare
+`mcp-stdio` command. V3 maps pure model names and optional Agent/Canvas operation
+surfaces to those tools, so core code never identifies an operation by Plugin id. An official
+Registry entry may additionally bind that exact command to immutable executable
+companions for specific `platform`/`arch` targets. Desktop verifies the deterministic
+Release URL, 128 MiB ceiling, exact size and SHA-256 before atomically publishing the
+selected bytes below private, versioned `userData/plugin-companions`; a missing exact
+target fails the Plugin install without replacing the working installation. Orphans
+are reconciled on startup, update and uninstall. A managed companion is resolved
+first, while an explicitly installed executable in the host `PATH` remains the
+fallback for Plugins without one. Choosing install or update is the execution
+consent event. Before package publication, Desktop resolves the exact managed or
+PATH binding and transactionally coordinates a private receipt keyed by the normalized
+manifest fingerprint, binding kind, real path, size and SHA-256 with the package
+switch. The old and new receipts may coexist during an update; any crash-partial or
+orphaned state is non-executable and startup reconciliation removes it. A Registry install
+that declares a managed companion cannot fall back to a same-named PATH command.
+Missing and changed bindings fail installation without replacing a working version.
+Listing or installing never starts the command.
 
-The Agent panel owns the host's default generation-tool preference. A newly opened
-file card inherits that opaque tool id, while a user selection on the card is stored
-as a namespaced node override and never writes back to the Agent preference. Missing
-or unavailable ids fail closed to an explicit valid selection; Canvas does not own
-the concrete tool catalog.
+On execution Desktop silently resolves and fingerprints the binding again and
+requires the matching persisted receipt; missing, tampered or drifted state fails
+closed with a bounded request to reinstall, never a first-call permission dialog.
+Application restart does not invalidate unchanged installation consent. Desktop
+copies the verified entrypoint bytes to a unique launch snapshot in a private
+temporary directory outside the immutable companion or `PATH` installation, runs
+that snapshot without a shell and with an allowlisted environment, and checks that MCP `tools/list` exposes
+every invoked declared tool before staging large inputs. The prepared execution is
+bound to that Plugin fingerprint and tool declaration; an update during staging
+fails before `tools/call`. This process runs
+with the user's OS authority; the installation receipt and staged-input protocol are trust
+boundaries, not an operating-system sandbox. The snapshot prevents normal
+replacement of the verified `PATH` entry; processes already running as the same OS
+user remain inside the same trust domain and require a future signed sidecar plus
+OS sandbox for stronger isolation.
 
-Generation calls may remain queued or running without a host-imposed absolute
-deadline. The sidecar owns vendor polling until terminal success/failure, while
-caller cancellation, transport closure, Plugin disposal, and process exit still
-propagate through the shared runtime. The complete contract is documented in
-[`generation-tool-plugins.md`](generation-tool-plugins.md).
+Desktop copies validated Canvas inputs into a short-lived directory and gives the
+tool only those copies plus a dedicated output directory. It admits only bounded,
+signature-checked results from that output directory, then removes the temporary
+tree. Scope, revision, placement, native Project paths, Canvas persistence and
+generated-node creation remain host-owned. Sandboxed Plugin callers receive only
+the `generation.execute` methods in the host protocol matching their manifest; the host derives their
+scope and references from the live owning node and its direct incoming edges.
+
+Tool-custom generation controls come only from the selected sidecar's current MCP
+`tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
+registry. Main lazily describes one explicitly selected tool, projects only bounded
+top-level scalar fields across preload, and revalidates caller values against the
+same live tool definition before execution. Those validated fields extend the
+`convax.generation-call/1` object without being allowed to replace its fixed
+host-reserved envelope; tools without extensions keep the original payload.
+
+The Agent generation model is a user-global renderer preference. Without an owning
+node override, a file card inherits that preference only when its output matches the
+card's intrinsic text/image/video/audio kind. The card catalog contains only tools
+with that output, and mismatched Agent defaults or persisted overrides fail closed.
+A manual card choice stores only the opaque host tool id in versioned, namespaced
+Canvas node metadata; clearing it restores automatic resolution. The node override
+is portable and undoable with the Canvas document, never updates the Agent preference
+in reverse, and fails closed when its tool is no longer installed or compatible.
+
+Direct Generate-tab calls include Canvas references only when the user explicitly
+mentions those nodes. Merely opening generation from an image, video, audio or text
+card never turns the owning card into an implicit input. Agent mode may prepare its
+own scoped Canvas context, but every media reference that reaches generation still
+passes the same managed-asset and live-revision guards.
+Known file-card modalities also constrain the direct model catalog and result: an
+image card accepts only image tools, a video card only video tools, and a mismatched
+Agent default or persisted card override fails closed. This output constraint is
+independent from Agent-mode references, where an explicitly mentioned image may
+still be a valid input to a video tool.
+
+A direct file-card generation is transiently owned by that mounted file node, not by
+the selected-card composer. Submit dismisses the composer immediately while the file
+card keeps a pending surface for arbitrarily long non-terminal work. Selection
+changes do not cancel that work; removing the owner or leaving its Canvas disposes
+it. Terminal failures remain recoverable on the card, while success clears the
+transient activity after the normal Canvas business operation commits.
+
+The complete manifest, MCP call/result, cancellation and security contract is in
+[`generation-tool-plugins.md`](generation-tool-plugins.md). The concrete local media
+composition is specified in [`ffmpeg-tool-plugin.md`](ffmpeg-tool-plugin.md).
+
+The same executable Tool Plugin may optionally contribute a user-global service
+surface. This does not create a second runtime or provider registry: Desktop reuses
+the already verified MCP sidecar and calls only fixed `service.status` and explicitly
+manifest-authorized `service.*` actions. Main reduces results to bounded account,
+credential-verification, credit and usage fields; unsupported data remains explicitly
+unavailable. Renderer settings receive no token, cookie, AK/SK, URL, native path,
+raw content or arbitrary MCP method. Destructive sign-out remains a host-rendered,
+confirmed action. An authorization action may request the one fixed main-only
+browser-cookie exchange in a fresh non-persistent sandboxed Electron session.
+
+Desktop exposes one read-only service catalog to the application menu and Services
+settings. Plugin service capabilities and displayed model rows are derived from that
+same installed manifest's generation tools; dynamic account, credit and usage data
+still comes only from the bounded service status. The existing OpenCode Agent runtime
+contributes a safe display-only projection of its connected LLM model catalog through
+`@convax/agent-runtime`. This composition has no execute or provider-resolution API:
+generation continues to select a generation tool id and Agent prompts continue to
+select an OpenCode provider/model pair.
+Choosing Configure and personally completing the service sign-in is the explicit
+authorization: an allowlisted cookie add/update triggers an exact-origin cookie
+check and continues automatically, without a second confirmation dialog. Closing
+the window performs the same check, completing only when an approved cookie exists
+and otherwise canceling. HTTPS sign-in popups preserve their opener relationship,
+but reuse the same temporary session and recursively inherit the host's navigation,
+permission, sandbox and Node-denial guards; closing a child popup never settles the
+root authorization. The broker independently re-reads and filters only the
+requested cookie names visible to that exact HTTPS origin, then sends them through a
+one-shot `service.authorization.complete` continuation bound to the unchanged Plugin
+and sidecar. Before clearing the non-persistent Chromium session, Main atomically
+checkpoints only that bounded, short-lived Cookie envelope, bound to the exact manifest and
+install-authorized executable identity. Successful sidecar persistence removes the
+checkpoint; an interrupted handoff can be retried with a fresh authorization id
+without another sign-in. Explicit cancel/sign-out and Plugin update/uninstall remove
+it. Cancellation, timeout and identity changes fail closed; no authorization URL or
+cookie crosses preload. Quit drains any in-flight checkpoint/sidecar handoff before
+the shared Tool Plugin runtime is disposed.
 
 ### Canvas mutation from UI or Agent
 
@@ -304,9 +427,9 @@ UI action or typed Agent tool
 The domain mutation commits before optional view behavior. Selection, reveal,
 fit-view, zoom, animation, and notification are legitimate Agent view capabilities;
 they remain explicitly scoped to the mounted view and cannot rewrite domain history.
-Ordinary mutations—including node creation, file drop/import, duplication, and
-generation—preserve the user's mounted viewport. Fit, center, zoom, and reveal move
-the viewport only when the user or an explicit view command requests them.
+Ordinary UI mutations such as adding, importing, duplicating, or generating nodes
+preserve the user's current viewport. Moving, fitting, centering, or zooming the view
+requires a separate explicit user action or view command.
 
 ### Adding a resource to Canvas
 
@@ -364,7 +487,7 @@ bus, Canvas node role, or parallel mutation API. A Plugin surface remains a `fil
 node and calls existing clients/controllers through a narrow host adapter.
 
 Canvas also exposes one explicit host-neutral selection action slot. It renders an
-action in an eligible single file-node toolbar or the multi-selection toolbar against
+action in an eligible single-node toolbar or the multi-selection toolbar against
 an immutable document/selection snapshot, isolates visibility failures, prevents
 duplicate execution, and aborts stale work. Desktop may use this slot for a concrete
 trusted integration such as JianYing. This is not a manifest
@@ -405,6 +528,14 @@ id, author the provenance marker, or enable the native adapter by matching a
 version. Catalog installation presence remains separate from this trust decision: a
 valid legacy sandboxed Plugin is still shown as installed, but cannot enable native
 tools.
+
+This is legacy architecture debt, not a pattern for Plugin authors. Its package is
+currently only an install-state switch for code compiled into Desktop, so adding a
+second integration of this shape would require new core contracts, IPC, preload,
+Agent, renderer, and native service code. It must either be presented solely as an
+optional built-in integration or migrate its native behavior to a verified companion
+behind a generic external-operation contract. Do not add another identity-gated
+Plugin path or encode `jianying` as a nominal generic capability.
 
 Marker-free catalog installations from an older Convax build are claimed only after
 their complete canonical digest matches the current bundle or a compiled historical
@@ -453,6 +584,35 @@ a Project or Canvas id; Desktop injects the currently mounted Canvas and rejects
 stale revision. The companion Skill explains this workflow but grants no tool or
 native permission and remains independently installable/removable from the Plugin.
 
+### Native Canvas media drag-out
+
+Canvas exposes a host-neutral selection drag-source lifecycle next to its existing
+selection actions. Desktop contributes that source only when the complete selection
+contains managed image, video or audio file nodes and no edges. Preparation is
+not started by selection alone: the user holds `Command-Shift` on macOS
+(`Control-Shift` reserved for Windows) and drags any selected node body. Either
+modifier release, window focus loss, Escape, scope changes and expiry cancel the
+gesture. The held chord is tracked at the window boundary, independently of
+focus and current selection eligibility. A user may therefore hold first and
+then point at or select one eligible media node; changing an eligible multi-selection
+while the chord remains held replaces only the prepared selection. Preparation is asynchronous,
+abortable and bound to the immutable document/selection snapshot; `dragstart` only
+consumes an already prepared source synchronously.
+
+Renderer and preload never receive a native path. Main re-resolves the live active
+Canvas and exact selection, verifies revision, managed `.convax/assets` references,
+MIME/signature, regular-file identity and aggregate limits, then stages private
+copies below `userData/canvas-external-drags`. It returns a one-use, sender-scoped,
+short-lived opaque ticket. Before publication, Main derives a bounded native preview
+from the first staged material; multi-selection adds a count badge, while video and
+audio may use the operating-system thumbnail or associated file icon. Electron's
+native `webContents.startDrag` publishes those copies and the prepared preview to the
+operating system, so Finder, JianYing and other file-drop consumers
+share the same path without destination-specific UI automation. Expired, canceled,
+consumed and crash-left stages are bounded and removed by Main. Windows remains an
+explicit native-drag WIP until its behavior is verified; no automation fallback is
+allowed.
+
 ## 9. Workbench layout boundary
 
 Workbench owns the generic state transition: part size, visibility, collapse
@@ -473,9 +633,14 @@ window coordination; keep the product's visual implementation in the host.
   no Node/Electron imports.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
-Project Canvas, Canvas documents/views, generation, Agent runtime, and narrow
-trusted native integrations such as `jianying`. The JianYing bridge accepts only a Project/Canvas
+Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
+Services, and narrow trusted native integrations such as `jianying`. Plugin Services
+accept only an installed Plugin id through fixed actions. The JianYing bridge accepts only a Project/Canvas
 reference, revision, node ids and a constrained target; native paths remain in main.
+The Canvas native-drag bridge is a two-phase exception required by Electron: an
+async prepare call returns only an opaque sender-scoped ticket, then a synchronous
+`dragstart` message consumes it. Main rechecks the active Canvas selection before
+preparation and never exposes staged paths through preload.
 Renderer assigns every export an opaque `operationId`; it keeps the live
 `AbortSignal` in the renderer realm and sends only cloneable start/cancel messages
 through preload. Cancellation is scoped to the originating trusted renderer and is

@@ -107,6 +107,7 @@ function privateTextVersion(content: string) {
 export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
   private managedImageReads = 0
   private readonly now: () => number
+  private projectCreationQueue: Promise<void> = Promise.resolve()
   private registryQueue: Promise<unknown> = Promise.resolve()
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
   private readonly textWriteQueues = new Map<string, Promise<void>>()
@@ -138,12 +139,14 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   async flushPendingWrites() {
     const failures: unknown[] = []
     while (true) {
+      const projectCreation = this.projectCreationQueue
       const registry = this.registryQueue
-      const results = await Promise.allSettled([...this.textWriteQueues.values(), ...this.projectMutationQueues.values()])
+      const results = await Promise.allSettled([projectCreation, ...this.textWriteQueues.values(), ...this.projectMutationQueues.values()])
       failures.push(...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []))
       await registry
       if (this.textWriteQueues.size === 0
         && this.projectMutationQueues.size === 0
+        && projectCreation === this.projectCreationQueue
         && registry === this.registryQueue) break
     }
     if (failures.length > 0) throw new AggregateError(failures, "Project files could not be saved")
@@ -264,13 +267,28 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     })
   }
 
-  async createProject(input: { name: string; parentPath: string }) {
+  createProject(input: { name: string; parentPath: string }) {
+    const result = this.projectCreationQueue.then(() => this.createProjectUnlocked(input))
+    this.projectCreationQueue = result.then(() => undefined, () => undefined)
+    return result
+  }
+
+  private async createProjectUnlocked(input: { name: string; parentPath: string }) {
     const name = validateName(input.name)
-    const parentRoot = await fs.realpath(path.resolve(input.parentPath))
+    const requestedParent = path.resolve(input.parentPath)
+    await fs.mkdir(requestedParent, { recursive: true })
+    const parentRoot = await fs.realpath(requestedParent)
     if (!(await fs.stat(parentRoot)).isDirectory()) throw new Error(`Project parent is not a directory: ${input.parentPath}`)
     const rootPath = path.join(parentRoot, name)
     if (await existsPortable(rootPath, true)) throw new Error(`Project already exists: ${name}`)
-    await fs.mkdir(rootPath)
+    try {
+      await fs.mkdir(rootPath)
+    } catch (error) {
+      if (isNodeError(error) && error.code === "EEXIST") {
+        throw new Error(`Project already exists: ${name}`, { cause: error })
+      }
+      throw error
+    }
     return this.addProject(rootPath)
   }
 

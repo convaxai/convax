@@ -14,6 +14,7 @@ function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
     id: kind,
     label: kind[0]!.toUpperCase() + kind.slice(1),
     component: BuiltinMediaFileNode,
+    hidden: kind === "file",
     matches: (data) => data.kind === kind,
     create(input) {
       const resource = input.data?.resource as CanvasResource | undefined
@@ -62,6 +63,7 @@ export function createDefaultCanvasNodeRegistry() {
       label: "Agent",
       component: BuiltinCanvasNode,
       create: (input) => createAgentNode({ id: input.id, position: input.position }),
+      hidden: true,
     },
   ])
 }

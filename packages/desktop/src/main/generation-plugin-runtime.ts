@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import { constants as fsConstants, createReadStream, mkdtempSync, rmSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -10,11 +10,14 @@ import type {
   GenerationToolInput,
   GenerationToolSummary,
 } from "../generation-contracts"
+import { pluginServiceMcpTools, type PluginServiceSummary } from "../plugin-service-contracts"
 import {
   webPluginManifestFileName,
   webPluginManifestSchemaV2,
+  webPluginManifestSchemaV3,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
+  type WebPluginServiceAction,
 } from "../plugin-contracts"
 import {
   StdioMcpClient,
@@ -23,10 +26,12 @@ import {
   type StdioMcpClientOptions,
 } from "./stdio-mcp-client"
 import {
+  toolPluginAuthorizationIdentity,
   toolPluginManifestSha256,
   type ToolPluginExecutableBinding,
   type ToolPluginExecutableBindingKind,
 } from "./tool-plugin-authorizations"
+import type { PluginServiceBrowserAuthorizationCompletion } from "./plugin-service-browser-authorization"
 import { normalizeGenerationToolInputSchema, validateGenerationToolInput } from "./generation-tool-input-schema"
 
 export interface GenerationPluginSource {
@@ -44,6 +49,23 @@ export interface GenerationPluginMcpClient {
   ): Promise<McpToolCallResult>
   close(force?: boolean): void
   listTools(signal?: AbortSignal): Promise<readonly McpToolDefinition[]>
+}
+
+export interface PluginServiceMcpCallResult extends McpToolCallResult {
+  /**
+   * Main-only identity of the exact manifest and verified executable bytes
+   * serving this call. It binds recoverable browser authorization state and is
+   * never serialized to preload or a renderer.
+   */
+  authorizationIdentity?: string
+  /**
+   * Main-only, one-shot continuation bound to the exact sidecar bytes and
+   * manifest that returned the browser request. It is never serialized.
+   */
+  completeAuthorization?: (
+    input: PluginServiceBrowserAuthorizationCompletion,
+    signal?: AbortSignal,
+  ) => Promise<McpToolCallResult>
 }
 
 export type GenerationPluginMcpClientFactory = (options: StdioMcpClientOptions) => GenerationPluginMcpClient
@@ -68,7 +90,6 @@ export type GenerationPluginManagedExecutableResolver = (
 
 export type GenerationPluginExecutableMaterializer = (
   binding: GenerationPluginExecutableBinding,
-  bindingKind: ToolPluginExecutableBindingKind,
 ) => Promise<GenerationPluginExecutableSnapshot>
 
 export interface GenerationPluginRuntimeOptions {
@@ -98,6 +119,7 @@ interface DiscoveredPlugin {
 }
 
 interface CachedPluginRuntime {
+  authorizationIdentity: string
   availableTools?: ReadonlyMap<string, McpToolDefinition>
   client: GenerationPluginMcpClient
   executableSnapshot: GenerationPluginExecutableSnapshot
@@ -207,26 +229,23 @@ async function sha256File(filePath: string) {
 }
 
 /**
- * Launch from a unique copy so a later atomic replacement of the install-authorized
- * entrypoint cannot change which bytes are executed. PATH integrations use a sibling
- * by default so CLIs can keep resolving relative resources. Registry-managed,
- * single-file companions pass a private runtime directory instead, preserving the
- * immutable two-file installation layout checked by ManagedPluginCompanionStore.
+ * Launch from a unique private temporary copy so a later atomic replacement of the
+ * install-authorized entrypoint cannot change which bytes are executed. The snapshot
+ * must stay outside the immutable managed-companion installation it was copied from.
  */
 export async function materializeGenerationPluginExecutable(
   binding: GenerationPluginExecutableBinding,
-  options: { directory?: string } = {},
 ): Promise<GenerationPluginExecutableSnapshot> {
   if (process.platform === "win32") {
     throw new Error("Generation Tool Plugin execution on Windows requires a host Job Object and is not enabled")
   }
+  const temporaryRoot = await fs.realpath(os.tmpdir())
+  const snapshotDirectory = await fs.mkdtemp(path.join(temporaryRoot, "convax-generation-snapshot-"))
   const extension = path.extname(binding.path)
-  const snapshotDirectory = options.directory ? await fs.realpath(options.directory) : path.dirname(binding.path)
-  const snapshotPath = path.join(snapshotDirectory, `.convax-generation-${randomUUID()}${extension}`)
-  let created = false
+  const snapshotPath = path.join(snapshotDirectory, `entrypoint${extension}`)
   try {
+    await fs.chmod(snapshotDirectory, 0o700)
     await fs.copyFile(binding.path, snapshotPath, fsConstants.COPYFILE_EXCL)
-    created = true
     await fs.chmod(snapshotPath, 0o500)
     const before = await fs.stat(snapshotPath)
     if (!before.isFile() || before.size !== binding.size || (await fs.realpath(snapshotPath)) !== snapshotPath) {
@@ -240,15 +259,15 @@ export async function materializeGenerationPluginExecutable(
     return {
       dispose() {
         try {
-          rmSync(snapshotPath, { force: true })
+          rmSync(snapshotDirectory, { force: true, recursive: true })
         } catch {
-          // The exact host-created snapshot is best-effort cleanup on shutdown.
+          // The exact host-created private snapshot directory is best-effort cleanup on shutdown.
         }
       },
       path: snapshotPath,
     }
   } catch (error) {
-    if (created) rmSync(snapshotPath, { force: true })
+    rmSync(snapshotDirectory, { force: true, recursive: true })
     throw error
   }
 }
@@ -301,12 +320,12 @@ export async function resolveGenerationPluginExecutable(
 
 function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginSummary & {
   runtime: NonNullable<InstalledWebPluginSummary["runtime"]>
-  schema: typeof webPluginManifestSchemaV2
+  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3
 } {
   return (
-    plugin.schema === webPluginManifestSchemaV2 &&
+    (plugin.schema === webPluginManifestSchemaV2 || plugin.schema === webPluginManifestSchemaV3) &&
     plugin.runtime?.type === "mcp-stdio" &&
-    Boolean(plugin.contributes.generation?.tools.length)
+    (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )
 }
 
@@ -314,10 +333,21 @@ function toolSummary(
   plugin: DiscoveredPlugin["manifest"],
   tool: WebPluginGenerationToolContribution,
 ): GenerationToolSummary {
+  const model =
+    plugin.schema === webPluginManifestSchemaV3
+      ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
+      : { name: tool.title, tool: tool.id }
+  const agent =
+    plugin.schema === webPluginManifestSchemaV3
+      ? plugin.contributes.agent?.tools.find((candidate) => candidate.tool === tool.id)
+      : undefined
   return {
     acceptedInputs: [...tool.acceptedInputs],
+    ...(agent === undefined ? {} : { agentId: agent.id }),
     description: tool.description,
     id: generationPluginToolHostId(plugin.id, tool.id),
+    kind: model ? "model" : "operation",
+    ...(model === undefined ? {} : { modelName: model.name }),
     output: tool.output,
     pluginId: plugin.id,
     pluginName: plugin.name,
@@ -329,8 +359,11 @@ function toolSummary(
 function toolContractFingerprint(tool: GenerationToolSummary) {
   return JSON.stringify({
     acceptedInputs: [...tool.acceptedInputs],
+    agentId: tool.agentId,
     description: tool.description,
     id: tool.id,
+    kind: tool.kind,
+    modelName: tool.modelName,
     output: tool.output,
     pluginId: tool.pluginId,
     pluginName: tool.pluginName,
@@ -383,14 +416,14 @@ export function generationPluginToolHostId(pluginId: string, toolId: string) {
 
 /**
  * Discovers executable contributions from installed Plugin manifests and lazily
- * executes their matching MCP tools. It intentionally contains no provider,
- * model, credential, account, or routing registry.
+ * executes their matching MCP tools. Generation and service surfaces share this
+ * one verified process lifecycle. It intentionally contains no provider, model,
+ * credential, account, or routing registry.
  */
 export class GenerationPluginRuntime {
   readonly #cache = new Map<string, CachedPluginRuntime>()
   readonly #createClient: GenerationPluginMcpClientFactory
   readonly #environment: Record<string, string>
-  readonly #managedExecutableSnapshotDirectory: string
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
@@ -407,20 +440,13 @@ export class GenerationPluginRuntime {
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
     this.#resolveManagedExecutable = options.resolveManagedExecutable
+    this.#materializeExecutable = options.materializeExecutable ?? materializeGenerationPluginExecutable
     this.#platform = options.platform ?? process.platform
     this.#verifyAuthorization = (input) => options.verifyAuthorization(input)
     // Never resolve commands or relative interpreter arguments from a downloaded
     // Plugin package (or the shared temp root). Each app session gets an empty,
     // private cwd owned by this runtime.
     this.#workingDirectory = mkdtempSync(path.join(os.tmpdir(), "convax-generation-runtime-"))
-    this.#managedExecutableSnapshotDirectory = mkdtempSync(path.join(os.tmpdir(), "convax-generation-executables-"))
-    this.#materializeExecutable =
-      options.materializeExecutable ??
-      ((binding, bindingKind) =>
-        materializeGenerationPluginExecutable(
-          binding,
-          bindingKind === "managed" ? { directory: this.#managedExecutableSnapshotDirectory } : undefined,
-        ))
   }
 
   async listTools(options: { output?: GenerationOutputModality } = {}): Promise<readonly GenerationToolSummary[]> {
@@ -438,6 +464,109 @@ export class GenerationPluginRuntime {
           left.title.localeCompare(right.title) ||
           left.toolId.localeCompare(right.toolId),
       )
+  }
+
+  /** Lists installed service contributions without resolving or starting their sidecars. */
+  async listServices(): Promise<readonly PluginServiceSummary[]> {
+    const plugins = await this.#discover()
+    return [...plugins.values()]
+      .filter(({ manifest }) => manifest.contributes.service !== undefined)
+      .map(({ manifest }) => {
+        const models = (manifest.contributes.generation?.tools ?? [])
+          .map((tool) => toolSummary(manifest, tool))
+          .filter((tool) => tool.kind === "model")
+          .map((tool) => ({
+            capability: tool.output,
+            id: tool.toolId,
+            name: tool.modelName!,
+          }))
+        return {
+          actions: [...manifest.contributes.service!.actions],
+          capabilities: [...new Set(models.map((model) => model.capability))],
+          description: manifest.description,
+          models,
+          pluginId: manifest.id,
+          pluginName: manifest.name,
+          version: manifest.version,
+        }
+      })
+      .sort(
+        (left, right) => left.pluginName.localeCompare(right.pluginName) || left.pluginId.localeCompare(right.pluginId),
+      )
+  }
+
+  /** Calls one host-defined service tool with an empty input; arbitrary MCP names never enter here. */
+  async callService(
+    pluginId: string,
+    call: "status" | WebPluginServiceAction,
+    signal?: AbortSignal,
+  ): Promise<PluginServiceMcpCallResult> {
+    if (signal?.aborted) throw abortError(signal.reason)
+    const plugins = await this.#discover()
+    const selected = this.#selectService(plugins, pluginId)
+    if (call !== "status" && !selected.manifest.contributes.service!.actions.includes(call)) {
+      throw new Error(`Plugin service action is not declared: ${pluginId}`)
+    }
+    const runtime = await this.#runtimeFor(selected)
+    const toolName =
+      call === "status"
+        ? pluginServiceMcpTools.status
+        : call === "authorize"
+          ? pluginServiceMcpTools.authorize
+          : call === "reauthorize"
+            ? pluginServiceMcpTools.reauthorize
+            : call === "authorization.cancel"
+              ? pluginServiceMcpTools.cancelAuthorization
+              : pluginServiceMcpTools.signOut
+    try {
+      const availableTools = await this.#availableTools(runtime, signal)
+      if (!availableTools.has(toolName)) {
+        throw new Error(`Plugin service ${pluginId} did not expose its fixed MCP tool: ${toolName}`)
+      }
+      if (signal?.aborted) throw abortError(signal.reason)
+      const current = (await this.#discover()).get(pluginId)
+      if (!current || current.fingerprint !== selected.fingerprint || this.#cache.get(pluginId) !== runtime) {
+        throw new Error(`Plugin service changed before its action started: ${pluginId}`)
+      }
+      const result: PluginServiceMcpCallResult = await runtime.client.callTool(toolName, {}, signal)
+      result.authorizationIdentity = runtime.authorizationIdentity
+      if (
+        (call === "authorize" || call === "reauthorize") &&
+        availableTools.has(pluginServiceMcpTools.completeAuthorization)
+      ) {
+        let completionStarted = false
+        result.completeAuthorization = async (input, completionSignal) => {
+          if (completionStarted)
+            throw new Error(`Plugin service authorization completion was already used: ${pluginId}`)
+          completionStarted = true
+          if (completionSignal?.aborted) throw abortError(completionSignal.reason)
+          const current = (await this.#discover()).get(pluginId)
+          if (!current || current.fingerprint !== selected.fingerprint || this.#cache.get(pluginId) !== runtime) {
+            throw new Error(`Plugin service changed before browser authorization completed: ${pluginId}`)
+          }
+          try {
+            const completionInput: Record<string, unknown> = {
+              authorization_id: input.authorization_id,
+              cookie_origin: input.cookie_origin,
+              cookies: input.cookies.map(({ name, value }) => ({ name, value })),
+              schema: input.schema,
+            }
+            return await runtime.client.callTool(
+              pluginServiceMcpTools.completeAuthorization,
+              completionInput,
+              completionSignal,
+            )
+          } catch (error) {
+            if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+            throw error
+          }
+        }
+      }
+      return result
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+      throw error
+    }
   }
 
   async prepareTool(expected: GenerationToolSummary, signal?: AbortSignal) {
@@ -534,7 +663,7 @@ export class GenerationPluginRuntime {
       // Generation jobs may legitimately remain queued or running for hours. The
       // sidecar owns the vendor state machine and resolves only on a terminal
       // result; caller cancellation, Plugin disposal, and process exit still stop
-      // this request. Control-plane calls retain the bounded client timeout.
+      // this request. Service/control-plane calls retain the bounded client timeout.
       return await prepared.runtime.client.callTool(prepared.toolId, input, signal, onExternalStart, false)
     } catch (error) {
       if (!(error instanceof Error && error.name === "AbortError")) this.#evict(prepared.runtime)
@@ -594,7 +723,6 @@ export class GenerationPluginRuntime {
     this.#starting.clear()
     for (const runtime of this.#cache.values()) this.#closeRuntime(runtime, true)
     this.#cache.clear()
-    rmSync(this.#managedExecutableSnapshotDirectory, { force: true, recursive: true })
     rmSync(this.#workingDirectory, { force: true, recursive: true })
   }
 
@@ -630,6 +758,12 @@ export class GenerationPluginRuntime {
       if (tool) return { plugin, tool }
     }
     throw new Error(`Generation tool is not installed: ${hostToolId}`)
+  }
+
+  #selectService(plugins: ReadonlyMap<string, DiscoveredPlugin>, pluginId: string) {
+    const plugin = plugins.get(pluginId)
+    if (!plugin?.manifest.contributes.service) throw new Error(`Plugin service is not installed: ${pluginId}`)
+    return plugin
   }
 
   async #runtimeFor(plugin: DiscoveredPlugin): Promise<CachedPluginRuntime> {
@@ -692,7 +826,7 @@ export class GenerationPluginRuntime {
         `Generation Plugin executable changed after installation; reinstall Plugin: ${plugin.manifest.id}`,
       )
     }
-    const executableSnapshot = await this.#materializeExecutable(confirmed.binding, confirmed.kind)
+    const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
     try {
       const client = this.#createClient({
         ...(declaredRuntime.args ? { args: [...declaredRuntime.args] } : {}),
@@ -705,6 +839,7 @@ export class GenerationPluginRuntime {
         throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
       }
       const cached: CachedPluginRuntime = {
+        authorizationIdentity: toolPluginAuthorizationIdentity(plugin.manifest, confirmed.kind, confirmed.binding),
         client,
         executableSnapshot,
         fingerprint: plugin.fingerprint,

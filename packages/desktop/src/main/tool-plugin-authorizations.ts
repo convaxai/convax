@@ -2,7 +2,12 @@ import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import { requireWebPluginId, webPluginManifestSchemaV2, type InstalledWebPluginSummary } from "../plugin-contracts"
+import {
+  requireWebPluginId,
+  webPluginManifestSchemaV2,
+  webPluginManifestSchemaV3,
+  type InstalledWebPluginSummary,
+} from "../plugin-contracts"
 
 const authorizationSchema = "convax.tool-plugin-authorization/1" as const
 const maximumReceiptBytes = 16 * 1024
@@ -86,9 +91,9 @@ export function toolPluginManifestSha256(plugin: InstalledWebPluginSummary) {
 
 export function isExecutableToolPlugin(plugin: InstalledWebPluginSummary) {
   return (
-    plugin.schema === webPluginManifestSchemaV2 &&
+    (plugin.schema === webPluginManifestSchemaV2 || plugin.schema === webPluginManifestSchemaV3) &&
     plugin.runtime?.type === "mcp-stdio" &&
-    Boolean(plugin.contributes.generation?.tools.length)
+    (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )
 }
 
@@ -402,6 +407,17 @@ export class ToolPluginAuthorizationStore {
       if (error instanceof Error && error.message === reinstallError(plugin.id).message) throw error
       throw reinstallError(plugin.id)
     }
+  }
+
+  /**
+   * Resolves and verifies the exact currently installed service identity
+   * without launching its executable. Missing or changed consent fails closed.
+   */
+  async authorizedServiceIdentity(plugin: InstalledWebPluginSummary) {
+    if (!isExecutableToolPlugin(plugin) || plugin.contributes.service === undefined) return null
+    const resolved = await this.#binding(plugin)
+    await this.verify(plugin, resolved.kind, resolved.binding)
+    return toolPluginAuthorizationIdentity(plugin, resolved.kind, resolved.binding)
   }
 
   async revoke(pluginId: string) {

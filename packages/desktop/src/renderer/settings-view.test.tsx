@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
+import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 import { SettingsView } from "./settings-view"
 
 const noop = () => undefined
@@ -41,6 +42,24 @@ const pluginClient: WebPluginClient = {
   uninstallPlugin: mock(async () => true),
 }
 
+const serviceSnapshot: ServiceCatalogSnapshot = {
+  loading: false,
+  services: [
+    {
+      authentication: "not-applicable",
+      billing: { kind: "free" },
+      capabilities: ["llm"],
+      description: "OpenCode agent runtime",
+      kind: "builtin",
+      loading: false,
+      models: [],
+      name: "OpenCode",
+      serviceId: "builtin:opencode",
+      state: "connected",
+    },
+  ],
+}
+
 describe("SettingsView", () => {
   test("renders a controlled global language preference and return action", () => {
     const markup = renderToStaticMarkup(
@@ -49,7 +68,10 @@ describe("SettingsView", () => {
         locale="en"
         onClose={noop}
         onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
         pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
       />,
     )
@@ -72,7 +94,10 @@ describe("SettingsView", () => {
         locale="zh-CN"
         onClose={noop}
         onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
         pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
       />,
     )
@@ -90,7 +115,10 @@ describe("SettingsView", () => {
         locale="en"
         onClose={noop}
         onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
         pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
       />,
     )
@@ -100,5 +128,28 @@ describe("SettingsView", () => {
     expect(markup).toContain('role="tablist"')
     expect(markup).not.toContain('role="dialog"')
     expect(markup).not.toContain('id="settings-language"')
+  })
+
+  test("exposes installed Plugin services as a host-rendered settings section", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        initialSection="services"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+
+    expect(markup).toContain(appMessage("en", "settings.services"))
+    expect(markup).toContain(`aria-label="${appMessage("en", "services.title")}"`)
+    expect(markup).toContain("OpenCode")
+    expect(markup).toContain(appMessage("en", "services.free"))
+    expect(markup).not.toContain("iframe")
   })
 })

@@ -19,6 +19,8 @@ describe("ProjectEmptyState", () => {
     expect(markup).toContain("Create or open a project")
     expect(markup).toContain("Create project")
     expect(markup).toContain("Open project")
+    expect(markup).toContain("Documents/Convax")
+    expect(markup).not.toContain("Choose a location")
   })
 })
 

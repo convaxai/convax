@@ -1,0 +1,68 @@
+import { describe, expect, test } from "bun:test"
+
+import { pluginServiceIpcChannels } from "../plugin-service-contracts"
+import { parsePluginServiceTarget, PluginServiceIpcOperations } from "./plugin-service-ipc-core"
+
+class TestSender {
+  readonly #listeners = new Set<() => void>()
+  constructor(readonly id: number) {}
+  once(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.add(listener) }
+  removeListener(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.delete(listener) }
+  destroy() { for (const listener of this.#listeners) listener(); this.#listeners.clear() }
+  listenerCount() { return this.#listeners.size }
+}
+
+function waitForAbort(signal: AbortSignal) {
+  return new Promise<never>((_resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason)
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+  })
+}
+
+describe("Plugin service IPC boundary", () => {
+  test("accepts only an exact Plugin id target and defines no generic action channel", () => {
+    expect(parsePluginServiceTarget({ pluginId: "account-tools" })).toEqual({ pluginId: "account-tools" })
+    expect(() => parsePluginServiceTarget({ pluginId: "account-tools", method: "arbitrary.call" })).toThrow(
+      "target is invalid",
+    )
+    expect(() => parsePluginServiceTarget({ pluginId: "../../secret" })).toThrow("kebab-case")
+    expect(Object.values(pluginServiceIpcChannels)).toEqual([
+      "plugin-service:authorize",
+      "plugin-service:authorization-cancel",
+      "plugin-service:status",
+      "plugin-service:list",
+      "plugin-service:reauthorize",
+      "plugin-service:sign-out",
+    ])
+  })
+
+  test("scopes duplicate operations and renderer destruction to one sender", async () => {
+    const operations = new PluginServiceIpcOperations()
+    const owner = new TestSender(1)
+    const other = new TestSender(2)
+    const first = operations.run(owner, "status\0account-tools", waitForAbort)
+    await expect(operations.run(owner, "status\0account-tools", async () => "duplicate")).rejects.toThrow(
+      "already active",
+    )
+    await expect(operations.run(other, "status\0account-tools", async () => "other")).resolves.toBe("other")
+    expect(owner.listenerCount()).toBe(1)
+    owner.destroy()
+    await expect(first).rejects.toMatchObject({ name: "AbortError" })
+    operations.dispose()
+  })
+
+  test("aborts every operation on disposal and fails future work closed", async () => {
+    const operations = new PluginServiceIpcOperations()
+    const owner = new TestSender(1)
+    const first = operations.run(owner, "authorize\0one", waitForAbort)
+    const second = operations.run(owner, "authorize\0two", waitForAbort)
+    const firstOutcome = first.then(() => null, (error: unknown) => error)
+    const secondOutcome = second.then(() => null, (error: unknown) => error)
+    operations.dispose()
+    operations.dispose()
+    expect(await firstOutcome).toMatchObject({ name: "AbortError" })
+    expect(await secondOutcome).toMatchObject({ name: "AbortError" })
+    expect(owner.listenerCount()).toBe(0)
+    await expect(operations.run(owner, "status\0one", async () => "no")).rejects.toThrow("disposed")
+  })
+})

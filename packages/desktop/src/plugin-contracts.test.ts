@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 
-import { type WebPluginGenerationContribution, parseWebPluginManifest } from "./plugin-contracts"
+import {
+  type WebPluginGenerationContribution,
+  type WebPluginServiceContribution,
+  parseWebPluginManifest,
+} from "./plugin-contracts"
 
 function staticManifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -45,6 +49,12 @@ function generationContribution(): WebPluginGenerationContribution {
   }
 }
 
+function serviceContribution(
+  actions: WebPluginServiceContribution["actions"] = ["reauthorize", "sign_out"],
+): WebPluginServiceContribution {
+  return { actions }
+}
+
 function executableManifest(overrides: Record<string, unknown> = {}) {
   const base = staticManifest()
   return {
@@ -59,6 +69,39 @@ function executableManifest(overrides: Record<string, unknown> = {}) {
       type: "mcp-stdio",
     },
     schema: "convax.plugin/2",
+    ...overrides,
+  }
+}
+
+function executableManifestV3(overrides: Record<string, unknown> = {}) {
+  const generation = generationContribution()
+  return {
+    capabilities: [],
+    contributes: {
+      agent: { tools: [{ id: "transform_video", tool: "video.generate" }] },
+      canvas: {
+        selectionActions: [
+          {
+            description: { default: "Create a transformed video", "zh-CN": "创建处理后的视频" },
+            editor: "time-range",
+            id: "trim",
+            steps: [{ tool: "video.generate" }],
+            target: "video",
+            title: { default: "Trim", "zh-CN": "截取" },
+          },
+        ],
+      },
+      generation: {
+        models: [{ name: "Example Image 1", tool: "image.generate" }],
+        tools: generation.tools,
+      },
+    },
+    description: "Declarative models and media operations",
+    id: "declarative-tools",
+    name: "Declarative Tools",
+    runtime: { command: "declarative-tools-mcp", type: "mcp-stdio" },
+    schema: "convax.plugin/3",
+    version: "1.0.0",
     ...overrides,
   }
 }
@@ -98,7 +141,7 @@ describe("versioned Plugin manifest generation declarations", () => {
 
     expect(parsed.schema).toBe("convax.plugin/2")
     expect(parsed.entry).toBe("web/index.html")
-    expect(parsed.contributes.canvas!.renderer.extensions).toEqual([".prompt"])
+    expect(parsed.contributes.canvas!.renderer?.extensions).toEqual([".prompt"])
     expect(parsed.runtime).toEqual({
       args: ["serve", "--transport=stdio", "--endpoint=https://example.invalid/mcp"],
       command: "convax-generation-mcp",
@@ -106,6 +149,77 @@ describe("versioned Plugin manifest generation declarations", () => {
     })
     expect(parsed.contributes.generation?.tools).toEqual(generationContribution().tools)
     expect(parsed.contributes.generation?.tools[1]?.acceptedInputs).toEqual(["reference_video", "audio", "text"])
+  })
+
+  test("parses explicit v3 models, Agent operations, and host-rendered selection actions", () => {
+    const parsed = parseWebPluginManifest(executableManifestV3())
+
+    expect(parsed.schema).toBe("convax.plugin/3")
+    expect(parsed.entry).toBeUndefined()
+    expect(parsed.contributes.generation?.models).toEqual([{ name: "Example Image 1", tool: "image.generate" }])
+    expect(parsed.contributes.agent).toEqual({ tools: [{ id: "transform_video", tool: "video.generate" }] })
+    expect(parsed.contributes.canvas?.renderer).toBeUndefined()
+    expect(parsed.contributes.canvas?.selectionActions).toEqual([
+      {
+        description: { default: "Create a transformed video", "zh-CN": "创建处理后的视频" },
+        editor: "time-range",
+        id: "trim",
+        steps: [{ tool: "video.generate" }],
+        target: "video",
+        title: { default: "Trim", "zh-CN": "截取" },
+      },
+    ])
+  })
+
+  test("rejects ambiguous v3 model, Agent, and selection-action references", () => {
+    const base = executableManifestV3()
+    const generation = base.contributes.generation
+    const withContributions = (contributes: Record<string, unknown>) => ({ ...base, contributes })
+
+    expect(() => parseWebPluginManifest(withContributions({ generation: { tools: generation.tools } }))).toThrow(
+      "models must be declared explicitly",
+    )
+    expect(() =>
+      parseWebPluginManifest(
+        withContributions({
+          generation: { ...generation, models: [{ name: "Missing", tool: "missing.tool" }] },
+        }),
+      ),
+    ).toThrow("unknown tool")
+    expect(() =>
+      parseWebPluginManifest(
+        withContributions({
+          agent: { tools: [{ id: "generate_image", tool: "image.generate" }] },
+          generation,
+        }),
+      ),
+    ).toThrow("operation, not a generation model")
+    expect(() =>
+      parseWebPluginManifest(
+        withContributions({
+          agent: { tools: [{ id: "Bad-Name", tool: "video.generate" }] },
+          generation,
+        }),
+      ),
+    ).toThrow("lower snake_case")
+    expect(() => {
+      const action = base.contributes.canvas.selectionActions[0]
+      return parseWebPluginManifest(
+        withContributions({
+          canvas: { selectionActions: [{ ...action, steps: [{ tool: "image.generate" }] }] },
+          generation,
+        }),
+      )
+    }).toThrow("operation, not a generation model")
+    expect(() => {
+      const action = base.contributes.canvas.selectionActions[0]
+      return parseWebPluginManifest(
+        withContributions({
+          canvas: { selectionActions: [{ ...action, steps: [{ tool: "missing.tool" }] }] },
+          generation,
+        }),
+      )
+    }).toThrow("unknown generation tool")
   })
 
   test("allows prompt-only tools with no optional Canvas reference roles", () => {
@@ -158,6 +272,40 @@ describe("versioned Plugin manifest generation declarations", () => {
     }).toThrow("runtime and executable contribution must appear together")
   })
 
+  test("allows a headless service-only Tool Plugin and keeps actions fixed and optional", () => {
+    const parsed = parseWebPluginManifest({
+      capabilities: [],
+      contributes: { service: serviceContribution(["sign_out"]) },
+      description: "Account service",
+      id: "account-service",
+      name: "Account Service",
+      runtime: { command: "account-service-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/2",
+      version: "1.0.0",
+    })
+
+    expect(parsed.entry).toBeUndefined()
+    expect(parsed.contributes.generation).toBeUndefined()
+    expect(parsed.contributes.service).toEqual({ actions: ["sign_out"] })
+
+    const statusOnly = parseWebPluginManifest({
+      ...parsed,
+      contributes: { service: serviceContribution([]) },
+    })
+    expect(statusOnly.contributes.service?.actions).toEqual([])
+  })
+
+  test("lets generation and service contributions share exactly one runtime", () => {
+    const manifest = executableManifest()
+    const parsed = parseWebPluginManifest({
+      ...manifest,
+      contributes: { ...manifest.contributes, service: serviceContribution() },
+    })
+    expect(parsed.contributes.generation?.tools).toHaveLength(2)
+    expect(parsed.contributes.service?.actions).toEqual(["reauthorize", "sign_out"])
+    expect(parsed.runtime?.command).toBe("convax-generation-mcp")
+  })
+
   test("allows a static v2 caller but keeps generation.execute out of v1", () => {
     const caller = parseWebPluginManifest(
       staticManifest({ capabilities: ["canvas.node.read", "generation.execute"], schema: "convax.plugin/2" }),
@@ -168,7 +316,7 @@ describe("versioned Plugin manifest generation declarations", () => {
     expect(caller.contributes.generation).toBeUndefined()
 
     expect(() => parseWebPluginManifest(staticManifest({ capabilities: ["generation.execute"] }))).toThrow(
-      "only to convax.plugin/2",
+      "only to executable Plugin manifests",
     )
     expect(() =>
       parseWebPluginManifest(staticManifest({ capabilities: ["canvas.node.read"], schema: "convax.plugin/2" })),
@@ -210,6 +358,19 @@ describe("versioned Plugin manifest generation declarations", () => {
         },
       })
     }).toThrow("unsupported field")
+  })
+
+  test("rejects arbitrary service methods, fields, and duplicate actions", () => {
+    const manifest = executableManifest()
+    const withService = (service: unknown) => ({
+      ...manifest,
+      contributes: { ...manifest.contributes, service },
+    })
+    expect(() => parseWebPluginManifest(withService({ actions: ["open_browser"] }))).toThrow("unsupported")
+    expect(() => parseWebPluginManifest(withService({ actions: ["sign_out", "sign_out"] }))).toThrow("duplicate")
+    expect(() => parseWebPluginManifest(withService({ actions: [], statusTool: "arbitrary.call" }))).toThrow(
+      "unsupported field",
+    )
   })
 
   test("requires a bounded portable bare executable and bounded portable args", () => {

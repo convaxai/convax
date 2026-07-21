@@ -38,7 +38,16 @@ import {
   Wrench,
   X,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { isAgentCanvasResource, shouldFlushAgentCanvasContext } from "../agent-canvas-context"
 import { AgentGenerationModelPicker } from "./agent-generation-model-picker"
 import {
@@ -233,6 +242,17 @@ function composerContainsRange(root: HTMLElement, range: Range) {
   return root.contains(range.startContainer) && root.contains(range.endContainer)
 }
 
+function focusComposerAtEnd(root: HTMLElement) {
+  root.focus()
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  range.collapse(false)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 function resourceLabel(resource: AgentResource) {
   if (resource.name) return resource.name
   if (resource.kind === "skill") return resource.name
@@ -301,7 +321,11 @@ export interface AgentPanelProps {
   projectName?: string
 }
 
-export function AgentPanel(props: AgentPanelProps) {
+export interface AgentPanelHandle {
+  addResources(resources: readonly AgentResource[]): void
+}
+
+export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(props, ref) {
   const embedded = props.embedded === true
   const compactEmbeddedChrome = embedded && props.embeddedHeader === false
   const sharedGenerationPreference = useAgentGenerationPreference()
@@ -358,7 +382,9 @@ export function AgentPanel(props: AgentPanelProps) {
   const [creatingSession, setCreatingSession] = useState(false)
   const [followingLatest, setFollowingLatest] = useState(true)
   const [error, setError] = useState<string>()
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0)
   const composerRef = useRef<HTMLDivElement>(null)
+  const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
   const composerDraftRef = useRef(composerDraft)
   const attachmentsRef = useRef(attachments)
@@ -612,6 +638,7 @@ export function AgentPanel(props: AgentPanelProps) {
     setGenerationModelPickerOpen(false)
     setSkillSlashQuery(undefined)
     setComposerFocused(false)
+    pendingComposerFocusRef.current = false
     setDropActive(false)
     setAttachments([])
     replaceComposerDraft(emptyAgentComposerDraft())
@@ -945,6 +972,26 @@ export function AgentPanel(props: AgentPanelProps) {
     },
     [closeResourcePicker, insertSkill, lockedResourceKeys],
   )
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      addResources(resources) {
+        if (!props.projectId || resources.length === 0) return
+        pendingComposerFocusRef.current = true
+        addResources(resources)
+        props.layout?.onOpenChange(true)
+        setComposerFocusRequest((request) => request + 1)
+      },
+    }),
+    [addResources, props.layout?.onOpenChange, props.projectId],
+  )
+
+  useLayoutEffect(() => {
+    if (!open || !pendingComposerFocusRef.current || !composerRef.current) return
+    pendingComposerFocusRef.current = false
+    focusComposerAtEnd(composerRef.current)
+  }, [attachments, composerFocusRequest, open])
 
   const selectPickerResource = useCallback(
     (resource: AgentResource) => {
@@ -1838,7 +1885,7 @@ export function AgentPanel(props: AgentPanelProps) {
       </aside>
     </TooltipProvider>
   )
-}
+})
 
 function ConversationHistory(props: {
   busySessionIds: ReadonlySet<string>

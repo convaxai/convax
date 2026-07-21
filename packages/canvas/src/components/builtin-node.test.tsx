@@ -6,6 +6,8 @@ import { createCanvasDocument } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import type { CanvasSelectionAction } from "../selection-actions"
+import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "../selection-drag-source"
 import { deriveCanvasSelectionContext } from "../selection-context"
 import { CanvasServicesProvider, createCanvasServices, type CanvasAssistantRequest } from "../services"
 import type { CanvasDocument, CanvasNode, CanvasSelection } from "../types"
@@ -23,7 +25,9 @@ mock.module("@xyflow/react", () => ({
   useConnection: (selector: (state: { inProgress: boolean }) => unknown) => selector({ inProgress: false }),
 }))
 
-const { BuiltinCanvasNode, CanvasNodeChrome } = await import("./builtin-node")
+const { BuiltinCanvasNode, BuiltinMediaFileNode, CanvasNodeChrome, startCanvasSelectionDragFromNode } = await import(
+  "./builtin-node"
+)
 
 const node: CanvasNode = {
   id: "node-a",
@@ -62,11 +66,29 @@ function renderWithEditor(
     assistantRender?: (request: CanvasAssistantRequest) => ReactNode
     commit?: CanvasEditorController["commit"]
     document?: CanvasDocument
+    executeSelectionAction?: CanvasEditorController["executeSelectionAction"]
+    rendererUsesChrome?: boolean
+    selectionDragArmed?: boolean
+    selectionDragSource?: CanvasSelectionDragSource | null
+    selectionDragStatus?: CanvasSelectionDragPreparationStatus
+    startSelectionDrag?: CanvasEditorController["startSelectionDrag"]
+    visibleSelectionActions?: readonly CanvasSelectionAction[]
   } = {},
 ) {
   const fileRenderers = createCanvasFileRendererRegistry([
     {
-      component: () => <div data-file-renderer />,
+      component: options.rendererUsesChrome
+        ? (props) => (
+            <CanvasNodeChrome
+              icon={null}
+              label="Registered renderer"
+              node={props}
+              toolbar={<div className="convax-node-toolbar__surface" data-renderer-toolbar />}
+            >
+              <div data-file-renderer />
+            </CanvasNodeChrome>
+          )
+        : () => <div data-file-renderer />,
       id: "test-file",
       label: "Test file",
       matches: (data) => data.kind === "test-file",
@@ -82,18 +104,25 @@ function renderWithEditor(
     document: options.document ?? createCanvasDocument({ id: "canvas-test", nodes: [node] }),
     duplicateNode: () => {},
     endGesture: () => {},
-    executeSelectionAction: () => {},
+    executeSelectionAction: options.executeSelectionAction ?? (() => {}),
     fileRenderers,
     hydrating,
     isSelectionActionPending: () => false,
     quickConnect: () => {},
     readOnly,
+    releaseSelectionDrag: () => {},
     removeNode: () => {},
     replaceNodeMedia: () => {},
     selectNodes: () => {},
     selection: currentSelection,
     selectionContext: deriveCanvasSelectionContext(currentSelection),
-    visibleSelectionActions: [],
+    selectionDragArmed: options.selectionDragArmed ?? false,
+    selectionDragChordHeld: options.selectionDragArmed ?? false,
+    selectionDragStatus: options.selectionDragStatus ?? "unavailable",
+    setSelectionDragCandidateNode: () => {},
+    startSelectionDrag: options.startSelectionDrag ?? (() => false),
+    visibleSelectionActions: options.visibleSelectionActions ?? [],
+    visibleSelectionDragSource: options.selectionDragSource ?? null,
   }
   const services = createCanvasServices({
     assistant: { render: options.assistantRender ?? (() => <div data-assistant-toolbar />) },
@@ -111,6 +140,17 @@ function toolbarCount(markup: string) {
 }
 
 describe("built-in node toolbar visibility", () => {
+  test("keeps an empty media body passive while upload remains in the node toolbar", () => {
+    const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
+      <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Image", url: "" }} />
+    ))
+
+    expect(markup).toContain("convax-media-empty__content")
+    expect(markup).toContain("Use the toolbar to add content")
+    expect(markup).toContain('aria-label="Add image"')
+    expect(markup).not.toContain("convax-media-empty__action")
+  })
+
   test("uses React Flow default visibility for the editable sole selected node", () => {
     const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
       <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={<div data-built-in-toolbar />}>
@@ -133,6 +173,136 @@ describe("built-in node toolbar visibility", () => {
     expect(toolbarCount(render(selection(["node-a", "node-b"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"], ["edge-a"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"]), true))).toBe(0)
+  })
+
+  test("adds host selection actions to every eligible node toolbar", () => {
+    const action: CanvasSelectionAction = {
+      execute: () => undefined,
+      id: "agent.add-to-conversation",
+      label: "Add to conversation",
+    }
+    const render = (toolbar?: ReactNode, currentSelection = selection(["node-a"]), readOnly = false) =>
+      renderWithEditor(
+        currentSelection,
+        readOnly,
+        (props) => (
+          <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={toolbar}>
+            <div />
+          </CanvasNodeChrome>
+        ),
+        false,
+        { visibleSelectionActions: [action] },
+      )
+
+    expect(render()).toContain('aria-label="Add to conversation"')
+    const withLocalToolbar = render(<div className="convax-node-toolbar__surface" data-local-toolbar />)
+    expect(withLocalToolbar).toContain('aria-label="Add to conversation"')
+    expect(withLocalToolbar).toContain("data-local-toolbar")
+    expect(withLocalToolbar.match(/aria-label="Add to conversation"/g)).toHaveLength(1)
+    const withContributedToolbar = renderWithEditor(
+      selection(["node-a"]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      { visibleSelectionActions: [action] },
+    )
+    expect(withContributedToolbar).toContain("data-contributed-toolbar")
+    expect(withContributedToolbar.match(/aria-label="Add to conversation"/g)).toHaveLength(1)
+    const withChromeAndContribution = renderWithEditor(
+      selection(["node-a"]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      { rendererUsesChrome: true, visibleSelectionActions: [action] },
+    )
+    expect(withChromeAndContribution).toContain("data-renderer-toolbar")
+    expect(withChromeAndContribution).toContain("data-contributed-toolbar")
+    expect(withChromeAndContribution.match(/aria-label="Add to conversation"/g)).toHaveLength(1)
+    expect(render(undefined, selection(["node-a", "node-b"]))).not.toContain("Add to conversation")
+    expect(render(undefined, selection(["node-a"], ["edge-a"]))).not.toContain("Add to conversation")
+    expect(render(undefined, selection(["node-a"]), true)).not.toContain("Add to conversation")
+  })
+
+  test("makes every selected node body draggable only while the held host gesture is ready", () => {
+    const dragSource: CanvasSelectionDragSource = {
+      id: "native-files",
+      label: "Drag outside Convax",
+      prepare: async () => ({ dispose: () => undefined, start: () => undefined }),
+      preparingLabel: "Preparing media",
+      visible: () => true,
+    }
+    const render = (
+      currentSelection: CanvasSelection,
+      status: CanvasSelectionDragPreparationStatus,
+      readOnly = false,
+      selected = true,
+    ) =>
+      renderWithEditor(
+        currentSelection,
+        readOnly,
+        (props) => <BuiltinCanvasNode {...props} selected={selected} />,
+        false,
+        { selectionDragArmed: true, selectionDragSource: dragSource, selectionDragStatus: status },
+      )
+
+    const ready = render(selection(["node-a"]), "ready")
+    expect(ready).toContain('data-canvas-selection-drag-state="ready"')
+    expect(ready).toContain('draggable="true"')
+    expect(ready).toContain("Drag outside Convax")
+    expect(ready).not.toContain('aria-label="Drag outside Convax"')
+
+    const preparing = render(selection(["node-a"]), "preparing")
+    expect(preparing).toContain('data-canvas-selection-drag-state="preparing"')
+    expect(preparing).toContain('draggable="false"')
+    expect(preparing).toContain('role="status"')
+    expect(preparing).toContain("Preparing media")
+
+    const multi = renderWithEditor(
+      selection(["node-a", "node-b"]),
+      false,
+      (props) => (
+        <>
+          <BuiltinCanvasNode {...props} />
+          <BuiltinCanvasNode {...props} id="node-b" />
+        </>
+      ),
+      false,
+      { selectionDragArmed: true, selectionDragSource: dragSource, selectionDragStatus: "ready" },
+    )
+    expect(multi.match(/draggable="true"/g)).toHaveLength(2)
+    expect(multi.match(/data-canvas-selection-drag-hint/g)).toHaveLength(1)
+    expect(render(selection(["node-a"]), "ready", true)).toContain('draggable="true"')
+    expect(render(selection(["node-a"]), "ready", false, false)).not.toContain("data-canvas-selection-drag-state")
+  })
+
+  test("starts the whole prepared selection only while the exact drag chord remains held", () => {
+    const start = mock(() => true)
+    const dragEvent = (
+      overrides: Partial<{ altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }> = {},
+    ) => ({
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      preventDefault: mock(() => undefined),
+      shiftKey: false,
+      stopPropagation: mock(() => undefined),
+      ...overrides,
+    })
+
+    const notReady = dragEvent({ metaKey: true, shiftKey: true })
+    expect(startCanvasSelectionDragFromNode(notReady, false, "meta", start)).toBeFalse()
+    const released = dragEvent({ metaKey: true })
+    expect(startCanvasSelectionDragFromNode(released, true, "meta", start)).toBeFalse()
+    const otherPlatform = dragEvent({ ctrlKey: true, shiftKey: true })
+    expect(startCanvasSelectionDragFromNode(otherPlatform, true, "meta", start)).toBeFalse()
+    const held = dragEvent({ metaKey: true, shiftKey: true })
+    expect(startCanvasSelectionDragFromNode(held, true, "meta", start)).toBeTrue()
+
+    expect(start).toHaveBeenCalledTimes(1)
+    for (const event of [notReady, released, otherPlatform, held]) {
+      expect(event.preventDefault).toHaveBeenCalledTimes(1)
+      expect(event.stopPropagation).toHaveBeenCalledTimes(1)
+    }
   })
 
   test("applies the same boundary to contributed and assistant toolbars", () => {
@@ -185,6 +355,8 @@ describe("built-in node toolbar visibility", () => {
     })
 
     expect(request?.ownerGenerationToolId).toBe("plugin.example:image.generate")
+    expect(request?.mentionedNodeIds).toEqual([])
+    expect(request?.onGenerationActivityChange).toBeFunction()
     request?.onOwnerGenerationToolIdChange?.("plugin.example:image.alternate")
     expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
   })

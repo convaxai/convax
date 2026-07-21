@@ -71,7 +71,10 @@
   border-color: #e1e3e7;
   border-radius: 8px;
   box-shadow: var(--canvas-floating-shadow);
-  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
 }
 
 .convax-canvas .convax-node:hover .convax-node__surface {
@@ -82,6 +85,19 @@
 .convax-canvas .convax-node.is-selected .convax-node__surface {
   border-color: var(--canvas-accent);
   box-shadow: 0 14px 32px -14px rgb(73 52 151 / 34%);
+}
+
+.convax-canvas .react-flow__node.is-connection-target .convax-node__surface {
+  border-color: var(--canvas-accent);
+  box-shadow:
+    0 0 0 4px var(--canvas-accent-soft),
+    0 16px 34px -14px rgb(73 52 151 / 42%);
+  transform: translateY(-1px);
+}
+
+.convax-canvas .react-flow__node.is-connection-target .convax-node__connection {
+  opacity: 1;
+  pointer-events: all;
 }
 
 .convax-canvas .react-flow__resize-control.convax-node-resizer__line {
@@ -150,6 +166,13 @@
   background: rgb(255 255 255 / 97%);
   box-shadow: 0 14px 34px -14px rgb(25 29 40 / 42%);
   backdrop-filter: blur(12px);
+}
+
+.convax-canvas .convax-node-toolbar__cluster {
+  display: flex;
+  width: max-content;
+  align-items: center;
+  gap: 6px;
 }
 
 .convax-canvas .convax-node-toolbar__button {
@@ -342,7 +365,7 @@
   background: #f3f4f6;
 }
 
-.convax-canvas .convax-media-empty__action {
+.convax-canvas .convax-media-empty__content {
   display: flex;
   min-width: 128px;
   min-height: 112px;
@@ -355,12 +378,8 @@
   background: transparent;
   color: #252930;
   font: inherit;
-  cursor: pointer;
-}
-
-.convax-canvas .convax-media-empty__action:disabled {
-  cursor: default;
-  opacity: 0.58;
+  pointer-events: none;
+  user-select: none;
 }
 
 .convax-canvas .convax-media-empty__icon {
@@ -407,7 +426,9 @@
   opacity: 0;
   pointer-events: none;
   transform: translateY(4px);
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 
 .convax-canvas .convax-video__controls.is-visible {
@@ -430,7 +451,10 @@
   pointer-events: auto;
   box-shadow: 0 5px 14px rgb(0 0 0 / 24%);
   backdrop-filter: blur(8px);
-  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
 }
 
 .convax-canvas .convax-video__control:hover,
@@ -484,7 +508,12 @@
   color: #17191d;
   pointer-events: none;
   transform: scale(0.74);
-  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
   box-shadow: 0 5px 14px -8px rgb(22 26 34 / 42%);
 }
 
@@ -641,7 +670,9 @@
   fill: none;
   stroke: var(--canvas-edge);
   stroke-width: 1.15;
-  transition: stroke 140ms ease, stroke-width 140ms ease;
+  transition:
+    stroke 140ms ease,
+    stroke-width 140ms ease;
 }
 
 .convax-canvas .react-flow__edge:hover .convax-edge__line {
@@ -796,9 +827,19 @@
 }
 
 .convax-canvas .convax-selection-toolbar {
+  z-index: 45;
+  max-width: calc(100% - 24px);
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.convax-canvas .convax-selection-toolbar__surface {
+  width: max-content;
   min-height: 42px;
   border-radius: 999px;
-  padding-inline: 6px;
+  padding: 4px 6px;
   box-shadow: 0 14px 34px -16px rgb(25 29 40 / 38%);
 }
 

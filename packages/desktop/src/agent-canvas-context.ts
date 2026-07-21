@@ -13,6 +13,14 @@ export function agentCanvasNodeResourceUri(canvasId: string, nodeId: string) {
   return `${agentCanvasResourceUri(canvasId)}/node/${encodeURIComponent(nodeId)}`
 }
 
+export function createAgentCanvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
+  return {
+    kind: "resource",
+    name,
+    uri: agentCanvasNodeResourceUri(canvasId, nodeId),
+  }
+}
+
 export function isAgentCanvasResource(resource: AgentResource) {
   if (resource.kind !== "resource") return false
   try {

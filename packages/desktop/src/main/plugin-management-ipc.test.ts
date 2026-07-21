@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import type { InstalledWebPluginSummary, WebPluginManifest } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { WebPluginManager } from "./plugin-manager"
@@ -78,7 +78,9 @@ function createManager(installed: InstalledWebPluginSummary[] = []) {
 }
 
 function createRemoteCatalog() {
-  return {
+  let changeListener: (() => void) | undefined
+  const unsubscribe = mock(() => undefined)
+  const catalog = {
     installPlugin: mock(async (id: string) => manifest(id)),
     listPluginCatalog: mock(async (installedIds: ReadonlySet<string>) => [
       {
@@ -87,6 +89,15 @@ function createRemoteCatalog() {
       },
     ]),
   } satisfies RemotePluginCatalogPort
+  return {
+    ...catalog,
+    emitChange: () => changeListener?.(),
+    subscribe: mock((listener: () => void) => {
+      changeListener = listener
+      return unsubscribe
+    }),
+    unsubscribe,
+  }
 }
 
 function invoke(channel: string, input?: unknown, event: TestIpcEvent = { sender: { id: 1 } }) {
@@ -149,7 +160,8 @@ describe("registerPluginManagementIpc", () => {
     const sent = testWindow()
     windows.push(sent, testWindow({ destroyed: true }), testWindow({ webContentsDestroyed: true }))
     dialogOwner = sent
-    const dispose = registerPluginManagementIpc(manager, catalog, () => true)
+    const onDidChange = mock((_pluginId: string) => undefined)
+    const dispose = registerPluginManagementIpc(manager, catalog, () => true, undefined, { onDidChange })
 
     await expect(invoke(pluginManagementIpcChannels.listPlugins)).resolves.toEqual({
       catalog: [
@@ -176,6 +188,12 @@ describe("registerPluginManagementIpc", () => {
     expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledWith(catalog[1]!.bundle)
     await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
     expect(manager.uninstall).toHaveBeenCalledWith("installed-plugin")
+    expect(onDidChange).toHaveBeenCalledTimes(3)
+    expect(onDidChange.mock.calls.map(([pluginId]) => pluginId)).toEqual([
+      "imported-plugin",
+      "catalog-plugin",
+      "installed-plugin",
+    ])
     expect(sent.webContents.send).toHaveBeenCalledTimes(3)
     expect(sent.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
 
@@ -227,10 +245,12 @@ describe("registerPluginManagementIpc", () => {
     const manager = createManager()
     const target = testWindow()
     windows.push(target)
-    const dispose = registerPluginManagementIpc(manager, [], () => true)
+    const onDidChange = mock((_pluginId: string) => undefined)
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, { onDidChange })
 
     await expect(invoke(pluginManagementIpcChannels.importPlugin)).resolves.toBeNull()
     expect(manager.install).not.toHaveBeenCalled()
+    expect(onDidChange).not.toHaveBeenCalled()
     expect(target.webContents.send).not.toHaveBeenCalled()
 
     const registered = [...handlers.keys()]
@@ -238,6 +258,145 @@ describe("registerPluginManagementIpc", () => {
     expect(registered).toHaveLength(4)
     expect(removedHandlers.sort()).toEqual(registered.sort())
     expect(handlers).toHaveLength(0)
+  })
+
+  test("does not route remote catalog changes through the installed Plugin lifecycle", async () => {
+    const { registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const remote = createRemoteCatalog()
+    const live = testWindow()
+    windows.push(live)
+    const dispose = registerPluginManagementIpc(createManager(), [], () => true, remote)
+
+    remote.emitChange()
+    expect(remote.subscribe).not.toHaveBeenCalled()
+    expect(live.webContents.send).not.toHaveBeenCalled()
+    dispose()
+    expect(remote.unsubscribe).not.toHaveBeenCalled()
+  })
+
+  test("does not publish change lifecycle when install-time executable authorization fails", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    manager.install = mock(async (_source: string, options) => {
+      await options?.beforePublish?.(manifest("imported-plugin"))
+      return manifest("imported-plugin")
+    }) as WebPluginManager["install"]
+    const target = testWindow()
+    windows.push(target)
+    dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
+    const onDidChange = mock((_pluginId: string) => undefined)
+    const prepareInstall = mock(async () => {
+      throw new Error("Tool Plugin executable could not be verified during installation")
+    })
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      onDidChange,
+      prepareInstall,
+    })
+
+    await expect(invoke(pluginManagementIpcChannels.importPlugin)).rejects.toThrow("could not be verified")
+    expect(prepareInstall).toHaveBeenCalledTimes(1)
+    expect(onDidChange).not.toHaveBeenCalled()
+    expect(target.webContents.send).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  test("forwards install authorization and revokes it only after a successful uninstall", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    const item = catalogEntry("catalog-plugin")
+    const prepareInstall = mock(async () => ({
+      commit: async () => undefined,
+      publish: async () => undefined,
+      rollback: async () => undefined,
+    }))
+    const revokeAuthorization = mock(async () => undefined)
+    const onDidChange = mock((_pluginId: string) => undefined)
+    dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
+    const dispose = registerPluginManagementIpc(manager, [item], () => true, undefined, {
+      onDidChange,
+      prepareInstall,
+      revokeAuthorization,
+    })
+
+    await invoke(pluginManagementIpcChannels.importPlugin)
+    expect(manager.install).toHaveBeenCalledWith("/portable/plugin-source", {
+      beforePublish: expect.any(Function),
+    })
+    await invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: item.manifest.id })
+    expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledWith(item.bundle, {
+      beforePublish: expect.any(Function),
+    })
+    await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })
+    expect(revokeAuthorization).toHaveBeenCalledWith("installed-plugin")
+
+    manager.uninstall = mock(async () => false) as WebPluginManager["uninstall"]
+    await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "missing-plugin" })
+    expect(revokeAuthorization).toHaveBeenCalledTimes(1)
+    expect(onDidChange).toHaveBeenCalledTimes(3)
+    dispose()
+  })
+
+  test("drains service authorization before Plugin publication and uninstall", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const order: string[] = []
+    const manager = createManager()
+    manager.install = mock(async (_source: string, options) => {
+      const installed = manifest("imported-plugin")
+      const transaction = await options?.beforePublish?.(installed)
+      await transaction?.publish()
+      order.push("package.publish")
+      await transaction?.commit()
+      return installed
+    }) as WebPluginManager["install"]
+    manager.uninstall = mock(async () => {
+      order.push("package.uninstall")
+      return true
+    }) as WebPluginManager["uninstall"]
+    const beforeChange = mock(async (pluginId: string) => { order.push(`before:${pluginId}`) })
+    const prepareInstall = mock(async () => ({
+      commit: async () => { order.push("authorization.commit") },
+      publish: async () => { order.push("authorization.publish") },
+      rollback: async () => undefined,
+    }))
+    dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      beforeChange,
+      onDidChange: async () => undefined,
+      prepareInstall,
+    })
+
+    await invoke(pluginManagementIpcChannels.importPlugin)
+    await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "imported-plugin" })
+    expect(order).toEqual([
+      "before:imported-plugin",
+      "authorization.publish",
+      "package.publish",
+      "authorization.commit",
+      "before:imported-plugin",
+      "package.uninstall",
+    ])
+    dispose()
+  })
+
+  test("does not report an already committed mutation as failed when post-change cleanup fails", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    const target = testWindow()
+    windows.push(target)
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined)
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      onDidChange: async () => { throw new Error("temporary cleanup failure") },
+    })
+    try {
+      await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(
+        true,
+      )
+      expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+      expect(warning).toHaveBeenCalledTimes(1)
+    } finally {
+      dispose()
+      warning.mockRestore()
+    }
   })
 
   test("merges remote catalog entries and routes remote installs by id without accepting a URL", async () => {
@@ -251,7 +410,12 @@ describe("registerPluginManagementIpc", () => {
     await expect(invoke(pluginManagementIpcChannels.listPlugins)).resolves.toEqual({
       catalog: [
         { ...manifest("builtin-plugin"), installed: false },
-        { ...manifest("remote-plugin"), installed: true },
+        {
+          ...manifest("remote-plugin"),
+          installed: true,
+          installedVersion: "1.0.0",
+          updateAvailable: false,
+        },
       ],
       installed: [manifest("remote-plugin")],
     })

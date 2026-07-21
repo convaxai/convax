@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createAgentNode, createFolderNode, createGroupNode, createMediaNode, createTextNode } from "./document"
 import {
+  CanvasFileGenerationActivityOwner,
   getCompatibleCanvasGenerationTools,
   getCanvasGenerationReferenceError,
   inferCanvasGenerationReferences,
@@ -10,6 +11,53 @@ import {
 } from "./services"
 
 describe("Canvas generation services", () => {
+  test("keeps a direct generation alive across composer dismissal and cancels only with its file-node owner", () => {
+    const owner = new CanvasFileGenerationActivityOwner()
+    let cancellations = 0
+
+    const pending = owner.apply({
+      cancel: () => {
+        cancellations += 1
+      },
+      prompt: "A small rabbit",
+      status: "pending",
+    })
+    expect(pending.dismissComposer).toBeTrue()
+    expect(pending.activity.status).toBe("pending")
+
+    // Dismissing or unmounting the composer is intentionally not an owner transition.
+    expect(owner.activity.status).toBe("pending")
+    expect(cancellations).toBe(0)
+
+    expect(owner.apply({ status: "complete" })).toEqual({
+      activity: { status: "idle" },
+      dismissComposer: false,
+    })
+    expect(cancellations).toBe(0)
+
+    owner.apply({
+      cancel: () => {
+        cancellations += 1
+      },
+      prompt: "A second rabbit",
+      status: "pending",
+    })
+    owner.dispose()
+    expect(owner.activity).toEqual({ status: "idle" })
+    expect(cancellations).toBe(1)
+  })
+
+  test("retains a terminal card error for an explicit recover action", () => {
+    const owner = new CanvasFileGenerationActivityOwner()
+    owner.apply({ cancel: () => undefined, prompt: "A small rabbit", status: "pending" })
+
+    expect(owner.apply({ message: "Generation failed", prompt: "A small rabbit", status: "error" })).toEqual({
+      activity: { message: "Generation failed", prompt: "A small rabbit", status: "error" },
+      dismissComposer: false,
+    })
+    expect(owner.activity).toEqual({ message: "Generation failed", prompt: "A small rabbit", status: "error" })
+  })
+
   test("keeps normalized tool-owned scalar fields behind the host service", async () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({
@@ -93,6 +141,34 @@ describe("Canvas generation services", () => {
       { nodeId: "image", role: "reference_image" },
       { nodeId: "video", role: "reference_video" },
     ])
+  })
+
+  test("keeps empty text and media cards prompt-only instead of inventing unusable references", () => {
+    const nodes = [
+      createTextNode({ id: "empty-text", position: { x: 0, y: 0 }, text: "   " }),
+      createMediaNode({
+        id: "empty-image",
+        position: { x: 0, y: 0 },
+        resource: { id: "empty-image-resource", kind: "image", url: "" },
+      }),
+      createMediaNode({
+        id: "empty-video",
+        position: { x: 0, y: 0 },
+        resource: { id: "empty-video-resource", kind: "video", url: "" },
+      }),
+      createMediaNode({
+        id: "empty-audio",
+        position: { x: 0, y: 0 },
+        resource: { id: "empty-audio-resource", kind: "audio", url: "" },
+      }),
+    ]
+
+    expect(
+      inferCanvasGenerationReferences(
+        nodes,
+        nodes.map((node) => node.id),
+      ),
+    ).toEqual([])
   })
 
   test("keeps explicit first and last frame roles available without guessing them", () => {

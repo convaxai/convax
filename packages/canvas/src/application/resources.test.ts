@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createTextNode } from "../document"
-import { CanvasCommandValidationError, CanvasRevisionConflictError } from "./commands"
+import { createCanvasDocument, createMediaNode, createTextNode } from "../document"
+import { CanvasCommandValidationError, CanvasRevisionConflictError, createCanvasNodeContentGuard } from "./commands"
 import {
   CanvasStorageConflictError,
   type CanvasDocumentRepository,
@@ -88,7 +88,7 @@ describe("canvas resource business service", () => {
     })
     expect(result.document.nodes.find((node) => node.id === createdNodeId)).toMatchObject({
       data: { kind: "image", url: "asset://poster" },
-      position: { x: 340, y: 0 },
+      position: { x: 304, y: 0 },
       style: { height: 180, width: 320 },
     })
     expect(result.storageVersion).toBe("v2")
@@ -152,7 +152,7 @@ describe("canvas resource business service", () => {
     expect(result.document.nodes.map((node) => node.id)).toContain("concurrent")
     expect(result.createdNodeIds).toHaveLength(1)
     expect(result.document.nodes.find((node) => node.id === result.createdNodeIds[0])?.position).toEqual({
-      x: 340,
+      x: 304,
       y: 0,
     })
     expect(result.warnings).toContain(
@@ -223,6 +223,174 @@ describe("canvas resource business service", () => {
     expect(await business.addResources(request)).toBe(result)
     expect(preparationCalls).toBe(1)
     expect(saveCalls).toBe(2)
+  })
+
+  test("replaces one guarded resource after an unrelated storage conflict without moving the target", async () => {
+    const owner = {
+      ...createMediaNode({
+        id: "owner",
+        position: { x: 80, y: 120 },
+        resource: { id: "old", kind: "image" as const, url: "asset://old" },
+      }),
+      style: { height: 280, width: 440 },
+    }
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main", nodes: [owner] }),
+      storageVersion: "v0",
+    }
+    let preparationCalls = 0
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return {
+            items: [
+              {
+                durationMs: 5_000,
+                id: "prepared-video",
+                kind: "video" as const,
+                metadata: { source: "generated" },
+                url: "asset://video",
+              },
+            ],
+          }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          saveCalls += 1
+          if (saveCalls === 1) {
+            snapshot = {
+              document: {
+                ...snapshot.document!,
+                nodes: [
+                  { ...owner, position: { x: 300, y: 220 }, style: { height: 320, width: 520 } },
+                  createTextNode({ id: "concurrent", position: { x: 0, y: 0 }, text: "Keep me" }),
+                ],
+                revision: 1,
+              },
+              storageVersion: "v1",
+            }
+            throw new CanvasStorageConflictError(request.expectedStorageVersion, "v1")
+          }
+          snapshot = { document: request.document, storageVersion: "v2" }
+          return { storageVersion: "v2" }
+        },
+      }),
+    )
+    const request = {
+      actor: { id: "ui", kind: "ui" },
+      canvasId: "canvas-main",
+      commandId: "replace-owner",
+      expectedRevision: 0,
+      expectedTarget: createCanvasNodeContentGuard(owner),
+      scopeId: "project",
+      source: { kind: "host-file" as const, path: ".convax/assets/generated.mp4", sourceId: "generated" },
+      targetNodeId: owner.id,
+    }
+
+    const result = await business.replaceResource(request)
+
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(2)
+    expect(result.createdNodeIds).toEqual([])
+    expect(result.affectedNodeIds).toEqual([owner.id])
+    expect(result.document.nodes.map((node) => node.id)).toEqual([owner.id, "concurrent"])
+    expect(result.document.nodes[0]).toMatchObject({
+      data: { kind: "video", metadata: { source: "generated" }, url: "asset://video" },
+      id: owner.id,
+      position: { x: 300, y: 220 },
+      style: { height: 320, width: 520 },
+    })
+    expect(result.warnings[0]).toContain("replayed from revision 0 on revision 1")
+    expect(await business.replaceResource(request)).toBe(result)
+    await expect(
+      business.addResources({
+        actor: request.actor,
+        anchor: { x: 0, y: 0 },
+        canvasId: request.canvasId,
+        commandId: request.commandId,
+        expectedRevision: 0,
+        scopeId: request.scopeId,
+        sources: [request.source],
+      }),
+    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+  })
+
+  test("rejects replacement preparation cardinality and a target edited during conflict replay", async () => {
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Original" })
+    const request = {
+      actor: { id: "ui", kind: "ui" },
+      canvasId: "canvas-main",
+      commandId: "replace-owner",
+      expectedRevision: 0,
+      expectedTarget: createCanvasNodeContentGuard(owner),
+      scopeId: "project",
+      source: { kind: "inline-text" as const, sourceId: "generated", text: "Generated" },
+      targetNodeId: owner.id,
+    }
+    const neverExecute = {
+      async execute() {
+        throw new Error("must not execute")
+      },
+      async query() {
+        throw new Error("must not query")
+      },
+    }
+    for (const items of [
+      [],
+      [
+        { id: "one", kind: "text" as const, text: "One" },
+        { id: "two", kind: "text" as const, text: "Two" },
+      ],
+    ]) {
+      const business = new CanvasResourceBusinessService(
+        {
+          async prepare() {
+            return { items }
+          },
+        },
+        neverExecute,
+      )
+      await expect(business.replaceResource(request)).rejects.toThrow("exactly one item")
+    }
+
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main", nodes: [owner] }),
+      storageVersion: "v0",
+    }
+    let saveCalls = 0
+    const changedTarget = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [{ id: "generated", kind: "text", text: "Generated" }] }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(saveRequest) {
+          saveCalls += 1
+          snapshot = {
+            document: {
+              ...snapshot.document!,
+              nodes: [{ ...owner, data: { ...owner.data, text: "User edit" } }],
+              revision: 1,
+            },
+            storageVersion: "v1",
+          }
+          throw new CanvasStorageConflictError(saveRequest.expectedStorageVersion, "v1")
+        },
+      }),
+    )
+
+    await expect(changedTarget.replaceResource(request)).rejects.toThrow("content changed")
+    expect(saveCalls).toBe(1)
   })
 
   test.each([

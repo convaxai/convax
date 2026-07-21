@@ -43,7 +43,45 @@ function generationManifest() {
   })
 }
 
-describe("WebPluginManager convax.plugin/2 compatibility", () => {
+function declarativeOperationManifest() {
+  return parseWebPluginManifest({
+    capabilities: [],
+    contributes: {
+      agent: { tools: [{ id: "transform_video", tool: "transform-video" }] },
+      generation: {
+        models: [],
+        tools: [
+          {
+            acceptedInputs: ["reference_video"],
+            description: "Transform a Canvas video",
+            id: "transform-video",
+            output: "video",
+            title: "Transform video",
+          },
+        ],
+      },
+    },
+    description: "Example declarative operation Tool Plugin",
+    id: "operation-tool",
+    name: "Operation Tool",
+    runtime: { command: "example-operation-tool", type: "mcp-stdio" },
+    schema: "convax.plugin/3",
+    version: "1.0.0",
+  })
+}
+
+describe("WebPluginManager executable Plugin compatibility", () => {
+  test("installs and lists a declarative v3 operation Plugin", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const manifest = declarativeOperationManifest()
+
+    await expect(manager.installBundle({ files: { "manifest.json": JSON.stringify(manifest) } })).resolves.toEqual(
+      manifest,
+    )
+    await expect(manager.list()).resolves.toEqual([manifest])
+  })
+
   test("installs and lists a generation Tool Plugin without treating its external command as a package asset", async () => {
     const root = await temporaryRoot()
     const manager = new WebPluginManager(path.join(root, "installed"))

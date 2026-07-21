@@ -7,8 +7,9 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "bun scripts/ensure-electron-runtime.ts && electron-vite dev",
-    "build": "electron-vite build",
+    "build:workspace-dependencies": "bun scripts/ensure-workspace-dependencies.ts",
+    "dev": "bun run build:workspace-dependencies && bun scripts/ensure-electron-runtime.ts && electron-vite dev",
+    "build": "bun run build:workspace-dependencies && electron-vite build",
     "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
     "test": "bun test --isolate",
     "typecheck": "tsgo --noEmit"

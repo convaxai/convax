@@ -4,9 +4,14 @@ import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
+import {
+  canvasExternalMediaDragIpcChannels,
+  type CanvasExternalMediaDragRendererClient,
+} from "../canvas-external-drag-contracts"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
+import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import {
@@ -57,6 +62,7 @@ const agentChannels = {
   getSessionState: "agent:session-state",
   getStatus: "agent:status",
   listCapabilities: "agent:capabilities",
+  listModels: "agent:models",
   listSessions: "agent:session-list",
   prompt: "agent:prompt",
   rejectQuestion: "agent:question-reject",
@@ -195,6 +201,7 @@ const agentClient = {
   getSessionState: (input) => ipcRenderer.invoke(agentChannels.getSessionState, input),
   getStatus: () => ipcRenderer.invoke(agentChannels.getStatus),
   listCapabilities: (input) => ipcRenderer.invoke(agentChannels.listCapabilities, input),
+  listModels: (input) => ipcRenderer.invoke(agentChannels.listModels, input),
   listSessions: (input) => ipcRenderer.invoke(agentChannels.listSessions, input),
   prompt: (input) => ipcRenderer.invoke(agentChannels.prompt, input),
   rejectQuestion: (input) => ipcRenderer.invoke(agentChannels.rejectQuestion, input),
@@ -247,6 +254,13 @@ const canvasRendererClient = {
   },
 } satisfies CanvasRendererClient
 
+const canvasExternalMediaDragClient = {
+  cancel: (input) => ipcRenderer.send(canvasExternalMediaDragIpcChannels.cancel, input),
+  cancelPrepare: (input) => ipcRenderer.send(canvasExternalMediaDragIpcChannels.cancelPrepare, input),
+  prepare: (input) => ipcRenderer.invoke(canvasExternalMediaDragIpcChannels.prepare, input),
+  start: (input) => ipcRenderer.send(canvasExternalMediaDragIpcChannels.start, input),
+} satisfies CanvasExternalMediaDragRendererClient
+
 const pluginClient = {
   importPlugin: () => ipcRenderer.invoke(pluginChannels.importPlugin),
   installCatalogPlugin: (input) => ipcRenderer.invoke(pluginChannels.installCatalogPlugin, input),
@@ -258,6 +272,20 @@ const pluginClient = {
   },
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
+
+const pluginServiceClient = {
+  authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
+  cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
+  getStatus: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.getStatus, input),
+  listServices: () => ipcRenderer.invoke(pluginServiceIpcChannels.listServices),
+  onDidChange(listener) {
+    const handleChange = () => listener()
+    ipcRenderer.on(pluginChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+  },
+  reauthorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.reauthorize, input),
+  signOut: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.signOut, input),
+} satisfies PluginServiceClient
 
 const jianyingClient = {
   cancelCanvasMediaExport: (input) => ipcRenderer.send(jianyingChannels.cancelCanvasMediaExport, input),
@@ -274,11 +302,16 @@ const generationClient = {
 
 contextBridge.exposeInMainWorld("convax", {
   agent: { ...agentClient, skills: agentSkillClient },
-  canvas: { documents: canvasDocumentClient, renderer: canvasRendererClient },
+  canvas: {
+    documents: canvasDocumentClient,
+    externalMediaDrag: canvasExternalMediaDragClient,
+    renderer: canvasRendererClient,
+  },
   generation: generationClient,
   jianying: jianyingClient,
   platform: process.platform,
   plugins: pluginClient,
+  pluginServices: pluginServiceClient,
   projectFiles: projectFilesClient,
   projects: projectsClient,
   protocol: desktopProtocolClient,

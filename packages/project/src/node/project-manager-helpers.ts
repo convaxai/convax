@@ -205,7 +205,10 @@ export async function removePathWithRetries(target: string) {
   }
 }
 
-export async function copyPath(source: string, target: string): Promise<void> {
+export async function copyPath(
+  source: string,
+  target: string,
+): Promise<void> {
   const stat = await fs.lstat(source)
   if (stat.isSymbolicLink()) throw new Error(`Symbolic links cannot be imported: ${source}`)
   if (stat.isFile()) {

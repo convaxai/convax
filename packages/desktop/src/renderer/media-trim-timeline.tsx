@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  clampFfmpegTrimRange,
-  ffmpegTimelineSampleTimes,
-  formatFfmpegTimelineTime,
-  moveFfmpegTrimBoundary,
-  normalizeFfmpegTimelineDuration,
-  type FfmpegTrimBoundary,
-  type FfmpegTrimRange,
-} from "./ffmpeg-trim-timeline-model"
+  clampMediaTrimRange,
+  mediaTimelineSampleTimes,
+  formatMediaTimelineTime,
+  moveMediaTrimBoundary,
+  normalizeMediaTimelineDuration,
+  type MediaTrimBoundary,
+  type MediaTrimRange,
+} from "./media-trim-timeline-model"
 
-interface FfmpegTrimTimelineCopy {
+interface MediaTrimTimelineCopy {
   end: string
   loading: string
   previewUnavailable: string
@@ -17,13 +17,13 @@ interface FfmpegTrimTimelineCopy {
   start: string
 }
 
-export interface FfmpegTrimTimelineProps {
-  copy: FfmpegTrimTimelineCopy
+export interface MediaTrimTimelineProps {
+  copy: MediaTrimTimelineCopy
   disabled: boolean
   durationHintSeconds?: number
   endSeconds: number
   label: string
-  onChange: (range: FfmpegTrimRange) => void
+  onChange: (range: MediaTrimRange) => void
   onDurationChange?: (durationSeconds: number) => void
   sourceUrl: string
   startSeconds: number
@@ -31,16 +31,16 @@ export interface FfmpegTrimTimelineProps {
 
 const thumbnailCount = 12
 
-export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
-  const hint = normalizeFfmpegTimelineDuration(props.durationHintSeconds)
+export function MediaTrimTimeline(props: MediaTrimTimelineProps) {
+  const hint = normalizeMediaTimelineDuration(props.durationHintSeconds)
   const [resolvedDuration, setResolvedDuration] = useState<number>()
   const [previewUnavailable, setPreviewUnavailable] = useState(false)
   const resolvedMetadataRef = useRef(false)
   const duration = resolvedDuration ?? hint
   const range = duration
-    ? clampFfmpegTrimRange({ endSeconds: props.endSeconds, startSeconds: props.startSeconds }, duration)
+    ? clampMediaTrimRange({ endSeconds: props.endSeconds, startSeconds: props.startSeconds }, duration)
     : { endSeconds: Math.max(props.endSeconds, props.startSeconds), startSeconds: Math.max(0, props.startSeconds) }
-  const samples = useMemo(() => (duration ? ffmpegTimelineSampleTimes(duration, thumbnailCount) : []), [duration])
+  const samples = useMemo(() => (duration ? mediaTimelineSampleTimes(duration, thumbnailCount) : []), [duration])
   const startPercent = duration ? (range.startSeconds / duration) * 100 : 0
   const endPercent = duration ? (range.endSeconds / duration) * 100 : 100
   const selectionPercent = Math.max(0, endPercent - startPercent)
@@ -54,7 +54,7 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
 
   const resolveDuration = useCallback(
     (candidate: number) => {
-      const actual = normalizeFfmpegTimelineDuration(candidate)
+      const actual = normalizeMediaTimelineDuration(candidate)
       if (!actual) return
       const firstResolution = !resolvedMetadataRef.current
       resolvedMetadataRef.current = true
@@ -68,19 +68,19 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
         endSeconds: firstResolution && (!hint || hintWasFullySelected) ? actual : props.endSeconds,
         startSeconds: props.startSeconds,
       }
-      const next = clampFfmpegTrimRange(requested, actual)
+      const next = clampMediaTrimRange(requested, actual)
       if (next.startSeconds !== props.startSeconds || next.endSeconds !== props.endSeconds) props.onChange(next)
     },
     [hint, props.endSeconds, props.onChange, props.onDurationChange, props.startSeconds],
   )
 
-  const changeBoundary = (boundary: FfmpegTrimBoundary, value: number) => {
+  const changeBoundary = (boundary: MediaTrimBoundary, value: number) => {
     if (!duration) return
-    props.onChange(moveFfmpegTrimBoundary(range, duration, boundary, value))
+    props.onChange(moveMediaTrimBoundary(range, duration, boundary, value))
   }
 
   return (
-    <div className="min-w-0" data-testid="ffmpeg-trim-timeline">
+    <div className="min-w-0" data-testid="media-trim-timeline">
       <video
         aria-hidden="true"
         className="hidden"
@@ -99,7 +99,7 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
           style={{ left: `${summaryPercent}%` }}
         >
           {duration
-            ? `${formatFfmpegTimelineTime(range.startSeconds, true)} – ${formatFfmpegTimelineTime(range.endSeconds, true)}`
+            ? `${formatMediaTimelineTime(range.startSeconds, true)} – ${formatMediaTimelineTime(range.endSeconds, true)}`
             : props.copy.loading}
         </div>
 
@@ -107,7 +107,7 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
           <div className="grid size-full grid-cols-12 overflow-hidden">
             {samples.length
               ? samples.map((time, index) => (
-                  <FfmpegTimelineThumbnail
+                  <MediaTimelineThumbnail
                     key={`${index}:${time}`}
                     label={props.label}
                     sourceUrl={props.sourceUrl}
@@ -139,8 +139,8 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
             <>
               <input
                 aria-label={props.copy.start}
-                aria-valuetext={formatFfmpegTimelineTime(range.startSeconds, true)}
-                className="ffmpeg-trim-range absolute inset-0 size-full"
+                aria-valuetext={formatMediaTimelineTime(range.startSeconds, true)}
+                className="media-trim-range absolute inset-0 size-full"
                 disabled={props.disabled}
                 max={duration}
                 min={0}
@@ -152,8 +152,8 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
               />
               <input
                 aria-label={props.copy.end}
-                aria-valuetext={formatFfmpegTimelineTime(range.endSeconds, true)}
-                className="ffmpeg-trim-range absolute inset-0 size-full"
+                aria-valuetext={formatMediaTimelineTime(range.endSeconds, true)}
+                className="media-trim-range absolute inset-0 size-full"
                 disabled={props.disabled}
                 max={duration}
                 min={0}
@@ -171,14 +171,14 @@ export function FfmpegTrimTimeline(props: FfmpegTrimTimelineProps) {
       <div className="mt-2 flex items-center justify-between gap-4 text-[11px] text-muted-foreground">
         <span>{previewUnavailable ? props.copy.previewUnavailable : props.label}</span>
         <span className="shrink-0 tabular-nums">
-          {props.copy.selectedDuration}: {formatFfmpegTimelineTime(range.endSeconds - range.startSeconds, true)}
+          {props.copy.selectedDuration}: {formatMediaTimelineTime(range.endSeconds - range.startSeconds, true)}
         </span>
       </div>
     </div>
   )
 }
 
-function FfmpegTimelineThumbnail(props: { label: string; sourceUrl: string; timeSeconds: number }) {
+function MediaTimelineThumbnail(props: { label: string; sourceUrl: string; timeSeconds: number }) {
   const [ready, setReady] = useState(false)
   return (
     <span className="relative min-w-0 overflow-hidden border-r border-white/15 bg-white/5 last:border-r-0">

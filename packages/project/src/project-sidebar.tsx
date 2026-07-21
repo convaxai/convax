@@ -91,6 +91,8 @@ export function ProjectSidebar({ className, controller, extension, filesControll
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [projectName, setProjectName] = useState("")
+  const [creatingProject, setCreatingProject] = useState(false)
+  const creatingProjectRef = useRef(false)
   const [editor, setEditor] = useState<EntryEditor | null>(null)
   const [filesExpanded, setFilesExpanded] = useState(true)
   const [extensionExpanded, setExtensionExpanded] = useState(true)
@@ -103,6 +105,10 @@ export function ProjectSidebar({ className, controller, extension, filesControll
   const [confirmForget, setConfirmForget] = useState<ProjectRecord | null>(null)
   const suppressClickAfterDragRef = useRef(false)
   const sectionsRef = useRef<HTMLDivElement | null>(null)
+  const openCreateProject = () => {
+    controller.clearError()
+    setCreateProjectOpen(true)
+  }
 
   useEffect(() => {
     void controller.initialize()
@@ -271,7 +277,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
             onClose={() => setSwitcherOpen(false)}
             onCreate={() => {
               setSwitcherOpen(false)
-              setCreateProjectOpen(true)
+              openCreateProject()
             }}
             onForget={setConfirmForget}
             onOpen={() => void controller.openProject()}
@@ -282,7 +288,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
       {!activeProject ? (
         <ProjectEmptyState
           loading={!projectSnapshot.initialized}
-          onCreate={() => setCreateProjectOpen(true)}
+          onCreate={openCreateProject}
           onOpen={() => void controller.openProject()}
         />
       ) : (
@@ -474,14 +480,20 @@ export function ProjectSidebar({ className, controller, extension, filesControll
       ) : null}
 
       {createProjectOpen ? (
-        <Modal title="New project" onClose={() => setCreateProjectOpen(false)}>
+        <Modal title="New project" onClose={() => { if (!creatingProject) setCreateProjectOpen(false) }}>
           <form
             onSubmit={(event) => {
               event.preventDefault()
-              if (!projectName.trim()) return
-              void controller.createProject(projectName.trim()).then(() => {
+              if (!projectName.trim() || creatingProjectRef.current) return
+              creatingProjectRef.current = true
+              setCreatingProject(true)
+              void controller.createProject(projectName.trim()).then((created) => {
+                if (!created) return
                 setProjectName("")
                 setCreateProjectOpen(false)
+              }).finally(() => {
+                creatingProjectRef.current = false
+                setCreatingProject(false)
               })
             }}
           >
@@ -489,15 +501,26 @@ export function ProjectSidebar({ className, controller, extension, filesControll
             <input
               autoFocus
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/25"
+              disabled={creatingProject}
               id="project-name"
-              onChange={(event) => setProjectName(event.currentTarget.value)}
+              onChange={(event) => {
+                setProjectName(event.currentTarget.value)
+                if (projectSnapshot.error) controller.clearError()
+              }}
               placeholder="My project"
               value={projectName}
             />
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">You will choose where to create it next.</p>
+            {projectSnapshot.error ? (
+              <p className="mt-2 text-xs leading-5 text-destructive" role="alert">{projectSnapshot.error}</p>
+            ) : (
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">It will be created in your Documents/Convax workspace.</p>
+            )}
             <div className="mt-5 flex justify-end gap-2">
-              <Button onClick={() => setCreateProjectOpen(false)} size="sm" variant="ghost">Cancel</Button>
-              <Button disabled={!projectName.trim()} size="sm" type="submit">Create project</Button>
+              <Button disabled={creatingProject} onClick={() => setCreateProjectOpen(false)} size="sm" variant="ghost">Cancel</Button>
+              <Button disabled={!projectName.trim() || creatingProject} size="sm" type="submit">
+                {creatingProject ? <LoaderCircle className="animate-spin" /> : null}
+                Create project
+              </Button>
             </div>
           </form>
         </Modal>

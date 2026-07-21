@@ -109,6 +109,88 @@ describe("OpenCode agent runtime boundaries", () => {
     await Promise.all([runtime.dispose(), runtimeWithoutPaths.dispose()])
   })
 
+  test("projects the OpenCode provider catalog without exposing provider configuration", async () => {
+    const directory = join(tmpdir(), "agent-runtime-model-catalog")
+    const list = mock(async () => ({
+      data: {
+        all: [
+          {
+            env: ["CONNECTED_PROVIDER_TOKEN"],
+            id: "connected-provider",
+            key: "must-not-cross-the-runtime-boundary",
+            models: {
+              primary: {
+                id: "primary-model",
+                name: "Primary model",
+                options: { credential: "must-not-cross-the-runtime-boundary" },
+                providerID: "connected-provider",
+              },
+              secondary: {
+                id: "secondary-model",
+                name: "Secondary model",
+                providerID: "connected-provider",
+              },
+            },
+            name: "Connected provider",
+            options: { apiKey: "must-not-cross-the-runtime-boundary" },
+            source: "env",
+          },
+          {
+            env: [],
+            id: "available-provider",
+            models: {
+              available: {
+                id: "available-model",
+                name: "Available model",
+                providerID: "available-provider",
+              },
+            },
+            name: "Available provider",
+            options: {},
+            source: "api",
+          },
+        ],
+        connected: ["connected-provider"],
+        default: { "connected-provider": "primary-model" },
+      },
+    }))
+    const runtime = new OpenCodeAgentRuntime()
+    ;(runtime as unknown as { client: unknown }).client = { provider: { list } }
+
+    try {
+      const catalog = await runtime.listModels({ directory })
+
+      expect(list).toHaveBeenCalledWith({ directory })
+      expect(catalog).toEqual({
+        providers: [
+          {
+            connected: true,
+            defaultModelId: "primary-model",
+            models: [
+              { default: true, modelId: "primary-model", modelName: "Primary model" },
+              { default: false, modelId: "secondary-model", modelName: "Secondary model" },
+            ],
+            providerId: "connected-provider",
+            providerName: "Connected provider",
+          },
+          {
+            connected: false,
+            defaultModelId: undefined,
+            models: [{ default: false, modelId: "available-model", modelName: "Available model" }],
+            providerId: "available-provider",
+            providerName: "Available provider",
+          },
+        ],
+      })
+      expect(JSON.stringify(catalog)).not.toContain("must-not-cross-the-runtime-boundary")
+      expect(catalog.providers[0]).not.toHaveProperty("env")
+      expect(catalog.providers[0]).not.toHaveProperty("key")
+      expect(catalog.providers[0]).not.toHaveProperty("options")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test("adds the explicit strong guard after caller plugins and disables unsafe built-ins", () => {
     const config = {
       permission: {

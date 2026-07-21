@@ -80,6 +80,7 @@ function responseHeaders(relativePath: string, rendererUrl: string) {
       "object-src 'none'",
       "base-uri 'none'",
       "form-action 'none'",
+      "navigate-to 'self'",
       `frame-ancestors ${frameAncestor}`,
     ].join("; "),
     "Content-Type": pluginAssetContentType(relativePath),
@@ -90,20 +91,49 @@ function responseHeaders(relativePath: string, rendererUrl: string) {
 
 function parsePluginAssetUrl(value: string) {
   const url = new URL(value)
-  if (url.protocol !== `${webPluginAssetScheme}:`
-    || url.username
-    || url.password
-    || url.port
-    || url.search
-    || url.hash) {
+  if (
+    url.protocol !== `${webPluginAssetScheme}:` ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash
+  ) {
     throw new Error("Plugin asset URL is not supported")
   }
   const pluginId = requireWebPluginId(url.hostname)
-  const relativePath = requireWebPluginRelativePath(
-    decodeURIComponent(url.pathname.slice(1)),
-    "Plugin asset path",
-  )
+  const relativePath = requireWebPluginRelativePath(decodeURIComponent(url.pathname.slice(1)), "Plugin asset path")
   return { pluginId, relativePath }
+}
+
+export function webPluginIdForAssetUrl(value: string) {
+  try {
+    return parsePluginAssetUrl(value).pluginId
+  } catch {
+    return undefined
+  }
+}
+
+/** Resolve the immutable Plugin binding before deciding a subframe navigation. */
+export function webPluginFrameBindingForNavigation(
+  currentUrl: string,
+  nextUrl: string,
+  boundPluginId?: string,
+) {
+  if (boundPluginId) return boundPluginId
+  const currentPluginId = webPluginIdForAssetUrl(currentUrl)
+  if (currentPluginId) return currentPluginId
+  if (currentUrl === "" || currentUrl === "about:blank") return webPluginIdForAssetUrl(nextUrl)
+  return undefined
+}
+
+/** Keep a bound Plugin frame on the exact installed Plugin origin for its lifetime. */
+export function isAllowedWebPluginFrameNavigation(currentUrl: string, nextUrl: string, boundPluginId?: string) {
+  const nextPluginId = webPluginIdForAssetUrl(nextUrl)
+  if (!nextPluginId) return false
+  if (boundPluginId !== undefined) return boundPluginId === nextPluginId
+  if (currentUrl === "about:blank") return true
+  return webPluginIdForAssetUrl(currentUrl) === nextPluginId
 }
 
 async function readResolvedAsset(absolutePath: string) {

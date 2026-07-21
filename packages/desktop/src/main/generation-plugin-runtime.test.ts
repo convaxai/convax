@@ -7,6 +7,7 @@ import path from "node:path"
 import {
   webPluginManifestSchema,
   webPluginManifestSchemaV2,
+  webPluginManifestSchemaV3,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
 } from "../plugin-contracts"
@@ -17,12 +18,15 @@ import {
   materializeGenerationPluginExecutable,
   resolveGenerationPluginExecutable,
   type GenerationPluginExecutableBinding,
+  type GenerationPluginExecutableSnapshot,
   type GenerationPluginMcpClient,
   type GenerationPluginRuntimeOptions,
   type GenerationPluginSource,
 } from "./generation-plugin-runtime"
-import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import type { McpToolCallResult, McpToolDefinition, StdioMcpClientOptions } from "./stdio-mcp-client"
+import { pluginServiceBrowserAuthorizationCompletionSchema } from "./plugin-service-browser-authorization"
+import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
+import { toolPluginAuthorizationIdentity } from "./tool-plugin-authorizations"
 
 async function rejection(promise: Promise<unknown>) {
   try {
@@ -82,6 +86,56 @@ function staticPlugin(): InstalledWebPluginSummary {
     id: "static-viewer",
     name: "Static Viewer",
     schema: webPluginManifestSchema,
+    version: "1.0.0",
+  }
+}
+
+function declarativeGenerationPlugin(): InstalledWebPluginSummary {
+  return {
+    capabilities: [],
+    contributes: {
+      agent: { tools: [{ id: "transform_video", tool: "transform.video" }] },
+      generation: {
+        models: [{ name: "Example Image 1", tool: "generate.image" }],
+        tools: [
+          {
+            acceptedInputs: ["reference_image"],
+            description: "Generate image",
+            id: "generate.image",
+            output: "image",
+            title: "Image generation tool",
+          },
+          {
+            acceptedInputs: ["reference_video"],
+            description: "Transform video",
+            id: "transform.video",
+            output: "video",
+            title: "Video operation",
+          },
+        ],
+      },
+      service: { actions: [] },
+    },
+    description: "Explicit models and operations",
+    id: "declarative-tools",
+    name: "Declarative Tools",
+    runtime: { command: "declarative-tools-cli", type: "mcp-stdio" },
+    schema: webPluginManifestSchemaV3,
+    version: "1.0.0",
+  }
+}
+
+function servicePlugin(
+  actions: NonNullable<InstalledWebPluginSummary["contributes"]["service"]>["actions"] = ["sign_out"],
+): InstalledWebPluginSummary {
+  return {
+    capabilities: [],
+    contributes: { service: { actions } },
+    description: "External account service",
+    id: "account-tools",
+    name: "Account Tools",
+    runtime: { command: "account-tool-cli", type: "mcp-stdio" },
+    schema: webPluginManifestSchemaV2,
     version: "1.0.0",
   }
 }
@@ -159,10 +213,6 @@ function setup(
   const plugins = new FakePluginSource()
   plugins.installed = installed
   const clients: FakeMcpClient[] = []
-  const materializations: Array<{
-    binding: GenerationPluginExecutableBinding
-    bindingKind: Parameters<NonNullable<GenerationPluginRuntimeOptions["materializeExecutable"]>>[1]
-  }> = []
   const options: StdioMcpClientOptions[] = []
   const runtime = new GenerationPluginRuntime({
     createClient(clientOptions) {
@@ -180,20 +230,17 @@ function setup(
       PATH: "/usr/local/bin:/usr/bin",
       SECRET_API_KEY: "must-not-leak",
     },
-    materializeExecutable: async (binding, bindingKind) => {
-      materializations.push({ binding, bindingKind })
-      return {
-        dispose() {},
-        path: binding.path,
-      }
-    },
+    materializeExecutable: async (binding) => ({
+      dispose() {},
+      path: binding.path,
+    }),
     plugins,
     resolveExecutable,
     verifyAuthorization,
     ...runtimeOptions,
   })
   runtimes.add(runtime)
-  return { clients, materializations, options, plugins, runtime }
+  return { clients, options, plugins, runtime }
 }
 
 describe("GenerationPluginRuntime", () => {
@@ -211,6 +258,8 @@ describe("GenerationPluginRuntime", () => {
         acceptedInputs: ["text", "reference_image"],
         description: "Generate image",
         id: "image-tools/generate.image",
+        kind: "model",
+        modelName: "Generate",
         output: "image",
         pluginId: "image-tools",
         pluginName: "Image Tools",
@@ -221,6 +270,8 @@ describe("GenerationPluginRuntime", () => {
         acceptedInputs: ["text", "reference_image"],
         description: "Generate video",
         id: "video-tools/generate-video",
+        kind: "model",
+        modelName: "Generate",
         output: "video",
         pluginId: "video-tools",
         pluginName: "Video Tools",
@@ -230,6 +281,49 @@ describe("GenerationPluginRuntime", () => {
     ])
     expect((await runtime.listTools({ output: "video" })).map((tool) => tool.id)).toEqual([
       "video-tools/generate-video",
+    ])
+    expect(clients).toHaveLength(0)
+  })
+
+  test("derives v3 model and operation metadata without inferring from Plugin identity", async () => {
+    const { clients, runtime } = setup([declarativeGenerationPlugin()])
+
+    expect(await runtime.listTools()).toEqual([
+      {
+        acceptedInputs: ["reference_image"],
+        description: "Generate image",
+        id: "declarative-tools/generate.image",
+        kind: "model",
+        modelName: "Example Image 1",
+        output: "image",
+        pluginId: "declarative-tools",
+        pluginName: "Declarative Tools",
+        title: "Image generation tool",
+        toolId: "generate.image",
+      },
+      {
+        acceptedInputs: ["reference_video"],
+        agentId: "transform_video",
+        description: "Transform video",
+        id: "declarative-tools/transform.video",
+        kind: "operation",
+        output: "video",
+        pluginId: "declarative-tools",
+        pluginName: "Declarative Tools",
+        title: "Video operation",
+        toolId: "transform.video",
+      },
+    ])
+    expect(await runtime.listServices()).toEqual([
+      {
+        actions: [],
+        capabilities: ["image"],
+        description: "Explicit models and operations",
+        models: [{ capability: "image", id: "generate.image", name: "Example Image 1" }],
+        pluginId: "declarative-tools",
+        pluginName: "Declarative Tools",
+        version: "1.0.0",
+      },
     ])
     expect(clients).toHaveLength(0)
   })
@@ -403,6 +497,168 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0]!.calls).toEqual([])
   })
 
+  test("discovers service-only contributions without starting commands and uses fixed MCP names", async () => {
+    let verifications = 0
+    const installedService = servicePlugin()
+    const executable = {
+      path: path.resolve("/resolved-tools", "account-tool-cli"),
+      sha256: "a".repeat(64),
+      size: 4_096,
+    }
+    const { clients, runtime } = setup(
+      [staticPlugin(), installedService],
+      ["service.status", "service.sign_out"],
+      async () => {
+        verifications += 1
+      },
+      async () => executable,
+    )
+
+    expect(await runtime.listServices()).toEqual([
+      {
+        actions: ["sign_out"],
+        capabilities: [],
+        description: "External account service",
+        models: [],
+        pluginId: "account-tools",
+        pluginName: "Account Tools",
+        version: "1.0.0",
+      },
+    ])
+    expect(clients).toHaveLength(0)
+
+    const firstStatus = await runtime.callService("account-tools", "status")
+    const secondStatus = await runtime.callService("account-tools", "status")
+    await runtime.callService("account-tools", "sign_out")
+    expect(firstStatus.authorizationIdentity).toBe(
+      toolPluginAuthorizationIdentity(installedService, "path", executable),
+    )
+    expect(secondStatus.authorizationIdentity).toBe(firstStatus.authorizationIdentity)
+    expect(verifications).toBe(1)
+    expect(clients).toHaveLength(1)
+    expect(clients[0].calls.map(({ input, name, requestTimeoutMs }) => ({ input, name, requestTimeoutMs }))).toEqual([
+      { input: {}, name: "service.status", requestTimeoutMs: undefined },
+      { input: {}, name: "service.status", requestTimeoutMs: undefined },
+      { input: {}, name: "service.sign_out", requestTimeoutMs: undefined },
+    ])
+  })
+
+  test("derives service capabilities and model labels from the same generation manifest", async () => {
+    const combined = generationPlugin({
+      id: "creative-service",
+      name: "Creative Service",
+      output: "video",
+      toolId: "video.generate",
+    })
+    combined.contributes.service = { actions: ["authorize"] }
+    combined.contributes.generation!.tools.unshift({
+      acceptedInputs: ["text", "reference_image"],
+      description: "Generate image",
+      id: "image.generate",
+      output: "image",
+      title: "Image Model",
+    })
+    combined.contributes.generation!.tools[1]!.title = "Video Model"
+    const { clients, runtime } = setup([combined])
+
+    expect(await runtime.listServices()).toEqual([
+      {
+        actions: ["authorize"],
+        capabilities: ["image", "video"],
+        description: "External generation tools",
+        models: [
+          { capability: "image", id: "image.generate", name: "Image Model" },
+          { capability: "video", id: "video.generate", name: "Video Model" },
+        ],
+        pluginId: "creative-service",
+        pluginName: "Creative Service",
+        version: "1.0.0",
+      },
+    ])
+    expect(clients).toHaveLength(0)
+  })
+
+  test("binds browser authorization completion to the exact service runtime and fixed MCP tool", async () => {
+    const { clients, runtime } = setup(
+      [servicePlugin(["authorize"])],
+      ["service.authorize", "service.authorization.complete", "service.status"],
+    )
+    const initial = await runtime.callService("account-tools", "authorize")
+    expect(initial.completeAuthorization).toBeFunction()
+    await initial.completeAuthorization!({
+      authorization_id: "request_0123456789abcdef",
+      cookie_origin: "https://accounts.example.com",
+      cookies: [{ name: "session_id", value: "main-only-cookie" }],
+      schema: pluginServiceBrowserAuthorizationCompletionSchema,
+    })
+
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.authorize", "service.authorization.complete"])
+    expect(clients[0]!.calls[1]!.input).toEqual({
+      authorization_id: "request_0123456789abcdef",
+      cookie_origin: "https://accounts.example.com",
+      cookies: [{ name: "session_id", value: "main-only-cookie" }],
+      schema: pluginServiceBrowserAuthorizationCompletionSchema,
+    })
+    await expect(
+      initial.completeAuthorization!({
+        authorization_id: "request_0123456789abcdef",
+        cookie_origin: "https://accounts.example.com",
+        cookies: [{ name: "session_id", value: "must-not-be-sent-twice" }],
+        schema: pluginServiceBrowserAuthorizationCompletionSchema,
+      }),
+    ).rejects.toThrow("already used")
+    expect(clients[0]!.calls).toHaveLength(2)
+  })
+
+  test("rejects browser authorization completion when the Plugin changed", async () => {
+    const { clients, plugins, runtime } = setup(
+      [servicePlugin(["authorize"])],
+      ["service.authorize", "service.authorization.complete"],
+    )
+    const initial = await runtime.callService("account-tools", "authorize")
+    plugins.installed = [{ ...servicePlugin(["authorize"]), version: "2.0.0" }]
+
+    await expect(
+      initial.completeAuthorization!({
+        authorization_id: "request_0123456789abcdef",
+        cookie_origin: "https://accounts.example.com",
+        cookies: [{ name: "session_id", value: "must-not-reach-updated-plugin" }],
+        schema: pluginServiceBrowserAuthorizationCompletionSchema,
+      }),
+    ).rejects.toThrow("changed before browser authorization completed")
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["service.authorize"])
+  })
+
+  test("requires each service action in the manifest and the matching fixed sidecar tool", async () => {
+    const undeclared = setup([servicePlugin([])], ["service.status", "service.sign_out"])
+    await expect(undeclared.runtime.callService("account-tools", "sign_out")).rejects.toThrow("not declared")
+    expect(undeclared.clients).toHaveLength(0)
+
+    const missing = setup([servicePlugin(["sign_out"])], ["service.status"])
+    await expect(missing.runtime.callService("account-tools", "sign_out")).rejects.toThrow(
+      "did not expose its fixed MCP tool: service.sign_out",
+    )
+    expect(missing.clients[0].calls).toHaveLength(0)
+  })
+
+  test("reuses one verified sidecar for generation and service contributions", async () => {
+    const generation = generationPlugin()
+    const combined: InstalledWebPluginSummary = {
+      ...generation,
+      contributes: {
+        ...generation.contributes,
+        service: { actions: ["sign_out"] },
+      },
+    }
+    const { clients, runtime } = setup([combined], ["generate.image", "service.status", "service.sign_out"])
+
+    await runtime.callTool("image-tools/generate.image", {})
+    await runtime.callService("image-tools", "status")
+    await runtime.callService("image-tools", "sign_out")
+    expect(clients).toHaveLength(1)
+    expect(clients[0].calls.map((call) => call.name)).toEqual(["generate.image", "service.status", "service.sign_out"])
+  })
+
   test("lazily starts a manifest-scoped MCP command with a narrow environment", async () => {
     let verifications = 0
     const { clients, options, plugins, runtime } = setup([generationPlugin()], ["generate.image"], async () => {
@@ -482,62 +738,13 @@ describe("GenerationPluginRuntime", () => {
       },
       bindingKind: "managed",
     })
-    expect(setupResult.materializations).toEqual([
-      {
-        binding: {
-          path: "/managed/image-tool-cli",
-          sha256: "b".repeat(64),
-          size: 20,
-        },
-        bindingKind: "managed",
-      },
-    ])
     expect(setupResult.options[0]!.command).toBe("/managed/image-tool-cli")
-  })
-
-  test("keeps managed companion installations immutable while their launch snapshot is active", async () => {
-    if (process.platform === "win32") return
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-managed-generation-runtime-test-"))
-    try {
-      const bytes = new TextEncoder().encode("#!/bin/sh\nexit 0\n")
-      const store = new ManagedPluginCompanionStore(path.join(parent, "plugin-companions"))
-      const transaction = await store.install({
-        arch: process.arch,
-        bytes,
-        command: "image-tool-cli",
-        platform: process.platform,
-        pluginId: "image-tools",
-        pluginVersion: "1.0.0",
-        sha256: createHash("sha256").update(bytes).digest("hex"),
-        size: bytes.byteLength,
-        version: "1.0.0",
-      })
-      await transaction.commit()
-      const installationDirectory = path.dirname(transaction.binding.path)
-      const setupResult = setup([generationPlugin()], ["generate.image"], async () => undefined, undefined, {
-        materializeExecutable: undefined,
-        resolveManagedExecutable: (pluginId, pluginVersion, command) => store.resolve(pluginId, pluginVersion, command),
-      })
-
-      await setupResult.runtime.callTool("image-tools/generate.image", {})
-
-      const snapshotPath = setupResult.options[0]!.command
-      expect(path.dirname(snapshotPath)).not.toBe(installationDirectory)
-      expect((await fs.readdir(installationDirectory)).sort()).toEqual(
-        [".convax-companion.json", "image-tool-cli"].sort(),
-      )
-      await expect(store.resolve("image-tools", "1.0.0", "image-tool-cli")).resolves.toEqual(transaction.binding)
-      setupResult.runtime.dispose()
-      await expect(fs.stat(snapshotPath)).rejects.toThrow()
-    } finally {
-      await fs.rm(parent, { force: true, recursive: true })
-    }
   })
 
   test("retains the explicit PATH integration when no managed companion is installed", async () => {
     let managedCalls = 0
     let pathCalls = 0
-    const { materializations, runtime } = setup(
+    const { runtime } = setup(
       [generationPlugin()],
       ["generate.image"],
       async () => undefined,
@@ -556,7 +763,6 @@ describe("GenerationPluginRuntime", () => {
     await runtime.callTool("image-tools/generate.image", {})
     expect(managedCalls).toBe(2)
     expect(pathCalls).toBe(2)
-    expect(materializations.map(({ bindingKind }) => bindingKind)).toEqual(["path"])
   })
 
   test("fails closed when a managed companion digest changes after installation verification", async () => {
@@ -778,19 +984,23 @@ describe("generation Plugin identifiers and environment", () => {
     }
   })
 
-  test("launches from a verified sibling snapshot instead of the install-authorized pathname", async () => {
+  test("launches from a verified private temporary snapshot instead of the install-authorized pathname", async () => {
     if (process.platform === "win32") return
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-generation-snapshot-test-"))
     const executable = path.join(directory, "image-tool-cli")
     let snapshotPath = ""
+    let snapshotDirectory = ""
     try {
       const original = "#!/bin/sh\nexit 0\n"
       await fs.writeFile(executable, original, { mode: 0o700 })
       const binding = await resolveGenerationPluginExecutable("image-tool-cli", { PATH: directory })
       const snapshot = await materializeGenerationPluginExecutable(binding)
       snapshotPath = snapshot.path
+      snapshotDirectory = path.dirname(snapshot.path)
       expect(snapshot.path).not.toBe(executable)
-      expect(path.dirname(snapshot.path)).toBe(path.dirname(binding.path))
+      expect(snapshotDirectory).not.toBe(path.dirname(binding.path))
+      expect((await fs.stat(snapshotDirectory)).mode & 0o777).toBe(0o700)
+      expect((await fs.stat(snapshot.path)).mode & 0o777).toBe(0o500)
       expect(await fs.readFile(snapshot.path, "utf8")).toBe(original)
 
       await fs.rename(executable, `${executable}.old`)
@@ -798,9 +1008,62 @@ describe("generation Plugin identifiers and environment", () => {
       expect(await fs.readFile(snapshot.path, "utf8")).toBe(original)
       snapshot.dispose()
       await expect(fs.stat(snapshot.path)).rejects.toThrow()
+      await expect(fs.stat(snapshotDirectory)).rejects.toThrow()
       snapshotPath = ""
+      snapshotDirectory = ""
     } finally {
-      if (snapshotPath) await fs.rm(snapshotPath, { force: true })
+      if (snapshotDirectory) await fs.rm(snapshotDirectory, { force: true, recursive: true })
+      else if (snapshotPath) await fs.rm(snapshotPath, { force: true })
+      await fs.rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("keeps managed companion resolution valid while concurrent launch snapshots are active", async () => {
+    if (process.platform === "win32") return
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-generation-managed-snapshot-test-"))
+    const store = new ManagedPluginCompanionStore(path.join(directory, "plugin-companions"), {
+      arch: process.arch,
+      platform: process.platform,
+    })
+    const bytes = new TextEncoder().encode("#!/bin/sh\nexit 0\n")
+    let snapshots: GenerationPluginExecutableSnapshot[] = []
+    try {
+      const transaction = await store.install({
+        arch: process.arch,
+        bytes,
+        command: "image-tool-cli",
+        platform: process.platform,
+        pluginId: "image-tools",
+        pluginVersion: "1.0.0",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: bytes.byteLength,
+        version: "1.0.0",
+      })
+      await transaction.commit()
+      const binding = await store.resolve("image-tools", "1.0.0", "image-tool-cli")
+      expect(binding).not.toBeNull()
+
+      snapshots = await Promise.all([
+        materializeGenerationPluginExecutable(binding!),
+        materializeGenerationPluginExecutable(binding!),
+      ])
+      expect(snapshots[0]!.path).not.toBe(snapshots[1]!.path)
+      expect(path.dirname(snapshots[0]!.path)).not.toBe(path.dirname(binding!.path))
+      expect(path.dirname(snapshots[1]!.path)).not.toBe(path.dirname(binding!.path))
+      expect(await store.resolve("image-tools", "1.0.0", "image-tool-cli")).toEqual(binding)
+
+      const firstDirectory = path.dirname(snapshots[0]!.path)
+      snapshots[0]!.dispose()
+      await expect(fs.stat(firstDirectory)).rejects.toThrow()
+      expect(await fs.readFile(snapshots[1]!.path, "utf8")).toBe("#!/bin/sh\nexit 0\n")
+      expect(await store.resolve("image-tools", "1.0.0", "image-tool-cli")).toEqual(binding)
+
+      const secondDirectory = path.dirname(snapshots[1]!.path)
+      snapshots[1]!.dispose()
+      await expect(fs.stat(secondDirectory)).rejects.toThrow()
+      snapshots = []
+    } finally {
+      for (const snapshot of snapshots) snapshot.dispose()
       await fs.rm(directory, { force: true, recursive: true })
     }
   })

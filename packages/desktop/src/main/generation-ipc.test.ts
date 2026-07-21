@@ -89,6 +89,8 @@ const tool: GenerationToolSummary = {
   acceptedInputs: ["reference_image"],
   description: "Generate an image",
   id: "example-plugin/generate_image",
+  kind: "model",
+  modelName: "Image",
   output: "image",
   pluginId: "example-plugin",
   pluginName: "Example",
@@ -260,6 +262,7 @@ describe("generation IPC", () => {
     )
     const configured = {
       ...request,
+      resultMode: { nodeId: "owner-card", type: "replace-node" as const },
       toolInput: { enabled: true, quality: "high", seed: 42 },
     }
 
@@ -332,6 +335,10 @@ describe("generation IPC", () => {
       [{ ...request, expectedOutputCount: 0 }, "expected output count is invalid"],
       [{ ...request, expectedOutputCount: 17 }, "expected output count is invalid"],
       [{ ...request, expectedOutputCount: 1.5 }, "expected output count is invalid"],
+      [{ ...request, resultMode: { type: "replace-node" } }, "result mode is invalid"],
+      [{ ...request, resultMode: { nodeId: "/native/path", type: "replace-node" } }, "replacement node id is invalid"],
+      [{ ...request, resultMode: { nodeId: "extra", type: "add" } }, "result mode is invalid"],
+      [{ ...request, resultMode: { type: "provider-result" } }, "result mode is invalid"],
       [
         { ...request, referenceConstraint: { ownerNodeId: "plugin-card", type: "arbitrary" } },
         "reference constraint is invalid",

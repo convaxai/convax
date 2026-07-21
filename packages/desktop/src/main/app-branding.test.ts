@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test"
+import { join } from "node:path"
 import { inflateSync } from "node:zlib"
 import desktopManifest from "../../package.json"
-import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
+import { desktopProductName, desktopProjectWorkspaceDirectory, desktopUserDataDirectory } from "./app-branding"
 
 describe("desktop branding", () => {
   test("keeps the Electron product name aligned with the runtime name", () => {
     expect(desktopManifest.productName).toBe(desktopProductName)
+  })
+
+  test("places newly created projects in a user-visible Documents workspace", () => {
+    const documentsDirectory = join("Users", "artist", "Documents")
+    expect(desktopProjectWorkspaceDirectory(documentsDirectory)).toBe(join(documentsDirectory, "Convax"))
   })
 
   test("ships a square 1024px RGBA application icon", async () => {

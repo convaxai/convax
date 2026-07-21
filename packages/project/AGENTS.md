@@ -22,6 +22,9 @@ This package owns the durable Project aggregate and native Project adapters.
   including its internal Canvases/Files vertical split.
 - Browser-safe entry points never import Node modules. Native I/O stays under
   `src/node/**` and performs real-path/containment validation.
+- Browser creation requests carry only a Project name. The host injects a trusted
+  parent directory; the Node adapter creates the child root, initializes identity,
+  and publishes the registry binding without adopting an existing directory.
 - `project.json` stores identity, the Canvas catalog stores no selection, and schema
   changes include versioned migration tests. Never reset old data silently.
 

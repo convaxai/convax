@@ -63,9 +63,10 @@ describe("canvas history", () => {
     expect(hydrated.future).toEqual([])
   })
 
-  test("keeps file and agent as the only user-facing node types", () => {
+  test("keeps file and agent as internal roles while hiding generic and agent insertion", () => {
     const registry = createDefaultCanvasNodeRegistry()
     expect(registry.list().map((definition) => definition.type)).toEqual(["file", "agent"])
+    expect(registry.get("agent")?.hidden).toBeTrue()
     const fileDefinition = registry.get("file")!
     expect(() => registry.register({ ...fileDefinition, type: "plugin-role" as "file" })).toThrow("file or agent")
     expect(
@@ -73,6 +74,7 @@ describe("canvas history", () => {
         .list()
         .map((definition) => definition.id),
     ).toEqual(["audio", "file", "folder", "image", "text", "video"])
+    expect(createDefaultCanvasFileRendererRegistry().get("file")?.hidden).toBeTrue()
     expect(createTextNode({ position: { x: 0, y: 0 } }).type).toBe("file")
     expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image", url: "" } }).type).toBe(
       "file",

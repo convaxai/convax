@@ -178,6 +178,21 @@ describe("CapabilityCenter", () => {
     expect(markup).toContain(appMessage("en", "capabilities.pluginsDescription"))
   })
 
+  test("makes an explicit Plugin import the executable consent point", () => {
+    const english = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} plugins={pluginInventory} tab="plugins" />,
+    )
+    const chinese = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} locale="zh-CN" plugins={pluginInventory} tab="plugins" />,
+    )
+
+    expect(english).toContain("choosing Install or Import authorizes the exact declared, fingerprinted local executable")
+    expect(english).toContain("Import Plugin")
+    expect(chinese).toContain("选择“安装”或“导入”即授权其声明并经指纹校验的本地可执行文件")
+    expect(chinese).toContain("导入插件")
+    expect(`${english}${chinese}`).not.toContain("Run Tool")
+  })
+
   test("shows an installed companion Skill without offering a duplicate install", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog
@@ -235,6 +250,98 @@ describe("CapabilityCenter", () => {
     expect(pluginMarkup).toContain("Install Plugin")
     expect(pluginMarkup).not.toContain("Ready on Canvas")
     expect(skillMarkup).toContain("Install Skill")
+  })
+
+  test("discloses install-time local execution consent for a headless Tool Plugin in both locales", () => {
+    const toolPlugin = {
+      capabilities: [],
+      contributes: {
+        generation: {
+          tools: [
+            {
+              acceptedInputs: ["reference_image" as const],
+              description: "Generate an image.",
+              id: "image.generate",
+              output: "image" as const,
+              title: "Image Generator",
+            },
+          ],
+        },
+      },
+      description: "A headless image generation tool.",
+      id: "image-generator",
+      installed: false,
+      name: "Image Generator",
+      runtime: { command: "example-image-tool", type: "mcp-stdio" as const },
+      schema: "convax.plugin/2" as const,
+      version: "1.0.0",
+    }
+    const plugins = { catalog: [toolPlugin], installed: [] }
+    const englishMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} plugins={plugins} tab="plugins" />,
+    )
+    const chineseMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} locale="zh-CN" plugins={plugins} tab="plugins" />,
+    )
+
+    expect(englishMarkup).toContain(
+      appMessage("en", "capabilities.installToolConsent", { command: "example-image-tool" }),
+    )
+    expect(chineseMarkup).toContain(
+      appMessage("zh-CN", "capabilities.installToolConsent", { command: "example-image-tool" }),
+    )
+  })
+
+  test("does not show local execution consent for an ordinary static Plugin", () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        plugins={{
+          catalog: [{ ...pluginInventory.catalog[0]!, installed: false }],
+          installed: [],
+        }}
+        tab="plugins"
+      />,
+    )
+
+    expect(markup).not.toContain("Installing authorizes the local tool")
+  })
+
+  test("discloses that an explicit Tool Plugin update authorizes the updated executable", () => {
+    const toolPlugin = {
+      capabilities: [],
+      contributes: {
+        generation: {
+          tools: [{
+            acceptedInputs: [],
+            description: "Generate an image.",
+            id: "image.generate",
+            output: "image" as const,
+            title: "Image Generator",
+          }],
+        },
+      },
+      description: "A headless image generation tool.",
+      id: "image-generator",
+      installed: true,
+      installedVersion: "1.0.0",
+      name: "Image Generator",
+      runtime: { command: "example-image-tool", type: "mcp-stdio" as const },
+      schema: "convax.plugin/2" as const,
+      updateAvailable: true,
+      version: "1.1.0",
+    }
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        plugins={{ catalog: [toolPlugin], installed: [toolPlugin] }}
+        tab="plugins"
+      />,
+    )
+
+    expect(markup).toContain(
+      appMessage("en", "capabilities.installToolConsent", { command: "example-image-tool" }),
+    )
   })
 
   test("shows an explicit catalog update without pretending the target version is installed", () => {

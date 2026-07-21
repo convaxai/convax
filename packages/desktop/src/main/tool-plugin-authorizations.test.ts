@@ -5,7 +5,12 @@ import path from "node:path"
 
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import { WebPluginManager, type WebPluginBundle } from "./plugin-manager"
-import { ToolPluginAuthorizationStore, type ToolPluginExecutableBinding } from "./tool-plugin-authorizations"
+import {
+  ToolPluginAuthorizationStore,
+  isExecutableToolPlugin,
+  toolPluginAuthorizationIdentity,
+  type ToolPluginExecutableBinding,
+} from "./tool-plugin-authorizations"
 
 const roots = new Set<string>()
 
@@ -58,7 +63,30 @@ function staticPlugin(): InstalledWebPluginSummary {
   }
 }
 
-function binding(digest = "a", executablePath = "/tools/image-tool"): ToolPluginExecutableBinding {
+function servicePlugin(): InstalledWebPluginSummary {
+  const installed = plugin()
+  return {
+    ...installed,
+    contributes: {
+      ...installed.contributes,
+      service: { actions: ["authorize", "reauthorize", "authorization.cancel", "sign_out"] },
+    },
+  }
+}
+
+function declarativeOperationPlugin(): InstalledWebPluginSummary {
+  const installed = plugin()
+  return {
+    ...installed,
+    contributes: {
+      agent: { tools: [{ id: "generate_image", tool: "image.generate" }] },
+      generation: { models: [], tools: installed.contributes.generation!.tools },
+    },
+    schema: "convax.plugin/3",
+  }
+}
+
+function binding(digest = "a", executablePath = "/managed/image-tool"): ToolPluginExecutableBinding {
   return { path: executablePath, sha256: digest.repeat(64), size: 4_096 }
 }
 
@@ -94,6 +122,9 @@ function bundle(installedPlugin: InstalledWebPluginSummary): WebPluginBundle {
 }
 
 describe("ToolPluginAuthorizationStore", () => {
+  test("treats a v3 declarative operation as the same authorized executable boundary", () => {
+    expect(isExecutableToolPlugin(declarativeOperationPlugin())).toBe(true)
+  })
   test("persists install consent across restart without a runtime prompt", async () => {
     const root = await temporaryRoot()
     const executable = binding("a", "/tools/image-tool")
@@ -110,36 +141,39 @@ describe("ToolPluginAuthorizationStore", () => {
     await expect(restarted.verify(installedPlugin, "path", executable)).resolves.toBeUndefined()
   })
 
-  test("binds consent to exact executable bytes without leaking paths", async () => {
-    const root = await temporaryRoot()
-    const executable = binding("a")
-    const authorization = store(path.join(root, "authorizations"), { path: executable })
-    const installedPlugin = plugin()
-    await installAuthorization(authorization, installedPlugin)
-
-    await expect(authorization.verify(installedPlugin, "path", executable)).resolves.toBeUndefined()
-    const changed = await authorization.verify(installedPlugin, "path", binding("b")).catch((error) => error)
-    expect(changed).toBeInstanceOf(Error)
-    expect((changed as Error).message).toContain("reinstall Plugin: image-tools")
-    expect((changed as Error).message).not.toContain("/tools")
-  })
-
-  test("binds managed consent to exact bytes and the managed binding source", async () => {
+  test("resolves the exact authorized service identity without launching a sidecar", async () => {
     const root = await temporaryRoot()
     const authorizationRoot = path.join(root, "authorizations")
-    const executable = binding("a", "/managed/image-tool")
-    const authorization = store(authorizationRoot, { managed: executable })
+    const executable = binding("a", "/tools/image-tool")
+    const authorization = store(authorizationRoot, { path: executable })
+    const installedPlugin = servicePlugin()
+    await installAuthorization(authorization, installedPlugin)
+
+    const expected = toolPluginAuthorizationIdentity(installedPlugin, "path", executable)
+    await expect(authorization.authorizedServiceIdentity(installedPlugin)).resolves.toBe(expected)
+    await expect(
+      store(authorizationRoot, { path: executable }).authorizedServiceIdentity(installedPlugin),
+    ).resolves.toBe(expected)
+    await expect(
+      store(authorizationRoot, { path: binding("b", "/tools/image-tool") }).authorizedServiceIdentity(installedPlugin),
+    ).rejects.toThrow("reinstall Plugin")
+    await expect(authorization.authorizedServiceIdentity(plugin())).resolves.toBeNull()
+    await expect(authorization.authorizedServiceIdentity(staticPlugin())).resolves.toBeNull()
+  })
+
+  test("binds consent to exact executable bytes and binding source without leaking paths", async () => {
+    const root = await temporaryRoot()
+    const managed = binding("a")
+    const authorization = store(path.join(root, "authorizations"), { managed })
     const installedPlugin = plugin()
     await installAuthorization(authorization, installedPlugin)
 
-    await expect(authorization.verify(installedPlugin, "managed", executable)).resolves.toBeUndefined()
-    await expect(authorization.verify(installedPlugin, "managed", binding("b", "/managed/image-tool"))).rejects.toThrow(
-      "reinstall Plugin",
-    )
-    await expect(authorization.verify(installedPlugin, "path", executable)).rejects.toThrow("reinstall Plugin")
-
-    const restarted = store(authorizationRoot, { managed: executable })
-    await expect(restarted.verify(installedPlugin, "managed", executable)).resolves.toBeUndefined()
+    await expect(authorization.verify(installedPlugin, "managed", managed)).resolves.toBeUndefined()
+    const changed = await authorization.verify(installedPlugin, "managed", binding("b")).catch((error) => error)
+    expect(changed).toBeInstanceOf(Error)
+    expect((changed as Error).message).toContain("reinstall Plugin: image-tools")
+    expect((changed as Error).message).not.toContain("/managed")
+    await expect(authorization.verify(installedPlugin, "path", managed)).rejects.toThrow("reinstall Plugin")
   })
 
   test("keeps the old receipt usable until an update commits and restores it on rollback", async () => {
@@ -147,25 +181,25 @@ describe("ToolPluginAuthorizationStore", () => {
     const authorizationRoot = path.join(root, "authorizations")
     const v1Binding = binding("a")
     const v2Binding = binding("b")
-    const v1Store = store(authorizationRoot, { path: v1Binding })
+    const v1Store = store(authorizationRoot, { managed: v1Binding })
     const v1 = plugin("1.0.0")
     const v2 = plugin("2.0.0")
     await installAuthorization(v1Store, v1)
 
-    const rollbackStore = store(authorizationRoot, { path: v2Binding })
+    const rollbackStore = store(authorizationRoot, { managed: v2Binding })
     const rolledBack = await rollbackStore.prepareInstall(v2)
     await rolledBack.publish()
-    await expect(v1Store.verify(v1, "path", v1Binding)).resolves.toBeUndefined()
-    await expect(rollbackStore.verify(v2, "path", v2Binding)).resolves.toBeUndefined()
+    await expect(v1Store.verify(v1, "managed", v1Binding)).resolves.toBeUndefined()
+    await expect(rollbackStore.verify(v2, "managed", v2Binding)).resolves.toBeUndefined()
     await rolledBack.rollback()
-    await expect(v1Store.verify(v1, "path", v1Binding)).resolves.toBeUndefined()
-    await expect(rollbackStore.verify(v2, "path", v2Binding)).rejects.toThrow("reinstall Plugin")
+    await expect(v1Store.verify(v1, "managed", v1Binding)).resolves.toBeUndefined()
+    await expect(rollbackStore.verify(v2, "managed", v2Binding)).rejects.toThrow("reinstall Plugin")
 
     const committed = await rollbackStore.prepareInstall(v2)
     await committed.publish()
     await committed.commit()
-    await expect(rollbackStore.verify(v2, "path", v2Binding)).resolves.toBeUndefined()
-    await expect(v1Store.verify(v1, "path", v1Binding)).rejects.toThrow("reinstall Plugin")
+    await expect(rollbackStore.verify(v2, "managed", v2Binding)).resolves.toBeUndefined()
+    await expect(v1Store.verify(v1, "managed", v1Binding)).rejects.toThrow("reinstall Plugin")
     expect((await receiptEntries(authorizationRoot)).filter((entry) => entry.endsWith(".json"))).toHaveLength(1)
   })
 
@@ -177,6 +211,7 @@ describe("ToolPluginAuthorizationStore", () => {
       resolveExecutable: async () => {
         throw new Error("not found at /secret/path")
       },
+      resolveManagedExecutable: async () => null,
     })
 
     const error = await authorization.prepareInstall(plugin()).catch((failure) => failure)
@@ -222,10 +257,9 @@ describe("ToolPluginAuthorizationStore", () => {
     const installedPlugin = plugin()
     await installAuthorization(pathStore, installedPlugin)
 
-    const managed = binding("a", "/managed/image-tool")
-    const managedStore = store(authorizationRoot, { managed })
+    const managedStore = store(authorizationRoot, { managed: binding("a") })
     await managedStore.reconcile([installedPlugin])
-    await expect(managedStore.verify(installedPlugin, "managed", managed)).rejects.toThrow("reinstall Plugin")
+    await expect(managedStore.verify(installedPlugin, "managed", binding("a"))).rejects.toThrow("reinstall Plugin")
     await expect(pathStore.verify(installedPlugin, "path", executable)).rejects.toThrow("reinstall Plugin")
   })
 
@@ -243,6 +277,7 @@ describe("ToolPluginAuthorizationStore", () => {
       resolveExecutable: async () => {
         throw new Error("temporary filesystem failure")
       },
+      resolveManagedExecutable: async () => null,
     })
     await unavailable.reconcile([installedPlugin])
 

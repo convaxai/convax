@@ -147,6 +147,27 @@ export interface AgentModel {
   modelId: string
 }
 
+/** A display-only OpenCode model projection. Provider configuration stays inside the runtime. */
+export interface AgentModelCatalogModel {
+  modelId: string
+  modelName: string
+  default: boolean
+}
+
+/** A display-only OpenCode provider projection with no credentials or provider options. */
+export interface AgentModelCatalogProvider {
+  providerId: string
+  providerName: string
+  connected: boolean
+  defaultModelId?: string
+  models: AgentModelCatalogModel[]
+}
+
+/** OpenCode's currently available LLM providers and models for one host-resolved directory. */
+export interface AgentModelCatalog {
+  providers: AgentModelCatalogProvider[]
+}
+
 interface AgentPromptFields<Resource> {
   sessionId: string
   text: string
@@ -186,6 +207,10 @@ export interface AgentListCapabilitiesRequest {
   scopeId: string
 }
 
+export interface AgentListModelsRequest {
+  scopeId: string
+}
+
 export interface AgentReplyPermissionRequest {
   scopeId: string
   requestId: string
@@ -213,6 +238,7 @@ export interface AgentClient {
   prompt(request: AgentPromptRequest): Promise<AgentMessage>
   abort(request: AgentAbortRequest): Promise<void>
   listCapabilities(request: AgentListCapabilitiesRequest): Promise<AgentCapabilities>
+  listModels(request: AgentListModelsRequest): Promise<AgentModelCatalog>
   replyPermission(request: AgentReplyPermissionRequest): Promise<void>
   replyQuestion(request: AgentReplyQuestionRequest): Promise<void>
   rejectQuestion(request: AgentRejectQuestionRequest): Promise<void>
@@ -304,6 +330,7 @@ export interface AgentRuntime {
   prompt(input: AgentRuntimePromptInput): Promise<AgentMessage>
   abort(input: AgentRuntimeSessionInput): Promise<void>
   listCapabilities(input: AgentRuntimeDirectoryInput): Promise<AgentCapabilities>
+  listModels(input: AgentRuntimeDirectoryInput): Promise<AgentModelCatalog>
   replyPermission(input: AgentRuntimeReplyPermissionInput): Promise<void>
   replyQuestion(input: AgentRuntimeReplyQuestionInput): Promise<void>
   rejectQuestion(input: AgentRuntimeRejectQuestionInput): Promise<void>

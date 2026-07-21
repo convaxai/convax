@@ -2,7 +2,27 @@ import { File, Type } from "lucide-react"
 import { createPortal } from "react-dom"
 import { Position, getBezierPath } from "@xyflow/react"
 import type { CanvasConnectionNodeType } from "../editor-context"
-import type { CanvasPoint } from "../types"
+import type { CanvasEdge, CanvasPoint } from "../types"
+
+export function createCanvasCardConnection(
+  sourceNodeId: string,
+  sourceSide: "left" | "right",
+  targetNodeId: string,
+): Pick<CanvasEdge, "source" | "sourceHandle" | "target" | "targetHandle"> {
+  return sourceSide === "right"
+    ? {
+        source: sourceNodeId,
+        sourceHandle: "source-right",
+        target: targetNodeId,
+        targetHandle: "target-left",
+      }
+    : {
+        source: targetNodeId,
+        sourceHandle: "source-right",
+        target: sourceNodeId,
+        targetHandle: "target-left",
+      }
+}
 
 export function ConnectionNodeMenu(props: {
   items: readonly CanvasConnectionNodeType[]
@@ -20,9 +40,7 @@ export function ConnectionNodeMenu(props: {
             role="menuitem"
             type="button"
           >
-            <span className="convax-connect-menu__icon">
-              {item.type === "text" ? <Type /> : <File />}
-            </span>
+            <span className="convax-connect-menu__icon">{item.type === "text" ? <Type /> : <File />}</span>
             <span className="truncate">{item.label}</span>
           </button>
         ))}
@@ -66,9 +84,7 @@ export function PendingConnectionMenu(props: {
         style={{
           left: props.targetScreen.x,
           top: props.targetScreen.y,
-          transform: props.side === "right"
-            ? "translate(18px, -50%)"
-            : "translate(calc(-100% - 18px), -50%)",
+          transform: props.side === "right" ? "translate(18px, -50%)" : "translate(calc(-100% - 18px), -50%)",
         }}
       >
         <ConnectionNodeMenu items={props.items} onSelect={props.onSelect} />

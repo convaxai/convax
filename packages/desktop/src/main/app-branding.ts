@@ -2,6 +2,10 @@ import { join } from "node:path"
 
 export const desktopProductName = "Convax"
 
+export function desktopProjectWorkspaceDirectory(documentsDirectory: string) {
+  return join(documentsDirectory, desktopProductName)
+}
+
 export function desktopUserDataDirectory(input: {
   appDataDirectory: string
   isPackaged: boolean

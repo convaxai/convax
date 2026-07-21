@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   agentCanvasNodeResourceUri,
   agentCanvasResourceUri,
+  createAgentCanvasNodeResource,
   createAgentCanvasInstructions,
   isAgentCanvasResource,
   shouldFlushAgentCanvasContext,
@@ -13,6 +14,11 @@ describe("desktop Canvas Agent context", () => {
     expect(agentCanvasNodeResourceUri("canvas", "plugin/folder:item")).toBe(
       "convax://canvas/canvas/node/plugin%2Ffolder%3Aitem",
     )
+    expect(createAgentCanvasNodeResource("canvas", "node", "Reference")).toEqual({
+      kind: "resource",
+      name: "Reference",
+      uri: "convax://canvas/canvas/node/node",
+    })
     expect(isAgentCanvasResource({ kind: "resource", uri: "convax://canvas/canvas/node/node" })).toBeTrue()
     expect(isAgentCanvasResource({ kind: "resource", uri: "https://example.com" })).toBeFalse()
   })

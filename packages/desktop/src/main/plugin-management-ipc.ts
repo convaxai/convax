@@ -27,11 +27,31 @@ export function registerPluginManagementIpc(
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
   remoteCatalog?: RemotePluginCatalogPort,
   lifecycle?: {
+    beforeChange?(pluginId: string): Promise<void> | void
     onDidChange(pluginId: string): Promise<void> | void
     prepareInstall?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
     revokeAuthorization?(pluginId: string): Promise<void>
   },
 ) {
+  const prepareInstall = lifecycle?.prepareInstall?.bind(lifecycle)
+  const preparePublication =
+    prepareInstall || lifecycle?.beforeChange
+      ? async (plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction> => {
+          const authorization = await prepareInstall?.(plugin)
+          return {
+            async publish() {
+              await lifecycle?.beforeChange?.(plugin.id)
+              await authorization?.publish()
+            },
+            async commit() {
+              await authorization?.commit()
+            },
+            async rollback() {
+              await authorization?.rollback()
+            },
+          }
+        }
+      : undefined
   const register = <Input, Result>(
     channel: string,
     handler: (event: IpcMainInvokeEvent, input: Input) => Promise<Result> | Result,
@@ -52,7 +72,18 @@ export function registerPluginManagementIpc(
     const installed = await manager.list()
     const installedById = new Map(installed.map((plugin) => [plugin.id, plugin]))
     const installedIds = new Set(installedById.keys())
-    const remote = (await remoteCatalog?.listPluginCatalog(installedIds).catch(() => [])) ?? []
+    const remote = ((await remoteCatalog?.listPluginCatalog(installedIds).catch(() => [])) ?? []).map((item) => {
+      const current = installedById.get(item.id)
+      return {
+        ...item,
+        ...(current
+          ? {
+              installedVersion: current.version,
+              updateAvailable: compareWebPluginVersions(item.version, current.version) > 0,
+            }
+          : {}),
+      }
+    })
     return {
       catalog: [
         ...catalog.map(({ companionSkillName, manifest }) => {
@@ -87,6 +118,8 @@ export function registerPluginManagementIpc(
       try {
         await lifecycle?.onDidChange(changedPluginId)
       } catch (error) {
+        // The package mutation is already committed. Startup reconciliation
+        // retries cleanup; never report a successful install as a failure.
         console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
       }
     }
@@ -110,8 +143,10 @@ export function registerPluginManagementIpc(
         const sourceDirectory = selected.filePaths[0]
         return changed(
           () =>
-            lifecycle?.prepareInstall
-              ? manager.install(sourceDirectory, { beforePublish: lifecycle.prepareInstall })
+            preparePublication
+              ? manager.install(sourceDirectory, {
+                  beforePublish: preparePublication,
+                })
               : manager.install(sourceDirectory),
           (plugin) => plugin.id,
         )
@@ -130,19 +165,23 @@ export function registerPluginManagementIpc(
               }
               return "legacyBundleDigests" in item
                 ? manager.installOrUpdateBuiltinBundle(item.bundle, {
+                    ...(preparePublication ? { beforePublish: preparePublication } : {}),
                     legacyBundleDigests: item.legacyBundleDigests,
                   })
-                : manager.installOrUpdateBuiltinBundle(item.bundle)
+                : preparePublication
+                  ? manager.installOrUpdateBuiltinBundle(item.bundle, {
+                      beforePublish: preparePublication,
+                    })
+                  : manager.installOrUpdateBuiltinBundle(item.bundle)
             },
             (plugin) => plugin.id,
           )
         }
-        if (remoteCatalog) {
+        if (remoteCatalog)
           return changed(
             () => remoteCatalog.installPlugin(input.id),
             (plugin) => plugin.id,
           )
-        }
         throw new Error(`Plugin catalog item was not found: ${input.id}`)
       },
     ),
@@ -151,6 +190,7 @@ export function registerPluginManagementIpc(
       (_event, input) =>
         changed(
           async () => {
+            await lifecycle?.beforeChange?.(input.id)
             const removed = await manager.uninstall(input.id)
             if (removed) await lifecycle?.revokeAuthorization?.(input.id).catch(() => undefined)
             return removed
@@ -159,5 +199,7 @@ export function registerPluginManagementIpc(
         ),
     ),
   ]
-  return () => disposers.forEach((dispose) => dispose())
+  return () => {
+    disposers.forEach((dispose) => dispose())
+  }
 }

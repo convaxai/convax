@@ -98,6 +98,9 @@ source, or ambient application state.
   host-owned executable companions; never Plugin package assets or renderer paths.
 - Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
   execution receipts bound to the normalized manifest and exact executable source/bytes.
+- Electron `userData/plugin-service-authorization-checkpoints/<plugin-id>.json`:
+  private, bounded and short-lived crash-recovery handoff for exact-origin allowlisted Cookies,
+  bound to the unchanged Plugin and verified executable identity; never a browser profile.
 - Browser storage: per-user Workbench input/layout and renderer preferences only.
 - In-memory controller state: loading, errors, selection, preview, and transition
   state. Do not silently turn it into durable shared state.
@@ -144,28 +147,47 @@ current schema.
 
 ## Plugin capability rules
 
+- Plugin identity is routing and namespacing data only. Model discovery, Agent
+  exposure, Canvas actions, execution, and UI behavior must derive from validated
+  manifest contributions and must never branch on a concrete Plugin id. Default
+  installation catalogs may name packages, but those ids cannot change runtime
+  semantics.
 - Concrete generation vendors, models, credentials, and routing are never built into
   Convax packages. An installed Tool Plugin plus its explicitly authorized external
-  executable is the complete vendor integration boundary.
+  executable is the complete vendor integration boundary; do not add provider
+  classes or a parallel provider registry.
 - An official Registry Tool Plugin may declare a target-specific executable
   companion whose command exactly matches its manifest runtime. Desktop verifies
   the fixed Release URL, platform/architecture, size and SHA-256, publishes it to a
   private versioned host directory, and resolves it before an explicit `PATH`
   fallback. Missing targets and immutable-identity byte changes fail closed.
 - Agent, Toolbar/UI, and Plugin callers use the same Desktop-main generation tool
-  executor. OpenCode is only the Agent-side tool client.
+  executor. OpenCode is only the Agent-side tool client, not the execution owner or
+  a dependency of direct product actions.
 - Do not expire an accepted generation job merely because it remains queued or
-  running. Generation sidecars own vendor polling until terminal success/failure or
-  caller cancellation; host progress keeps transport timeouts as inactivity guards.
+  running. Generation sidecars own vendor polling, bound individual network
+  requests, and keep non-terminal work alive until success, explicit terminal
+  failure, or caller cancellation. Host/Agent transports must not turn a healthy
+  pending state into an absolute tool-call timeout.
+- A Tool Plugin may expose a user-global service surface through the same verified
+  sidecar lifecycle. Service status and mutations use fixed host tool names and a
+  strict display-only contract; renderer code never selects an MCP method or receives
+  credentials, cookies, authorization URLs, native paths, or raw diagnostics.
+- Browser-cookie authorization for a Tool Plugin is a fixed main-only exchange,
+  never a generic MCP bridge. Use a fresh non-persistent sandboxed Electron session,
+  require explicit confirmation, export only allowlisted cookie names for one exact
+  HTTPS origin, and call only `service.authorization.complete` on the unchanged
+  requesting runtime. Cancellation, timeout, sign-out, close and Plugin change clear
+  the temporary session and fail closed; no request URL or cookie crosses preload.
 - Treat an explicit Tool Plugin install/update as consent for only the normalized
   manifest and executable binding verified during that publication. Persist the
   binding kind, real path, size and SHA-256; runtime silently rechecks it and asks
   for reinstall on missing or changed state, never for first-call approval.
-- Fingerprint the external Tool Plugin executable before staging aggregate-bounded
-  inputs. Recheck live reference/revision guards immediately before a billable call.
-  Launch the install-authorized entrypoint through a verified host-owned snapshot,
-  terminate the whole process tree on disposal, and fail closed on platforms where
-  the host lacks a process-tree ownership primitive.
+- Fingerprint an external Tool Plugin executable before staging aggregate-bounded
+  inputs. Recheck live reference/revision guards immediately
+  before a billable call. Launch the install-authorized entrypoint through a verified
+  host-owned snapshot, terminate the whole process tree on disposal, and fail
+  closed on platforms where the host lacks a process-tree ownership primitive.
 - Generated media enters Canvas only through `CanvasResourceBusinessService` and
   the managed `.convax/assets/` flow before existing `file` nodes reference it;
   failed commits must roll back newly admitted assets.
@@ -191,10 +213,14 @@ current schema.
 
 - Main owns native filesystem, Electron, Project Node adapters, and Agent runtime.
 - Preload exposes a narrow typed bridge. Renderer code must not import Node/Electron.
+- Native file drag-out uses a short-lived sender-scoped opaque ticket: Main validates
+  the live managed Canvas media selection, stages host-owned copies, and synchronously
+  starts Electron's drag. Renderer/preload never receive native paths, and targets
+  such as Finder or JianYing must not introduce UI automation branches.
 - Keep bridge namespaces separate: `projects`, `projectFiles`, `projects.canvases`,
-  `canvas`, `generation`, `agent`, and `plugins`; keep IPC prefixes `project:*`,
-  `project-files:*`, `project:canvas-*`, `canvas:*`, `generation:*`, `agent:*`, and
-  `plugin:*`.
+  `canvas`, `generation`, `agent`, `plugins`, and `pluginServices`; keep IPC prefixes
+  `project:*`, `project-files:*`, `project:canvas-*`, `canvas:*`, `generation:*`,
+  `agent:*`, `plugin:*`, and `plugin-service:*`.
 - Bump the Desktop protocol version and update its compatibility tests when the
   preload/main contract changes incompatibly.
 - Desktop may coordinate packages, but reusable state machines and business rules

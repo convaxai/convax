@@ -7,9 +7,12 @@ import { fileURLToPath } from "node:url"
 
 import {
   CanvasCommandIdConflictError,
+  createCanvasNodeContentGuard,
   type CanvasAddResourceSourcesRequest,
   type CanvasApplicationCommandResult,
   type CanvasCommandActor,
+  type CanvasNodeContentGuard,
+  type CanvasReplaceResourceSourceRequest,
 } from "@convax/canvas/application"
 import { getIncomingConnectedCanvasFileNodeIds, type CanvasDocument, type CanvasNode } from "@convax/canvas/core"
 import {
@@ -54,6 +57,7 @@ export interface GenerationCanvasProjectPort {
 
 export interface GenerationCanvasResourcePort {
   addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult>
+  replaceResource(request: CanvasReplaceResourceSourceRequest): Promise<CanvasApplicationCommandResult>
 }
 
 export interface PreparedGenerationToolExecution {
@@ -486,6 +490,13 @@ function validateRequest(request: GenerationCanvasRequest) {
     throw new Error("Generation relation anchors contain a duplicate node id")
   }
   if (request.toolId !== undefined) requireIdentifier(request.toolId, "Generation tool id")
+  if (request.resultMode !== undefined) {
+    if (request.resultMode.type === "replace-node") {
+      requireIdentifier(request.resultMode.nodeId, "Generation replacement node id")
+    } else if (request.resultMode.type !== "add") {
+      throw new Error("Generation result mode is not supported")
+    }
+  }
   validateGenerationToolInputShape(request.toolInput)
   if (request.referenceConstraint !== undefined) {
     if (request.referenceConstraint.type !== "direct-incoming") {
@@ -510,7 +521,10 @@ function selectTool(tools: readonly GenerationToolSummary[], request: Generation
       throw new Error(`Generation tool does not accept the requested output or reference roles: ${tool.id}`)
     return tool
   }
-  const candidates = tools.filter(satisfies)
+  // Omitted toolId means model auto-routing. Operations are callable only by
+  // their explicit host id so an installed action can never become a model by
+  // coincidence.
+  const candidates = tools.filter((tool) => tool.kind === "model" && satisfies(tool))
   if (candidates.length === 0) throw new Error("No installed generation tool accepts this request")
   if (candidates.length > 1) {
     throw new Error(
@@ -765,6 +779,7 @@ export class GenerationCanvasService {
       referenceConstraint: request.referenceConstraint,
       references: request.references,
       relationAnchorNodeIds: request.relationAnchorNodeIds ?? [],
+      resultMode: request.resultMode ?? { type: "add" },
       toolId: request.toolId,
       toolInput: request.toolInput ?? {},
     })
@@ -819,6 +834,18 @@ export class GenerationCanvasService {
         `Generation expected Canvas revision ${request.expectedRevision}, received ${snapshot.document.revision}`,
       )
     }
+    const resultMode = request.resultMode ?? { type: "add" as const }
+    const replacementTarget =
+      resultMode.type === "replace-node"
+        ? snapshot.document.nodes.find((node) => node.id === resultMode.nodeId)
+        : undefined
+    if (resultMode.type === "replace-node") {
+      if (!replacementTarget) throw new Error(`Generation replacement node was not found: ${resultMode.nodeId}`)
+      if (replacementTarget.type !== "file" || replacementTarget.data.kind === "group") {
+        throw new Error(`Generation replacement requires a Canvas file node: ${resultMode.nodeId}`)
+      }
+    }
+    const replacementGuard = replacementTarget ? createCanvasNodeContentGuard(replacementTarget) : undefined
     const requiresStableRevision =
       request.referenceConstraint !== undefined ||
       request.references.length > 0 ||
@@ -845,7 +872,8 @@ export class GenerationCanvasService {
       const references = await this.#stageReferences(snapshot.document, request, inputDirectory, signal)
       assertNotAborted(signal)
       await this.#assertStableReferences(request, referenceSnapshot, references, requiresStableRevision)
-      await this.#assertLiveCanvas(request, requiresStableRevision)
+      if (replacementGuard) await this.#assertStableReplacementTarget(request, replacementGuard)
+      else await this.#assertLiveCanvas(request, requiresStableRevision)
       assertNotAborted(signal)
       const toolInput = preparedTool.validateInput(request.toolInput)
       const toolResult = await preparedTool.call(
@@ -879,6 +907,7 @@ export class GenerationCanvasService {
       )
       assertNotAborted(signal)
       await this.#assertStableReferences(request, referenceSnapshot, references, requiresStableRevision)
+      if (replacementGuard) await this.#assertStableReplacementTarget(request, replacementGuard)
       if (toolResult.isError) {
         throw new GenerationToolReportedError(toolResult.content)
       }
@@ -889,6 +918,7 @@ export class GenerationCanvasService {
         outputDirectoryRealPath,
         materializedDirectory,
         signal,
+        resultMode.type === "replace-node" ? 1 : this.#maxOutputFiles,
       )
       const admittedOutputCount = admitted.files.length + admitted.texts.length
       if (request.expectedOutputCount !== undefined && admittedOutputCount !== request.expectedOutputCount) {
@@ -897,7 +927,8 @@ export class GenerationCanvasService {
         )
       }
       await this.#assertStableReferences(request, referenceSnapshot, references, requiresStableRevision)
-      await this.#assertLiveCanvas(request, requiresStableRevision)
+      if (replacementGuard) await this.#assertStableReplacementTarget(request, replacementGuard)
+      else await this.#assertLiveCanvas(request, requiresStableRevision)
       assertNotAborted(signal)
 
       const importedOutputs = admitted.files.length
@@ -906,7 +937,8 @@ export class GenerationCanvasService {
       let result: CanvasApplicationCommandResult
       try {
         await this.#assertStableReferences(request, referenceSnapshot, references, requiresStableRevision)
-        await this.#assertLiveCanvas(request, requiresStableRevision)
+        if (replacementGuard) await this.#assertStableReplacementTarget(request, replacementGuard)
+        else await this.#assertLiveCanvas(request, requiresStableRevision)
         const sources: CanvasAddResourceSourcesRequest["sources"] = [
           ...admitted.texts.map((text) => ({
             kind: "inline-text" as const,
@@ -917,30 +949,46 @@ export class GenerationCanvasService {
           ...importedOutputs.sources,
         ]
         if (!sources.length) throw new Error("Generation tool returned no usable output")
+        if (resultMode.type === "replace-node" && sources.length !== 1) {
+          throw new Error("Card generation must resolve to exactly one replacement resource")
+        }
         assertNotAborted(signal)
-        result = await this.#resources.addResources({
-          actor,
-          anchor: request.anchor,
-          canvasId: request.ref.canvasId,
-          commandId: `generation:${request.operationId}`,
-          conflictPolicy: requiresStableRevision ? "reject" : undefined,
-          expectedRevision: request.expectedRevision,
-          relation:
-            request.references.length || request.relationAnchorNodeIds?.length
-              ? {
-                  anchorNodeIds: [
-                    ...new Set([
-                      ...request.references.map((reference) => reference.nodeId),
-                      ...(request.relationAnchorNodeIds ?? []),
-                    ]),
-                  ],
-                  direction: "from-anchor",
-                  mode: "connect",
-                }
-              : undefined,
-          scopeId: request.ref.scopeId,
-          sources,
-        })
+        result =
+          resultMode.type === "replace-node"
+            ? await this.#resources.replaceResource({
+                actor,
+                canvasId: request.ref.canvasId,
+                commandId: `generation:${request.operationId}`,
+                conflictPolicy: requiresStableRevision ? "reject" : undefined,
+                expectedRevision: request.expectedRevision,
+                expectedTarget: replacementGuard!,
+                scopeId: request.ref.scopeId,
+                source: sources[0]!,
+                targetNodeId: resultMode.nodeId,
+              })
+            : await this.#resources.addResources({
+                actor,
+                anchor: request.anchor,
+                canvasId: request.ref.canvasId,
+                commandId: `generation:${request.operationId}`,
+                conflictPolicy: requiresStableRevision ? "reject" : undefined,
+                expectedRevision: request.expectedRevision,
+                relation:
+                  request.references.length || request.relationAnchorNodeIds?.length
+                    ? {
+                        anchorNodeIds: [
+                          ...new Set([
+                            ...request.references.map((reference) => reference.nodeId),
+                            ...(request.relationAnchorNodeIds ?? []),
+                          ]),
+                        ],
+                        direction: "from-anchor",
+                        mode: "connect",
+                      }
+                    : undefined,
+                scopeId: request.ref.scopeId,
+                sources,
+              })
       } catch (error) {
         if (importedOutputs.assetPaths.length) {
           try {
@@ -958,8 +1006,6 @@ export class GenerationCanvasService {
       try {
         const reloaded = await this.#renderer.reloadDocument(request.ref)
         if (reloaded && result.createdNodeIds.length) {
-          // Card-scoped generation panels use their owner selection as their lifetime.
-          // Keep that selection until the generation IPC result has reached the caller.
           await this.#renderer.executeView({
             command: {
               fit: "none",
@@ -998,6 +1044,36 @@ export class GenerationCanvasService {
     }
     if (checkRevision && snapshot.revision !== request.expectedRevision) {
       throw new Error("Generation revision must match the live active Canvas")
+    }
+  }
+
+  async #assertStableReplacementTarget(request: GenerationCanvasRequest, expected: CanvasNodeContentGuard) {
+    let document: CanvasDocument | null
+    try {
+      document = (await this.#documents.load(request.ref)).document
+    } catch {
+      document = null
+    }
+    const mode = request.resultMode
+    const target =
+      document && mode?.type === "replace-node" ? document.nodes.find((node) => node.id === mode.nodeId) : undefined
+    if (
+      !document ||
+      !target ||
+      target.type !== "file" ||
+      target.data.kind === "group" ||
+      stableJson(createCanvasNodeContentGuard(target)) !== stableJson(expected)
+    ) {
+      throw new Error("Generation replacement target changed while the tool was running")
+    }
+    const live = await this.#renderer.getViewSnapshot("desktop-main")
+    if (
+      !live ||
+      live.scopeId !== request.ref.scopeId ||
+      live.documentId !== request.ref.canvasId ||
+      live.revision !== document.revision
+    ) {
+      throw new Error("Generation replacement target changed while the tool was running")
     }
   }
 
@@ -1147,7 +1223,11 @@ export class GenerationCanvasService {
     outputDirectoryRealPath: string,
     materializedDirectory: string,
     signal?: AbortSignal,
+    maximumAdmittedFiles = this.#maxOutputFiles,
   ) {
+    if (!Number.isSafeInteger(maximumAdmittedFiles) || maximumAdmittedFiles < 1) {
+      throw new Error("Generation output admission limit is invalid")
+    }
     await assertPinnedOutputDirectory(outputDirectory, outputDirectoryRealPath)
     const warnings: string[] = []
     const texts = result.content
@@ -1159,14 +1239,19 @@ export class GenerationCanvasService {
     }
     const files: string[] = []
     const reportedPaths = new Set<string>()
+    let declaredFileCount = 0
+    let omittedFileCount = 0
     if (tool.output !== "text") warnings.push(...texts)
 
     for (const content of result.content) {
       assertNotAborted(signal)
-      if (files.length >= this.#maxOutputFiles && content.type !== "text") {
-        throw new Error("Generation tool returned too many output files")
-      }
       if (content.type === "text") continue
+      declaredFileCount += 1
+      if (declaredFileCount > this.#maxOutputFiles) throw new Error("Generation tool returned too many output files")
+      if (files.length >= maximumAdmittedFiles) {
+        omittedFileCount += 1
+        continue
+      }
       if (content.type === "image" || content.type === "audio") {
         const expected = content.type
         if (tool.output !== expected)
@@ -1214,7 +1299,12 @@ export class GenerationCanvasService {
 
     for (const artifact of structuredArtifacts(result.structuredContent, this.#maxOutputFiles)) {
       assertNotAborted(signal)
-      if (files.length >= this.#maxOutputFiles) throw new Error("Generation tool returned too many output files")
+      declaredFileCount += 1
+      if (declaredFileCount > this.#maxOutputFiles) throw new Error("Generation tool returned too many output files")
+      if (files.length >= maximumAdmittedFiles) {
+        omittedFileCount += 1
+        continue
+      }
       const sourcePath = path.join(outputDirectory, relativeArtifactPath(artifact.path))
       const realPath = await fs.realpath(sourcePath)
       if (reportedPaths.has(realPath)) continue
@@ -1234,7 +1324,9 @@ export class GenerationCanvasService {
       )
     }
 
-    if (files.length > this.#maxOutputFiles) throw new Error("Generation tool returned too many output files")
+    if (omittedFileCount > 0) {
+      warnings.push(`Generation returned ${declaredFileCount} outputs; only the first replaced the target card.`)
+    }
     if (tool.output === "text") {
       if (files.length) throw new Error("Text generation tools must return MCP text content")
       return { files, texts: texts.length ? [texts.join("\n\n")] : [], warnings: normalizeGenerationWarnings(warnings) }

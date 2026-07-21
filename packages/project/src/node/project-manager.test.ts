@@ -66,11 +66,36 @@ describe("NodeProjectManager registry", () => {
     })
   })
 
-  test("creates a project under an explicitly selected parent", async () => {
-    const created = await manager.createProject({ name: "Fresh project", parentPath: temporaryRoot })
+  test("creates a project under a host-owned workspace that does not exist yet", async () => {
+    const workspaceRoot = path.join(temporaryRoot, "Documents", "Convax")
+    const created = await manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })
     expect(created.name).toBe("Fresh project")
-    expect(await fs.stat(path.join(temporaryRoot, "Fresh project")).then((stat) => stat.isDirectory())).toBe(true)
-    expect(await fs.stat(path.join(temporaryRoot, "Fresh project", ".convax", "project.json")).then((stat) => stat.isFile())).toBe(true)
+    expect(await fs.stat(path.join(workspaceRoot, "Fresh project")).then((stat) => stat.isDirectory())).toBe(true)
+    expect(await fs.stat(path.join(workspaceRoot, "Fresh project", ".convax", "project.json")).then((stat) => stat.isFile())).toBe(true)
+    await expect(manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })).rejects.toThrow("Project already exists")
+  })
+
+  test("does not adopt or overwrite an existing workspace directory", async () => {
+    const workspaceRoot = path.join(temporaryRoot, "Documents", "Convax")
+    const existingRoot = path.join(workspaceRoot, "Storyboard")
+    await fs.mkdir(existingRoot, { recursive: true })
+    await fs.writeFile(path.join(existingRoot, "keep.txt"), "existing")
+
+    await expect(manager.createProject({ name: "storyboard", parentPath: workspaceRoot })).rejects.toThrow("Project already exists")
+    expect(await fs.readFile(path.join(existingRoot, "keep.txt"), "utf8")).toBe("existing")
+  })
+
+  test("allows only one concurrent creation for portable-equivalent project names", async () => {
+    const workspaceRoot = path.join(temporaryRoot, "Documents", "Convax")
+    const results = await Promise.allSettled([
+      manager.createProject({ name: "Concurrent", parentPath: workspaceRoot }),
+      manager.createProject({ name: "concurrent", parentPath: workspaceRoot }),
+    ])
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1)
+    expect((await manager.listProjects()).filter((project) => project.name.toLowerCase() === "concurrent")).toHaveLength(1)
+    expect((await fs.readdir(workspaceRoot)).filter((name) => name.toLowerCase() === "concurrent")).toHaveLength(1)
   })
 
   test("keeps the manifest project id when a project folder is moved and rebound", async () => {

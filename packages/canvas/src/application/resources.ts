@@ -3,8 +3,10 @@ import {
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
+  type CanvasNodeContentGuard,
   type CanvasAddResourcesCommand,
   type CanvasCommandActor,
+  type CanvasReplaceResourceCommand,
 } from "./commands"
 import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
 import type {
@@ -76,6 +78,17 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   sources: readonly CanvasResourceSource[]
 }
 
+export interface CanvasReplaceResourceSourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  commandId: string
+  /** Defaults to retry, guarded by expectedTarget so unrelated edits survive. */
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+  expectedTarget: CanvasNodeContentGuard
+  source: CanvasResourceSource
+  targetNodeId: string
+}
+
 type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
 
 const maxCanvasResourceConflictRetries = 2
@@ -107,6 +120,7 @@ export class CanvasResourceBusinessService {
       request.commandId,
     ])
     const fingerprint = stableJson({
+      operation: "add",
       anchor: request.anchor,
       conflictPolicy: request.conflictPolicy ?? "retry",
       expectedRevision: request.expectedRevision,
@@ -122,6 +136,40 @@ export class CanvasResourceBusinessService {
     }
 
     const result = this.addResourcesOnce(request)
+    const execution = { fingerprint, result }
+    this.executions.set(key, execution)
+    if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
+    void result.catch(() => {
+      if (this.executions.get(key) === execution) this.executions.delete(key)
+    })
+    return result
+  }
+
+  replaceResource(request: CanvasReplaceResourceSourceRequest): Promise<CanvasApplicationCommandResult> {
+    const key = JSON.stringify([
+      request.scopeId,
+      request.canvasId,
+      request.actor.kind,
+      request.actor.id,
+      request.commandId,
+    ])
+    const fingerprint = stableJson({
+      operation: "replace",
+      conflictPolicy: request.conflictPolicy ?? "retry",
+      expectedRevision: request.expectedRevision,
+      expectedTarget: request.expectedTarget,
+      source: request.source,
+      targetNodeId: request.targetNodeId,
+    })
+    const existing = this.executions.get(key)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+      }
+      return existing.result
+    }
+
+    const result = this.replaceResourceOnce(request)
     const execution = { fingerprint, result }
     this.executions.set(key, execution)
     if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
@@ -208,6 +256,110 @@ export class CanvasResourceBusinessService {
         expectedRevision = latest.revision
       }
     }
+  }
+
+  private async replaceResourceOnce(
+    request: CanvasReplaceResourceSourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    validateResourceOperation(request)
+    requireNonEmptyString(request.targetNodeId, "Canvas replacement target node id")
+    if (
+      !isRecord(request.expectedTarget) ||
+      !isRecord(request.expectedTarget.data) ||
+      typeof request.expectedTarget.data.kind !== "string" ||
+      typeof request.expectedTarget.data.label !== "string" ||
+      request.expectedTarget.type !== "file"
+    ) {
+      throw new CanvasCommandValidationError("Canvas replacement target guard is invalid")
+    }
+    validateCanvasResourceSources([request.source])
+
+    const prepared = await this.preparation.prepare({
+      canvasId: request.canvasId,
+      scopeId: request.scopeId,
+      sources: [request.source],
+    })
+    validatePreparedCanvasResources(prepared)
+    if (prepared.items.length !== 1) {
+      throw new CanvasCommandValidationError("Canvas resource replacement must prepare exactly one item")
+    }
+    const command: CanvasReplaceResourceCommand = {
+      type: "resources.replace",
+      expectedTarget: structuredClone(request.expectedTarget),
+      item: prepared.items[0]!,
+      targetNodeId: request.targetNodeId,
+    }
+
+    return this.executeWithConflictPolicy(request, command, prepared.warnings ?? [])
+  }
+
+  private async executeWithConflictPolicy(
+    request: Pick<
+      CanvasReplaceResourceSourceRequest,
+      "actor" | "canvasId" | "commandId" | "conflictPolicy" | "expectedRevision" | "scopeId"
+    >,
+    command: CanvasReplaceResourceCommand,
+    preparationWarnings: readonly string[],
+  ): Promise<CanvasApplicationCommandResult> {
+    let expectedRevision = request.expectedRevision
+    let conflictRetries = 0
+    while (true) {
+      try {
+        const result = await this.application.execute({
+          canvasId: request.canvasId,
+          envelope: {
+            actor: request.actor,
+            command,
+            commandId: request.commandId,
+            expectedRevision,
+          },
+          scopeId: request.scopeId,
+        })
+        const replayWarning =
+          conflictRetries > 0
+            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
+            : []
+        return {
+          ...result,
+          warnings: [...preparationWarnings, ...result.warnings, ...replayWarning],
+        }
+      } catch (error) {
+        if (
+          !isCanvasResourceConflict(error) ||
+          request.conflictPolicy === "reject" ||
+          conflictRetries >= maxCanvasResourceConflictRetries
+        ) {
+          throw error
+        }
+        conflictRetries += 1
+        const latest = await this.application.query(
+          { canvasId: request.canvasId, scopeId: request.scopeId },
+          { limit: 0 },
+        )
+        expectedRevision = latest.revision
+      }
+    }
+  }
+}
+
+function validateResourceOperation(request: {
+  actor: CanvasCommandActor
+  commandId: string
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+}) {
+  if (!request.commandId.trim() || !request.actor.id.trim()) {
+    throw new CanvasCommandValidationError("Canvas command and actor ids are required")
+  }
+  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
+    throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
+  }
+  if (
+    request.conflictPolicy !== undefined &&
+    request.conflictPolicy !== "reject" &&
+    request.conflictPolicy !== "retry"
+  ) {
+    throw new CanvasCommandValidationError("Canvas resource conflict policy must be retry or reject")
   }
 }
 

@@ -2,6 +2,7 @@ import { createContext, type ReactNode, useContext } from "react"
 import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
 import type { CanvasSelectionContext } from "./selection-context"
 import type { CanvasSelectionAction } from "./selection-actions"
+import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "./selection-drag-source"
 import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
 
 export interface CanvasConnectionNodeType {
@@ -19,6 +20,10 @@ export interface CanvasEditorController {
   fileRenderers: CanvasFileRendererRegistry
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
   visibleSelectionActions: readonly CanvasSelectionAction[]
+  visibleSelectionDragSource: CanvasSelectionDragSource | null
+  selectionDragArmed: boolean
+  selectionDragChordHeld: boolean
+  selectionDragStatus: CanvasSelectionDragPreparationStatus
   beginGesture: () => void
   cancelGesture: () => void
   endGesture: () => void
@@ -26,6 +31,9 @@ export interface CanvasEditorController {
   duplicateNode: (nodeId: string) => void
   executeSelectionAction: (action: CanvasSelectionAction) => void
   isSelectionActionPending: (actionId: string) => boolean
+  releaseSelectionDrag: () => void
+  setSelectionDragCandidateNode: (nodeId: string | null) => void
+  startSelectionDrag: () => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
   removeNode: (nodeId: string) => void
   replaceNodeMedia: (nodeId: string, file: File) => void

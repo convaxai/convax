@@ -21,7 +21,10 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        input: "src/preload/index.ts",
+        input: {
+          index: "src/preload/index.ts",
+          "plugin-service-browser-authorization": "src/preload/plugin-service-browser-authorization.ts",
+        },
         output: {
           format: "cjs",
           entryFileNames: "[name].js",

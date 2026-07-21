@@ -1,5 +1,6 @@
 export const desktopPluginHostProtocolV1 = "convax.plugin-host/1" as const
 export const desktopPluginHostProtocolV2 = "convax.plugin-host/2" as const
+export const desktopPluginHostProtocolV3 = "convax.plugin-host/3" as const
 /** Backwards-compatible name for the original static Plugin protocol. */
 export const desktopPluginHostProtocol = desktopPluginHostProtocolV1
 export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
@@ -7,6 +8,7 @@ export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImage
 export type DesktopPluginHostProtocol =
   | typeof desktopPluginHostProtocolV1
   | typeof desktopPluginHostProtocolV2
+  | typeof desktopPluginHostProtocolV3
 
 export type DesktopPluginHostMethodV1 =
   | "host.context.get"
@@ -22,7 +24,9 @@ export type DesktopPluginHostMethodV2 =
   | "generation.tools.list"
   | "generation.canvas.execute"
 
-export type DesktopPluginHostMethod = DesktopPluginHostMethodV2
+export type DesktopPluginHostMethodV3 = DesktopPluginHostMethodV2
+
+export type DesktopPluginHostMethod = DesktopPluginHostMethodV3
 
 export interface DesktopPluginHostRequest {
   id: string
@@ -32,19 +36,21 @@ export interface DesktopPluginHostRequest {
   type: "request"
 }
 
-export type DesktopPluginHostResponse = {
-  id: string
-  ok: true
-  protocol: DesktopPluginHostProtocol
-  result: unknown
-  type: "response"
-} | {
-  error: string
-  id: string
-  ok: false
-  protocol: DesktopPluginHostProtocol
-  type: "response"
-}
+export type DesktopPluginHostResponse =
+  | {
+      id: string
+      ok: true
+      protocol: DesktopPluginHostProtocol
+      result: unknown
+      type: "response"
+    }
+  | {
+      error: string
+      id: string
+      ok: false
+      protocol: DesktopPluginHostProtocol
+      type: "response"
+    }
 
 export interface DesktopPluginHostCommand {
   command: string
@@ -74,30 +80,43 @@ const methodsV2 = new Set<DesktopPluginHostMethodV2>([
   "generation.canvas.execute",
 ])
 
+const methodsV3 = new Set<DesktopPluginHostMethodV3>(methodsV2)
+
 export function desktopPluginHostProtocolForManifestSchema(
-  schema: "convax.plugin/1" | "convax.plugin/2",
+  schema: "convax.plugin/1" | "convax.plugin/2" | "convax.plugin/3",
 ): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/2" ? desktopPluginHostProtocolV2 : desktopPluginHostProtocolV1
+  return schema === "convax.plugin/3"
+    ? desktopPluginHostProtocolV3
+    : schema === "convax.plugin/2"
+      ? desktopPluginHostProtocolV2
+      : desktopPluginHostProtocolV1
 }
 
 export function isDesktopPluginHostProtocol(value: unknown): value is DesktopPluginHostProtocol {
-  return value === desktopPluginHostProtocolV1 || value === desktopPluginHostProtocolV2
+  return (
+    value === desktopPluginHostProtocolV1 ||
+    value === desktopPluginHostProtocolV2 ||
+    value === desktopPluginHostProtocolV3
+  )
 }
 
 export function isDesktopPluginHostRequest(value: unknown): value is DesktopPluginHostRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const request = value as Record<string, unknown>
   if (
-    request.type !== "request"
-    || typeof request.id !== "string"
-    || request.id.length === 0
-    || request.id.length > 128
-    || typeof request.method !== "string"
-    || !isDesktopPluginHostProtocol(request.protocol)
-  ) return false
+    request.type !== "request" ||
+    typeof request.id !== "string" ||
+    request.id.length === 0 ||
+    request.id.length > 128 ||
+    typeof request.method !== "string" ||
+    !isDesktopPluginHostProtocol(request.protocol)
+  )
+    return false
   return request.protocol === desktopPluginHostProtocolV1
     ? methodsV1.has(request.method as DesktopPluginHostMethodV1)
-    : methodsV2.has(request.method as DesktopPluginHostMethodV2)
+    : request.protocol === desktopPluginHostProtocolV2
+      ? methodsV2.has(request.method as DesktopPluginHostMethodV2)
+      : methodsV3.has(request.method as DesktopPluginHostMethodV3)
 }
 
 export function pluginHostSuccess(

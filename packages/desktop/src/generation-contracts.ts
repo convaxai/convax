@@ -1,4 +1,5 @@
 export type GenerationOutputModality = "text" | "image" | "video" | "audio"
+export type GenerationToolKind = "model" | "operation"
 
 export const generationIpcChannels = {
   cancel: "generation:cancel",
@@ -18,8 +19,14 @@ export type GenerationInputRole =
 export interface GenerationToolSummary {
   /** Host-stable id composed from the installed Plugin and its declared tool. */
   id: string
+  /** Declarative v3 classification; legacy v2 generation tools are models. */
+  kind: GenerationToolKind
+  /** Present only for v3 models and intentionally excludes the service name. */
+  modelName?: string
   pluginId: string
   pluginName: string
+  /** Plugin-local dedicated Agent tool id for v3 operations. */
+  agentId?: string
   toolId: string
   title: string
   description: string
@@ -83,6 +90,9 @@ export interface GenerationCanvasReference {
   role: GenerationInputRole
 }
 
+/** Host-neutral Canvas mutation for admitted results. Omission means add. */
+export type GenerationResultMode = { type: "add" } | { nodeId: string; type: "replace-node" }
+
 /** Host-derived relationship guard used by card/Plugin callers. */
 export interface GenerationReferenceConstraint {
   ownerNodeId: string
@@ -107,6 +117,7 @@ export interface GenerationCanvasRequest {
   references: readonly GenerationCanvasReference[]
   /** Trusted host-only relation anchors; these never enter the Tool Plugin input. */
   relationAnchorNodeIds?: readonly string[]
+  resultMode?: GenerationResultMode
   /** Never accepted from sandboxed Plugin payloads; the trusted host derives it from the owning card. */
   referenceConstraint?: GenerationReferenceConstraint
   anchor: {

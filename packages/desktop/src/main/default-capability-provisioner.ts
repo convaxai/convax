@@ -89,6 +89,17 @@ export async function provisionDefaultCapabilities(input: {
       // A receipt plus a missing package means the user removed this default.
       // Its companion must not be newly provisioned behind that choice.
       if (!installed) continue
+      try {
+        // Defaults remain on the normal verified Registry path. The installer
+        // returns the current package without republishing when it is already
+        // current, and atomically upgrades it when the Registry is newer.
+        installed = await input.remote!.installer.installPlugin(item.pluginId, { allowCurrent: true })
+      } catch (error) {
+        // Keep the already-installed version usable when an update check or
+        // publication fails; startup must not turn a healthy local Plugin into
+        // an unavailable capability merely because the Registry is offline.
+        failures.push({ error, id: item.pluginId, kind: "plugin" })
+      }
     } else {
       if (!installed) {
         try {

@@ -92,24 +92,27 @@ export class ProjectController {
   }
 
   async openProject() {
-    if (this.snapshot.changingActiveProject) return
-    await this.selectProject(() => this.client.openProject())
+    if (this.snapshot.changingActiveProject) return false
+    return this.selectProject(() => this.client.openProject())
   }
 
   async createProject(name: string) {
-    if (this.snapshot.changingActiveProject || !name.trim()) return
-    await this.selectProject(() => this.client.createProject({ name: name.trim() }))
+    if (this.snapshot.changingActiveProject || !name.trim()) return false
+    return this.selectProject(() => this.client.createProject({ name: name.trim() }))
   }
 
   private async selectProject(select: () => Promise<ProjectSelectionResult>) {
     const request = ++this.selectionRequest
     try {
       const result = await select()
-      if (request !== this.selectionRequest) return
+      if (request !== this.selectionRequest) return false
       this.update({ error: null, initialized: true, projects: result.projects })
-      if (!result.canceled && result.project) await this.activate(result.project.id)
+      if (result.canceled || !result.project) return false
+      await this.activate(result.project.id)
+      return true
     } catch (error) {
       if (request === this.selectionRequest) this.update({ error: errorMessage(error) })
+      return false
     }
   }
 

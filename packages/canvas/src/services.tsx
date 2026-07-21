@@ -60,6 +60,9 @@ export interface CanvasGenerationReference {
   role: CanvasGenerationInputRole
 }
 
+/** Host-neutral Canvas mutation selected by the caller. Omission keeps add semantics. */
+export type CanvasGenerationResultMode = { type: "add" } | { nodeId: string; type: "replace-node" }
+
 export interface CanvasGenerateRequest {
   anchor: CanvasPoint
   expectedRevision: number
@@ -73,6 +76,7 @@ export interface CanvasGenerateRequest {
    */
   relationAnchorNodeIds?: readonly string[]
   references: readonly CanvasGenerationReference[]
+  resultMode?: CanvasGenerationResultMode
   toolInput?: CanvasGenerationToolInput
   toolId?: string
   context: CanvasServiceContext
@@ -95,7 +99,8 @@ export interface CanvasGenerateService {
 }
 
 /**
- * Converts selected public Canvas file nodes into semantic generation inputs.
+ * Converts selected public Canvas file nodes with materialized content into semantic generation inputs.
+ * Empty cards remain prompt-only output targets; their kind alone is not an input source.
  * First/last-frame roles remain explicit choices for callers and are not guessed from selection order.
  */
 export function inferCanvasGenerationReferences(
@@ -132,7 +137,11 @@ export function getCanvasGenerationReferenceError(
 }
 
 function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInputRole | undefined {
-  if (node.data.kind === "text") return "text"
+  if (node.data.kind === "text") {
+    return "text" in node.data && typeof node.data.text === "string" && node.data.text.trim() ? "text" : undefined
+  }
+  if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
+  if (!("url" in node.data) || typeof node.data.url !== "string" || !node.data.url.trim()) return undefined
   if (node.data.kind === "image") return "reference_image"
   if (node.data.kind === "video") return "reference_video"
   if (node.data.kind === "audio") return "audio"
@@ -173,13 +182,61 @@ export interface CanvasTelemetryService {
   track: (event: CanvasTelemetryEvent) => void
 }
 
+/** Transient presentation state for a direct generation launched from a file card. */
+export type CanvasAssistantGenerationActivity =
+  | { cancel: () => void; prompt: string; status: "pending" }
+  | { status: "complete" }
+  | { message: string; prompt: string; status: "error" }
+
+export type CanvasFileGenerationActivity =
+  | { status: "idle" }
+  | Exclude<CanvasAssistantGenerationActivity, { status: "complete" }>
+
+/** Owns a direct generation for exactly as long as its target file node remains mounted. */
+export class CanvasFileGenerationActivityOwner {
+  #activity: CanvasFileGenerationActivity = { status: "idle" }
+  #cancel: (() => void) | undefined
+
+  get activity() {
+    return this.#activity
+  }
+
+  apply(activity: CanvasAssistantGenerationActivity): {
+    activity: CanvasFileGenerationActivity
+    dismissComposer: boolean
+  } {
+    if (activity.status === "pending") {
+      this.#cancel?.()
+      this.#cancel = activity.cancel
+      this.#activity = activity
+      return { activity: this.#activity, dismissComposer: true }
+    }
+    this.#cancel = undefined
+    this.#activity = activity.status === "complete" ? { status: "idle" } : activity
+    return { activity: this.#activity, dismissComposer: false }
+  }
+
+  dispose() {
+    this.#cancel?.()
+    this.#cancel = undefined
+    this.#activity = { status: "idle" }
+  }
+}
+
 export interface CanvasAssistantRequest {
   document: CanvasDocument
+  /** One-shot in-memory draft restored after an explicit card-generation recovery action. */
+  initialGenerationPrompt?: string
+  /** Host-selected context nodes. A file-card owner is carried separately and is not an implicit mention. */
   mentionedNodeIds: readonly string[]
   mode: "agent" | "file"
   /** Persisted owner-node override. Missing means inherit the host's current default. */
   ownerGenerationToolId?: string
   ownerNodeId: string
+  /** File-card-only activity notification; this never mutates or persists the Canvas document. */
+  onGenerationActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
+  /** Acknowledges that the one-shot recovery draft was copied into the mounted composer. */
+  onInitialGenerationPromptConsumed?: () => void
   /** File-card-only mutation; clearing the id restores host-default inheritance. */
   onOwnerGenerationToolIdChange?: (toolId?: string) => void
 }

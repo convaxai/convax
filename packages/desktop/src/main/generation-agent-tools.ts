@@ -19,11 +19,6 @@ export interface GenerationCanvasAgentPort {
   listTools(options?: { output?: GenerationOutputModality }): Promise<readonly GenerationToolSummary[]>
 }
 
-export interface GenerationAgentToolProviderOptions {
-  /** Tool Plugins with a dedicated Agent surface must not remain selectable through canvas_generate. */
-  excludedPluginIds?: readonly string[]
-}
-
 const toolName = "canvas_generate"
 const outputModalities = ["text", "image", "video", "audio"] as const satisfies readonly GenerationOutputModality[]
 const inputRoles = [
@@ -55,13 +50,9 @@ const topLevelFields = new Set([
  * remain the only executors, while the host supplies the authoritative Agent
  * Project scope and mutation actor.
  */
-export function createGenerationAgentToolProvider(
-  service: GenerationCanvasAgentPort,
-  options: GenerationAgentToolProviderOptions = {},
-): AgentToolProvider {
-  const excludedPluginIds = new Set(options.excludedPluginIds ?? [])
+export function createGenerationAgentToolProvider(service: GenerationCanvasAgentPort): AgentToolProvider {
   const installedTools = async () =>
-    normalizeInstalledTools(await service.listTools()).filter((tool) => !excludedPluginIds.has(tool.pluginId))
+    normalizeInstalledTools(await service.listTools()).filter((tool) => tool.kind === "model")
   return {
     async listTools() {
       const installed = await installedTools()
@@ -241,6 +232,9 @@ function normalizeInstalledTools(tools: readonly GenerationToolSummary[]) {
     ids.add(id)
     if (!outputModalitySet.has(tool.output)) {
       throw new Error(`Installed generation tool ${id} has an unsupported output modality`)
+    }
+    if (tool.kind !== "model" && tool.kind !== "operation") {
+      throw new Error(`Installed generation tool ${id} has an unsupported kind`)
     }
     if (!Array.isArray(tool.acceptedInputs)) {
       throw new Error(`Installed generation tool ${id} acceptedInputs must be an array`)

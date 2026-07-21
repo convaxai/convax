@@ -5,20 +5,26 @@ import {
   createMediaNode,
   createTextNode,
   type CanvasAssistantRequest,
+  type CanvasAssistantGenerationActivity,
+  type CanvasGenerateRequest,
+  type CanvasGenerateResult,
   type CanvasGenerateService,
   type CanvasGenerationToolDescription,
   type CanvasGenerationToolSummary,
   type CanvasNode,
 } from "@convax/canvas"
+import { projectFileReferenceKey } from "@convax/project/canvas"
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
   CanvasCardConversationPanel,
   CanvasCardGenerationCatalogRequestTracker,
+  canvasCardAgentContextNodeIds,
   canvasCardGenerationOutput,
   canvasCardGenerationReferences,
   compatibleCanvasCardGenerationTools,
   createCanvasCardGenerationRequest,
+  executeCanvasCardGeneration,
   resolveCanvasCardGenerationTool,
   validateCanvasCardGenerationToolInput,
 } from "./canvas-card-conversation-panel"
@@ -31,6 +37,7 @@ function imageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
       resource: {
         id: "image-resource",
         kind: "image",
+        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
         mimeType: "image/png",
         name: "reference.png",
         url: "convax-asset://project/image",
@@ -41,13 +48,17 @@ function imageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
   }
 }
 
-function assistantRequest(node: CanvasNode, nodes: CanvasNode[] = [node]): CanvasAssistantRequest {
+function assistantRequest(
+  node: CanvasNode,
+  nodes: CanvasNode[] = [node],
+  mentionedNodeIds: readonly string[] = [],
+): CanvasAssistantRequest {
   return {
     document: {
       ...createCanvasDocument({ id: "canvas-one", nodes }),
       revision: 7,
     },
-    mentionedNodeIds: [node.id],
+    mentionedNodeIds,
     mode: "file",
     ownerNodeId: node.id,
   }
@@ -90,43 +101,6 @@ const description: CanvasGenerationToolDescription = {
 }
 
 describe("Canvas card generation output", () => {
-  test("derives text and media output from the owner without rendering modality tabs", () => {
-    const nodes = [
-      createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "notes" }),
-      imageNode({ id: "image" }),
-      createMediaNode({
-        id: "video",
-        position: { x: 0, y: 0 },
-        resource: { id: "video-resource", kind: "video", url: "asset://video" },
-      }),
-      createMediaNode({
-        id: "audio",
-        position: { x: 0, y: 0 },
-        resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
-      }),
-      createFolderNode({
-        id: "folder",
-        position: { x: 0, y: 0 },
-        resource: { id: "folder-resource", kind: "folder", name: "Folder" },
-      }),
-      {
-        data: { kind: "plugin.example", label: "Plugin" },
-        id: "plugin",
-        position: { x: 0, y: 0 },
-        type: "file" as const,
-      },
-    ]
-
-    expect(nodes.map((node) => canvasCardGenerationOutput(assistantRequest(node, nodes)))).toEqual([
-      "text",
-      "image",
-      "video",
-      "audio",
-      undefined,
-      undefined,
-    ])
-  })
-
   test("inherits the Agent model until this node stores its own override", () => {
     const first = tool()
     const second = tool({ id: "tools/other", title: "Other image" })
@@ -138,15 +112,49 @@ describe("Canvas card generation output", () => {
     expect(resolveCanvasCardGenerationTool(second.id, [second, third], { id: third.id, output: "image" })).toBe(second)
   })
 
-  test("fails closed for a stale node override and otherwise keeps the unique-tool Auto fallback", () => {
-    const only = tool()
+  test("replaces a stale persisted id only with an unambiguous same-output fallback", () => {
+    const staleId = "xiaoyunque-generation/image.nova2"
+    const image = tool()
+    const otherImage = tool({ id: "tools/other-image", title: "Other image" })
+    const video = tool({ id: "tools/video", output: "video", title: "Video" })
+    const agentVideo = { id: video.id, output: "video" as const }
 
+    const fallback = resolveCanvasCardGenerationTool(staleId, [image, video], agentVideo, "image")
+    expect(fallback).toBe(image)
+    expect(resolveCanvasCardGenerationTool(staleId, [image, otherImage, video], agentVideo, "image")).toBeUndefined()
+    expect(resolveCanvasCardGenerationTool(video.id, [image, video], agentVideo, "image")).toBeUndefined()
+
+    const request = createCanvasCardGenerationRequest({
+      description: { fields: [], toolId: fallback!.id },
+      prompt: "A small rabbit",
+      request: assistantRequest(imageNode()),
+      signal: new AbortController().signal,
+      tool: fallback!,
+      toolInput: {},
+    })
+    expect(request.toolId).toBe(image.id)
+    expect(request.toolId).not.toBe(staleId)
+  })
+
+  test("keeps an image card strictly on image models, including persisted overrides and Agent defaults", () => {
+    const image = tool()
+    const otherImage = tool({ id: "tools/other-image", title: "Other image" })
+    const video = tool({ id: "tools/video", output: "video", title: "Video" })
+    const agentVideo = { id: video.id, output: "video" as const }
+    const emptyImage = imageNode({ data: { kind: "image", label: "Image", url: "" } })
+    const ownerOutput = canvasCardGenerationOutput(assistantRequest(emptyImage))
+
+    expect(ownerOutput).toBe("image")
+    expect(resolveCanvasCardGenerationTool(undefined, [image, video], agentVideo, ownerOutput)).toBe(image)
     expect(
-      resolveCanvasCardGenerationTool("tools/uninstalled", [only], { id: only.id, output: "image" }),
+      resolveCanvasCardGenerationTool(undefined, [image, otherImage, video], agentVideo, ownerOutput),
     ).toBeUndefined()
-    expect(resolveCanvasCardGenerationTool(undefined, [only])).toBe(only)
-    expect(resolveCanvasCardGenerationTool(undefined, [only, tool({ id: "tools/other" })])).toBeUndefined()
-    expect(resolveCanvasCardGenerationTool(undefined, [only], { id: only.id, output: "video" })).toBe(only)
+    expect(resolveCanvasCardGenerationTool(undefined, [video], agentVideo, ownerOutput)).toBeUndefined()
+    expect(resolveCanvasCardGenerationTool(video.id, [image, video], agentVideo, ownerOutput)).toBeUndefined()
+
+    const agentImage = { id: image.id, output: "image" as const }
+    expect(resolveCanvasCardGenerationTool(undefined, [image, video], agentImage, "video")).toBe(video)
+    expect(resolveCanvasCardGenerationTool(image.id, [image, video], agentImage, "video")).toBeUndefined()
   })
 })
 
@@ -159,7 +167,7 @@ describe("Canvas card generation request", () => {
       width: 800,
     })
     const node = imageNode({ extent: "parent", parentId: group.id })
-    const request = assistantRequest(node, [group, node])
+    const request = assistantRequest(node, [group, node], [node.id])
     const controller = new AbortController()
 
     expect(
@@ -182,6 +190,7 @@ describe("Canvas card generation request", () => {
       output: "image",
       prompt: "Turn this into a poster",
       references: [{ nodeId: "image-card", role: "reference_image" }],
+      resultMode: { nodeId: "image-card", type: "replace-node" },
       signal: controller.signal,
       toolId: "creative-tools/image.generate",
       toolInput: { aspect_ratio: "16:9", steps: 24 },
@@ -201,7 +210,7 @@ describe("Canvas card generation request", () => {
       createCanvasCardGenerationRequest({
         description: emptyDescription,
         prompt: "A soft opening",
-        request: assistantRequest(node),
+        request: assistantRequest(node, [node], [node.id]),
         signal: new AbortController().signal,
         tool: selected,
         toolInput: {},
@@ -209,6 +218,7 @@ describe("Canvas card generation request", () => {
     ).toMatchObject({
       output: "audio",
       prompt: "A soft opening",
+      resultMode: { nodeId: "folder", type: "replace-node" },
       toolId: selected.id,
     })
     expect(
@@ -221,6 +231,72 @@ describe("Canvas card generation request", () => {
         toolInput: {},
       }),
     ).not.toHaveProperty("toolInput")
+  })
+
+  test("generates from an empty image card as prompt-only output instead of treating the placeholder as input", () => {
+    const node = imageNode({
+      data: {
+        kind: "image",
+        label: "Image",
+        url: "",
+      },
+    })
+    const selected = tool({ acceptedInputs: [] })
+    const emptyDescription = { fields: [], toolId: selected.id } satisfies CanvasGenerationToolDescription
+
+    expect(
+      createCanvasCardGenerationRequest({
+        description: emptyDescription,
+        prompt: "A small rabbit",
+        request: assistantRequest(node, [node], [node.id]),
+        signal: new AbortController().signal,
+        tool: selected,
+        toolInput: {},
+      }),
+    ).toMatchObject({
+      output: "image",
+      prompt: "A small rabbit",
+      references: [],
+      resultMode: { nodeId: "image-card", type: "replace-node" },
+    })
+  })
+
+  test("rejects a video model before it can replace an image card", () => {
+    const node = imageNode()
+    const selected = tool({ acceptedInputs: [], id: "creative-tools/video.generate", output: "video" })
+    const emptyDescription = { fields: [], toolId: selected.id } satisfies CanvasGenerationToolDescription
+
+    expect(() =>
+      createCanvasCardGenerationRequest({
+        description: emptyDescription,
+        prompt: "Bring the character to life",
+        request: assistantRequest(node),
+        signal: new AbortController().signal,
+        tool: selected,
+        toolInput: {},
+      }),
+    ).toThrow("cannot replace this image card")
+  })
+
+  test("does not implicitly use a managed image owner unless the user explicitly mentions it", () => {
+    const node = imageNode()
+
+    expect(canvasCardGenerationReferences(assistantRequest(node))).toEqual([])
+    expect(canvasCardGenerationReferences(assistantRequest(node, [node], [node.id]))).toEqual([
+      { nodeId: node.id, role: "reference_image" },
+    ])
+
+    const selected = tool({ acceptedInputs: [] })
+    expect(
+      createCanvasCardGenerationRequest({
+        description: { fields: [], toolId: selected.id },
+        prompt: "A new scene",
+        request: assistantRequest(node),
+        signal: new AbortController().signal,
+        tool: selected,
+        toolInput: {},
+      }),
+    ).toMatchObject({ references: [] })
   })
 
   test("rejects missing, invalid, and stale model configuration", () => {
@@ -238,7 +314,7 @@ describe("Canvas card generation request", () => {
     ).toThrow("configuration is stale")
   })
 
-  test("infers text, image, video, and audio references but leaves folder and Plugin cards prompt-only", () => {
+  test("infers explicitly mentioned text, image, video, and audio references but leaves other cards prompt-only", () => {
     const nodes = [
       createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "notes" }),
       imageNode({ id: "image" }),
@@ -265,7 +341,7 @@ describe("Canvas card generation request", () => {
       },
     ]
 
-    expect(nodes.map((node) => canvasCardGenerationReferences(assistantRequest(node, nodes)))).toEqual([
+    expect(nodes.map((node) => canvasCardGenerationReferences(assistantRequest(node, nodes, [node.id])))).toEqual([
       [{ nodeId: "text", role: "text" }],
       [{ nodeId: "image", role: "reference_image" }],
       [{ nodeId: "video", role: "reference_video" }],
@@ -275,7 +351,7 @@ describe("Canvas card generation request", () => {
     ])
   })
 
-  test("filters known owner output but lets a generic card choose across compatible modalities", () => {
+  test("locks direct cards to their output kind while preserving explicit image input for video generation", () => {
     const references = [{ nodeId: "image-card", role: "reference_image" as const }]
     const tools = [
       tool(),
@@ -286,14 +362,154 @@ describe("Canvas card generation request", () => {
     expect(compatibleCanvasCardGenerationTools(tools, "image", references).map((item) => item.id)).toEqual([
       "creative-tools/image.generate",
     ])
-    expect(compatibleCanvasCardGenerationTools(tools, undefined, references).map((item) => item.id)).toEqual([
-      "creative-tools/image.generate",
+    expect(compatibleCanvasCardGenerationTools(tools, "video", references).map((item) => item.id)).toEqual([
       "tools/video-with-reference",
+    ])
+    expect(compatibleCanvasCardGenerationTools(tools, "image", []).map((item) => item.id)).toEqual([
+      "creative-tools/image.generate",
+      "tools/prompt-image",
     ])
   })
 })
 
 describe("Canvas card generation lifecycle", () => {
+  function generationRequest(signal = new AbortController().signal): CanvasGenerateRequest {
+    return {
+      anchor: { x: 0, y: 0 },
+      context: { documentId: "canvas-one", selectedNodeIds: ["image-card"], source: "canvas-card" },
+      expectedRevision: 7,
+      output: "image",
+      prompt: "A small rabbit",
+      references: [],
+      resultMode: { nodeId: "image-card", type: "replace-node" },
+      signal,
+      toolId: "creative-tools/image.generate",
+    }
+  }
+
+  test("closes the composer into card pending state immediately and completes it only after generation", async () => {
+    const activities: CanvasAssistantGenerationActivity[] = []
+    let cancelled = false
+    let resolveGeneration!: (result: CanvasGenerateResult) => void
+    const generate: CanvasGenerateService["generate"] = () =>
+      new Promise((resolve) => {
+        resolveGeneration = resolve
+      })
+    const pending = executeCanvasCardGeneration({
+      cancel: () => {
+        cancelled = true
+      },
+      generate,
+      onActivityChange: (activity) => activities.push(activity),
+      request: generationRequest(),
+    })
+
+    expect(activities.map((activity) => activity.status)).toEqual(["pending"])
+    expect(activities[0]?.status === "pending" && activities[0].cancel).toBeFunction()
+    expect(activities[0]?.status === "pending" && activities[0].prompt).toBe("A small rabbit")
+    resolveGeneration({
+      createdNodeIds: ["generated"],
+      revision: 8,
+      toolId: "creative-tools/image.generate",
+      warnings: [],
+    })
+    await expect(pending).resolves.toMatchObject({ createdNodeIds: ["generated"] })
+    expect(activities.map((activity) => activity.status)).toEqual(["pending", "complete"])
+    expect(cancelled).toBeFalse()
+  })
+
+  test("turns a terminal failure into a recoverable card error but does not surface cancellation as failure", async () => {
+    const failureActivities: CanvasAssistantGenerationActivity[] = []
+    await expect(
+      executeCanvasCardGeneration({
+        cancel: () => undefined,
+        generate: async () => {
+          throw new Error("Generation service unavailable")
+        },
+        onActivityChange: (activity) => failureActivities.push(activity),
+        request: generationRequest(),
+      }),
+    ).rejects.toThrow("Generation service unavailable")
+    expect(
+      failureActivities.map((activity) => (activity.status === "error" ? activity : { status: activity.status })),
+    ).toEqual([
+      { status: "pending" },
+      { message: "Generation service unavailable", prompt: "A small rabbit", status: "error" },
+    ])
+
+    const controller = new AbortController()
+    const cancellationActivities: CanvasAssistantGenerationActivity[] = []
+    await expect(
+      executeCanvasCardGeneration({
+        cancel: () => controller.abort(new DOMException("Disposed", "AbortError")),
+        generate: async () => {
+          controller.abort(new DOMException("Cancelled", "AbortError"))
+          throw controller.signal.reason
+        },
+        onActivityChange: (activity) => cancellationActivities.push(activity),
+        request: generationRequest(controller.signal),
+      }),
+    ).rejects.toThrow("Cancelled")
+    expect(cancellationActivities.map((activity) => activity.status)).toEqual(["pending"])
+  })
+
+  test("shows the bounded tool diagnostic before Electron's generation IPC wrapper", async () => {
+    const activities: CanvasAssistantGenerationActivity[] = []
+    const wrapped = new Error(
+      "Error invoking remote method 'generation:generate': GenerationToolReportedError: Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
+    )
+
+    await expect(
+      executeCanvasCardGeneration({
+        cancel: () => undefined,
+        generate: async () => {
+          throw wrapped
+        },
+        onActivityChange: (activity) => activities.push(activity),
+        request: generationRequest(),
+      }),
+    ).rejects.toBe(wrapped)
+    expect(activities.at(-1)).toEqual({
+      message:
+        "Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
+      prompt: "A small rabbit",
+      status: "error",
+    })
+  })
+
+  test("does not rewrite ordinary errors or errors from another IPC channel", async () => {
+    for (const message of [
+      "Error invoking remote method 'generation:generate': Error: Generation service unavailable",
+      "Error invoking remote method 'plugin-service:status': GenerationToolReportedError: Generation tool failed",
+    ]) {
+      const activities: CanvasAssistantGenerationActivity[] = []
+      await expect(
+        executeCanvasCardGeneration({
+          cancel: () => undefined,
+          generate: async () => {
+            throw new Error(message)
+          },
+          onActivityChange: (activity) => activities.push(activity),
+          request: generationRequest(),
+        }),
+      ).rejects.toThrow(message)
+      expect(activities.at(-1)).toMatchObject({ message, status: "error" })
+    }
+  })
+
+  test("keeps the file owner in Agent context without turning it into a generation mention", () => {
+    expect(canvasCardAgentContextNodeIds({ mentionedNodeIds: [], mode: "file", ownerNodeId: "managed-image" })).toEqual(
+      ["managed-image"],
+    )
+    expect(
+      canvasCardAgentContextNodeIds({
+        mentionedNodeIds: ["connected-image", "connected-video"],
+        mode: "agent",
+        ownerNodeId: "agent-card",
+      }),
+    ).toEqual(["connected-image", "connected-video"])
+  })
+
   test("invalidates stale catalog and description responses after scope changes", () => {
     const tracker = new CanvasCardGenerationCatalogRequestTracker()
     const first = tracker.begin("canvas:node:catalog-1")
@@ -305,16 +521,51 @@ describe("Canvas card generation lifecycle", () => {
     expect(second()).toBeFalse()
   })
 
+  test("does not render an implicit owner mention in the generation composer", () => {
+    const owner = imageNode()
+    const markup = renderToStaticMarkup(
+      <CanvasCardConversationPanel
+        agent={<div data-agent-panel>Agent conversation</div>}
+        request={assistantRequest(owner)}
+        service={{
+          describeTool: async (toolId) => ({ fields: [], toolId }),
+          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          listTools: async () => [],
+        }}
+      />,
+    )
+
+    expect(markup).not.toContain("@ reference.png")
+  })
+
+  test("restores the failed generation prompt into the explicit retry composer", () => {
+    const owner = imageNode()
+    const markup = renderToStaticMarkup(
+      <CanvasCardConversationPanel
+        agent={<div data-agent-panel>Agent conversation</div>}
+        request={{ ...assistantRequest(owner), initialGenerationPrompt: "A small rabbit" }}
+        service={{
+          describeTool: async (toolId) => ({ fields: [], toolId }),
+          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          listTools: async () => [],
+        }}
+      />,
+    )
+
+    expect(markup).toContain(">A small rabbit</textarea>")
+  })
+
   test("keeps both panels mounted with compact top-level tabs and one composer toolbar", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
       generate: async () => ({ createdNodeIds: ["generated"], revision: 8, toolId: "tools/image", warnings: [] }),
       listTools: async () => [],
     }
+    const owner = imageNode()
     const markup = renderToStaticMarkup(
       <CanvasCardConversationPanel
         agent={<div data-agent-panel>Agent conversation</div>}
-        request={assistantRequest(imageNode())}
+        request={assistantRequest(owner, [owner], [owner.id])}
         service={service}
       />,
     )

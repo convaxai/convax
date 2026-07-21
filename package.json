@@ -6,7 +6,7 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "dev": "bun turbo dev --filter=@convax/desktop",
-    "dev:desktop": "bun --cwd packages/desktop dev",
+    "dev:desktop": "bun turbo dev --filter=@convax/desktop",
     "build": "bun turbo build",
     "format": "prettier --ignore-unknown --write .",
     "lint": "oxlint",

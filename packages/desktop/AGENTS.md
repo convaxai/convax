@@ -17,6 +17,9 @@ it must not become the permanent home of reusable domain rules.
   bridge/IPC namespaces separate. Never re-add file methods to `window.convax.projects`.
 - Derive active Canvas/file from Workbench Surface only. Project Canvas owns catalog
   CRUD; Desktop coordinators own save-guard, fallback, rollback and preference flows.
+- Create Project injects the user-visible `Documents/Convax` parent and never opens a
+  native folder picker; Open Project alone lets the user bind an existing directory.
+  Renderer and preload never receive or choose the default native creation path.
 - Workbench layout owns generic resize/collapse state. Desktop owns concrete sizes,
   viewport constraints, pointer/keyboard events, CSS animation and localStorage.
 - The Agent generation-tool preference is the host default for new file-card
@@ -51,18 +54,53 @@ it must not become the permanent home of reusable domain rules.
   publish immutable bytes below private versioned `userData/plugin-companions`.
   Preserve the previous Plugin/companion pair on failure, clean orphans on
   update/uninstall/startup, and keep explicit `PATH` commands as the fallback.
-  Installation must fingerprint the exact binding and transactionally coordinate
-  its receipt with Plugin publication. Runtime silently re-verifies the same
+  Installation must resolve and fingerprint either the exact managed artifact or
+  the exact PATH executable and transactionally coordinate a host-owned receipt
+  with Plugin publication. A crash or cleanup failure may leave an inert orphan,
+  which runtime rejects and startup reconciliation removes. Runtime never prompts:
+  it silently verifies the same
   manifest, binding kind, real path, size and SHA-256 or fails closed and requests
-  reinstall. A required managed artifact must never fall back to `PATH`.
-- Generation `tools/call` has no host-imposed overall deadline. Keep initialization
-  and discovery bounded, but let the sidecar own queued vendor state until a terminal
-  result or caller cancellation. Agent transport relays content-free MCP progress so
-  its timeout remains an inactivity guard.
-- Tool-custom generation controls come only from the explicitly selected MCP tool's
+  reinstall. A required managed artifact must never fall back to PATH.
+  Launch snapshots belong in a separate private runtime temporary directory and
+  must never add files to or otherwise mutate the immutable companion installation.
+- Plugin service settings reuse that same Tool Plugin process/runtime. Keep actions
+  as a manifest-declared subset of fixed `service.*` MCP tools, validate structured
+  status in main, and expose one fixed preload method per action. Never return raw
+  MCP content, secrets, native paths or authorization URLs to renderer settings.
+- Generation `tools/call` has no host-imposed overall deadline. Keep initialization,
+  discovery and service/control-plane calls bounded, but let the sidecar own queued
+  vendor state until a terminal result or caller cancellation. Agent transport must
+  relay content-free MCP progress so its timeout remains an inactivity guard rather
+  than an absolute generation cutoff.
+- Tool-custom generation controls come from only the explicitly selected MCP tool's
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before
   execution and never allow them to replace the fixed generation-call envelope.
+- Keep the Agent-selected generation model as the user-global renderer default.
+  Cards without an owning-node override inherit it only when its output matches the
+  owning card's intrinsic media kind. A direct card catalog contains only tools for
+  that intrinsic output; mismatched Agent defaults and persisted overrides fail
+  closed. A card selection writes only the node override through Canvas and never
+  mutates the Agent default in reverse.
+- Browser-cookie service authorization is a main-only two-phase fixed exchange.
+  Use a fresh non-persistent sandboxed Electron session. Choosing Configure and
+  personally completing sign-in is explicit authorization: an allowlisted cookie
+  add/update checks the exact HTTPS origin and continues automatically, with no
+  second confirmation dialog. Closing the window completes only if that check finds
+  an approved cookie and otherwise cancels. Preserve real opener semantics for HTTPS
+  sign-in popups while forcing every child and descendant onto the same temporary
+  session and the same sandbox, navigation, permission and Node-denial guards. A
+  child close must never settle the root authorization. Independently re-read and
+  filter only allowlisted cookies before the one-shot
+  `service.authorization.complete`
+  continuation bound to the unchanged Plugin runtime. Before clearing the temporary
+  Chromium session, atomically checkpoint only that exact-origin allowlisted Cookie
+  envelope in private Main state, bound to the manifest plus verified executable
+  identity and a short recovery lifetime. Remove it after sidecar persistence, explicit cancel/sign-out, or Plugin
+  change; preserve it across an interrupted handoff so retry never requires another
+  login. Never persist a browser profile or expose the request, URL or cookies
+  through IPC. Drain the checkpoint/sidecar handoff before quit disposes the shared
+  Tool Plugin runtime.
 - Bind Plugin RPC to its MessagePort and exact Project/Canvas/node scope. Enforce the
   manifest allowlist and delegate to existing typed clients; never add a generic
   IPC/function-call escape hatch.
@@ -102,6 +140,17 @@ it must not become the permanent home of reusable domain rules.
   macOS WIP and must fail before native mutation, asking the user to return JianYing
   home and retry. Never rely on editor-scene `new_draft`, silently reuse the old
   draft, or send media before the destination identity is verified.
+- Native Canvas media drag-out is destination-neutral and uses Electron's native
+  `webContents.startDrag`; do not special-case Finder or drive JianYing UI. Renderer
+  may hold only a short-lived sender-scoped opaque ticket. Main reloads the exact
+  active selection, accepts only managed image/video/audio files, stages host-owned
+  copies below its private drag directory, and removes abandoned or expired stages.
+  Build the native drag preview before ticket publication from the first staged
+  material, adding a bounded count badge for a multi-selection; synchronous
+  `startDrag` must consume that prepared preview without renderer paths or bytes.
+  Selection alone must not stage media: only an explicit held export-drag gesture
+  may prepare. Modifier release, focus loss, cancel and scope change must abort an
+  in-flight fallback copy.
 - A cancellable renderer-to-main operation gets a sender-scoped opaque `operationId`.
   Keep the live Canvas `AbortSignal` in renderer and forward cloneable start/cancel
   messages over explicit IPC. Abort queued/filesystem work on renderer

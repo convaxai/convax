@@ -10,19 +10,21 @@ import {
   type CanvasNotification,
   type CanvasSelectionAction,
   type CanvasSelectionActionContext,
+  type CanvasSelectionDragSource,
 } from "@convax/canvas"
-import type { AgentResource } from "@convax/agent-runtime"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
 import { ProjectCanvasController, hydrateProjectCanvasDocument, projectFileReferenceKey } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
-  AudioLines,
   CheckCircle2,
   Clapperboard,
   Crop,
+  FileOutput,
   ImageDown,
   Info,
+  Layers3,
+  MessageSquarePlus,
   PanelLeftOpen,
   Scissors,
   TriangleAlert,
@@ -30,11 +32,13 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
-import { agentCanvasNodeResourceUri, createAgentCanvasInstructions } from "../agent-canvas-context"
+import { createAgentCanvasInstructions, createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary } from "../plugin-contracts"
 import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
-import { AgentPanel } from "./agent-panel"
+import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
+import { isGenerationModelTool } from "./agent-generation-models"
+import { createAddSelectionToConversationAction } from "./agent-selection-action"
 import {
   readAppLanguagePreference,
   resolveAppLocale,
@@ -43,33 +47,38 @@ import {
 } from "./app-language"
 import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { createInitialCanvasDocument } from "./canvas-document"
-import { CanvasCardConversationPanel } from "./canvas-card-conversation-panel"
+import { CanvasCardConversationPanel, canvasCardAgentContextNodeIds } from "./canvas-card-conversation-panel"
+import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
-import {
-  canResumeFfmpegAudioVideoSeparation,
-  canRunFfmpegTransform,
-  createFfmpegGenerateRequests,
-  type FfmpegTransformDialogRequest,
-  type FfmpegTransformInput,
-  isFfmpegDialogInScope,
-} from "./ffmpeg-selection-action"
-import { FfmpegTransformDialog, ffmpegTransformLabel } from "./ffmpeg-transform-dialog"
-import {
-  ffmpegSeparationCancellationNotice,
-  FfmpegPartialTransformError,
-  type FfmpegTransformProgress,
-  runFfmpegTransformSequence,
-} from "./ffmpeg-transform-runner"
 import {
   canExportSelectionToJianying,
   exportCanvasMediaToJianying,
   normalizeJianyingRendererError,
 } from "./jianying-selection-action"
+import {
+  canResumeMediaOperation,
+  canRunMediaOperation,
+  createMediaOperationGenerateRequests,
+  isMediaOperationDialogInScope,
+  listInstalledMediaOperationActions,
+  localizedMediaOperationText,
+  type MediaOperationDialogRequest,
+  type MediaOperationEditor,
+  type MediaOperationInput,
+} from "./media-operation-selection-action"
+import { MediaOperationDialog } from "./media-operation-dialog"
+import {
+  mediaOperationCancellationNotice,
+  MediaOperationPartialError,
+  type MediaOperationProgress,
+  runMediaOperationSequence,
+} from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import { ServiceCatalogController } from "./service-catalog-controller"
 import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
@@ -112,14 +121,6 @@ function uploadItemId(scope: "local" | "project", index: number) {
   return `resource_${scope}_${Date.now()}_${index}`
 }
 
-function canvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
-  return {
-    kind: "resource",
-    name,
-    uri: agentCanvasNodeResourceUri(canvasId, nodeId),
-  }
-}
-
 async function ensureProjectAssetsDirectory(projectId: string) {
   await window.convax.projectFiles.writeTextFile({
     content: "",
@@ -158,6 +159,13 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
   return projectFiles
 }
 
+function mediaOperationActionIcon(editor: MediaOperationEditor) {
+  if (editor === "time-point") return <ImageDown />
+  if (editor === "time-range") return <Scissors />
+  if (editor === "crop-region") return <Crop />
+  return <Layers3 />
+}
+
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
@@ -165,16 +173,18 @@ function App() {
     readAppLanguagePreference(localStorage),
   )
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null)
-  const [ffmpegDialog, setFfmpegDialog] = useState<FfmpegTransformDialogRequest | null>(null)
-  const ffmpegProgressRef = useRef(new WeakMap<FfmpegTransformDialogRequest, FfmpegTransformProgress>())
-  const closeFfmpegDialog = useCallback(() => setFfmpegDialog(null), [])
+  const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
+  const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
+  const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const agentPanelRef = useRef<AgentPanelHandle>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
+  const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
   const generationToolCatalogVersionRef = useRef("")
   generationToolCatalogVersionRef.current = JSON.stringify(
     installedPlugins.flatMap((plugin) =>
@@ -225,6 +235,10 @@ function App() {
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
+  const serviceCatalogController = useMemo(
+    () => new ServiceCatalogController(window.convax.pluginServices, window.convax.agent),
+    [],
+  )
   const workbenchLayoutController = useMemo(() => {
     const preferences = readWorkbenchLayoutPreferences(localStorage, {
       primarySidebar: primarySidebarBounds,
@@ -285,11 +299,20 @@ function App() {
     workbenchLayoutController.getSnapshot,
     workbenchLayoutController.getSnapshot,
   )
+  const serviceCatalogSnapshot = useSyncExternalStore(
+    serviceCatalogController.subscribe,
+    serviceCatalogController.getSnapshot,
+    serviceCatalogController.getSnapshot,
+  )
   useEffect(() => () => projectController.dispose(), [projectController])
   useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
   useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
   useEffect(() => () => workbenchController.dispose(), [workbenchController])
   useEffect(() => () => workbenchLayoutController.dispose(), [workbenchLayoutController])
+  useEffect(() => {
+    serviceCatalogController.start()
+    return () => serviceCatalogController.dispose()
+  }, [serviceCatalogController])
   useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth)
     window.addEventListener("resize", updateViewportWidth)
@@ -309,12 +332,12 @@ function App() {
     const openSettingsShortcut = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
       event.preventDefault()
-      closeFfmpegDialog()
+      closeMediaOperationDialog()
       setSettingsSection("general")
     }
     window.addEventListener("keydown", openSettingsShortcut)
     return () => window.removeEventListener("keydown", openSettingsShortcut)
-  }, [closeFfmpegDialog])
+  }, [closeMediaOperationDialog])
   useEffect(() => {
     if (!settingsSection) return
     const closeSettings = (event: KeyboardEvent) => {
@@ -336,6 +359,9 @@ function App() {
   }, [projectCanvasController, projectFilesController, projectSnapshot.activeProjectId, workbenchController])
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const activeProjectId = activeProject?.id
+  useEffect(() => {
+    serviceCatalogController.setScopeId(activeProjectId)
+  }, [activeProjectId, serviceCatalogController])
   const activeCanvasId =
     workbenchSnapshot.surface.kind === "canvas" && workbenchSnapshot.surface.input.projectId === activeProjectId
       ? workbenchSnapshot.surface.input.canvasId
@@ -344,11 +370,17 @@ function App() {
     activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
       ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
       : undefined
-  const activeFfmpegDialog = isFfmpegDialogInScope(ffmpegDialog, activeProjectId, activeCanvasId) ? ffmpegDialog : null
+  const activeMediaOperationDialog = isMediaOperationDialogInScope(
+    mediaOperationDialog,
+    activeProjectId,
+    activeCanvasId,
+  )
+    ? mediaOperationDialog
+    : null
   pluginHostContextRef.current = { activeCanvas, activeProject }
   useEffect(() => {
-    setFfmpegDialog((current) =>
-      current && !isFfmpegDialogInScope(current, activeProjectId, activeCanvasId) ? null : current,
+    setMediaOperationDialog((current) =>
+      current && !isMediaOperationDialogInScope(current, activeProjectId, activeCanvasId) ? null : current,
     )
   }, [activeCanvasId, activeProjectId])
 
@@ -442,7 +474,7 @@ function App() {
         try {
           throwIfAborted(input.signal)
           currentScope(input.projectId, input.canvasId)
-          const resource = canvasNodeResource(input.canvasId, input.nodeId, `${input.pluginName} node`)
+          const resource = createAgentCanvasNodeResource(input.canvasId, input.nodeId, `${input.pluginName} node`)
           const message = await window.convax.agent.prompt({
             instructions: [
               ...createAgentCanvasInstructions({
@@ -642,7 +674,7 @@ function App() {
           scopeId: activeProjectId,
         })
         if (signal?.aborted) throw signal.reason
-        return tools.map((tool) => ({
+        return tools.filter(isGenerationModelTool).map((tool) => ({
           acceptedInputs: tool.acceptedInputs,
           description: tool.description,
           id: tool.id,
@@ -670,14 +702,15 @@ function App() {
         try {
           const result = await window.convax.generation.generate({
             anchor: request.anchor,
-            ...(request.expectedOutputCount === undefined ? {} : { expectedOutputCount: request.expectedOutputCount }),
+            ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
             expectedRevision: request.expectedRevision,
             operationId,
             ...(request.output ? { output: request.output } : {}),
             prompt: request.prompt,
             ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
             references: request.references,
-            ...(request.relationAnchorNodeIds?.length ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
+            ...(request.relationAnchorNodeIds ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
+            ...(request.resultMode ? { resultMode: request.resultMode } : {}),
             ...(request.toolId ? { toolId: request.toolId } : {}),
             ...(request.toolInput ? { toolInput: request.toolInput } : {}),
           })
@@ -692,9 +725,9 @@ function App() {
       assistant: {
         render(request) {
           const host = assistantHostRef.current
-          const contextResources = request.mentionedNodeIds.flatMap((nodeId) => {
+          const contextResources = canvasCardAgentContextNodeIds(request).flatMap((nodeId) => {
             const node = request.document.nodes.find((candidate) => candidate.id === nodeId)
-            return node ? [canvasNodeResource(request.document.id, node.id, node.data.label)] : []
+            return node ? [createAgentCanvasNodeResource(request.document.id, node.id, node.data.label)] : []
           })
           const agent = (
             <AgentPanel
@@ -820,17 +853,18 @@ function App() {
     })
   }, [activeCanvasId, activeProjectId, flushCanvasForAgent])
 
-  const runFfmpegTransform = useCallback(
-    async (request: FfmpegTransformDialogRequest, input: FfmpegTransformInput, signal: AbortSignal) => {
+  const runMediaOperation = useCallback(
+    async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {
+      const hasMultipleSteps = request.action.steps.length > 1
       if (signal.aborted) {
-        if (request.kind === "separate-audio") {
-          const notice = ffmpegSeparationCancellationNotice(locale, undefined)
+        if (hasMultipleSteps) {
+          const notice = mediaOperationCancellationNotice(locale, undefined)
           setNotification({ description: notice.description, kind: "warning", title: notice.title })
         }
         throw signal.reason ?? new DOMException("Canceled", "AbortError")
       }
-      const requests = createFfmpegGenerateRequests(request, input, signal)
-      let initialProgress = ffmpegProgressRef.current.get(request) ?? {
+      const requests = createMediaOperationGenerateRequests(request, input, signal)
+      let initialProgress = mediaOperationProgressRef.current.get(request) ?? {
         createdNodeIds: [],
         nextRequestIndex: 0,
         revision: request.context.document.revision,
@@ -848,56 +882,56 @@ function App() {
           if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
         } catch (failure) {
           if (signal.aborted) {
-            ffmpegProgressRef.current.delete(request)
-            const notice = ffmpegSeparationCancellationNotice(locale, initialProgress)
+            mediaOperationProgressRef.current.delete(request)
+            const notice = mediaOperationCancellationNotice(locale, initialProgress)
             setNotification({ description: notice.description, kind: "warning", title: notice.title })
             throw failure
           }
           const message =
             locale === "zh-CN"
-              ? "暂时无法确认画布中的部分结果。可重试验证，已创建的视频不会重复生成。"
-              : "The partial Canvas result could not be verified yet. Retry validation without duplicating the completed video."
-          throw new FfmpegPartialTransformError(message, initialProgress, { cause: failure })
+              ? "暂时无法确认画布中的部分结果。可重试验证，已经完成的步骤不会重复执行。"
+              : "The partial Canvas result could not be verified yet. Retry validation without repeating completed steps."
+          throw new MediaOperationPartialError(message, initialProgress, { cause: failure })
         }
         if (
           !snapshot.document ||
-          !canResumeFfmpegAudioVideoSeparation(request, snapshot.document, initialProgress.createdNodeIds)
+          !canResumeMediaOperation(request, snapshot.document, initialProgress.createdNodeIds)
         ) {
-          ffmpegProgressRef.current.delete(request)
-          setFfmpegDialog((current) => (current === request ? null : current))
+          mediaOperationProgressRef.current.delete(request)
+          setMediaOperationDialog((current) => (current === request ? null : current))
           setNotification({
             description:
               locale === "zh-CN"
-                ? "源视频或已创建的无声视频发生了变化，请重新选择源视频后再执行音视频分离。"
-                : "The source or completed silent video changed. Select the source video and start separation again.",
+                ? "源视频或已创建的结果发生了变化，请重新选择源视频后再执行此操作。"
+                : "The source video or a completed result changed. Select the source video and start the operation again.",
             kind: "warning",
-            title: locale === "zh-CN" ? "无法继续音视频分离" : "Audio/video separation cannot continue",
+            title: locale === "zh-CN" ? "无法继续媒体操作" : "Media operation cannot continue",
           })
-          throw new Error("FFmpeg separation cannot resume because its Canvas inputs changed")
+          throw new Error("The Plugin media operation cannot resume because its Canvas inputs changed")
         }
         initialProgress = { ...initialProgress, revision: snapshot.document.revision }
-        ffmpegProgressRef.current.set(request, initialProgress)
+        mediaOperationProgressRef.current.set(request, initialProgress)
       }
-      let progress: FfmpegTransformProgress
+      let progress: MediaOperationProgress
       try {
-        progress = await runFfmpegTransformSequence({
+        progress = await runMediaOperationSequence({
           generate: (generateRequest) => services.require("generate").generate(generateRequest),
           initialProgress,
-          onProgress: (current) => ffmpegProgressRef.current.set(request, current),
+          onProgress: (current) => mediaOperationProgressRef.current.set(request, current),
           partialFailureMessage: (failure) => {
             const detail = failure instanceof Error ? failure.message : String(failure)
             return locale === "zh-CN"
-              ? `已创建无声视频，但独立音频创建失败。可直接重试，已完成的视频不会重复创建。\n${detail}`
-              : `The silent video was created, but the independent audio failed. Retry to continue without duplicating the completed video.\n${detail}`
+              ? `已完成部分结果，但后续步骤失败。可直接重试，已完成的步骤不会重复执行。\n${detail}`
+              : `Some results were created, but a later step failed. Retry without repeating completed steps.\n${detail}`
           },
           requests,
           signal,
         })
       } catch (failure) {
-        const savedProgress = ffmpegProgressRef.current.get(request)
-        if (signal.aborted && request.kind === "separate-audio") {
-          ffmpegProgressRef.current.delete(request)
-          const notice = ffmpegSeparationCancellationNotice(locale, savedProgress)
+        const savedProgress = mediaOperationProgressRef.current.get(request)
+        if (signal.aborted && hasMultipleSteps) {
+          mediaOperationProgressRef.current.delete(request)
+          const notice = mediaOperationCancellationNotice(locale, savedProgress)
           setNotification({
             description: notice.description,
             kind: "warning",
@@ -906,9 +940,9 @@ function App() {
         }
         throw failure
       }
-      ffmpegProgressRef.current.delete(request)
+      mediaOperationProgressRef.current.delete(request)
       if (signal.aborted) return
-      setFfmpegDialog((current) => (current === request ? null : current))
+      setMediaOperationDialog((current) => (current === request ? null : current))
       setNotification({
         description: progress.warnings.length
           ? progress.warnings.join("\n")
@@ -916,7 +950,10 @@ function App() {
             ? `已创建 ${progress.createdNodeIds.length} 个新节点。`
             : `${progress.createdNodeIds.length} new node${progress.createdNodeIds.length === 1 ? "" : "s"} created.`,
         kind: progress.warnings.length > 0 ? "warning" : "success",
-        title: locale === "zh-CN" ? "FFmpeg 处理完成" : "FFmpeg transform complete",
+        title:
+          locale === "zh-CN"
+            ? `${localizedMediaOperationText(request.action.title, locale)}完成`
+            : `${localizedMediaOperationText(request.action.title, locale)} complete`,
       })
     },
     [flushCanvasForAgent, locale, services],
@@ -924,6 +961,16 @@ function App() {
 
   const selectionActions = useMemo<readonly CanvasSelectionAction[]>(
     () => [
+      createAddSelectionToConversationAction({
+        addResources(resources) {
+          const panel = agentPanelRef.current
+          if (!panel) throw new Error("The Agent panel is not ready")
+          panel.addResources(resources)
+        },
+        canvasId: activeCanvasId,
+        icon: <MessageSquarePlus />,
+        label: locale === "zh-CN" ? "添加到对话" : "Add to conversation",
+      }),
       {
         id: "jianying.import-media",
         label: "导入到剪映",
@@ -938,7 +985,9 @@ function App() {
           return window.convax.platform === "darwin" && pluginEnabled && canExportSelectionToJianying(context)
         },
         async execute(context) {
-          if (!activeProjectId || !activeCanvasId) throw new Error("Open a Project Canvas before exporting to JianYing")
+          if (!activeProjectId || !activeCanvasId) {
+            throw new Error("Open a Project Canvas before exporting to JianYing")
+          }
           try {
             await flushCanvasForAgent()
             if (context.signal.aborted) throw context.signal.reason ?? new DOMException("Canceled", "AbortError")
@@ -964,28 +1013,35 @@ function App() {
           }
         },
       },
-      ...(
-        [
-          { icon: <ImageDown />, kind: "extract-frame" },
-          { icon: <Scissors />, kind: "trim" },
-          { icon: <AudioLines />, kind: "separate-audio" },
-          { icon: <Crop />, kind: "crop" },
-        ] as const
-      ).map(({ icon, kind }) => ({
-        id: `ffmpeg.${kind}`,
-        label: ffmpegTransformLabel(locale, kind),
-        icon,
+      ...mediaOperationActions.map((action) => ({
+        id: `plugin-selection-action:${action.pluginId}/${action.id}`,
+        label: localizedMediaOperationText(action.title, locale),
+        icon: mediaOperationActionIcon(action.editor),
         visible(context: CanvasSelectionActionContext) {
-          return canRunFfmpegTransform(context, installedPlugins, kind)
+          return canRunMediaOperation(context, action)
         },
         execute(context: CanvasSelectionActionContext) {
           if (!activeCanvasId || !activeProjectId) return
-          setFfmpegDialog({ canvasId: activeCanvasId, context, kind, projectId: activeProjectId })
+          setMediaOperationDialog({ action, canvasId: activeCanvasId, context, projectId: activeProjectId })
         },
       })),
     ],
-    [activeCanvasId, activeProjectId, flushCanvasForAgent, installedPlugins, locale],
+    [activeCanvasId, activeProjectId, flushCanvasForAgent, installedPlugins, locale, mediaOperationActions],
   )
+
+  const selectionDragSource = useMemo<CanvasSelectionDragSource | undefined>(() => {
+    const client = window.convax.canvas.externalMediaDrag
+    if (window.convax.platform !== "darwin" || !activeCanvasId || !activeProjectId || !client) return undefined
+    return createCanvasMediaSelectionDragSource({
+      client,
+      flush: flushCanvasForAgent,
+      icon: <FileOutput />,
+      label:
+        locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder、剪映或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+      preparingLabel: locale === "zh-CN" ? "正在准备素材，请继续按住 ⌘⇧" : "Preparing media — keep holding ⌘⇧",
+      scopeId: activeProjectId,
+    })
+  }, [activeCanvasId, activeProjectId, flushCanvasForAgent, locale])
 
   useEffect(() => {
     if (!notification) return
@@ -1081,10 +1137,10 @@ function App() {
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
   const openSettings = useCallback(
     (target: ApplicationMenuTarget) => {
-      closeFfmpegDialog()
+      closeMediaOperationDialog()
       setSettingsSection(target)
     },
-    [closeFfmpegDialog],
+    [closeMediaOperationDialog],
   )
   const changeLanguage = useCallback((preference: AppLanguagePreference) => {
     setLanguagePreference(preference)
@@ -1108,9 +1164,9 @@ function App() {
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
       <main
-        aria-hidden={settingsSection || activeFfmpegDialog ? true : undefined}
+        aria-hidden={settingsSection || activeMediaOperationDialog ? true : undefined}
         className={`relative flex size-full overflow-hidden bg-background${workbenchLayoutSnapshot.resize ? " cursor-col-resize select-none" : ""}`}
-        inert={Boolean(settingsSection || activeFfmpegDialog) || undefined}
+        inert={Boolean(settingsSection || activeMediaOperationDialog) || undefined}
       >
         <div
           className={`relative h-full shrink-0 overflow-hidden${!resizingPrimarySidebar || !primarySidebar.visible ? " transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}
@@ -1146,7 +1202,9 @@ function App() {
                   : undefined
               }
               filesController={projectFilesController}
-              footerActions={<ApplicationMenu locale={locale} onOpenSettings={openSettings} />}
+              footerActions={
+                <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+              }
               hideWhenNoProject
               resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
             />
@@ -1166,7 +1224,12 @@ function App() {
                 Project
               </span>
               <div className="mt-auto">
-                <ApplicationMenu compact locale={locale} onOpenSettings={openSettings} />
+                <ApplicationMenu
+                  compact
+                  locale={locale}
+                  onOpenSettings={openSettings}
+                  services={serviceCatalogSnapshot}
+                />
               </div>
             </aside>
           )}
@@ -1212,6 +1275,7 @@ function App() {
               }
               ref={canvasEditorRef}
               selectionActions={selectionActions}
+              selectionDragSource={selectionDragSource}
               services={services}
               title={activeCanvas.name}
               viewId="desktop-main"
@@ -1245,16 +1309,17 @@ function App() {
           }}
           projectId={activeProjectId}
           projectName={activeProject?.name}
+          ref={agentPanelRef}
         />
         {notification ? <Toast notification={notification} /> : null}
       </main>
-      {activeFfmpegDialog && !settingsSection ? (
-        <FfmpegTransformDialog
-          key={`${activeFfmpegDialog.context.document.id}:${activeFfmpegDialog.context.document.revision}:${activeFfmpegDialog.kind}`}
+      {activeMediaOperationDialog && !settingsSection ? (
+        <MediaOperationDialog
+          key={`${activeMediaOperationDialog.context.document.id}:${activeMediaOperationDialog.context.document.revision}:${activeMediaOperationDialog.action.pluginId}:${activeMediaOperationDialog.action.id}`}
           locale={locale}
-          onClose={closeFfmpegDialog}
-          onConfirm={(input, signal) => runFfmpegTransform(activeFfmpegDialog, input, signal)}
-          request={activeFfmpegDialog}
+          onClose={closeMediaOperationDialog}
+          onConfirm={(input, signal) => runMediaOperation(activeMediaOperationDialog, input, signal)}
+          request={activeMediaOperationDialog}
         />
       ) : null}
       {settingsSection ? (
@@ -1265,7 +1330,10 @@ function App() {
           locale={locale}
           onClose={() => setSettingsSection(null)}
           onLanguageChange={changeLanguage}
+          onRefreshServices={() => void serviceCatalogController.refresh()}
+          onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
           pluginClient={window.convax.plugins}
+          serviceSnapshot={serviceCatalogSnapshot}
           skillClient={window.convax.agent.skills}
         />
       ) : null}

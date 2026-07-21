@@ -2,7 +2,9 @@ import {
   getCompatibleCanvasGenerationTools,
   inferCanvasGenerationReferences,
   type CanvasAssistantRequest,
+  type CanvasAssistantGenerationActivity,
   type CanvasGenerateRequest,
+  type CanvasGenerateResult,
   type CanvasGenerateService,
   type CanvasGenerationOutput,
   type CanvasGenerationReference,
@@ -47,9 +49,17 @@ export function canvasCardGenerationOutput(
 }
 
 export function canvasCardGenerationReferences(
-  request: Pick<CanvasAssistantRequest, "document" | "ownerNodeId">,
+  request: Pick<CanvasAssistantRequest, "document" | "mentionedNodeIds">,
 ): readonly CanvasGenerationReference[] {
-  return inferCanvasGenerationReferences(request.document.nodes, [request.ownerNodeId])
+  return inferCanvasGenerationReferences(request.document.nodes, request.mentionedNodeIds)
+}
+
+export function canvasCardAgentContextNodeIds(
+  request: Pick<CanvasAssistantRequest, "mentionedNodeIds" | "mode" | "ownerNodeId">,
+): readonly string[] {
+  return [
+    ...new Set(request.mode === "file" ? [request.ownerNodeId, ...request.mentionedNodeIds] : request.mentionedNodeIds),
+  ]
 }
 
 function finiteNodeWidth(...values: unknown[]) {
@@ -84,12 +94,18 @@ export function resolveCanvasCardGenerationTool(
   ownerToolId: string | undefined,
   tools: readonly CanvasGenerationToolSummary[],
   agentDefault?: AgentGenerationToolSelection,
+  ownerOutput?: CanvasGenerationOutput,
 ) {
-  if (ownerToolId) return tools.find((tool) => tool.id === ownerToolId)
+  const outputTools = ownerOutput ? tools.filter((tool) => tool.output === ownerOutput) : tools
+  if (ownerToolId) {
+    const persisted = tools.find((tool) => tool.id === ownerToolId)
+    if (persisted) return outputTools.find((tool) => tool.id === persisted.id)
+  }
   const inherited = agentDefault
-    ? tools.find((tool) => tool.id === agentDefault.id && tool.output === agentDefault.output)
+    ? outputTools.find((tool) => tool.id === agentDefault.id && tool.output === agentDefault.output)
     : undefined
-  return inherited ?? (tools.length === 1 ? tools[0] : undefined)
+  if (inherited) return inherited
+  return outputTools.length === 1 ? outputTools[0] : undefined
 }
 
 export function validateCanvasCardGenerationToolInput(
@@ -122,6 +138,10 @@ export function createCanvasCardGenerationRequest(input: {
   if (input.description.toolId !== input.tool.id) {
     throw new Error("The selected generation model configuration is stale")
   }
+  const ownerOutput = canvasCardGenerationOutput(input.request)
+  if (ownerOutput && input.tool.output !== ownerOutput) {
+    throw new Error(`The selected generation model cannot replace this ${ownerOutput} card`)
+  }
   const prompt = input.prompt.trim()
   if (!prompt) throw new Error("Card generation prompt must not be empty")
   const toolInput = validateCanvasCardGenerationToolInput(input.description, input.toolInput)
@@ -133,9 +153,10 @@ export function createCanvasCardGenerationRequest(input: {
       source: "canvas-card",
     },
     expectedRevision: input.request.document.revision,
-    output: canvasCardGenerationOutput(input.request) ?? input.tool.output,
+    output: ownerOutput ?? input.tool.output,
     prompt,
     references: canvasCardGenerationReferences(input.request),
+    resultMode: { nodeId: node.id, type: "replace-node" },
     signal: input.signal,
     toolId: input.tool.id,
     ...(Object.keys(toolInput).length > 0 ? { toolInput } : {}),
@@ -165,7 +186,37 @@ function abortError(message: string) {
 }
 
 function generationErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
+  const message = error instanceof Error ? error.message : String(error)
+  return message.replace(
+    /^Error invoking remote method ['"]generation:generate['"]:\s*GenerationToolReportedError:\s*/,
+    "",
+  )
+}
+
+export async function executeCanvasCardGeneration(input: {
+  cancel: () => void
+  generate: CanvasGenerateService["generate"]
+  onActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
+  request: CanvasGenerateRequest
+}): Promise<CanvasGenerateResult> {
+  input.onActivityChange?.({ cancel: input.cancel, prompt: input.request.prompt, status: "pending" })
+  try {
+    const result = await input.generate(input.request)
+    if (input.request.signal.aborted) {
+      throw input.request.signal.reason ?? abortError("The card generation request was cancelled")
+    }
+    input.onActivityChange?.({ status: "complete" })
+    return result
+  } catch (error) {
+    if (!input.request.signal.aborted) {
+      input.onActivityChange?.({
+        message: generationErrorMessage(error),
+        prompt: input.request.prompt,
+        status: "error",
+      })
+    }
+    throw error
+  }
 }
 
 type ScopedLoad<T> =
@@ -181,7 +232,7 @@ export interface CanvasCardGenerationPanelProps {
 
 export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps) {
   const agentDefault = useAgentGenerationDefault()
-  const [prompt, setPrompt] = useState("")
+  const [prompt, setPrompt] = useState(props.request.initialGenerationPrompt ?? "")
   const [catalog, setCatalog] = useState<ScopedLoad<readonly CanvasGenerationToolSummary[]>>({
     scope: "",
     status: "loading",
@@ -196,21 +247,21 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const [generating, setGenerating] = useState(false)
   const catalogRequestRef = useRef(new CanvasCardGenerationCatalogRequestTracker())
   const descriptionRequestRef = useRef(new CanvasCardGenerationCatalogRequestTracker())
-  const generationControllerRef = useRef<AbortController | undefined>(undefined)
   const mountedRef = useRef(false)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
   const references = useMemo(
     () => canvasCardGenerationReferences(props.request),
-    [props.request.document.nodes, props.request.ownerNodeId],
+    [props.request.document.nodes, props.request.mentionedNodeIds],
   )
   const referencesRef = useRef(references)
   referencesRef.current = references
-  const output = canvasCardGenerationOutput(props.request)
+  const ownerOutput = canvasCardGenerationOutput(props.request)
   const referenceFingerprint = JSON.stringify(references)
   const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
   const catalogScope = JSON.stringify([
     props.request.document.id,
     props.request.ownerNodeId,
-    output ?? null,
+    ownerOutput ?? null,
     referenceFingerprint,
     catalogVersion,
   ])
@@ -218,12 +269,15 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const currentCatalog = catalog.scope === catalogScope ? catalog : undefined
   const currentTools = currentCatalog?.status === "ready" ? currentCatalog.value : []
   const ownerToolId = props.request.ownerGenerationToolId
-  const selectedOwnerTool = ownerToolId ? currentTools.find((tool) => tool.id === ownerToolId) : undefined
+  const selectedOwnerTool = ownerToolId
+    ? currentTools.find((tool) => tool.id === ownerToolId && (!ownerOutput || tool.output === ownerOutput))
+    : undefined
   const inheritedAgentTool =
-    !ownerToolId && agentDefault
+    !ownerToolId && agentDefault && (!ownerOutput || agentDefault.output === ownerOutput)
       ? currentTools.find((tool) => tool.id === agentDefault.id && tool.output === agentDefault.output)
       : undefined
-  const resolvedTool = resolveCanvasCardGenerationTool(ownerToolId, currentTools, agentDefault)
+  const resolvedTool = resolveCanvasCardGenerationTool(ownerToolId, currentTools, agentDefault, ownerOutput)
+  const modelSelectOwnerToolId = selectedOwnerTool || !resolvedTool ? ownerToolId : undefined
   const descriptionScope = resolvedTool ? JSON.stringify([catalogScope, resolvedTool.id]) : ""
   const currentDescription = descriptionScope && description.scope === descriptionScope ? description : undefined
   const inputValidation =
@@ -237,32 +291,35 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       inputValidation?.valid &&
       prompt.trim(),
   )
-  const owner = props.request.document.nodes.find((node) => node.id === props.request.ownerNodeId)
-
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       catalogRequestRef.current.invalidate()
       descriptionRequestRef.current.invalidate()
-      generationControllerRef.current?.abort(abortError("The card generation panel closed"))
     }
   }, [])
+
+  useEffect(() => {
+    if (props.request.initialGenerationPrompt !== undefined) {
+      props.request.onInitialGenerationPromptConsumed?.()
+    }
+  }, [props.request.initialGenerationPrompt, props.request.onInitialGenerationPromptConsumed])
 
   useEffect(() => {
     setToolInput({})
     setOperationError(undefined)
     setOperationMessage(undefined)
-  }, [operationScope, output])
+  }, [operationScope])
 
   useEffect(() => {
     const isLatest = catalogRequestRef.current.begin(catalogScope)
     const controller = new AbortController()
     setCatalog({ scope: catalogScope, status: "loading" })
-    void props.service.listTools(output ? { output } : {}, controller.signal).then(
+    void props.service.listTools(ownerOutput ? { output: ownerOutput } : {}, controller.signal).then(
       (listed) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
-        const compatible = compatibleCanvasCardGenerationTools(listed, output, referencesRef.current)
+        const compatible = compatibleCanvasCardGenerationTools(listed, ownerOutput, referencesRef.current)
         setCatalog({ scope: catalogScope, status: "ready", value: compatible })
       },
       (error) => {
@@ -274,7 +331,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       controller.abort(abortError("The generation tool catalog changed"))
       if (isLatest()) catalogRequestRef.current.invalidate()
     }
-  }, [catalogScope, output, props.service])
+  }, [catalogScope, ownerOutput, props.service])
 
   useEffect(() => {
     setToolInput({})
@@ -314,19 +371,10 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     }
   }, [descriptionScope, props.service, resolvedTool])
 
-  useEffect(() => {
-    generationControllerRef.current?.abort(abortError("The card generation scope changed"))
-  }, [operationScope])
-
   const runGeneration = (event: FormEvent) => {
     event.preventDefault()
     if (generating || !canGenerate || !resolvedTool || currentDescription?.status !== "ready") return
-    generationControllerRef.current?.abort(abortError("A newer card generation request started"))
     const controller = new AbortController()
-    generationControllerRef.current = controller
-    setGenerating(true)
-    setOperationError(undefined)
-    setOperationMessage(undefined)
     let request: CanvasGenerateRequest
     try {
       request = createCanvasCardGenerationRequest({
@@ -338,29 +386,34 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
         toolInput,
       })
     } catch (error) {
-      generationControllerRef.current = undefined
-      setGenerating(false)
       setOperationError(generationErrorMessage(error))
       return
     }
-    void props.service
-      .generate(request)
+    setGenerating(true)
+    setOperationError(undefined)
+    setOperationMessage(undefined)
+    promptRef.current?.blur()
+    void executeCanvasCardGeneration({
+      cancel: () => controller.abort(abortError("The card generation owner was disposed")),
+      generate: props.service.generate,
+      onActivityChange: props.request.onGenerationActivityChange,
+      request,
+    })
       .then(
         (result) => {
-          if (!mountedRef.current || controller.signal.aborted || generationControllerRef.current !== controller) return
+          if (!mountedRef.current || controller.signal.aborted) return
           setPrompt("")
           setOperationMessage(
             result.createdNodeIds.length > 0 ? `已添加 ${result.createdNodeIds.length} 个生成结果。` : "生成完成。",
           )
         },
         (error) => {
-          if (!mountedRef.current || controller.signal.aborted || generationControllerRef.current !== controller) return
+          if (!mountedRef.current || controller.signal.aborted) return
           setOperationError(generationErrorMessage(error))
         },
       )
       .finally(() => {
-        if (!mountedRef.current || generationControllerRef.current !== controller) return
-        generationControllerRef.current = undefined
+        if (!mountedRef.current) return
         setGenerating(false)
       })
   }
@@ -374,9 +427,9 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           ? references.length
             ? "没有已安装模型支持当前卡片。"
             : "没有已安装的生成模型。"
-          : ownerToolId && !selectedOwnerTool
+          : ownerToolId && !selectedOwnerTool && !resolvedTool
             ? "当前节点选择的模型已不可用，请选择其他模型或改为跟随 Agent。"
-            : !resolvedTool && currentTools.length > 1
+            : !resolvedTool
               ? "请选择一个模型。"
               : currentDescription?.status === "loading" || !currentDescription
                 ? "正在加载模型选项…"
@@ -398,6 +451,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           disabled={generating}
           onChange={(event) => setPrompt(event.currentTarget.value)}
           placeholder="描述要生成的内容…"
+          ref={promptRef}
           value={prompt}
         />
         {modelHint ? (
@@ -433,9 +487,9 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
                 setOperationMessage(undefined)
               }}
               inheritedTool={inheritedAgentTool}
-              ownerToolId={ownerToolId}
+              ownerToolId={modelSelectOwnerToolId}
               resolvedTool={resolvedTool}
-              showOutput={output === undefined}
+              showOutput={ownerOutput === undefined}
               tools={currentTools}
             />
             {currentDescription?.status === "ready" && currentDescription.value.fields.length > 0 ? (
@@ -448,11 +502,17 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
                 values={toolInput}
               />
             ) : null}
-            {owner ? (
-              <span className="max-w-32 shrink-0 truncate rounded-full bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
-                @ {owner.data.label}
-              </span>
-            ) : null}
+            {references.map((reference) => {
+              const node = props.request.document.nodes.find((candidate) => candidate.id === reference.nodeId)
+              return node ? (
+                <span
+                  key={reference.nodeId}
+                  className="max-w-32 shrink-0 truncate rounded-full bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground"
+                >
+                  @ {node.data.label}
+                </span>
+              ) : null
+            })}
           </div>
           <Button
             aria-label={generating ? "Generating" : "Generate"}
@@ -507,7 +567,11 @@ function ModelSelect(props: {
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={automaticToolToken}>
-          {props.inheritedTool ? `跟随 Agent · ${props.inheritedTool.title}` : "跟随 Agent"}
+          {props.inheritedTool
+            ? `跟随 Agent · ${props.inheritedTool.title}`
+            : props.resolvedTool
+              ? `自动 · ${props.resolvedTool.title}`
+              : "自动"}
         </SelectItem>
         {unavailable ? (
           <SelectItem disabled value={unavailableToolToken}>

@@ -41,13 +41,31 @@ import {
   VolumeX,
   Workflow,
 } from "lucide-react"
-import { Component, type ReactNode, useEffect, useRef, useState } from "react"
+import {
+  cloneElement,
+  Component,
+  createContext,
+  isValidElement,
+  type DragEvent,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 import { updateCanvasNodeData } from "../commands"
 import { getConnectedCanvasFileNodeIds } from "../connections"
 import { useCanvasEditor } from "../editor-context"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import type { CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
-import { useCanvasService } from "../services"
+import {
+  CanvasFileGenerationActivityOwner,
+  useCanvasService,
+  type CanvasAssistantGenerationActivity,
+  type CanvasFileGenerationActivity,
+} from "../services"
 import type {
   CanvasFolderNodeData,
   CanvasMediaKind,
@@ -56,6 +74,7 @@ import type {
   CanvasRichTextContent,
   CanvasTextNodeData,
 } from "../types"
+import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
 import { ConnectionNodeMenu } from "./connection-node-menu"
 
 function ToolbarButton(props: {
@@ -99,6 +118,46 @@ function ToolbarDivider() {
   return <span aria-hidden className="convax-node-toolbar__divider" />
 }
 
+const ContributedToolbarSelectionActionContext = createContext(false)
+
+function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAction[] }) {
+  const editor = useCanvasEditor()
+  return props.actions.map((action) => {
+    const pending = editor.isSelectionActionPending(action.id)
+    return (
+      <ToolbarButton
+        key={action.id}
+        disabled={pending}
+        icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+        label={action.label}
+        onClick={() => editor.executeSelectionAction(action)}
+      />
+    )
+  })
+}
+
+function mergeNodeToolbarSelectionActions(toolbar: ReactNode, actions: readonly CanvasSelectionAction[]) {
+  if (actions.length === 0) return toolbar
+  const content = (
+    <>
+      <NodeSelectionActionButtons actions={actions} />
+      {toolbar ? <ToolbarDivider /> : null}
+    </>
+  )
+  if (
+    isValidElement<{ children?: ReactNode; className?: string }>(toolbar) &&
+    toolbar.props.className?.split(/\s+/).includes("convax-node-toolbar__surface")
+  ) {
+    return cloneElement(toolbar, {}, content, toolbar.props.children)
+  }
+  return (
+    <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      {content}
+      {toolbar}
+    </div>
+  )
+}
+
 function NodeChrome(props: {
   children: ReactNode
   className?: string
@@ -109,11 +168,11 @@ function NodeChrome(props: {
 }) {
   const editor = useCanvasEditor()
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.node.id)
-  const showMutationToolbar = canShowNodeLocalMutationSurface(
-    editor.selectionContext,
-    props.node.id,
-    editor.readOnly,
-  )
+  const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.node.id, editor.readOnly)
+  const selectionActionsHandledByContribution = useContext(ContributedToolbarSelectionActionContext)
+  const selectionActions =
+    ownsSingleNodeContext && !selectionActionsHandledByContribution ? editor.visibleSelectionActions : []
+  const toolbar = mergeNodeToolbarSelectionActions(props.toolbar, selectionActions)
   const [connectMenuSide, setConnectMenuSide] = useState<"left" | "right" | null>(null)
   const connectionInProgress = useConnection((connection) => connection.inProgress)
   useEffect(() => {
@@ -125,10 +184,7 @@ function NodeChrome(props: {
   }, [connectionInProgress])
   return (
     <div
-      className={cn(
-        "convax-node group relative size-full text-card-foreground",
-        props.node.selected && "is-selected",
-      )}
+      className={cn("convax-node group relative size-full text-card-foreground", props.node.selected && "is-selected")}
     >
       <NodeResizer
         color="var(--ring)"
@@ -140,9 +196,9 @@ function NodeChrome(props: {
         onResizeStart={editor.beginGesture}
         onResizeEnd={editor.endGesture}
       />
-      {props.toolbar && showMutationToolbar ? (
+      {toolbar && showMutationToolbar ? (
         <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={36} position={Position.Top}>
-          {props.toolbar}
+          {toolbar}
         </NodeToolbar>
       ) : null}
       <div className="convax-node__title flex items-center gap-1.5">
@@ -163,12 +219,14 @@ function NodeChrome(props: {
             onClick={(event) => {
               event.preventDefault()
               event.stopPropagation()
-              setConnectMenuSide((current) => current === "left" ? null : "left")
+              setConnectMenuSide((current) => (current === "left" ? null : "left"))
             }}
             position={Position.Left}
             type="target"
           >
-            <span className="convax-node__connection-icon"><Plus /></span>
+            <span className="convax-node__connection-icon">
+              <Plus />
+            </span>
           </Handle>
           <Handle
             aria-expanded={connectMenuSide === "right"}
@@ -178,12 +236,14 @@ function NodeChrome(props: {
             onClick={(event) => {
               event.preventDefault()
               event.stopPropagation()
-              setConnectMenuSide((current) => current === "right" ? null : "right")
+              setConnectMenuSide((current) => (current === "right" ? null : "right"))
             }}
             position={Position.Right}
             type="source"
           >
-            <span className="convax-node__connection-icon"><Plus /></span>
+            <span className="convax-node__connection-icon">
+              <Plus />
+            </span>
           </Handle>
           {connectMenuSide ? (
             <NodeToolbar
@@ -210,14 +270,20 @@ function NodeChrome(props: {
 function plainTextDocument(text: string): JSONContent {
   return {
     type: "doc",
-    content: text.replace(/\r\n/g, "\n").split("\n").map((line) => ({
-      type: "paragraph",
-      ...(line ? { content: [{ type: "text", text: line }] } : {}),
-    })),
+    content: text
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => ({
+        type: "paragraph",
+        ...(line ? { content: [{ type: "text", text: line }] } : {}),
+      })),
   }
 }
 
-function textEditorSource(data: CanvasTextNodeData): { content: JSONContent | string; contentType: "json" | "markdown" } {
+function textEditorSource(data: CanvasTextNodeData): {
+  content: JSONContent | string
+  contentType: "json" | "markdown"
+} {
   if (data.richText?.type === "doc") {
     return { content: data.richText as JSONContent, contentType: "json" }
   }
@@ -283,9 +349,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       if (nextFingerprint === appliedFingerprintRef.current) return
       dataRef.current = nextData
       appliedFingerprintRef.current = nextFingerprint
-      canvasEditorRef.current.commit((document) =>
-        updateCanvasNodeData(document, nodeIdRef.current, () => nextData),
-      )
+      canvasEditorRef.current.commit((document) => updateCanvasNodeData(document, nodeIdRef.current, () => nextData))
     },
   })
 
@@ -356,7 +420,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <ToolbarButton
         icon={<Pencil />}
         label={editing ? "Finish editing" : "Edit text"}
-        onClick={() => editing ? finishEditing() : beginEditing()}
+        onClick={() => (editing ? finishEditing() : beginEditing())}
         pressed={editing}
       />
       <ToolbarDivider />
@@ -364,21 +428,33 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
         <ToolbarButton
           icon={<Pilcrow />}
           label="Paragraph"
-          onClick={() => runTextCommand((editor) => { editor.chain().focus().setParagraph().run() })}
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().setParagraph().run()
+            })
+          }
           preserveFocus
           pressed={textEditor.isActive("paragraph")}
         />
         <ToolbarButton
           icon={<Heading1 />}
           label="Heading 1"
-          onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleHeading({ level: 1 }).run() })}
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleHeading({ level: 1 }).run()
+            })
+          }
           preserveFocus
           pressed={textEditor.isActive("heading", { level: 1 })}
         />
         <ToolbarButton
           icon={<Heading2 />}
           label="Heading 2"
-          onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleHeading({ level: 2 }).run() })}
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleHeading({ level: 2 }).run()
+            })
+          }
           preserveFocus
           pressed={textEditor.isActive("heading", { level: 2 })}
         />
@@ -387,21 +463,33 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <ToolbarButton
         icon={<Bold />}
         label="Bold"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleBold().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleBold().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("bold")}
       />
       <ToolbarButton
         icon={<Italic />}
         label="Italic"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleItalic().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleItalic().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("italic")}
       />
       <ToolbarButton
         icon={<Strikethrough />}
         label="Strikethrough"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleStrike().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleStrike().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("strike")}
       />
@@ -409,21 +497,33 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <ToolbarButton
         icon={<List />}
         label="Bullet list"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleBulletList().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleBulletList().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("bulletList")}
       />
       <ToolbarButton
         icon={<ListOrdered />}
         label="Numbered list"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleOrderedList().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleOrderedList().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("orderedList")}
       />
       <ToolbarButton
         icon={<Quote />}
         label="Quote"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().toggleBlockquote().run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().toggleBlockquote().run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive("blockquote")}
       />
@@ -431,21 +531,33 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <ToolbarButton
         icon={<AlignLeft />}
         label="Align left"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().setTextAlign("left").run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().setTextAlign("left").run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive({ textAlign: "left" })}
       />
       <ToolbarButton
         icon={<AlignCenter />}
         label="Align center"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().setTextAlign("center").run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().setTextAlign("center").run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive({ textAlign: "center" })}
       />
       <ToolbarButton
         icon={<AlignRight />}
         label="Align right"
-        onClick={() => runTextCommand((editor) => { editor.chain().focus().setTextAlign("right").run() })}
+        onClick={() =>
+          runTextCommand((editor) => {
+            editor.chain().focus().setTextAlign("right").run()
+          })
+        }
         preserveFocus
         pressed={textEditor.isActive({ textAlign: "right" })}
       />
@@ -542,6 +654,7 @@ function VideoBody(props: { data: CanvasMediaNodeData; fit: "contain" | "cover";
         ref={videoRef}
         aria-label={props.data.label}
         className={cn("convax-video__media size-full", props.fit === "cover" ? "object-cover" : "object-contain")}
+        draggable={false}
         loop
         muted={muted}
         onPause={() => setPlaying(false)}
@@ -611,37 +724,23 @@ function mediaAccept(kind: CanvasMediaKind) {
   return undefined
 }
 
-function EmptyMedia(props: { canUpload: boolean; kind: CanvasMediaKind; onPick: () => void }) {
+function EmptyMedia(props: { kind: CanvasMediaKind }) {
   const label = mediaLabel(props.kind)
   return (
     <div className="convax-media-empty size-full">
-      <button
-        className="convax-media-empty__action nodrag nowheel"
-        disabled={!props.canUpload}
-        onClick={(event) => {
-          event.stopPropagation()
-          props.onPick()
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        type="button"
-      >
+      <div className="convax-media-empty__content" aria-hidden="true">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">Add {label}</span>
-        <span className="convax-media-empty__hint">Choose a {label} file</span>
-      </button>
+        <span className="convax-media-empty__title">Empty {label}</span>
+        <span className="convax-media-empty__hint">Use the toolbar to add content</span>
+      </div>
     </div>
   )
 }
 
-function MediaBody(props: {
-  canUpload: boolean
-  data: CanvasMediaNodeData
-  onPick: () => void
-  selected: boolean
-}) {
+function MediaBody(props: { data: CanvasMediaNodeData; selected: boolean }) {
   const fit = props.data.fit ?? "contain"
   if (!props.data.url.trim()) {
-    return <EmptyMedia canUpload={props.canUpload} kind={props.data.kind} onPick={props.onPick} />
+    return <EmptyMedia kind={props.data.kind} />
   }
   if (props.data.kind === "image") {
     return (
@@ -692,9 +791,6 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
     inputRef.current?.click()
   }
   const supportsFit = data.kind === "image" || data.kind === "video"
-  const selectionActions = editor.selection.nodeIds.size === 1 && editor.selection.nodeIds.has(props.id)
-    ? editor.visibleSelectionActions
-    : []
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
       <ToolbarButton
@@ -708,12 +804,14 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
           disabled={!data.url}
           icon={<Scan />}
           label={data.fit === "cover" ? "Fit inside frame" : "Fill frame"}
-          onClick={() => editor.commit((document) =>
-            updateCanvasNodeData(document, props.id, (current) => ({
-              ...current,
-              fit: data.fit === "cover" ? "contain" : "cover",
-            })),
-          )}
+          onClick={() =>
+            editor.commit((document) =>
+              updateCanvasNodeData(document, props.id, (current) => ({
+                ...current,
+                fit: data.fit === "cover" ? "contain" : "cover",
+              })),
+            )
+          }
           pressed={data.fit === "cover"}
         />
       ) : null}
@@ -723,19 +821,6 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         label={`Download ${mediaLabel(data.kind)}`}
         onClick={() => downloadMedia(data)}
       />
-      {selectionActions.length > 0 ? <ToolbarDivider /> : null}
-      {selectionActions.map((action) => {
-        const pending = editor.isSelectionActionPending(action.id)
-        return (
-          <ToolbarButton
-            key={action.id}
-            disabled={pending}
-            icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
-            label={action.label}
-            onClick={() => editor.executeSelectionAction(action)}
-          />
-        )
-      })}
       <ToolbarDivider />
       <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
       <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
@@ -743,7 +828,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   )
   return (
     <NodeChrome icon={mediaIcon(data.kind)} label={data.label} node={props} toolbar={toolbar}>
-      <MediaBody canUpload={editor.canUpload} data={data} onPick={chooseFile} selected={props.selected} />
+      <MediaBody data={data} selected={props.selected} />
       <input
         ref={inputRef}
         accept={mediaAccept(data.kind)}
@@ -808,7 +893,59 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
   )
 }
 
-function FileAssistantAccessory(props: NodeProps<CanvasNode>) {
+function FileGenerationActivityOverlay(props: {
+  activity: Exclude<CanvasFileGenerationActivity, { status: "idle" }>
+  onRecover: () => void
+}) {
+  if (props.activity.status === "pending") {
+    return (
+      <div
+        aria-busy="true"
+        aria-live="polite"
+        className="nodrag nowheel pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
+        data-canvas-file-generation-activity="pending"
+        role="status"
+      >
+        <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
+          <LoaderCircle className="size-6 animate-spin text-primary motion-reduce:animate-none" />
+          <span>正在生成…</span>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div
+      className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      data-canvas-file-generation-activity="error"
+      role="alert"
+    >
+      <div className="flex max-w-full flex-col items-center gap-2">
+        <span className="text-sm font-medium text-destructive">生成失败</span>
+        <span className="line-clamp-3 max-w-full text-xs text-muted-foreground">{props.activity.message}</span>
+        <Button
+          onClick={(event) => {
+            event.stopPropagation()
+            props.onRecover()
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          修改并重试
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function FileAssistantAccessory(
+  props: NodeProps<CanvasNode> & {
+    initialGenerationPrompt?: string
+    onGenerationActivityChange: (activity: CanvasAssistantGenerationActivity) => void
+    onInitialGenerationPromptConsumed: () => void
+  },
+) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
@@ -825,8 +962,13 @@ function FileAssistantAccessory(props: NodeProps<CanvasNode>) {
         >
           {assistant.render({
             document: editor.document,
-            mentionedNodeIds: [props.id],
+            ...(props.initialGenerationPrompt === undefined
+              ? {}
+              : { initialGenerationPrompt: props.initialGenerationPrompt }),
+            mentionedNodeIds: [],
             mode: "file",
+            onGenerationActivityChange: props.onGenerationActivityChange,
+            onInitialGenerationPromptConsumed: props.onInitialGenerationPromptConsumed,
             onOwnerGenerationToolIdChange: (toolId) => {
               editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
             },
@@ -852,46 +994,159 @@ function AgentNode(props: NodeProps<CanvasNode>) {
   return (
     <NodeChrome icon={<Bot />} label={props.data.label} node={props} toolbar={toolbar}>
       <div className="convax-agent-node nodrag nowheel size-full" data-canvas-shortcuts="ignore">
-        {assistant
-          ? assistant.render({
-              document: editor.document,
-              mentionedNodeIds,
-              mode: "agent",
-              ownerNodeId: props.id,
-            })
-          : <div className="grid size-full place-items-center p-5 text-center text-sm text-muted-foreground">Register an assistant service to use this Agent.</div>}
+        {assistant ? (
+          assistant.render({
+            document: editor.document,
+            mentionedNodeIds,
+            mode: "agent",
+            ownerNodeId: props.id,
+          })
+        ) : (
+          <div className="grid size-full place-items-center p-5 text-center text-sm text-muted-foreground">
+            Register an assistant service to use this Agent.
+          </div>
+        )}
       </div>
     </NodeChrome>
   )
 }
 
+function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: NodeProps<CanvasNode> }) {
+  const editor = useCanvasEditor()
+  const source = editor.visibleSelectionDragSource
+  const armed = Boolean(editor.selectionDragArmed && props.node.selected && source)
+  const ready = armed && editor.selectionDragStatus === "ready"
+  const preparing = armed && editor.selectionDragStatus === "preparing"
+  const showsHint = armed && editor.selection.nodeIds.values().next().value === props.node.id
+
+  return (
+    <div
+      className={cn(
+        "relative size-full",
+        armed && "nodrag",
+        ready && "cursor-grab active:cursor-grabbing",
+        preparing && "cursor-wait",
+      )}
+      data-canvas-selection-drag-state={armed ? editor.selectionDragStatus : undefined}
+      draggable={ready}
+      onDragStart={(event) =>
+        startCanvasSelectionDragFromNode(event, ready, source?.shortcutModifier, editor.startSelectionDrag)
+      }
+      onDragEnd={editor.releaseSelectionDrag}
+      onPointerEnter={() => editor.setSelectionDragCandidateNode(props.node.id)}
+      onPointerLeave={() => editor.setSelectionDragCandidateNode(null)}
+      onPointerDown={armed ? (event) => event.stopPropagation() : undefined}
+    >
+      {props.children}
+      {showsHint ? (
+        <div
+          aria-live="polite"
+          className="pointer-events-none absolute left-1/2 top-2 z-[80] flex max-w-[calc(100%-1rem)] -translate-x-1/2 items-center gap-1.5 rounded-full border bg-card/95 px-2.5 py-1 text-[11px] font-medium text-card-foreground shadow-sm backdrop-blur"
+          data-canvas-selection-drag-hint
+          role="status"
+        >
+          {preparing ? <LoaderCircle className="size-3 animate-spin" /> : source?.icon}
+          <span className="truncate">{preparing ? (source?.preparingLabel ?? source?.label) : source?.label}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+export function startCanvasSelectionDragFromNode(
+  event: Pick<
+    DragEvent<HTMLElement>,
+    "altKey" | "ctrlKey" | "metaKey" | "preventDefault" | "shiftKey" | "stopPropagation"
+  >,
+  ready: boolean,
+  shortcutModifier: "control" | "meta" | undefined,
+  start: () => boolean,
+) {
+  event.preventDefault()
+  event.stopPropagation()
+  if (!ready || !isCanvasExternalDragChordHeld(event, shortcutModifier)) return false
+  return start()
+}
+
 export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
-  if (props.data.kind === "group") return <GroupNode {...props} />
-  if (props.data.kind === "agent" || props.type === "agent") return <AgentNode {...props} />
-  return <RegisteredFileNode {...props} />
+  let content: ReactNode
+  if (props.data.kind === "group") content = <GroupNode {...props} />
+  else if (props.data.kind === "agent" || props.type === "agent") content = <AgentNode {...props} />
+  else content = <RegisteredFileNode {...props} />
+  return <CanvasSelectionDragNodeSurface node={props}>{content}</CanvasSelectionDragNodeSurface>
 }
 
 function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  const [generationOwner] = useState(() => new CanvasFileGenerationActivityOwner())
+  const [generationActivity, setGenerationActivity] = useState<CanvasFileGenerationActivity>(generationOwner.activity)
+  const [recoveryPrompt, setRecoveryPrompt] = useState<string>()
+  const onGenerationActivityChange = useCallback(
+    (activity: CanvasAssistantGenerationActivity) => {
+      const transition = generationOwner.apply(activity)
+      setGenerationActivity(transition.activity)
+      if (transition.dismissComposer) {
+        setRecoveryPrompt(undefined)
+        editor.selectNodes([])
+      }
+    },
+    [editor, generationOwner],
+  )
+  const onInitialGenerationPromptConsumed = useCallback(() => setRecoveryPrompt(undefined), [])
+  useEffect(() => () => generationOwner.dispose(), [generationOwner])
   const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
   const ContributedToolbar = definition?.toolbar
+  const selectionActions = showMutationToolbar ? editor.visibleSelectionActions : []
+  const contributedToolbar = ContributedToolbar ? (
+    <FileRendererBoundary data={props.data} fallback={null} renderer={ContributedToolbar}>
+      <ContributedToolbar {...props} />
+    </FileRendererBoundary>
+  ) : null
   return (
     <>
-      <FileRendererBoundary data={props.data} renderer={Renderer}>
-        {Renderer
-          ? <Renderer {...props} />
-          : <UnknownFileRenderer {...props} />}
-      </FileRendererBoundary>
+      <ContributedToolbarSelectionActionContext.Provider
+        value={Boolean(contributedToolbar && selectionActions.length > 0)}
+      >
+        <FileRendererBoundary data={props.data} renderer={Renderer}>
+          {Renderer ? <Renderer {...props} /> : <UnknownFileRenderer {...props} />}
+        </FileRendererBoundary>
+      </ContributedToolbarSelectionActionContext.Provider>
       {ContributedToolbar && showMutationToolbar ? (
         <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={82} position={Position.Top}>
-          <FileRendererBoundary data={props.data} fallback={null} renderer={ContributedToolbar}>
-            <ContributedToolbar {...props} />
-          </FileRendererBoundary>
+          {selectionActions.length > 0 ? (
+            <div className="convax-node-toolbar__cluster">
+              <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+                <NodeSelectionActionButtons actions={selectionActions} />
+              </div>
+              {contributedToolbar}
+            </div>
+          ) : (
+            contributedToolbar
+          )}
         </NodeToolbar>
       ) : null}
-      <FileAssistantAccessory {...props} />
+      {generationActivity.status === "idle" ? (
+        <FileAssistantAccessory
+          {...props}
+          initialGenerationPrompt={recoveryPrompt}
+          onGenerationActivityChange={onGenerationActivityChange}
+          onInitialGenerationPromptConsumed={onInitialGenerationPromptConsumed}
+        />
+      ) : null}
+      {generationActivity.status === "pending" || generationActivity.status === "error" ? (
+        <FileGenerationActivityOverlay
+          activity={generationActivity}
+          onRecover={() => {
+            const prompt = generationActivity.status === "error" ? generationActivity.prompt : undefined
+            const transition = generationOwner.apply({ status: "complete" })
+            setGenerationActivity(transition.activity)
+            setRecoveryPrompt(prompt)
+            editor.selectNodes([props.id])
+          }}
+        />
+      ) : null}
     </>
   )
 }
@@ -904,12 +1159,15 @@ function UnknownFileRenderer(props: NodeProps<CanvasNode>) {
   )
 }
 
-class FileRendererBoundary extends Component<{
-  children: ReactNode
-  data: CanvasNode["data"]
-  fallback?: ReactNode
-  renderer?: unknown
-}, { failed: boolean }> {
+class FileRendererBoundary extends Component<
+  {
+    children: ReactNode
+    data: CanvasNode["data"]
+    fallback?: ReactNode
+    renderer?: unknown
+  },
+  { failed: boolean }
+> {
   state = { failed: false }
 
   static getDerivedStateFromError() {
@@ -924,7 +1182,9 @@ class FileRendererBoundary extends Component<{
 
   render() {
     if (!this.state.failed) return this.props.children
-    return this.props.fallback !== undefined ? this.props.fallback : (
+    return this.props.fallback !== undefined ? (
+      this.props.fallback
+    ) : (
       <div className="grid size-full place-items-center rounded-lg border border-destructive/40 bg-card p-4 text-center text-sm text-destructive">
         This file renderer failed. Update the file or plugin to retry.
       </div>

@@ -23,6 +23,8 @@ const defaultLimits = {
 const builtinProvenanceFileName = ".convax-builtin.json"
 const portableBuiltinProvenanceFileName = builtinProvenanceFileName.toLocaleLowerCase("en-US")
 const builtinProvenanceSchema = "convax.plugin-builtin/1" as const
+const publicationTransactionUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const publicationCleanupPrefix = ".publication-cleanup-"
 
 interface BuiltinProvenance {
   bundleDigest: string
@@ -61,6 +63,10 @@ export interface WebPluginBundleInstallOptions extends WebPluginPublicationOptio
   replaceExisting?: boolean
 }
 
+export interface WebPluginBuiltinInstallOptions extends WebPluginPublicationOptions {
+  legacyBundleDigests?: readonly WebPluginLegacyBundleDigest[]
+}
+
 interface ResolvedLimits {
   maxEntryCount: number
   maxFileBytes: number
@@ -72,6 +78,34 @@ interface CopyState {
   limits: ResolvedLimits
   sourceRoot: string
   totalBytes: number
+}
+
+interface PublicationRemnantName {
+  expectedId?: string
+  kind: "backup" | "staging"
+}
+
+interface ValidatedPluginPackage {
+  declaration: string
+  digest: string
+  directoryIdentity: {
+    dev: number
+    ino: number
+  }
+  id: string
+  path: string
+}
+
+interface ValidatedPublicationPackage extends ValidatedPluginPackage {
+  kind: PublicationRemnantName["kind"]
+  name: string
+}
+
+interface PublicationRecoveryGroup {
+  backupClaims: number
+  backups: ValidatedPublicationPackage[]
+  failures: unknown[]
+  stagings: ValidatedPublicationPackage[]
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
@@ -91,6 +125,37 @@ async function exists(filePath: string) {
 function isInside(candidate: string, root: string) {
   const relative = path.relative(root, candidate)
   return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+}
+
+function publicationRemnantName(name: string): PublicationRemnantName | null {
+  if (name.length <= 37 || name.at(-37) !== "-" || !publicationTransactionUuidPattern.test(name.slice(-36))) return null
+  const prefix = name.slice(0, -37)
+  if (prefix === ".staging-bundle") return { kind: "staging" }
+  if (prefix.startsWith(".replaced-")) {
+    const expectedId = prefix.slice(".replaced-".length)
+    try {
+      return { expectedId: requireWebPluginId(expectedId), kind: "backup" }
+    } catch {
+      return null
+    }
+  }
+  if (prefix.startsWith(".staging-")) {
+    const expectedId = prefix.slice(".staging-".length)
+    try {
+      return { expectedId: requireWebPluginId(expectedId), kind: "staging" }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function isPublicationCleanupRemnant(name: string) {
+  return (
+    name.length === publicationCleanupPrefix.length + 36 &&
+    name.startsWith(publicationCleanupPrefix) &&
+    publicationTransactionUuidPattern.test(name.slice(-36))
+  )
 }
 
 function assertInside(candidate: string, root: string, label: string) {
@@ -386,6 +451,226 @@ export class WebPluginManager {
     return assertPlainDirectory(this.#rootPath, "Plugin installation root")
   }
 
+  async #validatePublicationPackage(
+    installationRoot: string,
+    directory: string,
+    expectedId: string,
+    label: string,
+  ): Promise<ValidatedPluginPackage> {
+    if (path.dirname(directory) !== installationRoot) {
+      throw new Error(`${label} must be an immediate child of the Plugin installation root`)
+    }
+    const before = await fs.lstat(directory)
+    if (before.isSymbolicLink() || !before.isDirectory()) {
+      throw new Error(`${label} must be a real directory`)
+    }
+    const realDirectory = await fs.realpath(directory)
+    if (realDirectory !== directory) throw new Error(`${label} must not resolve through a symbolic link`)
+    const manifest = await validateInstalledPackage(realDirectory, this.#limits)
+    if (manifest.id !== expectedId) throw new Error(`${label} manifest identity does not match its transaction name`)
+    const digest = await installedPackageDigest(realDirectory, this.#limits)
+    const markerPath = path.join(realDirectory, builtinProvenanceFileName)
+    if (this.#reservedBuiltinIds.has(manifest.id)) {
+      const provenance = await readBuiltinProvenance(realDirectory, manifest)
+      if (provenance.bundleDigest !== digest) {
+        throw new Error(`${label} built-in provenance does not match its package bytes`)
+      }
+    } else if (await exists(markerPath)) {
+      throw new Error(`${label} contains host-only built-in provenance`)
+    }
+    const after = await fs.lstat(directory)
+    if (
+      after.isSymbolicLink() ||
+      !after.isDirectory() ||
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error(`${label} changed while it was validated`)
+    }
+    return {
+      declaration: JSON.stringify(manifest),
+      digest,
+      directoryIdentity: { dev: after.dev, ino: after.ino },
+      id: manifest.id,
+      path: realDirectory,
+    }
+  }
+
+  async #assertPublicationCandidateUnchanged(installationRoot: string, candidate: ValidatedPublicationPackage) {
+    const current = await this.#validatePublicationPackage(
+      installationRoot,
+      candidate.path,
+      candidate.id,
+      `Plugin publication ${candidate.kind}`,
+    )
+    if (
+      current.declaration !== candidate.declaration ||
+      current.digest !== candidate.digest ||
+      current.directoryIdentity.dev !== candidate.directoryIdentity.dev ||
+      current.directoryIdentity.ino !== candidate.directoryIdentity.ino
+    ) {
+      throw new Error(`Plugin publication ${candidate.kind} changed before recovery: ${candidate.name}`)
+    }
+  }
+
+  async #removePublicationCandidate(installationRoot: string, candidate: ValidatedPublicationPackage) {
+    await this.#assertPublicationCandidateUnchanged(installationRoot, candidate)
+    const tombstone = path.join(installationRoot, `${publicationCleanupPrefix}${randomUUID()}`)
+    if (await exists(tombstone)) throw new Error("Plugin publication cleanup target already exists")
+    await fs.rename(candidate.path, tombstone)
+    await fs.rm(tombstone, { recursive: true })
+  }
+
+  async #removePublicationCleanupRemnant(installationRoot: string, name: string) {
+    const target = path.join(installationRoot, name)
+    if (path.dirname(target) !== installationRoot) {
+      throw new Error("Plugin publication cleanup remnant escapes its host root")
+    }
+    const metadata = await fs.lstat(target)
+    if (metadata.isSymbolicLink() || !metadata.isDirectory() || (await fs.realpath(target)) !== target) {
+      throw new Error(`Plugin publication cleanup remnant must be a real directory: ${name}`)
+    }
+    await fs.rm(target, { recursive: true })
+  }
+
+  async #restorePublicationBackup(installationRoot: string, candidate: ValidatedPublicationPackage): Promise<void> {
+    await this.#assertPublicationCandidateUnchanged(installationRoot, candidate)
+    const target = path.join(installationRoot, candidate.id)
+    if (await exists(target)) throw new Error(`Plugin recovery will not overwrite an existing package: ${candidate.id}`)
+    await fs.rename(candidate.path, target)
+    const restored = await this.#validatePublicationPackage(
+      installationRoot,
+      target,
+      candidate.id,
+      "Restored Plugin package",
+    )
+    if (restored.declaration !== candidate.declaration || restored.digest !== candidate.digest) {
+      throw new Error(`Restored Plugin package changed during recovery: ${candidate.id}`)
+    }
+  }
+
+  /**
+   * Recovers only host-named package publication transactions. A canonical package
+   * always wins. When it is absent, exactly one validated backup may be restored;
+   * staging directories are never promoted. Invalid or ambiguous remnants stay
+   * inert and are reported for explicit repair instead of being guessed at.
+   */
+  async reconcilePublicationState() {
+    const installationRoot = await this.#ensureRoot()
+    const groups = new Map<string, PublicationRecoveryGroup>()
+    const failures: unknown[] = []
+    const groupFor = (pluginId: string) => {
+      let group = groups.get(pluginId)
+      if (!group) {
+        group = { backupClaims: 0, backups: [], failures: [], stagings: [] }
+        groups.set(pluginId, group)
+      }
+      return group
+    }
+
+    const entries = await fs.readdir(installationRoot, { withFileTypes: true })
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (isPublicationCleanupRemnant(entry.name)) {
+        try {
+          await this.#removePublicationCleanupRemnant(installationRoot, entry.name)
+        } catch (error) {
+          failures.push(error)
+        }
+        continue
+      }
+      const remnant = publicationRemnantName(entry.name)
+      if (!remnant) continue
+      const expectedGroup = remnant.expectedId ? groupFor(remnant.expectedId) : undefined
+      if (remnant.kind === "backup") expectedGroup!.backupClaims += 1
+      try {
+        if (entry.isSymbolicLink() || !entry.isDirectory()) {
+          throw new Error(`Plugin publication ${remnant.kind} must be a real directory: ${entry.name}`)
+        }
+        const candidatePath = path.join(installationRoot, entry.name)
+        const expectedId = remnant.expectedId ?? (await readManifest(candidatePath, this.#limits.maxFileBytes)).id
+        const validated = await this.#validatePublicationPackage(
+          installationRoot,
+          candidatePath,
+          expectedId,
+          `Plugin publication ${remnant.kind}`,
+        )
+        const candidate: ValidatedPublicationPackage = {
+          ...validated,
+          kind: remnant.kind,
+          name: entry.name,
+        }
+        const group = groupFor(candidate.id)
+        if (candidate.kind === "backup") group.backups.push(candidate)
+        else group.stagings.push(candidate)
+      } catch (error) {
+        const destination = expectedGroup?.failures ?? failures
+        destination.push(error)
+      }
+    }
+
+    for (const [pluginId, group] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
+      const target = path.join(installationRoot, pluginId)
+      let canonical: ValidatedPluginPackage | null = null
+      try {
+        canonical = (await exists(target))
+          ? await this.#validatePublicationPackage(installationRoot, target, pluginId, "Installed Plugin package")
+          : null
+      } catch (error) {
+        group.failures.push(error)
+        continue
+      }
+
+      if (canonical) {
+        for (const candidate of [...group.backups, ...group.stagings]) {
+          try {
+            await this.#removePublicationCandidate(installationRoot, candidate)
+          } catch (error) {
+            group.failures.push(error)
+          }
+        }
+        continue
+      }
+
+      if (group.backupClaims === 1 && group.backups.length === 1) {
+        try {
+          await this.#restorePublicationBackup(installationRoot, group.backups[0]!)
+        } catch (error) {
+          group.failures.push(error)
+          continue
+        }
+        for (const staging of group.stagings) {
+          try {
+            await this.#removePublicationCandidate(installationRoot, staging)
+          } catch (error) {
+            group.failures.push(error)
+          }
+        }
+        continue
+      }
+
+      if (group.backupClaims === 0) {
+        for (const staging of group.stagings) {
+          try {
+            await this.#removePublicationCandidate(installationRoot, staging)
+          } catch (error) {
+            group.failures.push(error)
+          }
+        }
+      } else if (group.backupClaims > 1) {
+        group.failures.push(new Error(`Plugin publication recovery is ambiguous: ${pluginId}`))
+      }
+    }
+
+    const allFailures = [...failures, ...[...groups.values()].flatMap((group) => group.failures)]
+    if (allFailures.length) {
+      throw new AggregateError(allFailures, "Plugin publication recovery did not accept every transaction remnant", {
+        cause: allFailures[0],
+      })
+    }
+  }
+
   async #commitStaging(
     installationRoot: string,
     staging: string,
@@ -410,7 +695,6 @@ export class WebPluginManager {
         throw new Error(`Plugin update must have a newer version: ${manifest.id}`)
       }
     }
-
     const publication = await options.beforePublish?.(summary)
     let publicationPublished = false
     const publishAuthorization = async () => {
@@ -419,27 +703,35 @@ export class WebPluginManager {
         await publication.publish()
         publicationPublished = true
       } catch (error) {
-        await publication.rollback().catch(() => undefined)
+        try {
+          await publication.rollback()
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], `Plugin pre-publication rollback failed: ${manifest.id}`, {
+            cause: error,
+          })
+        }
         throw error
       }
     }
     const rollbackAuthorization = async () => {
       if (publicationPublished) await publication?.rollback()
     }
-
     if (!options.replaceExisting) {
       await publishAuthorization()
       try {
         await fs.rename(staging, target)
+      } catch (error) {
+        await rollbackAuthorization().catch(() => undefined)
+        throw error
+      }
+      try {
         await publication?.commit()
       } catch (error) {
         const failures: unknown[] = [error]
-        if (await exists(target)) {
-          try {
-            await fs.rename(target, staging)
-          } catch (rollbackError) {
-            failures.push(rollbackError)
-          }
+        try {
+          await fs.rename(target, staging)
+        } catch (rollbackError) {
+          failures.push(rollbackError)
         }
         try {
           await rollbackAuthorization()
@@ -450,7 +742,6 @@ export class WebPluginManager {
       }
       return summary
     }
-
     const backup = path.join(installationRoot, `.replaced-${manifest.id}-${randomUUID()}`)
     await publishAuthorization()
     try {
@@ -461,11 +752,31 @@ export class WebPluginManager {
     }
     try {
       await fs.rename(staging, target)
+    } catch (error) {
+      try {
+        await fs.rename(backup, target)
+      } catch (rollbackError) {
+        const authorizationError = await rollbackAuthorization().then(
+          () => undefined,
+          (failure) => failure,
+        )
+        throw new AggregateError(
+          [error, rollbackError, ...(authorizationError ? [authorizationError] : [])],
+          `Plugin update rollback failed: ${manifest.id}`,
+          {
+            cause: error,
+          },
+        )
+      }
+      await rollbackAuthorization().catch(() => undefined)
+      throw error
+    }
+    try {
       await publication?.commit()
     } catch (error) {
       const failures: unknown[] = [error]
       try {
-        if (await exists(target)) await fs.rename(target, staging)
+        await fs.rename(target, staging)
         await fs.rename(backup, target)
       } catch (rollbackError) {
         failures.push(rollbackError)
@@ -481,7 +792,12 @@ export class WebPluginManager {
     return summary
   }
 
-  async #replaceBuiltinStaging(installationRoot: string, staging: string, expectedId: string) {
+  async #replaceBuiltinStaging(
+    installationRoot: string,
+    staging: string,
+    expectedId: string,
+    options: WebPluginPublicationOptions = {},
+  ) {
     const manifest = await validateInstalledPackage(staging, this.#limits)
     if (manifest.id !== expectedId) throw new Error("Plugin manifest changed while it was being installed")
     await readBuiltinProvenance(staging, manifest)
@@ -494,22 +810,79 @@ export class WebPluginManager {
     if ((await installedPackageDigest(target, this.#limits)) !== currentProvenance.bundleDigest) {
       throw new Error(`Installed built-in Plugin files do not match their provenance: ${expectedId}`)
     }
+    const summary = { ...toInstalledWebPluginSummary(manifest), trustedBuiltin: true } as const
+    const publication = await options.beforePublish?.(summary)
+    let publicationPublished = false
+    if (publication) {
+      try {
+        await publication.publish()
+        publicationPublished = true
+      } catch (error) {
+        try {
+          await publication.rollback()
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            `Built-in Plugin pre-publication rollback failed: ${expectedId}`,
+            {
+              cause: error,
+            },
+          )
+        }
+        throw error
+      }
+    }
     const replaced = path.join(installationRoot, `.replaced-${expectedId}-${randomUUID()}`)
-    await fs.rename(target, replaced)
+    try {
+      await fs.rename(target, replaced)
+    } catch (error) {
+      if (publicationPublished) await publication?.rollback().catch(() => undefined)
+      throw error
+    }
     try {
       await fs.rename(staging, target)
     } catch (error) {
       try {
         await fs.rename(replaced, target)
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], `Built-in Plugin update rollback failed: ${expectedId}`, {
-          cause: error,
-        })
+        const authorizationError = publicationPublished
+          ? await publication?.rollback().then(
+              () => undefined,
+              (failure) => failure,
+            )
+          : undefined
+        throw new AggregateError(
+          [error, rollbackError, ...(authorizationError ? [authorizationError] : [])],
+          `Built-in Plugin update rollback failed: ${expectedId}`,
+          {
+            cause: error,
+          },
+        )
       }
+      if (publicationPublished) await publication?.rollback().catch(() => undefined)
       throw error
     }
+    try {
+      await publication?.commit()
+    } catch (error) {
+      const failures: unknown[] = [error]
+      try {
+        await fs.rename(target, staging)
+        await fs.rename(replaced, target)
+      } catch (rollbackError) {
+        failures.push(rollbackError)
+      }
+      if (publicationPublished) {
+        try {
+          await publication?.rollback()
+        } catch (rollbackError) {
+          failures.push(rollbackError)
+        }
+      }
+      throw new AggregateError(failures, `Built-in Plugin publication rollback failed: ${expectedId}`, { cause: error })
+    }
     await fs.rm(replaced, { force: true, recursive: true }).catch(() => undefined)
-    return { ...toInstalledWebPluginSummary(manifest), trustedBuiltin: true } as const
+    return summary
   }
 
   async install(
@@ -530,6 +903,7 @@ export class WebPluginManager {
     if (await exists(target)) throw new Error(`Plugin is already installed: ${sourceManifest.id}`)
 
     const staging = path.join(installationRoot, `.staging-${sourceManifest.id}-${randomUUID()}`)
+    const beforePublish = options.beforePublish?.bind(options)
     try {
       await copyPackageEntry(sourceRoot, staging, {
         entries: 0,
@@ -538,7 +912,7 @@ export class WebPluginManager {
         totalBytes: 0,
       })
       return await this.#commitStaging(installationRoot, staging, {
-        ...(options.beforePublish ? { beforePublish: options.beforePublish } : {}),
+        ...(beforePublish ? { beforePublish } : {}),
         expectedId: sourceManifest.id,
       })
     } finally {
@@ -559,7 +933,7 @@ export class WebPluginManager {
 
   async installOrUpdateBuiltinBundle(
     bundle: WebPluginBundle,
-    options: { legacyBundleDigests?: readonly WebPluginLegacyBundleDigest[] } = {},
+    options: WebPluginBuiltinInstallOptions = {},
   ): Promise<InstalledWebPluginSummary> {
     const manifest = bundleManifest(bundle)
     const expectedDigest = bundleDigest(bundle)
@@ -590,7 +964,7 @@ export class WebPluginManager {
       schema: builtinProvenanceSchema,
       version: manifest.version,
     }
-    return this.#installBundle(bundle, provenance, await exists(target))
+    return this.#installBundle(bundle, provenance, await exists(target), options)
   }
 
   /**
@@ -724,7 +1098,11 @@ export class WebPluginManager {
         await fs.mkdir(path.dirname(target), { mode: 0o700, recursive: true })
         await fs.writeFile(target, content, { flag: "wx", mode: 0o600 })
       }
-      if (replaceBuiltin) return await this.#replaceBuiltinStaging(installationRoot, staging, provenance!.id)
+      if (replaceBuiltin) {
+        return await this.#replaceBuiltinStaging(installationRoot, staging, provenance!.id, {
+          beforePublish: options.beforePublish,
+        })
+      }
       const installed = await this.#commitStaging(installationRoot, staging, {
         ...(provenance ? { expectedId: provenance.id } : {}),
         ...options,

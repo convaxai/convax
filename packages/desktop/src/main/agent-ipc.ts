@@ -8,7 +8,11 @@ import {
   type AgentProjectResolver,
 } from "./agent-resource-preparation"
 
-export type { AgentCanvasSnapshot, AgentCanvasSnapshotResolver, AgentProjectResolver } from "./agent-resource-preparation"
+export type {
+  AgentCanvasSnapshot,
+  AgentCanvasSnapshotResolver,
+  AgentProjectResolver,
+} from "./agent-resource-preparation"
 
 type ClientInput<Method extends Exclude<keyof AgentClient, "getStatus">> = Parameters<AgentClient[Method]>[0]
 
@@ -18,6 +22,7 @@ export const agentIpcChannels = {
   getSessionState: "agent:session-state",
   getStatus: "agent:status",
   listCapabilities: "agent:capabilities",
+  listModels: "agent:models",
   listSessions: "agent:session-list",
   prompt: "agent:prompt",
   rejectQuestion: "agent:question-reject",
@@ -65,66 +70,79 @@ export function registerAgentIpc(
     registerHandler<ClientInput<"getSessionState">, Awaited<ReturnType<AgentClient["getSessionState"]>>>(
       agentIpcChannels.getSessionState,
       options.isTrustedSender,
-      async (input) => runtime.getSessionState({
-        directory: await directoryFor(input.scopeId),
-        limit: input.limit,
-        sessionId: input.sessionId,
-      }),
+      async (input) =>
+        runtime.getSessionState({
+          directory: await directoryFor(input.scopeId),
+          limit: input.limit,
+          sessionId: input.sessionId,
+        }),
     ),
     registerHandler<AgentPromptRequest, Awaited<ReturnType<AgentClient["prompt"]>>>(
       agentIpcChannels.prompt,
       options.isTrustedSender,
-      async (input) => runtime.prompt({
-        agent: input.agent,
-        directory: await directoryFor(input.scopeId),
-        instructions: input.instructions,
-        model: input.model,
-        resources: await prepareAgentResources(manager, options.canvasSnapshots, input.scopeId, input.resources),
-        scopeId: input.scopeId,
-        sessionId: input.sessionId,
-        text: input.text,
-        variant: input.variant,
-      }),
+      async (input) =>
+        runtime.prompt({
+          agent: input.agent,
+          directory: await directoryFor(input.scopeId),
+          instructions: input.instructions,
+          model: input.model,
+          resources: await prepareAgentResources(manager, options.canvasSnapshots, input.scopeId, input.resources),
+          scopeId: input.scopeId,
+          sessionId: input.sessionId,
+          text: input.text,
+          variant: input.variant,
+        }),
     ),
-    registerHandler<ClientInput<"abort">, void>(
-      agentIpcChannels.abort,
-      options.isTrustedSender,
-      async (input) => runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId }),
+    registerHandler<ClientInput<"abort">, void>(agentIpcChannels.abort, options.isTrustedSender, async (input) =>
+      runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId }),
     ),
     registerHandler<ClientInput<"listCapabilities">, Awaited<ReturnType<AgentClient["listCapabilities"]>>>(
       agentIpcChannels.listCapabilities,
       options.isTrustedSender,
-      async (input) => runtime.listCapabilities({
-        directory: await directoryFor(input.scopeId),
-        scopeId: input.scopeId,
-      }),
+      async (input) =>
+        runtime.listCapabilities({
+          directory: await directoryFor(input.scopeId),
+          scopeId: input.scopeId,
+        }),
+    ),
+    registerHandler<ClientInput<"listModels">, Awaited<ReturnType<AgentClient["listModels"]>>>(
+      agentIpcChannels.listModels,
+      options.isTrustedSender,
+      async (input) =>
+        runtime.listModels({
+          directory: await directoryFor(input.scopeId),
+          scopeId: input.scopeId,
+        }),
     ),
     registerHandler<ClientInput<"replyPermission">, void>(
       agentIpcChannels.replyPermission,
       options.isTrustedSender,
-      async (input) => runtime.replyPermission({
-        directory: await directoryFor(input.scopeId),
-        message: input.message,
-        reply: input.reply,
-        requestId: input.requestId,
-      }),
+      async (input) =>
+        runtime.replyPermission({
+          directory: await directoryFor(input.scopeId),
+          message: input.message,
+          reply: input.reply,
+          requestId: input.requestId,
+        }),
     ),
     registerHandler<ClientInput<"replyQuestion">, void>(
       agentIpcChannels.replyQuestion,
       options.isTrustedSender,
-      async (input) => runtime.replyQuestion({
-        answers: input.answers,
-        directory: await directoryFor(input.scopeId),
-        requestId: input.requestId,
-      }),
+      async (input) =>
+        runtime.replyQuestion({
+          answers: input.answers,
+          directory: await directoryFor(input.scopeId),
+          requestId: input.requestId,
+        }),
     ),
     registerHandler<ClientInput<"rejectQuestion">, void>(
       agentIpcChannels.rejectQuestion,
       options.isTrustedSender,
-      async (input) => runtime.rejectQuestion({
-        directory: await directoryFor(input.scopeId),
-        requestId: input.requestId,
-      }),
+      async (input) =>
+        runtime.rejectQuestion({
+          directory: await directoryFor(input.scopeId),
+          requestId: input.requestId,
+        }),
     ),
   ]
 

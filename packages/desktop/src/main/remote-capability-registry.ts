@@ -6,6 +6,7 @@ import {
   requireWebPluginId,
   webPluginManifestSchema,
   webPluginManifestSchemaV2,
+  webPluginManifestSchemaV3,
 } from "../plugin-contracts"
 import { type SafeZipLimits, unpackSafeZip } from "./safe-zip"
 
@@ -17,6 +18,7 @@ export const remoteCapabilityRegistrySchema = "convax.registry/1" as const
 export const remoteCapabilityShowcaseSchema = "convax.showcase/1" as const
 export const remotePluginHostSchema = "convax.plugin-host/1" as const
 export const remotePluginHostSchemaV2 = "convax.plugin-host/2" as const
+export const remotePluginHostSchemaV3 = "convax.plugin-host/3" as const
 export const remoteSkillSchema = "opencode.skill/1" as const
 
 export type RemotePluginCompatibility =
@@ -27,6 +29,10 @@ export type RemotePluginCompatibility =
   | {
       pluginHost: typeof remotePluginHostSchemaV2
       pluginSchema: typeof webPluginManifestSchemaV2
+    }
+  | {
+      pluginHost: typeof remotePluginHostSchemaV3
+      pluginSchema: typeof webPluginManifestSchemaV3
     }
 
 const maxRegistryBytes = 2 * 1024 * 1024
@@ -538,12 +544,16 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
     compatibility.pluginHost === remotePluginHostSchema && compatibility.pluginSchema === webPluginManifestSchema
   const compatibleV2 =
     compatibility.pluginHost === remotePluginHostSchemaV2 && compatibility.pluginSchema === webPluginManifestSchemaV2
-  if (!compatibleV1 && !compatibleV2) {
+  const compatibleV3 =
+    compatibility.pluginHost === remotePluginHostSchemaV3 && compatibility.pluginSchema === webPluginManifestSchemaV3
+  if (!compatibleV1 && !compatibleV2 && !compatibleV3) {
     validationError("Remote Plugin compatibility is not supported by this host")
   }
   const parsedCompatibility: RemotePluginCompatibility = compatibleV1
     ? { pluginHost: remotePluginHostSchema, pluginSchema: webPluginManifestSchema }
-    : { pluginHost: remotePluginHostSchemaV2, pluginSchema: webPluginManifestSchemaV2 }
+    : compatibleV2
+      ? { pluginHost: remotePluginHostSchemaV2, pluginSchema: webPluginManifestSchemaV2 }
+      : { pluginHost: remotePluginHostSchemaV3, pluginSchema: webPluginManifestSchemaV3 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)

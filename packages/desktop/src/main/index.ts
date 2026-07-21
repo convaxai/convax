@@ -13,14 +13,23 @@ import {
   NodeProjectCanvasManager,
   ProjectCanvasResourcePreparation,
 } from "@convax/project/node"
-import { app, BrowserWindow, net, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
+import {
+  app,
+  BrowserWindow,
+  nativeImage,
+  net,
+  protocol,
+  shell,
+  webFrameMain,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import { registerWillQuitCleanup } from "./application-lifecycle"
-import { desktopProductName, desktopUserDataDirectory } from "./app-branding"
+import { desktopProductName, desktopProjectWorkspaceDirectory, desktopUserDataDirectory } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
-import { createFfmpegAgentToolProvider } from "./ffmpeg-agent-tools"
 import { createGenerationAgentToolProvider } from "./generation-agent-tools"
 import { GenerationCanvasService } from "./generation-canvas-service"
 import { registerGenerationIpc } from "./generation-ipc"
@@ -30,6 +39,13 @@ import {
   resolveGenerationPluginExecutable,
 } from "./generation-plugin-runtime"
 import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
+import { createPluginOperationAgentToolProvider } from "./plugin-operation-agent-tools"
+import {
+  registerCanvasExternalMediaDragIpc,
+  showCanvasExternalMediaDragStartFailure,
+} from "./canvas-external-media-drag-ipc"
+import { createCanvasExternalMediaDragIconFactory } from "./canvas-external-media-drag-icon"
+import { CanvasExternalMediaDragService } from "./canvas-external-media-drag-service"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
@@ -40,9 +56,20 @@ import {
   quarantineLegacyDevelopmentCaches,
   removeQuarantinedDevelopmentCaches,
 } from "./development-cache-policy"
-import { createWebPluginAssetHandler, webPluginAssetPrivileges, webPluginAssetScheme } from "./plugin-asset-protocol"
+import {
+  createWebPluginAssetHandler,
+  isAllowedWebPluginFrameNavigation,
+  webPluginAssetPrivileges,
+  webPluginAssetScheme,
+  webPluginFrameBindingForNavigation,
+  webPluginIdForAssetUrl,
+} from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { WebPluginManager } from "./plugin-manager"
+import { PluginServiceHost } from "./plugin-service-host"
+import { registerPluginServiceIpc } from "./plugin-service-ipc"
+import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
+import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-authorization-checkpoints"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
 import { registerSkillManagementIpc } from "./skill-management-ipc"
@@ -62,6 +89,7 @@ import { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
+import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -118,12 +146,44 @@ function createWindow(projectManager: NodeProjectManager) {
     },
   })
   const webContentsId = window.webContents.id
+  const pluginFrameBindings = new Map<number, string>()
   trustedWebContents.add(webContentsId)
-  window.once("closed", () => trustedWebContents.delete(webContentsId))
+  window.once("closed", () => {
+    pluginFrameBindings.clear()
+    trustedWebContents.delete(webContentsId)
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   window.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault()
   })
+  window.webContents.on("will-frame-navigate", (event) => {
+    if (event.isMainFrame) {
+      if (!isTrustedRendererUrl(event.url)) event.preventDefault()
+      return
+    }
+    const frame = event.frame
+    if (!frame) {
+      event.preventDefault()
+      return
+    }
+    const frameId = frame.frameTreeNodeId
+    const boundPluginId = webPluginFrameBindingForNavigation(frame.url, event.url, pluginFrameBindings.get(frameId))
+    if (boundPluginId && !pluginFrameBindings.has(frameId)) pluginFrameBindings.set(frameId, boundPluginId)
+    if (!isAllowedWebPluginFrameNavigation(frame.url, event.url, boundPluginId)) {
+      event.preventDefault()
+    }
+  })
+  window.webContents.on(
+    "did-frame-navigate",
+    (_event, url, _httpResponseCode, _httpStatusText, isMainFrame, frameProcessId, frameRoutingId) => {
+      if (isMainFrame) return
+      const pluginId = webPluginIdForAssetUrl(url)
+      const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
+      if (!pluginId || !frame) return
+      const bound = pluginFrameBindings.get(frame.frameTreeNodeId)
+      if (!bound) pluginFrameBindings.set(frame.frameTreeNodeId, pluginId)
+    },
+  )
   let closeGate: CloseGate = "idle"
   window.webContents.on("will-prevent-unload", () => {
     closeGate = "idle"
@@ -183,6 +243,7 @@ function startApplication() {
     if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
 
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
+    const projectCreationDirectory = desktopProjectWorkspaceDirectory(app.getPath("documents"))
     const projectManager = new NodeProjectManager({
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
@@ -192,6 +253,9 @@ function startApplication() {
       {},
       desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
     )
+    await pluginManager.reconcilePublicationState().catch((error) => {
+      console.warn("Could not fully reconcile Plugin package publication state", error)
+    })
     const companionStore = new ManagedPluginCompanionStore(join(userDataDirectory, "plugin-companions"))
     const generationEnvironment = generationPluginEnvironment(process.env)
     const toolPluginAuthorizations = new ToolPluginAuthorizationStore(
@@ -202,6 +266,9 @@ function startApplication() {
         resolveManagedExecutable: (pluginId, pluginVersion, command) =>
           companionStore.resolve(pluginId, pluginVersion, command),
       },
+    )
+    const pluginServiceAuthorizationCheckpoints = new PluginServiceAuthorizationCheckpointStore(
+      join(userDataDirectory, "plugin-service-authorization-checkpoints"),
     )
     const reconcileToolPluginExecutionState = async (
       installedPlugins: Awaited<ReturnType<typeof pluginManager.list>>,
@@ -215,6 +282,27 @@ function startApplication() {
         await toolPluginAuthorizations.reconcile(installedPlugins)
       } catch (error) {
         console.warn("Could not reconcile installed Tool Plugin authorizations", error)
+      }
+
+      const identities: Array<{ pluginId: string; serviceIdentity: string }> = []
+      const retainUnknownPluginIds: string[] = []
+      for (const plugin of installedPlugins) {
+        if (plugin.contributes.service === undefined) continue
+        try {
+          const serviceIdentity = await toolPluginAuthorizations.authorizedServiceIdentity(plugin)
+          if (serviceIdentity) identities.push({ pluginId: plugin.id, serviceIdentity })
+        } catch (error) {
+          // Keep a bounded recovery checkpoint when only identity inspection is
+          // unavailable. Runtime verification and checkpoint read still require
+          // an exact match before any Cookie can leave main.
+          retainUnknownPluginIds.push(plugin.id)
+          console.warn(`Could not inspect installed Tool Plugin service identity: ${plugin.id}`, error)
+        }
+      }
+      try {
+        await pluginServiceAuthorizationCheckpoints.reconcile(identities, retainUnknownPluginIds)
+      } catch (error) {
+        console.warn("Could not reconcile Plugin service authorization recovery state", error)
       }
     }
     for (const item of desktopBuiltinPluginCatalog) {
@@ -241,6 +329,25 @@ function startApplication() {
       new ProjectCanvasResourcePreparation(projectManager),
       canvasApplication,
     )
+    const managedCanvasMedia = new ManagedCanvasMediaResolver({
+      documents: canvasDocuments,
+      projects: projectManager,
+    })
+    const canvasExternalMediaDrag = new CanvasExternalMediaDragService({
+      createIcon: createCanvasExternalMediaDragIconFactory({
+        adapter: {
+          createFromBitmap: (buffer, options) => nativeImage.createFromBitmap(buffer, options),
+          createFromPath: (file) => nativeImage.createFromPath(file),
+          createThumbnailFromPath: (file, size) => nativeImage.createThumbnailFromPath(file, size),
+        },
+      }),
+      media: managedCanvasMedia,
+      onCleanupError: (error) => console.warn("Could not clean Canvas native drag media", error),
+      stagingRoot: join(userDataDirectory, "canvas-external-drags"),
+    })
+    void canvasExternalMediaDrag.initialize().catch((error) => {
+      console.warn("Could not initialize Canvas native drag media", error)
+    })
     const jianyingIntegration = new JianyingIntegrationService(
       createJianyingNativeAdapter({
         transport: new MacOSJianyingDeepLinkTransport(),
@@ -255,6 +362,7 @@ function startApplication() {
       documents: canvasDocuments,
       integration: jianyingIntegration,
       isEnabled: isJianyingEnabled,
+      media: managedCanvasMedia,
       projects: projectManager,
     })
     const ipcSecurity = {
@@ -274,6 +382,10 @@ function startApplication() {
       verifyAuthorization: ({ binding, bindingKind, plugin }) =>
         toolPluginAuthorizations.verify(plugin, bindingKind, binding),
     })
+    const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
+      pluginServiceAuthorizationCheckpoints,
+    )
+    const pluginServices = new PluginServiceHost(generationRuntime, pluginServiceBrowserAuthorization)
     const generation = new GenerationCanvasService({
       documents: canvasDocuments,
       projects: projectManager,
@@ -295,8 +407,8 @@ function startApplication() {
           renderer: canvasRenderer,
           resources: canvasResources,
         }),
-        createGenerationAgentToolProvider(generation, { excludedPluginIds: ["ffmpeg-tools"] }),
-        createFfmpegAgentToolProvider(generation, {
+        createGenerationAgentToolProvider(generation),
+        createPluginOperationAgentToolProvider(generation, {
           async resolveActiveCanvas() {
             const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
             return snapshot
@@ -333,6 +445,7 @@ function startApplication() {
     )
     const remoteCapabilities = new RemoteCapabilityInstaller({
       authorizationStore: toolPluginAuthorizations,
+      beforePluginPublish: (pluginId) => pluginServices.discardPlugin(pluginId),
       builtinPlugins: desktopBuiltinPluginCatalog,
       builtinSkills: desktopBuiltinSkillCatalog,
       companionStore,
@@ -367,9 +480,35 @@ function startApplication() {
       },
     )
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
-    const disposeProjectIpc = await registerProjectIpc(projectManager, ipcSecurity)
+    const disposeProjectIpc = await registerProjectIpc(projectManager, {
+      ...ipcSecurity,
+      projectCreationDirectory,
+    })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      onError: (error) => console.warn("Canvas native media drag failed", error),
+      onStartError: (_error, { senderId }) => {
+        if (!trustedWebContents.has(senderId)) return
+        void showCanvasExternalMediaDragStartFailure(canvasRenderer).catch((error) => {
+          console.warn("Could not show Canvas native media drag failure", error)
+        })
+      },
+      async resolveActiveCanvas(senderId) {
+        if (process.platform !== "darwin" || !trustedWebContents.has(senderId)) return null
+        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+        return snapshot
+          ? {
+              canvasId: snapshot.documentId,
+              revision: snapshot.revision,
+              scopeId: snapshot.scopeId,
+              selectedEdgeIds: snapshot.selectedEdgeIds,
+              selectedNodeIds: snapshot.selectedNodeIds,
+            }
+          : null
+      },
+    })
     const disposeGenerationIpc = registerGenerationIpc(
       {
         describeTool: (request) => generation.describeTool(request.toolId),
@@ -378,6 +517,9 @@ function startApplication() {
       },
       { isTrustedSender: ipcSecurity.isTrustedSender },
     )
+    const disposePluginServiceIpc = registerPluginServiceIpc(pluginServices, {
+      isTrustedSender: ipcSecurity.isTrustedSender,
+    })
     const disposeJianyingIpc = registerJianyingIpc(jianying, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       async resolveActiveCanvas() {
@@ -397,6 +539,7 @@ function startApplication() {
       ipcSecurity.isTrustedSender,
       remoteCapabilities,
       {
+        beforeChange: (pluginId) => pluginServices.discardPlugin(pluginId),
         prepareInstall: (plugin) => toolPluginAuthorizations.prepareInstall(plugin),
         revokeAuthorization: (pluginId) => toolPluginAuthorizations.revoke(pluginId),
         async onDidChange(pluginId) {
@@ -463,11 +606,20 @@ function startApplication() {
         disposeProjectIpc,
         disposeProjectCanvasIpc,
         disposeCanvasDocumentIpc,
+        disposeCanvasExternalMediaDragIpc,
         disposeGenerationIpc,
+        disposePluginServiceIpc,
         disposeJianyingIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
         disposeAgentIpc,
+        () => {
+          void canvasExternalMediaDrag.dispose().catch((error) => {
+            console.warn("Could not dispose Canvas native drag media", error)
+          })
+        },
+        () => pluginServices.dispose(),
+        () => pluginServiceBrowserAuthorization.dispose(),
         () => generationRuntime.dispose(),
         () => canvasRenderer.dispose(),
       ],
@@ -482,13 +634,22 @@ function startApplication() {
         .flushPendingWrites()
         .then(async () => {
           await agentRuntime.dispose()
+          await canvasExternalMediaDrag.dispose().catch((error) => {
+            console.warn("Could not dispose Canvas native drag media during shutdown", error)
+          })
+          // Browser authorization may be between exact-origin Cookie capture,
+          // checkpoint fsync, and sidecar persistence. Electron's will-quit
+          // cleanup is synchronous, so drain that handoff before disposing the
+          // shared sidecar runtime or allowing the process to exit.
+          await pluginServices.dispose()
+          await pluginServiceBrowserAuthorization.dispose()
           generationRuntime.dispose()
           quitGate = "approved"
           app.quit()
         })
         .catch((error) => {
           quitGate = "idle"
-          console.error("Convax stayed open because project files could not be saved", error)
+          console.error("Convax stayed open because shutdown work could not be completed", error)
         })
     })
 

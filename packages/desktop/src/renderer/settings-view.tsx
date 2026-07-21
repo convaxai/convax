@@ -1,20 +1,14 @@
-import {
-  Button,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  cn,
-} from "@convax/ui"
-import { ArrowLeft, Languages, Settings2, Sparkles } from "lucide-react"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
+import { ArrowLeft, Cloud, Languages, Settings2, Sparkles } from "lucide-react"
 import { useState } from "react"
-import type { WebPluginClient } from "../plugin-contracts"
+import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
+import { ServicesSurface } from "./plugin-services-view"
+import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-export type SettingsSection = "general" | "capabilities"
+export type SettingsSection = "general" | "services" | "capabilities"
 
 export interface SettingsViewProps {
   className?: string
@@ -23,7 +17,10 @@ export interface SettingsViewProps {
   locale: AppLocale
   onClose(): void
   onLanguageChange(preference: AppLanguagePreference): void
+  onRefreshServices(): void
+  onServiceAction(pluginId: string, action: WebPluginServiceAction): void
   pluginClient: WebPluginClient
+  serviceSnapshot: ServiceCatalogSnapshot
   skillClient: DesktopSkillClient
 }
 
@@ -43,15 +40,15 @@ function SettingsNavigationItem({
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium outline-none transition-colors",
-        active
-          ? "bg-accent text-accent-foreground"
-          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
         "focus-visible:ring-2 focus-visible:ring-ring/40",
       )}
       onClick={onClick}
       type="button"
     >
-      <span aria-hidden="true" className="[&>svg]:size-4">{icon}</span>
+      <span aria-hidden="true" className="[&>svg]:size-4">
+        {icon}
+      </span>
       {children}
     </button>
   )
@@ -78,10 +75,7 @@ function LanguageSettings({
             {appMessage(locale, "settings.languageDescription")}
           </span>
         </span>
-        <Select
-          onValueChange={(value) => onLanguageChange(value as AppLanguagePreference)}
-          value={languagePreference}
-        >
+        <Select onValueChange={(value) => onLanguageChange(value as AppLanguagePreference)} value={languagePreference}>
           <SelectTrigger
             aria-describedby="settings-language-description"
             aria-labelledby="settings-language-label"
@@ -107,12 +101,17 @@ export function SettingsView({
   locale,
   onClose,
   onLanguageChange,
+  onRefreshServices,
+  onServiceAction,
   pluginClient,
+  serviceSnapshot,
   skillClient,
 }: SettingsViewProps) {
   const [section, setSection] = useState<SettingsSection>(initialSection)
   const generalTitle = appMessage(locale, "settings.general")
+  const servicesTitle = appMessage(locale, "settings.services")
   const capabilitiesTitle = appMessage(locale, "settings.capabilities")
+  const sectionTitle = section === "general" ? generalTitle : section === "services" ? servicesTitle : capabilitiesTitle
 
   return (
     <section
@@ -126,8 +125,12 @@ export function SettingsView({
           {appMessage(locale, "settings.back")}
         </Button>
         <div className="px-3">
-          <h1 className="text-lg font-semibold" id="settings-view-title">{appMessage(locale, "settings.title")}</h1>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{appMessage(locale, "settings.localDescription")}</p>
+          <h1 className="text-lg font-semibold" id="settings-view-title">
+            {appMessage(locale, "settings.title")}
+          </h1>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {appMessage(locale, "settings.localDescription")}
+          </p>
         </div>
         <nav aria-label={appMessage(locale, "settings.title")} className="mt-5 space-y-1">
           <SettingsNavigationItem
@@ -136,6 +139,13 @@ export function SettingsView({
             onClick={() => setSection("general")}
           >
             {generalTitle}
+          </SettingsNavigationItem>
+          <SettingsNavigationItem
+            active={section === "services"}
+            icon={<Cloud />}
+            onClick={() => setSection("services")}
+          >
+            {servicesTitle}
           </SettingsNavigationItem>
           <SettingsNavigationItem
             active={section === "capabilities"}
@@ -154,13 +164,20 @@ export function SettingsView({
       <main className="min-w-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-8 py-8 lg:px-12">
           <header className="mb-6">
-            <h2 className="text-2xl font-semibold">{section === "general" ? generalTitle : capabilitiesTitle}</h2>
+            <h2 className="text-2xl font-semibold">{sectionTitle}</h2>
           </header>
           {section === "general" ? (
             <LanguageSettings
               languagePreference={languagePreference}
               locale={locale}
               onLanguageChange={onLanguageChange}
+            />
+          ) : section === "services" ? (
+            <ServicesSurface
+              locale={locale}
+              onAction={onServiceAction}
+              onRefresh={onRefreshServices}
+              snapshot={serviceSnapshot}
             />
           ) : (
             <CapabilityManagementSurface

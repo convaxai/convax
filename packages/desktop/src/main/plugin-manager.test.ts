@@ -55,6 +55,26 @@ async function writePackage(root: string, value: Record<string, unknown> = manif
   await fs.writeFile(path.join(root, "skills", "director", "SKILL.md"), "# Director\n")
 }
 
+const recoveryUuid1 = "00000000-0000-4000-8000-000000000001"
+const recoveryUuid2 = "00000000-0000-4000-8000-000000000002"
+
+function simpleBundle(version: string, content: string, id = "director-stage") {
+  return {
+    files: {
+      "index.html": content,
+      "manifest.json": JSON.stringify(manifest({ entry: "index.html", id, skill: undefined, version })),
+    },
+  }
+}
+
+async function writeSimplePackage(root: string, version: string, content: string, id = "director-stage") {
+  const bundle = simpleBundle(version, content, id)
+  await fs.mkdir(root, { recursive: true })
+  await Promise.all(
+    Object.entries(bundle.files).map(([relativePath, value]) => fs.writeFile(path.join(root, relativePath), value)),
+  )
+}
+
 function testBundleDigest(bundle: { files: Readonly<Record<string, string | Uint8Array>> }) {
   const digest = createHash("sha256")
   const files = Object.entries(bundle.files)
@@ -107,7 +127,7 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/3" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/4" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
@@ -177,7 +197,7 @@ describe("WebPluginManager", () => {
 
     const installed = await manager.install(source)
     expect(installed.id).toBe("director-stage")
-    expect(installed.contributes.canvas!.renderer.extensions).toEqual([".scene"])
+    expect(installed.contributes.canvas!.renderer?.extensions).toEqual([".scene"])
     expect(JSON.stringify(installed)).not.toContain(root)
     expect(await manager.list()).toEqual([installed])
     expect(await manager.resolveAsset("director-stage", "web/index.html")).toBe(
@@ -396,6 +416,136 @@ describe("WebPluginManager", () => {
     expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
       "new application",
     )
+  })
+
+  test("restores the unique validated backup after a crash between the two update renames", async () => {
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "old application"))
+    const target = path.join(installRoot, "director-stage")
+    const backup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid1}`)
+    const staging = path.join(installRoot, `.staging-bundle-${recoveryUuid2}`)
+    await fs.rename(target, backup)
+    await writeSimplePackage(staging, "2.0.0", "unpublished application")
+
+    await manager.reconcilePublicationState()
+
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "old application",
+    )
+    expect(await manager.list()).toEqual([expect.objectContaining({ id: "director-stage", version: "1.0.0" })])
+    expect(await fs.readdir(installRoot)).toEqual(["director-stage"])
+  })
+
+  test("keeps a valid canonical update and removes its validated stale backup", async () => {
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "old application"))
+    const target = path.join(installRoot, "director-stage")
+    const backup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid1}`)
+    await fs.rename(target, backup)
+    await manager.installBundle(simpleBundle("2.0.0", "published application"))
+
+    await manager.reconcilePublicationState()
+
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "published application",
+    )
+    expect(await fs.readdir(installRoot)).toEqual(["director-stage"])
+  })
+
+  test("does not guess between ambiguous backups or trust invalid transaction remnants", async () => {
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "first backup"))
+    const target = path.join(installRoot, "director-stage")
+    const firstBackup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid1}`)
+    const secondBackup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid2}`)
+    await fs.rename(target, firstBackup)
+    await writeSimplePackage(secondBackup, "0.9.0", "second backup")
+
+    await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" })
+    expect((await fs.lstat(firstBackup)).isDirectory()).toBe(true)
+    expect((await fs.lstat(secondBackup)).isDirectory()).toBe(true)
+
+    await fs.rm(secondBackup, { recursive: true })
+    const mismatched = path.join(installRoot, `.replaced-director-stage-${recoveryUuid2}`)
+    await writeSimplePackage(mismatched, "3.0.0", "wrong identity", "different-plugin")
+    await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" })
+    expect((await fs.lstat(firstBackup)).isDirectory()).toBe(true)
+    expect((await fs.lstat(mismatched)).isDirectory()).toBe(true)
+  })
+
+  test("rejects symlink remnants without disturbing a valid canonical package", async () => {
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("2.0.0", "canonical application"))
+    const outside = path.join(root, "outside")
+    await writeSimplePackage(outside, "3.0.0", "outside application")
+    const staging = path.join(installRoot, `.staging-director-stage-${recoveryUuid1}`)
+    await fs.symlink(outside, staging)
+    const arbitrary = path.join(installRoot, ".replaced-director-stage-not-a-host-uuid")
+    await writeSimplePackage(arbitrary, "4.0.0", "arbitrary application")
+
+    await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "canonical application",
+    )
+    expect((await fs.lstat(staging)).isSymbolicLink()).toBe(true)
+    expect((await fs.lstat(arbitrary)).isDirectory()).toBe(true)
+  })
+
+  test("restores only a provenance-verified built-in backup", async () => {
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const bundle = simpleBundle("1.0.0", "trusted built-in")
+    const manager = new WebPluginManager(installRoot, {}, ["director-stage"])
+    await manager.installOrUpdateBuiltinBundle(bundle)
+    const target = path.join(installRoot, "director-stage")
+    const backup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid1}`)
+    await fs.rename(target, backup)
+
+    await manager.reconcilePublicationState()
+    expect(await manager.isBuiltinBundleInstalled(bundle)).toBe(true)
+    expect(await manager.list()).toEqual([
+      expect.objectContaining({ id: "director-stage", trustedBuiltin: true, version: "1.0.0" }),
+    ])
+
+    await fs.rename(target, backup)
+    await fs.rm(path.join(backup, ".convax-builtin.json"))
+    await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("reports cleanup failure without replacing the canonical package and retries safely", async () => {
+    if (process.platform === "win32") return
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "old application"))
+    const target = path.join(installRoot, "director-stage")
+    const backup = path.join(installRoot, `.replaced-director-stage-${recoveryUuid1}`)
+    await fs.rename(target, backup)
+    await manager.installBundle(simpleBundle("2.0.0", "canonical application"))
+    await fs.chmod(installRoot, 0o500)
+    try {
+      await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    } finally {
+      await fs.chmod(installRoot, 0o700)
+    }
+
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
+      "canonical application",
+    )
+    expect((await fs.lstat(backup)).isDirectory()).toBe(true)
+    await manager.reconcilePublicationState()
+    await expect(fs.lstat(backup)).rejects.toMatchObject({ code: "ENOENT" })
   })
 
   test("rejects unsafe bundle names and file-directory collisions", async () => {

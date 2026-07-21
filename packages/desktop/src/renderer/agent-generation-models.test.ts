@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test"
 import type { GenerationToolSummary } from "../generation-contracts"
 import {
   AgentGenerationCatalogRequestTracker,
+  agentGenerationModelDisplayTitle,
   agentGenerationToolsForOutput,
   createAgentPromptInstructions,
   findAgentGenerationTool,
+  groupAgentGenerationToolsByService,
   reconcileAgentGenerationToolSelection,
 } from "./agent-generation-models"
 
@@ -13,6 +15,8 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     acceptedInputs: [],
     description: "Generate an image",
     id: "plugin.example:image.generate",
+    kind: "model",
+    modelName: "Example Image Model",
     output: "image",
     pluginId: "plugin.example",
     pluginName: "Example Plugin",
@@ -35,15 +39,39 @@ describe("Agent generation models", () => {
     expect(agentGenerationToolsForOutput(tools, "audio")).toEqual([])
   })
 
-  test("keeps FFmpeg direct Plugin tools out of the generation-model preference menu", () => {
-    const ffmpeg = tool({
-      id: "ffmpeg-tools/run.video",
+  test("keeps operation plugins out of model preferences", () => {
+    const operation = tool({
+      id: "media-tools/transform.video",
+      kind: "operation",
+      modelName: undefined,
       output: "video",
-      pluginId: "ffmpeg-tools",
-      toolId: "run.video",
+      pluginId: "media-tools",
+      pluginName: "Media Tools",
+      title: "Transform video",
+      toolId: "transform.video",
     })
-    expect(agentGenerationToolsForOutput([ffmpeg], "video")).toEqual([])
-    expect(findAgentGenerationTool({ id: ffmpeg.id, output: "video" }, [ffmpeg])).toBeUndefined()
+    expect(agentGenerationToolsForOutput([operation], "video")).toEqual([])
+    expect(findAgentGenerationTool({ id: operation.id, output: "video" }, [operation])).toBeUndefined()
+  })
+
+  test("groups declaratively named models under their generation service", () => {
+    const tools = [
+      tool({ modelName: "GPT Image 2", pluginId: "skylark", pluginName: "小云雀生成" }),
+      tool({ id: "skylark:nano", modelName: "Nano Banana Pro 1", pluginId: "skylark", pluginName: "小云雀生成" }),
+      tool({ id: "dreamina:seedream", modelName: "Seedream 4", pluginId: "dreamina", pluginName: "即梦" }),
+    ]
+
+    const services = groupAgentGenerationToolsByService(tools, "image")
+    expect(services.map(({ id, models, name }) => ({ id, modelIds: models.map((model) => model.id), name }))).toEqual([
+      {
+        id: "skylark",
+        modelIds: ["plugin.example:image.generate", "skylark:nano"],
+        name: "小云雀生成",
+      },
+      { id: "dreamina", modelIds: ["dreamina:seedream"], name: "即梦" },
+    ])
+    expect(agentGenerationModelDisplayTitle(services[0].models[0])).toBe("GPT Image 2")
+    expect(agentGenerationModelDisplayTitle(services[1].models[0])).toBe("Seedream 4")
   })
 
   test("fails a remembered choice closed when its installed id or output changes", () => {

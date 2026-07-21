@@ -185,13 +185,14 @@ describe("provisionDefaultCapabilities", () => {
     })
   })
 
-  test("does not repeat remote installation on later startups", async () => {
+  test("keeps a present default remote Plugin current on later startups", async () => {
     const input = await setupRemote()
     await provisionDefaultCapabilities(input)
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
 
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenLastCalledWith("ffmpeg-tools", { allowCurrent: true })
     expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
   })
 
@@ -201,12 +202,24 @@ describe("provisionDefaultCapabilities", () => {
     input.removeInstalledSkill()
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
     expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
 
     input.removeInstalledPlugin()
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
+    expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
+  })
+
+  test("keeps an installed default usable when its silent update fails", async () => {
+    const input = await setupRemote()
+    await provisionDefaultCapabilities(input)
+    const failure = new Error("registry unavailable")
+    input.failInstall(failure)
+
+    expect(await provisionDefaultCapabilities(input)).toEqual({
+      failures: [{ error: failure, id: "ffmpeg-tools", kind: "plugin" }],
+    })
     expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
   })
 

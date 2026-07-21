@@ -5,11 +5,12 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import { SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
-import { Check, LoaderCircle } from "lucide-react"
+import { Check, ChevronRight, LoaderCircle } from "lucide-react"
 import { useEffect, useId, useRef } from "react"
 import {
   agentGenerationOutputs,
-  agentGenerationToolsForOutput,
+  agentGenerationModelDisplayTitle,
+  groupAgentGenerationToolsByService,
   type AgentGenerationOutput,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
@@ -45,7 +46,10 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     panelId: `${instanceId}-agent-generation-model-panel-${output}`,
     value: output,
   })) satisfies readonly SegmentedTabItem<AgentGenerationOutput>[]
-  const tools = agentGenerationToolsForOutput(props.tools, props.activeOutput)
+  const services = groupAgentGenerationToolsByService(props.tools, props.activeOutput)
+  const selectedServiceId = services.find((service) =>
+    service.models.some((model) => model.id === props.selected?.id && model.output === props.selected?.output),
+  )?.id
   const activeTab = outputTabs.find((tab) => tab.value === props.activeOutput)!
 
   useEffect(() => {
@@ -71,7 +75,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     >
       <div className="mb-2 flex items-center justify-between px-1">
         <span className="text-sm font-semibold">Models</span>
-        <span className="text-[10px] text-muted-foreground">Installed tools</span>
+        <span className="text-[10px] text-muted-foreground">Generation services</span>
       </div>
       <SegmentedTabs
         aria-label="Generation media type"
@@ -106,31 +110,46 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
             </div>
           ) : props.error ? (
             <div className="px-2.5 py-3 text-xs text-destructive">{props.error}</div>
-          ) : tools.length === 0 ? (
+          ) : services.length === 0 ? (
             <div className="px-2.5 py-3 text-xs text-muted-foreground">
-              No installed {outputLabels[props.activeOutput].toLocaleLowerCase()} generation tools.
+              No installed {outputLabels[props.activeOutput].toLocaleLowerCase()} generation services.
             </div>
           ) : (
-            tools.map((tool) => {
-              const selected = props.selected?.id === tool.id && props.selected.output === tool.output
-              return (
-                <button
-                  aria-checked={selected}
-                  aria-label={`${tool.title} by ${tool.pluginName}`}
-                  className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                  key={tool.id}
-                  onClick={() => props.onSelect({ id: tool.id, output: props.activeOutput })}
-                  role="radio"
-                  type="button"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{tool.title}</span>
-                    <span className="block truncate text-[10px] text-muted-foreground">{tool.pluginName}</span>
+            services.map((service) => (
+              <details
+                className="group/service rounded-xl border border-transparent open:border-border/60 open:bg-muted/25"
+                key={service.id}
+                open={services.length === 1 || selectedServiceId === service.id}
+              >
+                <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-2.5 py-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/service:rotate-90" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{service.name}</span>
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                    {service.models.length}
                   </span>
-                  {selected ? <Check className="size-4 shrink-0" /> : null}
-                </button>
-              )
-            })
+                </summary>
+                <div className="mb-1 ml-4 border-l border-border/70 pl-2">
+                  {service.models.map((tool) => {
+                    const selected = props.selected?.id === tool.id && props.selected.output === tool.output
+                    const modelName = agentGenerationModelDisplayTitle(tool)
+                    return (
+                      <button
+                        aria-checked={selected}
+                        aria-label={`${modelName} by ${tool.pluginName}`}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                        key={tool.id}
+                        onClick={() => props.onSelect({ id: tool.id, output: props.activeOutput })}
+                        role="radio"
+                        type="button"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-sm">{modelName}</span>
+                        {selected ? <Check className="size-4 shrink-0" /> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              </details>
+            ))
           )}
         </div>
       </div>

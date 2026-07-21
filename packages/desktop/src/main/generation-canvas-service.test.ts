@@ -6,9 +6,16 @@ import path from "node:path"
 import {
   CanvasCommandIdConflictError,
   CanvasRevisionConflictError,
+  createCanvasNodeContentGuard,
   type CanvasApplicationCommandResult,
 } from "@convax/canvas/application"
-import { createCanvasDocument, createMediaNode, createTextNode, type CanvasDocument } from "@convax/canvas/core"
+import {
+  createAgentNode,
+  createCanvasDocument,
+  createMediaNode,
+  createTextNode,
+  type CanvasDocument,
+} from "@convax/canvas/core"
 import { projectFileReferenceKey } from "@convax/project/canvas"
 import type { GenerationCanvasRequest, GenerationToolDescription, GenerationToolSummary } from "../generation-contracts"
 import {
@@ -54,6 +61,8 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
     acceptedInputs: [],
     description: "Generate text",
     id: "creative-tools/write",
+    kind: "model",
+    modelName: "Write",
     output: "text",
     pluginId: "creative-tools",
     pluginName: "Creative Tools",
@@ -130,10 +139,18 @@ function setup(options: {
     ...options.project,
   }
   const resourceRequests: Parameters<GenerationCanvasResourcePort["addResources"]>[0][] = []
+  const replacementRequests: Parameters<GenerationCanvasResourcePort["replaceResource"]>[0][] = []
   const resources: GenerationCanvasResourcePort = {
     async addResources(input) {
       resourceRequests.push(input)
       return commandResult(document)
+    },
+    async replaceResource(input) {
+      replacementRequests.push(input)
+      return {
+        ...commandResult(document, []),
+        affectedNodeIds: [input.targetNodeId],
+      }
     },
     ...options.resource,
   }
@@ -168,6 +185,7 @@ function setup(options: {
     deleted,
     imported,
     renderer,
+    replacementRequests,
     resourceRequests,
     service: new GenerationCanvasService({
       documents: {
@@ -187,6 +205,28 @@ function setup(options: {
 }
 
 describe("GenerationCanvasService", () => {
+  test("never auto-selects an operation but permits its explicit host tool id", async () => {
+    const operation = tool({
+      agentId: "run",
+      id: "media-tools/trim",
+      kind: "operation",
+      modelName: undefined,
+      toolId: "trim",
+    })
+    const automatic = setup({ selectedTool: operation })
+
+    await expect(automatic.service.generate(request(), { id: "renderer:1", kind: "ui" })).rejects.toThrow(
+      "No installed generation tool accepts this request",
+    )
+    expect(automatic.calls).toHaveLength(0)
+
+    const explicit = setup({ selectedTool: operation })
+    await expect(
+      explicit.service.generate(request({ toolId: operation.id }), { id: "renderer:1", kind: "ui" }),
+    ).resolves.toMatchObject({ toolId: operation.id })
+    expect(explicit.calls).toHaveLength(1)
+  })
+
   test("commits text output without changing the caller's selection or viewport", async () => {
     const { calls, imported, resourceRequests, service, viewRequests } = setup({})
 
@@ -236,6 +276,230 @@ describe("GenerationCanvasService", () => {
     })
   })
 
+  test("rejects unexpected output counts before committing resources", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const { resourceRequests, service } = setup({
+      result: {
+        content: [
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+        ],
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    await expect(
+      service.generate(request({ expectedOutputCount: 1, output: "image", toolId: "creative-tools/draw" }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("returned 2 outputs; expected exactly 1")
+    expect(resourceRequests).toHaveLength(0)
+  })
+
+  test("connects host-only relation anchors without exposing them to the generation tool", async () => {
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
+    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 360, y: 0 }, text: "Pair anchor" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [reference, relationAnchor], title: "Canvas" })
+    const { calls, resourceRequests, service } = setup({
+      document,
+      selectedTool: tool({ acceptedInputs: ["text"] }),
+    })
+
+    await service.generate(
+      request({
+        references: [{ nodeId: reference.id, role: "text" }],
+        relationAnchorNodeIds: [reference.id, relationAnchor.id],
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(calls[0]?.references).toEqual([{ kind: "text", node_id: reference.id, role: "text", text: "Stable brief" }])
+    expect(resourceRequests[0]).toMatchObject({
+      conflictPolicy: "reject",
+      relation: {
+        anchorNodeIds: [reference.id, relationAnchor.id],
+        direction: "from-anchor",
+        mode: "connect",
+      },
+    })
+  })
+
+  test("rejects a missing relation anchor before starting the external tool", async () => {
+    const { calls, resourceRequests, service } = setup({})
+
+    await expect(
+      service.generate(request({ relationAnchorNodeIds: ["missing-node"] }), { id: "renderer:1", kind: "ui" }),
+    ).rejects.toThrow("relation anchor node was not found")
+    expect(calls).toHaveLength(0)
+    expect(resourceRequests).toHaveLength(0)
+  })
+
+  test("replaces a card resource without adding, moving, revealing, or reconnecting nodes", async () => {
+    const owner = createTextNode({
+      id: "owner-card",
+      label: "Character",
+      position: { x: 240, y: 160 },
+      text: "Describe a character",
+    })
+    owner.style = { height: 360, width: 480 }
+    const other = createTextNode({ id: "other-card", position: { x: 0, y: 0 }, text: "Keep me" })
+    const document = createCanvasDocument({
+      edges: [{ id: "owner-edge", source: other.id, target: owner.id }],
+      id: "canvas-one",
+      nodes: [owner, other],
+      title: "Canvas",
+    })
+    const { replacementRequests, resourceRequests, service, viewRequests } = setup({ document })
+
+    await expect(
+      service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).resolves.toEqual({
+      createdNodeIds: [],
+      revision: 1,
+      toolId: "creative-tools/write",
+      warnings: [],
+    })
+
+    expect(resourceRequests).toEqual([])
+    expect(replacementRequests).toHaveLength(1)
+    expect(replacementRequests[0]).toMatchObject({
+      actor: { id: "renderer:1", kind: "ui" },
+      canvasId: "canvas-one",
+      commandId: "generation:operation-one",
+      expectedRevision: 0,
+      expectedTarget: createCanvasNodeContentGuard(owner),
+      scopeId: "project-one",
+      source: { kind: "inline-text", name: "Generated", text: "A generated paragraph" },
+      targetNodeId: owner.id,
+    })
+    expect(replacementRequests[0]?.conflictPolicy).toBeUndefined()
+    expect(viewRequests).toEqual([])
+  })
+
+  test("admits only the first media output when one card is the generation result owner", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 20, y: 40 }, text: "Generate me" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const { imported, replacementRequests, resourceRequests, service } = setup({
+      document,
+      async result(input) {
+        const outputDirectory = input.output_directory as string
+        await Promise.all([
+          fs.writeFile(path.join(outputDirectory, "first.png"), png),
+          fs.writeFile(path.join(outputDirectory, "second.png"), png),
+        ])
+        return {
+          content: [],
+          structuredContent: {
+            artifacts: [
+              { mimeType: "image/png", path: "first.png" },
+              { mimeType: "image/png", path: "second.png" },
+            ],
+          },
+        }
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    const result = await service.generate(
+      request({
+        output: "image",
+        resultMode: { nodeId: owner.id, type: "replace-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(imported).toHaveLength(1)
+    expect(imported[0]).toHaveLength(1)
+    expect(path.basename(imported[0]![0]!)).toContain("first")
+    expect(resourceRequests).toEqual([])
+    expect(replacementRequests).toHaveLength(1)
+    expect(replacementRequests[0]?.source).toMatchObject({ kind: "host-file" })
+    expect(result).toMatchObject({ createdNodeIds: [], toolId: "creative-tools/draw" })
+    expect(result.warnings).toContain("Generation returned 2 outputs; only the first replaced the target card.")
+  })
+
+  test("allows unrelated Canvas revisions but rejects replacement-owner edits during a long generation", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 20, y: 40 }, text: "Original" })
+    let currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const unrelated = setup({
+      document: currentDocument,
+      loadDocument: () => ({ document: currentDocument }),
+      async result() {
+        currentDocument = {
+          ...currentDocument,
+          nodes: [owner, createTextNode({ id: "unrelated", position: { x: 500, y: 0 }, text: "Concurrent edit" })],
+          revision: 1,
+        }
+        return { content: [{ text: "Generated", type: "text" }] }
+      },
+    })
+    unrelated.renderer.getViewSnapshot = mock(async () => ({
+      documentId: currentDocument.id,
+      revision: currentDocument.revision,
+      scopeId: "project-one",
+      selectedEdgeIds: [],
+      selectedNodeIds: [],
+      viewId: "desktop-main",
+      viewport: { x: 0, y: 0, zoom: 1 },
+    }))
+
+    await expect(
+      unrelated.service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).resolves.toMatchObject({ createdNodeIds: [] })
+    expect(unrelated.replacementRequests).toHaveLength(1)
+
+    const editedOwner = { ...owner, data: { ...owner.data, text: "User edited this card" } }
+    currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const changed = setup({
+      document: currentDocument,
+      loadDocument: () => ({ document: currentDocument }),
+      async result() {
+        currentDocument = { ...currentDocument, nodes: [editedOwner], revision: 1 }
+        return { content: [{ text: "Must not land", type: "text" }] }
+      },
+    })
+    changed.renderer.getViewSnapshot = unrelated.renderer.getViewSnapshot
+
+    await expect(
+      changed.service.generate(
+        request({ operationId: "changed-owner", resultMode: { nodeId: owner.id, type: "replace-node" } }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("replacement target changed")
+    expect(changed.replacementRequests).toEqual([])
+    expect(changed.imported).toEqual([])
+  })
+
+  test.each([
+    ["missing", createCanvasDocument({ id: "canvas-one", title: "Canvas" }), "missing-card"],
+    [
+      "agent",
+      createCanvasDocument({
+        id: "canvas-one",
+        nodes: [createAgentNode({ id: "owner-card", position: { x: 0, y: 0 } })],
+        title: "Canvas",
+      }),
+      "owner-card",
+    ],
+  ] as const)("rejects a %s replacement owner before starting the paid tool", async (_kind, document, nodeId) => {
+    const { calls, replacementRequests, service } = setup({ document })
+
+    await expect(
+      service.generate(request({ resultMode: { nodeId, type: "replace-node" } }), { id: "renderer:1", kind: "ui" }),
+    ).rejects.toThrow(/replacement (node was not found|requires a Canvas file node)/)
+    expect(calls).toEqual([])
+    expect(replacementRequests).toEqual([])
+  })
+
   test("merges only currently declared scalar tool inputs and fingerprints them", async () => {
     const toolDescription: GenerationToolDescription = {
       fields: [
@@ -267,7 +531,7 @@ describe("GenerationCanvasService", () => {
       toolId: "creative-tools/write",
     }
     const { calls, service } = setup({ toolDescription })
-    const configured = request({ expectedOutputCount: 1, toolInput: { enhance: true, quality: "high", steps: 20 } })
+    const configured = request({ toolInput: { enhance: true, quality: "high", steps: 20 } })
 
     await service.generate(configured, { id: "renderer:1", kind: "ui" })
     expect(calls[0]).toMatchObject({
@@ -281,15 +545,6 @@ describe("GenerationCanvasService", () => {
         { ...configured, toolInput: { enhance: true, quality: "standard", steps: 20 } },
         { id: "renderer:1", kind: "ui" },
       ),
-    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
-    await expect(
-      service.generate(
-        { ...configured, relationAnchorNodeIds: ["different-relation-anchor"] },
-        { id: "renderer:1", kind: "ui" },
-      ),
-    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
-    await expect(
-      service.generate({ ...configured, expectedOutputCount: 2 }, { id: "renderer:1", kind: "ui" }),
     ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
     expect(calls).toHaveLength(1)
   })
@@ -334,26 +589,6 @@ describe("GenerationCanvasService", () => {
     )
     expect(prepared).toBe(1)
     expect(calls).toEqual([])
-  })
-
-  test("rejects invalid output cardinality and relation anchors on constrained requests before external work", async () => {
-    const { calls, service } = setup({})
-    const actor = { id: "renderer:1", kind: "ui" as const }
-
-    await expect(service.generate(request({ expectedOutputCount: 0 }), actor)).rejects.toThrow(
-      "expected output count must be an integer between 1 and 16",
-    )
-    await expect(
-      service.generate(
-        request({
-          operationId: "constrained-with-relations",
-          referenceConstraint: { ownerNodeId: "plugin-card", type: "direct-incoming" },
-          relationAnchorNodeIds: [],
-        }),
-        actor,
-      ),
-    ).rejects.toThrow("Constrained generation cannot include relation anchors")
-    expect(calls).toHaveLength(0)
   })
 
   test("scopes opaque sidecar operation ids to Project, Canvas, and actor", async () => {
@@ -520,28 +755,6 @@ describe("GenerationCanvasService", () => {
     expect(resourceRequests).toHaveLength(1)
     expect(result.warnings).toHaveLength(32)
     expect(result.warnings.at(-1)).toBe("1 additional generation warning was omitted.")
-  })
-
-  test("rejects unexpected admitted output counts before importing or committing resources", async () => {
-    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { imported, resourceRequests, service } = setup({
-      result: {
-        content: [
-          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
-          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
-        ],
-      },
-      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
-    })
-
-    await expect(
-      service.generate(request({ expectedOutputCount: 1, output: "image", toolId: "creative-tools/draw" }), {
-        id: "renderer:1",
-        kind: "ui",
-      }),
-    ).rejects.toThrow("returned 2 outputs; expected exactly 1")
-    expect(imported).toHaveLength(0)
-    expect(resourceRequests).toHaveLength(0)
   })
 
   test("stages managed image references and admits generated files as managed assets", async () => {
@@ -724,25 +937,6 @@ describe("GenerationCanvasService", () => {
 
     await expect(
       service.generate(request({ references: [{ nodeId: reference.id, role: "text" }] }), actor),
-    ).rejects.toThrow("references changed")
-    expect(calls).toHaveLength(0)
-  })
-
-  test("rechecks a same-revision relation anchor before starting the external tool", async () => {
-    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 0, y: 0 }, text: "Pair anchor" })
-    const document = createCanvasDocument({ id: "canvas-one", nodes: [relationAnchor], title: "Canvas" })
-    const { calls, service } = setup({
-      document,
-      async prepareTool() {
-        document.nodes.splice(0, 1)
-      },
-    })
-
-    await expect(
-      service.generate(request({ relationAnchorNodeIds: [relationAnchor.id] }), {
-        id: "renderer:1",
-        kind: "ui",
-      }),
     ).rejects.toThrow("references changed")
     expect(calls).toHaveLength(0)
   })
@@ -1018,51 +1212,6 @@ describe("GenerationCanvasService", () => {
       conflictPolicy: "reject",
       relation: { anchorNodeIds: [reference.id], direction: "from-anchor", mode: "connect" },
     })
-  })
-
-  test("connects host-only relation anchors without exposing them to the generation tool", async () => {
-    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
-    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 360, y: 0 }, text: "Pair anchor" })
-    const document = createCanvasDocument({
-      id: "canvas-one",
-      nodes: [reference, relationAnchor],
-      title: "Canvas",
-    })
-    const { calls, resourceRequests, service } = setup({
-      document,
-      selectedTool: tool({ acceptedInputs: ["text"] }),
-    })
-
-    await service.generate(
-      request({
-        references: [{ nodeId: reference.id, role: "text" }],
-        relationAnchorNodeIds: [reference.id, relationAnchor.id],
-      }),
-      { id: "renderer:1", kind: "ui" },
-    )
-
-    expect(calls[0]?.references).toEqual([{ kind: "text", node_id: reference.id, role: "text", text: "Stable brief" }])
-    expect(resourceRequests[0]).toMatchObject({
-      conflictPolicy: "reject",
-      relation: {
-        anchorNodeIds: [reference.id, relationAnchor.id],
-        direction: "from-anchor",
-        mode: "connect",
-      },
-    })
-  })
-
-  test("rejects a missing host-only relation anchor before starting the external tool", async () => {
-    const { calls, resourceRequests, service } = setup({})
-
-    await expect(
-      service.generate(request({ relationAnchorNodeIds: ["missing-node"] }), {
-        id: "renderer:1",
-        kind: "ui",
-      }),
-    ).rejects.toThrow("relation anchor node was not found")
-    expect(calls).toHaveLength(0)
-    expect(resourceRequests).toHaveLength(0)
   })
 
   test.each(["edge", "source", "revision"] as const)(

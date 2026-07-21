@@ -70,6 +70,38 @@ describe("ProjectController", () => {
     controller.dispose()
   })
 
+  test("trims, creates, and activates a new project only when selection succeeds", async () => {
+    const created: ProjectRecord = { createdAt: 3, id: "three", lastOpenedAt: 3, name: "Storyboard", rootPath: "/three" }
+    const createProject = mock(async (): Promise<ProjectSelectionResult> => ({
+      canceled: false,
+      project: created,
+      projects: [...projects, created],
+    }))
+    const controller = new ProjectController(createClient({ createProject }))
+    await controller.initialize()
+
+    expect(await controller.createProject("  Storyboard  ")).toBe(true)
+    expect(createProject).toHaveBeenCalledWith({ name: "Storyboard" })
+    expect(controller.getSnapshot().activeProjectId).toBe("three")
+    controller.dispose()
+  })
+
+  test("reports a failed creation without closing over the current project", async () => {
+    const createProject = mock(async (): Promise<ProjectSelectionResult> => {
+      throw new Error("Project already exists: Storyboard")
+    })
+    const controller = new ProjectController(createClient({ createProject }))
+    await controller.initialize()
+
+    expect(await controller.createProject("Storyboard")).toBe(false)
+    expect(controller.getSnapshot()).toMatchObject({
+      activeProjectId: "one",
+      error: "Project already exists: Storyboard",
+      projects,
+    })
+    controller.dispose()
+  })
+
   test("selects the next available project after forgetting the active one", async () => {
     const forgetProject = mock(async () => ({ projects: [projects[1]!], removed: true }))
     const beforeActiveProjectChange = mock(async () => undefined)

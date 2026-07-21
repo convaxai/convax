@@ -128,6 +128,21 @@ function generationPluginManifest(): WebPluginManifest {
   })
 }
 
+function declarativePluginManifest(): WebPluginManifest {
+  const legacy = generationPluginManifest()
+  return {
+    ...legacy,
+    contributes: {
+      ...legacy.contributes,
+      generation: {
+        models: [{ name: "Example Image 1", tool: "generate-image" }],
+        tools: legacy.contributes.generation!.tools,
+      },
+    },
+    schema: "convax.plugin/3",
+  }
+}
+
 function companion(overrides: Record<string, unknown> = {}) {
   return {
     command: "example-image-tool",
@@ -284,7 +299,7 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
-  test("accepts strict Plugin host/schema v1 and generation v2 compatibility pairs", () => {
+  test("accepts strict Plugin host/schema compatibility pairs through declarative v3", () => {
     const generationManifest = generationPluginManifest()
     const parsed = parseRemoteCapabilityRegistry(
       registry([
@@ -301,6 +316,19 @@ describe("parseRemoteCapabilityRegistry", () => {
         runtime: { command: "example-image-tool", type: "mcp-stdio" },
         schema: "convax.plugin/2",
       },
+    })
+
+    const declarative = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-host/3", pluginSchema: "convax.plugin/3" },
+          manifest: declarativePluginManifest(),
+        }),
+      ]),
+    )
+    expect(declarative.packages[0]).toMatchObject({
+      compatibility: { pluginHost: "convax.plugin-host/3", pluginSchema: "convax.plugin/3" },
+      manifest: { schema: "convax.plugin/3" },
     })
   })
 

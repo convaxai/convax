@@ -24,6 +24,7 @@ import type {
   AgentCapabilities,
   AgentMessage,
   AgentMessagePart,
+  AgentModelCatalog,
   AgentPermissionRequest,
   AgentQuestionRequest,
   AgentRuntime,
@@ -1003,6 +1004,30 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       description: skill.description,
       location: skill.location,
     }))
+  }
+
+  async listModels(input: AgentRuntimeDirectoryInput): Promise<AgentModelCatalog> {
+    const directory = workspaceDirectory(input.directory)
+    const client = await this.getClient()
+    const catalog = unwrap(await client.provider.list({ directory }), "List OpenCode models")
+    const connectedProviderIds = new Set(catalog.connected)
+
+    return {
+      providers: catalog.all.map((provider) => {
+        const defaultModelId = catalog.default[provider.id]
+        return {
+          connected: connectedProviderIds.has(provider.id),
+          defaultModelId,
+          models: Object.values(provider.models).map((model) => ({
+            default: model.id === defaultModelId,
+            modelId: model.id,
+            modelName: model.name,
+          })),
+          providerId: provider.id,
+          providerName: provider.name,
+        }
+      }),
+    }
   }
 
   async listCapabilities(input: AgentRuntimeDirectoryInput): Promise<AgentCapabilities> {
