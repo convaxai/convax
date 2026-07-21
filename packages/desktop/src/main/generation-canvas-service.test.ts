@@ -13,15 +13,18 @@ import {
   createAgentNode,
   createCanvasDocument,
   createMediaNode,
-  createTextNode,
+  createTextNode as createCanvasTextNode,
   type CanvasDocument,
 } from "@convax/canvas/core"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 import type { GenerationCanvasRequest, GenerationToolDescription, GenerationToolSummary } from "../generation-contracts"
 import {
   GenerationCanvasService,
+  type GenerationCanvasFilePublisherPort,
+  type GenerationCanvasManagedAssetPort,
   type GenerationCanvasProjectPort,
   type GenerationCanvasResourcePort,
+  type GenerationCanvasServiceOptions,
   type PreparedGenerationToolExecution,
   type GenerationToolExecutionPort,
 } from "./generation-canvas-service"
@@ -32,10 +35,67 @@ import { validateGenerationToolInput } from "./generation-tool-input-schema"
 
 const temporaryDirectories: string[] = []
 
+function managedReference(
+  name = "reference.png",
+  sha256 = "a".repeat(64),
+  mediaType = "image/png",
+): Extract<ProjectResourceReference, { kind: "managed-asset" }> {
+  return { kind: "managed-asset", mediaType, name, sha256 }
+}
+
+function projectFileReference(path: string): Extract<ProjectResourceReference, { kind: "project-file" }> {
+  return { kind: "project-file", path }
+}
+
+function createTextNode(input: { id: string; position: { x: number; y: number }; text?: string }) {
+  const text = input.text ?? ""
+  return createCanvasTextNode({
+    id: input.id,
+    metadata: {
+      [projectResourceReferenceKey]: projectFileReference(`References/${input.id}.md`),
+    },
+    mimeType: "text/markdown",
+    name: `${input.id}.md`,
+    position: input.position,
+    resourceState: { contentRevision: "runtime-only", status: "ready", text },
+  })
+}
+
 async function temporaryDirectory() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-generation-service-test-"))
   temporaryDirectories.push(directory)
   return directory
+}
+
+async function writeProjectTextReferences(root: string, entries: Record<string, string>) {
+  await fs.mkdir(path.join(root, "References"), { recursive: true })
+  for (const [id, text] of Object.entries(entries)) {
+    await fs.writeFile(path.join(root, "References", `${id}.md`), text, "utf8")
+  }
+}
+
+function projectPortFor(
+  root: string,
+  onResolve?: (portablePath: string) => Promise<void> | void,
+): GenerationCanvasProjectPort {
+  const nativePath = (portablePath: string) => path.join(root, ...portablePath.split("/"))
+  return {
+    async readFileInfo(input) {
+      const target = nativePath(input.path)
+      const stat = await fs.stat(target)
+      return {
+        mimeType: "text/markdown",
+        name: path.basename(target),
+        path: input.path,
+        size: stat.size,
+      }
+    },
+    async resolveEntryPath(input) {
+      const portablePath = input.path ?? ""
+      await onResolve?.(portablePath)
+      return nativePath(portablePath)
+    },
+  }
 }
 
 afterEach(async () => {
@@ -110,18 +170,26 @@ function persistedCommandResult(
   }
 }
 
-function setup(options: {
-  document?: CanvasDocument
-  loadDocument?: () => Promise<{ document: CanvasDocument | null }> | { document: CanvasDocument | null }
-  maxInputBytes?: number
-  prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
-  project?: Partial<GenerationCanvasProjectPort>
-  resource?: Partial<GenerationCanvasResourcePort>
-  result?: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>)
-  scopeId?: string
-  selectedTool?: GenerationToolSummary
-  toolDescription?: GenerationToolDescription
-}) {
+type GenerationLimitOverrides = Pick<
+  GenerationCanvasServiceOptions,
+  "maxInputBytes" | "maxInputFileBytes" | "maxInlineOutputFileBytes" | "maxOutputFileBytes" | "maxOutputFiles"
+>
+
+function setup(
+  options: {
+    assets?: GenerationCanvasManagedAssetPort
+    document?: CanvasDocument
+    loadDocument?: () => Promise<{ document: CanvasDocument | null }> | { document: CanvasDocument | null }
+    prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
+    publisher?: GenerationCanvasFilePublisherPort
+    project?: Partial<GenerationCanvasProjectPort>
+    resource?: Partial<GenerationCanvasResourcePort>
+    result?: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>)
+    scopeId?: string
+    selectedTool?: GenerationToolSummary
+    toolDescription?: GenerationToolDescription
+  } & GenerationLimitOverrides,
+) {
   const document = options.document ?? createCanvasDocument({ id: "canvas-one", title: "Canvas" })
   const selectedTool = options.selectedTool ?? tool()
   const calls: Record<string, unknown>[] = []
@@ -145,18 +213,26 @@ function setup(options: {
       return { call, validateInput: (input) => validateGenerationToolInput(description, input) }
     },
   }
-  const imported: string[][] = []
-  const deleted: string[][] = []
+  const published: Array<{
+    bytes?: Uint8Array
+    extension: string
+    name?: string
+    projectId: string
+    sourcePath?: string
+  }> = []
+  const publisher = options.publisher ?? {
+    async publishGenerated(input: {
+      bytes?: Uint8Array
+      extension: string
+      name?: string
+      projectId: string
+      sourcePath?: string
+    }) {
+      published.push(input)
+      return { path: `Generated/generated-${published.length}${input.extension}` }
+    },
+  }
   const project: GenerationCanvasProjectPort = {
-    async deleteManagedAssets(input) {
-      deleted.push(input.paths)
-    },
-    async importEntries(input) {
-      imported.push(input.sourcePaths)
-      return {
-        targetPaths: input.sourcePaths.map((source, index) => `.convax/assets/${index + 1}-${path.basename(source)}`),
-      }
-    },
     async readFileInfo() {
       throw new Error("Unexpected readFileInfo")
     },
@@ -215,24 +291,35 @@ function setup(options: {
   }
   return {
     calls,
-    deleted,
-    imported,
     renderer,
     replacementRequests,
     resourceRequests,
     service: new GenerationCanvasService({
+      assets: options.assets ?? {
+        async resolve() {
+          throw new Error("Unexpected managed asset resolve")
+        },
+      },
       documents: {
         async load() {
           return options.loadDocument ? options.loadDocument() : { document }
         },
       },
       ...(options.maxInputBytes === undefined ? {} : { maxInputBytes: options.maxInputBytes }),
+      ...(options.maxInputFileBytes === undefined ? {} : { maxInputFileBytes: options.maxInputFileBytes }),
+      ...(options.maxInlineOutputFileBytes === undefined
+        ? {}
+        : { maxInlineOutputFileBytes: options.maxInlineOutputFileBytes }),
+      ...(options.maxOutputFileBytes === undefined ? {} : { maxOutputFileBytes: options.maxOutputFileBytes }),
+      ...(options.maxOutputFiles === undefined ? {} : { maxOutputFiles: options.maxOutputFiles }),
+      publisher,
       projects: project,
       renderer,
       resources,
       temporaryRoot: os.tmpdir(),
       tools,
     }),
+    published,
     viewRequests,
   }
 }
@@ -408,8 +495,30 @@ describe("GenerationCanvasService", () => {
     expect(explicit.calls).toHaveLength(1)
   })
 
+  const generationLimitMaximums = [
+    ["maxInputFileBytes", 2 * 1024 * 1024 * 1024],
+    ["maxInputBytes", 2 * 1024 * 1024 * 1024],
+    ["maxInlineOutputFileBytes", 64 * 1024 * 1024],
+    ["maxOutputFileBytes", 2 * 1024 * 1024 * 1024],
+    ["maxOutputFiles", 16],
+  ] as const satisfies ReadonlyArray<readonly [keyof GenerationLimitOverrides, number]>
+  const invalidGenerationLimitCases = generationLimitMaximums.flatMap(([option, maximum]) =>
+    [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, maximum + 1].map(
+      (value) => [option, value, maximum] as const,
+    ),
+  )
+
+  test.each(invalidGenerationLimitCases)(
+    "rejects invalid or hard-limit-raising %s override %p above maximum %p",
+    (option, value, maximum) => {
+      expect(() => setup({ [option]: value } as GenerationLimitOverrides)).toThrow(
+        `Generation ${option} must be a positive safe integer no greater than ${maximum}`,
+      )
+    },
+  )
+
   test("commits text output without changing the caller's selection or viewport", async () => {
-    const { calls, imported, resourceRequests, service, viewRequests } = setup({})
+    const { calls, published, resourceRequests, service, viewRequests } = setup({})
 
     await expect(service.generate(request(), { id: "renderer:1", kind: "ui" })).resolves.toEqual({
       createdNodeIds: ["generated-one"],
@@ -434,7 +543,14 @@ describe("GenerationCanvasService", () => {
       "references",
       "schema",
     ])
-    expect(imported).toEqual([])
+    expect(published).toEqual([
+      {
+        bytes: Buffer.from("A generated paragraph", "utf8"),
+        extension: ".md",
+        name: "generated",
+        projectId: "project-one",
+      },
+    ])
     expect(resourceRequests).toHaveLength(1)
     expect(resourceRequests[0]).toMatchObject({
       actor: { id: "renderer:1", kind: "ui" },
@@ -442,7 +558,7 @@ describe("GenerationCanvasService", () => {
       commandId: "generation:operation-one",
       expectedRevision: 0,
       scopeId: "project-one",
-      sources: [{ kind: "inline-text", name: "Generated", text: "A generated paragraph" }],
+      sources: [{ kind: "host-file", path: "Generated/generated-1.md" }],
     })
     expect(resourceRequests[0].conflictPolicy).toBe("retry")
     expect(viewRequests).toHaveLength(1)
@@ -498,7 +614,7 @@ describe("GenerationCanvasService", () => {
       toolId: "media-import/import",
       warnings: [],
     })
-    expect(harness.imported).toEqual([])
+    expect(harness.published).toEqual([])
     expect(harness.resourceRequests).toEqual([])
     expect(harness.replacementRequests).toEqual([])
     expect(harness.viewRequests).toEqual([])
@@ -1304,7 +1420,7 @@ describe("GenerationCanvasService", () => {
       expectedRevision: 0,
       expectedTarget: createCanvasNodeContentGuard(owner),
       scopeId: "project-one",
-      source: { kind: "inline-text", name: "Generated", text: "A generated paragraph" },
+      source: { kind: "host-file", path: "Generated/generated-1.md" },
       targetNodeId: owner.id,
     })
     expect(replacementRequests[0]?.conflictPolicy).toBe("retry")
@@ -1315,7 +1431,7 @@ describe("GenerationCanvasService", () => {
     const owner = createTextNode({ id: "owner-card", position: { x: 20, y: 40 }, text: "Generate me" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { imported, replacementRequests, resourceRequests, service } = setup({
+    const { published, replacementRequests, resourceRequests, service } = setup({
       document,
       async result(input) {
         const outputDirectory = input.output_directory as string
@@ -1345,9 +1461,8 @@ describe("GenerationCanvasService", () => {
       { id: "renderer:1", kind: "ui" },
     )
 
-    expect(imported).toHaveLength(1)
-    expect(imported[0]).toHaveLength(1)
-    expect(path.basename(imported[0]![0]!)).toContain("first")
+    expect(published).toHaveLength(1)
+    expect(path.basename(published[0]?.sourcePath ?? "")).toContain("first")
     expect(resourceRequests).toEqual([])
     expect(replacementRequests).toHaveLength(1)
     expect(replacementRequests[0]?.source).toMatchObject({ kind: "host-file" })
@@ -1407,7 +1522,7 @@ describe("GenerationCanvasService", () => {
       ),
     ).rejects.toThrow("replacement target changed")
     expect(changed.replacementRequests).toEqual([])
-    expect(changed.imported).toEqual([])
+    expect(changed.published).toEqual([])
   })
 
   test.each([
@@ -1668,7 +1783,7 @@ describe("GenerationCanvasService", () => {
 
   test("bounds non-text tool warnings before committing and returning the shared result", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { resourceRequests, service } = setup({
+    const { published, resourceRequests, service } = setup({
       result: {
         content: [
           ...Array.from({ length: 33 }, (_, index) => ({ text: `warning ${index + 1}`, type: "text" as const })),
@@ -1684,11 +1799,36 @@ describe("GenerationCanvasService", () => {
     })
 
     expect(resourceRequests).toHaveLength(1)
+    expect(published).toHaveLength(1)
+    expect(published[0]).toMatchObject({ extension: ".png", sourcePath: expect.any(String) })
+    expect(published[0]?.bytes).toBeUndefined()
     expect(result.warnings).toHaveLength(32)
     expect(result.warnings.at(-1)).toBe("1 additional generation warning was omitted.")
   })
 
-  test("stages managed image references and admits generated files as managed assets", async () => {
+  test("rejects unexpected admitted output counts before publishing or committing resources", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const { published, resourceRequests, service } = setup({
+      result: {
+        content: [
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+        ],
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    await expect(
+      service.generate(request({ expectedOutputCount: 1, output: "image", toolId: "creative-tools/draw" }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("returned 2 outputs; expected exactly 1")
+    expect(published).toHaveLength(0)
+    expect(resourceRequests).toHaveLength(0)
+  })
+
+  test("stages a managed image reference and publishes generated media below Generated", async () => {
     const root = await temporaryDirectory()
     const referencePath = path.join(root, "reference.png")
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
@@ -1701,30 +1841,22 @@ describe("GenerationCanvasService", () => {
       resource: {
         id: "resource-one",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+        metadata: { [projectResourceReferenceKey]: managedReference() },
         mimeType: "image/png",
         name: "reference.png",
-        url: "",
+        state: { status: "stale" },
       },
     })
     document.nodes.push(owner, image)
     document.edges.push({ id: "reference-edge", source: image.id, target: owner.id })
     let stagedReferencePath = ""
-    const { imported, resourceRequests, service } = setup({
-      document,
-      project: {
-        async readFileInfo() {
-          return {
-            mimeType: "image/png",
-            name: "reference.png",
-            path: ".convax/assets/reference.png",
-            size: png.length,
-          }
-        },
-        async resolveEntryPath() {
+    const { published, resourceRequests, service } = setup({
+      assets: {
+        async resolve() {
           return referencePath
         },
       },
+      document,
       async result(input) {
         const references = input.references as Array<{ path: string }>
         stagedReferencePath = references[0]!.path
@@ -1757,22 +1889,30 @@ describe("GenerationCanvasService", () => {
 
     expect(result.toolId).toBe("creative-tools/draw")
     await expect(fs.stat(stagedReferencePath)).rejects.toThrow()
-    expect(imported).toHaveLength(1)
+    expect(published).toHaveLength(1)
+    expect(published[0]).toMatchObject({
+      extension: ".png",
+      name: "generated",
+      projectId: "project-one",
+      sourcePath: expect.any(String),
+    })
     expect(resourceRequests[0]).toMatchObject({
       conflictPolicy: "retry",
       relation: { anchorNodeIds: [owner.id], direction: "from-anchor", mode: "connect" },
-      sources: [{ kind: "host-file" }],
+      sources: [{ kind: "host-file", path: "Generated/generated-1.png" }],
     })
-    expect(resourceRequests[0]!.sources[0]).toHaveProperty("path", expect.stringContaining(".convax/assets/"))
   })
 
   test("enforces one total byte budget across every staged reference", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { first: "123456", second: "abcdef" })
     const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "123456" })
     const second = createTextNode({ id: "second", position: { x: 0, y: 0 }, text: "abcdef" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [first, second], title: "Canvas" })
     const { calls, service } = setup({
       document,
       maxInputBytes: 8,
+      project: projectPortFor(root),
       selectedTool: tool({ acceptedInputs: ["text"] }),
     })
 
@@ -1790,6 +1930,110 @@ describe("GenerationCanvasService", () => {
     expect(calls).toHaveLength(0)
   })
 
+  test("reads a text reference from its fresh Project file instead of transient Canvas text", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Fresh text from disk" })
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "stale runtime text" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
+    const { calls, service } = setup({
+      document,
+      project: projectPortFor(root),
+      selectedTool: tool({ acceptedInputs: ["text"] }),
+    })
+
+    await service.generate(request({ references: [{ nodeId: reference.id, role: "text" }] }), {
+      id: "renderer:1",
+      kind: "ui",
+    })
+
+    expect(calls[0]?.references).toEqual([
+      { kind: "text", node_id: reference.id, role: "text", text: "Fresh text from disk" },
+    ])
+  })
+
+  test("stages project-file media through the Project containment port", async () => {
+    const root = await temporaryDirectory()
+    const mediaDirectory = path.join(root, "Media")
+    const referencePath = path.join(mediaDirectory, "reference.png")
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await fs.mkdir(mediaDirectory)
+    await fs.writeFile(referencePath, png)
+    const image = createMediaNode({
+      id: "project-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "resource-one",
+        kind: "image",
+        metadata: { [projectResourceReferenceKey]: projectFileReference("Media/reference.png") },
+        mimeType: "image/png",
+        name: "reference.png",
+        state: { status: "stale" },
+      },
+    })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [image], title: "Canvas" })
+    let stagedPath = ""
+    const { calls, service } = setup({
+      document,
+      project: {
+        async readFileInfo(input) {
+          return { mimeType: "image/png", name: "reference.png", path: input.path, size: png.byteLength }
+        },
+        async resolveEntryPath() {
+          return referencePath
+        },
+      },
+      async result(input) {
+        stagedPath = (input.references as Array<{ path: string }>)[0]!.path
+        expect(await fs.readFile(stagedPath)).toEqual(png)
+        return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+      },
+      selectedTool: tool({
+        acceptedInputs: ["reference_image"],
+        id: "creative-tools/draw",
+        output: "image",
+        toolId: "draw",
+      }),
+    })
+
+    await service.generate(
+      request({ references: [{ nodeId: image.id, role: "reference_image" }], toolId: "creative-tools/draw" }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(calls).toHaveLength(1)
+    await expect(fs.stat(stagedPath)).rejects.toThrow()
+  })
+
+  test("rejects a project-directory generation reference before external work", async () => {
+    const image = createMediaNode({
+      id: "directory-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "resource-one",
+        kind: "image",
+        metadata: {
+          [projectResourceReferenceKey]: { kind: "project-directory", path: "Media" },
+        },
+        mimeType: "image/png",
+        name: "Media",
+        state: { status: "stale" },
+      },
+    })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [image], title: "Canvas" })
+    const { calls, service } = setup({
+      document,
+      selectedTool: tool({ acceptedInputs: ["reference_image"], output: "image" }),
+    })
+
+    await expect(
+      service.generate(request({ references: [{ nodeId: image.id, role: "reference_image" }] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("cannot use a Project directory")
+    expect(calls).toHaveLength(0)
+  })
+
   test("allows an unrelated Main revision after staging while preserving the exact reference guard", async () => {
     const root = await temporaryDirectory()
     const referencePath = path.join(root, "reference.png")
@@ -1801,29 +2045,21 @@ describe("GenerationCanvasService", () => {
       resource: {
         id: "resource-one",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+        metadata: { [projectResourceReferenceKey]: managedReference() },
         mimeType: "image/png",
         name: "reference.png",
-        url: "",
+        state: { status: "stale" },
       },
     })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [image], title: "Canvas" })
     const { calls, renderer, service } = setup({
-      document,
-      project: {
-        async readFileInfo() {
-          return {
-            mimeType: "image/png",
-            name: "reference.png",
-            path: ".convax/assets/reference.png",
-            size: png.length,
-          }
-        },
-        async resolveEntryPath() {
+      assets: {
+        async resolve() {
           document.revision += 1
           return referencePath
         },
       },
+      document,
       selectedTool: tool({
         acceptedInputs: ["reference_image"],
         id: "creative-tools/draw",
@@ -1857,13 +2093,18 @@ describe("GenerationCanvasService", () => {
     ["Toolbar", { id: "renderer:1", kind: "ui" as const }],
     ["Agent", { id: "opencode:project-one", kind: "agent" as const }],
   ])("rechecks a same-revision %s source-node snapshot before starting a paid tool", async (_caller, actor) => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief", replacement: "Replacement brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const { calls, service } = setup({
       document,
       async prepareTool() {
-        reference.data.text = "Replacement brief"
+        reference.data.metadata = {
+          [projectResourceReferenceKey]: projectFileReference("References/replacement.md"),
+        }
       },
+      project: projectPortFor(root),
       selectedTool: tool({ acceptedInputs: ["text"] }),
     })
 
@@ -1885,15 +2126,20 @@ describe("GenerationCanvasService", () => {
       resource: {
         id: "resource-one",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+        metadata: { [projectResourceReferenceKey]: managedReference() },
         mimeType: "image/png",
         name: "reference.png",
-        url: "",
+        state: { status: "stale" },
       },
     })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [image], title: "Canvas" })
     let loads = 0
     const { calls, resourceRequests, service } = setup({
+      assets: {
+        async resolve() {
+          return referencePath
+        },
+      },
       document,
       async loadDocument() {
         loads += 1
@@ -1902,19 +2148,6 @@ describe("GenerationCanvasService", () => {
           await fs.writeFile(referencePath, png)
         }
         return { document }
-      },
-      project: {
-        async readFileInfo() {
-          return {
-            mimeType: "image/png",
-            name: "reference.png",
-            path: ".convax/assets/reference.png",
-            size: png.length,
-          }
-        },
-        async resolveEntryPath() {
-          return referencePath
-        },
       },
       selectedTool: tool({
         acceptedInputs: ["reference_image"],
@@ -1934,12 +2167,13 @@ describe("GenerationCanvasService", () => {
     expect(resourceRequests).toHaveLength(0)
   })
 
-  test("removes newly imported managed assets when the Canvas commit fails", async () => {
+  test("retains a published Generated file and reports only its portable path when Canvas commit fails", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { deleted, service } = setup({
+    const canvasFailure = new Error("Canvas commit failed")
+    const { published, service } = setup({
       resource: {
         async addResources() {
-          throw new Error("Canvas commit failed")
+          throw canvasFailure
         },
       },
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
@@ -1951,10 +2185,83 @@ describe("GenerationCanvasService", () => {
         id: "renderer:1",
         kind: "ui",
       }),
-    ).rejects.toThrow("Canvas commit failed")
-    expect(deleted).toHaveLength(1)
-    expect(deleted[0]).toHaveLength(1)
-    expect(deleted[0]![0]).toStartWith(".convax/assets/")
+    ).rejects.toMatchObject({
+      message:
+        "Generation succeeded and files were saved, but they could not be added to Canvas. Saved files: Generated/generated-1.png",
+      name: "GenerationPublicationPartialSuccessError",
+      publishedPaths: ["Generated/generated-1.png"],
+      cause: canvasFailure,
+    })
+    expect(published).toHaveLength(1)
+  })
+
+  test("preserves all sixteen recovery paths when the configured output ceiling is reached", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const canvasFailure = new Error("Canvas commit failed after sixteen publications")
+    const expectedPaths = Array.from({ length: 16 }, (_, index) => `Generated/generated-${index + 1}.png`)
+    const { published, service } = setup({
+      maxOutputFiles: 16,
+      resource: {
+        async addResources() {
+          throw canvasFailure
+        },
+      },
+      result: {
+        content: Array.from({ length: 16 }, () => ({
+          data: png.toString("base64"),
+          mimeType: "image/png",
+          type: "image" as const,
+        })),
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    await expect(
+      service.generate(request({ expectedOutputCount: 16, output: "image", toolId: "creative-tools/draw" }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toMatchObject({
+      cause: canvasFailure,
+      name: "GenerationPublicationPartialSuccessError",
+      publishedPaths: expectedPaths,
+    })
+    expect(published).toHaveLength(16)
+  })
+
+  test("retains earlier outputs and skips Canvas when a later Generated publication fails", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 3, 4, 5, 6])
+    const secondFailure = new Error("second publication failed")
+    let publicationCalls = 0
+    const { resourceRequests, service } = setup({
+      publisher: {
+        async publishGenerated() {
+          publicationCalls += 1
+          if (publicationCalls === 2) throw secondFailure
+          return { path: "Generated/generated-first.png" }
+        },
+      },
+      result: {
+        content: [
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+          { data: png.toString("base64"), mimeType: "image/png", type: "image" },
+        ],
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+
+    await expect(
+      service.generate(request({ expectedOutputCount: 2, output: "image", toolId: "creative-tools/draw" }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toMatchObject({
+      cause: secondFailure,
+      name: "GenerationPublicationPartialSuccessError",
+      publishedPaths: ["Generated/generated-first.png"],
+    })
+    expect(publicationCalls).toBe(2)
+    expect(resourceRequests).toHaveLength(0)
   })
 
   test("does not use a stale Renderer projection as a paid-call correctness guard", async () => {
@@ -1974,6 +2281,8 @@ describe("GenerationCanvasService", () => {
   })
 
   test("fails closed when a Toolbar or Agent reference changes during generation", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief" })
     let markStarted!: () => void
     let release!: () => void
     const started = new Promise<void>((resolve) => {
@@ -1991,6 +2300,7 @@ describe("GenerationCanvasService", () => {
         await gate
         return { content: [{ text: "Generated from the original brief", type: "text" }] }
       },
+      project: projectPortFor(root),
       selectedTool: tool({ acceptedInputs: ["text"] }),
     })
 
@@ -1999,7 +2309,6 @@ describe("GenerationCanvasService", () => {
       kind: "ui",
     })
     await started
-    reference.data.text = "Replacement brief"
     document.revision += 1
     renderer.getViewSnapshot = mock(async () => ({
       documentId: "canvas-one",
@@ -2016,7 +2325,7 @@ describe("GenerationCanvasService", () => {
     expect(resourceRequests).toHaveLength(0)
   })
 
-  test("rechecks a managed asset after output import and before committing generated nodes", async () => {
+  test("retains publication when a managed asset changes before committing generated nodes", async () => {
     const root = await temporaryDirectory()
     const referencePath = path.join(root, "reference.png")
     const originalPath = path.join(root, "original.png")
@@ -2028,31 +2337,25 @@ describe("GenerationCanvasService", () => {
       resource: {
         id: "resource-one",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+        metadata: { [projectResourceReferenceKey]: managedReference() },
         mimeType: "image/png",
         name: "reference.png",
-        url: "",
+        state: { status: "stale" },
       },
     })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [image], title: "Canvas" })
-    const { calls, deleted, resourceRequests, service } = setup({
+    const { calls, resourceRequests, service } = setup({
+      assets: {
+        async resolve() {
+          return referencePath
+        },
+      },
       document,
-      project: {
-        async importEntries(input) {
+      publisher: {
+        async publishGenerated(input) {
           await fs.rename(referencePath, originalPath)
           await fs.writeFile(referencePath, png)
-          return { targetPaths: input.sourcePaths.map((source) => `.convax/assets/${path.basename(source)}`) }
-        },
-        async readFileInfo() {
-          return {
-            mimeType: "image/png",
-            name: "reference.png",
-            path: ".convax/assets/reference.png",
-            size: png.length,
-          }
-        },
-        async resolveEntryPath() {
-          return referencePath
+          return { path: `Generated/generated-1${input.extension}` }
         },
       },
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
@@ -2069,18 +2372,23 @@ describe("GenerationCanvasService", () => {
         request({ references: [{ nodeId: image.id, role: "reference_image" }], toolId: "creative-tools/draw" }),
         { id: "opencode:project-one", kind: "agent" },
       ),
-    ).rejects.toThrow("references changed")
+    ).rejects.toMatchObject({
+      name: "GenerationPublicationPartialSuccessError",
+      publishedPaths: ["Generated/generated-1.png"],
+    })
     expect(calls).toHaveLength(1)
     expect(resourceRequests).toHaveLength(0)
-    expect(deleted).toHaveLength(1)
   })
 
   test("does not replay a referenced generation commit after a revision conflict", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Stable brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     let commitAttempts = 0
     const { calls, service } = setup({
       document,
+      project: projectPortFor(root),
       resource: {
         async addResources() {
           commitAttempts += 1
@@ -2092,24 +2400,31 @@ describe("GenerationCanvasService", () => {
     const generationRequest = request({ references: [{ nodeId: reference.id, role: "text" }] })
     const actor = { id: "renderer:1", kind: "ui" as const }
 
-    await expect(service.generate(generationRequest, actor)).rejects.toBeInstanceOf(CanvasRevisionConflictError)
+    await expect(service.generate(generationRequest, actor)).rejects.toMatchObject({
+      name: "GenerationPublicationPartialSuccessError",
+    })
     document.revision = 1
-    await expect(service.generate(generationRequest, actor)).rejects.toBeInstanceOf(CanvasRevisionConflictError)
+    await expect(service.generate(generationRequest, actor)).rejects.toMatchObject({
+      name: "GenerationPublicationPartialSuccessError",
+    })
     expect(calls).toHaveLength(1)
     expect(commitAttempts).toBe(1)
   })
 
-  test("cancels referenced generation after output import without committing stale output", async () => {
+  test("reports partial success when cancellation arrives after Generated publication", async () => {
     const controller = new AbortController()
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Stable brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { deleted, resourceRequests, service } = setup({
+    const { resourceRequests, service } = setup({
       document,
-      project: {
-        async importEntries(input) {
+      project: projectPortFor(root),
+      publisher: {
+        async publishGenerated(input) {
           controller.abort("generation was canceled")
-          return { targetPaths: input.sourcePaths.map((source) => `.convax/assets/${path.basename(source)}`) }
+          return { path: `Generated/generated-1${input.extension}` }
         },
       },
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
@@ -2122,16 +2437,21 @@ describe("GenerationCanvasService", () => {
         { id: "renderer:1", kind: "ui" },
         controller.signal,
       ),
-    ).rejects.toMatchObject({ name: "AbortError" })
+    ).rejects.toMatchObject({
+      name: "GenerationPublicationPartialSuccessError",
+      publishedPaths: ["Generated/generated-1.png"],
+    })
     expect(resourceRequests).toHaveLength(0)
-    expect(deleted).toHaveLength(1)
   })
 
   test("commits referenced generation with Main-side guarded retry semantics", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Stable brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const { resourceRequests, service } = setup({
       document,
+      project: projectPortFor(root),
       selectedTool: tool({ acceptedInputs: ["text"] }),
     })
 
@@ -2146,8 +2466,56 @@ describe("GenerationCanvasService", () => {
     })
   })
 
+  test("connects host-only relation anchors without exposing them to the generation tool", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Stable brief", "silent-video": "Pair anchor" })
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
+    const relationAnchor = createTextNode({ id: "silent-video", position: { x: 360, y: 0 }, text: "Pair anchor" })
+    const document = createCanvasDocument({
+      id: "canvas-one",
+      nodes: [reference, relationAnchor],
+      title: "Canvas",
+    })
+    const { calls, resourceRequests, service } = setup({
+      document,
+      project: projectPortFor(root),
+      selectedTool: tool({ acceptedInputs: ["text"] }),
+    })
+
+    await service.generate(
+      request({
+        references: [{ nodeId: reference.id, role: "text" }],
+        relationAnchorNodeIds: [reference.id, relationAnchor.id],
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(calls[0]?.references).toEqual([{ kind: "text", node_id: reference.id, role: "text", text: "Stable brief" }])
+    expect(resourceRequests[0]).toMatchObject({
+      conflictPolicy: "retry",
+      relation: {
+        anchorNodeIds: [reference.id, relationAnchor.id],
+        direction: "from-anchor",
+        mode: "connect",
+      },
+    })
+  })
+
+  test("rejects a missing host-only relation anchor before starting the external tool", async () => {
+    const { calls, resourceRequests, service } = setup({})
+
+    await expect(
+      service.generate(request({ relationAnchorNodeIds: ["missing-node"] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("relation anchor node was not found")
+    expect(calls).toHaveLength(0)
+    expect(resourceRequests).toHaveLength(0)
+  })
+
   test.each(["edge", "source", "revision"] as const)(
-    "fails closed when a Plugin card's direct-incoming scope changes by %s",
+    "guards a Plugin card's direct-incoming scope when the %s changes",
     async (change) => {
       const root = await temporaryDirectory()
       const referencePath = path.join(root, "reference.png")
@@ -2160,10 +2528,10 @@ describe("GenerationCanvasService", () => {
         resource: {
           id: "resource-one",
           kind: "image",
-          metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+          metadata: { [projectResourceReferenceKey]: managedReference() },
           mimeType: "image/png",
           name: "reference.png",
-          url: "",
+          state: { status: "stale" },
         },
       })
       const document = createCanvasDocument({
@@ -2172,26 +2540,18 @@ describe("GenerationCanvasService", () => {
         nodes: [owner, image],
         title: "Canvas",
       })
-      const { imported, resourceRequests, service } = setup({
-        document,
-        project: {
-          async readFileInfo() {
-            return {
-              mimeType: "image/png",
-              name: "reference.png",
-              path: ".convax/assets/reference.png",
-              size: png.length,
-            }
-          },
-          async resolveEntryPath() {
+      const { published, resourceRequests, service } = setup({
+        assets: {
+          async resolve() {
             return referencePath
           },
         },
+        document,
         async result() {
           if (change === "edge") document.edges = []
           else if (change === "source") {
             image.data.metadata = {
-              [projectFileReferenceKey]: { path: ".convax/assets/replaced.png" },
+              [projectResourceReferenceKey]: managedReference("replaced.png", "b".repeat(64)),
             }
           } else document.revision += 1
           return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
@@ -2215,11 +2575,11 @@ describe("GenerationCanvasService", () => {
       )
       if (change === "revision") {
         await expect(generation).resolves.toMatchObject({ revision: 2 })
-        expect(imported).toHaveLength(1)
+        expect(published).toHaveLength(1)
         expect(resourceRequests).toHaveLength(1)
       } else {
         await expect(generation).rejects.toThrow("direct incoming references changed")
-        expect(imported).toHaveLength(0)
+        expect(published).toHaveLength(0)
         expect(resourceRequests).toHaveLength(0)
       }
     },
@@ -2241,11 +2601,11 @@ describe("GenerationCanvasService", () => {
     ).rejects.toThrow("at most one first_frame")
   })
 
-  test("rejects a replaced output directory before importing artifacts", async () => {
+  test("rejects a replaced output directory before publishing artifacts", async () => {
     const outside = await temporaryDirectory()
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
     await fs.writeFile(path.join(outside, "result.png"), png)
-    const { imported, service } = setup({
+    const { published, service } = setup({
       async result(input) {
         const outputDirectory = input.output_directory as string
         await fs.rm(outputDirectory, { recursive: true })
@@ -2267,11 +2627,11 @@ describe("GenerationCanvasService", () => {
     await expect(
       service.generate(request({ toolId: "creative-tools/draw" }), { id: "renderer:1", kind: "ui" }),
     ).rejects.toThrow("output_directory was replaced")
-    expect(imported).toHaveLength(0)
+    expect(published).toHaveLength(0)
   })
 
   test("bounds structured artifact declarations before reading paths", async () => {
-    const { imported, service } = setup({
+    const { published, service } = setup({
       result: {
         content: [],
         structuredContent: {
@@ -2290,7 +2650,7 @@ describe("GenerationCanvasService", () => {
     await expect(
       service.generate(request({ toolId: "creative-tools/draw" }), { id: "renderer:1", kind: "ui" }),
     ).rejects.toThrow("too many output files")
-    expect(imported).toHaveLength(0)
+    expect(published).toHaveLength(0)
   })
 
   test("propagates cancellation to the Tool Plugin and commits nothing", async () => {

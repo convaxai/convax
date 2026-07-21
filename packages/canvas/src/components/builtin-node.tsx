@@ -35,7 +35,6 @@ import {
   Strikethrough,
   Trash2,
   Type,
-  Upload,
   Video as VideoIcon,
   Volume2,
   VolumeX,
@@ -872,21 +871,14 @@ function mediaLabel(kind: CanvasMediaKind) {
   return "file"
 }
 
-function mediaAccept(kind: CanvasMediaKind) {
-  if (kind === "image") return "image/*"
-  if (kind === "video") return "video/*"
-  if (kind === "audio") return "audio/*"
-  return undefined
-}
-
 function EmptyMedia(props: { kind: CanvasMediaKind }) {
   const label = mediaLabel(props.kind)
   return (
     <div className="convax-media-empty size-full">
-      <div className="convax-media-empty__content" aria-hidden="true">
+      <div className="convax-media-empty__action nodrag nowheel">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">Empty {label}</span>
-        <span className="convax-media-empty__hint">Use the toolbar to add content</span>
+        <span className="convax-media-empty__title">{label} unavailable</span>
+        <span className="convax-media-empty__hint">Relink is not available yet</span>
       </div>
     </div>
   )
@@ -953,20 +945,9 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const data = props.data as CanvasMediaNodeData
   const url = data.resourceState?.url
-  const inputRef = useRef<HTMLInputElement>(null)
-  const chooseFile = () => {
-    editor.selectNodes([props.id])
-    inputRef.current?.click()
-  }
   const supportsFit = data.kind === "image" || data.kind === "video"
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
-      <ToolbarButton
-        disabled={!editor.canUpload}
-        icon={<Upload />}
-        label={url ? `Replace ${mediaLabel(data.kind)}` : `Add ${mediaLabel(data.kind)}`}
-        onClick={chooseFile}
-      />
       {supportsFit ? (
         <ToolbarButton
           disabled={!url}
@@ -1018,17 +999,6 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
             : undefined
         }
         selected={props.selected}
-      />
-      <input
-        ref={inputRef}
-        accept={mediaAccept(data.kind)}
-        className="hidden"
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0]
-          if (file) editor.replaceNodeMedia(props.id, file)
-          event.currentTarget.value = ""
-        }}
-        type="file"
       />
     </NodeChrome>
   )

@@ -23,6 +23,7 @@ import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
 } from "../plugin-canvas-image-contracts"
+import { createCanvasResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -379,6 +380,11 @@ const canvasDocumentClient = {
   load: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.load, input),
 } satisfies CanvasRendererDocumentClient
 
+const canvasResourceClient = createCanvasResourcePreloadClient({
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  invoke: (channel, input) => ipcRenderer.invoke(channel, input),
+})
+
 const canvasRendererClient = {
   onRequest(handler) {
     const listener = (_event: Electron.IpcRendererEvent, envelope: CanvasRendererRequestEnvelope) => {
@@ -541,6 +547,7 @@ contextBridge.exposeInMainWorld("convax", {
     externalMediaDrag: canvasExternalMediaDragClient,
     pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
+    resources: canvasResourceClient,
   },
   generation: generationClient,
   jianying: jianyingClient,

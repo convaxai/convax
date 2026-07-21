@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import { getProjectResourceReference, type ProjectResourceReference } from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
@@ -166,6 +167,59 @@ describe("project canvas resource preparation", () => {
       state: { contentRevision: "revision-a", status: "ready", text: "# Brief" },
     })
     expect(result.items[0]).not.toHaveProperty("format")
+    expect(result.retainedOnFailure).toEqual([{ label: "Notes/Brief-a1.md" }])
+  })
+
+  test("reports only successfully published new text when later preparation fails", async () => {
+    const laterFailure = new Error("native file lookup failed")
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo() {
+          throw laterFailure
+        },
+      }),
+      {
+        async publishText() {
+          return { contentRevision: "revision-a", path: "Notes/First-a1.md" }
+        },
+      },
+      unusedAssets(),
+    )
+
+    try {
+      await preparation.prepare({
+        ...requestRef,
+        sources: [
+          { kind: "new-text", name: "First", sourceId: "first", text: "# First" },
+          { kind: "host-file", path: "media/missing.png", sourceId: "missing" },
+        ],
+      })
+      throw new Error("Expected preparation to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
+      expect((error as CanvasResourcePartialFailureError).cause).toBe(laterFailure)
+      expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/First-a1.md" }])
+    }
+  })
+
+  test("does not report host-file preparation as a retained resource", async () => {
+    const hostFailure = new Error("native file lookup failed")
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo() {
+          throw hostFailure
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+    )
+
+    await expect(
+      preparation.prepare({
+        ...requestRef,
+        sources: [{ kind: "host-file", path: "media/missing.png", sourceId: "missing" }],
+      }),
+    ).rejects.toBe(hostFailure)
   })
 
   test("accepts only Project directories as folder references", async () => {

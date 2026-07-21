@@ -37,7 +37,6 @@ export interface CanvasEditorController {
   startSelectionDrag: () => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
   removeNode: (nodeId: string) => void
-  replaceNodeMedia: (nodeId: string, file: File) => void
   selectNodes: (nodeIds: readonly string[]) => void
 }
 

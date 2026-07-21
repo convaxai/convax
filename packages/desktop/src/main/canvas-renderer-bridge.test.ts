@@ -13,6 +13,7 @@ interface TestWebContents {
 type ResponseListener = (event: { sender: TestWebContents }, response: CanvasRendererResponseEnvelope) => void
 
 const requestQueue: CanvasRendererRequestEnvelope[] = []
+const secondaryRequestQueue: CanvasRendererRequestEnvelope[] = []
 const requestWaiters: Array<(request: CanvasRendererRequestEnvelope) => void> = []
 let responseListener: ResponseListener | null = null
 
@@ -25,8 +26,27 @@ const webContents: TestWebContents = {
   },
 }
 
+const secondaryWebContents: TestWebContents = {
+  id: 42,
+  send(_channel, envelope) {
+    secondaryRequestQueue.push(envelope)
+  },
+}
+
+const window = {
+  isDestroyed: () => false,
+  webContents,
+}
+
+const secondaryWindow = {
+  isDestroyed: () => false,
+  webContents: secondaryWebContents,
+}
+
 void mock.module("electron", () => ({
-  BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents }] },
+  BrowserWindow: {
+    getAllWindows: () => [window, secondaryWindow],
+  },
   ipcMain: {
     on: (_channel: string, listener: ResponseListener) => {
       responseListener = listener
@@ -39,6 +59,7 @@ void mock.module("electron", () => ({
 
 afterEach(() => {
   requestQueue.splice(0)
+  secondaryRequestQueue.splice(0)
   requestWaiters.splice(0)
   responseListener = null
 })
@@ -58,8 +79,8 @@ function respond(request: CanvasRendererRequestEnvelope, result: CanvasRendererR
 async function bridge(requestTimeoutMs?: number) {
   const { createCanvasRendererBridge } = await import("./canvas-renderer-bridge")
   return createCanvasRendererBridge({
-    isTrustedSender: (event) => event.sender.id === webContents.id,
-    isTrustedWebContentsId: (id) => id === webContents.id,
+    isTrustedSender: (event) => event.sender.id === webContents.id || event.sender.id === secondaryWebContents.id,
+    isTrustedWebContentsId: (id) => id === webContents.id || id === secondaryWebContents.id,
     ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
   })
 }
@@ -116,6 +137,39 @@ describe("Canvas renderer projection bridge", () => {
   test("fails a projection request that times out", async () => {
     const renderer = await bridge(1)
     await expect(renderer.reloadDocument(ref)).rejects.toThrow("did not answer")
+    renderer.dispose()
+  })
+
+  test("requests the Workbench snapshot from the exact invoking renderer id", async () => {
+    const renderer = await bridge()
+    const pending = renderer.getViewSnapshot("desktop-main", secondaryWebContents.id)
+    await Promise.resolve()
+
+    expect(requestQueue).toHaveLength(0)
+    expect(secondaryRequestQueue).toHaveLength(1)
+    const request = secondaryRequestQueue.shift()!
+    if (!responseListener) throw new Error("Canvas renderer response listener is unavailable")
+    responseListener(
+      { sender: secondaryWebContents },
+      {
+        id: request.id,
+        ok: true,
+        result: {
+          snapshot: {
+            documentId: "canvas-second",
+            revision: 4,
+            scopeId: "project-second",
+            selectedEdgeIds: [],
+            selectedNodeIds: [],
+            viewId: "desktop-main",
+            viewport: { x: 0, y: 0, zoom: 1 },
+          },
+          type: "view.snapshot",
+        },
+      },
+    )
+
+    await expect(pending).resolves.toMatchObject({ documentId: "canvas-second", scopeId: "project-second" })
     renderer.dispose()
   })
 })

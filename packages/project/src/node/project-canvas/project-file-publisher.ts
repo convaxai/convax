@@ -6,20 +6,21 @@ import type { ProjectCanvasFilePublisher } from "./project-canvas-resource-prepa
 import type { ProjectRootResolver } from "./project-managed-asset-store"
 
 export interface ProjectFilePublisherOptions {
+  maximumGeneratedBytes?: number
   maximumBytes?: number
   randomId?: () => string
 }
 
 export const defaultProjectTextPublicationMaximumBytes = 16 * 1024 * 1024
+export const defaultProjectGeneratedPublicationMaximumBytes = 2 * 1024 * 1024 * 1024
 const maximumPublicationAttempts = 32
 const maximumPortableComponentLength = 255
 const maximumPublicationIdLength = 64
-const publicationFileSuffix = `-${"i".repeat(maximumPublicationIdLength)}.md`
-const maximumPublicationStemBytes = maximumPortableComponentLength - Buffer.byteLength(publicationFileSuffix, "utf8")
-const maximumPublicationStemUtf16Units = maximumPortableComponentLength - publicationFileSuffix.length
+const publicationCopyChunkBytes = 64 * 1024
 const portableStemReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 
 export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
+  readonly #maximumGeneratedBytes: number
   readonly #maximumBytes: number
   readonly #randomId: () => string
 
@@ -27,10 +28,17 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     private readonly roots: ProjectRootResolver,
     options: ProjectFilePublisherOptions = {},
   ) {
-    const maximumBytes = options.maximumBytes ?? defaultProjectTextPublicationMaximumBytes
-    if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
-      throw new Error("Project text publication maximumBytes must be a positive safe integer")
-    }
+    const maximumBytes = requirePublicationMaximum(
+      options.maximumBytes,
+      defaultProjectTextPublicationMaximumBytes,
+      "maximumBytes",
+    )
+    const maximumGeneratedBytes = requirePublicationMaximum(
+      options.maximumGeneratedBytes,
+      defaultProjectGeneratedPublicationMaximumBytes,
+      "maximumGeneratedBytes",
+    )
+    this.#maximumGeneratedBytes = maximumGeneratedBytes
     this.#maximumBytes = maximumBytes
     this.#randomId = options.randomId ?? randomUUID
   }
@@ -48,45 +56,75 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     if (typeof input.content !== "string") throw new Error("Project text publication content must be a string")
     if (typeof input.projectId !== "string" || !input.projectId) throw new Error("Project id is required")
 
-    const stem = requirePortableStem(input.name)
     const contentByteLength = Buffer.byteLength(input.content, "utf8")
     if (contentByteLength > this.#maximumBytes) {
       throw new Error("Project text publication exceeds the maximum size")
     }
     const content = Buffer.from(input.content, "utf8")
     const contentRevision = createHash("sha256").update(content).digest("hex")
-    const layout = await this.#resolveLayout(input.projectId)
+    const published = await this.#publish({
+      directory: input.directory,
+      extension: input.extension,
+      maximumBytes: this.#maximumBytes,
+      name: input.name,
+      projectId: input.projectId,
+      source: { bytes: content, kind: "bytes" },
+    })
+    return { contentRevision, path: published.path }
+  }
+
+  async publishGenerated(input: {
+    bytes?: Uint8Array
+    extension: string
+    name?: string
+    projectId: string
+    sourcePath?: string
+  }): Promise<{ path: string }> {
+    const hasBytes = input.bytes !== undefined
+    const hasSourcePath = input.sourcePath !== undefined
+    if (hasBytes === hasSourcePath) {
+      throw new Error("Generated Project publication requires exactly one byte or file source")
+    }
+    return this.#publish({
+      directory: "Generated",
+      extension: input.extension,
+      maximumBytes: this.#maximumGeneratedBytes,
+      name: input.name ?? "generated",
+      projectId: input.projectId,
+      source: hasBytes
+        ? { bytes: requirePublicationBytes(input.bytes), kind: "bytes" }
+        : { kind: "file", sourcePath: requireSourcePath(input.sourcePath) },
+    })
+  }
+
+  async #publish(input: {
+    directory: "Generated" | "Notes"
+    extension: string
+    maximumBytes: number
+    name?: string
+    projectId: string
+    source: PublicationSource
+  }): Promise<{ path: string }> {
+    if (typeof input.projectId !== "string" || !input.projectId) throw new Error("Project id is required")
+    const extension = requirePortableExtension(input.extension)
+    const stem = requirePortableStem(input.name, extension)
+    const layout = await this.#resolveLayout(input.projectId, input.directory)
     const firstId = requirePublicationId(this.#randomId())
     const stagingPath = path.join(layout.staging.path, firstId)
     await assertPublicationDirectories(layout)
-
-    const stagingHandle = await fs.open(stagingPath, "wx", 0o600)
-    let staging: OwnedFile
-    try {
-      const opened = await stagingHandle.stat({ bigint: true })
-      assertRegularFile(opened, "Project publication staging file")
-      staging = await captureOwnedFile(stagingPath, opened, "Project publication staging file")
-      if (!sameNativePath(path.dirname(staging.realPath), layout.staging.realPath)) {
-        throw new Error("Project publication staging directory changed")
-      }
-      await assertPublicationDirectories(layout)
-      await stagingHandle.writeFile(content)
-      await stagingHandle.sync()
-      const written = await stagingHandle.stat({ bigint: true })
-      assertRegularFile(written, "Project publication staging file")
-      if (!sameFileIdentity(staging.snapshot, written) || written.size !== BigInt(content.byteLength)) {
-        throw new Error("Project publication staging file changed during write")
-      }
-      staging = { ...staging, snapshot: written }
-    } finally {
-      await stagingHandle.close().catch(() => undefined)
-    }
+    const staged = await writePublicationStaging({
+      layout,
+      maximumBytes: input.maximumBytes,
+      source: input.source,
+      stagingPath,
+    })
+    const staging = staged.file
     await assertPublicationDirectories(layout)
 
     for (let attempt = 0; attempt < maximumPublicationAttempts; attempt += 1) {
       const shortId = attempt === 0 ? firstId : requirePublicationId(this.#randomId())
-      const fileName = `${stem}-${shortId}${input.extension}`
-      const targetPath = path.join(layout.notes.path, fileName)
+      const fileName = `${stem}-${shortId}${extension}`
+      const targetPath = path.join(layout.target.path, fileName)
       await assertPublicationDirectories(layout)
       // Repeated identity checks fail closed on ordinary symlinks and replacements
       // completed before a check. Portable Node cannot make parent-directory
@@ -101,23 +139,20 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
       }
 
       const publication = await captureOwnedFile(targetPath, staging.snapshot, "Published Project file")
-      if (!sameNativePath(path.dirname(publication.realPath), layout.notes.realPath)) {
-        throw new Error("Project Notes directory changed during publication")
+      if (!sameNativePath(path.dirname(publication.realPath), layout.target.realPath)) {
+        throw new Error(`Project ${input.directory} directory changed during publication`)
       }
       // A user-visible publication is never rolled back. Post-link verification
       // reports failure without unlinking the published path.
       await assertPublicationDirectories(layout)
-      await verifyPublishedFile(publication, contentRevision, contentByteLength)
-      return {
-        contentRevision,
-        path: `${input.directory}/${fileName}`,
-      }
+      await verifyPublishedFile(publication, staged.sha256, staged.size)
+      return { path: `${input.directory}/${fileName}` }
     }
 
     throw new Error("Project text publication could not find a unique name after repeated collisions")
   }
 
-  async #resolveLayout(projectId: string): Promise<PublicationLayout> {
+  async #resolveLayout(projectId: string, directory: "Generated" | "Notes"): Promise<PublicationLayout> {
     const projectPath = path.resolve(await this.roots.resolveProjectRoot({ projectId }))
     const projectRoot = await captureDirectory(projectPath, "Project root")
     await assertDirectoryIdentity(projectRoot, "Project root")
@@ -127,7 +162,7 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     await assertDirectoryIdentity(privateStorage, "Project private storage")
 
     const stagingRoot = path.join(privateStorage.path, "staging")
-    const notesRoot = path.join(projectRoot.path, "Notes")
+    const targetRoot = path.join(projectRoot.path, directory)
     await assertDirectoryIdentity(projectRoot, "Project root")
     await assertDirectoryIdentity(privateStorage, "Project private storage")
     await ensureRealDirectory(stagingRoot, 0o700, "Project publication staging directory")
@@ -138,15 +173,15 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     await assertDirectoryIdentity(projectRoot, "Project root")
     await assertDirectoryIdentity(privateStorage, "Project private storage")
     await assertDirectoryIdentity(staging, "Project publication staging directory")
-    await ensureRealDirectory(notesRoot, 0o755, "Project Notes directory")
+    await ensureRealDirectory(targetRoot, 0o755, `Project ${directory} directory`)
     await assertDirectoryIdentity(projectRoot, "Project root")
     await assertDirectoryIdentity(privateStorage, "Project private storage")
     await assertDirectoryIdentity(staging, "Project publication staging directory")
     const layout = {
-      notes: await captureDirectory(notesRoot, "Project Notes directory"),
       privateStorage,
       projectRoot,
       staging,
+      target: await captureDirectory(targetRoot, `Project ${directory} directory`),
     }
     await assertPublicationDirectories(layout)
     return layout
@@ -154,11 +189,13 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
 }
 
 interface PublicationLayout {
-  notes: DirectoryIdentity
   privateStorage: DirectoryIdentity
   projectRoot: DirectoryIdentity
   staging: DirectoryIdentity
+  target: DirectoryIdentity
 }
+
+type PublicationSource = { bytes: Uint8Array; kind: "bytes" } | { kind: "file"; sourcePath: string }
 
 interface DirectoryIdentity {
   path: string
@@ -172,7 +209,126 @@ interface OwnedFile {
   snapshot: BigIntStats
 }
 
-function requirePortableStem(value: string | undefined) {
+function requirePublicationMaximum(value: number | undefined, hardMaximum: number, name: string) {
+  const maximum = value ?? hardMaximum
+  if (!Number.isSafeInteger(maximum) || maximum <= 0 || maximum > hardMaximum) {
+    throw new Error(`Project publication ${name} must be a positive safe integer no greater than ${hardMaximum}`)
+  }
+  return maximum
+}
+
+async function writePublicationStaging(input: {
+  layout: PublicationLayout
+  maximumBytes: number
+  source: PublicationSource
+  stagingPath: string
+}): Promise<{ file: OwnedFile; sha256: string; size: number }> {
+  let sourceHandle: Awaited<ReturnType<typeof fs.open>> | undefined
+  let sourcePath: string | undefined
+  let sourceRealPath: string | undefined
+  let sourceSnapshot: BigIntStats | undefined
+  if (input.source.kind === "bytes") {
+    if (input.source.bytes.byteLength > input.maximumBytes) {
+      throw new Error("Project publication exceeds the maximum size")
+    }
+  } else {
+    sourcePath = input.source.sourcePath
+    sourceSnapshot = await fs.lstat(sourcePath, { bigint: true })
+    assertRegularFile(sourceSnapshot, "Generated Project publication source")
+    if (sourceSnapshot.size > BigInt(input.maximumBytes)) {
+      throw new Error("Generated Project publication source exceeds the maximum size")
+    }
+    sourceRealPath = await fs.realpath(sourcePath)
+  }
+
+  try {
+    if (sourcePath && sourceRealPath && sourceSnapshot) {
+      sourceHandle = await fs.open(sourcePath, secureReadFlags())
+      const openedSource = await sourceHandle.stat({ bigint: true })
+      assertRegularFile(openedSource, "Generated Project publication source")
+      if (
+        !sameFileSnapshot(sourceSnapshot, openedSource) ||
+        !sameNativePath(await fs.realpath(sourcePath), sourceRealPath)
+      ) {
+        throw new Error("Generated Project publication source changed before copy")
+      }
+    }
+
+    const stagingHandle = await fs.open(input.stagingPath, "wx", 0o600)
+    let staging: OwnedFile
+    const hash = createHash("sha256")
+    let totalBytes = 0
+    try {
+      const opened = await stagingHandle.stat({ bigint: true })
+      assertRegularFile(opened, "Project publication staging file")
+      staging = await captureOwnedFile(input.stagingPath, opened, "Project publication staging file")
+      if (!sameNativePath(path.dirname(staging.realPath), input.layout.staging.realPath)) {
+        throw new Error("Project publication staging directory changed")
+      }
+      await assertPublicationDirectories(input.layout)
+
+      if (input.source.kind === "bytes") {
+        hash.update(input.source.bytes)
+        totalBytes = input.source.bytes.byteLength
+        await writeAll(stagingHandle, input.source.bytes)
+      } else {
+        const buffer = Buffer.allocUnsafe(publicationCopyChunkBytes)
+        while (true) {
+          const { bytesRead } = await sourceHandle!.read(buffer, 0, buffer.byteLength, null)
+          if (bytesRead === 0) break
+          totalBytes += bytesRead
+          if (totalBytes > input.maximumBytes) {
+            throw new Error("Generated Project publication source exceeds the maximum size")
+          }
+          const chunk = buffer.subarray(0, bytesRead)
+          hash.update(chunk)
+          await writeAll(stagingHandle, chunk)
+        }
+      }
+
+      await stagingHandle.sync()
+      const written = await stagingHandle.stat({ bigint: true })
+      assertRegularFile(written, "Project publication staging file")
+      if (!sameFileIdentity(staging.snapshot, written) || written.size !== BigInt(totalBytes)) {
+        throw new Error("Project publication staging file changed during write")
+      }
+      staging = { ...staging, snapshot: written }
+    } finally {
+      await stagingHandle.close().catch(() => undefined)
+    }
+
+    if (sourceHandle && sourcePath && sourceRealPath && sourceSnapshot) {
+      const afterHandle = await sourceHandle.stat({ bigint: true })
+      const afterPath = await fs.lstat(sourcePath, { bigint: true })
+      assertRegularFile(afterPath, "Generated Project publication source")
+      if (
+        !sameFileSnapshot(sourceSnapshot, afterHandle) ||
+        !sameFileSnapshot(sourceSnapshot, afterPath) ||
+        !sameNativePath(await fs.realpath(sourcePath), sourceRealPath)
+      ) {
+        throw new Error("Generated Project publication source changed during copy")
+      }
+    }
+
+    const sha256 = hash.digest("hex")
+    await assertPublicationDirectories(input.layout)
+    await verifyPublishedFile(staging!, sha256, totalBytes)
+    return { file: staging!, sha256, size: totalBytes }
+  } finally {
+    await sourceHandle?.close().catch(() => undefined)
+  }
+}
+
+async function writeAll(handle: Awaited<ReturnType<typeof fs.open>>, data: Uint8Array) {
+  let offset = 0
+  while (offset < data.byteLength) {
+    const { bytesWritten } = await handle.write(data, offset, data.byteLength - offset)
+    if (bytesWritten <= 0) throw new Error("Project publication staging write made no progress")
+    offset += bytesWritten
+  }
+}
+
+function requirePortableStem(value: string | undefined, extension: string) {
   if (value !== undefined && typeof value !== "string") throw new Error("Project publication name must be a string")
   if (value !== undefined && !hasOnlyUnicodeScalars(value)) {
     throw new Error("Project publication name must contain only Unicode scalar values")
@@ -181,14 +337,14 @@ function requirePortableStem(value: string | undefined) {
   if (requested.includes("/") || requested.includes("\\") || requested.includes("\0")) {
     throw new Error("Project publication name must be one portable name")
   }
-  const extension = path.posix.extname(requested)
-  const withoutExtension = extension ? requested.slice(0, -extension.length) : requested
+  const requestedExtension = path.posix.extname(requested)
+  const withoutExtension = requestedExtension ? requested.slice(0, -requestedExtension.length) : requested
   const stem = withoutExtension
     .trim()
     .replace(/\s+/gu, "-")
     .replace(/[:*?"<>|\u0000-\u001f\u007f]+/gu, "-")
     .replace(/[. -]+$/gu, "")
-  const boundedStem = truncatePortableStem(stem)
+  const boundedStem = truncatePortableStem(stem, extension)
   const firstStem = boundedStem.split(".", 1)[0] ?? ""
   if (!boundedStem || boundedStem === "." || boundedStem === ".." || portableStemReservedName.test(firstStem)) {
     throw new Error("Project publication name does not produce a portable stem")
@@ -196,7 +352,10 @@ function requirePortableStem(value: string | undefined) {
   return boundedStem
 }
 
-function truncatePortableStem(value: string) {
+function truncatePortableStem(value: string, extension: string) {
+  const publicationFileSuffix = `-${"i".repeat(maximumPublicationIdLength)}${extension}`
+  const maximumPublicationStemBytes = maximumPortableComponentLength - Buffer.byteLength(publicationFileSuffix, "utf8")
+  const maximumPublicationStemUtf16Units = maximumPortableComponentLength - publicationFileSuffix.length
   let byteLength = 0
   let utf16Units = 0
   let result = ""
@@ -213,6 +372,25 @@ function truncatePortableStem(value: string) {
     utf16Units += character.length
   }
   return result
+}
+
+function requirePortableExtension(value: string) {
+  if (typeof value !== "string" || !/^\.[a-z0-9]{1,16}$/.test(value)) {
+    throw new Error("Project publication extension must be a canonical portable extension")
+  }
+  return value
+}
+
+function requirePublicationBytes(value: Uint8Array | undefined) {
+  if (!(value instanceof Uint8Array)) throw new Error("Generated Project publication bytes are invalid")
+  return value
+}
+
+function requireSourcePath(value: string | undefined) {
+  if (typeof value !== "string" || !value.trim() || value.includes("\0")) {
+    throw new Error("Generated Project publication source path is invalid")
+  }
+  return path.resolve(value)
 }
 
 function hasOnlyUnicodeScalars(value: string) {
@@ -255,7 +433,7 @@ async function assertPublicationDirectories(layout: PublicationLayout) {
   await assertDirectoryIdentity(layout.projectRoot, "Project root")
   await assertDirectoryIdentity(layout.privateStorage, "Project private storage")
   await assertDirectoryIdentity(layout.staging, "Project publication staging directory")
-  await assertDirectoryIdentity(layout.notes, "Project Notes directory")
+  await assertDirectoryIdentity(layout.target, "Project publication target directory")
 }
 
 async function assertDirectoryIdentity(identity: DirectoryIdentity, label: string) {

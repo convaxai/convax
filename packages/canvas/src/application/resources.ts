@@ -53,7 +53,22 @@ export interface CanvasResourcePreparationRequest extends CanvasDocumentRef {
 
 export interface CanvasResourcePreparationResult {
   items: readonly CanvasUploadItem[]
+  retainedOnFailure?: readonly { label: string }[]
   warnings?: readonly string[]
+}
+
+export class CanvasResourcePartialFailureError extends Error {
+  readonly retainedOnFailure: readonly { label: string }[]
+
+  constructor(cause: unknown, retainedOnFailure: readonly { label: string }[]) {
+    const retained = validateRetainedOnFailure(retainedOnFailure)
+    if (retained.length === 0) {
+      throw new CanvasCommandValidationError("Canvas resource partial failure requires a retained label")
+    }
+    super("Canvas resources could not be committed after host resources were retained", { cause })
+    this.name = "CanvasResourcePartialFailureError"
+    this.retainedOnFailure = retained
+  }
 }
 
 /** Platform adapter for reading files, probing media, and materializing URLs. */
@@ -181,6 +196,20 @@ export class CanvasResourceBusinessService {
   }
 
   addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
+    return this.addResourcesShared(request)
+  }
+
+  addPreparedResources(
+    request: CanvasAddResourceSourcesRequest,
+    prepared: CanvasResourcePreparationResult,
+  ): Promise<CanvasApplicationCommandResult> {
+    return this.addResourcesShared(request, prepared)
+  }
+
+  private addResourcesShared(
+    request: CanvasAddResourceSourcesRequest,
+    hostPrepared?: CanvasResourcePreparationResult,
+  ): Promise<CanvasApplicationCommandResult> {
     const key = JSON.stringify([
       request.scopeId,
       request.canvasId,
@@ -195,6 +224,7 @@ export class CanvasResourceBusinessService {
       expectedRevision: request.expectedRevision,
       relation: request.relation,
       sources: request.sources,
+      ...(hostPrepared === undefined ? {} : { hostPrepared }),
     })
     const existing = this.executions.get(key)
     if (existing) {
@@ -204,11 +234,12 @@ export class CanvasResourceBusinessService {
       return existing.result
     }
 
-    const result = this.addResourcesOnce(request)
+    const result = this.addResourcesOnce(request, hostPrepared)
     const execution = { fingerprint, result }
     this.executions.set(key, execution)
     if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
-    void result.catch(() => {
+    void result.catch((error) => {
+      if (error instanceof CanvasResourcePartialFailureError) return
       if (this.executions.get(key) === execution) this.executions.delete(key)
     })
     return result
@@ -293,7 +324,10 @@ export class CanvasResourceBusinessService {
     return this.executeWithConflictPolicy(request, command, [])
   }
 
-  private async addResourcesOnce(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
+  private async addResourcesOnce(
+    request: CanvasAddResourceSourcesRequest,
+    hostPrepared?: CanvasResourcePreparationResult,
+  ): Promise<CanvasApplicationCommandResult> {
     throwIfAborted(request.signal)
     if (!request.commandId.trim() || !request.actor.id.trim()) {
       throw new CanvasCommandValidationError("Canvas command and actor ids are required")
@@ -308,24 +342,48 @@ export class CanvasResourceBusinessService {
     ) {
       throw new CanvasCommandValidationError("Canvas resource conflict policy must be retry or reject")
     }
-    validateCanvasResourceSources(request.sources)
+    const sourceIds = validateCanvasResourceSources(request.sources)
     if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
       throw new CanvasCommandValidationError("Placement anchor must contain finite coordinates")
     }
+    if (hostPrepared !== undefined) validatePreparedCanvasResources(hostPrepared, sourceIds)
+    if (request.sources.length === 0 && (hostPrepared === undefined || hostPrepared.items.length === 0)) {
+      throw new CanvasCommandValidationError("At least one Canvas resource source is required")
+    }
 
-    const prepared = await this.preparation.prepare({
-      canvasId: request.canvasId,
-      ...(request.signal ? { signal: request.signal } : {}),
-      scopeId: request.scopeId,
-      sources: request.sources,
-    })
+    const preparedFromSources: CanvasResourcePreparationResult = request.sources.length
+      ? await this.preparation.prepare({
+          canvasId: request.canvasId,
+          ...(request.signal ? { signal: request.signal } : {}),
+          scopeId: request.scopeId,
+          sources: request.sources,
+        })
+      : { items: [] }
     throwIfAborted(request.signal)
-    validatePreparedCanvasResources(prepared)
-    const command = createAddCanvasResourcesCommand({
-      anchor: request.anchor,
-      items: prepared.items,
-      relation: request.relation,
-    })
+    const retainedOnFailure = mergeRetainedOnFailure(
+      preparedFromSources.retainedOnFailure,
+      hostPrepared?.retainedOnFailure,
+    )
+    let prepared: CanvasResourcePreparationResult
+    let command: CanvasAddResourcesCommand
+    try {
+      validatePreparedCanvasResources(preparedFromSources)
+      prepared =
+        hostPrepared === undefined
+          ? preparedFromSources
+          : {
+              items: [...preparedFromSources.items, ...hostPrepared.items],
+              retainedOnFailure,
+              warnings: [...(preparedFromSources.warnings ?? []), ...(hostPrepared.warnings ?? [])],
+            }
+      command = createAddCanvasResourcesCommand({
+        anchor: request.anchor,
+        items: prepared.items,
+        relation: request.relation,
+      })
+    } catch (error) {
+      throwPartialFailureIfRetained(error, retainedOnFailure)
+    }
     // Preparation and command creation stay outside the retry loop so one logical
     // operation keeps the same materialized resources and generated node ids.
     let expectedRevision = request.expectedRevision
@@ -362,19 +420,24 @@ export class CanvasResourceBusinessService {
           request.conflictPolicy === "reject" ||
           conflictRetries >= maxCanvasResourceConflictRetries
         ) {
-          throw error
+          throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
         }
         conflictRetries += 1
         // A storage conflict has no document revision, so both conflict types use
         // one fresh query before reapplying the business command.
         throwIfAborted(request.signal)
-        const latest = await this.application.query(
-          {
-            canvasId: request.canvasId,
-            scopeId: request.scopeId,
-          },
-          { limit: 0 },
-        )
+        let latest: Awaited<ReturnType<CanvasCommandExecutor["query"]>>
+        try {
+          latest = await this.application.query(
+            {
+              canvasId: request.canvasId,
+              scopeId: request.scopeId,
+            },
+            { limit: 0 },
+          )
+        } catch (queryError) {
+          throwPartialFailureIfRetained(queryError, prepared.retainedOnFailure)
+        }
         throwIfAborted(request.signal)
         expectedRevision = latest.revision
       }
@@ -405,18 +468,22 @@ export class CanvasResourceBusinessService {
       sources: [request.source],
     })
     throwIfAborted(request.signal)
-    validatePreparedCanvasResources(prepared)
-    if (prepared.items.length !== 1) {
-      throw new CanvasCommandValidationError("Canvas resource replacement must prepare exactly one item")
-    }
-    const command: CanvasReplaceResourceCommand = {
-      type: "resources.replace",
-      expectedTarget: structuredClone(request.expectedTarget),
-      item: prepared.items[0]!,
-      targetNodeId: request.targetNodeId,
-    }
+    try {
+      validatePreparedCanvasResources(prepared)
+      if (prepared.items.length !== 1) {
+        throw new CanvasCommandValidationError("Canvas resource replacement must prepare exactly one item")
+      }
+      const command: CanvasReplaceResourceCommand = {
+        type: "resources.replace",
+        expectedTarget: structuredClone(request.expectedTarget),
+        item: prepared.items[0]!,
+        targetNodeId: request.targetNodeId,
+      }
 
-    return this.executeWithConflictPolicy(request, command, prepared.warnings ?? [])
+      return await this.executeWithConflictPolicy(request, command, prepared.warnings ?? [])
+    } catch (error) {
+      throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
+    }
   }
 
   private async executeWithConflictPolicy(
@@ -506,6 +573,16 @@ function isCanvasResourceConflict(error: unknown) {
   return error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError
 }
 
+function throwPartialFailureIfRetained(
+  error: unknown,
+  retainedOnFailure: CanvasResourcePreparationResult["retainedOnFailure"],
+): never {
+  if (error instanceof CanvasResourcePartialFailureError) throw error
+  const retained = validateRetainedOnFailure(retainedOnFailure)
+  if (retained.length > 0) throw new CanvasResourcePartialFailureError(error, retained)
+  throw error
+}
+
 function canvasResourceReplayWarning(fromRevision: number, latestRevision: number, retries: number) {
   return [
     "Canvas changed while resources were being added;",
@@ -536,15 +613,24 @@ export function validateCanvasResourceSources(sources: readonly CanvasResourceSo
       throw new CanvasCommandValidationError(`Unsupported canvas resource source: ${String(source.kind)}`)
     }
   }
+  return sourceIds
 }
 
-function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResult) {
+function validatePreparedCanvasResources(
+  prepared: CanvasResourcePreparationResult,
+  unavailableSourceIds: ReadonlySet<string> = new Set(),
+) {
   if (!isRecord(prepared) || !Array.isArray(prepared.items)) {
     throw new CanvasCommandValidationError("Resource preparation must return an item array")
   }
+  const itemIds = new Set<string>()
   for (const item of prepared.items) {
     if (!isRecord(item)) throw new CanvasCommandValidationError("Prepared canvas resource is invalid")
     requireNonEmptyString(item.id, "Prepared resource id")
+    if (unavailableSourceIds.has(item.id) || itemIds.has(item.id)) {
+      throw new CanvasCommandValidationError(`Canvas resource source id is duplicated: ${item.id}`)
+    }
+    itemIds.add(item.id)
     if (!isRecord(item.metadata)) throw new CanvasCommandValidationError("Prepared resource metadata is required")
     requireResourceRuntimeState(item.state)
     for (const key of ["format", "text", "richText", "url", "posterUrl", "path"]) {
@@ -572,6 +658,43 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
   ) {
     throw new CanvasCommandValidationError("Resource preparation warnings must be strings")
   }
+  validateRetainedOnFailure(prepared.retainedOnFailure)
+}
+
+function mergeRetainedOnFailure(
+  ...values: Array<CanvasResourcePreparationResult["retainedOnFailure"]>
+): readonly { label: string }[] | undefined {
+  const retained = new Map<string, { label: string }>()
+  for (const value of values) {
+    for (const item of validateRetainedOnFailure(value)) {
+      if (!retained.has(item.label)) retained.set(item.label, item)
+    }
+  }
+  return retained.size > 0 ? [...retained.values()] : undefined
+}
+
+function validateRetainedOnFailure(value: unknown): readonly { label: string }[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) {
+    throw new CanvasCommandValidationError("Canvas resource retained labels must be an array")
+  }
+  const labels = new Set<string>()
+  return Object.freeze(
+    value.map((item) => {
+      if (!isRecord(item) || Object.keys(item).length !== 1 || !Object.hasOwn(item, "label")) {
+        throw new CanvasCommandValidationError("Canvas resource retained label is invalid")
+      }
+      const label = item.label
+      if (typeof label !== "string" || !label.trim() || label !== label.trim() || label.length > 4_096) {
+        throw new CanvasCommandValidationError("Canvas resource retained label is invalid")
+      }
+      if (labels.has(label)) {
+        throw new CanvasCommandValidationError(`Canvas resource retained label is duplicated: ${label}`)
+      }
+      labels.add(label)
+      return Object.freeze({ label })
+    }),
+  )
 }
 
 function requireResourceRuntimeState(value: unknown) {

@@ -7,19 +7,17 @@ import {
   createCanvasServices,
   type CanvasEditorHandle,
   type CanvasGenerateService,
-  type CanvasMediaKind,
   type CanvasNotification,
   type CanvasSelectionAction,
   type CanvasSelectionActionContext,
   type CanvasSelectionDragSource,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
-import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
+import { ProjectFilesController } from "@convax/project-files"
 import {
   dehydrateProjectCanvasDocument,
   ProjectCanvasController,
   hydrateProjectCanvasDocument,
-  projectFileReferenceKey,
 } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
@@ -107,69 +105,10 @@ const collapsedSecondarySidebarSize = 44
 const minimumCanvasPeekSize = 160
 const overlaySidebarBreakpoint = 1040
 
-function mediaKindFromMime(mimeType: string): CanvasMediaKind {
-  if (mimeType.startsWith("image/")) return "image"
-  if (mimeType.startsWith("video/")) return "video"
-  if (mimeType.startsWith("audio/")) return "audio"
-  return "file"
-}
-
 function projectAssetUrl(projectId: string, path: string) {
   const url = new URL(`convax-asset://${projectId}/file`)
   url.searchParams.set("path", path)
   return url.href
-}
-
-function projectFileResource(file: ProjectFileInfo, projectId: string) {
-  return {
-    kind: mediaKindFromMime(file.mimeType),
-    metadata: { [projectFileReferenceKey]: { path: file.path } },
-    mimeType: file.mimeType,
-    name: file.name,
-    url: projectAssetUrl(projectId, file.path),
-  }
-}
-
-function uploadItemId(scope: "local" | "project", index: number) {
-  return `resource_${scope}_${Date.now()}_${index}`
-}
-
-async function ensureProjectAssetsDirectory(projectId: string) {
-  await window.convax.projectFiles.writeTextFile({
-    content: "",
-    createParents: true,
-    path: ".convax/assets/.keep",
-    projectId,
-  })
-}
-
-async function importCanvasFiles(files: readonly File[], projectId: string, signal: AbortSignal) {
-  if (files.length === 0) return []
-  await ensureProjectAssetsDirectory(projectId)
-  const sourceTokens = files.map((file) => window.convax.projectFiles.createImportToken(file))
-  if (sourceTokens.some((token) => !token))
-    throw new Error("Only files from the local disk can be added to a project canvas")
-  const imported = await window.convax.projectFiles.importEntries({
-    destinationPath: ".convax/assets",
-    projectId,
-    sourceTokens,
-  })
-  const projectFiles = await Promise.all(
-    (imported.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })),
-  )
-  if (signal.aborted) throw signal.reason
-  return projectFiles
-}
-
-async function copyCanvasProjectFiles(paths: string[], projectId: string, signal: AbortSignal) {
-  if (paths.length === 0) return []
-  await ensureProjectAssetsDirectory(projectId)
-  const copied = await window.convax.projectFiles.copyEntries({ destinationPath: ".convax/assets", paths, projectId })
-  const projectFiles = await Promise.all(
-    (copied.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })),
-  )
-  if (signal.aborted) throw signal.reason
-  return projectFiles
 }
 
 function hydrateRendererCanvasDocument(document: CanvasDocument, projectId: string, title?: string) {
@@ -181,12 +120,19 @@ function hydrateRendererCanvasDocument(document: CanvasDocument, projectId: stri
     ({ path }) => projectAssetUrl(projectId, path),
   )
 }
-
 function mediaOperationActionIcon(editor: MediaOperationEditor) {
   if (editor === "time-point") return <ImageDown />
   if (editor === "time-range") return <Scissors />
   if (editor === "crop-region") return <Crop />
   return <Layers3 />
+}
+
+function canvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
+  return {
+    kind: "resource",
+    name,
+    uri: agentCanvasNodeResourceUri(canvasId, nodeId),
+  }
 }
 
 function App() {
@@ -858,32 +804,39 @@ function App() {
           )
         },
       },
-      upload: {
-        async upload(request) {
+      mutation: {
+        async add(request) {
           if (request.signal.aborted) throw request.signal.reason
-          if (!activeProjectId) throw new Error("Open a project before adding files to the canvas")
-          return resolveCanvasUploadItems(request, {
+          if (!activeProjectId || !activeCanvasId) {
+            throw new Error("Open a Project Canvas before adding resources")
+          }
+          await flushCanvasForAgent()
+          if (request.signal.aborted) throw request.signal.reason
+          const transport = resolveCanvasUploadItems(
+            {
+              files: request.files ?? [],
+              signal: request.signal,
+              transfer: request.transfer,
+            },
+            {
+              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              projectId: activeProjectId,
+            },
+          )
+          const localFiles = transport.localFiles.map(({ file, ...source }) => {
+            const sourceToken = window.convax.canvas.resources.createLocalFileToken(file)
+            if (!sourceToken) throw new Error("Only files from the local disk can be added to a Project Canvas")
+            return { ...source, sourceToken }
+          })
+          return window.convax.canvas.resources.add({
+            anchor: request.anchor,
+            canvasId: activeCanvasId,
+            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+            expectedRevision: request.expectedRevision,
+            localFiles,
             projectId: activeProjectId,
-            async copyProjectMediaFiles(paths, signal) {
-              const files = await copyCanvasProjectFiles([...paths], activeProjectId, signal)
-              return files.map((file, index) => ({
-                id: uploadItemId("project", index),
-                ...projectFileResource(file, activeProjectId),
-              }))
-            },
-            async importLocalMediaFiles(files, signal) {
-              const imported = await importCanvasFiles(files, activeProjectId, signal)
-              return imported.map((file, index) => ({
-                id: uploadItemId("local", index),
-                ...projectFileResource(file, activeProjectId),
-              }))
-            },
-            async readProjectTextFile(path, signal) {
-              const result = await window.convax.projectFiles.readTextFile({ path, projectId: activeProjectId })
-              if (!result.exists) throw new Error(`Could not read ${path}`)
-              if (signal.aborted) throw signal.reason
-              return { content: result.content, contentRevision: result.contentRevision }
-            },
+            ...(request.relation === undefined ? {} : { relation: request.relation }),
+            sources: [...request.sources, ...transport.sources],
           })
         },
       },

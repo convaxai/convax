@@ -20,7 +20,7 @@ interface PendingRequest {
 
 export interface CanvasRendererBridge {
   executeView(input: CanvasViewCommandRequest): Promise<CanvasViewCommandResult>
-  getViewSnapshot(viewId: string): Promise<CanvasViewSnapshot | null>
+  getViewSnapshot(viewId: string, targetWebContentsId?: number): Promise<CanvasViewSnapshot | null>
   reloadDocument(ref: CanvasDocumentRef): Promise<boolean>
 }
 
@@ -41,14 +41,18 @@ export function createCanvasRendererBridge(options: {
   }
   ipcMain.on(canvasRendererChannels.response, handleResponse)
 
-  const request = (input: CanvasRendererRequest, signal?: AbortSignal) =>
+  const request = (input: CanvasRendererRequest, signal?: AbortSignal, targetWebContentsId?: number) =>
     new Promise<CanvasRendererRequestResult>((resolve, reject) => {
       if (signal?.aborted) {
         reject(abortError(signal))
         return
       }
       const target = BrowserWindow.getAllWindows().find(
-        (window) => !window.isDestroyed() && options.isTrustedWebContentsId(window.webContents.id),
+        (window) =>
+          !window.isDestroyed() &&
+          !window.webContents.isDestroyed() &&
+          options.isTrustedWebContentsId(window.webContents.id) &&
+          (targetWebContentsId === undefined || window.webContents.id === targetWebContentsId),
       )
       if (!target) {
         reject(new Error("No Canvas renderer is available"))
@@ -95,8 +99,8 @@ export function createCanvasRendererBridge(options: {
       if (result.type !== "view.execute") throw new Error("Canvas renderer returned the wrong response")
       return result.result
     },
-    async getViewSnapshot(viewId) {
-      const result = await request({ type: "view.snapshot", viewId })
+    async getViewSnapshot(viewId, targetWebContentsId) {
+      const result = await request({ type: "view.snapshot", viewId }, undefined, targetWebContentsId)
       if (result.type !== "view.snapshot") throw new Error("Canvas renderer returned the wrong response")
       return result.snapshot
     },

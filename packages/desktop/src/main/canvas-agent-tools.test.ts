@@ -3,6 +3,8 @@ import {
   CanvasApplicationService,
   CanvasResourceBusinessService,
   CanvasRevisionConflictError,
+  type CanvasDocumentRef,
+  CanvasResourcePartialFailureError,
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
 import type { CanvasViewSnapshot } from "@convax/canvas/view"
@@ -205,7 +207,7 @@ describe("Canvas Agent tools", () => {
       canvasId: "canvas-inactive",
       commandId: "inactive-add",
       expectedRevision: 7,
-      sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
+      sources: [{ kind: "new-text", sourceId: "source", text: "Text" }],
     })
     await expect(
       provider.callTool(scope, "canvas_view", {
@@ -471,7 +473,7 @@ describe("Canvas Agent tools", () => {
         canvasId: "canvas-main",
         commandId: "invalid-view",
         expectedRevision: 0,
-        sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
+        sources: [{ kind: "new-text", sourceId: "source", text: "Text" }],
         view: { select: "yes" },
       }),
     ).rejects.toThrow("view.select")
@@ -510,6 +512,9 @@ describe("Canvas Agent tools", () => {
     const schema = JSON.stringify(definitions.find((tool) => tool.name === "canvas_add_resources")?.inputSchema)
     expect(schema).toContain('"const":"host-file"')
     expect(schema).toContain('"const":"host-directory"')
+    expect(schema).toContain('"const":"new-text"')
+    expect(schema).not.toContain("inline-text")
+    expect(schema).not.toContain("remote-url")
     expect(schema).not.toContain("project-file")
     expect(schema).not.toContain("project-directory")
   })
@@ -541,8 +546,9 @@ describe("Canvas Agent tools", () => {
               {
                 id: "folder-source",
                 kind: "folder" as const,
+                metadata: {},
                 name: "references",
-                path: "design/references",
+                state: { status: "stale" as const },
               },
             ],
           }
@@ -587,7 +593,7 @@ describe("Canvas Agent tools", () => {
     expect(savedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
     expect(document.nodes).toHaveLength(1)
     expect(document.nodes[0]).toMatchObject({
-      data: { kind: "folder", name: "references", path: "design/references" },
+      data: { kind: "folder", name: "references" },
       type: "file",
     })
   })
@@ -610,7 +616,16 @@ describe("Canvas Agent tools", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "note", kind: "text" as const, text: "Latest context" }] }
+          return {
+            items: [
+              {
+                id: "note",
+                kind: "text" as const,
+                metadata: {},
+                state: { status: "ready" as const, text: "Latest context" },
+              },
+            ],
+          }
         },
       },
       application,
@@ -637,7 +652,7 @@ describe("Canvas Agent tools", () => {
       canvasId: "canvas-main",
       commandId: "stale-resource-add",
       expectedRevision: 0,
-      sources: [{ kind: "inline-text", sourceId: "note", text: "Latest context" }],
+      sources: [{ kind: "new-text", sourceId: "note", text: "Latest context" }],
     })
 
     expect(result).toMatchObject({
@@ -666,7 +681,7 @@ describe("Canvas Agent tools", () => {
       },
       renderer: {
         async getViewSnapshot() {
-          return null
+          return activeCanvasSnapshot(0)
         },
         async executeView() {
           throw new Error("Unexpected view")
@@ -708,13 +723,147 @@ describe("Canvas Agent tools", () => {
         sources: [{ kind: "host-file", path: "readme.md", sourceId: 1 }],
       }),
     ).rejects.toThrow("sources[0].sourceId")
-    await expect(
-      provider.callTool(scope, "canvas_add_resources", {
-        ...base,
-        sources: [{ kind: "remote-url", sourceId: "remote", url: "file:///tmp/private" }],
-      }),
-    ).rejects.toThrow("must use HTTP or HTTPS")
+    for (const source of [
+      { kind: "inline-text", sourceId: "inline", text: "legacy" },
+      { kind: "remote-url", sourceId: "remote", url: "https://example.com/file" },
+      { kind: "host-file", path: "/tmp/private.txt", sourceId: "unix-native" },
+      { kind: "host-file", path: "C:\\private\\file.txt", sourceId: "windows-native" },
+      { kind: "host-file", path: ".CONVAX/assets/private", sourceId: "private-metadata" },
+      { kind: "host-directory", path: "../outside", sourceId: "external-directory" },
+    ]) {
+      await expect(provider.callTool(scope, "canvas_add_resources", { ...base, sources: [source] })).rejects.toThrow(
+        source.kind.startsWith("host-") ? "Project-relative" : "Unsupported Canvas resource source",
+      )
+    }
     expect(calls).toBe(0)
+  })
+
+  test("bounds resource-add failures while exposing only validated retained Notes labels", async () => {
+    let resourceFailure: unknown = new CanvasResourcePartialFailureError(
+      new Error("repository failed at /native/project/.convax/document.json"),
+      [{ label: "Notes/Brief-a1.md" }],
+    )
+    const provider = createCanvasAgentToolProvider({
+      application: {
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
+      },
+      renderer: {
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(0)
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          throw resourceFailure
+        },
+      },
+    })
+    const request = {
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "bounded-resource-failure",
+      expectedRevision: 0,
+      sources: [{ kind: "new-text", sourceId: "source", text: "Saved" }],
+    }
+    const scope = { directory: "/project", scopeId: "project-a" }
+
+    let failure: unknown
+    try {
+      await provider.callTool(scope, "canvas_add_resources", request)
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Error)
+    let message = failure instanceof Error ? failure.message : String(failure)
+    expect(message).toContain("Notes/Brief-a1.md")
+    expect(message).not.toContain("/native/")
+
+    resourceFailure = new CanvasResourcePartialFailureError(new Error("ENOENT: /native/private/source"), [
+      { label: "Generated/private.md" },
+    ])
+    try {
+      await provider.callTool(scope, "canvas_add_resources", { ...request, commandId: "malicious-partial" })
+    } catch (error) {
+      failure = error
+    }
+    message = failure instanceof Error ? failure.message : String(failure)
+    expect(message).toBe("Could not add resources to the Canvas")
+    expect(message).not.toContain("Generated/private.md")
+    expect(message).not.toContain("/native/")
+
+    resourceFailure = new Error("EACCES: /native/private/source")
+    try {
+      await provider.callTool(scope, "canvas_add_resources", { ...request, commandId: "ordinary-failure" })
+    } catch (error) {
+      failure = error
+    }
+    message = failure instanceof Error ? failure.message : String(failure)
+    expect(message).toBe("Could not add resources to the Canvas")
+    expect(message).not.toContain("/native/")
+  })
+
+  test("does not include renderer reload errors in Agent-visible sync warnings", async () => {
+    const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 1 }
+    const provider = createCanvasAgentToolProvider({
+      application: {
+        async execute() {
+          throw new Error("Unexpected execute")
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
+      },
+      renderer: {
+        async getViewSnapshot() {
+          return activeCanvasSnapshot(0)
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          throw new Error("ENOENT: /native/private/document.json")
+        },
+      },
+      resources: {
+        async addResources() {
+          return {
+            affectedNodeIds: ["created"],
+            changed: true,
+            createdNodeIds: ["created"],
+            document,
+            storageVersion: "v1",
+            warnings: [],
+          }
+        },
+      },
+    })
+
+    const result = await provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_add_resources", {
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "reload-warning",
+      expectedRevision: 0,
+      sources: [{ kind: "new-text", sourceId: "source", text: "Saved" }],
+    })
+
+    expect(result).toMatchObject({
+      sync: {
+        reloaded: false,
+        warning: "Canvas was updated, but the live editor could not be refreshed",
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain("/native/")
   })
 
   test("keeps a committed business mutation successful when its optional view update fails", async () => {
@@ -734,7 +883,7 @@ describe("Canvas Agent tools", () => {
           return activeCanvasSnapshot(document.revision)
         },
         async executeView() {
-          throw new Error("View changed before reveal")
+          throw new Error("View failed at /native/private/window-state.json")
         },
         async reloadDocument() {
           return true
@@ -759,15 +908,16 @@ describe("Canvas Agent tools", () => {
       canvasId: "canvas-main",
       commandId: "add-once",
       expectedRevision: 2,
-      sources: [{ kind: "inline-text", sourceId: "source", text: "Saved" }],
+      sources: [{ kind: "new-text", sourceId: "source", text: "Saved" }],
       view: { select: true },
     })
 
     expect(result).toMatchObject({
       changed: true,
       revision: 3,
-      warnings: [expect.stringContaining("resources were saved")],
+      warnings: ["Canvas resources were saved, but the live view could not be updated."],
     })
+    expect(JSON.stringify(result)).not.toContain("/native/")
   })
 
   test("does not start a durable Agent mutation when cancellation wins after catalog lookup", async () => {

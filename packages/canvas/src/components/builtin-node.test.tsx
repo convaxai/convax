@@ -119,7 +119,6 @@ function renderWithEditor(
     quickConnect: () => {},
     readOnly,
     removeNode: () => {},
-    replaceNodeMedia: () => {},
     selectNodes: () => {},
     selection: currentSelection,
     selectionContext: deriveCanvasSelectionContext(currentSelection),

@@ -1,5 +1,40 @@
+import type { CanvasResourceSource } from "@convax/canvas/application"
+import type { CanvasPoint } from "@convax/canvas/core"
+
 export const desktopProtocolChannel = "desktop:protocol-version"
 export const desktopProtocolVersion = "convax.desktop-ipc/18"
+export const canvasResourceIpcChannel = "canvas:resource-add"
+
+export interface CanvasResourceAddResult {
+  createdNodeIds: readonly string[]
+  revision: number
+  warnings: readonly string[]
+}
+
+export interface CanvasResourceAddInput {
+  anchor: CanvasPoint
+  canvasId: string
+  commandId: string
+  expectedRevision: number
+  localFiles?: readonly {
+    mediaType?: string
+    name: string
+    sourceId: string
+    sourceToken: string
+  }[]
+  projectId: string
+  relation?: {
+    anchorNodeIds: readonly string[]
+    direction?: "from-anchor" | "to-anchor"
+    mode: "connect" | "none"
+  }
+  sources: readonly CanvasResourceSource[]
+}
+
+export interface CanvasResourceClient {
+  add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
+  createLocalFileToken(file: File): string
+}
 
 export interface DesktopProtocolClient {
   readonly version: string

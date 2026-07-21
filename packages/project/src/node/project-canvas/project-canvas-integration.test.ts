@@ -4,14 +4,16 @@ import os from "node:os"
 import path from "node:path"
 import {
   CanvasApplicationService,
+  CanvasResourceBusinessService,
+  CanvasResourcePartialFailureError,
   CanvasStorageConflictError,
-  createAddCanvasResourcesCommand,
 } from "@convax/canvas/application"
 import { getProjectResourceReference } from "../../canvas/project-resources"
 import { NodeProjectManager } from "../project-manager"
 import type { ProjectPrivateStorage } from "../project-private-storage"
 import { ProjectCanvasDocumentRepository } from "./project-canvas-document-repository"
 import { ProjectCanvasDocumentService } from "./project-canvas-document-service"
+import { ProjectFilePublisher } from "./project-file-publisher"
 import { NodeProjectCanvasManager } from "./project-canvas-manager"
 import { ProjectCanvasResourcePreparation } from "./project-canvas-resource-preparation"
 import { ProjectManagedAssetStore } from "./project-managed-asset-store"
@@ -154,6 +156,7 @@ describe("project canvas persistence integration", () => {
       },
       assets,
     )
+    const resources = new CanvasResourceBusinessService(preparation, application)
 
     const admission = preparation.withAdmittedExternalFiles(
       {
@@ -168,16 +171,18 @@ describe("project canvas persistence integration", () => {
         projectId: project.id,
       },
       async (prepared) =>
-        application.execute({
-          canvasId: ref.canvasId,
-          envelope: {
+        resources.addPreparedResources(
+          {
             actor: { id: "integration", kind: "test" },
-            command: createAddCanvasResourcesCommand({ anchor: { x: 10, y: 20 }, items: prepared.items }),
+            anchor: { x: 10, y: 20 },
+            canvasId: ref.canvasId,
             commandId: "admit-and-save",
             expectedRevision: initialDocument.revision,
+            scopeId: ref.scopeId,
+            sources: [],
           },
-          scopeId: ref.scopeId,
-        }),
+          prepared,
+        ),
     )
     await writeStarted
     let queuedEntered = false
@@ -200,5 +205,53 @@ describe("project canvas persistence integration", () => {
       mediaType: "image/png",
       name: "outside.png",
     })
+  })
+
+  test("retains a published Note when the Canvas commit fails", async () => {
+    const projectRoot = path.join(temporaryRoot, "project")
+    await fs.mkdir(projectRoot)
+    const manager = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "user-data", "projects.json") })
+    const project = await manager.addProject(projectRoot)
+    const canvases = new NodeProjectCanvasManager(manager, manager)
+    const assets = new ProjectManagedAssetStore(manager)
+    const repository = new ProjectCanvasDocumentRepository(manager, canvases, assets)
+    const ref = { canvasId: "canvas-main", scopeId: project.id }
+    const initialized = await new ProjectCanvasDocumentService(repository, canvases).load(ref)
+    if (!initialized.document) throw new Error("Canvas was not initialized")
+
+    const commitFailure = new Error("private repository path must not escape")
+    const application = new CanvasApplicationService({
+      load: (input) => repository.load(input),
+      async save() {
+        throw commitFailure
+      },
+    })
+    const preparation = new ProjectCanvasResourcePreparation(
+      manager,
+      new ProjectFilePublisher(manager, { randomId: () => "retained-a1" }),
+      assets,
+    )
+    const resources = new CanvasResourceBusinessService(preparation, application)
+
+    try {
+      await resources.addResources({
+        actor: { id: "integration", kind: "test" },
+        anchor: { x: 10, y: 20 },
+        canvasId: ref.canvasId,
+        commandId: "publish-then-fail",
+        expectedRevision: initialized.document.revision,
+        scopeId: ref.scopeId,
+        sources: [{ kind: "new-text", name: "Brief", sourceId: "brief", text: "# Retained brief" }],
+      })
+      throw new Error("Expected the Canvas commit to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
+      expect((error as CanvasResourcePartialFailureError).cause).toBe(commitFailure)
+      expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([
+        { label: "Notes/Brief-retained-a1.md" },
+      ])
+    }
+
+    expect(await fs.readFile(path.join(projectRoot, "Notes", "Brief-retained-a1.md"), "utf8")).toBe("# Retained brief")
   })
 })

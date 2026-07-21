@@ -802,11 +802,17 @@ git commit -m "feat(project): prepare file-backed canvas resources"
 
 ## Task 5: Route Desktop UI and Agent additions through one resource operation
 
+**Scope correction after independent review:** This task adds only the shared resource-add path. Resource
+invalidation remains in Task 8 and the real seven-day GC race remains in Task 9. Desktop is a thin,
+sender-scoped composition edge; it must not become a second resource service or trust Renderer-supplied
+actor/scope values.
+
 **Files:**
 
 - Modify: `packages/desktop/src/desktop-protocol.ts`
 - Test: `packages/desktop/src/desktop-protocol.test.ts`
 - Modify: `packages/desktop/src/preload/index.ts`
+- Modify: `packages/desktop/src/renderer/env.d.ts`
 - Modify: `packages/desktop/src/main/canvas-document-ipc.ts`
 - Test: `packages/desktop/src/main/canvas-document-ipc.test.ts`
 - Modify: `packages/desktop/src/main/index.ts`
@@ -819,15 +825,18 @@ git commit -m "feat(project): prepare file-backed canvas resources"
 - Modify: `packages/canvas/src/services.tsx`
 - Modify: `packages/canvas/src/components/canvas-editor.tsx`
 - Test: `packages/canvas/src/components/canvas-editor.test.tsx`
+- Modify: `packages/canvas/src/editor-context.tsx`
+- Modify: `packages/canvas/src/components/builtin-node.tsx`
+- Test: `packages/canvas/src/components/builtin-node.test.tsx`
 
-- [ ] **Step 1: Write failing protocol and shared-operation tests**
+- [x] **Step 1: Write failing protocol and shared-operation tests**
 
 Add a renderer-safe contract under `window.convax.canvas.resources`:
 
 ```ts
 export interface CanvasResourceClient {
+  createLocalFileToken(file: File): string
   add(input: {
-    actor: { id: string; kind: string }
     anchor: { x: number; y: number }
     canvasId: string
     commandId: string
@@ -835,11 +844,16 @@ export interface CanvasResourceClient {
     localFiles?: readonly { name: string; sourceToken: string; sourceId: string; mediaType?: string }[]
     projectId: string
     sources: readonly CanvasResourceSource[]
-  }): Promise<CanvasApplicationCommandResult>
+  }): Promise<{ createdNodeIds: readonly string[]; revision: number; warnings: readonly string[] }>
 }
 ```
 
-In preload-facing types, `sourceToken` remains opaque. In the actual `ipcRenderer.invoke` payload, consume each token exactly once and send a Main-private `sourcePath`; never expose that payload shape in `renderer/env.d.ts`.
+In preload-facing types, `sourceToken` remains opaque. Add token creation below `canvas.resources` rather
+than reusing Project Files import. Validate the entire batch before consuming anything: duplicate or invalid
+tokens and `sourceId` collisions across portable and local sources reject atomically. After an accepted IPC
+attempt, every token is consumed whether the Main call succeeds or fails. In the actual
+`ipcRenderer.invoke` payload, send a Main-private `sourcePath`; never expose that payload shape in
+`renderer/env.d.ts`, results, or errors.
 
 Add tests proving:
 
@@ -857,7 +871,7 @@ expect(mainRequest.externalFiles).toEqual([
 expect(rendererResult).not.toContain("/native/outside.png")
 ```
 
-- [ ] **Step 2: Run protocol tests and verify RED**
+- [x] **Step 2: Run protocol tests and verify RED**
 
 Run:
 
@@ -869,24 +883,32 @@ bun test packages/desktop/src/renderer/canvas-upload.test.ts
 
 Expected: failures because `canvas.resources` and the new bridge version do not exist.
 
-- [ ] **Step 3: Add the incompatible bridge atomically**
+- [x] **Step 3: Add the incompatible bridge atomically**
 
-Increment `desktopProtocolVersion` by one and add only these channels:
+Increment `desktopProtocolVersion` by one and add only the resource-add IPC channel. Token creation is a
+preload-local method that uses `webUtils` and never calls Main. Do not add an invalidate channel in this task;
+Task 8 owns watcher-driven invalidation.
 
 ```ts
 const canvasResourceChannels = {
   add: "canvas:resource-add",
-  invalidate: "canvas:resource-invalidate",
 } as const
 ```
 
-The Main `add` handler must validate the trusted sender, bind the active Project/Canvas scope, convert consumed native source paths into `ProjectCanvasResourcePreparation.admitExternalFiles`, and execute the same `CanvasResourceBusinessService` used by Agent and generation. Keep revision retry semantics in the business service; do not duplicate placement or relation logic in IPC.
+The Main `add` handler must validate the trusted sender and resolve the active Project/Canvas for that exact
+`event.sender`; it must not select the first mounted Renderer. Renderer-supplied Project/Canvas ids are stale
+guards only, and Main injects the fixed UI actor. Convert consumed native source paths into
+`ProjectCanvasResourcePreparation.withAdmittedExternalFiles` and execute the same
+`CanvasResourceBusinessService` used by Agent and generation. Keep revision retry semantics in the business
+service; do not duplicate placement or relation logic in IPC.
 
 For local files, call `ProjectManagedAssetStore.withAdmittedExternalFiles` and keep its Project mutex through the resulting Canvas application commit. Refactor `CanvasResourceBusinessService` to expose a host-only `addPreparedResources(request, prepared)` method that reuses the same validation, placement, relation, conflict, and command-id logic as `addResources`. Project-path and `new-text` sources continue through `addResources`; pre-admitted external items use `addPreparedResources` inside the mutex callback.
 
-Add a race test that starts reuse of a seven-day orphan, pauses immediately before Canvas save, requests GC, then completes the save. The expected result is a committed reference and an existing blob; GC may run only after the admission mutex releases and must then observe the live reference.
+Extend the real admission -> `addPreparedResources` -> repository-save integration test to prove the Project
+mutex remains held through the commit. The seven-day orphan/GC race is tested with the real GC in Task 9,
+not simulated here.
 
-- [ ] **Step 4: Replace renderer-side copying**
+- [x] **Step 4: Replace renderer-side copying**
 
 Delete `ensureProjectAssetsDirectory`, `copyCanvasProjectFiles`, `importCanvasFiles`, and `projectFileResource` from `packages/desktop/src/renderer/index.tsx`. Change `resolveCanvasUploadItems` so it returns transport sources rather than prepared node items:
 
@@ -897,11 +919,14 @@ export interface CanvasUploadSources {
 }
 ```
 
-Project file drags produce `host-file`; Project directory drags produce `host-directory`; local browser files produce opaque tokens immediately before `canvas.resources.add`. Do not call Project Files `copyEntries`, `importEntries`, `readTextFile`, or `writeTextFile` for Canvas admission.
+Project file drags produce `host-file`; Project directory drags produce `host-directory`; local browser files
+produce opaque tokens immediately before `canvas.resources.add`. Flush the mounted Canvas through the
+existing view bridge before invoking Main so a stale Renderer save cannot overwrite the Main commit. Do not
+call Project Files `copyEntries`, `importEntries`, `readTextFile`, or `writeTextFile` for Canvas admission.
 
 Add a partial-success test in which `new-text` publication succeeds and Canvas commit fails. Assert the `Notes/*.md` file remains and the error contains its portable Project path.
 
-- [ ] **Step 5: Give CanvasEditor one host-neutral mutation service**
+- [x] **Step 5: Give CanvasEditor one host-neutral mutation service**
 
 In `packages/canvas/src/services.tsx` add:
 
@@ -918,9 +943,13 @@ export interface CanvasResourceMutationService {
 }
 ```
 
-CanvasEditor toolbar text creation must call this service with `{ kind: "new-text", sourceId, text: "" }`; file drop must call it with the selected files and portable Project sources. On success, call `editor.reload()` and preserve viewport. Remove direct `addNode("text")` and direct upload-item insertion.
+Every CanvasEditor new-text entry (toolbar, blank-canvas double click, menus, and quick-connect) must call this
+service with `{ kind: "new-text", sourceId, text: "" }`; file drop must call it with selected files and portable
+Project sources. Quick-connect uses the mutation relation field. On success, reload while preserving viewport.
+Remove direct `addNode("text")`, direct upload-item insertion, and source-less media/file registry entries.
+Until Task 8 introduces typed relink, disable/remove `replaceNodeMedia`; never implement replacement as add.
 
-- [ ] **Step 6: Remove old Agent source kinds**
+- [x] **Step 6: Remove old Agent source kinds**
 
 Change the Agent JSON schema and parser to accept only:
 
@@ -932,7 +961,10 @@ Change the Agent JSON schema and parser to accept only:
 
 Update `canvas-storyboard/SKILL.md` to say that `new-text` publishes Markdown under `Notes/` before adding a Canvas node. Add rejection tests for `inline-text`, `remote-url`, native paths, `.convax`, and external directories.
 
-- [ ] **Step 7: Run Canvas/Desktop package gates**
+Agent and Renderer callers cannot supply a trusted actor or widen the current Project/Canvas. Main binds the
+live scope, and external local files enter only through the opaque-token path.
+
+- [x] **Step 7: Run Canvas/Desktop package gates**
 
 Run:
 
@@ -946,7 +978,7 @@ bun run pack:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 8: Commit shared resource insertion**
+- [x] **Step 8: Commit shared resource insertion**
 
 ```bash
 git add packages/canvas packages/desktop
@@ -955,21 +987,41 @@ git commit -m "feat(desktop): share canvas resource admission"
 
 ## Task 6: Hydrate resource references and make text editing file-backed
 
+**Scope correction after independent review:** Hydration is a separate Project Node capability, not another
+responsibility of resource preparation. Task 6 resolves every requested snapshot from disk without a cache;
+Task 8 later adds invalidation only where mounted views need it. File compare-and-replace belongs to Project
+Files; Desktop only binds a live node id to its exact typed reference. Managed editable-copy/relink is deferred
+to Task 8 so no direct document rewrite is added.
+
 **Files:**
 
 - Modify: `packages/project/src/canvas/project-resources.ts`
 - Test: `packages/project/src/canvas/project-resources.test.ts`
-- Modify: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.ts`
-- Test: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts`
+- Create: `packages/project/src/node/project-canvas/project-canvas-resource-hydrator.ts`
+- Test: `packages/project/src/node/project-canvas/project-canvas-resource-hydrator.test.ts`
+- Modify: `packages/project-files/src/contracts.ts`
+- Modify: `packages/project/src/node/project-manager.ts`
+- Test: `packages/project/src/node/project-manager.test.ts`
+- Modify: `packages/desktop/src/desktop-protocol.ts`
+- Test: `packages/desktop/src/desktop-protocol.test.ts`
 - Modify: `packages/desktop/src/preload/index.ts`
+- Modify: `packages/desktop/src/preload/canvas-resource-client.ts`
+- Test: `packages/desktop/src/preload/canvas-resource-client.test.ts`
 - Modify: `packages/desktop/src/main/canvas-document-ipc.ts`
+- Test: `packages/desktop/src/main/canvas-document-ipc.test.ts`
+- Modify: `packages/desktop/src/main/index.ts`
 - Modify: `packages/desktop/src/renderer/index.tsx`
+- Modify: `packages/canvas/src/types.ts`
 - Modify: `packages/canvas/src/services.tsx`
 - Modify: `packages/canvas/src/editor-context.tsx`
 - Modify: `packages/canvas/src/components/canvas-editor.tsx`
 - Test: `packages/canvas/src/components/canvas-editor.test.tsx`
 - Modify: `packages/canvas/src/components/builtin-node.tsx`
 - Test: `packages/canvas/src/components/builtin-node.test.tsx`
+- Modify: `packages/project/src/controller.ts`
+- Test: `packages/project/src/controller.test.ts`
+- Modify: `packages/workbench/src/controller.ts`
+- Test: `packages/workbench/src/controller.test.ts`
 
 - [ ] **Step 1: Write failing hydration-state tests**
 
@@ -1033,7 +1085,6 @@ Run:
 
 ```bash
 bun test packages/project/src/canvas/project-resources.test.ts
-bun test packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts
 bun test packages/canvas/src/components/builtin-node.test.tsx
 ```
 
@@ -1053,6 +1104,7 @@ export interface ProjectResourceSnapshot {
   status: CanvasResourceStatus
   text?: string
   url?: string
+  editableText?: boolean
 }
 
 export async function hydrateProjectCanvasDocument(
@@ -1061,7 +1113,13 @@ export async function hydrateProjectCanvasDocument(
 ): Promise<CanvasDocument>
 ```
 
-The Node resolver must revalidate reference syntax, Project containment, regular-file type, size, and managed digest on every call. For text it returns UTF-8 content plus SHA-256 `contentRevision`; for media it returns metadata and a Desktop-created `convax-asset:` URL, never a native path.
+Implement the Node resolver as a dedicated `ProjectCanvasResourceHydrator`. It revalidates reference syntax,
+Project containment, regular-file type, size, and managed digest on every call, reusing the shared
+`ProjectManagedAssetStore`. A URL factory is injected by Desktop. For text it returns strict UTF-8 content
+plus the raw-byte SHA-256 `contentRevision`; for media it returns metadata and a Desktop-created
+`convax-asset:` URL, never a native path. Per-node failures become safe bounded states and cannot leak native
+filesystem errors. Do not add a hydration cache in this task: disk remains the only content truth and Task 8
+will define watcher-driven refresh before any caching policy exists.
 
 - [ ] **Step 5: Add file-backed text read/save ports**
 
@@ -1071,7 +1129,7 @@ Add this host-neutral Canvas service:
 export class CanvasTextResourceConflictError extends Error {
   constructor(
     readonly expectedRevision: string,
-    readonly actualRevision: string,
+    readonly actualRevision: string | null,
   ) {
     super("Canvas text resource changed outside Convax")
     this.name = "CanvasTextResourceConflictError"
@@ -1087,19 +1145,16 @@ export interface CanvasTextResourceService {
     },
     signal: AbortSignal,
   ): Promise<{ contentRevision: string }>
-  saveManagedCopy(
-    input: {
-      content: string
-      nodeId: string
-    },
-    signal: AbortSignal,
-  ): Promise<{ contentRevision: string }>
 }
 ```
 
-Desktop binds `nodeId` to the live active Project/Canvas, reloads the document, extracts the exact `project-file` reference, rejects managed assets as read-only, reads current bytes, compares the actual SHA-256 revision, and atomically replaces only that Project file. The IPC request must not accept a path or reference from renderer.
+Add an internal Project Files compare-and-replace port that performs bounded stable read, raw-byte SHA-256
+comparison, and atomic replacement inside the existing per-file write queue. Desktop binds `nodeId` to the
+live active Project/Canvas, reloads the document, extracts the exact `project-file` reference, rejects managed
+assets as read-only, and calls that port. The IPC request must not accept a path or reference from Renderer.
 
-Extend the service with `saveManagedCopy(input: { content: string; nodeId: string }, signal)` for managed `.md`/`.txt` nodes. It publishes a new file under `Notes/`, then commits a node-reference replacement from `managed-asset` to `project-file`; if the Canvas commit fails, it retains the Notes file and reports partial success. The text toolbar labels this action `Save editable copy`. Other managed formats and non-text Project files remain read-only.
+Managed `.md`/`.txt` remains read-only in this task. Task 8 adds typed relink and then implements
+`Save editable copy`; do not mutate document references directly in Desktop or Project Node code.
 
 - [ ] **Step 6: Keep draft lifecycle out of Canvas persistence**
 
@@ -1114,11 +1169,20 @@ export interface CanvasPendingDraft {
 registerPendingDraft(draft: CanvasPendingDraft): () => void
 ```
 
-`prepareToLeave` must ask a host-provided decision service for `"save" | "discard" | "cancel"`; save awaits every registered draft, discard calls each discard callback, and cancel throws `CanvasLeaveCanceledError` so Desktop keeps the current Project/Canvas mounted. Browser `beforeunload` must remain guarded while any draft is registered.
+`prepareToLeave` must ask a host-provided decision service for `"save" | "discard" | "cancel"`; save awaits
+every registered draft, discard calls each discard callback, and cancel returns `false`. Project and Workbench
+before-change guards must accept that result as a clean cancellation, retain the current scope, clear their
+changing state, and keep `error` null instead of surfacing a Canvas-specific exception.
+Browser `beforeunload` remains guarded while any draft is registered. Abort before file commit performs no
+write; after atomic commit the operation reports success and scope departure waits for it.
 
 - [ ] **Step 7: Change BuiltinTextFileNode to explicit Save/Cancel**
 
-Read display content from `data.resourceState.text ?? ""`. Tiptap updates only a component-local draft. Replace “Finish editing” with separate `Save text` and `Cancel text` actions. Successful save updates local rendered content/revision through resource invalidation; it must not call `updateCanvasNodeData`, `commit`, `beginGesture`, or Canvas undo. Enable editing only for Project `.md`/`.txt`; offer `Save editable copy` for managed `.md`/`.txt`; render every other format read-only.
+Read display content from `data.resourceState.text ?? ""`. Tiptap updates only a component-local draft.
+Replace “Finish editing” with separate `Save text` and `Cancel text` actions. Successful save refreshes runtime
+state without calling full history hydration (which clears undo/redo), `updateCanvasNodeData`, `commit`,
+`beginGesture`, or Canvas undo. Enable editing only for Project `.md`/`.txt`; managed text and every other
+format remain read-only until typed relink lands in Task 8.
 
 - [ ] **Step 8: Run package gates**
 
@@ -1153,7 +1217,7 @@ git commit -m "feat(canvas): save text through project files"
 - Test: `packages/project/src/node/project-canvas/project-file-publisher.test.ts`
 - Modify: `docs/generation-tool-plugins.md`
 
-- [ ] **Step 1: Write failing media and text publication tests**
+- [x] **Step 1: Write failing media and text publication tests**
 
 Replace managed-output assertions in `generation-canvas-service.test.ts` with:
 
@@ -1201,7 +1265,7 @@ test("retains a published result when Canvas commit fails", async () => {
 
 Delete the former expectation that `deleteManagedAssets` runs after a commit failure.
 
-- [ ] **Step 2: Run the generation tests and verify RED**
+- [x] **Step 2: Run the generation tests and verify RED**
 
 Run:
 
@@ -1211,7 +1275,7 @@ bun test packages/desktop/src/main/generation-canvas-service.test.ts
 
 Expected: failures because generation still imports into `.convax/assets` and rolls it back.
 
-- [ ] **Step 3: Add no-clobber Generated publication**
+- [x] **Step 3: Add no-clobber Generated publication**
 
 Extend `ProjectFilePublisher` with:
 
@@ -1226,7 +1290,7 @@ publishGenerated(input: {
 
 It must write to `.convax/staging/<operation-id>`, verify the byte count, fsync and close, then publish with no replace to `Generated/<safe-stem>-<short-id><extension>`. A collision chooses another short id. Existing files, directories, and symlinks are never replaced.
 
-- [ ] **Step 4: Replace generation admission and rollback**
+- [x] **Step 4: Replace generation admission and rollback**
 
 In `GenerationCanvasProjectPort`, replace `importEntries` and `deleteManagedAssets` with `publishGenerated`. Remove `#importOutputFiles` and create one published Project path per admitted text/media result. Pass those paths as `host-file` sources into the existing shared resource business service.
 
@@ -1242,11 +1306,11 @@ throw new GenerationPublicationPartialSuccessError({
 
 The error may expose portable `Generated/*` paths, never native paths or sidecar diagnostics.
 
-- [ ] **Step 5: Keep reference staging typed**
+- [x] **Step 5: Keep reference staging typed**
 
 Update generation input staging to read `ProjectResourceReference` rather than `ProjectFileReference.path`. Project files resolve through containment checks; managed assets resolve through digest verification. Text input comes from hydrated bytes or a fresh Node read, never from persisted Canvas data. Recheck the exact reference and content revision immediately before the external call.
 
-- [ ] **Step 6: Run generation and package gates**
+- [x] **Step 6: Run generation and package gates**
 
 Run:
 
@@ -1260,7 +1324,7 @@ bun --cwd packages/desktop test
 
 Expected: all commands exit 0.
 
-- [ ] **Step 7: Commit file-first generation**
+- [x] **Step 7: Commit file-first generation**
 
 ```bash
 git add packages/project/src/node/project-canvas packages/desktop/src/main/generation-canvas-service.ts packages/desktop/src/main/generation-canvas-service.test.ts docs/generation-tool-plugins.md

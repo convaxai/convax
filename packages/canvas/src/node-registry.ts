@@ -12,7 +12,7 @@ export interface CanvasNodeDefinition {
   type: CanvasNodeType
   label: string
   component: ComponentType<NodeProps<CanvasNode>>
-  create: (input: CanvasNodeCreateInput) => CanvasNode
+  create?: (input: CanvasNodeCreateInput) => CanvasNode
   hidden?: boolean
 }
 
@@ -56,7 +56,8 @@ export function createCanvasNodeRegistry(initial: readonly CanvasNodeDefinition[
     },
     register(definition) {
       validateNodeType(definition.type)
-      if (definitions.has(definition.type)) throw new Error(`Canvas node type is already registered: ${definition.type}`)
+      if (definitions.has(definition.type))
+        throw new Error(`Canvas node type is already registered: ${definition.type}`)
       definitions.set(definition.type, definition)
       emit()
       return () => {

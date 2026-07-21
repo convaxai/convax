@@ -62,7 +62,7 @@ import {
   GenerationPluginRuntime,
   resolveGenerationPluginExecutable,
 } from "./generation-plugin-runtime"
-import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
+import { registerCanvasDocumentIpc, registerCanvasResourceIpc } from "./canvas-document-ipc"
 import { createPluginOperationAgentToolProvider } from "./plugin-operation-agent-tools"
 import {
   registerCanvasExternalMediaDragIpc,
@@ -444,10 +444,12 @@ function startApplication() {
         })
       },
     })
-    const canvasResources = new CanvasResourceBusinessService(
-      new ProjectCanvasResourcePreparation(projectManager, projectFilePublisher, projectAssets),
-      canvasApplication,
+    const canvasResourcePreparation = new ProjectCanvasResourcePreparation(
+      projectManager,
+      projectFilePublisher,
+      projectAssets,
     )
+    const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
     const managedCanvasMedia = new ManagedCanvasMediaResolver({
       documents: canvasDocuments,
       projects: projectManager,
@@ -536,7 +538,9 @@ function startApplication() {
     )
     const pluginServices = new PluginServiceHost(generationRuntime, pluginServiceBrowserAuthorization)
     const generation = new GenerationCanvasService({
+      assets: projectAssets,
       documents: canvasDocuments,
+      publisher: projectFilePublisher,
       projects: projectManager,
       renderer: canvasRenderer,
       resources: canvasResources,
@@ -884,7 +888,7 @@ function startApplication() {
       },
       async resolveActiveCanvas(senderId) {
         if (process.platform !== "darwin" || !trustedWebContents.has(senderId)) return null
-        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", senderId)
         return snapshot
           ? {
               canvasId: snapshot.documentId,
@@ -892,6 +896,19 @@ function startApplication() {
               scopeId: snapshot.scopeId,
               selectedEdgeIds: snapshot.selectedEdgeIds,
               selectedNodeIds: snapshot.selectedNodeIds,
+            }
+          : null
+      },
+    })
+    const disposeCanvasResourceIpc = registerCanvasResourceIpc(canvasResources, canvasResourcePreparation, {
+      ...ipcSecurity,
+      async resolveActiveCanvas(event) {
+        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
+        return snapshot
+          ? {
+              canvasId: snapshot.documentId,
+              projectId: snapshot.scopeId,
+              revision: snapshot.revision,
             }
           : null
       },
@@ -1023,6 +1040,7 @@ function startApplication() {
         disposeCanvasDocumentIpc,
         disposePluginCanvasImageIpc,
         disposeCanvasExternalMediaDragIpc,
+        disposeCanvasResourceIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,

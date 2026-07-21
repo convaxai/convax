@@ -5,7 +5,12 @@ import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { requireProjectResourceReference } from "../../canvas/project-resources"
-import { ProjectFilePublisher } from "./project-file-publisher"
+import {
+  defaultProjectGeneratedPublicationMaximumBytes,
+  defaultProjectTextPublicationMaximumBytes,
+  ProjectFilePublisher,
+  type ProjectFilePublisherOptions,
+} from "./project-file-publisher"
 
 let temporaryRoot = ""
 let projectRoot = ""
@@ -21,6 +26,119 @@ afterEach(async () => {
 })
 
 describe("ProjectFilePublisher", () => {
+  const publisherLimitMaximums = [
+    ["maximumBytes", defaultProjectTextPublicationMaximumBytes],
+    ["maximumGeneratedBytes", defaultProjectGeneratedPublicationMaximumBytes],
+  ] as const satisfies ReadonlyArray<readonly [keyof ProjectFilePublisherOptions, number]>
+  const invalidPublisherLimitCases = publisherLimitMaximums.flatMap(([option, maximum]) =>
+    [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, maximum + 1].map(
+      (value) => [option, value, maximum] as const,
+    ),
+  )
+
+  test.each(invalidPublisherLimitCases)(
+    "rejects invalid or hard-limit-raising %s override %p above maximum %p",
+    (option, value, maximum) => {
+      expect(() => new ProjectFilePublisher(roots(), { [option]: value } as ProjectFilePublisherOptions)).toThrow(
+        `Project publication ${option} must be a positive safe integer no greater than ${maximum}`,
+      )
+    },
+  )
+
+  test("publishes generated UTF-8 bytes below Generated through shared private staging", async () => {
+    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "generated-a1" })
+
+    const published = await publisher.publishGenerated({
+      bytes: Buffer.from("A generated paragraph", "utf8"),
+      extension: ".md",
+      projectId: "project_one",
+    })
+
+    expect(published).toEqual({ path: "Generated/generated-generated-a1.md" })
+    expect(await fs.readFile(path.join(projectRoot, "Generated", "generated-generated-a1.md"), "utf8")).toBe(
+      "A generated paragraph",
+    )
+    expect(await fs.readFile(path.join(projectRoot, ".convax", "staging", "generated-a1"), "utf8")).toBe(
+      "A generated paragraph",
+    )
+  })
+
+  test("streams a generated media source without reading the whole file into memory", async () => {
+    const sourcePath = path.join(temporaryRoot, "verified-source.png")
+    const bytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(256 * 1024, 7),
+    ])
+    await fs.writeFile(sourcePath, bytes)
+    const publisher = new ProjectFilePublisher(roots(), {
+      maximumGeneratedBytes: bytes.byteLength,
+      randomId: () => "media-a1",
+    })
+    const originalReadFile = fs.readFile
+    fs.readFile = ((target: Parameters<typeof fs.readFile>[0], ...args: unknown[]) => {
+      if (path.resolve(String(target)) === path.resolve(sourcePath)) {
+        throw new Error("generated media source was read wholesale")
+      }
+      return Reflect.apply(originalReadFile, fs, [target, ...args])
+    }) as typeof fs.readFile
+
+    try {
+      const published = await publisher.publishGenerated({
+        extension: ".png",
+        name: "render.png",
+        projectId: "project_one",
+        sourcePath,
+      })
+
+      expect(published).toEqual({ path: "Generated/render-media-a1.png" })
+    } finally {
+      fs.readFile = originalReadFile
+    }
+    expect(await fs.readFile(path.join(projectRoot, "Generated", "render-media-a1.png"))).toEqual(bytes)
+    expect(await fs.readFile(path.join(projectRoot, ".convax", "staging", "media-a1"))).toEqual(bytes)
+  })
+
+  test("closes a generated source handle when staging copy fails", async () => {
+    const sourcePath = path.join(temporaryRoot, "failing-source.png")
+    await fs.writeFile(sourcePath, Buffer.alloc(128, 3))
+    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "close-source" })
+    const originalOpen = fs.open
+    let sourceClosed = false
+    let cleanupSource: (() => Promise<void>) | undefined
+    fs.open = (async (target: Parameters<typeof fs.open>[0], ...args: unknown[]) => {
+      const handle = await Reflect.apply(originalOpen, fs, [target, ...args])
+      if (path.resolve(String(target)) === path.resolve(sourcePath)) {
+        const originalClose = handle.close.bind(handle)
+        cleanupSource = originalClose
+        handle.close = async () => {
+          sourceClosed = true
+          await originalClose()
+        }
+        handle.read = async () => {
+          throw new Error("injected source read failure")
+        }
+      }
+      return handle
+    }) as typeof fs.open
+
+    let closedBeforeCleanup = false
+    try {
+      await expect(
+        publisher.publishGenerated({
+          extension: ".png",
+          projectId: "project_one",
+          sourcePath,
+        }),
+      ).rejects.toThrow("injected source read failure")
+      closedBeforeCleanup = sourceClosed
+    } finally {
+      fs.open = originalOpen
+      if (!sourceClosed) await cleanupSource?.()
+    }
+
+    expect(closedBeforeCleanup).toBe(true)
+  })
+
   test("publishes UTF-8 text through private staging without clobbering", async () => {
     const publisher = new ProjectFilePublisher(roots(), { randomId: () => "note-a1" })
 

@@ -137,7 +137,16 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const { createCanvasDocument, createTextNode } = await import("../document")
-const { CanvasEditor } = await import("./canvas-editor")
+const {
+  abortCanvasReload,
+  abortCanvasReloadBeforeWait,
+  CanvasEditor,
+  completeCanvasResourceMutation,
+  handleCanvasResourceMutationFailure,
+  linkCanvasReloadAbortSignal,
+  runCanvasReloadScopeEffect,
+  settleCanvasReloadFailure,
+} = await import("./canvas-editor")
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
@@ -235,39 +244,285 @@ describe("CanvasEditor node dimension projection", () => {
   })
 })
 
-describe("CanvasEditor viewport ownership", () => {
-  test("does not fit the viewport after adding a regular node", () => {
-    renderEditor()
+describe("CanvasEditor resource mutation", () => {
+  test("ignores delayed success and failure after switching to another scope with the same Canvas id", async () => {
+    const operation = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    let current = operation
+    let resolveMutation!: (value: { createdNodeIds: string[]; revision: number; warnings: string[] }) => void
+    const mutation = new Promise<{ createdNodeIds: string[]; revision: number; warnings: string[] }>((resolve) => {
+      resolveMutation = resolve
+    })
+    const reload = mock(async () => undefined)
+    const selectNodes = mock(() => undefined)
+    const show = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+    const completion = mutation.then((result) =>
+      completeCanvasResourceMutation({
+        currentScope: () => current,
+        operationScope: operation,
+        reload,
+        result,
+        selectNodes,
+        show,
+        signal: new AbortController().signal,
+      }),
+    )
+
+    current = { documentId: "canvas-main", generation: 1, scopeId: "project-b" }
+    resolveMutation({ createdNodeIds: ["old-note"], revision: 1, warnings: [] })
+    await completion
+    handleCanvasResourceMutationFailure({
+      currentScope: () => current,
+      error: new Error("old Project failed"),
+      notifyError,
+      operationScope: operation,
+      signal: new AbortController().signal,
+    })
+
+    expect(reload).not.toHaveBeenCalled()
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("warns when committed resources cannot be refreshed without exposing the reload error", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const selectNodes = mock(() => undefined)
+    const show = mock(() => undefined)
+
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => {
+        throw new Error("ENOENT: /native/private/project")
+      },
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes,
+      show,
+      signal: new AbortController().signal,
+    })
+
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).toHaveBeenCalledWith({
+      description: "Reload the Canvas to show the committed resources.",
+      kind: "warning",
+      title: "Resources added, but refresh failed",
+    })
+    expect(JSON.stringify(show.mock.calls)).not.toContain("/native/")
+  })
+
+  test("ignores an aborted success in the same scope before and during refresh completion", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const abortedBefore = new AbortController()
+    abortedBefore.abort()
+    const reloadBefore = mock(async () => undefined)
+    const selectBefore = mock(() => undefined)
+    const showBefore = mock(() => undefined)
+
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: reloadBefore,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: selectBefore,
+      show: showBefore,
+      signal: abortedBefore.signal,
+    })
+    expect(reloadBefore).not.toHaveBeenCalled()
+    expect(selectBefore).not.toHaveBeenCalled()
+    expect(showBefore).not.toHaveBeenCalled()
+
+    const abortedDuring = new AbortController()
+    const selectDuring = mock(() => undefined)
+    const showDuring = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => {
+        abortedDuring.abort()
+      },
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: selectDuring,
+      show: showDuring,
+      signal: abortedDuring.signal,
+    })
+    expect(selectDuring).not.toHaveBeenCalled()
+    expect(showDuring).not.toHaveBeenCalled()
+
+    const abortedBeforeNotify = new AbortController()
+    const showAfterSelect = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => undefined,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: () => abortedBeforeNotify.abort(),
+      show: showAfterSelect,
+      signal: abortedBeforeNotify.signal,
+    })
+    expect(showAfterSelect).not.toHaveBeenCalled()
+  })
+
+  test("passes the mutation signal through a slow persistence reload and aborts it", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const mutationController = new AbortController()
+    let persistenceSignal: AbortSignal | undefined
+    const show = mock(() => undefined)
+    const selectNodes = mock(() => undefined)
+    const completion = completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: (async (signal: AbortSignal) => {
+        persistenceSignal = signal
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+        })
+      }) as never,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes,
+      show,
+      signal: mutationController.signal,
+    })
+
+    await Promise.resolve()
+    mutationController.abort()
+    await completion
+
+    expect(persistenceSignal).toBe(mutationController.signal)
+    expect(persistenceSignal?.aborted).toBeTrue()
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).not.toHaveBeenCalled()
+  })
+
+  test("resolves an aborted reload barrier without recording an error or notification", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const mutationController = new AbortController()
+    const reloadController = new AbortController()
+    const unlink = linkCanvasReloadAbortSignal(mutationController.signal, reloadController)
+    const resolveBarrier = mock(() => undefined)
+    const rejectBarrier = mock(() => undefined)
+    const setLoadError = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+
+    mutationController.abort()
+    const outcome = settleCanvasReloadFailure({
+      currentScope: () => scope,
+      error: new DOMException("Aborted", "AbortError"),
+      notifyError,
+      rejectBarrier,
+      reloadScope: scope,
+      resolveBarrier,
+      setLoadError,
+      signal: reloadController.signal,
+    })
+    unlink()
+
+    expect(outcome).toBe("aborted")
+    expect(reloadController.signal.aborted).toBeTrue()
+    expect(resolveBarrier).toHaveBeenCalledTimes(1)
+    expect(rejectBarrier).not.toHaveBeenCalled()
+    expect(setLoadError).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("aborts a tracked slow reload before prepare-to-leave waits for the load barrier", async () => {
+    const reloadController = new AbortController()
+    const events: string[] = []
+    const slowReload = new Promise<void>((resolve) => {
+      reloadController.signal.addEventListener(
+        "abort",
+        () => {
+          events.push("abort")
+          resolve()
+        },
+        { once: true },
+      )
+    })
+
+    await abortCanvasReloadBeforeWait(reloadController, async () => {
+      events.push("wait")
+      expect(reloadController.signal.aborted).toBeTrue()
+      await slowReload
+    })
+
+    expect(events).toEqual(["abort", "wait"])
+  })
+
+  test("aborts a tracked slow reload when the view scope changes without a remount", async () => {
+    const reloadController = new AbortController()
+    const aborted = new Promise<void>((resolve) =>
+      reloadController.signal.addEventListener("abort", () => resolve(), { once: true }),
+    )
+
+    abortCanvasReload(reloadController)
+    await aborted
+
+    expect(reloadController.signal.aborted).toBeTrue()
+  })
+
+  test("does not apply stale reload state after a no-remount view scope change", () => {
+    const reloadScope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    let current = reloadScope
+    const setLoadError = mock(() => undefined)
+    const setHydrating = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+
+    current = { documentId: "canvas-main", generation: 1, scopeId: "project-b" }
+    runCanvasReloadScopeEffect({
+      currentScope: () => current,
+      effect: () => {
+        setLoadError()
+        notifyError()
+      },
+      reloadScope,
+    })
+    runCanvasReloadScopeEffect({
+      currentScope: () => current,
+      effect: setHydrating,
+      reloadScope,
+    })
+
+    expect(setLoadError).not.toHaveBeenCalled()
+    expect(setHydrating).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("routes header text creation through new-text mutation without fitting the viewport", async () => {
+    const additions: unknown[] = []
+    renderEditor(
+      createCanvasServices({
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["note"], revision: 1, warnings: [] }
+          },
+        },
+      }),
+    )
 
     expect(buttonActions.get("Text")).toBeFunction()
     buttonActions.get("Text")?.()
+    await Promise.resolve()
+
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      expectedRevision: 0,
+      files: [],
+      sources: [{ kind: "new-text", text: "" }],
+    })
+    expect((additions[0] as { sources: Array<{ sourceId: unknown }> }).sources[0]?.sourceId).toBeString()
 
     expectViewportUnchanged()
   })
 
-  test("does not fit the viewport after a dropped file finishes uploading", async () => {
-    let uploadFinished!: () => void
-    const finished = new Promise<void>((resolve) => {
-      uploadFinished = resolve
-    })
+  test("routes a drop through resource mutation and preserves the viewport", async () => {
+    const additions: unknown[] = []
     renderEditor(
       createCanvasServices({
-        notify: {
-          show(notification) {
-            if (notification.kind === "success") uploadFinished()
-          },
-        },
-        upload: {
-          async upload() {
-            return [
-              {
-                id: "brief",
-                kind: "text",
-                metadata: {},
-                name: "brief.txt",
-                state: { status: "ready", text: "Brief" },
-              },
-            ]
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["brief"], revision: 1, warnings: [] }
           },
         },
       }),
@@ -284,8 +539,17 @@ describe("CanvasEditor viewport ownership", () => {
       },
       preventDefault: () => undefined,
     })
-    await finished
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
 
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      expectedRevision: 0,
+      files: [expect.objectContaining({ name: "brief.txt" })],
+      sources: [],
+      transfer: { data: { Files: "" }, types: ["Files"] },
+    })
     expectViewportUnchanged()
   })
 

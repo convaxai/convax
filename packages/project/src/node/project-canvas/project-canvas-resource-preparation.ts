@@ -6,6 +6,7 @@ import type {
   CanvasResourcePreparationResult,
   CanvasResourceSource,
 } from "@convax/canvas/application"
+import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import type { ProjectFilesClient } from "@convax/project-files/contracts"
 import {
   projectResourceReferenceKey,
@@ -54,11 +55,31 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
     throwIfAborted(request.signal)
     const items: CanvasUploadItem[] = []
-    for (const source of request.sources) {
-      items.push(await this.prepareSource(request.scopeId, source, request.signal))
-      throwIfAborted(request.signal)
+    const retainedOnFailure: { label: string }[] = []
+    try {
+      for (const source of request.sources) {
+        const prepared = await this.prepareSource(request.scopeId, source, request.signal)
+        items.push(prepared.item)
+        if (prepared.retainedOnFailure) retainedOnFailure.push(prepared.retainedOnFailure)
+        throwIfAborted(request.signal)
+      }
+    } catch (error) {
+      if (error instanceof CanvasResourcePartialFailureError) {
+        if (retainedOnFailure.length === 0) throw error
+        throw new CanvasResourcePartialFailureError(error.cause, [
+          ...retainedOnFailure,
+          ...error.retainedOnFailure,
+        ])
+      }
+      if (retainedOnFailure.length > 0) {
+        throw new CanvasResourcePartialFailureError(error, retainedOnFailure)
+      }
+      throw error
     }
-    return { items }
+    return {
+      items,
+      ...(retainedOnFailure.length === 0 ? {} : { retainedOnFailure }),
+    }
   }
 
   withAdmittedExternalFiles<T>(
@@ -104,7 +125,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     projectId: string,
     source: CanvasResourceSource,
     signal?: AbortSignal,
-  ): Promise<CanvasUploadItem> {
+  ): Promise<{ item: CanvasUploadItem; retainedOnFailure?: { label: string } }> {
     throwIfAborted(signal)
     if (source.kind === "new-text") {
       const published = await this.publisher.publishText({
@@ -114,19 +135,27 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         name: source.name,
         projectId,
       })
-      throwIfAborted(signal)
       const reference = requireProjectFileReference(published.path)
+      if (signal?.aborted) {
+        throw new CanvasResourcePartialFailureError(
+          signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError"),
+          [{ label: reference.path }],
+        )
+      }
       return {
-        id: source.sourceId,
-        kind: "text",
-        metadata: metadataFor(reference),
-        mimeType: "text/markdown",
-        name: path.posix.basename(reference.path),
-        state: {
-          contentRevision: published.contentRevision,
-          status: "ready",
-          text: source.text,
+        item: {
+          id: source.sourceId,
+          kind: "text",
+          metadata: metadataFor(reference),
+          mimeType: "text/markdown",
+          name: path.posix.basename(reference.path),
+          state: {
+            contentRevision: published.contentRevision,
+            status: "ready",
+            text: source.text,
+          },
         },
+        retainedOnFailure: { label: reference.path },
       }
     }
 
@@ -135,11 +164,13 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       await this.project.listDirectory({ path: reference.path, projectId })
       throwIfAborted(signal)
       return {
-        id: source.sourceId,
-        kind: "folder",
-        metadata: metadataFor(reference),
-        name: path.posix.basename(reference.path),
-        state: { status: "stale" },
+        item: {
+          id: source.sourceId,
+          kind: "folder",
+          metadata: metadataFor(reference),
+          name: path.posix.basename(reference.path),
+          state: { status: "stale" },
+        },
       }
     }
 
@@ -153,15 +184,17 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       throwIfAborted(signal)
       if (!text.exists) throw new Error(`Project text file was not found: ${reference.path}`)
       return {
-        id: source.sourceId,
-        kind: "text",
-        metadata: metadataFor(reference),
-        mimeType: mimeType || textMimeTypeFor(textFormat),
-        name: sourceInfo.name,
-        state: {
-          contentRevision: text.contentRevision,
-          status: "ready",
-          text: text.content,
+        item: {
+          id: source.sourceId,
+          kind: "text",
+          metadata: metadataFor(reference),
+          mimeType: mimeType || textMimeTypeFor(textFormat),
+          name: sourceInfo.name,
+          state: {
+            contentRevision: text.contentRevision,
+            status: "ready",
+            text: text.content,
+          },
         },
       }
     }
@@ -179,18 +212,20 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         : undefined
     throwIfAborted(signal)
     return {
-      durationMs: inspection?.durationMs,
-      height: inspection?.height,
-      id: source.sourceId,
-      kind,
-      metadata: metadataFor(reference),
-      mimeType: mimeType || undefined,
-      name: sourceInfo.name,
-      state: {
-        ...(inspection?.posterUrl === undefined ? {} : { posterUrl: inspection.posterUrl }),
-        status: "stale",
+      item: {
+        durationMs: inspection?.durationMs,
+        height: inspection?.height,
+        id: source.sourceId,
+        kind,
+        metadata: metadataFor(reference),
+        mimeType: mimeType || undefined,
+        name: sourceInfo.name,
+        state: {
+          ...(inspection?.posterUrl === undefined ? {} : { posterUrl: inspection.posterUrl }),
+          status: "stale",
+        },
+        width: inspection?.width,
       },
-      width: inspection?.width,
     }
   }
 }

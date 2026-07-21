@@ -19,9 +19,9 @@ import {
 } from "@convax/canvas/application"
 import { getIncomingConnectedCanvasFileNodeIds, type CanvasDocument, type CanvasNode } from "@convax/canvas/core"
 import {
-  getProjectFileReference,
-  isManagedProjectAssetPath,
-  managedProjectAssetDirectory,
+  getProjectResourceReference,
+  requireProjectResourceReference,
+  type ProjectResourceReference,
 } from "@convax/project/canvas"
 import type {
   GenerationCanvasRequest,
@@ -44,12 +44,6 @@ export interface GenerationCanvasDocumentPort {
 }
 
 export interface GenerationCanvasProjectPort {
-  deleteManagedAssets(input: { paths: string[]; projectId: string }): Promise<unknown>
-  importEntries(input: {
-    destinationPath?: string
-    projectId: string
-    sourcePaths: string[]
-  }): Promise<{ targetPaths?: string[] }>
   readFileInfo(input: { path: string; projectId: string }): Promise<{
     mimeType: string
     name: string
@@ -57,6 +51,22 @@ export interface GenerationCanvasProjectPort {
     size: number
   }>
   resolveEntryPath(input: { path?: string; projectId: string }): Promise<string>
+}
+
+type GenerationManagedAssetReference = Extract<ProjectResourceReference, { kind: "managed-asset" }>
+
+export interface GenerationCanvasManagedAssetPort {
+  resolve(input: { projectId: string; reference: GenerationManagedAssetReference }): Promise<string>
+}
+
+export interface GenerationCanvasFilePublisherPort {
+  publishGenerated(input: {
+    bytes?: Uint8Array
+    extension: string
+    name?: string
+    projectId: string
+    sourcePath?: string
+  }): Promise<{ path: string }>
 }
 
 export interface GenerationCanvasResourcePort {
@@ -78,12 +88,14 @@ export interface GenerationToolExecutionPort {
 }
 
 export interface GenerationCanvasServiceOptions {
+  assets: GenerationCanvasManagedAssetPort
   documents: GenerationCanvasDocumentPort
   maxInputFileBytes?: number
   maxInputBytes?: number
   maxInlineOutputFileBytes?: number
   maxOutputFileBytes?: number
   maxOutputFiles?: number
+  publisher: GenerationCanvasFilePublisherPort
   projects: GenerationCanvasProjectPort
   renderer: Pick<CanvasRendererBridge, "executeView" | "reloadDocument">
   resources: GenerationCanvasResourcePort
@@ -95,6 +107,7 @@ interface StagedTextReference {
   kind: "text"
   nodeId: string
   role: GenerationInputRole
+  sourceSnapshot: ProjectResourceSnapshot
   text: string
 }
 
@@ -105,7 +118,7 @@ interface StagedFileReference {
   nodeId: string
   path: string
   role: GenerationInputRole
-  sourceSnapshot: ManagedAssetSnapshot
+  sourceSnapshot: ProjectResourceSnapshot
 }
 
 type StagedReference = StagedTextReference | StagedFileReference
@@ -118,9 +131,10 @@ interface NativeFileSnapshot {
   size: bigint
 }
 
-interface ManagedAssetSnapshot {
+interface ProjectResourceSnapshot {
   nodeId: string
   realPath: string
+  reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>
   sourcePath: string
   stat: NativeFileSnapshot
 }
@@ -170,6 +184,14 @@ const generationInputRoles = new Set<GenerationInputRole>([
 const singletonInputRoles = new Set<GenerationInputRole>(["first_frame", "last_frame"])
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 const unsafeGenerationFailureDiagnosticCharacters = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+
+function requireGenerationMaximum(value: number | undefined, hardMaximum: number, name: string) {
+  const maximum = value ?? hardMaximum
+  if (!Number.isSafeInteger(maximum) || maximum <= 0 || maximum > hardMaximum) {
+    throw new Error(`Generation ${name} must be a positive safe integer no greater than ${hardMaximum}`)
+  }
+  return maximum
+}
 
 const unsafeGenerationFailureDiagnosticPatterns = [
   /(?:^|[\s("'`=:])\/(?!\/)[^\s"'`]+/,
@@ -239,6 +261,37 @@ export class GenerationToolReportedError extends Error {
     const diagnostic = normalizedGenerationFailureDiagnostic(content)
     super(diagnostic ? `Generation tool failed: ${diagnostic}` : "Generation tool reported a failure")
     this.name = "GenerationToolReportedError"
+  }
+}
+
+function requireGeneratedPublicationPath(value: string) {
+  const reference = requireProjectResourceReference({ kind: "project-file", path: value })
+  if (reference.kind !== "project-file" || !reference.path.startsWith("Generated/")) {
+    throw new Error("Generation publisher returned a path outside Generated")
+  }
+  const segments = reference.path.split("/")
+  if (segments.length !== 2 || reference.path.length > 320) {
+    throw new Error("Generation publisher returned an invalid Generated path")
+  }
+  return reference.path
+}
+
+export class GenerationPublicationPartialSuccessError extends Error {
+  readonly publishedPaths: readonly string[]
+
+  constructor(publishedPaths: readonly string[], cause: unknown) {
+    const paths = publishedPaths.map(requireGeneratedPublicationPath)
+    if (!paths.length || paths.length > defaultMaxOutputFiles || new Set(paths).size !== paths.length) {
+      throw new Error("Generation partial-success paths are invalid")
+    }
+    super(
+      `Generation succeeded and files were saved, but they could not be added to Canvas. Saved files: ${paths.join(", ")}`,
+      {
+        cause,
+      },
+    )
+    this.name = "GenerationPublicationPartialSuccessError"
+    this.publishedPaths = Object.freeze([...paths])
   }
 }
 
@@ -367,27 +420,32 @@ function sameNativeFileSnapshot(left: NativeFileSnapshot, right: NativeFileSnaps
   )
 }
 
-function managedAssetChangedError(nodeId: string, cause?: unknown) {
+function projectResourceChangedError(nodeId: string, cause?: unknown) {
   return new Error(
-    `Generation managed asset reference changed while the tool was running: ${nodeId}`,
+    `Generation Project resource reference changed while the tool was running: ${nodeId}`,
     cause === undefined ? undefined : { cause },
   )
 }
 
-async function captureManagedAssetSnapshot(input: {
+async function captureProjectResourceSnapshot(input: {
   expectedRealPath: string
-  expectedSize: number
+  expectedSize?: number
   nodeId: string
+  reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>
   sourcePath: string
-}): Promise<ManagedAssetSnapshot> {
+}): Promise<ProjectResourceSnapshot> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     const before = await fs.lstat(input.sourcePath, { bigint: true })
-    if (!before.isFile() || before.isSymbolicLink() || before.size !== BigInt(input.expectedSize)) {
-      throw managedAssetChangedError(input.nodeId)
+    if (
+      !before.isFile() ||
+      before.isSymbolicLink() ||
+      (input.expectedSize !== undefined && before.size !== BigInt(input.expectedSize))
+    ) {
+      throw projectResourceChangedError(input.nodeId)
     }
     const realPath = await fs.realpath(input.sourcePath)
-    if (realPath !== input.expectedRealPath) throw managedAssetChangedError(input.nodeId)
+    if (realPath !== input.expectedRealPath) throw projectResourceChangedError(input.nodeId)
 
     handle = await fs.open(
       input.expectedRealPath,
@@ -407,33 +465,58 @@ async function captureManagedAssetSnapshot(input: {
       !sameNativeFileSnapshot(beforeSnapshot, pinnedSnapshot) ||
       !sameNativeFileSnapshot(pinnedSnapshot, afterSnapshot)
     ) {
-      throw managedAssetChangedError(input.nodeId)
+      throw projectResourceChangedError(input.nodeId)
     }
     return {
       nodeId: input.nodeId,
       realPath: input.expectedRealPath,
+      reference: input.reference,
       sourcePath: input.sourcePath,
       stat: pinnedSnapshot,
     }
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Generation managed asset reference changed")) {
+    if (error instanceof Error && error.message.startsWith("Generation Project resource reference changed")) {
       throw error
     }
-    throw managedAssetChangedError(input.nodeId, error)
+    throw projectResourceChangedError(input.nodeId, error)
   } finally {
     await handle?.close().catch(() => undefined)
   }
 }
 
-async function assertManagedAssetSnapshot(expected: ManagedAssetSnapshot) {
-  const current = await captureManagedAssetSnapshot({
-    expectedRealPath: expected.realPath,
-    expectedSize: Number(expected.stat.size),
-    nodeId: expected.nodeId,
-    sourcePath: expected.sourcePath,
-  })
-  if (!sameNativeFileSnapshot(current.stat, expected.stat)) {
-    throw managedAssetChangedError(expected.nodeId)
+async function readStableUtf8Resource(snapshot: ProjectResourceSnapshot, maximumBytes: number) {
+  if (snapshot.stat.size < 1n || snapshot.stat.size > BigInt(maximumBytes)) {
+    throw new Error(`Generation text reference is empty or too large: ${snapshot.nodeId}`)
+  }
+  const handle = await fs.open(
+    snapshot.sourcePath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  )
+  try {
+    const opened = await handle.stat({ bigint: true })
+    if (!opened.isFile() || !sameNativeFileSnapshot(snapshot.stat, nativeFileSnapshot(opened))) {
+      throw projectResourceChangedError(snapshot.nodeId)
+    }
+    const bytes = await handle.readFile()
+    const afterHandle = await handle.stat({ bigint: true })
+    const afterPath = await fs.lstat(snapshot.sourcePath, { bigint: true })
+    if (
+      bytes.byteLength !== Number(snapshot.stat.size) ||
+      !afterPath.isFile() ||
+      afterPath.isSymbolicLink() ||
+      !sameNativeFileSnapshot(snapshot.stat, nativeFileSnapshot(afterHandle)) ||
+      !sameNativeFileSnapshot(snapshot.stat, nativeFileSnapshot(afterPath)) ||
+      (await fs.realpath(snapshot.sourcePath)) !== snapshot.realPath
+    ) {
+      throw projectResourceChangedError(snapshot.nodeId)
+    }
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+    } catch {
+      throw new Error(`Generation text reference is not valid UTF-8: ${snapshot.nodeId}`)
+    }
+  } finally {
+    await handle.close().catch(() => undefined)
   }
 }
 
@@ -734,15 +817,12 @@ function relativeArtifactPath(value: string) {
 }
 
 function generationReferenceSource(node: CanvasNode) {
-  const fileReference = getProjectFileReference(nodeMetadata(node))
+  const reference = getProjectResourceReference(nodeMetadata(node))
   return {
     kind: node.data.kind,
     mimeType: "mimeType" in node.data && typeof node.data.mimeType === "string" ? node.data.mimeType : null,
-    projectPath: fileReference?.path ?? null,
-    text:
-      node.data.kind === "text" && "text" in node.data && typeof node.data.text === "string" ? node.data.text : null,
+    reference,
     type: node.type,
-    url: !fileReference && "url" in node.data && typeof node.data.url === "string" ? node.data.url : null,
   }
 }
 
@@ -811,12 +891,13 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
 
 /**
  * Shared application service used by toolbar, Agent tools, and narrow Plugin
- * calls. It stages inputs, executes an installed Tool Plugin, admits outputs as
- * managed Project assets, and commits normal Canvas file nodes. A declarative
- * return operation reuses the same staging and execution boundary but returns
- * one bounded text result without mutating the Canvas.
+ * calls. It stages inputs, executes an installed Tool Plugin, publishes outputs
+ * as user-visible Project files, and commits normal Canvas file nodes. A
+ * declarative return operation reuses the same staging and execution boundary
+ * but returns one bounded text result without mutating the Canvas.
  */
 export class GenerationCanvasService {
+  readonly #assets: GenerationCanvasManagedAssetPort
   readonly #documents: GenerationCanvasDocumentPort
   readonly #executions = new Map<string, GenerationExecution>()
   readonly #maxInputFileBytes: number
@@ -824,6 +905,7 @@ export class GenerationCanvasService {
   readonly #maxInlineOutputFileBytes: number
   readonly #maxOutputFileBytes: number
   readonly #maxOutputFiles: number
+  readonly #publisher: GenerationCanvasFilePublisherPort
   readonly #projects: GenerationCanvasProjectPort
   readonly #renderer: Pick<CanvasRendererBridge, "executeView" | "reloadDocument">
   readonly #resources: GenerationCanvasResourcePort
@@ -831,12 +913,26 @@ export class GenerationCanvasService {
   readonly #tools: GenerationToolExecutionPort
 
   constructor(options: GenerationCanvasServiceOptions) {
+    this.#assets = options.assets
     this.#documents = options.documents
-    this.#maxInputFileBytes = options.maxInputFileBytes ?? defaultMaxInputFileBytes
-    this.#maxInputBytes = options.maxInputBytes ?? defaultMaxInputBytes
-    this.#maxInlineOutputFileBytes = options.maxInlineOutputFileBytes ?? defaultMaxInlineOutputFileBytes
-    this.#maxOutputFileBytes = options.maxOutputFileBytes ?? defaultMaxOutputFileBytes
-    this.#maxOutputFiles = options.maxOutputFiles ?? defaultMaxOutputFiles
+    this.#maxInputFileBytes = requireGenerationMaximum(
+      options.maxInputFileBytes,
+      defaultMaxInputFileBytes,
+      "maxInputFileBytes",
+    )
+    this.#maxInputBytes = requireGenerationMaximum(options.maxInputBytes, defaultMaxInputBytes, "maxInputBytes")
+    this.#maxInlineOutputFileBytes = requireGenerationMaximum(
+      options.maxInlineOutputFileBytes,
+      defaultMaxInlineOutputFileBytes,
+      "maxInlineOutputFileBytes",
+    )
+    this.#maxOutputFileBytes = requireGenerationMaximum(
+      options.maxOutputFileBytes,
+      defaultMaxOutputFileBytes,
+      "maxOutputFileBytes",
+    )
+    this.#maxOutputFiles = requireGenerationMaximum(options.maxOutputFiles, defaultMaxOutputFiles, "maxOutputFiles")
+    this.#publisher = options.publisher
     this.#projects = options.projects
     this.#renderer = options.renderer
     this.#resources = options.resources
@@ -909,7 +1005,7 @@ export class GenerationCanvasService {
         }
       },
     )
-    return waitForCaller(result, signal)
+    return result
   }
 
   async #generateOnce(
@@ -1114,22 +1210,40 @@ export class GenerationCanvasService {
         }
       }
 
-      const importedOutputs = admitted.files.length
-        ? await this.#importOutputFiles(workingRequest.ref.scopeId, admitted.files, signal)
-        : { assetPaths: [], sources: [] }
+      const publishedPaths: string[] = []
       let result: CanvasApplicationCommandResult
       try {
+        for (const text of admitted.texts) {
+          assertNotAborted(signal)
+          const published = await this.#publisher.publishGenerated({
+            bytes: Buffer.from(text, "utf8"),
+            extension: ".md",
+            name: "generated",
+            projectId: workingRequest.ref.scopeId,
+          })
+          publishedPaths.push(requireGeneratedPublicationPath(published.path))
+        }
+        for (const file of admitted.files) {
+          assertNotAborted(signal)
+          const extension = path.extname(file).toLowerCase()
+          if (!Object.values(outputExtensions).includes(extension)) {
+            throw new Error("Generation admitted output has no canonical extension")
+          }
+          const published = await this.#publisher.publishGenerated({
+            extension,
+            name: "generated",
+            projectId: workingRequest.ref.scopeId,
+            sourcePath: file,
+          })
+          publishedPaths.push(requireGeneratedPublicationPath(published.path))
+        }
         await this.#assertStableReferences(workingRequest, referenceSnapshot, references, requiresStableRevision)
         if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
-        const sources: CanvasAddResourceSourcesRequest["sources"] = [
-          ...admitted.texts.map((text) => ({
-            kind: "inline-text" as const,
-            name: "Generated",
-            sourceId: randomUUID(),
-            text,
-          })),
-          ...importedOutputs.sources,
-        ]
+        const sources: CanvasAddResourceSourcesRequest["sources"] = publishedPaths.map((publishedPath) => ({
+          kind: "host-file",
+          path: publishedPath,
+          sourceId: randomUUID(),
+        }))
         if (!sources.length) throw new Error("Generation tool returned no usable output")
         if (resultMode.type === "replace-node" && sources.length !== 1) {
           throw new Error("Card generation must resolve to exactly one replacement resource")
@@ -1145,6 +1259,7 @@ export class GenerationCanvasService {
                 expectedRevision: workingRequest.expectedRevision,
                 expectedTarget: replacementGuard!,
                 scopeId: workingRequest.ref.scopeId,
+                ...(signal ? { signal } : {}),
                 source: sources[0]!,
                 targetNodeId: resultMode.nodeId,
               })
@@ -1157,19 +1272,11 @@ export class GenerationCanvasService {
                 expectedRevision: workingRequest.expectedRevision,
                 relation: generationResultRelation(workingRequest),
                 scopeId: workingRequest.ref.scopeId,
+                ...(signal ? { signal } : {}),
                 sources,
               })
       } catch (error) {
-        if (importedOutputs.assetPaths.length) {
-          try {
-            await this.#projects.deleteManagedAssets({
-              paths: importedOutputs.assetPaths,
-              projectId: workingRequest.ref.scopeId,
-            })
-          } catch (cleanupError) {
-            throw generationCleanupFailure(error, cleanupError)
-          }
-        }
+        if (publishedPaths.length) throw new GenerationPublicationPartialSuccessError(publishedPaths, error)
         throw error
       }
       const warnings = normalizeGenerationWarnings([...admitted.warnings, ...result.warnings])
@@ -1304,9 +1411,7 @@ export class GenerationCanvasService {
     const document = await this.#assertStableCanvasDocument(request, expectedReferenceSnapshot, required)
     try {
       await Promise.all(
-        references.map((reference) =>
-          reference.kind === "file" ? assertManagedAssetSnapshot(reference.sourceSnapshot) : Promise.resolve(),
-        ),
+        references.map((reference) => this.#assertProjectResourceSnapshot(request, reference.sourceSnapshot)),
       )
     } catch {
       throw new Error(
@@ -1316,6 +1421,41 @@ export class GenerationCanvasService {
       )
     }
     return document
+  }
+
+  async #assertProjectResourceSnapshot(request: GenerationCanvasRequest, expected: ProjectResourceSnapshot) {
+    let sourcePath: string
+    let expectedSize: number | undefined
+    if (expected.reference.kind === "managed-asset") {
+      sourcePath = await this.#assets.resolve({
+        projectId: request.ref.scopeId,
+        reference: expected.reference,
+      })
+    } else {
+      const info = await this.#projects.readFileInfo({
+        path: expected.reference.path,
+        projectId: request.ref.scopeId,
+      })
+      expectedSize = info.size
+      sourcePath = await this.#projects.resolveEntryPath({
+        path: expected.reference.path,
+        projectId: request.ref.scopeId,
+      })
+    }
+    const current = await captureProjectResourceSnapshot({
+      expectedRealPath: await fs.realpath(sourcePath),
+      expectedSize,
+      nodeId: expected.nodeId,
+      reference: expected.reference,
+      sourcePath,
+    })
+    if (
+      current.realPath !== expected.realPath ||
+      current.sourcePath !== expected.sourcePath ||
+      !sameNativeFileSnapshot(current.stat, expected.stat)
+    ) {
+      throw projectResourceChangedError(expected.nodeId)
+    }
   }
 
   async #stageReferences(
@@ -1334,8 +1474,9 @@ export class GenerationCanvasService {
       if (node.data.kind !== expectedKind) {
         throw new Error(`Generation role ${reference.role} requires a ${expectedKind} node: ${reference.nodeId}`)
       }
+      const resolved = await this.#resolveProjectResourceReference(request.ref.scopeId, node)
       if (reference.role === "text") {
-        const text = "text" in node.data && typeof node.data.text === "string" ? node.data.text : ""
+        const text = await readStableUtf8Resource(resolved.sourceSnapshot, maxTextReferenceLength)
         const textBytes = Buffer.byteLength(text, "utf8")
         if (!text || textBytes > maxTextReferenceLength) {
           throw new Error(`Generation text reference is empty or too large: ${reference.nodeId}`)
@@ -1343,56 +1484,94 @@ export class GenerationCanvasService {
         stagedBytes += textBytes
         if (stagedBytes > this.#maxInputBytes)
           throw new Error("Generation references exceed the total input size limit")
-        references.push({ kind: "text", nodeId: node.id, role: reference.role, text })
+        await this.#assertProjectResourceSnapshot(request, resolved.sourceSnapshot)
+        references.push({
+          kind: "text",
+          nodeId: node.id,
+          role: reference.role,
+          sourceSnapshot: resolved.sourceSnapshot,
+          text,
+        })
         continue
       }
-      const fileReference = getProjectFileReference(nodeMetadata(node))
-      if (!fileReference || !isManagedProjectAssetPath(fileReference.path)) {
-        throw new Error(`Generation media references must be managed Project assets: ${reference.nodeId}`)
-      }
-      const info = await this.#projects.readFileInfo({ path: fileReference.path, projectId: request.ref.scopeId })
-      const mimeType = normalizeMimeType(info.mimeType)
-      if (!mimeType.startsWith(expectedMimePrefix(reference.role))) {
-        throw new Error(`Generation reference MIME type does not match ${reference.role}: ${mimeType || "unknown"}`)
-      }
-      if (!Number.isSafeInteger(info.size) || info.size < 1 || info.size > this.#maxInputFileBytes) {
+      const size = Number(resolved.sourceSnapshot.stat.size)
+      if (!Number.isSafeInteger(size) || size < 1 || size > this.#maxInputFileBytes) {
         throw new Error(`Generation reference file is empty or too large: ${reference.nodeId}`)
       }
-      stagedBytes += info.size
+      stagedBytes += size
       if (stagedBytes > this.#maxInputBytes) throw new Error("Generation references exceed the total input size limit")
-      const absolutePath = await this.#projects.resolveEntryPath({
-        path: fileReference.path,
-        projectId: request.ref.scopeId,
-      })
-      const referenceRealPath = await fs.realpath(absolutePath)
-      const sourceSnapshot = await captureManagedAssetSnapshot({
-        expectedRealPath: referenceRealPath,
-        expectedSize: info.size,
-        nodeId: node.id,
-        sourcePath: absolutePath,
-      })
-      const target = path.join(inputDirectory, `${index + 1}-${safeFileName(info.name, `reference-${index + 1}`)}`)
+      const target = path.join(inputDirectory, `${index + 1}-${safeFileName(resolved.name, `reference-${index + 1}`)}`)
       await copyStableFile({
         description: `Generation reference file ${reference.nodeId}`,
-        expectedRealPath: referenceRealPath,
-        expectedSize: info.size,
+        expectedRealPath: resolved.sourceSnapshot.realPath,
+        expectedSize: size,
         maximumBytes: this.#maxInputFileBytes,
         prepareTarget: () => target,
         signal,
-        sourcePath: absolutePath,
+        sourcePath: resolved.sourceSnapshot.sourcePath,
       })
-      await assertManagedAssetSnapshot(sourceSnapshot)
+      const handle = await fs.open(target, constants.O_RDONLY)
+      let header: Buffer
+      try {
+        header = Buffer.alloc(Math.min(32, size))
+        const { bytesRead } = await handle.read(header, 0, header.length, 0)
+        header = header.subarray(0, bytesRead)
+      } finally {
+        await handle.close().catch(() => undefined)
+      }
+      const detectedMimeType = signatureMimeType(header)
+      if (
+        !detectedMimeType ||
+        !detectedMimeType.startsWith(expectedMimePrefix(reference.role)) ||
+        (resolved.mimeType && !compatibleMimeTypes(resolved.mimeType, detectedMimeType))
+      ) {
+        throw new Error(
+          `Generation reference MIME type does not match ${reference.role}: ${detectedMimeType || "unknown"}`,
+        )
+      }
+      await this.#assertProjectResourceSnapshot(request, resolved.sourceSnapshot)
       references.push({
         kind: "file",
-        mimeType,
-        name: info.name,
+        mimeType: detectedMimeType,
+        name: resolved.name,
         nodeId: node.id,
         path: target,
         role: reference.role,
-        sourceSnapshot,
+        sourceSnapshot: resolved.sourceSnapshot,
       })
     }
     return references
+  }
+
+  async #resolveProjectResourceReference(projectId: string, node: CanvasNode) {
+    const reference = getProjectResourceReference(nodeMetadata(node))
+    if (!reference) throw new Error(`Generation reference requires a typed Project resource: ${node.id}`)
+    if (reference.kind === "project-directory") {
+      throw new Error(`Generation reference cannot use a Project directory: ${node.id}`)
+    }
+
+    let expectedSize: number | undefined
+    let mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : undefined)
+    let name = reference.kind === "managed-asset" ? reference.name : path.posix.basename(reference.path)
+    let sourcePath: string
+    if (reference.kind === "managed-asset") {
+      sourcePath = await this.#assets.resolve({ projectId, reference })
+    } else {
+      const info = await this.#projects.readFileInfo({ path: reference.path, projectId })
+      expectedSize = info.size
+      mimeType = normalizeMimeType(info.mimeType)
+      name = info.name
+      sourcePath = await this.#projects.resolveEntryPath({ path: reference.path, projectId })
+    }
+    const realPath = await fs.realpath(sourcePath)
+    const sourceSnapshot = await captureProjectResourceSnapshot({
+      expectedRealPath: realPath,
+      expectedSize,
+      nodeId: node.id,
+      reference,
+      sourcePath,
+    })
+    return { mimeType, name, sourceSnapshot }
   }
 
   async #admitOutputs(
@@ -1571,30 +1750,4 @@ export class GenerationCanvasService {
       sourcePath: unresolvedCandidate,
     })
   }
-
-  async #importOutputFiles(projectId: string, files: readonly string[], signal?: AbortSignal) {
-    if (files.length > this.#maxOutputFiles) throw new Error("Generation tool returned too many output files")
-    assertNotAborted(signal)
-    const imported = await this.#projects.importEntries({
-      destinationPath: managedProjectAssetDirectory,
-      projectId,
-      sourcePaths: [...files],
-    })
-    if (!imported.targetPaths || imported.targetPaths.length !== files.length) {
-      throw new Error("Generation outputs could not be imported as managed Project assets")
-    }
-    const sources = imported.targetPaths.map((assetPath) => {
-      if (!isManagedProjectAssetPath(assetPath)) {
-        throw new Error("Generation output import escaped the managed Project asset directory")
-      }
-      return { kind: "host-file" as const, path: assetPath, sourceId: randomUUID() }
-    })
-    return { assetPaths: imported.targetPaths, sources }
-  }
-}
-
-function generationCleanupFailure(error: unknown, cleanupError: unknown) {
-  return new AggregateError([error, cleanupError], "Generation failed and its imported assets could not be removed", {
-    cause: error,
-  })
 }

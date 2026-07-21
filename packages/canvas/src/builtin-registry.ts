@@ -4,27 +4,18 @@ import {
   BuiltinMediaFileNode,
   BuiltinTextFileNode,
 } from "./components/builtin-node"
-import { createAgentNode, createMediaNode, createTextNode } from "./document"
+import { createAgentNode } from "./document"
 import { createCanvasFileRendererRegistry, type CanvasFileRendererDefinition } from "./file-renderer-registry"
 import { createCanvasNodeRegistry } from "./node-registry"
-import type { CanvasMediaKind, CanvasResource } from "./types"
+import type { CanvasMediaKind } from "./types"
 
 function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
   return {
     id: kind,
     label: kind[0]!.toUpperCase() + kind.slice(1),
     component: BuiltinMediaFileNode,
-    hidden: kind === "file",
+    hidden: true,
     matches: (data) => data.kind === kind,
-    create(input) {
-      const resource = input.data?.resource as CanvasResource | undefined
-      return createMediaNode({
-        id: input.id,
-        label: typeof input.data?.label === "string" ? input.data.label : undefined,
-        position: input.position,
-        resource: resource ?? { id: input.id ?? kind, kind, metadata: {}, state: { status: "stale" } },
-      })
-    },
   }
 }
 
@@ -34,12 +25,6 @@ export function createDefaultCanvasFileRendererRegistry() {
       id: "text",
       label: "Text",
       component: BuiltinTextFileNode,
-      create: (input) => createTextNode({
-        id: input.id,
-        metadata: {},
-        position: input.position,
-        resourceState: { status: "stale" },
-      }),
       matches: (data) => data.kind === "text",
     },
     mediaRenderer("image"),
@@ -61,12 +46,6 @@ export function createDefaultCanvasNodeRegistry() {
       type: "file",
       label: "File",
       component: BuiltinCanvasNode,
-      create: (input) => createTextNode({
-        id: input.id,
-        metadata: {},
-        position: input.position,
-        resourceState: { status: "stale" },
-      }),
     },
     {
       type: "agent",

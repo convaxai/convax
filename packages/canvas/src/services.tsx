@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasUploadItem } from "./types"
+import type { CanvasResourceSource } from "./application"
+import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 export interface CanvasServiceContext {
   documentId: string
@@ -8,19 +9,31 @@ export interface CanvasServiceContext {
   source: string
 }
 
-export interface CanvasUploadRequest {
-  files: readonly File[]
-  position?: CanvasPoint
-  transfer?: {
-    data: Readonly<Record<string, string>>
-    types: readonly string[]
-  }
-  context: CanvasServiceContext
-  signal: AbortSignal
+export interface CanvasResourceMutationTransfer {
+  data: Readonly<Record<string, string>>
+  types: readonly string[]
 }
 
-export interface CanvasUploadService {
-  upload: (request: CanvasUploadRequest) => Promise<readonly CanvasUploadItem[]>
+export interface CanvasResourceMutationRequest {
+  anchor: CanvasPoint
+  expectedRevision: number
+  files?: readonly File[]
+  relation?: {
+    anchorNodeIds: readonly string[]
+    direction?: "from-anchor" | "to-anchor"
+    mode: "connect" | "none"
+  }
+  sources: readonly CanvasResourceSource[]
+  signal: AbortSignal
+  transfer?: CanvasResourceMutationTransfer
+}
+
+export interface CanvasResourceMutationService {
+  add(input: CanvasResourceMutationRequest): Promise<{
+    createdNodeIds: readonly string[]
+    revision: number
+    warnings: readonly string[]
+  }>
 }
 
 export type CanvasGenerationOutput = "text" | "image" | "video" | "audio"
@@ -256,7 +269,7 @@ export interface CanvasAssistantService {
 
 export interface CanvasServiceMap {
   assistant: CanvasAssistantService
-  upload: CanvasUploadService
+  mutation: CanvasResourceMutationService
   generate: CanvasGenerateService
   persistence: CanvasPersistenceService
   export: CanvasExportService

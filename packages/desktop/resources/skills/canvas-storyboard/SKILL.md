@@ -15,8 +15,10 @@ cards, not just advice in chat.
 3. Break the input into 3–12 shots unless the user specifies another count. Each
    markdown card should include the shot number, framing, subject/action, camera
    movement, and dialogue or audio cue when present.
-4. Add the cards with `canvas_add_resources` as `inline-text` sources. This business
-   operation owns card sizing, placement, persistence, refresh, and optional view
+4. Add the cards with `canvas_add_resources` as `new-text` sources. Each source is
+   first published as a normal Markdown file below the active Project's `Notes/`
+   directory, then referenced by its Canvas card. This business operation owns file
+   publication, card sizing, placement, persistence, refresh, and optional view
    effects; do not approximate those rules with raw node JSON.
 5. Using only the returned node ids and current revision, arrange the cards in
    narrative order and connect each shot to the next with `canvas_apply_primitive`.

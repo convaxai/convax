@@ -9,6 +9,7 @@ import {
   type CanvasDocumentSnapshot,
 } from "./persistence"
 import {
+  CanvasResourcePartialFailureError,
   CanvasResourceBusinessService,
   type CanvasResourcePreparationRequest,
   type CanvasResourceSource,
@@ -38,6 +39,372 @@ function preparedText(text: string): CanvasTextResource {
 }
 
 describe("canvas resource business service", () => {
+  test("merges retained labels and wraps only a final application failure", async () => {
+    const commitFailure = new Error("repository save failed")
+    let attempts = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return {
+            items: [preparedText("Draft")],
+            retainedOnFailure: [{ label: "Notes/Draft-a.md" }],
+          }
+        },
+      },
+      {
+        async execute() {
+          attempts += 1
+          if (attempts === 1) throw new CanvasRevisionConflictError(0, 1)
+          throw commitFailure
+        },
+        async query() {
+          return { nodes: [], revision: 1, storageVersion: "v1" }
+        },
+      },
+    )
+
+    let failure: unknown
+    try {
+      await business.addPreparedResources(
+        {
+          actor: { id: "ui", kind: "ui" },
+          anchor: { x: 0, y: 0 },
+          canvasId: "canvas-main",
+          commandId: "partial-final-failure",
+          expectedRevision: 0,
+          scopeId: "project",
+          sources: [{ kind: "new-text", sourceId: "prepared", text: "Draft" }],
+        },
+        {
+          items: [{ ...preparedText("Second"), id: "host-prepared" }],
+          retainedOnFailure: [{ label: "Notes/Second-b.md" }],
+        },
+      )
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect((failure as CanvasResourcePartialFailureError).cause).toBe(commitFailure)
+    expect((failure as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([
+      { label: "Notes/Draft-a.md" },
+      { label: "Notes/Second-b.md" },
+    ])
+    expect(attempts).toBe(2)
+  })
+
+  test("caches a typed partial failure for the same command id without preparing another Note", async () => {
+    let preparationCalls = 0
+    let executeCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [preparedText("Draft")], retainedOnFailure: [{ label: "Notes/Draft.md" }] }
+        },
+      },
+      {
+        async execute() {
+          executeCalls += 1
+          throw new Error("repository save failed")
+        },
+        async query() {
+          throw new Error("application must not query")
+        },
+      },
+    )
+    const request = {
+      actor: { id: "ui", kind: "ui" as const },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "cached-partial-failure",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "new-text" as const, sourceId: "prepared", text: "Draft" }],
+    }
+
+    let firstFailure: unknown
+    let secondFailure: unknown
+    try {
+      await business.addResources(request)
+    } catch (error) {
+      firstFailure = error
+    }
+    try {
+      await business.addResources(request)
+    } catch (error) {
+      secondFailure = error
+    }
+
+    expect(firstFailure).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect(secondFailure).toBe(firstFailure)
+    expect(preparationCalls).toBe(1)
+    expect(executeCalls).toBe(1)
+  })
+
+  test("does not cache an ordinary failure without retained host resources", async () => {
+    let preparationCalls = 0
+    let executeCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [preparedText("Draft")] }
+        },
+      },
+      {
+        async execute() {
+          executeCalls += 1
+          if (executeCalls === 1) throw new Error("transient failure")
+          return {
+            affectedNodeIds: [],
+            changed: false,
+            createdNodeIds: [],
+            document: createCanvasDocument({ id: "canvas-main" }),
+            storageVersion: "v1",
+            warnings: [],
+          }
+        },
+        async query() {
+          throw new Error("application must not query")
+        },
+      },
+    )
+    const request = {
+      actor: { id: "ui", kind: "ui" as const },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "ordinary-retry",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "host-file" as const, path: "media/draft.md", sourceId: "prepared" }],
+    }
+
+    await expect(business.addResources(request)).rejects.toThrow("transient failure")
+    await expect(business.addResources(request)).resolves.toMatchObject({ storageVersion: "v1" })
+    expect(preparationCalls).toBe(2)
+    expect(executeCalls).toBe(2)
+  })
+
+  test("propagates a typed preparation failure unchanged and wraps a failed conflict query", async () => {
+    const preparationFailure = new CanvasResourcePartialFailureError(new Error("later source failed"), [
+      { label: "Notes/First.md" },
+    ])
+    const preparationBusiness = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          throw preparationFailure
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application must not run")
+        },
+        async query() {
+          throw new Error("application must not run")
+        },
+      },
+    )
+    const request = {
+      actor: { id: "ui", kind: "ui" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "typed-preparation-failure",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "new-text" as const, sourceId: "note", text: "Draft" }],
+    }
+    await expect(preparationBusiness.addResources(request)).rejects.toBe(preparationFailure)
+
+    const queryFailure = new Error("query failed")
+    const queryBusiness = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [preparedText("Draft")], retainedOnFailure: [{ label: "Notes/Draft.md" }] }
+        },
+      },
+      {
+        async execute() {
+          throw new CanvasStorageConflictError("v0", "v1")
+        },
+        async query() {
+          throw queryFailure
+        },
+      },
+    )
+    let failure: unknown
+    try {
+      await queryBusiness.addResources({ ...request, commandId: "typed-query-failure" })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect((failure as CanvasResourcePartialFailureError).cause).toBe(queryFailure)
+    expect((failure as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/Draft.md" }])
+  })
+
+  test("does not report partial failure when a retained preparation succeeds after conflict retry", async () => {
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main" }),
+      storageVersion: "v0",
+    }
+    let saves = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [preparedText("Draft")], retainedOnFailure: [{ label: "Notes/Draft.md" }] }
+        },
+      },
+      {
+        async execute(request) {
+          saves += 1
+          if (saves === 1) throw new CanvasRevisionConflictError(0, 1)
+          const application = new CanvasApplicationService({
+            async load() {
+              return snapshot
+            },
+            async save(saveRequest) {
+              snapshot = { document: saveRequest.document, storageVersion: "v2" }
+              return { storageVersion: "v2" }
+            },
+          })
+          return application.execute(request)
+        },
+        async query() {
+          return { nodes: [], revision: 0, storageVersion: "v0" }
+        },
+      },
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "retry-success-retained",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "Draft" }],
+      }),
+    ).resolves.toMatchObject({ createdNodeIds: [expect.any(String)] })
+    expect(saves).toBe(2)
+  })
+
+  test("wraps a command creation failure after preparation retained a host resource", async () => {
+    const commandFailure = new Error("command materialization failed")
+    const items = [preparedText("Draft")]
+    Object.defineProperty(items, "map", {
+      configurable: true,
+      get() {
+        throw commandFailure
+      },
+    })
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items, retainedOnFailure: [{ label: "Notes/Draft.md" }] }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application must not run")
+        },
+        async query() {
+          throw new Error("application must not run")
+        },
+      },
+    )
+
+    let failure: unknown
+    try {
+      await business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "command-creation-failure",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "Draft" }],
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect((failure as CanvasResourcePartialFailureError).cause).toBe(commandFailure)
+    expect((failure as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/Draft.md" }])
+  })
+
+  test("wraps prepared-resource validation after preparation retained a host resource", async () => {
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return {
+            items: [{ ...preparedText("Draft"), metadata: undefined } as never],
+            retainedOnFailure: [{ label: "Notes/Draft.md" }],
+          }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application must not run")
+        },
+        async query() {
+          throw new Error("application must not run")
+        },
+      },
+    )
+
+    let failure: unknown
+    try {
+      await business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "prepared-validation-failure",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "Draft" }],
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect((failure as CanvasResourcePartialFailureError).cause).toBeInstanceOf(CanvasCommandValidationError)
+    expect((failure as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/Draft.md" }])
+  })
+
+  test("rejects invalid retained labels at the Canvas preparation boundary", async () => {
+    expect(() => new CanvasResourcePartialFailureError(new Error("failure"), [{ label: "" }])).toThrow("retained label")
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [preparedText("Draft")], retainedOnFailure: [{ label: "" }] }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application must not run")
+        },
+        async query() {
+          throw new Error("application must not run")
+        },
+      },
+    )
+    await expect(
+      business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "invalid-retained-label",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "Draft" }],
+      }),
+    ).rejects.toThrow("retained label")
+  })
+
   test.each(["inline-text", "remote-url"])("rejects removed source kind %s", async (kind) => {
     let preparationCalls = 0
     const business = new CanvasResourceBusinessService(
@@ -254,9 +621,7 @@ describe("canvas resource business service", () => {
 
   test("does not execute when resource preparation finishes after cancellation", async () => {
     const preparationStarted = Promise.withResolvers<void>()
-    const preparationResult = Promise.withResolvers<{
-      items: [{ id: string; kind: "text"; text: string }]
-    }>()
+    const preparationResult = Promise.withResolvers<{ items: [CanvasTextResource] }>()
     let executeCalls = 0
     let queryCalls = 0
     const business = new CanvasResourceBusinessService(
@@ -288,12 +653,12 @@ describe("canvas resource business service", () => {
       expectedRevision: 0,
       scopeId: "project",
       signal: controller.signal,
-      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
     })
 
     await preparationStarted.promise
     controller.abort(cancellation)
-    preparationResult.resolve({ items: [{ id: "prepared", kind: "text", text: "New resource" }] })
+    preparationResult.resolve({ items: [preparedText("New resource")] })
 
     await expect(operation).rejects.toBe(cancellation)
     expect(executeCalls).toBe(0)
@@ -308,7 +673,7 @@ describe("canvas resource business service", () => {
     const business = new CanvasResourceBusinessService(
       {
         async prepare() {
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       {
@@ -334,7 +699,7 @@ describe("canvas resource business service", () => {
       expectedRevision: 0,
       scopeId: "project",
       signal: controller.signal,
-      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
     })
 
     await queryStarted.promise
@@ -344,6 +709,115 @@ describe("canvas resource business service", () => {
     await expect(operation).rejects.toBe(cancellation)
     expect(executeCalls).toBe(1)
     expect(committed).toBe(0)
+  })
+
+  test("adds host-prepared resources through the same validation, replay, relation, and command-id path", async () => {
+    const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Anchor" })
+    let snapshot: CanvasDocumentSnapshot = {
+      document: { ...createCanvasDocument({ id: "canvas-main", nodes: [anchor] }), revision: 1 },
+      storageVersion: "v1",
+    }
+    let preparationCalls = 0
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [preparedText("Project file")] }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          saveCalls += 1
+          snapshot = { document: request.document, storageVersion: "v2" }
+          return { storageVersion: "v2" }
+        },
+      }),
+    )
+    const request = {
+      actor: { id: "desktop:renderer", kind: "ui" as const },
+      anchor: { x: 40, y: 80 },
+      canvasId: "canvas-main",
+      commandId: "mixed-prepared-add",
+      expectedRevision: 0,
+      relation: { anchorNodeIds: ["anchor"], mode: "connect" as const },
+      scopeId: "project-one",
+      sources: [{ kind: "host-file" as const, path: "media/project.png", sourceId: "prepared" }],
+    }
+    const hostPrepared = {
+      items: [
+        {
+          id: "external",
+          kind: "image" as const,
+          metadata: {},
+          name: "external.png",
+          state: { status: "stale" as const },
+          width: 800,
+          height: 400,
+        },
+      ],
+      warnings: ["external metadata normalized"],
+    }
+
+    const result = await business.addPreparedResources(request, hostPrepared)
+
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(1)
+    expect(result.createdNodeIds).toHaveLength(2)
+    expect(result.document.edges).toHaveLength(2)
+    expect(result.warnings).toEqual([
+      "external metadata normalized",
+      "Canvas changed while resources were being added; replayed from revision 0 on revision 1 after 1 conflict retry.",
+    ])
+    expect(await business.addPreparedResources(request, hostPrepared)).toBe(result)
+    expect(preparationCalls).toBe(1)
+    expect(saveCalls).toBe(1)
+
+    await expect(
+      business.addPreparedResources(request, {
+        ...hostPrepared,
+        items: [{ ...hostPrepared.items[0]!, name: "different.png" }],
+      }),
+    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
+  })
+
+  test("rejects a source id collision between ordinary and host-prepared resources before preparation", async () => {
+    let preparationCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [] }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application should not run")
+        },
+        async query() {
+          throw new Error("application should not run")
+        },
+      },
+    )
+
+    await expect(
+      business.addPreparedResources(
+        {
+          actor: { id: "desktop:renderer", kind: "ui" },
+          anchor: { x: 0, y: 0 },
+          canvasId: "canvas-main",
+          commandId: "source-collision",
+          expectedRevision: 0,
+          scopeId: "project-one",
+          sources: [{ kind: "host-file", path: "media/project.png", sourceId: "duplicate" }],
+        },
+        { items: [{ id: "duplicate", kind: "text", metadata: {}, state: { status: "stale" } }] },
+      ),
+    ).rejects.toThrow("Canvas resource source id is duplicated: duplicate")
+    expect(preparationCalls).toBe(0)
   })
 
   test("rebases a stale resource addition on the latest document without losing an unrelated concurrent edit", async () => {
