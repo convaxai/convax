@@ -29,10 +29,11 @@ This package owns the durable Project aggregate and native Project adapters.
 - Files inside the Project are referenced directly. Only files admitted from outside
   the Project are copied to deterministic content-addressed paths below
   `.convax/assets/blobs/`; duplicate bytes share one blob.
-- Managed-asset admission, reference admission, trash restore and GC use one
-  Project-scoped in-process asset mutex. GC derives liveness from typed Canvas
-  references, waits through a grace period and trash retention, and fails safe when
-  it cannot scan every document. `gc.json` is rebuildable timing state, not a catalog.
+- Managed-asset admission, reference admission and GC use one Project-scoped
+  in-process asset mutex. GC derives liveness from typed Canvas references, waits
+  through one seven-day grace period, atomically persists timing state before deleting
+  due blobs, and fails safe when it cannot scan every document. `gc.json` is
+  rebuildable timing state, not a catalog.
 - Publishing user-visible `Notes/` or `Generated/` files is file-first and no-clobber.
   If the later Canvas commit fails, retain the file and report partial success. Do not
   add a cross-file WAL or delete a user file to simulate atomicity.

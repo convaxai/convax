@@ -254,7 +254,6 @@ browser localStorage                    per-user Workbench/renderer preferences
     canvases/<canvas-id>/document.json  Canvas document
     assets/blobs/<sha256>               deduplicated copies admitted from outside the Project
     assets/.staging/                    short-lived managed-asset imports
-    assets/.trash/                      managed blobs waiting for final GC deletion
     assets/gc.json                      rebuildable delayed-GC timing state
     staging/                            short-lived user-file publication staging
 ```
@@ -301,8 +300,11 @@ unsupported bytes and keep them outside new mutation and GC paths.
 The Project asset single-source transition is one approved breaking cutover under
 this rule. Its authoritative scope and safeguards are recorded in
 [the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
-The new Canvas schema stores only typed `project-file` or `managed-asset` references.
-It does not migrate legacy path-only references, inline text, or remote URLs.
+Canvas owns generic resource-slot and application semantics. Project Canvas owns the
+concrete `project-file`, `project-directory` and `managed-asset` union stored in
+host-owned node metadata, plus Project validation, traversal and hydration. The new
+persistence rejects legacy path-only references, inline text and remote URLs instead
+of migrating them.
 
 Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
 is a normal user-visible Project file below `Generated/`. Both flows publish the file
@@ -310,16 +312,19 @@ first and commit its Canvas reference second. If the Canvas commit fails, the fi
 retained and the UI reports partial success. Canvas undo never rewrites an already
 saved user file.
 
-Managed assets are immutable SHA-256-addressed copies. Project Node serializes import,
-reference admission, trash restore and GC with one in-process Project asset mutex.
-GC derives liveness by scanning typed references in every supported Canvas document,
-waits seven days, moves an orphan into `.trash`, waits another seven days, then
-rescans before deletion. `gc.json` stores only rebuildable timing state. Any unreadable
-Canvas document, corrupt state or digest mismatch stops deletion conservatively.
+Managed assets are immutable SHA-256-addressed value copies. The original external
+path is not persisted or watched after admission. Project Node serializes import,
+reference admission and GC with one in-process Project asset mutex. GC derives
+liveness by scanning typed references in every supported Canvas document, records the
+first unreferenced time, waits seven days and completes another full scan before
+deletion. It atomically saves the next `gc.json` timing state before unlinking due
+blobs; stale records after a crash are removed by the next scan. Any unreadable Canvas
+document, corrupt state or digest mismatch stops deletion conservatively.
 
-Project file watcher events invalidate runtime snapshots and refresh or mark nodes
-missing; they are not an event log. File and directory moves do not rewrite Canvas
-references in v1. Users explicitly relink missing nodes.
+Every coalesced Project filesystem event marks the current Project's mounted resource
+snapshots stale; an optional path only prioritizes lazy refresh. Watcher events are not
+an event log. File and directory moves do not rewrite Canvas references in v1. Users
+explicitly relink missing nodes.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.

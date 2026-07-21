@@ -44,7 +44,7 @@ files under `packages/` add local rules and inherit this contract.
 | Package                 | Owns                                                                                                                                                             | Must not own                                                                             |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
-| `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog and relationships | Active Canvas selection, Canvas document semantics, Agent sessions                       |
+| `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                       |
 | `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                    | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
 | `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                         | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
 | `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                  | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
@@ -169,8 +169,9 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   the file and report partial success. Managed-asset admission may likewise leave an
   unreferenced blob for delayed GC; never add cross-file WAL merely to roll it back.
 - Project file moves and renames do not rewrite Canvas references in v1. Watchers
-  invalidate runtime snapshots; missing references stay visible until the user
-  relinks them.
+  treat every coalesced filesystem event as invalidation of the current Project's
+  mounted resource snapshots; an optional event path is only a refresh-priority hint.
+  Missing references stay visible until the user relinks them.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.

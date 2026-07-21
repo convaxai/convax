@@ -2,7 +2,7 @@
 
 状态：已批准的破坏性重构设计，供后续 implementation plan 使用。
 
-本文只解决三件事：Canvas 内容以 Project 文件为唯一来源、Project 外文件按内容去重复制、无引用 managed asset 延迟回收。设计明确接受安全的 partial success，不提供跨文件 ACID、自动移动追踪或通用资源目录。
+本文只解决三件事：Canvas 内容以 Project 管理的磁盘资源为唯一来源、Project 外文件按内容去重复制、无引用 managed asset 延迟回收。设计明确接受安全的 partial success，不提供跨文件 ACID、自动移动追踪或通用资源目录。
 
 ## 1. 背景与现状
 
@@ -22,13 +22,13 @@
 
 ### 2.1 核心目标
 
-1. 用户可见的 Project 文件是内容的唯一事实来源。
+1. Project 管理的磁盘资源是内容的唯一事实来源：`project-file` 读取用户可见文件，`managed-asset` 读取 Project 持有的不可变私有副本。
 2. Canvas 文档只保存资源引用和视图状态，不保存文本正文、二进制、`data:` URL、`blob:` URL 或原生绝对路径。
 3. Project 内文件直接引用，不复制。
 4. 只有从 Project 外引入的本地文件才复制到 `.convax/assets`。
 5. managed asset 按实际文件内容的 SHA-256 去重；重复拖入只增加引用，不增加物理副本。
 6. Canvas 新建文本和生成结果先成为用户可见 Project 文件，再由 Canvas 引用。
-7. 没有任何 Canvas 引用的 managed asset 经过宽限期和回收站保留期后删除。
+7. 没有任何 Canvas 引用的 managed asset 经过 7 天宽限期和删除前完整复查后回收。
 8. 文件监听能让引用节点刷新或进入 missing 状态。
 
 ### 2.2 非目标
@@ -68,7 +68,7 @@ Canvas 文档保存：
 
 运行时读取资源后可以在内存中形成文本、对象 URL、缩略图或媒体 metadata，但这些 hydration 结果不写回 Canvas 文档。
 
-### 3.2 两种资源引用
+### 3.2 三种 Project 引用
 
 ```ts
 type ProjectResourceReference =
@@ -82,9 +82,13 @@ type ProjectResourceReference =
       name: string
       mediaType?: string
     }
+  | {
+      kind: "project-directory"
+      path: string
+    }
 ```
 
-`project-file.path` 是规范化 POSIX 分隔符的 Project 相对路径。它不能逃出 Project，也不能指向除 managed asset 解析器以外的 `.convax` 私有路径。
+`project-file.path` 是规范化 POSIX 分隔符的 Project 相对路径。它不能逃出 Project，也不能以任何大小写形式指向 `.convax`。`managed-asset` 是独立引用类型；只有可信 Project adapter 可以根据 digest 把它解析到 `.convax/assets/blobs/`，该私有路径不能成为 `project-file` 引用。
 
 `managed-asset.sha256` 是 64 位小写十六进制摘要。物理路径由固定规则推导：
 
@@ -94,8 +98,7 @@ type ProjectResourceReference =
 
 `name` 和 `mediaType` 只是显示与解码提示，不参与寻址，也不能证明文件内容。每次进入需要信任字节的边界时，Main 读取实际文件并重新验证大小、签名或摘要。
 
-目录节点不是内容资源。若产品保留 folder node，它只保存独立的
-`{ kind: "project-directory", path }` 引用，不允许指向 `.convax`，也不进入 managed asset GC。
+其中 `project-file` 和 `managed-asset` 是两种内容引用。`project-directory` 不是内容资源；现有 folder node 用它保存 Project 内目录，不允许指向 `.convax`，也不进入 managed asset GC。
 
 如果 Plugin 节点需要多个持久资源，它们必须进入 host-owned 的类型化资源槽位；Plugin 自己的 opaque JSON 字符串不能保存路径或哈希，也不能让资产保持存活。
 
@@ -130,8 +133,6 @@ Resource Catalog 在 v1 没有新的权威信息：
         <sha256>
       .staging/
         <operation-id>
-      .trash/
-        <sha256>
       gc.json
     staging/
       <short-lived-operation-id>
@@ -142,7 +143,6 @@ Resource Catalog 在 v1 没有新的权威信息：
 - `Notes/` 和 `Generated/` 是普通用户目录，可见、可移动、可版本控制；
 - `.convax/assets/blobs/` 只保存 Project 外导入文件的内容副本；
 - `.convax/assets/.staging/` 只保存尚未发布为 managed blob 的短期导入文件；
-- `.convax/assets/.trash/` 保存已过第一段宽限期、等待最终删除的 blob；
 - `.convax/assets/gc.json` 与它管理的 store 放在一起，但不是 Resource Catalog；
 - `.convax/staging/` 是 Notes/Generated 发布等操作的可丢弃临时区，不保存事务日志；
 - 所有 staging 都位于 Project 所在文件系统，便于使用同文件系统原子操作。
@@ -153,11 +153,12 @@ Resource Catalog 在 v1 没有新的权威信息：
 
 ### 5.1 统一判定
 
-Main 收到 host-owned 文件 token 后解析真实路径，并与 Project 根真实路径比较：
+Main 收到 host-owned 文件或目录 token 后解析真实路径，并与 Project 根真实路径比较：
 
-- 来源在 Project 内：创建 `project-file` 引用；
-- 来源在 Project 外：导入 managed asset，再创建 `managed-asset` 引用；
-- 来源无法安全解析、是目录、symlink 或不允许的对象：拒绝。
+- Project 内普通文件：创建 `project-file` 引用；
+- Project 内目录：创建 `project-directory` 引用；
+- Project 外普通文件：导入 managed asset，再创建 `managed-asset` 引用；
+- Project 外目录、任何 symlink、无法安全解析或不允许的对象：拒绝。
 
 调用方不能通过传入 `kind` 或伪造 Project 相对路径选择分支。
 
@@ -179,6 +180,8 @@ Project 内文件不复制。拖入两次的结果是两个 Canvas 节点引用�
 6. 返回 `managed-asset` 引用，由 Canvas application service 创建节点。
 
 同一个外部文件移动到 Canvas 两次时，可以得到两个节点，但物理结果始终是一个 `blobs/<sha256>` 文件。不同文件名但字节完全相同也只保存一份；每个引用仍可保留自己的显示名称。
+
+导入是 value copy。Canvas 和 Project 元数据都不持久化、监听或继续访问原始外部路径；复制完成后，managed blob 是该引用的权威字节来源。原始外部文件后续发生修改、移动或删除都不会自动传播到 Canvas。
 
 如果 blob 已存在但实际摘要与路径不符，导入失败并报告 managed store 损坏，不能覆盖或信任该文件。
 
@@ -253,13 +256,14 @@ v1 不定义 `.convax-note.json`，也不承诺完整富文本往返。需要粗
 
 现有 watcher 继续负责 Project 文件树刷新。资源层增加按事件失效：
 
-- 精确路径事件：使该 `project-file` 的 runtime snapshot 失效并重新读取；
-- 路径未知或 watcher 重启：使当前 Project 的所有已挂载 `project-file` snapshot 失效；
+- 任意合并后的 filesystem event 都使当前 Project 的全部已挂载 `project-file` 和 `project-directory` runtime snapshot 进入 stale；
+- event 中的可选 path 只用于优先刷新相关的可见节点，不能缩小失效集合；
+- watcher 重启、事件缺少 path、rename 或多个事件被合并时使用相同的整体失效语义；
 - 内容修改：节点刷新内容和预览，不修改 Canvas document revision；
 - 原路径删除：节点保留并显示 missing；
 - 路径重新出现：节点重新 hydration。
 
-watcher 是失效提示，不是事件日志。正确性来自每次读取时重新验证文件，而不是假设所有 OS 事件都可靠到达。
+进入 stale 不要求立即重读所有文件；当前挂载或再次访问的节点按需 hydration。watcher 是失效提示，不是事件日志。正确性来自每次读取时重新验证文件，而不是假设所有 OS 事件都可靠到达。
 
 ### 8.2 移动与重命名
 
@@ -290,7 +294,7 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 .convax/assets/gc.json
 ```
 
-它与 blob、staging 和 trash 属于同一个 managed store，随 store 一起移动和备份，也便于 `@convax/project/node` 独占管理。它只记录延迟删除时间，不保存资源 metadata、路径映射、引用计数或 Canvas id，所以不是 Resource Catalog。
+它与 blob 和 import staging 属于同一个 managed store，随 store 一起移动和备份，也便于 `@convax/project/node` 独占管理。它只记录延迟删除时间，不保存资源 metadata、路径映射、引用计数或 Canvas id，所以不是 Resource Catalog。
 
 建议 schema：
 
@@ -300,14 +304,13 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
   "lastSuccessfulScanAt": "2026-07-21T10:00:00.000Z",
   "entries": {
     "<sha256>": {
-      "unreferencedSince": "2026-07-14T10:00:00.000Z",
-      "trashedAt": null
+      "unreferencedSince": "2026-07-14T10:00:00.000Z"
     }
   }
 }
 ```
 
-状态通过临时文件加原子替换写入。它是可重建的保守缓存；缺失或损坏时不删除任何文件，在本次完整扫描中从零重建时间。现有 live blob 从本次扫描时间开始新的 `unreferencedSince`，现有 trash 从本次扫描时间开始新的 `trashedAt`，因此不会因为状态丢失而立即删除。
+状态通过临时文件加原子替换写入。它是可重建的保守缓存；缺失或损坏时不删除任何文件，在本次完整扫描中从零重建时间。所有当前无引用 blob 从本次扫描时间开始新的 `unreferencedSince`，因此不会因为状态丢失而立即删除。
 
 ### 9.2 引用根
 
@@ -319,14 +322,13 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 
 任意 Canvas 文档无法读取、schema 不支持或资源字段校验失败时，本次 GC 整体停止。opaque Plugin JSON、普通字符串、运行时 URL 和日志都不算引用。
 
-### 9.3 两段式回收
+### 9.3 单段宽限回收
 
 默认常量：
 
 | 阶段 | 时长 |
 | --- | ---: |
 | 首次确认无引用后的宽限期 | 7 天 |
-| 进入 `.trash` 后的保留期 | 7 天 |
 | staging 最短保留期 | 24 小时 |
 | 完整扫描最小间隔 | 24 小时 |
 | Project 打开后的空闲延迟 | 30 秒 |
@@ -334,16 +336,17 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 一次 GC 在 Project 级 asset mutex 内按以下顺序执行：
 
 1. 扫描全部 Canvas 引用根；失败则无副作用退出；
-2. 枚举 `blobs/` 和 `.trash/` 中的普通文件，不跟随 symlink；
-3. 对仍被引用的 live blob 删除其 GC 记录；
-4. 对首次无引用的 live blob记录当前 `unreferencedSince`；
-5. 对持续无引用满 7 天的 live blob原子移动到 `.trash/<sha256>`，记录 `trashedAt`；
-6. 对 trash 中重新出现引用的 blob恢复到 `blobs/`，并清除 GC 记录；
-7. 对 trash 中持续无引用满 7 天的 blob，在本轮引用扫描结果仍有效时删除；
-8. 原子保存新的 `gc.json`；失败时保留文件，下一轮重试；
-9. 清理超过 24 小时且不在当前进程 active operation 集合中的 staging。
+2. 枚举 `blobs/` 中名称合法的普通文件，不跟随 symlink；
+3. 为仍被引用的 blob 删除旧 GC 记录，为首次无引用的 blob 记录当前 `unreferencedSince`；
+4. 把已有记录、持续无引用满 7 天且本轮仍无引用的 blob列为删除候选；候选的旧记录暂时保留；
+5. 原子保存新的 `gc.json` 和 `lastSuccessfulScanAt`；保存失败则不删除任何 blob；
+6. 只有步骤 5 成功后才逐个删除候选；删除失败时旧记录仍然到期，下一轮重试；
+7. 下一轮扫描从状态中移除已经不存在的 blob 记录；
+8. 清理超过 24 小时且不在当前进程 active operation 集合中的 `.convax/assets/.staging/` 和 `.convax/staging/`。
 
-最终物理删除最早发生在第一次确认无引用后的约 14 天，并可能因为 24 小时扫描间隔更晚。短暂重新引用会清除旧计时；再次变成无引用后重新计算 7 天。
+最终物理删除最早发生在第一次确认无引用后的约 7 天，并可能因为 24 小时扫描间隔更晚。短暂重新引用会清除旧计时；再次变成无引用后重新计算 7 天。
+
+如果进程在 `gc.json` 保存后、删除前退出，blob 和到期记录都保留，下一轮重试。如果进程在删除后退出，最多留下指向不存在 blob 的 stale timing entry，下一轮枚举会删除该记录。两种情况都不需要 WAL。
 
 不维护引用计数。即使一个摘要被 100 个节点引用，扫描结果也只是“存在至少一个引用”。
 
@@ -353,22 +356,22 @@ GC 不监听每次节点删除，也不创建高频定时器：
 
 - Project 打开时，如果距离上次成功扫描已满 24 小时，空闲 30 秒后运行；
 - Project 持续打开时，每 24 小时最多运行一次；
-- 用户执行“清理可回收资产”时立即完整扫描，但仍遵守两段保留期；
+- 用户执行“清理可回收资产”时立即完整扫描，但仍遵守 7 天宽限期；
 - Project 关闭和 App 退出时不强制运行；
 - 同一 Project 只允许一个 GC；重复请求合并；
 - 不同 Project 的 GC 由 Desktop 限制为低并发后台任务。
 
 ### 9.5 与导入和重新引用的并发
 
-managed import、managed reference admission、trash 恢复和 GC 移动/删除共享一个进程内 Project asset mutex。
+managed import、managed reference admission 和 GC 扫描/删除共享一个进程内 Project asset mutex。
 
-新增 managed 引用前必须在 mutex 内确认 `blobs/<sha256>` 存在且摘要正确；如果文件只在 `.trash`，先恢复再提交 Canvas。若恢复成功但 Canvas 提交失败，留下的 live blob 仍是安全的无引用文件，下一轮 GC 会重新计时。
+新增 managed 引用前必须在 mutex 内确认 `blobs/<sha256>` 存在且摘要正确，并让该引用的 Canvas commit 在同一 mutex 临界区完成。GC 从最终引用扫描到候选删除也始终持有该 mutex，因此新引用不能插入到最终复查与删除之间。managed blob 发布成功但 Canvas 提交失败时，留下的 blob 仍是安全的无引用文件，下一轮 GC 会开始计时。
 
 进程崩溃不需要前滚或回滚事务：
 
 - staging 可以稍后清理；
 - live orphan 会被下一轮标记；
-- trash 由实际目录和 `gc.json` 重建；
+- 删除前崩溃只会延长保留，删除后崩溃只会留下可清理的 stale timing entry；
 - 已发布的用户文件永不由 managed asset GC 删除。
 
 ## 10. 破坏性切换
@@ -389,13 +392,12 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 
 ### `@convax/canvas`
 
-- 拥有内容节点只保存资源引用的 schema 与业务操作；
-- 拥有 runtime hydration、missing/corrupt 展示状态的 headless 合约；
-- 不解析 Project 路径，不读文件，不实现 GC。
+- 拥有内容节点的通用资源槽位语义、资源 application/business ports，以及 runtime hydration、missing/corrupt 展示状态的 headless 合约；
+- 不定义或解析 `ProjectResourceReference`，不拥有 Project 路径、managed digest、文件 I/O 或 GC。
 
 ### `@convax/project/canvas`
 
-- 拥有 `ProjectResourceReference`、合法字段遍历和序列化校验；
+- 拥有 host-owned metadata 中的具体 `ProjectResourceReference` union、Project scope 校验、合法字段遍历和序列化校验；
 - 确保 dehydrate 后没有文本正文、URL 或 native path；
 - 为 GC 提供“从一个有效 Canvas 文档枚举 managed hashes”的纯函数。
 
@@ -403,7 +405,7 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 
 - 解析 Project 绑定与真实路径；
 - 实现 Project 文件读取、文本写入、managed import 和摘要验证；
-- 拥有 `.convax/assets`、`gc.json`、trash、staging 和 Project asset mutex；
+- 拥有 `.convax/assets`、`gc.json`、staging 和 Project asset mutex；
 - 实现 Canvas repository 的新 schema 持久化和旧 schema 拒绝。
 
 ### `@convax/project-files`
@@ -434,8 +436,11 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 ### 资源与 schema
 
 - Project 内文件产生 `project-file`，不写 `.convax/assets`；
+- Project 内目录产生 `project-directory`，Project 外目录被拒绝；
+- `project-file` 拒绝所有大小写形式的 `.convax` 路径；
 - 同一外部文件重复导入只产生一个 blob；
 - 相同字节不同文件名仍去重；
+- 外部来源绝对路径不进入 Canvas/Project 元数据，导入后修改原文件不改变 managed blob；
 - managed 引用路径只能由合法 SHA-256 推导；
 - 持久化 Canvas 不包含正文、运行时 URL、原生路径；
 - opaque Plugin state 中的字符串不成为 GC root；
@@ -453,18 +458,19 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 
 ### Watcher
 
-- 修改使 runtime snapshot 失效并刷新；
+- 单次或合并 filesystem event 使当前 Project 的挂载资源整体 stale，可选 path 只影响刷新优先级；
+- 修改使相关 runtime snapshot 按需刷新；
 - 删除使节点进入 missing；
 - 路径重新出现后恢复；
-- 未知路径事件使当前 Project 资源整体失效；
 - move/rename 不自动改写 Canvas 引用。
 
 ### GC
 
 - 首次 orphan 只记录时间，不移动；
-- 7 天前不进入 trash；
-- trash 再保留 7 天且删除前重新扫描；
-- 重新引用清除计时或从 trash 恢复；
+- 7 天前不删除，满 7 天仍要重新扫描全部引用；
+- 重新引用清除旧计时；
+- `gc.json` 原子保存失败时不删除候选；
+- 删除失败保留到期记录并在下一轮重试；
 - `gc.json` 缺失/损坏时本轮不删除并可重建；
 - 任一 Canvas 无法扫描时无删除副作用；
 - symlink 和未知目录项不被跟随或删除；
@@ -473,12 +479,12 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 
 ## 14. 实施顺序
 
-1. 提升 Canvas schema，落地两种类型化引用并删除 inline content 新写路径；
+1. 提升 Canvas schema，落地三种 Project 引用并删除 inline content 新写路径；
 2. 让 Project 内资源直接引用；
 3. 实现 content-addressed external import 和并发去重；
 4. 将 Canvas 新建文本与 generation 输出改为 file-first；
 5. 接入 watcher 失效、missing/corrupt 状态和手动重新定位；
-6. 实现 `gc.json`、两段式回收和 24 小时调度；
+6. 实现 `gc.json`、单段 7 天宽限回收和 24 小时调度；
 7. 删除旧 path-only managed、inline text、remote URL 与回滚资产逻辑；
 8. 更新 Desktop protocol、架构文档和端到端 smoke tests。
 
@@ -496,7 +502,7 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 6. 生成结果直接生成用户可见 `Generated/*` 文件；
 7. 文件外部修改后节点刷新，删除后显示 missing；
 8. 移动或重命名不会被错误猜测或自动改写；
-9. 无引用 managed blob 至少保留约 14 天后才物理删除；
+9. 无引用 managed blob 至少保留约 7 天，并在删除前重新完成全部引用扫描；
 10. `gc.json` 丢失、Canvas 扫描失败或摘要异常时 GC 保守停止；
 11. 不存在 Resource Catalog、文件移动 WAL、Canvas catalog WAL、generation publication WAL 或每候选 GC WAL；
 12. 旧 schema 不迁移、不双读，并且不会被新 GC 删除。
@@ -510,7 +516,7 @@ managed import、managed reference admission、trash 恢复和 GC 移动/删除�
 - Canvas 只保存引用；
 - 新建和生成内容先落成用户文件；
 - watcher 负责失效提示，读取负责最终验证；
-- GC 通过全量引用扫描、7 天宽限和 7 天 trash 保留控制增长；
+- GC 通过全量引用扫描和单段 7 天宽限控制增长；
 - partial success 通过“保留文件、允许重试”处理，不升级为文件系统事务框架。
 
 这个边界足以实现用户资产单一来源，也为将来的移动跟随、索引或更强事务留下独立演进空间。
