@@ -52,6 +52,24 @@ describe("canvas document persistence", () => {
     })
   })
 
+  test("serializes pretty JSON with a trailing newline", () => {
+    const document = createCanvasDocument({ id: "canvas_pretty", title: "Pretty" })
+    expect(serializeCanvasDocument(document)).toBe(`${JSON.stringify({
+      document,
+      schemaVersion: "convax.canvas/2",
+    }, null, 2)}\n`)
+  })
+
+  test.each([
+    ["null", null],
+    ["array", []],
+    ["scalar", 42],
+  ] as const)("rejects a non-object %s JSON root", (_kind, value) => {
+    expect(() => parseStoredCanvasDocument(JSON.stringify(value), "canvas")).toThrow(
+      InvalidCanvasDocumentError,
+    )
+  })
+
   test("rejects the former unversioned document without rewriting its bytes", () => {
     const document = createCanvasDocument({ id: "canvas_legacy" })
     const legacy = JSON.stringify(document)

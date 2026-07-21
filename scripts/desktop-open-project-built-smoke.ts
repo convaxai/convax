@@ -963,35 +963,42 @@ try {
     throw new Error(`Unexpected saved 3D Director state: ${JSON.stringify(savedDirectorState)}`)
   }
 
-  const persistedDocument = JSON.parse(
+  const persistedEnvelope = JSON.parse(
     await fs.readFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "utf8"),
   ) as {
-    edges?: unknown[]
-    id?: string
-    nodes?: Array<{
-      data?: {
-        kind?: string
-        metadata?: {
-          convaxPlugin?: { version?: string }
-          convaxPluginState?: {
-            directorProject?: {
-              objects?: Array<{ id?: string; transform?: { rotation?: number[] } }>
-              version?: number
+    document?: {
+      edges?: unknown[]
+      id?: string
+      nodes?: Array<{
+        data?: {
+          kind?: string
+          metadata?: {
+            convaxPlugin?: { version?: string }
+            convaxPluginState?: {
+              directorProject?: {
+                objects?: Array<{ id?: string; transform?: { rotation?: number[] } }>
+                version?: number
+              }
+              presentation?: { viewport?: { directorView?: unknown } }
+              schemaVersion?: number
             }
-            presentation?: { viewport?: { directorView?: unknown } }
-            schemaVersion?: number
           }
         }
-      }
-    }>
+      }>
+    }
+    schemaVersion?: unknown
   }
-  const persistedDirectorState = persistedDocument.nodes?.[0]?.data?.metadata?.convaxPluginState
+  if (persistedEnvelope.schemaVersion !== "convax.canvas/2") {
+    throw new Error(`Unexpected persisted Canvas envelope: ${JSON.stringify(persistedEnvelope)}`)
+  }
+  const persistedDocument = persistedEnvelope.document
+  const persistedDirectorState = persistedDocument?.nodes?.[0]?.data?.metadata?.convaxPluginState
   const persistedRole = persistedDirectorState?.directorProject?.objects?.find(
     (object) => object.id === "char_default_a",
   )
   const persistedRotationY = persistedRole?.transform?.rotation?.[1]
   if (
-    persistedDocument.id !== "canvas-main" ||
+    persistedDocument?.id !== "canvas-main" ||
     persistedDocument.nodes?.length !== 1 ||
     persistedDocument.nodes[0]?.data?.kind !== "plugin.storyai-3d-director-desk" ||
     persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.schemaVersion !== 2 ||
@@ -1004,7 +1011,7 @@ try {
     persistedDocument.nodes[0]?.data?.metadata?.convaxPlugin?.version !== "0.0.1-convax.3" ||
     persistedDocument.edges?.length !== 0
   ) {
-    throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
+    throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedEnvelope)}`)
   }
 
   // Match the recorded failure: finish an Orbit gesture and click the host-owned
