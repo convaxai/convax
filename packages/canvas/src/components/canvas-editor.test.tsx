@@ -259,7 +259,15 @@ describe("CanvasEditor viewport ownership", () => {
         },
         upload: {
           async upload() {
-            return [{ id: "brief", kind: "text", name: "brief.txt", text: "Brief" }]
+            return [
+              {
+                id: "brief",
+                kind: "text",
+                metadata: {},
+                name: "brief.txt",
+                state: { status: "ready", text: "Brief" },
+              },
+            ]
           },
         },
       }),

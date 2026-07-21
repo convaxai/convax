@@ -92,31 +92,36 @@ describe("Canvas generation services", () => {
 
   test("infers semantic roles for supported selected file nodes", () => {
     const nodes = [
-      createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "A lighthouse" }),
+      createTextNode({
+        id: "brief",
+        metadata: {},
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "A lighthouse" },
+      }),
       createMediaNode({
         id: "image",
         position: { x: 0, y: 0 },
-        resource: { id: "image-resource", kind: "image", url: "asset://image" },
+        resource: { id: "image-resource", kind: "image", metadata: {}, state: { status: "ready", url: "asset://image" } },
       }),
       createMediaNode({
         id: "video",
         position: { x: 0, y: 0 },
-        resource: { id: "video-resource", kind: "video", url: "asset://video" },
+        resource: { id: "video-resource", kind: "video", metadata: {}, state: { status: "ready", url: "asset://video" } },
       }),
       createMediaNode({
         id: "audio",
         position: { x: 0, y: 0 },
-        resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+        resource: { id: "audio-resource", kind: "audio", metadata: {}, state: { status: "ready", url: "asset://audio" } },
       }),
       createMediaNode({
         id: "file",
         position: { x: 0, y: 0 },
-        resource: { id: "file-resource", kind: "file", url: "asset://file" },
+        resource: { id: "file-resource", kind: "file", metadata: {}, state: { status: "ready", url: "asset://file" } },
       }),
       createFolderNode({
         id: "folder",
         position: { x: 0, y: 0 },
-        resource: { id: "folder-resource", kind: "folder", name: "Folder" },
+        resource: { id: "folder-resource", kind: "folder", metadata: {}, name: "Folder", state: { status: "ready" } },
       }),
       createAgentNode({ id: "agent", position: { x: 0, y: 0 } }),
       createGroupNode({ id: "group", height: 100, position: { x: 0, y: 0 }, width: 100 }),

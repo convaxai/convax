@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { duplicateCanvasSelection } from "./commands"
-import { createCanvasDocument, createTextNode } from "./document"
+import { createCanvasDocument, createTextNode as createCanvasTextNode } from "./document"
 import { parseStoredCanvasDocument, serializeCanvasDocument } from "./application/persistence"
 import {
   canvasNodeGenerationPreferenceKey,
@@ -9,6 +9,16 @@ import {
   setCanvasNodeGenerationToolId,
 } from "./generation-preference"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
+
+function createTextNode(input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
+  metadata?: Record<string, unknown>
+}) {
+  return createCanvasTextNode({
+    ...input,
+    metadata: input.metadata ?? {},
+    resourceState: { status: "ready" },
+  })
+}
 
 describe("Canvas node generation preference", () => {
   test("stores one opaque tool override while preserving unrelated node metadata", () => {

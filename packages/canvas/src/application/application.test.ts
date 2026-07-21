@@ -22,8 +22,9 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
         item: {
           id: "resource_image",
           kind: "image",
+          metadata: { source: "Generated/Poster.png" },
           name: "Poster.png",
-          url: "asset://poster",
+          state: { status: "ready", url: "asset://poster" },
           width: 1_000,
           height: 500,
         },
@@ -36,7 +37,7 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
           kind: "text",
           metadata: { source: "docs/brief.md" },
           name: "Brief.md",
-          text: "# Campaign brief",
+          state: { status: "ready", text: "# Campaign brief" },
         },
         nodeId: "text_node",
       },
@@ -139,7 +140,12 @@ describe("canvas application commands", () => {
 
   test("adds prepared resources with product sizing, placement, and explicit relations", () => {
     const anchor = {
-      ...createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Anchor" }),
+      ...createTextNode({
+        id: "anchor",
+        metadata: { source: "Notes/anchor.md" },
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "Anchor" },
+      }),
       style: { height: 180, width: 320 },
     }
     const document = createCanvasDocument({ id: "canvas_resources", nodes: [anchor] })
@@ -158,7 +164,10 @@ describe("canvas application commands", () => {
       style: { height: 160, width: 320 },
     })
     expect(applied.document.nodes.find((node) => node.id === "text_node")).toMatchObject({
-      data: { metadata: { source: "docs/brief.md" } },
+      data: {
+        metadata: { source: "docs/brief.md" },
+        resourceState: { status: "ready", text: "# Campaign brief" },
+      },
       position: { x: 380, y: 36 },
       style: { height: 240, width: 360 },
     })
@@ -201,7 +210,12 @@ describe("canvas application commands", () => {
   test("commits one logical revision and rejects a stale caller", () => {
     const document = createCanvasDocument({
       id: "canvas_revision",
-      nodes: [createTextNode({ id: "anchor", position: { x: 0, y: 0 } })],
+      nodes: [createTextNode({
+        id: "anchor",
+        metadata: { source: "Notes/anchor.md" },
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready" },
+      })],
     })
     const envelope = {
       actor: { id: "agent_one", kind: "agent" as const },
@@ -246,7 +260,13 @@ describe("canvas application commands", () => {
       type: "resources.add",
       items: [
         {
-          item: { id: "folder-resource", kind: "folder", name: "Design", path: "assets/design" },
+          item: {
+            id: "folder-resource",
+            kind: "folder",
+            metadata: { source: "assets/design" },
+            name: "Design",
+            state: { status: "ready" },
+          },
           nodeId: "folder-node",
         },
       ],
@@ -254,7 +274,7 @@ describe("canvas application commands", () => {
     })
 
     expect(applied.document.nodes[0]).toMatchObject({
-      data: { kind: "folder", name: "Design", path: "assets/design" },
+      data: { kind: "folder", name: "Design", resourceState: { status: "ready" } },
       id: "folder-node",
       type: "file",
     })
@@ -474,10 +494,17 @@ describe("canvas application queries", () => {
     const first = createTextNode({
       id: "first",
       label: "Campaign Brief",
+      metadata: { source: "Notes/first.md" },
       position: { x: 10, y: 20 },
-      text: "Summer launch",
+      resourceState: { status: "ready", text: "Summer launch" },
     })
-    const second = createTextNode({ id: "second", label: "Review", position: { x: 40, y: 20 }, text: "Approve assets" })
+    const second = createTextNode({
+      id: "second",
+      label: "Review",
+      metadata: { source: "Notes/second.md" },
+      position: { x: 40, y: 20 },
+      resourceState: { status: "ready", text: "Approve assets" },
+    })
     const document = connectCanvasNodes(createCanvasDocument({ nodes: [first, second] }), {
       id: "edge",
       source: first.id,

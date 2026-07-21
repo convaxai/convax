@@ -553,19 +553,23 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
   for (const item of prepared.items) {
     if (!isRecord(item)) throw new CanvasCommandValidationError("Prepared canvas resource is invalid")
     requireNonEmptyString(item.id, "Prepared resource id")
+    if (!isRecord(item.metadata)) throw new CanvasCommandValidationError("Prepared resource metadata is required")
+    requireResourceRuntimeState(item.state)
+    for (const key of ["text", "richText", "url", "posterUrl", "path"]) {
+      if (Object.hasOwn(item, key)) {
+        throw new CanvasCommandValidationError(`Prepared resource contains removed field: ${key}`)
+      }
+    }
     if (item.kind === "text") {
-      if (typeof item.text !== "string") throw new CanvasCommandValidationError("Prepared text resource is invalid")
       continue
     }
     if (item.kind === "folder") {
       requireNonEmptyString(item.name, "Prepared folder name")
-      if (item.path !== undefined) requireNonEmptyString(item.path, "Prepared folder path")
       continue
     }
     if (item.kind !== "audio" && item.kind !== "file" && item.kind !== "image" && item.kind !== "video") {
       throw new CanvasCommandValidationError(`Unsupported prepared resource kind: ${String(item.kind)}`)
     }
-    if (typeof item.url !== "string") throw new CanvasCommandValidationError("Prepared media resource URL is required")
     requirePositiveNumberIfPresent(item.width, "Prepared resource width")
     requirePositiveNumberIfPresent(item.height, "Prepared resource height")
     requirePositiveNumberIfPresent(item.durationMs, "Prepared resource duration")
@@ -575,6 +579,18 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
     (!Array.isArray(prepared.warnings) || prepared.warnings.some((warning) => typeof warning !== "string"))
   ) {
     throw new CanvasCommandValidationError("Resource preparation warnings must be strings")
+  }
+}
+
+function requireResourceRuntimeState(value: unknown) {
+  if (!isRecord(value)
+    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(value.status))) {
+    throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
+  }
+  for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {
+    if (value[key] !== undefined && typeof value[key] !== "string") {
+      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a string`)
+    }
   }
 }
 

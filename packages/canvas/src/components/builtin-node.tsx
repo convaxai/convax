@@ -79,7 +79,6 @@ import type {
   CanvasMediaKind,
   CanvasMediaNodeData,
   CanvasNode,
-  CanvasRichTextContent,
   CanvasTextNodeData,
 } from "../types"
 import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
@@ -322,19 +321,14 @@ function plainTextDocument(text: string): JSONContent {
   }
 }
 
-function textEditorSource(data: CanvasTextNodeData): {
-  content: JSONContent | string
-  contentType: "json" | "markdown"
-} {
-  if (data.richText?.type === "doc") {
-    return { content: data.richText as JSONContent, contentType: "json" }
-  }
-  if (data.format === "markdown") return { content: data.text, contentType: "markdown" }
-  return { content: plainTextDocument(data.text), contentType: "json" }
+function textEditorSource(data: CanvasTextNodeData): { content: JSONContent | string; contentType: "json" | "markdown" } {
+  const text = data.resourceState?.text ?? ""
+  if (data.format === "markdown") return { content: text, contentType: "markdown" }
+  return { content: plainTextDocument(text), contentType: "json" }
 }
 
 function textDataFingerprint(data: CanvasTextNodeData) {
-  return `${data.format ?? "plain"}\u0000${data.text}\u0000${JSON.stringify(data.richText ?? null)}`
+  return `${data.format ?? "plain"}\u0000${data.resourceState?.contentRevision ?? ""}\u0000${data.resourceState?.text ?? ""}`
 }
 
 function createTextEditorExtensions() {
@@ -444,8 +438,10 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       const nextData: CanvasTextNodeData = {
         ...current,
         format: "markdown",
-        richText: editor.getJSON() as CanvasRichTextContent,
-        text: editor.getMarkdown(),
+        resourceState: {
+          ...(current.resourceState ?? { status: "stale" }),
+          text: editor.getMarkdown(),
+        },
       }
       const nextFingerprint = textDataFingerprint(nextData)
       if (nextFingerprint === appliedFingerprintRef.current) return
@@ -759,7 +755,7 @@ function VideoBody(props: {
     setPlaying(false)
     setMuted(true)
     return () => videoRef.current?.pause()
-  }, [props.data.url])
+  }, [props.data.resourceState?.url])
 
   const requestPlayback = (intent: "hover" | "manual", forceMuted = false) => {
     const video = videoRef.current
@@ -808,9 +804,9 @@ function VideoBody(props: {
         onPause={() => setPlaying(false)}
         onPlay={() => setPlaying(true)}
         playsInline
-        poster={props.data.posterUrl}
+        poster={props.data.resourceState?.posterUrl}
         preload="metadata"
-        src={props.data.url}
+        src={props.data.resourceState?.url}
       />
       <div className={cn("convax-video__controls", (hovered || playing || props.selected) && "is-visible")}>
         <button
@@ -891,7 +887,8 @@ function MediaBody(props: {
   selected: boolean
 }) {
   const fit = props.data.fit ?? "contain"
-  if (!props.data.url.trim()) {
+  const url = props.data.resourceState?.url ?? ""
+  if (!url.trim()) {
     return <EmptyMedia kind={props.data.kind} />
   }
   if (props.data.kind === "image") {
@@ -908,7 +905,7 @@ function MediaBody(props: {
             width: event.currentTarget.naturalWidth,
           })
         }}
-        src={props.data.url}
+        src={url}
       />
     )
   }
@@ -919,7 +916,7 @@ function MediaBody(props: {
     return (
       <div className="flex size-full flex-col items-center justify-center gap-4 p-5">
         <Music2 className="size-8 text-muted-foreground" />
-        <audio className="nodrag nowheel w-full" controls preload="metadata" src={props.data.url} />
+        <audio className="nodrag nowheel w-full" controls preload="metadata" src={url} />
       </div>
     )
   }
@@ -932,9 +929,10 @@ function MediaBody(props: {
 }
 
 function downloadMedia(data: CanvasMediaNodeData) {
-  if (!data.url) return
+  const url = data.resourceState?.url
+  if (!url) return
   const anchor = document.createElement("a")
-  anchor.href = data.url
+  anchor.href = url
   anchor.download = data.name ?? data.label
   anchor.rel = "noopener"
   anchor.click()
@@ -943,7 +941,7 @@ function downloadMedia(data: CanvasMediaNodeData) {
 export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const data = props.data as CanvasMediaNodeData
-  const mediaSourceUrl = data.url
+  const url = data.resourceState?.url
   const inputRef = useRef<HTMLInputElement>(null)
   const chooseFile = () => {
     editor.selectNodes([props.id])
@@ -955,12 +953,12 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
       <ToolbarButton
         disabled={!editor.canUpload}
         icon={<Upload />}
-        label={data.url ? `Replace ${mediaLabel(data.kind)}` : `Add ${mediaLabel(data.kind)}`}
+        label={url ? `Replace ${mediaLabel(data.kind)}` : `Add ${mediaLabel(data.kind)}`}
         onClick={chooseFile}
       />
       {supportsFit ? (
         <ToolbarButton
-          disabled={!data.url}
+          disabled={!url}
           icon={<Scan />}
           label={data.fit === "cover" ? "Fit inside frame" : "Fill frame"}
           onClick={() =>
@@ -975,7 +973,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         />
       ) : null}
       <ToolbarButton
-        disabled={!data.url}
+        disabled={!url}
         icon={<Download />}
         label={`Download ${mediaLabel(data.kind)}`}
         onClick={() => downloadMedia(data)}
@@ -1002,7 +1000,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
                   fitCanvasMediaNodeToIntrinsicSize(document, {
                     ...size,
                     nodeId: props.id,
-                    sourceUrl: mediaSourceUrl,
+                    sourceUrl: url ?? "",
                   }),
                 )
               }
@@ -1067,7 +1065,6 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
         <Folder className="size-10 text-primary/75" />
         <div className="max-w-full">
           <div className="truncate text-sm font-medium">{data.name ?? data.label}</div>
-          {data.path ? <div className="mt-1 truncate text-[11px] text-muted-foreground">{data.path}</div> : null}
         </div>
       </div>
     </NodeChrome>

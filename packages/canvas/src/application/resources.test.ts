@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode, createTextNode } from "../document"
+import { createCanvasDocument, createMediaNode, createTextNode as createCanvasTextNode } from "../document"
+import type { CanvasTextResource } from "../types"
 import { CanvasCommandValidationError, CanvasRevisionConflictError, createCanvasNodeContentGuard } from "./commands"
 import {
   CanvasStorageConflictError,
@@ -16,6 +17,22 @@ import { CanvasApplicationService, CanvasCommandIdConflictError } from "./servic
 
 function source(): CanvasResourceSource {
   return { kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }
+}
+
+function createTextNode(input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
+  metadata?: Record<string, unknown>
+  text?: string
+}) {
+  const { text, ...nodeInput } = input
+  return createCanvasTextNode({
+    ...nodeInput,
+    metadata: input.metadata ?? {},
+    resourceState: { status: "ready", ...(text === undefined ? {} : { text }) },
+  })
+}
+
+function preparedText(text: string): CanvasTextResource {
+  return { id: "prepared", kind: "text", metadata: {}, state: { status: "ready", text } }
 }
 
 describe("canvas resource business service", () => {
@@ -49,8 +66,9 @@ describe("canvas resource business service", () => {
                 height: 500,
                 id: "poster_resource",
                 kind: "image",
+                metadata: {},
                 name: "Poster.png",
-                url: "asset://poster",
+                state: { status: "ready", url: "asset://poster" },
                 width: 1_000,
               },
             ],
@@ -87,7 +105,7 @@ describe("canvas resource business service", () => {
       revision: 1,
     })
     expect(result.document.nodes.find((node) => node.id === createdNodeId)).toMatchObject({
-      data: { kind: "image", url: "asset://poster" },
+      data: { kind: "image", resourceState: { status: "ready", url: "asset://poster" } },
       position: { x: 304, y: 0 },
       style: { height: 160, width: 320 },
     })
@@ -224,7 +242,7 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       application,
@@ -291,7 +309,7 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       application,
@@ -628,7 +646,7 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       {
@@ -679,7 +697,7 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       application,
@@ -737,7 +755,7 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           preparationCalls += 1
-          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+          return { items: [preparedText("New resource")] }
         },
       },
       application,
@@ -797,7 +815,15 @@ describe("canvas resource business service", () => {
     const invalidPreparation = new CanvasResourceBusinessService(
       {
         async prepare() {
-          return { items: [{ id: "broken", kind: "image", url: "asset://broken", width: -1 }] }
+          return {
+            items: [{
+              id: "broken",
+              kind: "image",
+              metadata: {},
+              state: { status: "ready", url: "asset://broken" },
+              width: -1,
+            }],
+          }
         },
       },
       application,

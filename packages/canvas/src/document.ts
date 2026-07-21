@@ -11,6 +11,7 @@ import type {
   CanvasNodeData,
   CanvasPoint,
   CanvasResource,
+  CanvasResourceRuntimeState,
   CanvasTextFormat,
   CanvasTextNodeData,
 } from "./types"
@@ -76,26 +77,26 @@ export function parseCanvasDocument(value: unknown, expectedId?: string): Canvas
 }
 
 export function createTextNode(input: {
+  format?: CanvasTextFormat
   id?: string
   label?: string
-  text?: string
-  format?: CanvasTextFormat
-  metadata?: Record<string, unknown>
+  metadata: Record<string, unknown>
   position: CanvasPoint
+  resourceState: CanvasResourceRuntimeState
 }): CanvasNode {
   const data: CanvasTextNodeData = {
+    format: input.format,
     kind: "text",
     label: input.label ?? "Text",
-    text: input.text ?? "",
-    format: input.format,
     metadata: input.metadata,
+    resourceState: { ...input.resourceState },
   }
   return {
     id: input.id ?? createCanvasId("node"),
     type: "file",
     position: input.position,
     data,
-    style: input.format ? { width: 360, height: 240 } : { width: 280, height: 160 },
+    style: { width: 360, height: 240 },
   }
 }
 
@@ -109,14 +110,13 @@ export function createMediaNode(input: {
   const data: CanvasMediaNodeData = {
     kind: input.resource.kind,
     label: input.label ?? input.resource.name ?? kindLabel,
-    url: input.resource.url,
     name: input.resource.name,
     mimeType: input.resource.mimeType,
-    posterUrl: input.resource.posterUrl,
     width: input.resource.width,
     height: input.resource.height,
     durationMs: input.resource.durationMs,
     metadata: input.resource.metadata,
+    resourceState: { ...input.resource.state },
   }
   const boundedMedia =
     input.resource.kind === "image" || input.resource.kind === "video"
@@ -142,8 +142,8 @@ export function createFolderNode(input: {
     kind: "folder",
     label: input.label ?? input.resource.name,
     name: input.resource.name,
-    path: input.resource.path,
     metadata: input.resource.metadata,
+    resourceState: { ...input.resource.state },
   }
   return {
     id: input.id ?? createCanvasId("node"),
@@ -223,14 +223,10 @@ function isCanvasNode(value: unknown) {
     && isRecord(value.data)
     && typeof value.data.kind === "string"
     && typeof value.data.label === "string")) return false
-  if ((value.data.kind === "text" || value.data.kind === "note") && typeof value.data.text !== "string") return false
+  if (value.data.kind === "note") return false
   if (value.data.kind === "text" && value.data.format !== undefined && !["plain", "markdown"].includes(String(value.data.format))) return false
-  if (value.data.kind === "text" && value.data.richText !== undefined && !isCanvasRichTextContent(value.data.richText)) return false
-  if (value.data.kind === "folder"
-    && (value.data.name !== undefined && typeof value.data.name !== "string"
-      || value.data.path !== undefined && typeof value.data.path !== "string")) return false
+  if (value.data.kind === "folder" && value.data.name !== undefined && typeof value.data.name !== "string") return false
   if (value.data.kind === "agent" && value.data.agentId !== undefined && typeof value.data.agentId !== "string") return false
-  if (value.data.metadata !== undefined && !isRecord(value.data.metadata)) return false
   if (
     value.data.status !== undefined &&
     value.data.status !== "idle" &&
@@ -239,41 +235,32 @@ function isCanvasNode(value: unknown) {
   )
     return false
   if (value.data.error !== undefined && typeof value.data.error !== "string") return false
-  if (["image", "video", "audio", "file"].includes(value.data.kind) && typeof value.data.url !== "string") return false
+  if (isResourceKind(value.data.kind) && !isRecord(value.data.metadata)) return false
+  if (isResourceKind(value.data.kind) && value.data.resourceState !== undefined && !isResourceRuntimeState(value.data.resourceState)) return false
+  if (isResourceKind(value.data.kind)) {
+    for (const key of ["text", "richText", "url", "posterUrl", "path"]) {
+      if (key in value.data) return false
+    }
+  }
+  if (!isResourceKind(value.data.kind) && value.data.metadata !== undefined && !isRecord(value.data.metadata)) return false
   if (["image", "video", "audio", "file"].includes(value.data.kind)
     && value.data.fit !== undefined
     && !["contain", "cover"].includes(String(value.data.fit))) return false
   return true
 }
 
-function isCanvasRichTextContent(value: unknown, depth = 0): boolean {
-  if (!isRecord(value) || depth > 100) return false
-  if (typeof value.type !== "string") return false
-  if (value.text !== undefined && typeof value.text !== "string") return false
-  if (value.attrs !== undefined && !isRecord(value.attrs)) return false
-  if (value.content !== undefined
-    && (!Array.isArray(value.content) || !value.content.every((child) => isCanvasRichTextContent(child, depth + 1)))) return false
-  if (value.marks !== undefined && (!Array.isArray(value.marks) || !value.marks.every((mark) =>
-    isRecord(mark)
-    && typeof mark.type === "string"
-    && (mark.attrs === undefined || isRecord(mark.attrs))))) return false
-  return true
+function isResourceKind(value: string) {
+  return ["text", "image", "video", "audio", "file", "folder"].includes(value)
+}
+
+function isResourceRuntimeState(value: unknown) {
+  if (!isRecord(value)
+    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(value.status))) return false
+  return ["contentRevision", "error", "posterUrl", "text", "url"].every((key) =>
+    value[key] === undefined || typeof value[key] === "string")
 }
 
 function migrateCanvasNode(node: PersistedCanvasNode): CanvasNode {
-  if (node.data.kind === "note") {
-    const { tone: _tone, ...legacyData } = node.data
-    return {
-      ...node,
-      type: "file",
-      data: {
-        ...legacyData,
-        kind: "text",
-        label: legacyData.label === "Note" ? "Text" : legacyData.label,
-        text: typeof legacyData.text === "string" ? legacyData.text : "",
-      },
-    }
-  }
   if (["image", "video", "audio", "file"].includes(node.data.kind)
     && node.data.label === "Media"
     && typeof node.data.name !== "string") {

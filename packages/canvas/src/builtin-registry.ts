@@ -22,7 +22,7 @@ function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
         id: input.id,
         label: typeof input.data?.label === "string" ? input.data.label : undefined,
         position: input.position,
-        resource: resource ?? { id: input.id ?? kind, kind, url: "" },
+        resource: resource ?? { id: input.id ?? kind, kind, metadata: {}, state: { status: "stale" } },
       })
     },
   }
@@ -34,7 +34,12 @@ export function createDefaultCanvasFileRendererRegistry() {
       id: "text",
       label: "Text",
       component: BuiltinTextFileNode,
-      create: (input) => createTextNode({ id: input.id, position: input.position }),
+      create: (input) => createTextNode({
+        id: input.id,
+        metadata: {},
+        position: input.position,
+        resourceState: { status: "stale" },
+      }),
       matches: (data) => data.kind === "text",
     },
     mediaRenderer("image"),
@@ -56,7 +61,12 @@ export function createDefaultCanvasNodeRegistry() {
       type: "file",
       label: "File",
       component: BuiltinCanvasNode,
-      create: (input) => createTextNode({ id: input.id, position: input.position }),
+      create: (input) => createTextNode({
+        id: input.id,
+        metadata: {},
+        position: input.position,
+        resourceState: { status: "stale" },
+      }),
     },
     {
       type: "agent",

@@ -13,7 +13,12 @@ describe("canvas application service", () => {
     let snapshot: CanvasDocumentSnapshot = {
       document: createCanvasDocument({
         id: "canvas-main",
-        nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "Launch brief" })],
+        nodes: [createTextNode({
+          id: "first",
+          metadata: {},
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready", text: "Launch brief" },
+        })],
       }),
       storageVersion: "v1",
     }

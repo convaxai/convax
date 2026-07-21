@@ -698,7 +698,7 @@ function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position
       label: item.name ?? "Text",
       metadata: item.metadata,
       position,
-      text: item.text,
+      resourceState: item.state,
     })
   }
   if (item.kind === "folder") return createFolderNode({ id: nodeId, position, resource: item })
