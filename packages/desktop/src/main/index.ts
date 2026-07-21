@@ -10,6 +10,7 @@ import {
 } from "@convax/canvas/application"
 import {
   NodeProjectManager,
+  ProjectAssetGc,
   ProjectCanvasDocumentRepository,
   ProjectCanvasDocumentService,
   ProjectFilePublisher,
@@ -152,6 +153,7 @@ import {
   PluginSkillOwnershipStore,
 } from "./plugin-skill-lifecycle"
 import { createProjectResourceUrl, resolveProjectResourceProtocolPath } from "./project-resource-protocol"
+import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -199,7 +201,10 @@ function isTrustedRendererUrl(value: string) {
   }
 }
 
-function createWindow(projectManager: NodeProjectManager) {
+function createWindow(
+  projectManager: NodeProjectManager,
+  projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
+) {
   const window = new BrowserWindow({
     title: applicationName,
     icon: appIcon,
@@ -224,6 +229,7 @@ function createWindow(projectManager: NodeProjectManager) {
     pluginFrameBindings.clear()
     trustedWebContents.delete(webContentsId)
     if (mainWindow === window) mainWindow = null
+    projectAssetGcScheduler.closeAll()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   window.webContents.on("will-navigate", (event, url) => {
@@ -435,8 +441,16 @@ function startApplication() {
       })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const projectAssets = new ProjectManagedAssetStore(projectManager)
-    const projectFilePublisher = new ProjectFilePublisher(projectManager)
+    const projectFilePublisher = new ProjectFilePublisher(projectManager, projectAssets)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases, projectAssets)
+    const projectAssetGcScheduler = new ProjectAssetGcScheduler({
+      gc: new ProjectAssetGc({
+        assets: projectAssets,
+        catalogs: projectCanvases,
+        documents: canvasDocumentRepository,
+        projects: projectManager,
+      }),
+    })
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
     const canvasResourceHydrator = new ProjectCanvasResourceHydrator(
       projectManager,
@@ -884,6 +898,7 @@ function startApplication() {
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
       projectCreationDirectory,
+      onForgot: (projectId) => projectAssetGcScheduler.close(projectId),
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
@@ -900,7 +915,11 @@ function startApplication() {
       canvasDocuments,
       canvasApplication,
       canvasResourceHydrator,
-      { ...ipcSecurity, resolveActiveCanvas },
+      {
+        ...ipcSecurity,
+        prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
+        resolveActiveCanvas,
+      },
     )
     const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
@@ -1085,6 +1104,7 @@ function startApplication() {
         },
         () => pluginServices.dispose(),
         () => pluginServiceBrowserAuthorization.dispose(),
+        () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
@@ -1120,7 +1140,7 @@ function startApplication() {
         })
     })
 
-    createWindow(projectManager)
+    createWindow(projectManager, projectAssetGcScheduler)
     // Registry updates are intentionally outside the first-window critical
     // path. A packaged first install comes from the verified local seed above;
     // dev and damaged/offline packages remain usable while network recovery or
@@ -1160,7 +1180,7 @@ function startApplication() {
       app,
       () => mainWindow,
       () => {
-        createWindow(projectManager)
+        createWindow(projectManager, projectAssetGcScheduler)
       },
     )
   })

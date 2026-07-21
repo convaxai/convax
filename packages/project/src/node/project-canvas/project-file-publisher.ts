@@ -3,7 +3,7 @@ import { constants as fsConstants, type BigIntStats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type { ProjectCanvasFilePublisher } from "./project-canvas-resource-preparation"
-import type { ProjectRootResolver } from "./project-managed-asset-store"
+import type { ProjectManagedAssetStore, ProjectRootResolver } from "./project-managed-asset-store"
 
 export interface ProjectFilePublisherOptions {
   maximumGeneratedBytes?: number
@@ -26,6 +26,7 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
 
   constructor(
     private readonly roots: ProjectRootResolver,
+    private readonly assets: ProjectManagedAssetStore,
     options: ProjectFilePublisherOptions = {},
   ) {
     const maximumBytes = requirePublicationMaximum(
@@ -44,6 +45,16 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   }
 
   async publishText(input: {
+    content: string
+    directory: "Notes"
+    extension: ".md" | ".txt"
+    name?: string
+    projectId: string
+  }) {
+    return this.assets.runExclusive(input.projectId, () => this.#publishText(input))
+  }
+
+  async #publishText(input: {
     content: string
     directory: "Notes"
     extension: ".md" | ".txt"
@@ -74,6 +85,16 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   }
 
   async publishGenerated(input: {
+    bytes?: Uint8Array
+    extension: string
+    name?: string
+    projectId: string
+    sourcePath?: string
+  }): Promise<{ path: string }> {
+    return this.assets.runExclusive(input.projectId, () => this.#publishGenerated(input))
+  }
+
+  async #publishGenerated(input: {
     bytes?: Uint8Array
     extension: string
     name?: string

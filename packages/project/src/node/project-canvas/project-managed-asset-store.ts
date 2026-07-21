@@ -134,6 +134,10 @@ export class ProjectManagedAssetStore {
     return this.#mutex.run(projectId, () => this.#runLockScope(projectId, operation))
   }
 
+  getMaximumBytesForMaintenance() {
+    return this.#maximumBytes
+  }
+
   async #runLockScope<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const root: ProjectAssetLockRoot = { nested: [], projectId }
     const scope: ProjectAssetLockScope = { active: true, root }

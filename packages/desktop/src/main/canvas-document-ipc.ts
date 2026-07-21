@@ -43,6 +43,7 @@ type CanvasDocumentHydrator = Pick<ProjectCanvasResourceHydrator, "hydrate"> &
 
 interface CanvasDocumentIpcOptions {
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+  prepareProjectCanvasAccess?: (projectId: string) => () => void
   resolveActiveCanvas?: (event: IpcMainInvokeEvent) => Promise<ActiveCanvasScope | null>
 }
 
@@ -61,15 +62,16 @@ export function registerCanvasDocumentIpc(
         : undefined
   const options = maybeOptions ?? (hydratorOrOptions as CanvasDocumentIpcOptions)
   const disposers: Array<() => void> = []
-  ipcMain.handle(canvasDocumentIpcChannels.load, (event, input) => {
+  ipcMain.handle(canvasDocumentIpcChannels.load, async (event, input) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
-    return Promise.resolve(documents.load(input)).then(async (result) => {
-      if (!result.document || !hydrator) return result
-      return {
-        ...result,
-        document: await hydrator.hydrate({ document: result.document, projectId: input.scopeId }),
-      }
-    })
+    const completeProjectCanvasAccess = options.prepareProjectCanvasAccess?.(input.scopeId)
+    const result = await documents.load(input)
+    completeProjectCanvasAccess?.()
+    if (!result.document || !hydrator) return result
+    return {
+      ...result,
+      document: await hydrator.hydrate({ document: result.document, projectId: input.scopeId }),
+    }
   })
   disposers.push(() => ipcMain.removeHandler(canvasDocumentIpcChannels.load))
   if (application) {

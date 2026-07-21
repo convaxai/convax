@@ -228,7 +228,7 @@ describe("project canvas persistence integration", () => {
     })
     const preparation = new ProjectCanvasResourcePreparation(
       manager,
-      new ProjectFilePublisher(manager, { randomId: () => "retained-a1" }),
+      new ProjectFilePublisher(manager, assets, { randomId: () => "retained-a1" }),
       assets,
     )
     const resources = new CanvasResourceBusinessService(preparation, application)

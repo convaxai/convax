@@ -11,6 +11,7 @@ import {
   ProjectFilePublisher,
   type ProjectFilePublisherOptions,
 } from "./project-file-publisher"
+import { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 let temporaryRoot = ""
 let projectRoot = ""
@@ -26,6 +27,43 @@ afterEach(async () => {
 })
 
 describe("ProjectFilePublisher", () => {
+  test("holds the shared Project asset mutex for the entire publication flow", async () => {
+    const entered = deferred()
+    const release = deferred()
+    const rootResolver = roots()
+    const assets = new ProjectManagedAssetStore(rootResolver)
+    const publisher = new ProjectFilePublisher(
+      {
+        async resolveProjectRoot(input) {
+          entered.resolve()
+          await release.promise
+          return rootResolver.resolveProjectRoot(input)
+        },
+      },
+      assets,
+      { randomId: () => "mutex" },
+    )
+
+    const publishing = publisher.publishText({
+      content: "locked",
+      directory: "Notes",
+      extension: ".md",
+      projectId: "project_one",
+    })
+    await entered.promise
+    let maintenanceEntered = false
+    const maintenance = assets.runExclusive("project_one", async () => {
+      maintenanceEntered = true
+    })
+    await Bun.sleep(0)
+    expect(maintenanceEntered).toBe(false)
+
+    release.resolve()
+    await publishing
+    await maintenance
+    expect(maintenanceEntered).toBe(true)
+  })
+
   const publisherLimitMaximums = [
     ["maximumBytes", defaultProjectTextPublicationMaximumBytes],
     ["maximumGeneratedBytes", defaultProjectGeneratedPublicationMaximumBytes],
@@ -39,14 +77,14 @@ describe("ProjectFilePublisher", () => {
   test.each(invalidPublisherLimitCases)(
     "rejects invalid or hard-limit-raising %s override %p above maximum %p",
     (option, value, maximum) => {
-      expect(() => new ProjectFilePublisher(roots(), { [option]: value } as ProjectFilePublisherOptions)).toThrow(
+      expect(() => new ProjectFilePublisher(roots(), managedAssets(), { [option]: value } as ProjectFilePublisherOptions)).toThrow(
         `Project publication ${option} must be a positive safe integer no greater than ${maximum}`,
       )
     },
   )
 
   test("publishes generated UTF-8 bytes below Generated through shared private staging", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "generated-a1" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "generated-a1" })
 
     const published = await publisher.publishGenerated({
       bytes: Buffer.from("A generated paragraph", "utf8"),
@@ -70,7 +108,7 @@ describe("ProjectFilePublisher", () => {
       Buffer.alloc(256 * 1024, 7),
     ])
     await fs.writeFile(sourcePath, bytes)
-    const publisher = new ProjectFilePublisher(roots(), {
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), {
       maximumGeneratedBytes: bytes.byteLength,
       randomId: () => "media-a1",
     })
@@ -101,7 +139,7 @@ describe("ProjectFilePublisher", () => {
   test("closes a generated source handle when staging copy fails", async () => {
     const sourcePath = path.join(temporaryRoot, "failing-source.png")
     await fs.writeFile(sourcePath, Buffer.alloc(128, 3))
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "close-source" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "close-source" })
     const originalOpen = fs.open
     let sourceClosed = false
     let cleanupSource: (() => Promise<void>) | undefined
@@ -140,7 +178,7 @@ describe("ProjectFilePublisher", () => {
   })
 
   test("publishes UTF-8 text through private staging without clobbering", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "note-a1" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "note-a1" })
 
     const published = await publisher.publishText({
       content: "# 你好\n",
@@ -168,7 +206,7 @@ describe("ProjectFilePublisher", () => {
       path.join(projectRoot, "Notes", "Brief-link.md"),
     )
     const ids = ["taken", "directory", "link", "fresh"]
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => ids.shift()! })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => ids.shift()! })
 
     const published = await publisher.publishText({
       content: "new",
@@ -188,7 +226,7 @@ describe("ProjectFilePublisher", () => {
     await fs.mkdir(path.join(projectRoot, "Notes"))
     await fs.writeFile(path.join(projectRoot, "Notes", "notes-taken.txt"), "existing")
     const ids = ["taken", "fresh"]
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => ids.shift()! })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => ids.shift()! })
 
     const published = await publisher.publishText({
       content: "editable copy",
@@ -204,7 +242,7 @@ describe("ProjectFilePublisher", () => {
   })
 
   test("normalizes an optional display name to one portable extensionless stem", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "portable" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "portable" })
 
     expect(
       (
@@ -229,7 +267,7 @@ describe("ProjectFilePublisher", () => {
   })
 
   test("rejects a Windows-reserved first stem even when more extensions follow", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "reserved" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "reserved" })
 
     await expect(
       publisher.publishText({
@@ -244,7 +282,7 @@ describe("ProjectFilePublisher", () => {
   })
 
   test("rejects an isolated surrogate before publishing a Notes file", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "surrogate" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "surrogate" })
 
     await expect(
       publisher.publishText({
@@ -263,7 +301,7 @@ describe("ProjectFilePublisher", () => {
     ["emoji", "😀".repeat(300)],
   ])("bounds a long %s name as one portable filesystem component", async (_label, name) => {
     const maximumId = "i".repeat(64)
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => maximumId })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => maximumId })
 
     const published = await publisher.publishText({
       content: "bounded Unicode",
@@ -284,7 +322,7 @@ describe("ProjectFilePublisher", () => {
   })
 
   test("accepts content at the exact UTF-8 byte ceiling", async () => {
-    const publisher = new ProjectFilePublisher(roots(), { maximumBytes: 4, randomId: () => "exact" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { maximumBytes: 4, randomId: () => "exact" })
 
     const published = await publisher.publishText({
       content: "😀",
@@ -309,7 +347,7 @@ describe("ProjectFilePublisher", () => {
       }
       return Reflect.apply(originalFrom, Buffer, [value, ...args])
     }) as typeof Buffer.from
-    const publisher = new ProjectFilePublisher(roots(), { maximumBytes: 4, randomId: () => "oversize" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { maximumBytes: 4, randomId: () => "oversize" })
 
     try {
       await expect(
@@ -333,7 +371,7 @@ describe("ProjectFilePublisher", () => {
     await fs.mkdir(path.join(projectRoot, "Notes"))
     await fs.writeFile(path.join(projectRoot, "Notes", "Brief-grow.md"), "collision")
     let idCalls = 0
-    const publisher = new ProjectFilePublisher(roots(), {
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), {
       randomId: () => {
         idCalls += 1
         if (idCalls === 1) return "grow"
@@ -358,7 +396,7 @@ describe("ProjectFilePublisher", () => {
   test("bounds collision retries when the id source repeats", async () => {
     await fs.mkdir(path.join(projectRoot, "Notes"))
     await fs.writeFile(path.join(projectRoot, "Notes", "Brief-repeated.md"), "existing")
-    const publisher = new ProjectFilePublisher(roots(), { randomId: () => "repeated" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "repeated" })
 
     await expect(
       publisher.publishText({
@@ -378,13 +416,16 @@ describe("ProjectFilePublisher", () => {
     const outside = path.join(temporaryRoot, "outside-root")
     await fs.mkdir(outside)
     await fs.writeFile(path.join(outside, "foreign.txt"), "must remain")
-    const publisher = new ProjectFilePublisher({
-      async resolveProjectRoot() {
-        renameSync(projectRoot, movedRoot)
-        symlinkSync(outside, projectRoot, process.platform === "win32" ? "junction" : "dir")
-        return projectRoot
+    const publisher = new ProjectFilePublisher(
+      {
+        async resolveProjectRoot() {
+          renameSync(projectRoot, movedRoot)
+          symlinkSync(outside, projectRoot, process.platform === "win32" ? "junction" : "dir")
+          return projectRoot
+        },
       },
-    })
+      managedAssets(),
+    )
 
     await expect(
       publisher.publishText({
@@ -408,7 +449,7 @@ describe("ProjectFilePublisher", () => {
       await fs.mkdir(path.dirname(target), { recursive: true })
       await fs.mkdir(outside)
       await fs.symlink(outside, target, process.platform === "win32" ? "junction" : "dir")
-      const publisher = new ProjectFilePublisher(roots(), { randomId: () => "unsafe" })
+      const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => "unsafe" })
 
       await expect(
         publisher.publishText({
@@ -429,7 +470,7 @@ describe("ProjectFilePublisher", () => {
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.mkdir(target)
     await fs.mkdir(outside)
-    const publisher = new ProjectFilePublisher(roots(), {
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), {
       randomId: () => {
         renameSync(target, movedTarget)
         symlinkSync(outside, target, process.platform === "win32" ? "junction" : "dir")
@@ -457,6 +498,18 @@ function roots() {
       return fs.realpath(projectRoot)
     },
   }
+}
+
+function managedAssets() {
+  return new ProjectManagedAssetStore(roots())
+}
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 async function readNotesDirectory() {

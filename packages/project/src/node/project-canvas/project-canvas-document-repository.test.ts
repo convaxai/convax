@@ -1,14 +1,18 @@
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 import {
   CanvasStorageConflictError,
   serializeCanvasDocument,
   UnsupportedCanvasDocumentVersionError,
 } from "@convax/canvas/application"
 import { createCanvasDocument, createMediaNode, createTextNode, type CanvasNode } from "@convax/canvas/core"
-import { projectResourceReferenceKey, type ProjectResourceReference } from "../../canvas/project-resources"
+import {
+  projectResourceBindingsKey,
+  projectResourceReferenceKey,
+  type ProjectResourceReference,
+} from "../../canvas/project-resources"
 import {
   ProjectPrivateStorageConflictError,
   type ProjectPrivateStorage,
@@ -81,6 +85,162 @@ function harness(
 }
 
 describe("project canvas document repository", () => {
+  test("strict maintenance loads every current document and collects only exact typed managed references", async () => {
+    const primaryDigest = "a".repeat(64)
+    const posterDigest = "b".repeat(64)
+    const pluginDigest = "c".repeat(64)
+    const opaqueDigest = "d".repeat(64)
+    const primary = createMediaNode({
+      id: "image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "image-resource",
+        kind: "image",
+        metadata: {
+          [projectResourceBindingsKey]: {
+            poster: { kind: "managed-asset", name: "poster.jpg", sha256: posterDigest },
+          },
+          [projectResourceReferenceKey]: { kind: "managed-asset", name: "image.png", sha256: primaryDigest },
+        },
+        state: { status: "stale" },
+      },
+    })
+    const plugin = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: {
+          convaxPluginState: { arbitrary: opaqueDigest, nested: { digest: opaqueDigest } },
+          [projectResourceBindingsKey]: {
+            input: { kind: "managed-asset", name: "plugin.bin", sha256: pluginDigest },
+          },
+        },
+      },
+    } as CanvasNode
+    const documents = new Map([
+      ["canvas-main", serializeCanvasDocument(createCanvasDocument({ id: "canvas-main", nodes: [primary, plugin] }))],
+    ])
+    const reads: string[] = []
+    const storage: ProjectPrivateStorage = {
+      async readPrivateTextFile(input) {
+        reads.push(input.path)
+        const content = documents.get(input.path.split("/")[0])
+        return content ? { content, exists: true, version: "v2" } : { content: "", exists: false, version: null }
+      },
+      async writePrivateTextFile() {
+        throw new Error("strict maintenance must not write")
+      },
+    }
+    const repository = new ProjectCanvasDocumentRepository(
+      storage,
+      {} as ProjectCanvasCatalogStore,
+      {} as ProjectManagedAssetStore,
+    )
+
+    const digests = await repository.loadAllStrict({
+      canvases: [{ createdAt: 1, id: "canvas-main", name: "Main", updatedAt: 1 }],
+      projectId: "project_one",
+    })
+
+    expect([...digests].sort()).toEqual([pluginDigest, posterDigest, primaryDigest].sort())
+    expect(digests.has(opaqueDigest)).toBe(false)
+    expect(reads).toEqual(["canvas-main/document.json"])
+  })
+
+  test("strict maintenance rejects a missing catalog-owned document without write, touch, or migration", async () => {
+    const reads: string[] = []
+    const writePrivateTextFile = mock(async () => {
+      throw new Error("strict maintenance must not write")
+    })
+    const getCanvasCatalog = mock(async () => {
+      throw new Error("strict maintenance must not reload or migrate the catalog")
+    })
+    const touchCanvas = mock(async () => {
+      throw new Error("strict maintenance must not touch the catalog")
+    })
+    const repository = new ProjectCanvasDocumentRepository(
+      {
+        async readPrivateTextFile(input) {
+          reads.push(input.path)
+          return { content: "", exists: false, version: null }
+        },
+        writePrivateTextFile,
+      },
+      { getCanvasCatalog, touchCanvas },
+      {} as ProjectManagedAssetStore,
+    )
+
+    await expect(
+      repository.loadAllStrict({
+        canvases: [{ createdAt: 1, id: "canvas-empty", name: "Empty", updatedAt: 1 }],
+        projectId: "project_one",
+      }),
+    ).rejects.toThrow(/document.*missing|missing.*document/i)
+
+    expect(reads).toEqual(["canvas-empty/document.json"])
+    expect(writePrivateTextFile).not.toHaveBeenCalled()
+    expect(getCanvasCatalog).not.toHaveBeenCalled()
+    expect(touchCanvas).not.toHaveBeenCalled()
+  })
+
+  test("strict maintenance rejects unsupported or malformed documents without catalog, write, touch, or migration paths", async () => {
+    const malformed = serializeCanvasDocument(
+      createCanvasDocument({
+        id: "canvas-main",
+        nodes: [
+          {
+            id: "plugin",
+            type: "file",
+            position: { x: 0, y: 0 },
+            data: {
+              kind: "plugin.surface",
+              label: "Plugin",
+              metadata: {
+                [projectResourceBindingsKey]: { input: { kind: "managed-asset", name: "bad", sha256: "A".repeat(64) } },
+              },
+            },
+          } as CanvasNode,
+        ],
+      }),
+    )
+    let content = malformed
+    let writes = 0
+    const storage: ProjectPrivateStorage = {
+      async readPrivateTextFile() {
+        return { content, exists: true, version: "original" }
+      },
+      async writePrivateTextFile() {
+        writes += 1
+        throw new Error("strict maintenance must not write")
+      },
+    }
+    const getCanvasCatalog = mock(async () => {
+      throw new Error("strict maintenance must not load the catalog")
+    })
+    const touchCanvas = mock(async () => {
+      throw new Error("strict maintenance must not touch the catalog")
+    })
+    const repository = new ProjectCanvasDocumentRepository(
+      storage,
+      { getCanvasCatalog, touchCanvas },
+      {} as ProjectManagedAssetStore,
+    )
+    const request = {
+      canvases: [{ createdAt: 1, id: "canvas-main", name: "Main", updatedAt: 1 }],
+      projectId: "project_one",
+    }
+
+    await expect(repository.loadAllStrict(request)).rejects.toThrow()
+    content = '{"schemaVersion":"convax.canvas/1","document":{"id":"canvas-main"}}\n'
+    await expect(repository.loadAllStrict(request)).rejects.toBeInstanceOf(UnsupportedCanvasDocumentVersionError)
+    expect(writes).toBe(0)
+    expect(getCanvasCatalog).not.toHaveBeenCalled()
+    expect(touchCanvas).not.toHaveBeenCalled()
+  })
+
   test("rejects unsupported bytes without write, touch, delete, or error wrapping", async () => {
     const original = '{"schemaVersion":"convax.canvas/1","document":{"id":"canvas-main"}}\n'
     const { getCounts, getStored, repository } = harness({

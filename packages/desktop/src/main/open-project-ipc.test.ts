@@ -136,7 +136,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
     const canvasDocuments = new ProjectCanvasDocumentService(canvasRepository, canvases)
     const resourcePreparation = new ProjectCanvasResourcePreparation(
       projects,
-      new ProjectFilePublisher(projects),
+      new ProjectFilePublisher(projects, assets),
       assets,
     )
     const canvasApplication = new CanvasApplicationService(canvasDocuments)

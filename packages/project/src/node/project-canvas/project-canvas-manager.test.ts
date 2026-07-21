@@ -23,6 +23,77 @@ afterEach(async () => {
 })
 
 describe("NodeProjectCanvasManager", () => {
+  test("strict maintenance rejects a missing catalog without creating or migrating state", async () => {
+    const manager = new NodeProjectCanvasManager(projects, projects)
+
+    await expect(
+      manager.runCurrentCatalogMaintenance({ projectId }, async () => undefined),
+    ).rejects.toThrow(/catalog.*missing|missing.*catalog/i)
+
+    await expect(fs.access(path.join(projectRoot, ".convax", "canvases"))).rejects.toThrow()
+    expect(JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))).toEqual({
+      projectId,
+      schemaVersion: "convax.project/1",
+    })
+  })
+
+  test("strict maintenance rejects legacy catalog bytes without migrating or touching them", async () => {
+    await new NodeProjectCanvasManager(projects, projects).getCanvasCatalog({ projectId })
+    const catalogPath = path.join(projectRoot, ".convax", "canvases", "catalog.json")
+    const current = JSON.parse(await fs.readFile(catalogPath, "utf8"))
+    const legacy = `${JSON.stringify({
+      activeCanvasId: "canvas-main",
+      canvases: current.canvases,
+      schemaVersion: "convax.canvas-workspace/1",
+    }, null, 2)}\n`
+    await fs.writeFile(catalogPath, legacy)
+    const before = await fs.stat(catalogPath)
+
+    await expect(
+      new NodeProjectCanvasManager(projects, projects).runCurrentCatalogMaintenance(
+        { projectId },
+        async () => undefined,
+      ),
+    ).rejects.toThrow(/schema.*supported|current.*catalog/i)
+
+    expect(await fs.readFile(catalogPath, "utf8")).toBe(legacy)
+    expect((await fs.stat(catalogPath)).mtimeMs).toBe(before.mtimeMs)
+  })
+
+  test("holds the Project queue through delete rollback before maintenance observes the catalog root", async () => {
+    const bootstrap = new NodeProjectCanvasManager(projects, projects)
+    await bootstrap.getCanvasCatalog({ projectId })
+    const created = await bootstrap.createCanvas({ name: "Rollback", projectId })
+    const entered = deferred()
+    const release = deferred()
+    const failingStorage = {
+      readPrivateTextFile: (input: Parameters<typeof projects.readPrivateTextFile>[0]) =>
+        projects.readPrivateTextFile(input),
+      async writePrivateTextFile(input: Parameters<typeof projects.writePrivateTextFile>[0]) {
+        entered.resolve()
+        await release.promise
+        throw new Error(`injected catalog publication failure: ${input.path}`)
+      },
+    }
+    const manager = new NodeProjectCanvasManager(failingStorage, projects)
+
+    const deleting = manager.deleteCanvas({ canvasId: created.canvas.id, projectId })
+    await entered.promise
+    let maintenanceEntered = false
+    const maintenance = manager.runCurrentCatalogMaintenance({ projectId }, async (catalog) => {
+      maintenanceEntered = true
+      expect(catalog.canvases.some((canvas) => canvas.id === created.canvas.id)).toBe(true)
+      expect((await fs.lstat(path.join(projectRoot, ".convax", "canvases", created.canvas.id))).isDirectory()).toBe(true)
+    })
+    await Promise.resolve()
+    expect(maintenanceEntered).toBe(false)
+
+    release.resolve()
+    await expect(deleting).rejects.toThrow("injected catalog publication failure")
+    await maintenance
+    expect(maintenanceEntered).toBe(true)
+  })
+
   test("persists catalog CRUD without storing Workbench selection", async () => {
     const manager = new NodeProjectCanvasManager(projects, projects, { now: () => 10 })
     expect(await manager.getCanvasCatalog({ projectId })).toMatchObject({ projectId })
@@ -152,3 +223,11 @@ describe("NodeProjectCanvasManager", () => {
     })
   })
 })
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}

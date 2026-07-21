@@ -169,6 +169,7 @@ export async function registerProjectIpc(
   options: {
     isTrustedSender: (event: IpcMainInvokeEvent) => boolean
     projectCreationDirectory: string
+    onForgot?(projectId: string): void
   },
 ) {
   const handlerDisposers: Array<() => void> = []
@@ -255,7 +256,10 @@ export async function registerProjectIpc(
     }),
     registerHandler(projectIpcChannels.forgetProject, options.isTrustedSender, async (_event, input) => {
       const removed = await manager.forget(input.projectId)
-      if (removed) await stopWatching(input.projectId)
+      if (removed) {
+        options.onForgot?.(input.projectId)
+        await stopWatching(input.projectId)
+      }
       return { projects: await listProjects(), removed }
     }),
     registerHandler(projectFilesIpcChannels.listDirectory, options.isTrustedSender, (_event, input) =>

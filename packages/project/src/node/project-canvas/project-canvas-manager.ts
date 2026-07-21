@@ -40,6 +40,17 @@ export class NodeProjectCanvasManager implements ProjectCanvasCatalogStore {
     })
   }
 
+  runCurrentCatalogMaintenance<T>(
+    input: { projectId: string },
+    operation: (catalog: ProjectCanvasCatalogFile) => Promise<T>,
+  ): Promise<T> {
+    return this.queue(input.projectId, async () => {
+      const stored = await this.storage.readPrivateTextFile(catalogRef(input.projectId))
+      if (!stored.exists) throw new Error("Current Canvas catalog is missing")
+      return operation(parseStrictCurrentCatalog(JSON.parse(stored.content)))
+    })
+  }
+
   createCanvas(input: { name?: string; projectId: string }): Promise<{ canvas: ProjectCanvas; catalog: ProjectCanvasCatalog }> {
     return this.queue(input.projectId, async () => {
       const current = await this.ensureCatalog(input.projectId)
@@ -292,6 +303,38 @@ function parseCatalog(value: unknown): Pick<ProjectCanvasCatalogSnapshot, "catal
       ? readLegacyWorkbenchPreference(input, canvases)
       : undefined,
   }
+}
+
+function parseStrictCurrentCatalog(value: unknown): ProjectCanvasCatalogFile {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Current Canvas catalog is invalid")
+  }
+  const keys = Object.keys(value).sort()
+  if (keys.length !== 2 || keys[0] !== "canvases" || keys[1] !== "schemaVersion") {
+    throw new Error("Current Canvas catalog contains unsupported fields")
+  }
+  const input = value as { canvases?: unknown; schemaVersion?: unknown }
+  if (input.schemaVersion !== "convax.project-canvases/2" || !Array.isArray(input.canvases)) {
+    throw new Error("Current Canvas catalog schema is not supported")
+  }
+  for (const candidate of input.canvases) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("Current Canvas catalog contains an invalid canvas")
+    }
+    const canvasKeys = Object.keys(candidate).sort()
+    if (
+      canvasKeys.length !== 4 ||
+      canvasKeys[0] !== "createdAt" ||
+      canvasKeys[1] !== "id" ||
+      canvasKeys[2] !== "name" ||
+      canvasKeys[3] !== "updatedAt"
+    ) {
+      throw new Error("Current Canvas catalog contains unsupported Canvas fields")
+    }
+  }
+  const canvases = parseCanvases(input.canvases)
+  if (canvases.length === 0) throw new Error("Canvas catalog must contain at least one canvas")
+  return { canvases, schemaVersion: "convax.project-canvases/2" }
 }
 
 function readLegacyCanvases(value: unknown) {

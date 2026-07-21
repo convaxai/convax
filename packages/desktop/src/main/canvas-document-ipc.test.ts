@@ -713,6 +713,60 @@ function textDocument(reference: unknown = { kind: "project-file", path: "Notes/
 }
 
 describe("Canvas document hydration IPC", () => {
+  test("opens GC scheduling only from Canvas document access and never from save", async () => {
+    const document = textDocument()
+    const completeProjectCanvasAccess = mock(() => undefined)
+    const prepareProjectCanvasAccess = mock(() => completeProjectCanvasAccess)
+    const load = mock(async () => {
+      expect(prepareProjectCanvasAccess).toHaveBeenCalledWith("project-one")
+      expect(completeProjectCanvasAccess).not.toHaveBeenCalled()
+      return { document, storageVersion: "storage-4" }
+    })
+    const save = mock(async () => ({ storageVersion: "storage-5" }))
+    registerCanvasDocumentIpc(
+      { load, save },
+      { hydrate: mock(async ({ document: loaded }) => loaded) },
+      { isTrustedSender: () => true, prepareProjectCanvasAccess },
+    )
+
+    await handlers.get("canvas:document-load")!(
+      { sender: { id: 2 } },
+      { canvasId: "canvas-main", scopeId: "project-one" },
+    )
+    await handlers.get("canvas:document-save")!(
+      { sender: { id: 2 } },
+      {
+        document,
+        expectedStorageVersion: "storage-4",
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      },
+    )
+
+    expect(prepareProjectCanvasAccess).toHaveBeenCalledTimes(1)
+    expect(completeProjectCanvasAccess).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not open GC scheduling when the Canvas document load fails", async () => {
+    const completeProjectCanvasAccess = mock(() => undefined)
+    const prepareProjectCanvasAccess = mock(() => completeProjectCanvasAccess)
+    registerCanvasDocumentIpc(
+      {
+        load: mock(async () => {
+          throw new Error("unsupported Canvas document")
+        }),
+        save: mock(),
+      },
+      { hydrate: mock() },
+      { isTrustedSender: () => true, prepareProjectCanvasAccess },
+    )
+
+    await expect(
+      handlers.get("canvas:document-load")!({ sender: { id: 2 } }, { canvasId: "canvas-main", scopeId: "project-one" }),
+    ).rejects.toThrow("unsupported Canvas document")
+    expect(prepareProjectCanvasAccess).toHaveBeenCalledWith("project-one")
+    expect(completeProjectCanvasAccess).not.toHaveBeenCalled()
+  })
+
   test("hydrates document loads in Main through the dedicated Project hydrator", async () => {
     const document = textDocument()
     const load = mock(async () => ({ document, storageVersion: "storage-4" }))

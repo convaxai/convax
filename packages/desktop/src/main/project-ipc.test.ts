@@ -182,9 +182,10 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
     watchProject,
     writeTextFile: unsupported,
   } satisfies DesktopProjectManager
+  const onForgot = mock((_projectId: string) => undefined)
 
   const { projectFilesIpcChannels, projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
-  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, onForgot, projectCreationDirectory })
 
   const firstFileRequest = Promise.resolve(
     invoke(projectFilesIpcChannels.listDirectory, { path: "", projectId: "one" }),
@@ -194,6 +195,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
 
   const forgetRequest = Promise.resolve(invoke(projectIpcChannels.forgetProject, { projectId: "one" }))
   await Bun.sleep(0)
+  expect(onForgot).toHaveBeenCalledWith("one")
   const replacementFileRequest = Promise.resolve(
     invoke(projectFilesIpcChannels.listDirectory, { path: "assets", projectId: "one" }),
   )
@@ -205,6 +207,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
 
   expect(reportError).toHaveBeenCalledWith("Failed to watch project one", expect.any(Error))
   expect(replacementStop).toHaveBeenCalledTimes(1)
+  expect(onForgot).toHaveBeenCalledWith("one")
   reportError.mockRestore()
   dispose()
 })
@@ -261,7 +264,9 @@ test("creates a named project in the injected user workspace without opening a d
   create.mockImplementationOnce(async () => {
     throw new Error("Project already exists: Storyboard")
   })
-  await expect(invoke(projectIpcChannels.createProject, { name: "Storyboard" })).rejects.toThrow("Project already exists")
+  await expect(invoke(projectIpcChannels.createProject, { name: "Storyboard" })).rejects.toThrow(
+    "Project already exists",
+  )
   expect(showOpenDialog).not.toHaveBeenCalled()
   expect(watchProject).toHaveBeenCalledTimes(1)
 

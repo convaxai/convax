@@ -300,12 +300,11 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 
 它与 blob 和 import staging 属于同一个 managed store，随 store 一起移动和备份，也便于 `@convax/project/node` 独占管理。它只记录延迟删除时间，不保存资源 metadata、路径映射、引用计数或 Canvas id，所以不是 Resource Catalog。
 
-建议 schema：
+固定 schema：
 
 ```json
 {
   "schemaVersion": 1,
-  "lastSuccessfulScanAt": "2026-07-21T10:00:00.000Z",
   "entries": {
     "<sha256>": {
       "unreferencedSince": "2026-07-14T10:00:00.000Z"
@@ -324,29 +323,33 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 - poster 等明确的 host-owned 资源槽位；
 - Plugin 节点的 host-owned resource bindings。
 
-任意 Canvas 文档无法读取、schema 不支持或资源字段校验失败时，本次 GC 整体停止。opaque Plugin JSON、普通字符串、运行时 URL 和日志都不算引用。
+任意 catalog-owned Canvas 的 `document.json` 缺失、无法读取、schema 不支持或资源字段校验失败时，本次 GC 整体停止。缺失文档不视为“尚未物化的空 Canvas”；普通新 Canvas 在首次文档物化前阻塞 GC，是防止缩小 durable 引用根的保守取舍。opaque Plugin JSON、普通字符串、运行时 URL 和日志都不算引用。
 
 ### 9.3 单段宽限回收
 
 默认常量：
 
-| 阶段                     |    时长 |
-| ------------------------ | ------: |
-| 首次确认无引用后的宽限期 |    7 天 |
-| staging 最短保留期       | 24 小时 |
-| 完整扫描最小间隔         | 24 小时 |
-| Project 打开后的空闲延迟 |   30 秒 |
+| 阶段                         |    时长 |
+| ---------------------------- | ------: |
+| 首次确认无引用后的宽限期     |    7 天 |
+| staging 最短保留期           | 24 小时 |
+| 完整扫描最小间隔             | 24 小时 |
+| 首次 Canvas 访问后的空闲延迟 |   30 秒 |
+| 扫描失败后的重试延迟         | 15 分钟 |
 
 一次 GC 在 Project 级 asset mutex 内按以下顺序执行：
 
 1. 扫描全部 Canvas 引用根；失败则无副作用退出；
-2. 枚举 `blobs/` 中名称合法的普通文件，不跟随 symlink；
+2. 枚举 `blobs/` 中名称合法的普通文件和固定 `gc-delete-<sha256>` quarantine alias，不跟随 symlink；
 3. 为仍被引用的 blob 删除旧 GC 记录，为首次无引用的 blob 记录当前 `unreferencedSince`；
 4. 把已有记录、持续无引用满 7 天且本轮仍无引用的 blob列为删除候选；候选的旧记录暂时保留；
-5. 原子保存新的 `gc.json` 和 `lastSuccessfulScanAt`；保存失败则不删除任何 blob；
-6. 只有步骤 5 成功后才逐个删除候选；删除失败时旧记录仍然到期，下一轮重试；
-7. 下一轮扫描从状态中移除已经不存在的 blob 记录；
-8. 清理超过 24 小时且不在当前进程 active operation 集合中的 `.convax/assets/.staging/` 和 `.convax/staging/`。
+5. 原子保存 exact `{ schemaVersion: 1, entries }` `gc.json`；保存失败则不删除任何 blob；
+6. 仅在加载到有效旧状态时恢复 live quarantine：用 no-replace hard link 发布缺失的 canonical blob，重新 no-follow 打开并验证同一身份和摘要后 unlink alias；canonical 已存在时不覆盖，只在双方验证后删除冗余 alias；重建无效状态的本轮不做这类 destructive cleanup；
+7. 再次完整扫描全部 Canvas 引用根；候选重新被引用时先清除其记录并重新保存状态；
+8. 删除前先对全部剩余候选完成 no-follow 身份、大小、时间和摘要预检；任何预检失败都不开始删除；
+9. 将 canonical blob 原子 rename 到固定 private quarantine alias，重新 no-follow 打开并验证后只 unlink alias；失败记录和 crash 后遗留 alias 留待下一轮重试；
+10. 下一轮扫描从状态中移除已经不存在的 blob 记录；
+11. 清理超过 24 小时的普通 `.convax/assets/.staging/*` 和 `.convax/staging/*` 文件，不递归、不跟随 symlink，并排除 GC quarantine alias。
 
 最终物理删除最早发生在第一次确认无引用后的约 7 天，并可能因为 24 小时扫描间隔更晚。短暂重新引用会清除旧计时；再次变成无引用后重新计算 7 天。
 
@@ -356,14 +359,15 @@ v1 不自动改写引用，无论移动发生在 App 内还是 App 外：
 
 ### 9.4 调度
 
-GC 不监听每次节点删除，也不创建高频定时器：
+GC 不监听每次节点删除，也不创建高频定时器。调度状态只存在于 Desktop 进程内，`gc.json` 不记录上次成功扫描时间，Desktop 也不使用其 mtime 节流：
 
-- Project 打开时，如果距离上次成功扫描已满 24 小时，空闲 30 秒后运行；
-- Project 持续打开时，每 24 小时最多运行一次；
-- 用户执行“清理可回收资产”时立即完整扫描，但仍遵守 7 天宽限期；
+- Project 第一次成功访问 Canvas 文档时，空闲 30 秒后运行；
+- Canvas 文档读取前捕获调度 lease；Project close/closeAll 使慢读取持有的旧 lease 失效，读取完成不能重新打开已关闭 Project 的计时器；
+- Project 持续打开时，每次成功扫描后 24 小时运行下一轮；失败后 15 分钟重试；
+- 进程重启后可能多执行一次安全的完整扫描；
 - Project 关闭和 App 退出时不强制运行；
 - 同一 Project 只允许一个 GC；重复请求合并；
-- 不同 Project 的 GC 由 Desktop 限制为低并发后台任务。
+- 不同 Project 的 GC 由 Desktop 限制为全局单任务后台执行。
 
 ### 9.5 与导入和重新引用的并发
 

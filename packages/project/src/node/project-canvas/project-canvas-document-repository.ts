@@ -23,6 +23,19 @@ export class ProjectCanvasDocumentRepository implements CanvasDocumentRepository
     private readonly assets: ProjectManagedAssetStore,
   ) {}
 
+  async loadAllStrict(input: { canvases: readonly ProjectCanvas[]; projectId: string }): Promise<ReadonlySet<string>> {
+    const digests = new Set<string>()
+    for (const canvas of input.canvases) {
+      const ref = { canvasId: canvas.id, scopeId: input.projectId }
+      const stored = await this.storage.readPrivateTextFile(storageRef(ref))
+      if (!stored.exists) throw new Error(`Project Canvas document is missing: ${canvas.id}`)
+      const parsed = parseStoredCanvasDocument(stored.content, canvas.id)
+      const document = dehydrateProjectCanvasDocument(parsed)
+      for (const reference of collectProjectManagedAssetReferences(document)) digests.add(reference.sha256)
+    }
+    return digests
+  }
+
   async load(ref: CanvasDocumentRef) {
     await this.assertOwnership(ref)
     const stored = await this.storage.readPrivateTextFile(storageRef(ref))
