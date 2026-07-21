@@ -17,6 +17,7 @@ import {
   RemoteRegistryCacheCorruptionError,
   RemoteRegistryTimeoutError,
   RemoteRegistryValidationError,
+  downloadBundle,
   parseRemoteCapabilityShowcase,
   parseRemoteCapabilityRegistry,
 } from "./remote-capability-registry"
@@ -319,6 +320,61 @@ function packageWithZip(zip: Uint8Array, overrides: Record<string, unknown> = {}
       }),
     ]),
   ).packages[0]!
+}
+
+function packageWithCompanionBytes(bytes: Uint8Array) {
+  const digest = createHash("sha256").update(bytes).digest("hex")
+  const manifest = generationPluginManifest()
+  const item = parseRemoteCapabilityRegistry(
+    registry([
+      pluginPackage({
+        companions: [
+          companion({
+            targets: [
+              {
+                ...companion().targets[0],
+                artifact: { ...companion().targets[0].artifact, sha256: digest, size: bytes.byteLength },
+              },
+            ],
+          }),
+        ],
+        compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/2" },
+        manifest,
+      }),
+    ]),
+  ).packages[0]!
+  if (item.kind !== "plugin") throw new Error("expected Plugin")
+  const companionItem = item.companions![0]!
+  return { companionItem, item, target: companionItem.targets[0]! }
+}
+
+function scheduledByteStream(
+  chunks: readonly Uint8Array[],
+  delayMs: number,
+  options: { hangAfterChunks?: boolean; onCancel?: () => void } = {},
+) {
+  let cancelled = false
+  let index = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      options.onCancel?.()
+    },
+    start(controller) {
+      const publish = () => {
+        if (cancelled) return
+        if (index >= chunks.length) {
+          if (!options.hangAfterChunks) controller.close()
+          return
+        }
+        controller.enqueue(chunks[index++]!)
+        timer = setTimeout(publish, delayMs)
+      }
+      timer = setTimeout(publish, delayMs)
+    },
+  })
 }
 
 describe("parseRemoteCapabilityRegistry", () => {
@@ -1356,6 +1412,110 @@ describe("RemoteCapabilityRegistryClient", () => {
     await expect(redirecting.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow("redirect host")
   })
 
+  test("allows a progressing companion transfer to outlive the metadata request timeout", async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8])
+    const { companionItem, item, target } = packageWithCompanionBytes(bytes)
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () =>
+          new Response(
+            scheduledByteStream(
+              Array.from(bytes, (byte) => Uint8Array.of(byte)),
+              4,
+            ),
+            { headers: { "content-length": String(bytes.byteLength) } },
+          ),
+      ),
+      timeoutMs: 5,
+      transferInactivityTimeoutMs: 30,
+      transferTimeoutMs: 500,
+    })
+
+    await expect(client.downloadCompanionArtifact(item, companionItem, target)).resolves.toEqual(bytes)
+  })
+
+  test("cancels a companion transfer that stops making progress", async () => {
+    const bytes = Uint8Array.from([1, 2])
+    const { companionItem, item, target } = packageWithCompanionBytes(bytes)
+    let cancelled = false
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () =>
+          new Response(
+            scheduledByteStream([bytes.subarray(0, 1)], 1, {
+              hangAfterChunks: true,
+              onCancel: () => {
+                cancelled = true
+              },
+            }),
+          ),
+      ),
+      transferInactivityTimeoutMs: 15,
+      transferTimeoutMs: 200,
+    })
+
+    await expect(client.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow(
+      "Remote companion artifact download stalled",
+    )
+    expect(cancelled).toBe(true)
+  })
+
+  test("enforces a hard deadline even while a companion transfer keeps making progress", async () => {
+    const bytes = new Uint8Array(200).fill(1)
+    const { companionItem, item, target } = packageWithCompanionBytes(bytes)
+    let cancelled = false
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () =>
+          new Response(
+            scheduledByteStream(
+              Array.from(bytes, (byte) => Uint8Array.of(byte)),
+              5,
+              {
+                onCancel: () => {
+                  cancelled = true
+                },
+              },
+            ),
+          ),
+      ),
+      transferInactivityTimeoutMs: 500,
+      transferTimeoutMs: 80,
+    })
+
+    await expect(client.downloadCompanionArtifact(item, companionItem, target)).rejects.toThrow(
+      "Remote companion artifact download timed out after 80ms",
+    )
+    expect(cancelled).toBe(true)
+  })
+
+  test("preserves caller cancellation while a companion body is pending", async () => {
+    const bytes = Uint8Array.of(1)
+    const { companionItem, item, target } = packageWithCompanionBytes(bytes)
+    let cancelled = false
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () =>
+          new Response(
+            scheduledByteStream([], 1, {
+              hangAfterChunks: true,
+              onCancel: () => {
+                cancelled = true
+              },
+            }),
+          ),
+      ),
+      transferInactivityTimeoutMs: 100,
+      transferTimeoutMs: 500,
+    })
+    const controller = new AbortController()
+    const pending = client.downloadCompanionArtifact(item, companionItem, target, { signal: controller.signal })
+    setTimeout(() => controller.abort(new DOMException("user cancelled", "AbortError")), 5)
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(cancelled).toBe(true)
+  })
+
   test("downloads an allowlisted redirect, verifies bytes and returns install-ready files", async () => {
     const manifest = pluginManifest()
     const zip = createTestZip([
@@ -1379,6 +1539,60 @@ describe("RemoteCapabilityRegistryClient", () => {
     const bundle = await client.downloadBundle(item)
     expect(new TextDecoder().decode(bundle.files["web/index.html"])).toContain("Hello")
     expect(calls).toHaveLength(2)
+  })
+
+  test("allows a progressing package transfer to outlive the metadata request timeout", async () => {
+    const manifest = pluginManifest()
+    const zip = createTestZip([
+      { content: JSON.stringify(manifest), name: "manifest.json" },
+      { content: "<!doctype html><title>Hello</title>", method: 8, name: "web/index.html" },
+    ])
+    const item = packageWithZip(zip)
+    const chunks = Array.from({ length: Math.ceil(zip.byteLength / 32) }, (_, index) =>
+      zip.subarray(index * 32, Math.min((index + 1) * 32, zip.byteLength)),
+    )
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(
+        () =>
+          new Response(scheduledByteStream(chunks, 2), {
+            headers: { "content-length": String(zip.byteLength) },
+          }),
+      ),
+      timeoutMs: 5,
+      transferInactivityTimeoutMs: 50,
+      transferTimeoutMs: 1_000,
+    })
+
+    await expect(client.downloadBundle(item)).resolves.toMatchObject({
+      files: { "manifest.json": expect.any(Uint8Array) },
+    })
+  })
+
+  test("keeps the convenience download timeout bound to the artifact transfer", async () => {
+    const manifest = pluginManifest()
+    const zip = createTestZip([{ content: JSON.stringify(manifest), name: "manifest.json" }])
+    const item = packageWithZip(zip)
+    let requestAborted = false
+
+    await expect(
+      downloadBundle(item, {
+        fetch: fetchMock(
+          (_url, init) =>
+            new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  requestAborted = true
+                  reject(init.signal?.reason)
+                },
+                { once: true },
+              )
+            }),
+        ),
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("Remote Plugin package download timed out after 20ms")
+    expect(requestAborted).toBe(true)
   })
 
   test("rejects disallowed redirect hosts, byte size changes, and SHA-256 mismatch", async () => {

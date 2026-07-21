@@ -53,6 +53,11 @@ export const maxRemoteCompanionBytes = 128 * 1024 * 1024
 const maxShowcaseIndexBytes = 2 * 1024 * 1024
 const maxShowcasePosterBytes = 4 * 1024 * 1024
 const maxShowcaseAnimationBytes = 24 * 1024 * 1024
+const defaultRemoteRequestTimeoutMs = 10_000
+const defaultRemoteTransferInactivityTimeoutMs = 60_000
+const defaultRemoteTransferTimeoutMs = 10 * 60_000
+const maxRemoteRequestTimeoutMs = 120_000
+const maxRemoteTransferTimeoutMs = 10 * 60_000
 const semverPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
 
@@ -189,6 +194,11 @@ export interface RemoteCapabilityRegistryClientOptions {
   showcaseMediaCache?: RemoteShowcaseMediaCache
   /** Main-owned test seam. Production composition must use the official default. */
   showcaseUrl?: string
+  /** Main-owned test seam for a transfer's maximum time without network progress. */
+  transferInactivityTimeoutMs?: number
+  /** Main-owned test seam for the hard deadline of a bounded artifact transfer. */
+  transferTimeoutMs?: number
+  /** Main-owned test seam for bounded Registry and Showcase metadata requests. */
   timeoutMs?: number
 }
 
@@ -909,9 +919,12 @@ async function withTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   externalSignal?: AbortSignal,
+  label = "Remote capability request",
 ) {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
-    throw new Error("Remote capability timeout must be an integer between 1 and 120000 milliseconds")
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > maxRemoteRequestTimeoutMs) {
+    throw new Error(
+      `Remote capability timeout must be an integer between 1 and ${maxRemoteRequestTimeoutMs} milliseconds`,
+    )
   }
   if (externalSignal?.aborted) throw abortError(externalSignal)
   const controller = new AbortController()
@@ -928,15 +941,90 @@ async function withTimeout<T>(
     // aborted. Preserve safe cache side effects, but never report that cancelled
     // or timed-out caller as successful.
     if (externalSignal?.aborted) throw abortError(externalSignal)
-    if (timedOut) throw new RemoteRegistryTimeoutError(`Remote capability request timed out after ${timeoutMs}ms`)
+    if (timedOut) throw new RemoteRegistryTimeoutError(`${label} timed out after ${timeoutMs}ms`)
     return result
   } catch (error) {
     if (externalSignal?.aborted) throw abortError(externalSignal)
-    if (timedOut) throw new RemoteRegistryTimeoutError(`Remote capability request timed out after ${timeoutMs}ms`)
+    if (timedOut) throw new RemoteRegistryTimeoutError(`${label} timed out after ${timeoutMs}ms`)
     throw error
   } finally {
     clearTimeout(timer)
     externalSignal?.removeEventListener("abort", cancel)
+  }
+}
+
+interface RemoteTransferTimeoutOptions {
+  externalSignal?: AbortSignal
+  inactivityTimeoutMs: number
+  label: string
+  timeoutMs: number
+}
+
+async function withTransferTimeout<T>(
+  operation: (input: { progress: () => void; signal: AbortSignal }) => Promise<T>,
+  options: RemoteTransferTimeoutOptions,
+) {
+  const { externalSignal, inactivityTimeoutMs, label, timeoutMs } = options
+  if (
+    !Number.isSafeInteger(inactivityTimeoutMs) ||
+    inactivityTimeoutMs < 1 ||
+    inactivityTimeoutMs > maxRemoteRequestTimeoutMs
+  ) {
+    throw new Error(
+      `Remote transfer inactivity timeout must be an integer between 1 and ${maxRemoteRequestTimeoutMs} milliseconds`,
+    )
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > maxRemoteTransferTimeoutMs) {
+    throw new Error(
+      `Remote transfer timeout must be an integer between 1 and ${maxRemoteTransferTimeoutMs} milliseconds`,
+    )
+  }
+  if (externalSignal?.aborted) throw abortError(externalSignal)
+
+  const controller = new AbortController()
+  let completed = false
+  let inactivityTimer: ReturnType<typeof setTimeout> | undefined
+  let interruption: Error | undefined
+  let rejectInterruption!: (error: Error) => void
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    rejectInterruption = reject
+  })
+
+  const interrupt = (error: Error) => {
+    if (completed || interruption) return
+    interruption = error
+    controller.abort(error)
+    rejectInterruption(error)
+  }
+  const progress = () => {
+    if (completed || interruption) return
+    if (inactivityTimer) clearTimeout(inactivityTimer)
+    inactivityTimer = setTimeout(() => {
+      interrupt(
+        new RemoteRegistryTimeoutError(`${label} stalled for ${inactivityTimeoutMs}ms without receiving network data`),
+      )
+    }, inactivityTimeoutMs)
+  }
+  const onExternalAbort = () => interrupt(abortError(externalSignal))
+  externalSignal?.addEventListener("abort", onExternalAbort, { once: true })
+  progress()
+  const hardTimer = setTimeout(() => {
+    interrupt(new RemoteRegistryTimeoutError(`${label} timed out after ${timeoutMs}ms`))
+  }, timeoutMs)
+  const pending = Promise.resolve().then(() => operation({ progress, signal: controller.signal }))
+  void pending.catch(() => undefined)
+
+  try {
+    return await Promise.race([pending, interrupted])
+  } catch (error) {
+    if (externalSignal?.aborted) throw abortError(externalSignal)
+    if (interruption) throw interruption
+    throw error
+  } finally {
+    completed = true
+    clearTimeout(hardTimer)
+    if (inactivityTimer) clearTimeout(inactivityTimer)
+    externalSignal?.removeEventListener("abort", onExternalAbort)
   }
 }
 
@@ -949,7 +1037,13 @@ function parseContentLength(response: Response, maxBytes: number, label: string)
   return length
 }
 
-async function readBoundedBody(response: Response, maxBytes: number, label: string, signal: AbortSignal) {
+async function readBoundedBody(
+  response: Response,
+  maxBytes: number,
+  label: string,
+  signal: AbortSignal,
+  onProgress?: () => void,
+) {
   parseContentLength(response, maxBytes, label)
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer())
@@ -959,19 +1053,28 @@ async function readBoundedBody(response: Response, maxBytes: number, label: stri
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
+  const cancelOnAbort = () => {
+    void reader.cancel(abortError(signal)).catch(() => undefined)
+  }
+  signal.addEventListener("abort", cancelOnAbort, { once: true })
   try {
     while (true) {
       if (signal.aborted) throw abortError(signal)
       const result = await reader.read()
-      if (result.done) break
+      if (result.done) {
+        if (signal.aborted) throw abortError(signal)
+        break
+      }
       total += result.value.byteLength
       if (!Number.isSafeInteger(total) || total > maxBytes) validationError(`${label} exceeds the download size limit`)
+      if (result.value.byteLength > 0) onProgress?.()
       chunks.push(result.value)
     }
   } catch (error) {
     await reader.cancel().catch(() => undefined)
     throw error
   } finally {
+    signal.removeEventListener("abort", cancelOnAbort)
     reader.releaseLock()
   }
   const output = new Uint8Array(total)
@@ -996,6 +1099,7 @@ async function fetchWithRedirects(
   headers: Headers,
   purpose: "artifact" | "companion" | "registry",
   configuredRegistryUrl: string,
+  onProgress?: () => void,
 ) {
   let currentUrl = inputUrl
   for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
@@ -1010,6 +1114,7 @@ async function fetchWithRedirects(
       if (signal.aborted) throw error
       throw new RemoteRegistryTransportError(error instanceof Error ? error.message : "Remote request failed")
     }
+    onProgress?.()
     if (response.url) {
       if (purpose === "artifact") assertAllowedArtifactRequestUrl(response.url, response.url === inputUrl)
       else if (purpose === "companion") {
@@ -1031,6 +1136,7 @@ async function fetchShowcaseMediaWithRedirects(
   inputUrl: string,
   signal: AbortSignal,
   headers: Headers,
+  onProgress?: () => void,
 ) {
   let currentUrl = inputUrl
   for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
@@ -1042,6 +1148,7 @@ async function fetchShowcaseMediaWithRedirects(
       if (signal.aborted) throw error
       throw new RemoteRegistryTransportError(error instanceof Error ? error.message : "Remote showcase request failed")
     }
+    onProgress?.()
     if (response.url) assertAllowedShowcaseMediaRequestUrl(response.url, redirectCount === 0)
     if (![301, 302, 303, 307, 308].includes(response.status)) return response
     const location = response.headers.get("location")
@@ -1132,6 +1239,8 @@ export class RemoteCapabilityRegistryClient {
   #showcaseRequest?: { identity: string; promise: Promise<RemoteCapabilityShowcase> }
   readonly #showcaseUrl: string
   readonly #timeoutMs: number
+  readonly #transferInactivityTimeoutMs: number
+  readonly #transferTimeoutMs: number
 
   constructor(options: RemoteCapabilityRegistryClientOptions = {}) {
     this.#cache = options.cache ?? new MemoryRemoteRegistryCache()
@@ -1149,7 +1258,9 @@ export class RemoteCapabilityRegistryClient {
     this.#showcaseIndexCache = options.showcaseCache ?? new MemoryRemoteRegistryCache()
     this.#showcaseMediaCache = options.showcaseMediaCache
     this.#showcaseUrl = assertConfiguredRegistryUrl(options.showcaseUrl ?? officialRemoteShowcaseIndexUrl)
-    this.#timeoutMs = options.timeoutMs ?? 10_000
+    this.#timeoutMs = options.timeoutMs ?? defaultRemoteRequestTimeoutMs
+    this.#transferInactivityTimeoutMs = options.transferInactivityTimeoutMs ?? defaultRemoteTransferInactivityTimeoutMs
+    this.#transferTimeoutMs = options.transferTimeoutMs ?? defaultRemoteTransferTimeoutMs
   }
 
   #withRegistryCachePublication<T>(operation: () => Promise<T>) {
@@ -1302,6 +1413,7 @@ export class RemoteCapabilityRegistryClient {
         },
         this.#timeoutMs,
         signal,
+        "Remote Registry request",
       )
     } catch (error) {
       if (signal?.aborted) throw abortError(signal)
@@ -1408,6 +1520,7 @@ export class RemoteCapabilityRegistryClient {
       },
       options.timeoutMs ?? this.#timeoutMs,
       options.signal,
+      "Remote showcase index request",
     )
     await this.#publishShowcase(body, showcase)
     return showcase
@@ -1448,22 +1561,27 @@ export class RemoteCapabilityRegistryClient {
     const cached = await this.#showcaseMediaCache?.read({ sha256: media.sha256, size: media.size }).catch(() => null)
     if (options.signal?.aborted) throw abortError(options.signal)
     if (cached && showcaseBytesAreValid(cached, media)) return Uint8Array.from(cached)
-    const bytes = await withTimeout(
-      async (signal) => {
+    const bytes = await withTransferTimeout(
+      async ({ progress, signal }) => {
         const response = await fetchShowcaseMediaWithRedirects(
           this.#fetch,
           media.url,
           signal,
           new Headers({ accept: media.mime }),
+          progress,
         )
         if (response.status !== 200) {
           throw new RemoteRegistryTransportError(`Remote showcase media returned HTTP ${response.status}`)
         }
         assertShowcaseContentType(response, media.mime)
-        return readBoundedBody(response, media.size, "Remote showcase media", signal)
+        return readBoundedBody(response, media.size, "Remote showcase media", signal, progress)
       },
-      options.timeoutMs ?? this.#timeoutMs,
-      options.signal,
+      {
+        externalSignal: options.signal,
+        inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
+        label: "Remote showcase media download",
+        timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
+      },
     )
     if (bytes.byteLength !== media.size) {
       validationError(`Remote showcase media size mismatch: expected ${media.size}, received ${bytes.byteLength}`)
@@ -1541,8 +1659,8 @@ export class RemoteCapabilityRegistryClient {
         JSON.stringify(candidate) === JSON.stringify(targetValue),
     )
     if (!target) validationError("Remote companion target does not match its Plugin Registry entry")
-    const bytes = await withTimeout(
-      async (signal) => {
+    const bytes = await withTransferTimeout(
+      async ({ progress, signal }) => {
         const response = await fetchWithRedirects(
           this.#fetch,
           target.artifact.url,
@@ -1550,14 +1668,19 @@ export class RemoteCapabilityRegistryClient {
           new Headers({ accept: "application/octet-stream" }),
           "companion",
           this.#registryUrl,
+          progress,
         )
         if (response.status !== 200) {
           throw new RemoteRegistryTransportError(`Remote companion artifact returned HTTP ${response.status}`)
         }
-        return readBoundedBody(response, target.artifact.size, "Remote companion artifact", signal)
+        return readBoundedBody(response, target.artifact.size, "Remote companion artifact", signal, progress)
       },
-      options.timeoutMs ?? this.#timeoutMs,
-      options.signal,
+      {
+        externalSignal: options.signal,
+        inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
+        label: "Remote companion artifact download",
+        timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
+      },
     )
     if (bytes.byteLength !== target.artifact.size) {
       validationError(
@@ -1581,8 +1704,8 @@ export class RemoteCapabilityRegistryClient {
       throw new Error(`Remote artifact maxBytes must be an integer between 1 and ${maxArtifactBytes}`)
     }
     if (item.artifact.size > downloadLimit) validationError("Remote artifact declared size exceeds the download limit")
-    const bytes = await withTimeout(
-      async (signal) => {
+    const bytes = await withTransferTimeout(
+      async ({ progress, signal }) => {
         const response = await fetchWithRedirects(
           this.#fetch,
           item.artifact.url,
@@ -1590,13 +1713,18 @@ export class RemoteCapabilityRegistryClient {
           new Headers({ accept: "application/zip" }),
           "artifact",
           this.#registryUrl,
+          progress,
         )
         if (response.status !== 200)
           throw new RemoteRegistryTransportError(`Remote artifact returned HTTP ${response.status}`)
-        return readBoundedBody(response, item.artifact.size, "Remote artifact", signal)
+        return readBoundedBody(response, item.artifact.size, "Remote artifact", signal, progress)
       },
-      options.timeoutMs ?? this.#timeoutMs,
-      options.signal,
+      {
+        externalSignal: options.signal,
+        inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
+        label: `Remote ${item.kind === "plugin" ? "Plugin" : "Skill"} package download`,
+        timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
+      },
     )
     if (bytes.byteLength !== item.artifact.size) {
       validationError(`Remote artifact size mismatch: expected ${item.artifact.size}, received ${bytes.byteLength}`)
@@ -1637,6 +1765,8 @@ export async function downloadBundle(
     showcaseCache,
     showcaseMediaCache,
     showcaseUrl,
+    transferInactivityTimeoutMs,
+    transferTimeoutMs,
     timeoutMs,
     ...downloadOptions
   } = options
@@ -1649,6 +1779,8 @@ export async function downloadBundle(
     showcaseCache,
     showcaseMediaCache,
     showcaseUrl,
+    transferInactivityTimeoutMs,
+    transferTimeoutMs: transferTimeoutMs ?? timeoutMs,
     timeoutMs,
   }).downloadBundle(packageValue, downloadOptions)
 }
