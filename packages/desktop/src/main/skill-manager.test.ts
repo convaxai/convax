@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ManagedAgentSkillStore } from "@convax/agent-runtime/node"
 import { DesktopSkillManager } from "./skill-manager"
+import { DesktopSkillMutationCoordinator, PluginSkillOwnershipStore } from "./plugin-skill-lifecycle"
 
 const skill = (name: string, description = "Test workflow") =>
   ["---", `name: ${name}`, `description: ${description}`, "---", "", "Use existing tools."].join("\n")
@@ -14,6 +15,8 @@ async function fixture(
 ) {
   const root = await mkdtemp(join(tmpdir(), "desktop-skill-manager-"))
   const store = new ManagedAgentSkillStore(join(root, "opencode"))
+  const ownership = new PluginSkillOwnershipStore(join(root, "plugin-owned-skills.json"))
+  const mutations = new DesktopSkillMutationCoordinator()
   const refreshSkills = mock(async () => undefined)
   const runtime = {
     listSkills: mock(async () => globalSkills),
@@ -57,8 +60,10 @@ async function fixture(
       },
     ],
     presentations,
+    ownership,
+    mutations,
   )
-  return { globalSkills, manager, refreshSkills, root }
+  return { globalSkills, manager, mutations, ownership, refreshSkills, root, store }
 }
 
 describe("DesktopSkillManager", () => {
@@ -71,6 +76,7 @@ describe("DesktopSkillManager", () => {
           {
             description: "Global",
             location: "/global/SKILL.md",
+            management: { kind: "standalone" },
             managed: false,
             name: "global-skill",
             source: "global",
@@ -79,7 +85,12 @@ describe("DesktopSkillManager", () => {
       })
 
       const installed = await setup.manager.installCatalogSkill("storyboard")
-      expect(installed).toMatchObject({ managed: true, name: "storyboard", source: "managed" })
+      expect(installed).toMatchObject({
+        management: { kind: "standalone" },
+        managed: true,
+        name: "storyboard",
+        source: "managed",
+      })
       expect(setup.refreshSkills).toHaveBeenCalledTimes(1)
       expect(await setup.manager.list()).toMatchObject({
         catalog: [{ id: "storyboard", installed: true }],
@@ -132,6 +143,137 @@ describe("DesktopSkillManager", () => {
       dispose()
       await setup.manager.installCatalogSkill("storyboard")
       expect(listener).toHaveBeenCalledTimes(2)
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("serializes standalone mutations with a Plugin-owned Skill publication", async () => {
+    const setup = await fixture()
+    try {
+      const release = await setup.mutations.acquire()
+      let completed = false
+      const install = setup.manager.installCatalogSkill("storyboard").then((result) => {
+        completed = true
+        return result
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(completed).toBe(false)
+      expect(await setup.store.list()).toEqual([])
+
+      release()
+      await expect(install).resolves.toMatchObject({ name: "storyboard" })
+      expect(completed).toBe(true)
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("labels Plugin-owned Skills and rejects independent uninstall", async () => {
+    const setup = await fixture()
+    try {
+      await setup.store.installFromFiles({ "SKILL.md": skill("plugin-workflow", "Owned workflow") })
+      await setup.ownership.write([
+        {
+          pluginId: "media-tools",
+          pluginName: "Media Tools",
+          pluginVersion: "1.2.0",
+          skillName: "plugin-workflow",
+          sourcePath: "skills/plugin-workflow",
+          sourceSha256: "a".repeat(64),
+        },
+      ])
+
+      expect((await setup.manager.list()).skills).toEqual([
+        expect.objectContaining({
+          management: {
+            kind: "plugin",
+            pluginId: "media-tools",
+            pluginName: "Media Tools",
+            pluginVersion: "1.2.0",
+          },
+          name: "plugin-workflow",
+        }),
+      ])
+      await expect(setup.manager.uninstall("plugin-workflow")).rejects.toThrow("managed by Plugin Media Tools")
+      expect((await setup.store.list()).map((entry) => entry.name)).toEqual(["plugin-workflow"])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects every standalone install path when an owned Skill binding survives missing bytes", async () => {
+    const setup = await fixture()
+    try {
+      await setup.ownership.write([
+        {
+          pluginId: "media-tools",
+          pluginName: "Media Tools",
+          pluginVersion: "1.2.0",
+          skillName: "storyboard",
+          sourcePath: "skills/storyboard",
+          sourceSha256: "a".repeat(64),
+        },
+      ])
+      const source = join(setup.root, "standalone-source", "storyboard")
+      await mkdir(source, { recursive: true })
+      await writeFile(join(source, "SKILL.md"), skill("storyboard"))
+      const attempts = [
+        () => setup.manager.installManagedAtStartup(source),
+        () => setup.manager.importFromDirectory(source),
+        () => setup.manager.installFromFiles({ "SKILL.md": skill("storyboard") }),
+        () => setup.manager.installCatalogSkill("storyboard"),
+      ]
+
+      for (const attempt of attempts) {
+        await expect(attempt()).rejects.toThrow("managed by Plugin Media Tools")
+        expect(await setup.store.list()).toEqual([])
+      }
+      expect(setup.refreshSkills).not.toHaveBeenCalled()
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("reserves both sides of a pending Plugin transition and blocks standalone mutations until recovery", async () => {
+    const setup = await fixture()
+    try {
+      const pendingBinding = {
+        pluginId: "media-tools",
+        pluginName: "Media Tools",
+        pluginVersion: "2.0.0",
+        skillName: "pending-workflow",
+        sourcePath: "skills/pending-workflow",
+        sourceSha256: "b".repeat(64),
+      }
+      await setup.ownership.begin({
+        kind: "install",
+        nextBindings: [pendingBinding],
+        pluginId: "media-tools",
+        pluginVersion: "2.0.0",
+        previousBindings: [],
+        publications: [],
+      })
+      await setup.store.installFromFiles({
+        "SKILL.md": skill("pending-workflow", "Partially published Plugin workflow"),
+      })
+
+      expect((await setup.manager.list()).skills).toEqual([
+        expect.objectContaining({
+          management: expect.objectContaining({ kind: "plugin", pluginId: "media-tools" }),
+          name: "pending-workflow",
+        }),
+      ])
+      await expect(setup.manager.installCatalogSkill("storyboard")).rejects.toThrow(
+        "Plugin-owned Skill recovery must finish",
+      )
+      await expect(setup.manager.uninstall("pending-workflow")).rejects.toThrow(
+        "Plugin-owned Skill recovery must finish",
+      )
+      await expect(setup.manager.refresh()).rejects.toThrow("Plugin-owned Skill recovery must finish")
+      expect(setup.refreshSkills).not.toHaveBeenCalled()
+      expect((await setup.store.list()).map((entry) => entry.name)).toEqual(["pending-workflow"])
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }

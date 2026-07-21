@@ -11,9 +11,12 @@ them into a generic extension framework:
 - a **Convax Plugin** is an installed product surface or integration lifecycle
   composed by Desktop from existing Canvas, Project and Agent capabilities.
 
-A Plugin may reference a companion Skill so users can install the UI/integration and
-its Agent workflow together. They remain two capabilities with separate validation,
-storage, receipts and removal. Neither inherits the other's authority.
+A standalone Skill has its own package identity and independent lifecycle. A Plugin
+manifest v1-v3 may reference one legacy companion through its top-level `skill` path;
+that companion remains standalone after installation. A v4 Plugin may instead declare
+one or more owned directories through `contributes.skills`. Owned Skills retain their
+own validation and never inherit Plugin authority, but their install, update, rollback,
+and removal lifecycle belongs to the Plugin.
 
 OpenCode plugins are Agent-runtime hooks and are not Convax Plugins.
 
@@ -22,7 +25,8 @@ OpenCode plugins are Agent-runtime hooks and are not Convax Plugins.
 | Concern                                                                                                                           | Owner                                      |
 | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Skill discovery and execution                                                                                                     | `@convax/agent-runtime` through OpenCode   |
-| Managed Skill validation/copy/removal                                                                                             | `@convax/agent-runtime/node`               |
+| Managed Skill validation and reversible filesystem publication                                                                    | `@convax/agent-runtime/node`               |
+| Standalone lifecycle, Plugin-owned bindings and Plugin/Skill transaction composition                                              | Desktop main                               |
 | Canvas renderer and node-toolbar registration                                                                                     | existing `@convax/canvas` registries       |
 | Plugin package discovery, static assets, generation tool processes, native import dialogs, trusted provenance and native adapters | Desktop main                               |
 | Plugin iframe rendering and scoped host calls                                                                                     | Desktop renderer composition               |
@@ -51,7 +55,8 @@ Electron userData/
                                                bounded verified media cache
   opencode/
     skills/
-      user/<skill-name>/...                 managed Skills, including explicitly installed companions
+      user/<skill-name>/...                 materialized standalone and Plugin-owned Skills
+  plugin-skill-bindings/index-v1.json       bindings plus one digest-bound recovery transition
   plugins/
     <plugin-id>/
       manifest.json
@@ -72,13 +77,50 @@ Browser storage/
 
 Built-ins follow the same validated copy lifecycle as imported capabilities. Most
 items become visible in the catalog and require an explicit install. A catalog item
-may opt into one-time default provisioning; Desktop copies it on first eligible
-startup and records separate Plugin and companion-Skill receipts in
-`default-capabilities.json`. The receipt prevents a later user uninstall from being
-silently reversed. Runtime loading never reaches back through a source-tree path.
-Built-in catalog code imports complete packages from Desktop `resources`, never from
-`src/main` or `node_modules`. A companion Skill is a second copy into the managed
-Skill root and remains independently removable.
+may opt into one-time default provisioning. Desktop records the Plugin receipt in
+`default-capabilities.json`; a legacy v1-v3 standalone companion has its own receipt,
+while a v4 owned Skill follows the Plugin receipt. A later user uninstall is not
+silently reversed. Runtime loading never reaches back
+through a source-tree path. Built-in catalog code imports complete packages from
+Desktop `resources`, never from `src/main` or `node_modules`.
+
+A v4 owned Skill is also materialized below the managed Skill root, but
+`plugin-skill-bindings/index-v1.json` is the authority for its owner. Desktop stages
+the Plugin package, every owned Skill, and the updated binding index as one logical
+publication. This is crash-consistent rather than a simultaneous multi-directory
+rename: prepare validates and stages Skill trees; pre-switch `publish` rechecks
+external names and records exact rollback receipts; post-switch `activate` publishes
+ownership before Skill bytes; `commit` records a durable forward decision before
+deleting backups and clearing the journal. A synchronous failure before that decision
+restores the previous Plugin, Skill bytes, and bindings. After it, cleanup keeps the
+new capability current and is retryable. Plugin removal removes its owned Skills. The
+shared filesystem location is discovery data, not evidence that the owned Skill may
+be removed independently.
+
+Plugin publications and standalone Skill install/remove operations share one
+Desktop-owned mutation coordinator. A user action therefore cannot change the shared
+managed Skill directory between ownership validation and publication. The ownership
+binding also reserves its Skill name while materialized bytes are missing, so none of
+the standalone import, catalog, or file install paths can fill that gap with unrelated
+content. Install, update, built-in claim, and uninstall for one Plugin id are likewise
+serialized, preventing a waiting stale update from overwriting a newer package.
+The per-Plugin lifecycle lock covers the package switch, managed-companion work,
+executable-authorization receipt, and owned-Skill transaction as one ordered boundary.
+After a committed change, runtime cleanup reacquires that Plugin's lock and reconciles
+only its companion, authorization, and service-authorization checkpoint; the full
+installed-Plugin scan is reserved for startup recovery.
+
+At startup Plugin-package remnant recovery first selects one validated installed
+package. Replacement backups may be restored; a validated uninstall tombstone is
+finished and never restored. Package recovery ambiguity stops dependent recovery
+instead of allowing the Skill journal to guess. An undecided Skill transition moves
+forward when the selected package is the target version and rolls back otherwise; a
+durable forward decision always completes. Each step verifies exact content digests.
+Unknown backups, changed bytes, and ambiguous state fail closed. The owned-Skill
+forward decision is recorded before executable-authorization and backup cleanup;
+those later cleanup steps are best-effort and cannot trigger package rollback.
+Desktop reconciles every previously installed declaration, provisions defaults, and
+then refreshes OpenCode discovery once so a first-start owned Skill is immediately visible.
 
 Catalog Plugin ids are reserved from ordinary directory imports. A trusted built-in
 installation receives a host-only provenance marker containing its id, version and
@@ -129,6 +171,27 @@ frontmatter and every copied path, rejects links and Windows-unsafe names, appli
 size limits, and commits through a staging rename. Convax may remove only content in
 its own managed root. External global Skills are visible but read-only.
 
+Standalone installation owns its materialized name directly. A v4 Plugin-owned
+installation records `(pluginId, pluginVersion, skillName, sourcePath, sourceSha256)`
+in Desktop's private binding index. OpenCode selects a Skill by name, so every Plugin
+publication and startup reconciliation checks each declared name against global
+Skills, standalone managed Skills, and other Plugin owners; external discovery is
+checked again immediately before the package switch. An update may replace bytes only
+when the existing binding proves the same owner.
+`@convax/agent-runtime` enforces the generic filesystem transaction and remains
+unaware of this ownership decision.
+
+A v1-v3 companion remains standalone while that schema is installed. An explicit
+update to v4 may transfer ownership only when the current complete managed Skill tree
+matches the old validated Plugin package byte for byte. Modified or unrelated
+same-name Skills fail closed. If the process stops during that verified migration,
+the pending digest receipts and the Plugin package selected during startup determine
+forward versus rollback without treating the legacy bytes as a new ownership claim.
+Importing a portable local Skill never infers Plugin ownership from its name or from
+Registry metadata: it remains standalone. If a subsequently installed Plugin declares
+that name, the collision fails closed instead of adopting or replacing the local Skill;
+the exact legacy v1-v3 migration above is the only ownership-transfer path.
+
 OpenCode caches Skill discovery per instance. A managed install or removal disposes
 the volatile OpenCode instance state and clears host registrations, while preserving
 durable sessions and messages. Refresh is deferred while a prompt is running.
@@ -161,13 +224,23 @@ files enter `WebPluginManager.installBundle` or
 `DesktopSkillManager.installFromFiles`. Those managers remain the only durable
 installation boundary and repeat their normal manifest/frontmatter/path checks.
 
-Plugin ZIPs have `manifest.json` at their root and may carry a companion Skill at
-the manifest's `skill` path. Standalone Skill ZIPs have `SKILL.md` at their root.
-The catalog can present both together, but Plugin and Skill install, refresh,
-receipt and removal outcomes remain independent.
+Plugin ZIPs have `manifest.json` at their root. In v1-v3, the optional top-level
+`skill` path identifies a legacy companion whose install, refresh, receipt, and
+removal remain independent. In v4, each `contributes.skills` item names a Skill
+directory in the same ZIP; it is installed and removed only through the owner Plugin.
+Standalone Skill ZIPs have `SKILL.md` at their root and remain independently
+addressable catalog packages. An owned Skill may still be an independent source
+workspace and have a Registry presentation ZIP for portable Codex use. Its Registry
+entry declares `ownerPluginId`, remains previewable, and is rejected by Convax's
+standalone install path; Convax installation bytes come from the owner Plugin ZIP.
+
+Source Plugin and Skill workspaces may declare and build their own npm dependencies,
+but every released archive is self-contained. The Registry's trusted build phase runs
+package build scripts before inert validation and deterministic packing. Convax never
+runs npm, Bun, install hooks, or another package manager while installing a capability.
 
 A Tool Plugin Registry item may declare `companions` separately from its static ZIP.
-Each companion command must equal the v2 manifest's bare MCP runtime command and
+Each companion command must equal its v2-v4 manifest's bare MCP runtime command and
 provides immutable `darwin|linux|win32` plus `arm64|x64` target records. Desktop
 requires an exact current-host target, deterministic Plugin Release URL, declared
 size at or below 128 MiB and matching SHA-256. It writes the raw executable only to
@@ -203,16 +276,17 @@ surfaces:
 - **3D Director Desk** embeds the MIT-licensed StoryAI director surface for spatial
   character, geometry, camera, panorama and shot-preview work. Its portable scene
   graph and director viewport camera are stored as separate fields in the owning
-  Canvas node through `canvas.node.updateState`; its companion Skill reviews the
-  same snapshot through normal Canvas Agent resources.
+  Canvas node through `canvas.node.updateState`; its legacy independently managed
+  companion Skill reviews the same snapshot through normal Canvas Agent resources.
 - **Panorama Viewer** is an original offline WebGL2 surface for equirectangular 360°
   images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
   image nodes connected into its own Canvas node through a narrow host capability.
   The selected connected-node preference and view settings are portable; local file
   pixels remain session-local and are never stored in Plugin state.
 - **JianYing Editor** is default-provisioned as a trusted built-in Plugin plus a
-  separately receipted companion Skill. The package controls lifecycle and describes
-  the workflow; its native implementation remains compiled into Desktop main.
+  separately receipted legacy companion Skill. The package controls lifecycle and
+  describes the workflow; its native implementation remains compiled into Desktop
+  main.
 
 The 3D surface keeps the strict Plugin CSP and `sandbox="allow-scripts"`. The
 non-open upstream mannequin asset is replaced by the procedural MIT implementation.
@@ -269,7 +343,7 @@ observation can prove the result.
 
 The Agent flow uses the same main service but not the toolbar's automatic target.
 The status tool returns a short-lived opaque observation token. When a draft is
-active, the companion Skill tells the Agent to ask whether to use it or create a new
+active, the legacy companion Skill tells the Agent to ask whether to use it or create a new
 draft. Current-draft export uses that explicit choice and token. If the user chooses
 new, the Agent explains the active-to-new WIP boundary, asks them to return JianYing
 home, and calls the status tool again; new-draft export proceeds only from a
@@ -299,7 +373,7 @@ then adds only the contributions required by that product slice:
 - an optional creatable Canvas plugin node;
 - node-toolbar commands delivered to the mounted surface;
 - an explicit capability allowlist;
-- an optional companion `SKILL.md` path.
+- an optional legacy companion `SKILL.md` path whose lifecycle remains independent.
 
 `convax.plugin/2` preserves that static sandbox and adds two narrowly separated
 generation roles. A Tool Plugin may declare a separately installed bare
@@ -309,6 +383,17 @@ host-owned Canvas generation operation. A runtime declaration does not grant cal
 authority, and caller authority does not expose process or arbitrary MCP access.
 See [`generation-tool-plugins.md`](generation-tool-plugins.md) for the exact
 manifest, staging, result, authorization and cancellation contract.
+
+`convax.plugin/3` makes model and operation exposure declarative. It retains the
+legacy top-level `skill` field and its independent lifecycle. `convax.plugin/4`
+preserves v3 generation models, Agent operations, Canvas selection actions, service
+contributions, runtime authorization, and host behavior, but removes the ambiguous
+top-level `skill`. Its `contributes.skills` array contains `{name,path}` entries where
+`path` is the complete Skill directory. The directory basename and root `SKILL.md`
+frontmatter name must equal `name`. A v4 Plugin must still contribute a capability
+beyond owned Skills; a Skill-only package belongs in the standalone Skill catalog.
+`convax.plugin-host/4` intentionally has the same iframe RPC method set as host v3:
+owned Skills are install-time lifecycle metadata, not a new runtime permission.
 
 Plugin ids are kebab-case. All package paths are relative and validated inside the
 package root. Installation rejects symlinks/reparse-point escapes, traversal,
@@ -369,12 +454,17 @@ capability receive no connection-change signal.
 ## Skill presentation and inspection
 
 The management surface presents marketplace, Convax-managed and globally discovered
-Skills with the same media card and detail dialog. Managed Skills may be removed;
-globally discovered Skills are explicitly read-only. Details for an installed Skill
-come from its actual local directory, not from similarly named catalog metadata.
+Skills with the same media card and detail dialog. Standalone managed Skills may be
+removed; globally discovered Skills are read-only. Plugin-owned Skills show their
+owner Plugin and version and have no independent install, update, or remove action.
+Details for an installed Skill come from its actual local directory, not from similarly
+named catalog metadata.
 The Agent Runtime reads that directory as a bounded, non-executable bundle, rejects
 symlinks and unsafe paths, and returns bytes to Desktop for a size-limited plain-text
 preview. No preview operation evaluates Skill scripts or grants new capabilities.
+Installation and import are equally inert. A script included in a Skill may run only
+when an Agent later invokes it explicitly through the normal permission and sandbox
+boundary; merely listing, installing, or previewing the Skill never executes it.
 
 Showcase media is presentation metadata rather than installable Skill content.
 Checked-in Skills use fixed host-bundled assets, while remote Skills use the verified
@@ -396,21 +486,26 @@ Every file renderer already receives the Canvas file-assistant accessory. Attach
 a plugin node gives the Agent a validated read-only snapshot of that node and its
 edges. Mutations still use typed Canvas tools.
 
-A companion Skill may be installed explicitly, or provisioned once by a default
-built-in catalog item, into the same managed user Skill store. It remains installed
-independently if the Plugin is removed; the provisioning receipt is not an ownership
-graph. It may explain the Plugin workflow and select existing business, primitive
-and view tools. It does not expose native code, register tools, confer trusted
-built-in provenance, or duplicate Canvas/Project invariants. Generation is the
-current example: `canvas_generate` is a thin Agent adapter over the same typed
-operation used by Toolbar and Plugin UI. Any future Plugin-facing command exposed
-to the Agent must preserve that pattern and host-bound Project/Canvas/node scope.
+A standalone or legacy companion Skill may be installed explicitly, or provisioned
+once by a default built-in catalog item, into the managed user Skill store. It remains
+installed independently if the Plugin is removed; its provisioning receipt is not an
+ownership graph. A v4 owned Skill uses the same OpenCode discovery store but is
+materialized and removed only by the Plugin lifecycle, with Desktop's binding index as
+the ownership authority. On startup Desktop reconciles orphan bindings and exact
+installed Plugin declarations before refreshing OpenCode discovery.
+
+Either kind may explain a Plugin workflow and select existing business, primitive,
+and view tools. Neither exposes native code, registers tools, confers trusted built-in
+provenance, or duplicates Canvas/Project invariants. Generation is the current
+example: `canvas_generate` is a thin Agent adapter over the same typed operation used
+by Toolbar and Plugin UI. Any future Plugin-facing command exposed to the Agent must
+preserve that pattern and host-bound Project/Canvas/node scope.
 
 ## Deliberately deferred
 
 - billing, reviews and automatic updates;
 - installing or executing npm/native/Python payloads embedded in third-party Plugin
-  packages; a v2 generation command is installed as a separately verified companion,
+  packages; a v2-v4 generation command is installed as a separately verified companion,
   with the user's install/update action serving as authorization, and is reached only
   through the documented MCP boundary;
 - arbitrary React code in the renderer;

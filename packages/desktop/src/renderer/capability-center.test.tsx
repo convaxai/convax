@@ -54,6 +54,7 @@ const skillInventory: DesktopSkillInventory = {
       description: "Installed by Convax",
       displayName: "Canvas Storyboard",
       location: "/managed/storyboard/SKILL.md",
+      management: { kind: "standalone" },
       managed: true,
       name: "storyboard",
       source: "managed",
@@ -61,6 +62,7 @@ const skillInventory: DesktopSkillInventory = {
     {
       description: "Discovered from OpenCode",
       location: "/global/review/SKILL.md",
+      management: { kind: "standalone" },
       managed: false,
       name: "review",
       source: "global",
@@ -162,7 +164,68 @@ describe("CapabilityCenter", () => {
     expect(markup).not.toContain("Uninstall")
   })
 
-  test("keeps a Plugin companion Skill as an explicit separate install", () => {
+  test("routes Plugin-owned Skill installation through its Plugin and exposes no independent uninstall", () => {
+    const catalogMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        skills={{
+          catalog: [
+            {
+              description: "Edit local media with FFmpeg.",
+              id: "ffmpeg-canvas",
+              installed: false,
+              name: "FFmpeg Canvas",
+              ownerPluginId: "ffmpeg-tools",
+              ownerPluginName: "FFmpeg Tools",
+            },
+          ],
+          skills: [],
+        }}
+      />,
+    )
+    const installedMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        skills={{
+          catalog: [
+            {
+              description: "Edit local media with FFmpeg.",
+              id: "ffmpeg-canvas",
+              installed: true,
+              name: "FFmpeg Canvas",
+              ownerPluginId: "ffmpeg-tools",
+              ownerPluginName: "FFmpeg Tools",
+            },
+          ],
+          skills: [
+            {
+              description: "Edit local media with FFmpeg.",
+              displayName: "FFmpeg Canvas",
+              location: "/managed/ffmpeg-canvas/SKILL.md",
+              management: {
+                kind: "plugin",
+                pluginId: "ffmpeg-tools",
+                pluginName: "FFmpeg Tools",
+                pluginVersion: "1.0.0",
+              },
+              managed: true,
+              name: "ffmpeg-canvas",
+              source: "managed",
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(catalogMarkup).toContain("Install providing Plugin")
+    expect(catalogMarkup).toContain("Provided by FFmpeg Tools")
+    expect(catalogMarkup).not.toContain(">Install Skill<")
+    expect(installedMarkup).toContain("Provided by FFmpeg Tools")
+    expect(installedMarkup).toContain("View details")
+    expect(installedMarkup).not.toContain("Uninstall")
+  })
+
+  test("preserves the legacy companion Skill action for pre-v4 Plugins", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog {...baseDialogProps} plugins={pluginInventory} tab="plugins" />,
     )
@@ -178,7 +241,7 @@ describe("CapabilityCenter", () => {
     expect(markup).toContain(appMessage("en", "capabilities.pluginsDescription"))
   })
 
-  test("makes an explicit Plugin import the executable consent point", () => {
+  test("describes Plugin-owned Skill lifecycle while preserving explicit Plugin imports", () => {
     const english = renderToStaticMarkup(
       <CapabilityCenterDialog {...baseDialogProps} plugins={pluginInventory} tab="plugins" />,
     )
@@ -186,14 +249,14 @@ describe("CapabilityCenter", () => {
       <CapabilityCenterDialog {...baseDialogProps} locale="zh-CN" plugins={pluginInventory} tab="plugins" />,
     )
 
-    expect(english).toContain("choosing Install or Import authorizes the exact declared, fingerprinted local executable")
+    expect(english).toContain(appMessage("en", "capabilities.pluginsDescription"))
     expect(english).toContain("Import Plugin")
-    expect(chinese).toContain("选择“安装”或“导入”即授权其声明并经指纹校验的本地可执行文件")
+    expect(chinese).toContain(appMessage("zh-CN", "capabilities.pluginsDescription"))
     expect(chinese).toContain("导入插件")
     expect(`${english}${chinese}`).not.toContain("Run Tool")
   })
 
-  test("shows an installed companion Skill without offering a duplicate install", () => {
+  test("does not derive Plugin mutation actions from an independently installed legacy Skill", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog
         {...baseDialogProps}
@@ -212,6 +275,7 @@ describe("CapabilityCenter", () => {
           skills: [
             {
               location: "/managed/jianying-editor/SKILL.md",
+              management: { kind: "standalone" },
               managed: true,
               name: "jianying-editor",
               source: "managed",
@@ -222,7 +286,7 @@ describe("CapabilityCenter", () => {
       />,
     )
 
-    expect(markup).toContain("Installed")
+    expect(markup).toContain("3D Director Stage")
     expect(markup).not.toContain("Install companion Skill")
   })
 
@@ -312,13 +376,15 @@ describe("CapabilityCenter", () => {
       capabilities: [],
       contributes: {
         generation: {
-          tools: [{
-            acceptedInputs: [],
-            description: "Generate an image.",
-            id: "image.generate",
-            output: "image" as const,
-            title: "Image Generator",
-          }],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Generate an image.",
+              id: "image.generate",
+              output: "image" as const,
+              title: "Image Generator",
+            },
+          ],
         },
       },
       description: "A headless image generation tool.",
@@ -339,9 +405,7 @@ describe("CapabilityCenter", () => {
       />,
     )
 
-    expect(markup).toContain(
-      appMessage("en", "capabilities.installToolConsent", { command: "example-image-tool" }),
-    )
+    expect(markup).toContain(appMessage("en", "capabilities.installToolConsent", { command: "example-image-tool" }))
   })
 
   test("shows an explicit catalog update without pretending the target version is installed", () => {

@@ -3,7 +3,7 @@ import { checkDesktopProtocol, desktopProtocolVersion } from "./desktop-protocol
 
 describe("desktop IPC protocol compatibility", () => {
   test("tracks the Desktop preload bridge contract", () => {
-    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/14")
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/15")
   })
 
   test("accepts a matching main, preload, and renderer protocol", async () => {

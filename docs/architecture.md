@@ -70,10 +70,13 @@ capabilities. Third-party Web Plugin code remains sandboxed. A built-in integrat
 may additionally have a trusted Desktop adapter, but its static package cannot invoke
 that adapter and does not grant the same privilege to imported packages. Trusted
 built-in status is host-authored provenance over the exact catalog bundle, never a
-manifest id/version claim. Plugins may provide a separately managed companion Skill,
-but they are not the same extension mechanism: Skills describe Agent workflows and
-select tools; they never implement UI or native behavior, and Plugins never become
-OpenCode plugins.
+manifest id/version claim. A standalone Skill has its own package and lifecycle. The
+top-level `skill` field retained by `convax.plugin/1` through `/3` names a legacy
+independently managed companion. `convax.plugin/4` instead may own Skill directories
+through `contributes.skills`; those directories are atomically published and removed
+with the Plugin but remain ordinary OpenCode Skills at runtime. Skills describe Agent
+workflows and select tools; they never implement UI or native behavior, inherit
+Plugin authority, or turn Convax Plugins into OpenCode plugins.
 
 ## 3. Packages and dependency graph
 
@@ -146,7 +149,9 @@ boundary checker fails closed until those admissions are complete.
 | Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage |
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence               |
 | Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
-| OpenCode Skill discovery                                 | `@convax/agent-runtime`                      | Desktop owns only the managed install adapter and UI                     |
+| OpenCode Skill discovery                                 | `@convax/agent-runtime`                      | Runtime sees generic directories, never Desktop ownership metadata       |
+| Managed Skill filesystem publication                     | `@convax/agent-runtime/node`                 | Generic reversible transaction; no Plugin ownership knowledge            |
+| Standalone/Plugin-owned Skill management and provenance  | Desktop main                                 | Owner policy and atomic Plugin composition stay outside Agent runtime    |
 | Installed Plugin packages                                | Desktop main                                 | Global static packages; no active Project/Canvas state                   |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
@@ -170,7 +175,8 @@ Electron userData/
   capability-registry/showcase-v1.json  verified showcase index for the current catalog revision
   capability-registry/showcase-media-v1/<sha256>
                                         bounded content-addressed showcase media cache
-  opencode/skills/user/<skill>/         Convax-managed OpenCode Skills
+  opencode/skills/user/<skill>/         materialized standalone and Plugin-owned Skills
+  plugin-skill-bindings/index-v1.json   Desktop-owned bindings plus one digest-bound recovery journal
   plugins/<plugin-id>/                  validated static Plugin packages
     .convax-builtin.json                host-authored catalog provenance, when applicable
   plugin-companions/<plugin-id>/<plugin-version>/
@@ -290,10 +296,11 @@ OpenCode session. Successful media output is prepared through
 `CanvasResourceBusinessService`, imported into managed `.convax/assets/`, and then
 referenced by the existing Canvas `file` node flow.
 
-Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3`: a
-validated manifest declares generation tools and a separately installed bare
-`mcp-stdio` command. V3 maps pure model names and optional Agent/Canvas operation
-surfaces to those tools, so core code never identifies an operation by Plugin id. An official
+Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` and
+`/4`: a validated manifest declares generation tools and a separately installed bare
+`mcp-stdio` command. V3 and v4 map pure model names and optional Agent/Canvas operation
+surfaces to those tools, so core code never identifies an operation by Plugin id. V4
+adds owned Skill lifecycle metadata without changing generation execution. An official
 Registry entry may additionally bind that exact command to immutable executable
 companions for specific `platform`/`arch` targets. Desktop verifies the deterministic
 Release URL, 128 MiB ceiling, exact size and SHA-256 before atomically publishing the
@@ -468,11 +475,46 @@ Neither Project nor Workbench imports the other to implement this flow.
   never carries a native path. Showcase media is separate presentation metadata:
   fixed bundled assets for built-ins or digest-verified Release sidecars for remote
   Skills, loaded lazily and played only while visible.
-- A Plugin companion Skill uses the same managed Skill lifecycle. User-installed
-  companions are explicit. A catalog item may request one-time default provisioning;
-  Desktop records the completed Plugin and Skill independently so later user removal
-  is respected. A companion never gains extra Plugin permissions or bypasses typed
-  capabilities.
+- Standalone Skills use an independent managed lifecycle. A top-level Plugin `skill`
+  in schema v1-v3 is a legacy companion with the same independent behavior; one-time
+  default provisioning records the Plugin and Skill separately so later user removal
+  is respected.
+- A v4 `contributes.skills` directory is owned by the declaring Plugin. Desktop
+  validates its complete Skill tree and exact name, rejects global/standalone/other-owner
+  name collisions, and composes Skill publication with Plugin publication. Prepare
+  stages bytes; pre-switch `publish` journals exact receipts; post-switch `activate`
+  exposes ownership before Skill bytes; `commit` records a durable forward decision
+  before cleanup. Normal pre-decision failures restore the previous package, bytes,
+  and bindings. After a crash, Plugin-package recovery first selects the validated
+  installed package; the Skill journal then moves forward when that package is the
+  target version or rolls back otherwise. Startup finally reconciles declarations,
+  bindings, and exact materialized bytes. The shared OpenCode discovery directory
+  does not imply independent ownership.
+- Package rollback and dependent rollback are one ordered boundary. Desktop rolls
+  back Skills, executable authorization, and managed companions only after every
+  package rename has restored the old/absent state. If any rename fails, the
+  capability transaction is deferred: durable receipts and partial Skill publication
+  remain intact, its in-process lock is released, and a typed error requires a clean
+  startup. Package recovery then selects canonical, backup, or uninstall-tombstone
+  state before the retained Skill, authorization, and companion state converges.
+- Same-id Plugin package mutations are serialized. Startup first resolves validated
+  staging, replacement, and uninstall remnants; unresolved package state blocks
+  dependent Skill recovery. A validated uninstall tombstone selects forward removal
+  and is never restored. The owned-Skill decision precedes best-effort authorization
+  and backup cleanup, and Agent Skill discovery refreshes after default provisioning.
+- A Plugin owner binding reserves its global Skill name even if the materialized
+  directory is missing. A pending transition reserves the union of previous and next
+  names. Standalone install/uninstall and Agent discovery refresh recheck settled
+  ownership under the shared mutation coordinator; they cannot observe or mutate a
+  partially published Plugin Skill tree.
+- Updating a v1-v3 legacy companion to a v4 owned Skill is allowed only when the
+  current managed Skill tree exactly matches the old validated Plugin package. That
+  verified transition is journaled before the package switch, so recovery can finish
+  the staged v4 Skill when the v4 package survives. Modified or unrelated same-name
+  Skills are never adopted.
+- Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
+  typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
+  never receives Plugin ids or ownership policy.
 - The official remote Registry is fetched only by Desktop main from its fixed
   origin. Renderer requests carry stable catalog ids, never URLs, paths or digests.
   Desktop verifies catalog sequence, compatibility, immutable artifact metadata,
@@ -573,7 +615,7 @@ not promise panel-only behavior.
 The native adapter boundary reserves Windows explicitly, but its current Windows
 implementation is WIP and fails closed as unsupported without attempting a fallback
 automation path. This platform limitation does not widen the static Plugin package
-or companion Skill.
+or its legacy companion Skill.
 
 The companion Agent workflow first inspects draft state. If a draft is active, the
 Agent asks the user to choose that draft or a new one and submits the short-lived
@@ -581,8 +623,10 @@ observation token for a current-draft export. If the user chooses new, the Agent
 explains the active-to-new WIP boundary, asks the user to return JianYing home, then
 inspects again before submitting a new-draft export. Its tool schema does not accept
 a Project or Canvas id; Desktop injects the currently mounted Canvas and rejects a
-stale revision. The companion Skill explains this workflow but grants no tool or
-native permission and remains independently installable/removable from the Plugin.
+stale revision. This v1-v3-style legacy companion Skill explains the workflow but
+grants no tool or native permission and remains independently installable/removable
+from the Plugin. A future v4 migration would deliberately replace that lifecycle with
+an owned `contributes.skills` entry.
 
 ### Native Canvas media drag-out
 

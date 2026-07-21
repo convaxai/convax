@@ -233,6 +233,14 @@ await fs.mkdir(path.dirname(seededDirectorPluginRoot), { recursive: true })
 await fs.cp(path.join(desktopRoot, "resources", "plugins", "storyai-3d-director-desk"), seededDirectorPluginRoot, {
   recursive: true,
 })
+// This smoke exercises the built Desktop surface, not the availability or
+// throughput of a published GitHub Release. A durable default receipt with no
+// installed package is the supported "user removed this default" state, so it
+// keeps the run offline while still exercising normal startup reconciliation.
+await fs.writeFile(
+  path.join(userDataRoot, "default-capabilities.json"),
+  `${JSON.stringify({ plugins: ["ffmpeg-tools"], schema: "convax.default-capabilities/1", skills: [] }, null, 2)}\n`,
+)
 const rendererPortReservation = reservePort()
 const inspectorPortReservation = reservePort()
 const rendererPort = rendererPortReservation.port
@@ -279,6 +287,7 @@ try {
         description: "Convert a brief into connected, reviewable shot cards.",
         displayName: "Storyboard Builder",
         location: "/managed/canvas-storyboard/SKILL.md",
+        management: { kind: "standalone" },
         managed: true,
         name: "canvas-storyboard",
         source: "managed",

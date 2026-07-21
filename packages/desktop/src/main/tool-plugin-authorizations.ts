@@ -6,6 +6,7 @@ import {
   requireWebPluginId,
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
+  webPluginManifestSchemaV4,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 
@@ -91,7 +92,9 @@ export function toolPluginManifestSha256(plugin: InstalledWebPluginSummary) {
 
 export function isExecutableToolPlugin(plugin: InstalledWebPluginSummary) {
   return (
-    (plugin.schema === webPluginManifestSchemaV2 || plugin.schema === webPluginManifestSchemaV3) &&
+    (plugin.schema === webPluginManifestSchemaV2 ||
+      plugin.schema === webPluginManifestSchemaV3 ||
+      plugin.schema === webPluginManifestSchemaV4) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )
@@ -372,7 +375,10 @@ export class ToolPluginAuthorizationStore {
         published = true
       },
       async commit() {
-        await fs.rm(staging, { force: true })
+        // Publication consent is already durable. Everything below is
+        // superseded-receipt cleanup and must never turn a committed Plugin
+        // package switch into a rollback attempt.
+        await fs.rm(staging, { force: true }).catch(() => undefined)
         const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => [])
         await Promise.all(
           entries.map(async (entry) => {
@@ -425,6 +431,43 @@ export class ToolPluginAuthorizationStore {
     await fs.rm(path.join(root, requireWebPluginId(pluginId)), { force: true, recursive: true })
   }
 
+  async #reconcilePlugin(root: string, pluginId: string, plugin: InstalledWebPluginSummary | undefined) {
+    const directory = path.join(root, pluginId)
+    let directoryStat
+    try {
+      directoryStat = await fs.lstat(directory)
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) return
+      throw error
+    }
+    if (!plugin || !isExecutableToolPlugin(plugin) || directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      await fs.rm(directory, { force: true, recursive: true })
+      return
+    }
+    let key: string | undefined
+    try {
+      const resolved = await this.#binding(plugin)
+      key = receiptFor(plugin, resolved.kind, resolved.binding).key
+    } catch {
+      // A transient resolver/filesystem failure leaves old receipts inert:
+      // runtime verification is still impossible, but consent is not
+      // permanently destroyed merely because storage was briefly busy.
+    }
+    for (const receipt of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if (key === undefined && receipt.isFile() && receipt.name.endsWith(".json")) continue
+      if (!receipt.isFile() || receipt.name !== `${key}.json`) {
+        await fs.rm(path.join(directory, receipt.name), { force: true, recursive: true }).catch(() => undefined)
+      }
+    }
+  }
+
+  /** Reconciles one Plugin while its lifecycle lock is held. */
+  async reconcilePlugin(pluginIdValue: string, plugin?: InstalledWebPluginSummary) {
+    const pluginId = requireWebPluginId(pluginIdValue)
+    if (plugin && plugin.id !== pluginId) throw new Error("Tool Plugin authorization identity does not match")
+    await this.#reconcilePlugin(await this.#ensureRoot(), pluginId, plugin)
+  }
+
   /** Removes orphaned and superseded receipts without ever creating consent. */
   async reconcile(installed: readonly InstalledWebPluginSummary[]) {
     const root = await this.#ensureRoot()
@@ -432,27 +475,7 @@ export class ToolPluginAuthorizationStore {
     for (const entry of await fs.readdir(root, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith(".")) continue
       const plugin = plugins.get(entry.name)
-      const directory = path.join(root, entry.name)
-      if (!plugin || !isExecutableToolPlugin(plugin)) {
-        await fs.rm(directory, { force: true, recursive: true })
-        continue
-      }
-      let key: string | undefined
-      try {
-        const resolved = await this.#binding(plugin)
-        key = receiptFor(plugin, resolved.kind, resolved.binding).key
-      } catch {
-        // A transient resolver/filesystem failure leaves old receipts inert:
-        // runtime verification is still impossible, but consent is not
-        // permanently destroyed merely because storage was briefly busy.
-        // A later successful pass can identify and remove superseded receipts.
-      }
-      for (const receipt of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
-        if (key === undefined && receipt.isFile() && receipt.name.endsWith(".json")) continue
-        if (!receipt.isFile() || receipt.name !== `${key}.json`) {
-          await fs.rm(path.join(directory, receipt.name), { force: true, recursive: true }).catch(() => undefined)
-        }
-      }
+      await this.#reconcilePlugin(root, entry.name, plugin)
     }
   }
 }

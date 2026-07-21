@@ -15,6 +15,7 @@ import {
   webPluginManifestFileName,
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
+  webPluginManifestSchemaV4,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
   type WebPluginServiceAction,
@@ -320,10 +321,12 @@ export async function resolveGenerationPluginExecutable(
 
 function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginSummary & {
   runtime: NonNullable<InstalledWebPluginSummary["runtime"]>
-  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3
+  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4
 } {
   return (
-    (plugin.schema === webPluginManifestSchemaV2 || plugin.schema === webPluginManifestSchemaV3) &&
+    (plugin.schema === webPluginManifestSchemaV2 ||
+      plugin.schema === webPluginManifestSchemaV3 ||
+      plugin.schema === webPluginManifestSchemaV4) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )
@@ -334,11 +337,11 @@ function toolSummary(
   tool: WebPluginGenerationToolContribution,
 ): GenerationToolSummary {
   const model =
-    plugin.schema === webPluginManifestSchemaV3
+    plugin.schema === webPluginManifestSchemaV3 || plugin.schema === webPluginManifestSchemaV4
       ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
       : { name: tool.title, tool: tool.id }
   const agent =
-    plugin.schema === webPluginManifestSchemaV3
+    plugin.schema === webPluginManifestSchemaV3 || plugin.schema === webPluginManifestSchemaV4
       ? plugin.contributes.agent?.tools.find((candidate) => candidate.tool === tool.id)
       : undefined
   return {

@@ -249,6 +249,8 @@ function PluginCard({
 
 function SkillCatalogCard({
   busy,
+  installAction,
+  installLabel,
   locale,
   managedName,
   onInstall,
@@ -261,6 +263,8 @@ function SkillCatalogCard({
   target,
 }: {
   busy: CapabilityAction | null
+  installAction?: CapabilityAction
+  installLabel?: string
   locale: AppLocale
   managedName?: string
   onInstall?(): void
@@ -283,7 +287,9 @@ function SkillCatalogCard({
     (media: DesktopSkillShowcaseMedia) => onLoadShowcase(stableTarget, media),
     [onLoadShowcase, stableTarget],
   )
-  const action = managedName ? (`skill.uninstall:${managedName}` as const) : (`skill.install:${skill.id}` as const)
+  const action = managedName
+    ? (`skill.uninstall:${managedName}` as const)
+    : (installAction ?? (`skill.install:${skill.id}` as const))
   return (
     <article className="group flex min-h-72 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm transition-colors hover:border-primary/35">
       <button
@@ -317,7 +323,9 @@ function SkillCatalogCard({
             <Button disabled={busy !== null || skill.installed} onClick={onInstall} size="sm" variant="outline">
               <BusyIcon active={busy === action} />
               <Download />
-              {appMessage(locale, skill.installed ? "capabilities.installed" : "capabilities.installSkill")}
+              {skill.installed
+                ? appMessage(locale, "capabilities.installed")
+                : (installLabel ?? appMessage(locale, "capabilities.installSkill"))}
             </Button>
           )}
         </div>
@@ -327,8 +335,11 @@ function SkillCatalogCard({
 }
 
 interface SelectedSkillDetails {
+  installLabel?: string
   managedName?: string
+  ownerPluginId?: string
   readOnly: boolean
+  readOnlyLabel?: string
   skill: DesktopSkillCatalogItem
   target: DesktopSkillTarget
 }
@@ -343,6 +354,7 @@ function SkillsPanel({
   locale,
   onImport,
   onInstall,
+  onInstallPlugin,
   onLoadDetails,
   onLoadShowcase,
   onUninstall,
@@ -352,6 +364,7 @@ function SkillsPanel({
   locale: AppLocale
   onImport(): void
   onInstall(id: string): void
+  onInstallPlugin(id: string): void
   onLoadDetails(target: DesktopSkillTarget): Promise<DesktopSkillDetails>
   onLoadShowcase(target: DesktopSkillTarget, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null>
   onUninstall(name: string): void
@@ -405,24 +418,44 @@ function SkillsPanel({
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {inventory.catalog.map((skill) => {
               const managed = inventory.skills.find((candidate) => candidate.name === skill.id && candidate.managed)
+              const pluginManaged = managed?.management.kind === "plugin"
+              const ownerName =
+                managed?.management.kind === "plugin"
+                  ? managed.management.pluginName
+                  : (skill.ownerPluginName ?? skill.ownerPluginId)
+              const installLabel = skill.ownerPluginId
+                ? appMessage(locale, "capabilities.installProvidingPlugin")
+                : undefined
               const target = { id: skill.id, kind: "catalog" } as const
               const selection: SelectedSkillDetails = {
+                installLabel,
                 managedName: managed?.name,
-                readOnly: false,
+                ownerPluginId: skill.ownerPluginId,
+                readOnly: pluginManaged,
+                readOnlyLabel:
+                  pluginManaged && ownerName
+                    ? appMessage(locale, "capabilities.providedByPlugin", { name: ownerName })
+                    : undefined,
                 skill,
                 target,
               }
               return (
                 <SkillCatalogCard
                   busy={busy}
+                  installAction={skill.ownerPluginId ? (`plugin.install:${skill.ownerPluginId}` as const) : undefined}
+                  installLabel={installLabel}
                   key={skill.id}
                   locale={locale}
                   managedName={managed?.name}
-                  onInstall={() => onInstall(skill.id)}
+                  onInstall={() => (skill.ownerPluginId ? onInstallPlugin(skill.ownerPluginId) : onInstall(skill.id))}
                   onLoadShowcase={onLoadShowcase}
                   onOpen={() => void openDetails(selection)}
                   onUninstall={() => managed && onUninstall(managed.name)}
+                  readOnly={pluginManaged}
                   skill={skill}
+                  statusLabel={
+                    ownerName ? appMessage(locale, "capabilities.providedByPlugin", { name: ownerName }) : undefined
+                  }
                   target={target}
                 />
               )
@@ -445,11 +478,21 @@ function SkillsPanel({
                 id: skill.name,
                 installed: skill.managed,
                 name: skill.displayName ?? catalog?.name ?? skill.name,
+                ...(skill.management.kind === "plugin"
+                  ? {
+                      ownerPluginId: skill.management.pluginId,
+                      ownerPluginName: skill.management.pluginName,
+                    }
+                  : {}),
               }
-              const readOnly = skill.source === "global"
+              const readOnly = skill.source === "global" || skill.management.kind === "plugin"
               const selection: SelectedSkillDetails = {
                 managedName: skill.managed ? skill.name : undefined,
                 readOnly,
+                readOnlyLabel:
+                  skill.management.kind === "plugin"
+                    ? appMessage(locale, "capabilities.providedByPlugin", { name: skill.management.pluginName })
+                    : undefined,
                 skill: card,
                 target,
               }
@@ -464,7 +507,11 @@ function SkillsPanel({
                   onUninstall={() => onUninstall(skill.name)}
                   readOnly={readOnly}
                   skill={card}
-                  statusLabel={appMessage(locale, readOnly ? "capabilities.globalReadOnly" : "capabilities.managed")}
+                  statusLabel={
+                    skill.management.kind === "plugin"
+                      ? appMessage(locale, "capabilities.providedByPlugin", { name: skill.management.pluginName })
+                      : appMessage(locale, readOnly ? "capabilities.globalReadOnly" : "capabilities.managed")
+                  }
                   target={target}
                 />
               )
@@ -484,12 +531,17 @@ function SkillsPanel({
           key={skillTargetKey(selected.target)}
           loading={detailLoading}
           locale={locale}
+          installLabel={selected.installLabel}
           managedName={selected.managedName}
           onClose={closeDetails}
-          onInstall={() => selected.target.kind === "catalog" && onInstall(selected.target.id)}
+          onInstall={() => {
+            if (selected.ownerPluginId) onInstallPlugin(selected.ownerPluginId)
+            else if (selected.target.kind === "catalog") onInstall(selected.target.id)
+          }}
           onRetry={() => void openDetails(selected)}
           onUninstall={() => selected.managedName && onUninstall(selected.managedName)}
           readOnly={selected.readOnly}
+          readOnlyLabel={selected.readOnlyLabel}
           skill={selected.skill}
         />
       ) : null}
@@ -635,6 +687,7 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             locale={locale}
             onImport={props.onImportSkill}
             onInstall={props.onInstallSkill}
+            onInstallPlugin={props.onInstallPlugin}
             onLoadDetails={props.onLoadSkillDetails}
             onLoadShowcase={props.onLoadSkillShowcase}
             onUninstall={props.onUninstallSkill}

@@ -16,14 +16,16 @@ const skillClient: DesktopSkillClient = {
   importSkill: mock(async () => null),
   installCatalogSkill: mock(async () => ({
     location: "/managed/storyboard/SKILL.md",
+    management: { kind: "standalone" as const },
     managed: true,
     name: "storyboard",
     source: "managed" as const,
   })),
   installPluginSkill: mock(async () => ({
-    location: "/managed/plugin/SKILL.md",
+    location: "/managed/storyboard/SKILL.md",
+    management: { kind: "standalone" as const },
     managed: true,
-    name: "plugin",
+    name: "storyboard",
     source: "managed" as const,
   })),
   listSkills: mock(async () => ({ catalog: [], skills: [] })),

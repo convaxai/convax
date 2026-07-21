@@ -8,6 +8,7 @@ import {
   webPluginManifestSchema,
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
+  webPluginManifestSchemaV4,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
 } from "../plugin-contracts"
@@ -90,7 +91,9 @@ function staticPlugin(): InstalledWebPluginSummary {
   }
 }
 
-function declarativeGenerationPlugin(): InstalledWebPluginSummary {
+function declarativeGenerationPlugin(
+  schema: typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4 = webPluginManifestSchemaV3,
+): InstalledWebPluginSummary {
   return {
     capabilities: [],
     contributes: {
@@ -115,12 +118,15 @@ function declarativeGenerationPlugin(): InstalledWebPluginSummary {
         ],
       },
       service: { actions: [] },
+      ...(schema === webPluginManifestSchemaV4
+        ? { skills: [{ name: "declarative-workflow", path: "skills/declarative-workflow" }] }
+        : {}),
     },
     description: "Explicit models and operations",
     id: "declarative-tools",
     name: "Declarative Tools",
     runtime: { command: "declarative-tools-cli", type: "mcp-stdio" },
-    schema: webPluginManifestSchemaV3,
+    schema,
     version: "1.0.0",
   }
 }
@@ -326,6 +332,27 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients).toHaveLength(0)
+  })
+
+  test("preserves declarative generation, operation, and service behavior for v4 Plugins with owned Skills", async () => {
+    const v3 = setup([declarativeGenerationPlugin()])
+    const v4Plugin = declarativeGenerationPlugin(webPluginManifestSchemaV4)
+    const v4 = setup([v4Plugin], ["generate.image", "transform.video", "service.status"])
+
+    expect(v4Plugin.contributes.skills).toEqual([{ name: "declarative-workflow", path: "skills/declarative-workflow" }])
+    expect(await v4.runtime.listTools()).toEqual(await v3.runtime.listTools())
+    expect(await v4.runtime.listServices()).toEqual(await v3.runtime.listServices())
+    expect(v4.clients).toHaveLength(0)
+
+    await v4.runtime.callTool("declarative-tools/transform.video", { operation: "trim" })
+    expect(v4.clients[0].calls).toEqual([
+      {
+        input: { operation: "trim" },
+        name: "transform.video",
+        requestTimeoutMs: false,
+        signal: undefined,
+      },
+    ])
   })
 
   test("lazily describes only one selected tool through a bounded scalar schema", async () => {

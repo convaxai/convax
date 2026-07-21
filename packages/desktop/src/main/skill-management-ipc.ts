@@ -91,9 +91,9 @@ function requireShowcaseInput(input: unknown) {
 export function registerSkillManagementIpc(
   manager: DesktopSkillManager,
   projects: DesktopSkillProjectResolver,
-  plugins: Pick<WebPluginManager, "list" | "resolveAsset">,
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
   remoteCatalog?: RemoteSkillCatalogPort,
+  plugins?: Pick<WebPluginManager, "list" | "resolveAsset">,
 ) {
   const register = <Input, Result>(
     channel: string,
@@ -169,9 +169,10 @@ export function registerSkillManagementIpc(
     register<SkillClientInput<"installPluginSkill">, Awaited<ReturnType<DesktopSkillClient["installPluginSkill"]>>>(
       skillManagementIpcChannels.installPluginSkill,
       async (_event, input) => {
+        if (!plugins) throw new Error("Legacy Plugin companion Skill installation is unavailable")
         const plugin = (await plugins.list()).find((candidate) => candidate.id === input.pluginId)
         if (!plugin) throw new Error(`Installed Plugin was not found: ${input.pluginId}`)
-        if (!plugin.skill) throw new Error(`Plugin does not include a companion Skill: ${input.pluginId}`)
+        if (!plugin.skill) throw new Error(`Plugin does not include a legacy companion Skill: ${input.pluginId}`)
         const skillFile = await plugins.resolveAsset(plugin.id, plugin.skill)
         return manager.importFromDirectory(dirname(skillFile))
       },

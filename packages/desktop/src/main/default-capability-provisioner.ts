@@ -3,7 +3,11 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
-import type { WebPluginManager } from "./plugin-manager"
+import {
+  WebPluginPublicationDeferredError,
+  type WebPluginManager,
+  type WebPluginPublicationOptions,
+} from "./plugin-manager"
 import type { RemoteCapabilityInstaller } from "./remote-capability-installer"
 import type { DesktopSkillManager } from "./skill-manager"
 
@@ -35,16 +39,38 @@ interface RemoteDefaultProvisioning {
   installer: Pick<RemoteCapabilityInstaller, "installPlugin">
 }
 
-export async function provisionDefaultCapabilities(input: {
+interface DefaultCapabilityProvisioningInput {
   catalog: readonly DesktopBuiltinPluginBundle[]
   pluginManager: Pick<
     WebPluginManager,
     "installOrUpdateBuiltinBundle" | "isBuiltinBundleInstalled" | "list" | "resolveAsset"
   >
-  skillManager: Pick<DesktopSkillManager, "installManagedAtStartup" | "listManaged">
+  preparePluginPublication: NonNullable<WebPluginPublicationOptions["beforePublish"]>
+  skillManager: Pick<DesktopSkillManager, "installManagedAtStartup" | "listManaged" | "refresh">
   stateFile: string
   remote?: RemoteDefaultProvisioning
-}): Promise<DefaultCapabilityProvisioningResult> {
+}
+
+export async function provisionDefaultCapabilities(
+  input: DefaultCapabilityProvisioningInput,
+): Promise<DefaultCapabilityProvisioningResult> {
+  let deferred = false
+  try {
+    return await provisionDefaultCapabilitiesOnce(input)
+  } catch (error) {
+    deferred = error instanceof WebPluginPublicationDeferredError
+    throw error
+  } finally {
+    // Startup publication intentionally batches Skill discovery so a newly
+    // installed default Plugin and all of its owned Skills become visible in
+    // the same refresh, including when another default failed to provision.
+    if (!deferred) await input.skillManager.refresh()
+  }
+}
+
+async function provisionDefaultCapabilitiesOnce(
+  input: DefaultCapabilityProvisioningInput,
+): Promise<DefaultCapabilityProvisioningResult> {
   const state = await readState(input.stateFile)
   for (const item of input.catalog) {
     if (!item.defaultInstall) continue
@@ -52,11 +78,10 @@ export async function provisionDefaultCapabilities(input: {
     const installed = (await input.pluginManager.list()).find((plugin) => plugin.id === item.manifest.id)
     if (provisionedBefore && !installed) continue
     if (!(await input.pluginManager.isBuiltinBundleInstalled(item.bundle))) {
-      await ("legacyBundleDigests" in item
-        ? input.pluginManager.installOrUpdateBuiltinBundle(item.bundle, {
-            legacyBundleDigests: item.legacyBundleDigests,
-          })
-        : input.pluginManager.installOrUpdateBuiltinBundle(item.bundle))
+      await input.pluginManager.installOrUpdateBuiltinBundle(item.bundle, {
+        beforePublish: input.preparePluginPublication,
+        ...("legacyBundleDigests" in item ? { legacyBundleDigests: item.legacyBundleDigests } : {}),
+      })
     }
     if (!provisionedBefore) {
       state.plugins.push(item.manifest.id)
@@ -95,19 +120,25 @@ export async function provisionDefaultCapabilities(input: {
         // current, and atomically upgrades it when the Registry is newer.
         installed = await input.remote!.installer.installPlugin(item.pluginId, { allowCurrent: true })
       } catch (error) {
+        if (error instanceof WebPluginPublicationDeferredError) throw error
         // Keep the already-installed version usable when an update check or
         // publication fails; startup must not turn a healthy local Plugin into
         // an unavailable capability merely because the Registry is offline.
         failures.push({ error, id: item.pluginId, kind: "plugin" })
       }
     } else {
-      if (!installed) {
-        try {
-          installed = await input.remote!.installer.installPlugin(item.pluginId)
-        } catch (error) {
-          failures.push({ error, id: item.pluginId, kind: "plugin" })
-          continue
-        }
+      try {
+        // A same-id package without our durable default receipt is not trusted
+        // merely because it parses. The Registry installer verifies exact
+        // package bytes and repairs companion/authorization/owned-Skill state
+        // before this installation can be adopted as a managed default.
+        installed = installed
+          ? await input.remote!.installer.installPlugin(item.pluginId, { allowCurrent: true })
+          : await input.remote!.installer.installPlugin(item.pluginId)
+      } catch (error) {
+        if (error instanceof WebPluginPublicationDeferredError) throw error
+        failures.push({ error, id: item.pluginId, kind: "plugin" })
+        continue
       }
       state.plugins.push(item.pluginId)
       await writeState(input.stateFile, state)

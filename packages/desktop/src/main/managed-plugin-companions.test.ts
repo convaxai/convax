@@ -202,4 +202,17 @@ describe("ManagedPluginCompanionStore", () => {
     await store.reconcile([])
     expect((await fs.readdir(root)).filter((name) => !name.startsWith("."))).toEqual([])
   })
+
+  test("reconciles only the locked Plugin without touching another Plugin lifecycle", async () => {
+    const { store } = await setup()
+    const first = await store.install(installInput("first"))
+    await first.commit()
+    const other = await store.install(installInput("other", { pluginId: "other-plugin" }))
+    await other.commit()
+
+    await store.reconcilePlugin("example-plugin")
+
+    expect(await store.resolve("example-plugin", "1.0.0", "example-tool")).toBeNull()
+    expect(await store.resolve("other-plugin", "1.0.0", "example-tool")).not.toBeNull()
+  })
 })

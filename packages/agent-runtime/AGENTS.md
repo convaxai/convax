@@ -12,6 +12,13 @@ host-managed Skill directory adapter, discovery isolation and cache refresh, but
 must not learn about Convax Plugins, catalogs, Project identity, or management UI.
 Normal external global Skills may be listed; project-local ambient Skills and remote
 Skill indexes stay disabled. Refresh volatile discovery without deleting sessions.
+The managed store may expose generic reversible prepare/publish/commit/rollback
+transactions so a host can compose filesystem publication with another capability.
+It emits host-agnostic, content-digest-bound recovery receipts for install, replace,
+and remove; the host persists and composes those receipts with its ownership decision.
+The store must not persist or interpret owner ids, decide whether a Skill is
+standalone or owned, or authorize replacement. Mismatched bytes and unjournaled
+backups fail closed.
 
 Do not weaken the security boundary:
 

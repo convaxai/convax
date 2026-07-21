@@ -92,7 +92,14 @@ source, or ambient application state.
   through Canvas repository/application ports implemented by `@convax/project/node`.
 - `<project>/.convax/assets/`: managed Canvas assets accessed through the scoped
   Project Files capability.
-- Electron `userData/opencode/skills/user/<name>/`: Convax-managed OpenCode Skills.
+- Electron `userData/opencode/skills/user/<name>/`: materialized Convax-managed
+  OpenCode Skills, including independently managed standalone Skills and Plugin-owned
+  Skills. Ownership is never inferred from this shared discovery path.
+- Electron `userData/plugin-skill-bindings/index-v1.json`: Desktop-owned authoritative
+  bindings from each materialized Plugin-owned Skill to its exact Plugin id, name,
+  version, source path, and source digest, plus at most one crash-recovery transition
+  containing digest-bound managed-Skill receipts and an optional durable forward
+  decision.
 - Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
 - Electron `userData/plugin-companions/<plugin-id>/<plugin-version>/`: Registry-verified,
   host-owned executable companions; never Plugin package assets or renderer paths.
@@ -142,8 +149,22 @@ current schema.
   pathless/read-only; mutations use Canvas tools.
 - OpenCode Skills remain native instruction bundles. Project-local ambient Skills
   and executable OpenCode extensions are not discovered merely by opening a folder.
-- Installing a Plugin companion Skill is explicit and uses the same managed Skill
-  lifecycle; it grants no implicit Plugin or host capability.
+- Standalone Skills have their own package identity and install/update/removal
+  lifecycle. The optional top-level `skill` in `convax.plugin/1` through `/3` is a
+  legacy independently managed companion and keeps that behavior while that schema
+  remains installed. An explicit v1-v3 to v4 update may transfer ownership only when
+  the current managed Skill tree exactly matches the old installed Plugin's embedded
+  companion; modified or unrelated same-name Skills fail closed.
+- `convax.plugin/4` may declare owned Skill directories through
+  `contributes.skills`. Desktop validates and publishes those Skills atomically with
+  their owner Plugin; they cannot be installed, updated, or removed independently.
+  A persisted owner binding continues to reserve the Skill name if its materialized
+  directory is missing. A pending Plugin transition conservatively reserves both its
+  previous and next Skill names and blocks standalone mutation or discovery refresh
+  until recovery settles it. Neither kind of Skill grants implicit Plugin or host capability.
+- `@convax/agent-runtime` validates, materializes, discovers, and refreshes generic
+  Skill directories only. Plugin ownership, receipts, UI policy, and transaction
+  composition remain Desktop concerns.
 
 ## Plugin capability rules
 
@@ -152,6 +173,13 @@ current schema.
   manifest contributions and must never branch on a concrete Plugin id. Default
   installation catalogs may name packages, but those ids cannot change runtime
   semantics.
+- Serialize every install, update, built-in claim, and uninstall for the same Plugin
+  id. Startup package recovery must resolve validated staging, replacement, and
+  uninstall remnants before authorization or owned-Skill recovery consumes package
+  state; ambiguity fails closed. If any Plugin-package rollback rename fails, do not
+  guess by rolling back dependent Skills, authorization receipts, or companions.
+  Release process-local locks while retaining their exact journals, require startup
+  recovery, and let the selected canonical package drive every dependent outcome.
 - Concrete generation vendors, models, credentials, and routing are never built into
   Convax packages. An installed Tool Plugin plus its explicitly authorized external
   executable is the complete vendor integration boundary; do not add provider

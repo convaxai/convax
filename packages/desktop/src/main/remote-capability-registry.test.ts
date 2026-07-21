@@ -143,6 +143,19 @@ function declarativePluginManifest(): WebPluginManifest {
   }
 }
 
+function ownedSkillsPluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  const legacy = pluginManifest()
+  return {
+    ...legacy,
+    contributes: {
+      ...legacy.contributes,
+      skills: [{ name: "hello-agent", path: "skills/hello-agent" }],
+    },
+    schema: "convax.plugin/4",
+    ...overrides,
+  }
+}
+
 function companion(overrides: Record<string, unknown> = {}) {
   return {
     command: "example-image-tool",
@@ -299,7 +312,7 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
-  test("accepts strict Plugin host/schema compatibility pairs through declarative v3", () => {
+  test("accepts strict Plugin host/schema compatibility pairs through owned-Skill v4", () => {
     const generationManifest = generationPluginManifest()
     const parsed = parseRemoteCapabilityRegistry(
       registry([
@@ -330,6 +343,67 @@ describe("parseRemoteCapabilityRegistry", () => {
       compatibility: { pluginHost: "convax.plugin-host/3", pluginSchema: "convax.plugin/3" },
       manifest: { schema: "convax.plugin/3" },
     })
+
+    const owned = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
+          manifest: ownedSkillsPluginManifest(),
+        }),
+        skillPackage({ ownerPluginId: "hello-convax" }),
+      ]),
+    )
+    expect(owned.packages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
+          kind: "plugin",
+          manifest: expect.objectContaining({
+            contributes: expect.objectContaining({
+              skills: [{ name: "hello-agent", path: "skills/hello-agent" }],
+            }),
+            schema: "convax.plugin/4",
+          }),
+        }),
+        expect.objectContaining({ kind: "skill", ownerPluginId: "hello-convax" }),
+      ]),
+    )
+  })
+
+  test("binds owned remote Skills to exactly one matching v4 Plugin contribution", () => {
+    const owner = pluginPackage({
+      compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
+      manifest: ownedSkillsPluginManifest(),
+    })
+
+    expect(() => parseRemoteCapabilityRegistry(registry([owner, skillPackage()]))).toThrow("must declare its owning")
+    expect(() => parseRemoteCapabilityRegistry(registry([owner]))).toThrow("without a matching Registry package")
+    expect(() =>
+      parseRemoteCapabilityRegistry(registry([owner, skillPackage({ ownerPluginId: "different-plugin" })])),
+    ).toThrow("owner does not match")
+    expect(() => parseRemoteCapabilityRegistry(registry([skillPackage({ ownerPluginId: "hello-convax" })]))).toThrow(
+      "owner does not match",
+    )
+
+    const secondManifest = ownedSkillsPluginManifest({
+      id: "second-plugin",
+      name: "Second Plugin",
+      version: "2.0.0",
+    })
+    const second = pluginPackage({
+      artifact: artifact({
+        url:
+          "https://github.com/microvoid/convax-plugins/releases/download/plugin-second-plugin-v2.0.0/" +
+          "second-plugin-2.0.0.zip",
+      }),
+      compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
+      description: secondManifest.description,
+      id: secondManifest.id,
+      manifest: secondManifest,
+      name: secondManifest.name,
+      version: secondManifest.version,
+    })
+    expect(() => parseRemoteCapabilityRegistry(registry([owner, second]))).toThrow("multiple Plugins")
   })
 
   test("binds companion commands and target assets to the exact generation manifest and Release path", () => {

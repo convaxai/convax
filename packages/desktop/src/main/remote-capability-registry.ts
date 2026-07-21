@@ -7,6 +7,7 @@ import {
   webPluginManifestSchema,
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
+  webPluginManifestSchemaV4,
 } from "../plugin-contracts"
 import { type SafeZipLimits, unpackSafeZip } from "./safe-zip"
 
@@ -19,6 +20,7 @@ export const remoteCapabilityShowcaseSchema = "convax.showcase/1" as const
 export const remotePluginHostSchema = "convax.plugin-host/1" as const
 export const remotePluginHostSchemaV2 = "convax.plugin-host/2" as const
 export const remotePluginHostSchemaV3 = "convax.plugin-host/3" as const
+export const remotePluginHostSchemaV4 = "convax.plugin-host/4" as const
 export const remoteSkillSchema = "opencode.skill/1" as const
 
 export type RemotePluginCompatibility =
@@ -33,6 +35,10 @@ export type RemotePluginCompatibility =
   | {
       pluginHost: typeof remotePluginHostSchemaV3
       pluginSchema: typeof webPluginManifestSchemaV3
+    }
+  | {
+      pluginHost: typeof remotePluginHostSchemaV4
+      pluginSchema: typeof webPluginManifestSchemaV4
     }
 
 const maxRegistryBytes = 2 * 1024 * 1024
@@ -87,6 +93,8 @@ export interface RemoteSkillPackage {
   id: string
   kind: "skill"
   name: string
+  /** Plugin whose v4 Skill contribution owns this Skill's Convax lifecycle. */
+  ownerPluginId?: string
   version: string
   yanked: boolean
 }
@@ -546,14 +554,18 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
     compatibility.pluginHost === remotePluginHostSchemaV2 && compatibility.pluginSchema === webPluginManifestSchemaV2
   const compatibleV3 =
     compatibility.pluginHost === remotePluginHostSchemaV3 && compatibility.pluginSchema === webPluginManifestSchemaV3
-  if (!compatibleV1 && !compatibleV2 && !compatibleV3) {
+  const compatibleV4 =
+    compatibility.pluginHost === remotePluginHostSchemaV4 && compatibility.pluginSchema === webPluginManifestSchemaV4
+  if (!compatibleV1 && !compatibleV2 && !compatibleV3 && !compatibleV4) {
     validationError("Remote Plugin compatibility is not supported by this host")
   }
   const parsedCompatibility: RemotePluginCompatibility = compatibleV1
     ? { pluginHost: remotePluginHostSchema, pluginSchema: webPluginManifestSchema }
     : compatibleV2
       ? { pluginHost: remotePluginHostSchemaV2, pluginSchema: webPluginManifestSchemaV2 }
-      : { pluginHost: remotePluginHostSchemaV3, pluginSchema: webPluginManifestSchemaV3 }
+      : compatibleV3
+        ? { pluginHost: remotePluginHostSchemaV3, pluginSchema: webPluginManifestSchemaV3 }
+        : { pluginHost: remotePluginHostSchemaV4, pluginSchema: webPluginManifestSchemaV4 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)
@@ -594,9 +606,10 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
 }
 
 function parseSkillPackage(input: Record<string, unknown>): RemoteSkillPackage {
-  assertKeys(
+  assertKeysWithOptional(
     input,
     ["artifact", "compatibility", "description", "id", "kind", "name", "version", "yanked"],
+    ["ownerPluginId"],
     "Remote Skill package",
   )
   const compatibility = asRecord(input.compatibility, "Remote Skill compatibility")
@@ -609,6 +622,7 @@ function parseSkillPackage(input: Record<string, unknown>): RemoteSkillPackage {
     id: requireSkillId(input.id),
     kind: "skill",
     name: requireString(input.name, "Remote Skill name", 120),
+    ...(input.ownerPluginId === undefined ? {} : { ownerPluginId: requireWebPluginId(input.ownerPluginId) }),
     version: requireSemver(input.version, "Remote Skill version"),
     yanked: requireBoolean(input.yanked, "Remote Skill yanked"),
   }
@@ -663,6 +677,38 @@ export function parseRemoteCapabilityRegistry(value: unknown): RemoteCapabilityR
           artifactUrls.add(target.artifact.url)
         }
       }
+    }
+  }
+  const contributedSkillOwners = new Map<string, string>()
+  for (const item of packages) {
+    if (item.kind !== "plugin" || item.manifest.schema !== webPluginManifestSchemaV4) continue
+    for (const skill of item.manifest.contributes.skills ?? []) {
+      const previousOwner = contributedSkillOwners.get(skill.name)
+      if (previousOwner && previousOwner !== item.id) {
+        validationError(`Remote capability registry assigns Plugin-owned Skill ${skill.name} to multiple Plugins`)
+      }
+      contributedSkillOwners.set(skill.name, item.id)
+    }
+  }
+  const skillPackages = new Map(
+    packages.filter((item): item is RemoteSkillPackage => item.kind === "skill").map((item) => [item.id, item]),
+  )
+  for (const [skillName, pluginId] of contributedSkillOwners) {
+    if (!skillPackages.has(skillName)) {
+      validationError(`Plugin ${pluginId} contributes Skill ${skillName} without a matching Registry package`)
+    }
+  }
+  for (const item of packages) {
+    if (item.kind !== "skill") continue
+    const contributedOwner = contributedSkillOwners.get(item.id)
+    if (item.ownerPluginId === undefined) {
+      if (contributedOwner) {
+        validationError(`Remote Skill ${item.id} must declare its owning Plugin: ${contributedOwner}`)
+      }
+      continue
+    }
+    if (contributedOwner !== item.ownerPluginId) {
+      validationError(`Remote Skill ${item.id} owner does not match a Plugin Skill contribution: ${item.ownerPluginId}`)
     }
   }
   return { packages, revision, schema: remoteCapabilityRegistrySchema, sequence: input.sequence as number }

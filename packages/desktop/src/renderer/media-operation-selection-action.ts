@@ -80,7 +80,11 @@ export function listInstalledMediaOperationActions(
   installedPlugins: readonly InstalledWebPluginSummary[],
 ): readonly MediaOperationAction[] {
   return installedPlugins.flatMap((plugin) => {
-    if (plugin.schema !== "convax.plugin/3" || plugin.runtime?.type !== "mcp-stdio") return []
+    if (
+      (plugin.schema !== "convax.plugin/3" && plugin.schema !== "convax.plugin/4") ||
+      plugin.runtime?.type !== "mcp-stdio"
+    )
+      return []
     const generationTools = plugin.contributes.generation?.tools ?? []
     const actions = plugin.contributes.canvas?.selectionActions ?? []
     return actions.flatMap((action) => {

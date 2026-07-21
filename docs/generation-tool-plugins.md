@@ -15,9 +15,12 @@ This design has two independent Plugin roles:
 - a **Generation Caller Plugin** is a sandboxed Canvas Web surface granted the
   narrow `generation.execute` capability so it can use installed generation tools.
 
-A `convax.plugin/2` or `/3` package may have either role or both. Declaring a runtime
-does not grant its iframe caller authority, and granting caller authority does not
-let an iframe start processes or issue arbitrary MCP calls.
+A `convax.plugin/2`, `/3`, or `/4` package may have either role or both. Declaring a
+runtime does not grant its iframe caller authority, and granting caller authority
+does not let an iframe start processes or issue arbitrary MCP calls. V4 preserves
+the v3 generation, operation, service, and execution semantics; its additional
+`contributes.skills` metadata is consumed only by the Desktop-owned Plugin/Skill
+lifecycle.
 
 The same executable package may also declare a **Service contribution** for account
 connection and metering status. It shares the exact runtime, install-time executable authorization,
@@ -139,13 +142,15 @@ caller-only package uses v2 with an `entry`, Canvas contribution and
 an executable contribution. A package may declare both roles when it genuinely owns
 both a Web surface and executable tools.
 
-## Declarative `convax.plugin/3` catalogs and operations
+## Declarative `convax.plugin/3` and `/4` catalogs and operations
 
-`convax.plugin/3` and `convax.plugin-host/3` remove the legacy ambiguity between a
-generation model and a deterministic media operation. Its generation declaration
-must include `models`, which explicitly maps pure model display names to tool ids;
-an unreferenced tool is an operation. Existing v2 tools retain their original
-model semantics.
+`convax.plugin/3` and `/4` remove the legacy ambiguity between a generation model and
+a deterministic media operation. Their generation declaration must include `models`,
+which explicitly maps pure model display names to tool ids; an unreferenced tool is
+an operation. Existing v2 tools retain their original model semantics. The v4 host
+uses the same model, Agent-operation, Canvas selection-action, service, executable
+authorization, and output-admission paths as v3; owned Skills do not alter tool
+discovery or execution.
 
 ```json
 {
@@ -580,7 +585,8 @@ The entire temporary tree is removed after success, failure or cancellation.
 ## Sandboxed Plugin caller API
 
 A Web surface with `generation.execute` receives exactly two additional methods on
-its per-node `convax.plugin-host/2` MessagePort:
+the MessagePort version matching its manifest (`convax.plugin-host/2`, `/3`, or
+`/4`):
 
 | Method                      | Params                                                 | Result                                                              |
 | --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
@@ -656,7 +662,7 @@ Changes to this boundary must preserve all of the following:
 - install-authorized and runtime-verified execution before staging, aggregate-bounded
   temporary inputs and bounded outputs;
 - generated media entering Canvas only through the managed asset/resource flow;
-- strict v1/v2 manifest and Plugin-host protocol compatibility;
+- strict v1-v4 manifest and matching Plugin-host protocol compatibility;
 - explicit install/update authorization, no first-call prompt and no shell execution;
 - exact Registry companion target/URL/size/digest checks, atomic rollback and
   explicit `PATH` fallback;

@@ -441,12 +441,44 @@ export class ManagedPluginCompanionStore {
     return root ? this.#removeEntry(root, path.join(root, pluginId, pluginVersion)) : false
   }
 
+  async #reconcilePlugin(root: string, pluginId: string, current: InstalledWebPluginSummary | undefined) {
+    const pluginPath = path.join(root, pluginId)
+    if (!(await pathExists(pluginPath))) return
+    const pluginStat = await fs.lstat(pluginPath)
+    if (!current?.runtime?.command || pluginStat.isSymbolicLink() || !pluginStat.isDirectory()) {
+      await this.#removeEntry(root, pluginPath)
+      return
+    }
+    for (const versionEntry of await fs.readdir(pluginPath, { withFileTypes: true })) {
+      const versionPath = path.join(pluginPath, versionEntry.name)
+      if (versionEntry.name !== current.version || versionEntry.isSymbolicLink() || !versionEntry.isDirectory()) {
+        await this.#removeEntry(root, versionPath)
+        continue
+      }
+      for (const commandEntry of await fs.readdir(versionPath, { withFileTypes: true })) {
+        if (
+          commandEntry.name !== current.runtime.command ||
+          commandEntry.isSymbolicLink() ||
+          !commandEntry.isDirectory()
+        ) {
+          await this.#removeEntry(root, path.join(versionPath, commandEntry.name))
+        }
+      }
+    }
+  }
+
+  /** Reconciles one Plugin while its lifecycle lock is held. */
+  async reconcilePlugin(pluginIdValue: string, current?: InstalledWebPluginSummary) {
+    const pluginId = requireWebPluginId(pluginIdValue)
+    if (current && current.id !== pluginId) throw new Error("Managed companion Plugin identity does not match")
+    const root = await this.#root(false)
+    if (root) await this.#reconcilePlugin(root, pluginId, current)
+  }
+
   async reconcile(installed: readonly InstalledWebPluginSummary[]) {
     const root = await this.#root(false)
     if (!root) return
-    const expected = new Map(
-      installed.map((plugin) => [plugin.id, { command: plugin.runtime?.command, version: plugin.version }] as const),
-    )
+    const expected = new Map(installed.map((plugin) => [plugin.id, plugin] as const))
     for (const pluginEntry of await fs.readdir(root, { withFileTypes: true })) {
       const pluginPath = path.join(root, pluginEntry.name)
       if (pluginEntry.name.startsWith(".")) {
@@ -454,22 +486,11 @@ export class ManagedPluginCompanionStore {
         continue
       }
       const current = expected.get(pluginEntry.name)
-      if (!current?.command || pluginEntry.isSymbolicLink() || !pluginEntry.isDirectory()) {
+      if (!current || pluginEntry.isSymbolicLink() || !pluginEntry.isDirectory()) {
         await this.#removeEntry(root, pluginPath)
         continue
       }
-      for (const versionEntry of await fs.readdir(pluginPath, { withFileTypes: true })) {
-        const versionPath = path.join(pluginPath, versionEntry.name)
-        if (versionEntry.name !== current.version || versionEntry.isSymbolicLink() || !versionEntry.isDirectory()) {
-          await this.#removeEntry(root, versionPath)
-          continue
-        }
-        for (const commandEntry of await fs.readdir(versionPath, { withFileTypes: true })) {
-          if (commandEntry.name !== current.command || commandEntry.isSymbolicLink() || !commandEntry.isDirectory()) {
-            await this.#removeEntry(root, path.join(versionPath, commandEntry.name))
-          }
-        }
-      }
+      await this.#reconcilePlugin(root, pluginEntry.name, current)
     }
   }
 }

@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
-import { WebPluginManager } from "./plugin-manager"
+import { WebPluginManager, WebPluginPublicationDeferredError } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
 
@@ -63,6 +63,66 @@ function simpleBundle(version: string, content: string, id = "director-stage") {
     files: {
       "index.html": content,
       "manifest.json": JSON.stringify(manifest({ entry: "index.html", id, skill: undefined, version })),
+    },
+  }
+}
+
+function ownedBundle(version: string, includeSkill = true) {
+  const ownedManifest = {
+    capabilities: [],
+    contributes: {
+      canvas: { renderer: { create: true, height: 320, width: 480 } },
+      ...(includeSkill ? { skills: [{ name: "director-workflow", path: "skills/director-workflow" }] } : {}),
+    },
+    description: "Director workflow surface",
+    entry: "index.html",
+    id: "director-tools",
+    name: "Director Tools",
+    schema: "convax.plugin/4",
+    version,
+  }
+  return {
+    files: {
+      "index.html": "<!doctype html><title>Director</title>",
+      "manifest.json": JSON.stringify(ownedManifest),
+      ...(includeSkill
+        ? {
+            "skills/director-workflow/SKILL.md": [
+              "---",
+              "name: director-workflow",
+              "description: Direct a scene",
+              "---",
+            ].join("\n"),
+          }
+        : {}),
+    },
+  }
+}
+
+const noOpPublication = async () => ({
+  async activate() {},
+  async commit() {},
+  async publish() {},
+  async rollback() {},
+})
+
+function activationFailurePublication(phases: string[]) {
+  return {
+    async activate() {
+      phases.push("activate")
+      throw new Error("simulated capability activation failure")
+    },
+    async commit() {
+      phases.push("commit")
+    },
+    async deferToRecovery() {
+      phases.push("defer")
+    },
+    async publish() {
+      phases.push("publish")
+    },
+    async rollback() {
+      phases.push("rollback")
     },
   }
 }
@@ -127,7 +187,7 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/4" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/5" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
@@ -208,6 +268,389 @@ describe("WebPluginManager", () => {
     expect(await manager.list()).toEqual([])
   })
 
+  test("restores an installed Plugin when an owned-capability uninstall transaction cannot commit", async () => {
+    const root = await temporaryRoot()
+    const source = path.join(root, "source")
+    await writePackage(source)
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    await manager.install(source)
+    let activated = 0
+    let published = 0
+    let rolledBack = 0
+
+    await expect(
+      manager.uninstall("director-stage", {
+        beforeRemove: async () => ({
+          async activate() {
+            activated += 1
+            expect(await manager.list()).toEqual([])
+          },
+          async commit() {
+            throw new Error("owned capability commit failed")
+          },
+          async publish() {
+            published += 1
+            expect((await manager.list()).map((plugin) => plugin.id)).toEqual(["director-stage"])
+          },
+          async rollback() {
+            rolledBack += 1
+          },
+        }),
+      }),
+    ).rejects.toThrow("Plugin uninstall rollback failed")
+
+    expect(published).toBe(1)
+    expect(activated).toBe(1)
+    expect(rolledBack).toBe(1)
+    expect((await manager.list()).map((plugin) => plugin.id)).toEqual(["director-stage"])
+  })
+
+  test("activates host capabilities only after install/update publication and exposes the validated previous package", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const phases: string[] = []
+    await manager.installBundle(simpleBundle("1.0.0", "first"), {
+      beforePublish: async (_plugin, candidate) => {
+        expect(candidate.previous).toBeUndefined()
+        return {
+          async activate() {
+            phases.push("activate-install")
+            expect((await manager.list())[0]?.version).toBe("1.0.0")
+          },
+          async commit() {
+            phases.push("commit-install")
+          },
+          async publish() {
+            phases.push("publish-install")
+            expect(await manager.list()).toEqual([])
+          },
+          async rollback() {},
+        }
+      },
+    })
+    await manager.installBundle(simpleBundle("2.0.0", "second"), {
+      beforePublish: async (_plugin, candidate) => {
+        expect(candidate.previous?.plugin.version).toBe("1.0.0")
+        expect(candidate.previous?.root).toBe(await fs.realpath(path.join(root, "installed", "director-stage")))
+        return {
+          async activate() {
+            phases.push("activate-update")
+            expect((await manager.list())[0]?.version).toBe("2.0.0")
+          },
+          async commit() {
+            phases.push("commit-update")
+          },
+          async publish() {
+            phases.push("publish-update")
+            expect((await manager.list())[0]?.version).toBe("1.0.0")
+          },
+          async rollback() {},
+        }
+      },
+      replaceExisting: true,
+    })
+
+    expect(phases).toEqual([
+      "publish-install",
+      "activate-install",
+      "commit-install",
+      "publish-update",
+      "activate-update",
+      "commit-update",
+    ])
+  })
+
+  test("rejects staging or previous-package changes made during publication callbacks", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    let installRollback = 0
+
+    await expect(
+      manager.installBundle(simpleBundle("1.0.0", "candidate"), {
+        beforePublish: async (_plugin, candidate) => ({
+          async commit() {},
+          async publish() {
+            await fs.writeFile(path.join(candidate.root, "index.html"), "tampered candidate")
+          },
+          async rollback() {
+            installRollback += 1
+          },
+        }),
+      }),
+    ).rejects.toThrow("changed before the package switch")
+    expect(installRollback).toBe(1)
+    expect(await manager.list()).toEqual([])
+
+    await manager.installBundle(simpleBundle("1.0.0", "previous"))
+    let updateRollback = 0
+    await expect(
+      manager.installBundle(simpleBundle("2.0.0", "candidate"), {
+        beforePublish: async (_plugin, candidate) => ({
+          async commit() {},
+          async publish() {
+            await fs.writeFile(path.join(candidate.previous!.root, "index.html"), "tampered previous")
+          },
+          async rollback() {
+            updateRollback += 1
+          },
+        }),
+        replaceExisting: true,
+      }),
+    ).rejects.toThrow("changed before the package switch")
+    expect(updateRollback).toBe(1)
+    expect((await manager.list())[0]?.version).toBe("1.0.0")
+  })
+
+  test("does not let staging cleanup failure mask publication success or typed recovery", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot)
+    const originalRemove = fs.rm.bind(fs)
+    let failCleanup = true
+    const remove = spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (failCleanup && path.basename(String(target)).startsWith(".staging-bundle-")) {
+        failCleanup = false
+        throw new Error("simulated staging cleanup failure")
+      }
+      return originalRemove(target, options)
+    })
+    try {
+      await expect(manager.installBundle(simpleBundle("1.0.0", "candidate"))).resolves.toMatchObject({
+        version: "1.0.0",
+      })
+    } finally {
+      remove.mockRestore()
+    }
+
+    const phases: string[] = []
+    const originalRename = fs.rename.bind(fs)
+    const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.basename(String(source)) === "director-stage" &&
+        path.basename(String(destination)).startsWith(".staging-bundle-")
+      ) {
+        throw new Error("simulated rollback rename failure")
+      }
+      return originalRename(source, destination)
+    })
+    failCleanup = true
+    const removeDeferred = spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (failCleanup && path.basename(String(target)).startsWith(".staging-bundle-")) {
+        failCleanup = false
+        throw new Error("simulated deferred cleanup failure")
+      }
+      return originalRemove(target, options)
+    })
+    try {
+      await expect(
+        manager.installBundle(simpleBundle("2.0.0", "candidate"), {
+          beforePublish: async () => activationFailurePublication(phases),
+          replaceExisting: true,
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      removeDeferred.mockRestore()
+      rename.mockRestore()
+    }
+  })
+
+  test("defers capability recovery when a new Plugin package cannot be rolled back", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot)
+    const phases: string[] = []
+    const originalRename = fs.rename.bind(fs)
+    const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.basename(String(source)) === "director-stage" &&
+        path.basename(String(destination)).startsWith(".staging-bundle-")
+      ) {
+        throw new Error("simulated package rollback rename failure")
+      }
+      return originalRename(source, destination)
+    })
+    try {
+      await expect(
+        manager.installBundle(simpleBundle("1.0.0", "candidate"), {
+          beforePublish: async () => activationFailurePublication(phases),
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      rename.mockRestore()
+    }
+
+    expect(phases).toEqual(["publish", "activate", "defer"])
+    expect(await manager.list()).toEqual([expect.objectContaining({ id: "director-stage", version: "1.0.0" })])
+    await manager.reconcilePublicationState()
+    expect((await fs.readdir(installationRoot)).filter((name) => name.startsWith("."))).toEqual([])
+  })
+
+  test("defers capability recovery when an updated Plugin package remains canonical", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "previous"))
+    const phases: string[] = []
+    const originalRename = fs.rename.bind(fs)
+    const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.basename(String(source)) === "director-stage" &&
+        path.basename(String(destination)).startsWith(".staging-bundle-")
+      ) {
+        throw new Error("simulated update rollback rename failure")
+      }
+      return originalRename(source, destination)
+    })
+    try {
+      await expect(
+        manager.installBundle(simpleBundle("2.0.0", "candidate"), {
+          beforePublish: async () => activationFailurePublication(phases),
+          replaceExisting: true,
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      rename.mockRestore()
+    }
+
+    expect(phases).toEqual(["publish", "activate", "defer"])
+    expect(await manager.list()).toEqual([expect.objectContaining({ version: "2.0.0" })])
+    expect((await fs.readdir(installationRoot)).some((name) => name.startsWith(".replaced-director-stage-"))).toBe(true)
+    await manager.reconcilePublicationState()
+    expect(await manager.list()).toEqual([expect.objectContaining({ version: "2.0.0" })])
+    expect((await fs.readdir(installationRoot)).filter((name) => name.startsWith("."))).toEqual([])
+  })
+
+  test("defers capability recovery when a failed update cannot restore its backup", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "previous"))
+    const phases: string[] = []
+    const originalRename = fs.rename.bind(fs)
+    const rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      const sourceName = path.basename(String(source))
+      const destinationName = path.basename(String(destination))
+      if (
+        (sourceName.startsWith(".staging-bundle-") || sourceName.startsWith(".replaced-director-stage-")) &&
+        destinationName === "director-stage"
+      ) {
+        throw new Error("simulated update switch or restore failure")
+      }
+      return originalRename(source, destination)
+    })
+    try {
+      await expect(
+        manager.installBundle(simpleBundle("2.0.0", "candidate"), {
+          beforePublish: async () => ({
+            async commit() {},
+            async deferToRecovery() {
+              phases.push("defer")
+            },
+            async publish() {
+              phases.push("publish")
+            },
+            async rollback() {
+              phases.push("rollback")
+            },
+          }),
+          replaceExisting: true,
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      rename.mockRestore()
+    }
+
+    expect(phases).toEqual(["publish", "defer"])
+    expect(await manager.list()).toEqual([])
+    await manager.reconcilePublicationState()
+    expect(await manager.list()).toEqual([expect.objectContaining({ version: "1.0.0" })])
+    expect((await fs.readdir(installationRoot)).filter((name) => name.startsWith("."))).toEqual([])
+  })
+
+  test("defers built-in update and uninstall capabilities when their package rollback fails", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot, {}, ["director-stage"])
+    const initial = simpleBundle("1.0.0", "previous")
+    const updated = simpleBundle("2.0.0", "candidate")
+    await manager.installOrUpdateBuiltinBundle(initial)
+
+    const updatePhases: string[] = []
+    const originalRename = fs.rename.bind(fs)
+    let rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.basename(String(source)) === "director-stage" &&
+        path.basename(String(destination)).startsWith(".staging-bundle-")
+      ) {
+        throw new Error("simulated built-in rollback failure")
+      }
+      return originalRename(source, destination)
+    })
+    try {
+      await expect(
+        manager.installOrUpdateBuiltinBundle(updated, {
+          beforePublish: async () => activationFailurePublication(updatePhases),
+          legacyBundleDigests: [{ bundleDigest: testBundleDigest(initial), version: "1.0.0" }],
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(updatePhases).toEqual(["publish", "activate", "defer"])
+    expect(await manager.list()).toEqual([expect.objectContaining({ trustedBuiltin: true, version: "2.0.0" })])
+    await manager.reconcilePublicationState()
+
+    const uninstallPhases: string[] = []
+    rename = spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.basename(String(source)).startsWith(".removed-director-stage-") &&
+        path.basename(String(destination)) === "director-stage"
+      ) {
+        throw new Error("simulated uninstall rollback failure")
+      }
+      return originalRename(source, destination)
+    })
+    try {
+      await expect(
+        manager.uninstall("director-stage", {
+          beforeRemove: async () => activationFailurePublication(uninstallPhases),
+        }),
+      ).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(uninstallPhases).toEqual(["publish", "activate", "defer"])
+    expect(await manager.list()).toEqual([])
+    await manager.reconcilePublicationState()
+    expect((await fs.readdir(installationRoot)).filter((name) => name.startsWith("."))).toEqual([])
+  })
+
+  test("revalidates a built-in staging package after publication callbacks", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, ["director-stage"])
+    const initial = simpleBundle("1.0.0", "previous")
+    await manager.installOrUpdateBuiltinBundle(initial)
+    let rolledBack = 0
+
+    await expect(
+      manager.installOrUpdateBuiltinBundle(simpleBundle("2.0.0", "candidate"), {
+        beforePublish: async (_plugin, candidate) => ({
+          async commit() {},
+          async publish() {
+            await fs.writeFile(path.join(candidate.root, "index.html"), "tampered built-in candidate")
+          },
+          async rollback() {
+            rolledBack += 1
+          },
+        }),
+        legacyBundleDigests: [{ bundleDigest: testBundleDigest(initial), version: "1.0.0" }],
+      }),
+    ).rejects.toThrow(/changed before the package switch|provenance does not match/)
+
+    expect(rolledBack).toBe(1)
+    expect((await manager.list())[0]?.version).toBe("1.0.0")
+  })
+
   test("installs an in-memory marketplace bundle through the same validation", async () => {
     const root = await temporaryRoot()
     const manager = new WebPluginManager(path.join(root, "installed"))
@@ -221,6 +664,71 @@ describe("WebPluginManager", () => {
 
     expect(installed.id).toBe("director-stage")
     expect(await fs.readFile(await manager.resolveAsset(installed.id, "SKILL.md"), "utf8")).toContain("Bundled skill")
+  })
+
+  test("requires every v4 owned Skill directory to be present in the Plugin package", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const manifestV4 = {
+      capabilities: [],
+      contributes: {
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Run an operation",
+              id: "operation.run",
+              output: "text",
+              title: "Run",
+            },
+          ],
+        },
+        skills: [{ name: "director-workflow", path: "skills/director-workflow" }],
+      },
+      description: "Director tools",
+      id: "director-tools",
+      name: "Director Tools",
+      runtime: { command: "director-tools-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/4",
+      version: "1.0.0",
+    }
+
+    await expect(manager.installBundle({ files: { "manifest.json": JSON.stringify(manifestV4) } })).rejects.toThrow(
+      "Plugin-owned Skill director-workflow does not exist",
+    )
+    await expect(
+      manager.installBundle({
+        files: {
+          "manifest.json": JSON.stringify(manifestV4),
+          "skills/director-workflow/SKILL.md": [
+            "---",
+            "name: director-workflow",
+            "description: Direct a scene",
+            "---",
+          ].join("\n"),
+        },
+      }),
+    ).rejects.toThrow("host publication lifecycle")
+  })
+
+  test("cannot bypass the owned-Skill lifecycle when an update removes the last Skill or uninstalls", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    await manager.installBundle(ownedBundle("1.0.0"), { beforePublish: noOpPublication })
+
+    await expect(manager.installBundle(ownedBundle("2.0.0", false), { replaceExisting: true })).rejects.toThrow(
+      "host publication lifecycle",
+    )
+    await expect(manager.uninstall("director-tools")).rejects.toThrow("host publication lifecycle")
+    expect(await manager.list()).toEqual([expect.objectContaining({ id: "director-tools", version: "1.0.0" })])
+
+    await expect(
+      manager.installBundle(ownedBundle("2.0.0", false), {
+        beforePublish: noOpPublication,
+        replaceExisting: true,
+      }),
+    ).resolves.toMatchObject({ version: "2.0.0" })
   })
 
   test("reserves catalog ids and marks only host-installed built-in bundles as trusted", async () => {
@@ -418,6 +926,83 @@ describe("WebPluginManager", () => {
     )
   })
 
+  test("serializes same-Plugin publications so a waiting older update cannot overwrite a newer one", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    await manager.installBundle(simpleBundle("1.0.0", "initial"))
+    let releaseOlder!: () => void
+    const olderBlocked = new Promise<void>((resolve) => {
+      releaseOlder = resolve
+    })
+    let enterOlder!: () => void
+    const olderEntered = new Promise<void>((resolve) => {
+      enterOlder = resolve
+    })
+    let newerPrepared = false
+    const older = manager.installBundle(simpleBundle("2.0.0", "older request"), {
+      beforePublish: async () => {
+        enterOlder()
+        await olderBlocked
+        return noOpPublication()
+      },
+      replaceExisting: true,
+    })
+    await olderEntered
+    const newer = manager.installBundle(simpleBundle("3.0.0", "newer request"), {
+      beforePublish: async () => {
+        newerPrepared = true
+        return noOpPublication()
+      },
+      replaceExisting: true,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(newerPrepared).toBe(false)
+
+    releaseOlder()
+    await expect(older).resolves.toMatchObject({ version: "2.0.0" })
+    await expect(newer).resolves.toMatchObject({ version: "3.0.0" })
+    expect((await manager.list())[0]?.version).toBe("3.0.0")
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "index.html"), "utf8")).toBe("newer request")
+  })
+
+  test("extends the same-Plugin lock across host lifecycle work with an opaque mutation context", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const phases: string[] = []
+    let enterFirst!: () => void
+    const entered = new Promise<void>((resolve) => {
+      enterFirst = resolve
+    })
+    let releaseFirst!: () => void
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const first = manager.withPluginMutation("director-stage", async (mutation) => {
+      phases.push("first:start")
+      enterFirst()
+      await gate
+      await manager.installBundle(simpleBundle("1.0.0", "first"), { mutation })
+      phases.push("first:end")
+    })
+    await entered
+    const second = manager.withPluginMutation("director-stage", async () => {
+      phases.push("second:start")
+      expect((await manager.list())[0]?.version).toBe("1.0.0")
+    })
+    await Promise.resolve()
+    expect(phases).toEqual(["first:start"])
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(phases).toEqual(["first:start", "first:end", "second:start"])
+
+    await expect(
+      manager.installBundle(simpleBundle("1.0.0", "forged", "other-plugin"), {
+        mutation: { pluginId: "other-plugin" },
+      }),
+    ).rejects.toThrow("mutation context")
+  })
+
   test("restores the unique validated backup after a crash between the two update renames", async () => {
     const root = await temporaryRoot()
     const installRoot = path.join(root, "installed")
@@ -454,6 +1039,28 @@ describe("WebPluginManager", () => {
       "published application",
     )
     expect(await fs.readdir(installRoot)).toEqual(["director-stage"])
+  })
+
+  test("finishes a validated uninstall tombstone and rejects a symlinked one during startup recovery", async () => {
+    if (process.platform === "win32") return
+    const root = await temporaryRoot()
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await manager.installBundle(simpleBundle("1.0.0", "removed application"))
+    const target = path.join(installRoot, "director-stage")
+    const removed = path.join(installRoot, `.removed-director-stage-${recoveryUuid1}`)
+    await fs.rename(target, removed)
+
+    await manager.reconcilePublicationState()
+    expect(await manager.list()).toEqual([])
+    await expect(fs.lstat(removed)).rejects.toMatchObject({ code: "ENOENT" })
+
+    const outside = path.join(root, "outside-removed")
+    await writeSimplePackage(outside, "2.0.0", "outside application")
+    const symlink = path.join(installRoot, `.removed-director-stage-${recoveryUuid2}`)
+    await fs.symlink(outside, symlink)
+    await expect(manager.reconcilePublicationState()).rejects.toThrow("did not accept every transaction remnant")
+    expect((await fs.lstat(symlink)).isSymbolicLink()).toBe(true)
   })
 
   test("does not guess between ambiguous backups or trust invalid transaction remnants", async () => {

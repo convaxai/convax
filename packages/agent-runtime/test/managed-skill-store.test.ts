@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -227,6 +227,256 @@ describe("ManagedAgentSkillStore", () => {
       expect(await store.uninstall("removable-skill")).toBe(false)
       await expect(lstat(installed.directory)).rejects.toMatchObject({ code: "ENOENT" })
       expect(await readFile(join(outside, "keep.txt"), "utf8")).toBe("keep")
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("prepares a Skill install without publishing it and rolls a published install back", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const transaction = await store.prepareInstallFromFiles({
+        "SKILL.md": skillDocument("prepared-skill"),
+        "references/version.txt": "prepared",
+      })
+
+      expect(transaction.skill.name).toBe("prepared-skill")
+      expect(await store.list()).toEqual([])
+
+      await transaction.publish()
+      expect(await readFile(join(transaction.skill.directory, "references", "version.txt"), "utf8")).toBe("prepared")
+
+      await transaction.rollback()
+      expect(await store.list()).toEqual([])
+      expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("replaces a managed Skill only when authorized and restores the previous version on rollback", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const installed = await store.installFromFiles({
+        "SKILL.md": skillDocument("replaceable-skill", "Original workflow"),
+        "references/version.txt": "original",
+      })
+
+      await expect(
+        store.prepareInstallFromFiles({
+          "SKILL.md": skillDocument("replaceable-skill", "Updated workflow"),
+        }),
+      ).rejects.toThrow("already installed")
+
+      const replacementFiles = {
+        "SKILL.md": skillDocument("replaceable-skill", "Updated workflow"),
+        "references/version.txt": "updated",
+      }
+      const rolledBack = await store.prepareInstallFromFiles(replacementFiles, { replaceExisting: true })
+      expect(await readFile(join(installed.directory, "references", "version.txt"), "utf8")).toBe("original")
+
+      await rolledBack.publish()
+      expect((await store.inspect("replaceable-skill")).description).toBe("Updated workflow")
+      expect(await readFile(join(installed.directory, "references", "version.txt"), "utf8")).toBe("updated")
+
+      await rolledBack.rollback()
+      expect((await store.inspect("replaceable-skill")).description).toBe("Original workflow")
+      expect(await readFile(join(installed.directory, "references", "version.txt"), "utf8")).toBe("original")
+
+      const committed = await store.prepareInstallFromFiles(replacementFiles, { replaceExisting: true })
+      await committed.publish()
+      await committed.commit()
+      await committed.rollback()
+      expect((await store.inspect("replaceable-skill")).description).toBe("Updated workflow")
+      expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("prepares a reversible uninstall and commits removal only after publication", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      await store.installFromFiles({ "SKILL.md": skillDocument("transactional-removal") })
+
+      const rolledBack = await store.prepareUninstall("transactional-removal")
+      expect(rolledBack).not.toBeNull()
+      expect((await store.list()).map((skill) => skill.name)).toEqual(["transactional-removal"])
+
+      await rolledBack!.publish()
+      expect(await store.list()).toEqual([])
+      await rolledBack!.rollback()
+      expect((await store.list()).map((skill) => skill.name)).toEqual(["transactional-removal"])
+
+      const committed = await store.prepareUninstall("transactional-removal")
+      await committed!.publish()
+      await committed!.commit()
+      await committed!.rollback()
+      expect(await store.list()).toEqual([])
+      expect(await store.prepareUninstall("transactional-removal")).toBeNull()
+      expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("recovers journaled install, replacement, and removal publications after a process restart", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const interruptedInstall = await store.prepareInstallFromFiles({
+        "SKILL.md": skillDocument("recovered-skill", "First version"),
+      })
+      await interruptedInstall.publish()
+
+      const restarted = new ManagedAgentSkillStore(setup.config)
+      await restarted.recoverPublication(interruptedInstall.recovery, "rollback")
+      expect(await restarted.list()).toEqual([])
+
+      await restarted.installFromFiles({ "SKILL.md": skillDocument("recovered-skill", "First version") })
+      const interruptedReplacement = await restarted.prepareInstallFromFiles(
+        { "SKILL.md": skillDocument("recovered-skill", "Second version") },
+        { replaceExisting: true },
+      )
+      await interruptedReplacement.publish()
+      await new ManagedAgentSkillStore(setup.config).recoverPublication(interruptedReplacement.recovery, "commit")
+      expect((await restarted.inspect("recovered-skill")).description).toBe("Second version")
+
+      const interruptedRemoval = await restarted.prepareUninstall("recovered-skill")
+      await interruptedRemoval!.publish()
+      await new ManagedAgentSkillStore(setup.config).recoverPublication(interruptedRemoval!.recovery, "rollback")
+      expect((await restarted.inspect("recovered-skill")).description).toBe("Second version")
+      expect((await readdir(restarted.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("does not destroy published bytes when rollback recovery prerequisites are missing or changed", async () => {
+    for (const corruption of ["missing", "changed"] as const) {
+      const setup = await fixture()
+      try {
+        const store = new ManagedAgentSkillStore(setup.config)
+        await store.installFromFiles({ "SKILL.md": skillDocument("guarded-recovery", "Original") })
+        const replacement = await store.prepareInstallFromFiles(
+          { "SKILL.md": skillDocument("guarded-recovery", "Replacement") },
+          { replaceExisting: true },
+        )
+        await replacement.publish()
+        const backup = join(store.userDirectory, `.install-backup-${replacement.recovery.transactionId}`)
+        if (corruption === "missing") {
+          await rm(backup, { recursive: true })
+        } else {
+          await writeFile(join(backup, "SKILL.md"), skillDocument("guarded-recovery", "Changed backup"))
+        }
+
+        await expect(store.recoverPublication(replacement.recovery, "rollback")).rejects.toThrow(
+          "Managed Skill backup changed before rollback",
+        )
+        expect((await store.inspect("guarded-recovery")).description).toBe("Replacement")
+      } finally {
+        await rm(setup.root, { force: true, recursive: true })
+      }
+    }
+
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const installation = await store.prepareInstallFromFiles({
+        "SKILL.md": skillDocument("guarded-install", "Published installation"),
+      })
+      await installation.publish()
+      const unexpectedBackup = join(store.userDirectory, `.install-backup-${installation.recovery.transactionId}`)
+      await mkdir(unexpectedBackup)
+      await writeFile(join(unexpectedBackup, "SKILL.md"), skillDocument("guarded-install", "Unexpected backup"))
+
+      await expect(store.recoverPublication(installation.recovery, "rollback")).rejects.toThrow(
+        "Unexpected managed Skill backup for an install",
+      )
+      expect((await store.inspect("guarded-install")).description).toBe("Published installation")
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("completes journaled publications that crashed before their filesystem rename", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const interruptedInstall = await store.prepareInstallFromFiles({
+        "SKILL.md": skillDocument("forward-skill", "First version"),
+      })
+      await new ManagedAgentSkillStore(setup.config).recoverPublication(interruptedInstall.recovery, "commit")
+      expect((await store.inspect("forward-skill")).description).toBe("First version")
+
+      const interruptedReplacement = await store.prepareInstallFromFiles(
+        { "SKILL.md": skillDocument("forward-skill", "Second version") },
+        { replaceExisting: true },
+      )
+      await new ManagedAgentSkillStore(setup.config).recoverPublication(interruptedReplacement.recovery, "commit")
+      expect((await store.inspect("forward-skill")).description).toBe("Second version")
+
+      const interruptedRemoval = await store.prepareUninstall("forward-skill")
+      await new ManagedAgentSkillStore(setup.config).recoverPublication(interruptedRemoval!.recovery, "commit")
+      expect(await store.list()).toEqual([])
+      expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("recovers a replacement interrupted between its two filesystem renames", async () => {
+    for (const outcome of ["commit", "rollback"] as const) {
+      const setup = await fixture()
+      try {
+        const store = new ManagedAgentSkillStore(setup.config)
+        const installed = await store.installFromFiles({
+          "SKILL.md": skillDocument("between-renames", "Original"),
+        })
+        const replacement = await store.prepareInstallFromFiles(
+          { "SKILL.md": skillDocument("between-renames", "Replacement") },
+          { replaceExisting: true },
+        )
+        const backup = join(store.userDirectory, `.install-backup-${replacement.recovery.transactionId}`)
+        await rename(installed.directory, backup)
+
+        await new ManagedAgentSkillStore(setup.config).recoverPublication(replacement.recovery, outcome)
+        expect((await store.inspect("between-renames")).description).toBe(
+          outcome === "commit" ? "Replacement" : "Original",
+        )
+        expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+      } finally {
+        await rm(setup.root, { force: true, recursive: true })
+      }
+    }
+  })
+
+  test("cleans an abandoned hidden staging directory but never guesses away a published backup", async () => {
+    const setup = await fixture()
+    try {
+      const store = new ManagedAgentSkillStore(setup.config)
+      const abandoned = await store.prepareInstallFromFiles({
+        "SKILL.md": skillDocument("abandoned-skill"),
+      })
+      expect((await readdir(store.userDirectory)).some((name) => name.startsWith(".install-stage-"))).toBe(true)
+
+      await new ManagedAgentSkillStore(setup.config).cleanupAbandonedPublications()
+      expect(await store.list()).toEqual([])
+      expect((await readdir(store.userDirectory)).filter((name) => name.startsWith(".install-"))).toEqual([])
+      await abandoned.rollback()
+
+      await store.installFromFiles({ "SKILL.md": skillDocument("guarded-backup", "Original") })
+      const replacement = await store.prepareInstallFromFiles(
+        { "SKILL.md": skillDocument("guarded-backup", "Replacement") },
+        { replaceExisting: true },
+      )
+      await replacement.publish()
+      await expect(store.cleanupAbandonedPublications()).rejects.toThrow("backup has no recovery journal")
+      await store.recoverPublication(replacement.recovery, "rollback")
+      expect((await store.inspect("guarded-backup")).description).toBe("Original")
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }

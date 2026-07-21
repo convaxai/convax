@@ -9,6 +9,7 @@ import {
   ToolPluginAuthorizationStore,
   isExecutableToolPlugin,
   toolPluginAuthorizationIdentity,
+  toolPluginManifestSha256,
   type ToolPluginExecutableBinding,
 } from "./tool-plugin-authorizations"
 
@@ -86,6 +87,18 @@ function declarativeOperationPlugin(): InstalledWebPluginSummary {
   }
 }
 
+function ownedSkillOperationPlugin(): InstalledWebPluginSummary {
+  const installed = declarativeOperationPlugin()
+  return {
+    ...installed,
+    contributes: {
+      ...installed.contributes,
+      skills: [{ name: "image-workflow", path: "skills/image-workflow" }],
+    },
+    schema: "convax.plugin/4",
+  }
+}
+
 function binding(digest = "a", executablePath = "/managed/image-tool"): ToolPluginExecutableBinding {
   return { path: executablePath, sha256: digest.repeat(64), size: 4_096 }
 }
@@ -124,6 +137,19 @@ function bundle(installedPlugin: InstalledWebPluginSummary): WebPluginBundle {
 describe("ToolPluginAuthorizationStore", () => {
   test("treats a v3 declarative operation as the same authorized executable boundary", () => {
     expect(isExecutableToolPlugin(declarativeOperationPlugin())).toBe(true)
+  })
+  test("binds v4 owned Skill declarations into the executable authorization identity", () => {
+    const installed = ownedSkillOperationPlugin()
+    expect(isExecutableToolPlugin(installed)).toBe(true)
+    expect(toolPluginManifestSha256(installed)).not.toBe(
+      toolPluginManifestSha256({
+        ...installed,
+        contributes: {
+          ...installed.contributes,
+          skills: [{ name: "other-workflow", path: "skills/other-workflow" }],
+        },
+      }),
+    )
   })
   test("persists install consent across restart without a runtime prompt", async () => {
     const root = await temporaryRoot()
@@ -283,6 +309,22 @@ describe("ToolPluginAuthorizationStore", () => {
 
     expect(await receiptEntries(authorizationRoot)).toEqual(priorEntries)
     await expect(healthy.verify(installedPlugin, "path", executable)).resolves.toBeUndefined()
+  })
+
+  test("reconciles only the locked Plugin authorization", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const authorization = store(authorizationRoot, { path: binding("a", "/tools/image-tool") })
+    const first = plugin()
+    const other = { ...plugin(), id: "other-tools", name: "Other Tools" }
+    await installAuthorization(authorization, first)
+    await installAuthorization(authorization, other)
+
+    await authorization.reconcilePlugin(first.id)
+
+    expect(await receiptEntries(authorizationRoot, first.id)).toEqual([])
+    expect(await receiptEntries(authorizationRoot, other.id)).not.toEqual([])
+    await expect(authorization.verify(other, "path", binding("a", "/tools/image-tool"))).resolves.toBeUndefined()
   })
 
   test("static Plugins require no executable authorization receipt", async () => {

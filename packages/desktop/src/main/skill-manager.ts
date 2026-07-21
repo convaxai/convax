@@ -18,6 +18,11 @@ import type {
 } from "../skill-management-contracts"
 import type { DesktopBuiltinSkillBundle, DesktopBuiltinSkillPresentation } from "./builtin-skill-catalog"
 import { createSkillFilePreviews } from "./skill-details"
+import type {
+  DesktopSkillMutationCoordinator,
+  PluginOwnedSkillBinding,
+  PluginSkillOwnershipStore,
+} from "./plugin-skill-lifecycle"
 
 export interface DesktopSkillRuntime {
   listSkills(input: { directory: string }): Promise<AgentSkill[]>
@@ -32,7 +37,9 @@ export class DesktopSkillManager {
     private readonly runtime: DesktopSkillRuntime,
     private readonly defaultDirectory: string,
     private readonly catalog: readonly DesktopBuiltinSkillBundle[],
-    private readonly presentations: readonly DesktopBuiltinSkillPresentation[] = [],
+    private readonly presentations: readonly DesktopBuiltinSkillPresentation[],
+    private readonly ownership: Pick<PluginSkillOwnershipStore, "assertSettled" | "reservations">,
+    private readonly mutations: Pick<DesktopSkillMutationCoordinator, "run">,
   ) {}
 
   subscribe(listener: () => void) {
@@ -96,7 +103,12 @@ export class DesktopSkillManager {
   }
 
   async list(directory = this.defaultDirectory): Promise<DesktopSkillInventory> {
-    const [managed, discovered] = await Promise.all([this.store.list(), this.runtime.listSkills({ directory })])
+    const [managed, discovered, bindings] = await Promise.all([
+      this.store.list(),
+      this.runtime.listSkills({ directory }),
+      this.ownership.reservations(),
+    ])
+    const bindingsByName = new Map(bindings.map((binding) => [binding.skillName, binding]))
     const managedByName = new Map(managed.map((skill) => [skill.name, skill]))
     const skillsByName = new Map<string, DesktopSkillSummary>()
     for (const skill of discovered) {
@@ -104,10 +116,11 @@ export class DesktopSkillManager {
       skillsByName.set(
         skill.name,
         local
-          ? this.summary(local)
+          ? this.summary(local, bindingsByName.get(skill.name))
           : {
               description: skill.description,
               location: skill.location ?? "",
+              management: { kind: "standalone" },
               managed: false,
               name: skill.name,
               source: "global",
@@ -115,7 +128,9 @@ export class DesktopSkillManager {
       )
     }
     for (const skill of managed) {
-      if (!skillsByName.has(skill.name)) skillsByName.set(skill.name, this.summary(skill))
+      const summary = this.summary(skill, bindingsByName.get(skill.name))
+      if (!skillsByName.has(skill.name)) skillsByName.set(skill.name, summary)
+      else if (bindingsByName.has(skill.name)) skillsByName.set(skill.name, summary)
     }
     const installedNames = new Set(managed.map((skill) => skill.name))
     return {
@@ -132,7 +147,9 @@ export class DesktopSkillManager {
   }
 
   async listManaged() {
-    return (await this.store.list()).map((skill) => this.summary(skill))
+    const [skills, bindings] = await Promise.all([this.store.list(), this.ownership.reservations()])
+    const bindingsByName = new Map(bindings.map((binding) => [binding.skillName, binding]))
+    return skills.map((skill) => this.summary(skill, bindingsByName.get(skill.name)))
   }
 
   /**
@@ -141,14 +158,19 @@ export class DesktopSkillManager {
    * registry that has not been observed yet.
    */
   async installManagedAtStartup(sourceDirectory: string) {
-    const installed = await this.store.importFromDirectory(sourceDirectory)
-    this.emit()
-    return this.summary(installed)
+    return this.mutate(async () => {
+      const installed = await this.store.importFromDirectory(sourceDirectory)
+      await this.assertStandaloneInstallAllowed(installed)
+      this.emit()
+      return this.summary(installed)
+    })
   }
 
   async importFromDirectory(sourceDirectory: string, directory = this.defaultDirectory) {
-    const installed = await this.store.importFromDirectory(sourceDirectory)
-    return this.finishInstall(installed, directory)
+    return this.mutate(async () => {
+      const installed = await this.store.importFromDirectory(sourceDirectory)
+      return this.finishInstall(installed, directory)
+    })
   }
 
   async installFromFiles(
@@ -156,18 +178,22 @@ export class DesktopSkillManager {
     directory = this.defaultDirectory,
     expectedName?: string,
   ) {
-    const installed = await this.store.installFromFiles(
-      files,
-      expectedName === undefined ? undefined : { expectedName },
-    )
-    return this.finishInstall(installed, directory)
+    return this.mutate(async () => {
+      const installed = await this.store.installFromFiles(
+        files,
+        expectedName === undefined ? undefined : { expectedName },
+      )
+      return this.finishInstall(installed, directory)
+    })
   }
 
   async installCatalogSkill(id: string, directory = this.defaultDirectory) {
     const bundle = this.catalog.find((candidate) => candidate.id === id)
     if (!bundle) throw new Error(`Skill catalog item was not found: ${id}`)
-    const installed = await this.store.installFromFiles(bundle.files)
-    return this.finishInstall(installed, directory)
+    return this.mutate(async () => {
+      const installed = await this.store.installFromFiles(bundle.files)
+      return this.finishInstall(installed, directory)
+    })
   }
 
   async resolveSkillLocation(name: string, directory = this.defaultDirectory) {
@@ -181,18 +207,35 @@ export class DesktopSkillManager {
   }
 
   async uninstall(name: string) {
-    const removed = await this.store.uninstall(name)
-    if (!removed) return false
-    try {
-      await this.runtime.refreshSkills()
-    } finally {
-      this.emit()
-    }
-    return true
+    return this.mutate(async () => {
+      const binding = (await this.ownership.reservations()).find((candidate) => candidate.skillName === name)
+      if (binding) {
+        throw new Error(`Skill is managed by Plugin ${binding.pluginName} and cannot be uninstalled independently`)
+      }
+      const removed = await this.store.uninstall(name)
+      if (!removed) return false
+      try {
+        await this.runtime.refreshSkills()
+      } finally {
+        this.emit()
+      }
+      return true
+    })
+  }
+
+  async refresh() {
+    return this.mutate(async () => {
+      try {
+        await this.runtime.refreshSkills()
+      } finally {
+        this.emit()
+      }
+    })
   }
 
   private async finishInstall(installed: ManagedAgentSkill, directory: string) {
     try {
+      await this.assertStandaloneInstallAllowed(installed)
       const conflicts = (await this.runtime.listSkills({ directory })).filter(
         (skill) => skill.name === installed.name && (!skill.location || !this.store.isManagedLocation(skill.location)),
       )
@@ -209,11 +252,50 @@ export class DesktopSkillManager {
     return this.summary(installed)
   }
 
-  private summary(skill: ManagedAgentSkill): DesktopSkillSummary {
+  private async assertStandaloneInstallAllowed(installed: ManagedAgentSkill) {
+    try {
+      const binding = (await this.ownership.reservations()).find((candidate) => candidate.skillName === installed.name)
+      if (binding) {
+        throw new Error(`Skill is managed by Plugin ${binding.pluginName} and cannot be installed independently`)
+      }
+    } catch (error) {
+      try {
+        if (!(await this.store.uninstall(installed.name))) {
+          throw new Error(`Could not roll back standalone Skill installation: ${installed.name}`, { cause: error })
+        }
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `Standalone Skill ownership rollback failed: ${installed.name}`,
+          {
+            cause: error,
+          },
+        )
+      }
+      throw error
+    }
+  }
+
+  private mutate<Result>(operation: () => Promise<Result>) {
+    return this.mutations.run(async () => {
+      await this.ownership.assertSettled()
+      return operation()
+    })
+  }
+
+  private summary(skill: ManagedAgentSkill, binding?: PluginOwnedSkillBinding): DesktopSkillSummary {
     return {
       description: skill.description,
       displayName: this.displayName(skill.name),
       location: skill.skillFile,
+      management: binding
+        ? {
+            kind: "plugin",
+            pluginId: binding.pluginId,
+            pluginName: binding.pluginName,
+            pluginVersion: binding.pluginVersion,
+          }
+        : { kind: "standalone" },
       managed: true,
       name: skill.name,
       source: "managed",

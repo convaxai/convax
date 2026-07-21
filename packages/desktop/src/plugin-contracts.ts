@@ -2,11 +2,13 @@ export const webPluginManifestFileName = "manifest.json"
 export const webPluginManifestSchema = "convax.plugin/1" as const
 export const webPluginManifestSchemaV2 = "convax.plugin/2" as const
 export const webPluginManifestSchemaV3 = "convax.plugin/3" as const
+export const webPluginManifestSchemaV4 = "convax.plugin/4" as const
 
 export type WebPluginManifestSchema =
   | typeof webPluginManifestSchema
   | typeof webPluginManifestSchemaV2
   | typeof webPluginManifestSchemaV3
+  | typeof webPluginManifestSchemaV4
 
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
@@ -53,7 +55,7 @@ export interface WebPluginGenerationToolContribution {
 }
 
 export interface WebPluginGenerationContribution {
-  /** Required by convax.plugin/3, absent from legacy convax.plugin/2 declarations. */
+  /** Required by declarative convax.plugin/3 and later schemas; absent from legacy convax.plugin/2 declarations. */
   models?: WebPluginGenerationModelContribution[]
   tools: WebPluginGenerationToolContribution[]
 }
@@ -66,6 +68,16 @@ export interface WebPluginAgentToolContribution {
 
 export interface WebPluginAgentContribution {
   tools: WebPluginAgentToolContribution[]
+}
+
+/**
+ * A Skill whose installation lifecycle is owned by the declaring Plugin.
+ * `path` names the Skill directory; the host validates its root SKILL.md and
+ * exact frontmatter name before publishing either capability.
+ */
+export interface WebPluginSkillContribution {
+  name: string
+  path: string
 }
 
 /**
@@ -125,31 +137,33 @@ export interface WebPluginCanvasContribution {
   renderer?: WebPluginCanvasRendererContribution
   /** Commands delivered only to a declared sandboxed renderer. */
   toolbar?: WebPluginToolbarContribution[]
-  /** Host-rendered actions are available only to convax.plugin/3. */
+  /** Host-rendered actions are available to declarative convax.plugin/3 and later schemas. */
   selectionActions?: WebPluginCanvasSelectionActionContribution[]
 }
 
 export interface WebPluginManifest {
   capabilities: WebPluginCapability[]
   contributes: {
-    /** Present only in a convax.plugin/3 manifest and bound to declared operation tools. */
+    /** Present only in declarative convax.plugin/3 and later manifests and bound to declared operation tools. */
     agent?: WebPluginAgentContribution
     canvas?: WebPluginCanvasContribution
-    /** Present only in a convax.plugin/2 or /3 manifest with a matching MCP runtime. */
+    /** Present only in an executable convax.plugin/2 or later manifest with a matching MCP runtime. */
     generation?: WebPluginGenerationContribution
-    /** Present only in a convax.plugin/2 or /3 manifest with a matching MCP runtime. */
+    /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
+    /** Plugin-owned Skills are available only to convax.plugin/4. */
+    skills?: WebPluginSkillContribution[]
   }
   description: string
   /** Sandboxed HTML entry, relative to the plugin package; absent for a headless Tool Plugin. */
   entry?: string
   id: string
   name: string
-  /** v1 remains static-only; v2 can call generation tools and/or declare one external runtime. */
+  /** v1 remains static-only; executable and declarative capabilities are introduced by later schemas. */
   schema: WebPluginManifestSchema
-  /** Optional SKILL.md path relative to the plugin package. */
+  /** Legacy independently managed companion Skill; unavailable to convax.plugin/4. */
   skill?: string
-  /** Present only in a convax.plugin/2 or /3 manifest with executable contributions. */
+  /** Present only in a convax.plugin/2 or later manifest with executable contributions. */
   runtime?: WebPluginMcpStdioRuntime
   version: string
 }
@@ -521,12 +535,13 @@ function parseMcpStdioRuntime(value: unknown): WebPluginMcpStdioRuntime {
 
 function parseGeneration(
   value: unknown,
-  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3,
+  schema: typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3 | typeof webPluginManifestSchemaV4,
 ): WebPluginGenerationContribution {
   const input = asRecord(value, "Generation contribution")
-  assertKeys(input, schema === webPluginManifestSchemaV3 ? ["models", "tools"] : ["tools"], "Generation contribution")
-  if (schema === webPluginManifestSchemaV3 && !Object.prototype.hasOwnProperty.call(input, "models")) {
-    throw new Error("convax.plugin/3 generation models must be declared explicitly")
+  const declarativeSchema = schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
+  assertKeys(input, declarativeSchema ? ["models", "tools"] : ["tools"], "Generation contribution")
+  if (declarativeSchema && !Object.prototype.hasOwnProperty.call(input, "models")) {
+    throw new Error(`${schema} generation models must be declared explicitly`)
   }
   if (!Array.isArray(input.tools) || input.tools.length === 0 || input.tools.length > 64) {
     throw new Error("Generation tools must be a non-empty array with at most 64 items")
@@ -550,7 +565,7 @@ function parseGeneration(
   if (new Set(tools.map((tool) => tool.id)).size !== tools.length) {
     throw new Error("Generation tools contain duplicate ids")
   }
-  if (schema !== webPluginManifestSchemaV3) return { tools }
+  if (!declarativeSchema) return { tools }
   if (!Array.isArray(input.models) || input.models.length > tools.length) {
     throw new Error("Generation models must be an array no longer than the generation tools array")
   }
@@ -567,6 +582,40 @@ function parseGeneration(
     throw new Error("Generation models contain duplicate tool references")
   }
   return { models, tools }
+}
+
+function requirePluginSkillName(value: unknown, label: string) {
+  const name = requireString(value, label, 64)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name)) {
+    throw new Error(`${label} must use kebab-case`)
+  }
+  validatePortablePluginSegment(name)
+  return name
+}
+
+function parsePluginSkills(value: unknown): WebPluginSkillContribution[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
+    throw new Error("Plugin Skill contributions must be a non-empty array with at most 32 items")
+  }
+  const skills = value.map((value, index) => {
+    const label = `Plugin Skill contribution ${index}`
+    const input = asRecord(value, label)
+    assertKeys(input, ["name", "path"], label)
+    const name = requirePluginSkillName(input.name, `${label} name`)
+    const path = requireWebPluginRelativePath(input.path, `${label} path`)
+    if (path.split("/").at(-1) !== name) {
+      throw new Error(`${label} path must name its Skill directory: ${name}`)
+    }
+    return { name, path }
+  })
+  if (new Set(skills.map((skill) => skill.name)).size !== skills.length) {
+    throw new Error("Plugin Skill contributions contain duplicate names")
+  }
+  if (new Set(skills.map((skill) => skill.path.toLocaleLowerCase("en-US"))).size !== skills.length) {
+    throw new Error("Plugin Skill contributions contain duplicate paths")
+  }
+  return skills
 }
 
 function parseAgent(value: unknown): WebPluginAgentContribution {
@@ -610,7 +659,7 @@ function parseService(value: unknown): WebPluginServiceContribution {
   return { actions }
 }
 
-function validateV3ToolReferences(input: {
+function validateDeclarativeToolReferences(input: {
   agent?: WebPluginAgentContribution
   generation?: WebPluginGenerationContribution
   selectionActions?: readonly WebPluginCanvasSelectionActionContribution[]
@@ -647,13 +696,14 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (
     schema !== webPluginManifestSchema &&
     schema !== webPluginManifestSchemaV2 &&
-    schema !== webPluginManifestSchemaV3
+    schema !== webPluginManifestSchemaV3 &&
+    schema !== webPluginManifestSchemaV4
   ) {
     throw new Error("Plugin manifest schema is not supported")
   }
   const executableSchema =
-    schema === webPluginManifestSchemaV2 ||
-    schema === webPluginManifestSchemaV3
+    schema === webPluginManifestSchemaV2 || schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
+  const declarativeSchema = schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4
   assertKeys(
     input,
     [
@@ -665,7 +715,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
       "name",
       ...(executableSchema ? ["runtime"] : []),
       "schema",
-      "skill",
+      ...(schema === webPluginManifestSchemaV4 ? [] : ["skill"]),
       "version",
     ],
     "Plugin manifest",
@@ -694,7 +744,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
-      ...(schema === webPluginManifestSchemaV3 ? ["agent"] : []),
+      ...(declarativeSchema ? ["agent"] : []),
+      ...(schema === webPluginManifestSchemaV4 ? ["skills"] : []),
     ],
     "Plugin contributions",
   )
@@ -707,11 +758,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (canvas) {
     assertKeys(
       canvas,
-      [
-        "renderer",
-        "toolbar",
-        ...(schema === webPluginManifestSchemaV3 ? ["selectionActions"] : []),
-      ],
+      ["renderer", "toolbar", ...(declarativeSchema ? ["selectionActions"] : [])],
       "Canvas contributions",
     )
   }
@@ -729,29 +776,44 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (executableSchema && hasRuntime !== hasExecutableContribution) {
     throw new Error(`${schema} runtime and executable contribution must appear together`)
   }
-  if (executableSchema && !hasRuntime && !hasExecutableContribution && !capabilities.includes("generation.execute")) {
+  if (
+    executableSchema &&
+    schema !== webPluginManifestSchemaV4 &&
+    !hasRuntime &&
+    !hasExecutableContribution &&
+    !capabilities.includes("generation.execute")
+  ) {
     throw new Error(`${schema} must declare an executable contribution or request generation.execute`)
   }
   const toolbar = parseToolbar(canvas?.toolbar)
-  const selectionActions =
-    schema === webPluginManifestSchemaV3 ? parseSelectionActions(canvas?.selectionActions) : undefined
+  const selectionActions = declarativeSchema ? parseSelectionActions(canvas?.selectionActions) : undefined
   if (canvas && !hasRendererContribution && !selectionActions?.length) {
     throw new Error("Canvas contributions must declare a renderer or selection actions")
   }
+  const skills = schema === webPluginManifestSchemaV4 ? parsePluginSkills(contributes.skills) : undefined
+  if (
+    schema === webPluginManifestSchemaV4 &&
+    !hasRendererContribution &&
+    !selectionActions?.length &&
+    !hasExecutableContribution &&
+    !capabilities.includes("generation.execute")
+  ) {
+    throw new Error("convax.plugin/4 must declare a Plugin capability beyond owned Skills")
+  }
   const generation = hasGenerationContribution
-      ? parseGeneration(
-          contributes.generation,
-          schema as typeof webPluginManifestSchemaV2 | typeof webPluginManifestSchemaV3,
-        )
-      : undefined
-  const agent =
-    schema === webPluginManifestSchemaV3 && contributes.agent !== undefined
-      ? parseAgent(contributes.agent)
-      : undefined
+    ? parseGeneration(
+        contributes.generation,
+        schema as
+          | typeof webPluginManifestSchemaV2
+          | typeof webPluginManifestSchemaV3
+          | typeof webPluginManifestSchemaV4,
+      )
+    : undefined
+  const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined
   const runtime = hasRuntime ? parseMcpStdioRuntime(input.runtime) : undefined
-  if (schema === webPluginManifestSchemaV3) {
-    validateV3ToolReferences({ agent, generation, selectionActions })
+  if (declarativeSchema) {
+    validateDeclarativeToolReferences({ agent, generation, selectionActions })
   }
   return {
     capabilities: [...capabilities] as WebPluginCapability[],
@@ -768,6 +830,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
           }),
       ...(generation === undefined ? {} : { generation }),
       ...(service === undefined ? {} : { service }),
+      ...(skills === undefined ? {} : { skills }),
     },
     description: requireString(input.description, "Plugin description", 2_000),
     ...(entry === undefined ? {} : { entry }),

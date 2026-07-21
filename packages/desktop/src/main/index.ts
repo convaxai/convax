@@ -65,7 +65,12 @@ import {
   webPluginIdForAssetUrl,
 } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
-import { WebPluginManager } from "./plugin-manager"
+import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import {
+  WebPluginManager,
+  WebPluginPublicationDeferredError,
+  type WebPluginPublicationCandidate,
+} from "./plugin-manager"
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
@@ -90,6 +95,12 @@ import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import {
+  composePluginPublicationTransactions,
+  DesktopSkillMutationCoordinator,
+  PluginSkillLifecycle,
+  PluginSkillOwnershipStore,
+} from "./plugin-skill-lifecycle"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -253,9 +264,10 @@ function startApplication() {
       {},
       desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
     )
-    await pluginManager.reconcilePublicationState().catch((error) => {
-      console.warn("Could not fully reconcile Plugin package publication state", error)
-    })
+    // Package recovery selects the authoritative Plugin version used by every
+    // dependent authorization and owned-Skill journal. An ambiguous package
+    // state must stop startup instead of letting later recovery guess.
+    await pluginManager.reconcilePublicationState()
     const companionStore = new ManagedPluginCompanionStore(join(userDataDirectory, "plugin-companions"))
     const generationEnvironment = generationPluginEnvironment(process.env)
     const toolPluginAuthorizations = new ToolPluginAuthorizationStore(
@@ -303,6 +315,24 @@ function startApplication() {
         await pluginServiceAuthorizationCheckpoints.reconcile(identities, retainUnknownPluginIds)
       } catch (error) {
         console.warn("Could not reconcile Plugin service authorization recovery state", error)
+      }
+    }
+    const reconcileToolPluginExecutionStateForPlugin = async (pluginId: string) => {
+      const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
+      try {
+        await companionStore.reconcilePlugin(pluginId, current)
+      } catch (error) {
+        console.warn(`Could not reconcile changed Tool Plugin companion: ${pluginId}`, error)
+      }
+      try {
+        await toolPluginAuthorizations.reconcilePlugin(pluginId, current)
+      } catch (error) {
+        console.warn(`Could not reconcile changed Tool Plugin authorization: ${pluginId}`, error)
+      }
+      try {
+        await pluginServiceAuthorizationCheckpoints.remove(pluginId)
+      } catch (error) {
+        console.warn(`Could not discard changed Plugin service authorization checkpoint: ${pluginId}`, error)
       }
     }
     for (const item of desktopBuiltinPluginCatalog) {
@@ -436,12 +466,29 @@ function startApplication() {
       ]),
       toolServerName: "convax",
     })
+    const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
+    const pluginSkillOwnership = new PluginSkillOwnershipStore(
+      join(userDataDirectory, "plugin-skill-bindings", "index-v1.json"),
+    )
+    const skillMutations = new DesktopSkillMutationCoordinator()
+    const pluginSkillLifecycle = new PluginSkillLifecycle(
+      managedSkillStore,
+      pluginSkillOwnership,
+      () => agentRuntime.listSkills({ directory: userDataDirectory }),
+      skillMutations,
+    )
+    const installedPluginsForSkillReconciliation = await pluginManager.list()
+    await pluginSkillLifecycle.reconcileAll(installedPluginsForSkillReconciliation, (pluginId, relativePath) =>
+      pluginManager.resolveAsset(pluginId, relativePath),
+    )
     const skillManager = new DesktopSkillManager(
-      new ManagedAgentSkillStore(openCodeConfigDirectory),
+      managedSkillStore,
       agentRuntime,
       userDataDirectory,
       desktopBuiltinSkillCatalog,
       desktopBuiltinSkillPresentations,
+      pluginSkillOwnership,
+      skillMutations,
     )
     const remoteCapabilities = new RemoteCapabilityInstaller({
       authorizationStore: toolPluginAuthorizations,
@@ -450,6 +497,7 @@ function startApplication() {
       builtinSkills: desktopBuiltinSkillCatalog,
       companionStore,
       pluginManager,
+      pluginSkillLifecycle,
       registry: new RemoteCapabilityRegistryClient({
         cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
         fetch: createElectronRemoteCapabilityFetch(net),
@@ -460,9 +508,25 @@ function startApplication() {
       }),
       skillManager,
     })
+    const prepareLocalPluginPublication = async (
+      plugin: InstalledWebPluginSummary,
+      candidate: WebPluginPublicationCandidate,
+    ) => {
+      const authorization = await toolPluginAuthorizations.prepareInstall(plugin)
+      try {
+        const ownedSkills = await pluginSkillLifecycle.prepareInstall(plugin, candidate)
+        // The owned-Skill transaction records the only fallible forward
+        // decision. Authorization cleanup is best-effort and follows it.
+        return composePluginPublicationTransactions([ownedSkills, authorization])
+      } catch (error) {
+        await authorization.rollback().catch(() => undefined)
+        throw error
+      }
+    }
     await provisionDefaultCapabilities({
       catalog: desktopBuiltinPluginCatalog,
       pluginManager,
+      preparePluginPublication: prepareLocalPluginPublication,
       remote: {
         catalog: desktopDefaultRemoteCapabilityCatalog,
         installer: remoteCapabilities,
@@ -477,6 +541,7 @@ function startApplication() {
       },
       (error) => {
         console.error("Could not provision default Convax capabilities", error)
+        if (error instanceof WebPluginPublicationDeferredError) throw error
       },
     )
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
@@ -540,18 +605,16 @@ function startApplication() {
       remoteCapabilities,
       {
         beforeChange: (pluginId) => pluginServices.discardPlugin(pluginId),
-        prepareInstall: (plugin) => toolPluginAuthorizations.prepareInstall(plugin),
-        revokeAuthorization: (pluginId) => toolPluginAuthorizations.revoke(pluginId),
+        prepareInstall: prepareLocalPluginPublication,
+        prepareRemove: (plugin) => pluginSkillLifecycle.prepareUninstall(plugin),
         async onDidChange(pluginId) {
           generationRuntime.disposePlugin(pluginId)
-          await pluginManager
-            .list()
-            .then(reconcileToolPluginExecutionState)
-            .catch((error) => {
-              console.warn("Could not list changed Tool Plugins for execution-state reconciliation", error)
-            })
+          await reconcileToolPluginExecutionStateForPlugin(pluginId)
           void agentRuntime.refreshHostTools().catch((error) => {
             console.warn("Could not immediately refresh OpenCode generation tools", error)
+          })
+          void skillManager.refresh().catch((error) => {
+            console.warn("Could not immediately refresh OpenCode Plugin-owned Skills", error)
           })
         },
       },
@@ -559,9 +622,9 @@ function startApplication() {
     const disposeSkillManagementIpc = registerSkillManagementIpc(
       skillManager,
       projectManager,
-      pluginManager,
       ipcSecurity.isTrustedSender,
       remoteCapabilities,
+      pluginManager,
     )
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,

@@ -37,9 +37,40 @@ it must not become the permanent home of reusable domain rules.
   sender validation.
 - Treat OpenCode Skills and Convax Plugins as distinct existing concepts. Skills use
   the Agent runtime's native discovery; Plugins compose existing Canvas file-renderer
-  and toolbar registries. A companion Skill is independently installed/removed,
-  describes workflows and selects tools; it grants no Plugin or native permission.
-  Do not create a generic extension framework.
+  and toolbar registries. Standalone Skills and the legacy top-level `skill` field in
+  `convax.plugin/1` through `/3` remain independently managed. A
+  `convax.plugin/4` `contributes.skills` entry is owned by its Plugin: Desktop keeps
+  the ownership binding and atomically publishes, updates, rolls back, and removes
+  the materialized Skill with that Plugin. Owned Skills are visible as provided by
+  the Plugin but cannot be managed separately. No Skill grants Plugin or native
+  permission, and `@convax/agent-runtime` must not learn Plugin identity. Do not
+  create a generic extension framework.
+- Plugin-owned Skill publication has three ordered phases. Prepare validates and
+  stages without exposing new bytes. `publish` rechecks external names and journals
+  exact rollback receipts before the Plugin directory switch. `activate` publishes
+  ownership before Skill bytes after the switch. `commit` records the forward
+  decision before cleanup. Startup converges exact remnants to the validated Plugin
+  package selected by Plugin-package recovery; changed bytes and unknown backups fail
+  closed. A v1-v3 companion transfers to v4 ownership only after an exact old-package
+  byte match. Package recovery must succeed before any dependent Skill journal is
+  consumed. Serialize same-id Plugin install/update/uninstall publications, and
+  serialize owned-Skill transactions with every standalone managed Skill mutation;
+  they share one filesystem namespace. Agent discovery refresh uses that coordinator
+  too. A surviving ownership binding reserves its Skill name even when materialized
+  bytes are missing; a pending journal reserves both previous and next names and
+  blocks standalone mutation until recovery.
+- A dependent publication may roll back only after every Plugin-package rollback
+  rename succeeds. Any incomplete install, update, built-in update, or uninstall
+  rollback must call `deferToRecovery`: retain Skill journals, authorization receipts,
+  and managed companions, release process-local locks, and surface a typed
+  recovery-required error. Startup selects the canonical Plugin package first, then
+  converges all retained state. Default provisioning must not downgrade this error
+  to an offline failure or continue opening the application with a pending journal.
+- Treat owned-Skill commit as the fallible forward decision. Only after it succeeds
+  may executable-authorization and backup cleanup run; cleanup is best-effort and
+  must not roll a current Plugin back. Recover validated uninstall tombstones by
+  finishing removal, never by restoring them. Refresh Agent Skill discovery once
+  startup default provisioning has completed, including its failure path.
 - Install Plugins as validated static packages under `userData`. Render third-party
   entries only in `sandbox="allow-scripts"` iframes served by the contained Plugin
   asset protocol. Never use `webview`, import Plugin JS, or expose Electron/Node.

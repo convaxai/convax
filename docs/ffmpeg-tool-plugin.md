@@ -6,7 +6,7 @@ or Canvas mutation path.
 
 ## Product scope
 
-The `ffmpeg-tools` package is a headless `convax.plugin/3` Tool Plugin distributed
+The `ffmpeg-tools` package is a headless `convax.plugin/4` Tool Plugin distributed
 from the public `convax-plugins` Registry. Its executable companion exposes FFmpeg
 through the shared executable-tool boundary. The manifest classifies every FFmpeg
 tool as an operation, so none appears as a generation model.
@@ -27,12 +27,17 @@ eligible first startup. It still verifies and authorizes only the Registry-pinne
 companion bytes through the normal Tool Plugin transaction; it does not introduce a
 second executable trust path.
 
-Desktop records independent durable receipts for the Plugin and its embedded
-companion Skill. A failed remote attempt is diagnosed and retried on a later startup
-without preventing Convax from opening. Once either capability has been installed,
-removing it is respected and startup does not restore it. Before public open-source
-distribution, this temporary silent default should return to a prominent one-click
-Install action.
+Its `ffmpeg-canvas` Skill is an owned `contributes.skills` directory, not a second
+standalone installation. Desktop publishes the Plugin package, executable
+authorization, materialized Skill, and ownership binding as one coordinated
+transaction. A synchronous failure before the owned-Skill forward decision restores
+the previous Plugin, authorization, Skill bytes, and binding. Once that decision is
+durable, cleanup keeps the updated capability current and completes during startup
+recovery. Uninstall removes both. A failed remote attempt is diagnosed and retried on a later startup
+without preventing Convax from opening. Once the Plugin has been removed, its
+one-time default receipt prevents startup from restoring it. Before public
+open-source distribution, this temporary silent default should return to a prominent
+one-click Install action.
 
 ## Ownership and execution flow
 
@@ -108,7 +113,7 @@ every output path before execution; it must not accept caller-selected paths.
 ## Toolbar presets
 
 The manifest declares four host-rendered selection actions. Desktop discovers them
-from any installed v3 Plugin and shows them when one managed video node is selected
+from any installed v3 or v4 Plugin and shows them when one managed video node is selected
 without an edge selection; it does not identify `ffmpeg-tools` in business code.
 
 - Extract frame: accepts a non-negative timestamp and calls the declared
@@ -193,7 +198,7 @@ behavior.
 
 ## Direct Agent surface
 
-FFmpeg is a transform Plugin rather than a generative model. Its v3 manifest keeps
+FFmpeg is a transform Plugin rather than a generative model. Its v4 manifest keeps
 `generation.models` empty and maps the three `run.*` operations to Agent ids.
 Desktop derives stable names such as `plugin_ffmpeg_tools_run_video` through the
 same generic operation adapter used by every Plugin. `canvas_generate` and the

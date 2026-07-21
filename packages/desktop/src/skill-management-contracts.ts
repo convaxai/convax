@@ -1,9 +1,19 @@
 export type DesktopSkillSource = "global" | "managed"
 
+export type DesktopSkillManagement =
+  | { kind: "standalone" }
+  | {
+      kind: "plugin"
+      pluginId: string
+      pluginName: string
+      pluginVersion: string
+    }
+
 export interface DesktopSkillSummary {
   description?: string
   displayName?: string
   location: string
+  management: DesktopSkillManagement
   managed: boolean
   name: string
   source: DesktopSkillSource
@@ -25,6 +35,9 @@ export interface DesktopSkillCatalogItem {
   id: string
   installed: boolean
   name: string
+  /** Plugin-owned catalog entries remain previewable but cannot be installed as standalone Skills. */
+  ownerPluginId?: string
+  ownerPluginName?: string
 }
 
 export interface DesktopSkillInventory {
@@ -71,6 +84,7 @@ export interface DesktopSkillClient {
   }): Promise<DesktopSkillShowcase | null>
   importSkill(): Promise<DesktopSkillSummary | null>
   installCatalogSkill(input: { id: string }): Promise<DesktopSkillSummary>
+  /** Installs a legacy v1-v3 Plugin companion as an independent Skill. */
   installPluginSkill(input: { pluginId: string }): Promise<DesktopSkillSummary>
   listSkills(input?: { scopeId?: string }): Promise<DesktopSkillInventory>
   onDidChange(listener: () => void): () => void

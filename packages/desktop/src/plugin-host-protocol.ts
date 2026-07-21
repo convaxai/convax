@@ -1,6 +1,7 @@
 export const desktopPluginHostProtocolV1 = "convax.plugin-host/1" as const
 export const desktopPluginHostProtocolV2 = "convax.plugin-host/2" as const
 export const desktopPluginHostProtocolV3 = "convax.plugin-host/3" as const
+export const desktopPluginHostProtocolV4 = "convax.plugin-host/4" as const
 /** Backwards-compatible name for the original static Plugin protocol. */
 export const desktopPluginHostProtocol = desktopPluginHostProtocolV1
 export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
@@ -9,6 +10,7 @@ export type DesktopPluginHostProtocol =
   | typeof desktopPluginHostProtocolV1
   | typeof desktopPluginHostProtocolV2
   | typeof desktopPluginHostProtocolV3
+  | typeof desktopPluginHostProtocolV4
 
 export type DesktopPluginHostMethodV1 =
   | "host.context.get"
@@ -25,8 +27,9 @@ export type DesktopPluginHostMethodV2 =
   | "generation.canvas.execute"
 
 export type DesktopPluginHostMethodV3 = DesktopPluginHostMethodV2
+export type DesktopPluginHostMethodV4 = DesktopPluginHostMethodV3
 
-export type DesktopPluginHostMethod = DesktopPluginHostMethodV3
+export type DesktopPluginHostMethod = DesktopPluginHostMethodV4
 
 export interface DesktopPluginHostRequest {
   id: string
@@ -81,22 +84,26 @@ const methodsV2 = new Set<DesktopPluginHostMethodV2>([
 ])
 
 const methodsV3 = new Set<DesktopPluginHostMethodV3>(methodsV2)
+const methodsV4 = new Set<DesktopPluginHostMethodV4>(methodsV3)
 
 export function desktopPluginHostProtocolForManifestSchema(
-  schema: "convax.plugin/1" | "convax.plugin/2" | "convax.plugin/3",
+  schema: "convax.plugin/1" | "convax.plugin/2" | "convax.plugin/3" | "convax.plugin/4",
 ): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/3"
-    ? desktopPluginHostProtocolV3
-    : schema === "convax.plugin/2"
-      ? desktopPluginHostProtocolV2
-      : desktopPluginHostProtocolV1
+  return schema === "convax.plugin/4"
+    ? desktopPluginHostProtocolV4
+    : schema === "convax.plugin/3"
+      ? desktopPluginHostProtocolV3
+      : schema === "convax.plugin/2"
+        ? desktopPluginHostProtocolV2
+        : desktopPluginHostProtocolV1
 }
 
 export function isDesktopPluginHostProtocol(value: unknown): value is DesktopPluginHostProtocol {
   return (
     value === desktopPluginHostProtocolV1 ||
     value === desktopPluginHostProtocolV2 ||
-    value === desktopPluginHostProtocolV3
+    value === desktopPluginHostProtocolV3 ||
+    value === desktopPluginHostProtocolV4
   )
 }
 
@@ -116,7 +123,9 @@ export function isDesktopPluginHostRequest(value: unknown): value is DesktopPlug
     ? methodsV1.has(request.method as DesktopPluginHostMethodV1)
     : request.protocol === desktopPluginHostProtocolV2
       ? methodsV2.has(request.method as DesktopPluginHostMethodV2)
-      : methodsV3.has(request.method as DesktopPluginHostMethodV3)
+      : request.protocol === desktopPluginHostProtocolV3
+        ? methodsV3.has(request.method as DesktopPluginHostMethodV3)
+        : methodsV4.has(request.method as DesktopPluginHostMethodV4)
 }
 
 export function pluginHostSuccess(

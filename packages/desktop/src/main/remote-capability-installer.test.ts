@@ -3,12 +3,17 @@ import { describe, expect, mock, test } from "bun:test"
 import { parseWebPluginManifest, type WebPluginManifest } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { DesktopBuiltinSkillBundle } from "./builtin-skill-catalog"
-import type { WebPluginBundleInstallOptions } from "./plugin-manager"
+import {
+  WebPluginPublicationDeferredError,
+  type WebPluginBundleInstallOptions,
+  type WebPluginMutationContext,
+} from "./plugin-manager"
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import {
   remoteCapabilityRegistrySchema,
   remotePluginHostSchema,
   remotePluginHostSchemaV2,
+  remotePluginHostSchemaV4,
   remoteSkillSchema,
   type RemoteCapabilityPackage,
   type RemotePluginCompanion,
@@ -128,7 +133,12 @@ function setup(
   installed: WebPluginManifest[] = [],
   target: { arch: NodeJS.Architecture; platform: NodeJS.Platform } = { arch: "arm64", platform: "darwin" },
   beforePluginPublish?: (pluginId: string) => Promise<void> | void,
+  pluginSkillLifecycle?: {
+    prepareInstall: ReturnType<typeof mock>
+    reconcileInstalled: ReturnType<typeof mock>
+  },
 ) {
+  let installedPlugins = [...installed]
   const registry = {
     downloadBundle: mock(async (_item: RemoteCapabilityPackage) => ({ files })),
     downloadCompanionArtifact: mock(async () => encoder.encode("companion")),
@@ -159,18 +169,43 @@ function setup(
       return transaction
     }),
   }
+  const mutationTails = new Map<string, Promise<void>>()
+  const withPluginMutation = async <Result>(
+    pluginId: string,
+    operation: (mutation: WebPluginMutationContext) => Promise<Result>,
+  ): Promise<Result> => {
+    const previous = mutationTails.get(pluginId) ?? Promise.resolve()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const current = previous.then(() => gate)
+    mutationTails.set(pluginId, current)
+    await previous
+    try {
+      return await operation({ pluginId })
+    } finally {
+      release()
+      if (mutationTails.get(pluginId) === current) mutationTails.delete(pluginId)
+    }
+  }
   const pluginManager = {
     installBundle: mock(
       async (bundle: { files: Readonly<Record<string, Uint8Array>> }, options: WebPluginBundleInstallOptions = {}) => {
         const parsed = JSON.parse(new TextDecoder().decode(bundle.files["manifest.json"]))
         const plugin = parseWebPluginManifest(parsed)
-        const transaction = await options.beforePublish?.(plugin)
+        const transaction = await options.beforePublish?.(plugin, { root: "/staging/plugin" })
         await transaction?.publish()
+        await transaction?.activate?.()
         await transaction?.commit()
+        installedPlugins = [...installedPlugins.filter((candidate) => candidate.id !== plugin.id), plugin]
         return plugin
       },
     ),
-    list: mock(async () => installed),
+    isBundleInstalled: mock(async () => true),
+    list: mock(async () => installedPlugins),
+    resolveAsset: mock(async (pluginId: string, relativePath: string) => `/plugins/${pluginId}/${relativePath}`),
+    withPluginMutation,
   }
   const companionTransactions: Array<{ commit: ReturnType<typeof mock>; rollback: ReturnType<typeof mock> }> = []
   const companionStore = {
@@ -179,12 +214,13 @@ function setup(
       companionTransactions.push(transaction)
       return { binding: { path: "/managed/companion", sha256: "a".repeat(64), size: 9 }, ...transaction }
     }),
-    reconcile: mock(async () => {}),
+    reconcilePlugin: mock(async () => {}),
   }
   const skillManager = {
     installFromFiles: mock(
       async (_files: Readonly<Record<string, string | Uint8Array>>, _directory?: string, expectedName?: string) => ({
         location: `/managed/${expectedName}/SKILL.md`,
+        management: { kind: "standalone" as const },
         managed: true,
         name: expectedName!,
         source: "managed" as const,
@@ -206,6 +242,15 @@ function setup(
       version: "0.1.0",
     },
   ]
+  const resolvedPluginSkillLifecycle = pluginSkillLifecycle ?? {
+    prepareInstall: mock(async () => ({
+      async activate() {},
+      async commit() {},
+      async publish() {},
+      async rollback() {},
+    })),
+    reconcileInstalled: mock(async () => {}),
+  }
   const installer = new RemoteCapabilityInstaller({
     arch: target.arch,
     authorizationStore,
@@ -215,6 +260,7 @@ function setup(
     companionStore,
     platform: target.platform,
     pluginManager,
+    pluginSkillLifecycle: resolvedPluginSkillLifecycle,
     registry,
     skillManager,
   })
@@ -255,6 +301,113 @@ describe("RemoteCapabilityInstaller", () => {
     expect(registry.fetchRegistry).toHaveBeenNthCalledWith(2, { cachePolicy: "cache-first" })
   })
 
+  test("keeps Plugin-owned Skills previewable but routes installation through the owner", async () => {
+    const ownedManifest = parseWebPluginManifest({
+      capabilities: [],
+      contributes: {
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Run a local operation",
+              id: "operation.run",
+              output: "text",
+              title: "Run",
+            },
+          ],
+        },
+        skills: [{ name: "media-workflow", path: "skills/media-workflow" }],
+      },
+      description: "Media tools",
+      id: "media-tools",
+      name: "Media Tools",
+      runtime: { command: "media-tools-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/4",
+      version: "1.0.0",
+    })
+    const packages = [
+      pluginPackage("media-tools", "1.0.0", {
+        compatibility: { pluginHost: remotePluginHostSchemaV4, pluginSchema: "convax.plugin/4" },
+        manifest: ownedManifest,
+        name: ownedManifest.name,
+      }),
+      skillPackage("media-workflow", { ownerPluginId: "media-tools" }),
+    ]
+    const { installer, registry } = setup(packages)
+
+    await expect(installer.listSkillCatalog(new Set())).resolves.toEqual([
+      {
+        description: "media-workflow description",
+        id: "media-workflow",
+        installed: false,
+        name: "media-workflow",
+        ownerPluginId: "media-tools",
+        ownerPluginName: "Media Tools",
+      },
+    ])
+    await expect(installer.installSkill("media-workflow")).rejects.toThrow("provided by Plugin media-tools")
+    expect(registry.downloadBundle).not.toHaveBeenCalled()
+  })
+
+  test("publishes owned Skills inside the same remote Plugin transaction", async () => {
+    const ownedManifest = parseWebPluginManifest({
+      capabilities: [],
+      contributes: {
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Run a local operation",
+              id: "operation.run",
+              output: "text",
+              title: "Run",
+            },
+          ],
+        },
+        skills: [{ name: "media-workflow", path: "skills/media-workflow" }],
+      },
+      description: "Media tools",
+      id: "media-tools",
+      name: "Media Tools",
+      runtime: { command: "media-tools-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/4",
+      version: "1.0.0",
+    })
+    const item = pluginPackage("media-tools", "1.0.0", {
+      compatibility: { pluginHost: remotePluginHostSchemaV4, pluginSchema: "convax.plugin/4" },
+      manifest: ownedManifest,
+      name: ownedManifest.name,
+    })
+    let setupResult: ReturnType<typeof setup> | undefined
+    const ownedTransaction = {
+      activate: mock(async () => undefined),
+      commit: mock(async () => {
+        expect(setupResult?.authorizationTransactions[0]?.commit).not.toHaveBeenCalled()
+      }),
+      publish: mock(async () => undefined),
+      rollback: mock(async () => undefined),
+    }
+    const pluginSkillLifecycle = {
+      prepareInstall: mock(async () => ownedTransaction),
+      reconcileInstalled: mock(async () => undefined),
+    }
+    const files = {
+      "manifest.json": encoder.encode(JSON.stringify(ownedManifest)),
+      "skills/media-workflow/SKILL.md": encoder.encode("---\nname: media-workflow\ndescription: Media workflow\n---\n"),
+    }
+    setupResult = setup([item], files, [], undefined, undefined, pluginSkillLifecycle)
+
+    await expect(setupResult.installer.installPlugin("media-tools")).resolves.toMatchObject({ id: "media-tools" })
+    expect(pluginSkillLifecycle.prepareInstall).toHaveBeenCalledWith(ownedManifest, { root: "/staging/plugin" })
+    expect(ownedTransaction.publish).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.activate).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.commit).toHaveBeenCalledTimes(1)
+    expect(setupResult.authorizationTransactions[0]?.commit).toHaveBeenCalledTimes(1)
+    expect(ownedTransaction.rollback).not.toHaveBeenCalled()
+  })
+
   test("rechecks the downloaded Plugin manifest before using the ordinary bundle installer", async () => {
     const item = pluginPackage("remote-plugin")
     const files = {
@@ -285,13 +438,7 @@ describe("RemoteCapabilityInstaller", () => {
     const item = pluginPackage("remote-plugin")
     const files = { "manifest.json": encoder.encode(JSON.stringify(item.manifest)) }
     const beforePluginPublish = mock(async (_pluginId: string) => undefined)
-    const setupResult = setup(
-      [item],
-      files,
-      [],
-      { arch: "arm64", platform: "darwin" },
-      beforePluginPublish,
-    )
+    const setupResult = setup([item], files, [], { arch: "arm64", platform: "darwin" }, beforePluginPublish)
 
     await setupResult.installer.installPlugin(item.id)
     expect(beforePluginPublish).toHaveBeenCalledWith(item.id)
@@ -405,6 +552,26 @@ describe("RemoteCapabilityInstaller", () => {
     expect(setupResult.companionTransactions[0]!.commit).not.toHaveBeenCalled()
   })
 
+  test("preserves a companion when Plugin package recovery must select the final version", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) }
+    const setupResult = setup([item], files)
+    const cause = new Error("package rollback rename failed")
+    setupResult.pluginManager.installBundle.mockRejectedValueOnce(
+      new WebPluginPublicationDeferredError([cause], "Plugin publication requires startup recovery", { cause }),
+    )
+
+    await expect(setupResult.installer.installPlugin(item.id)).rejects.toBeInstanceOf(WebPluginPublicationDeferredError)
+    expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
+    expect(setupResult.companionTransactions[0]!.commit).not.toHaveBeenCalled()
+    expect(setupResult.companionStore.reconcilePlugin).not.toHaveBeenCalled()
+  })
+
   test("does not report or attempt rollback after Plugin success when companion cleanup fails", async () => {
     const pluginManifest = generationManifest("generation-plugin")
     const item = pluginPackage("generation-plugin", "1.0.0", {
@@ -477,7 +644,66 @@ describe("RemoteCapabilityInstaller", () => {
     )
     await expect(same.installer.installPlugin("generation-plugin")).rejects.toThrow("newer version")
     await expect(same.installer.installPlugin("generation-plugin", { allowCurrent: true })).resolves.toEqual(current)
-    expect(same.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(same.registry.downloadBundle).toHaveBeenCalledTimes(2)
+    expect(same.pluginManager.isBundleInstalled).toHaveBeenCalledTimes(2)
+    expect(same.authorizationStore.prepareInstall).toHaveBeenCalledTimes(1)
+  })
+
+  test("refuses to adopt a same-version package whose bytes do not match the Registry", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: current,
+    })
+    const setupResult = setup([item], { "manifest.json": encoder.encode(JSON.stringify(current)) }, [current])
+    setupResult.pluginManager.isBundleInstalled.mockResolvedValueOnce(false)
+
+    await expect(setupResult.installer.installPlugin(item.id, { allowCurrent: true })).rejects.toThrow(
+      "does not match the verified Registry package",
+    )
+    expect(setupResult.authorizationStore.prepareInstall).not.toHaveBeenCalled()
+    expect(setupResult.companionStore.install).not.toHaveBeenCalled()
+  })
+
+  test("revalidates a current Registry package after repair preparation", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: current,
+    })
+    const setupResult = setup([item], { "manifest.json": encoder.encode(JSON.stringify(current)) }, [current])
+    setupResult.pluginManager.isBundleInstalled.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+
+    await expect(setupResult.installer.installPlugin(item.id, { allowCurrent: true })).rejects.toThrow(
+      "changed during verified Registry repair",
+    )
+    expect(setupResult.pluginManager.isBundleInstalled).toHaveBeenCalledTimes(2)
+    expect(setupResult.authorizationTransactions[0]!.publish).not.toHaveBeenCalled()
+    expect(setupResult.authorizationTransactions[0]!.rollback).toHaveBeenCalledTimes(1)
+  })
+
+  test("serializes the complete companion and package lifecycle for concurrent same-Plugin installs", async () => {
+    const pluginManifest = generationManifest("generation-plugin")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const setupResult = setup([item], {
+      "manifest.json": encoder.encode(JSON.stringify(pluginManifest)),
+    })
+
+    const outcomes = await Promise.allSettled([
+      setupResult.installer.installPlugin(item.id),
+      setupResult.installer.installPlugin(item.id),
+    ])
+
+    expect(outcomes.filter(({ status }) => status === "fulfilled")).toHaveLength(1)
+    expect(outcomes.filter(({ status }) => status === "rejected")).toHaveLength(1)
+    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionStore.install).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
+    expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
   })
 
   test("installs Skills from verified files with the Registry id as the expected Skill name", async () => {

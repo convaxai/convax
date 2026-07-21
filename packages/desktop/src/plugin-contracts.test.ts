@@ -106,6 +106,22 @@ function executableManifestV3(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function ownedSkillsManifest(overrides: Record<string, unknown> = {}) {
+  const base = staticManifest()
+  return {
+    ...base,
+    contributes: {
+      ...base.contributes,
+      skills: [
+        { name: "canvas-director", path: "skills/canvas-director" },
+        { name: "asset-reviewer", path: "skills/asset-reviewer" },
+      ],
+    },
+    schema: "convax.plugin/4",
+    ...overrides,
+  }
+}
+
 describe("versioned Plugin manifest generation declarations", () => {
   test("keeps convax.plugin/1 static-only", () => {
     const parsed = parseWebPluginManifest(staticManifest())
@@ -169,6 +185,64 @@ describe("versioned Plugin manifest generation declarations", () => {
         title: { default: "Trim", "zh-CN": "截取" },
       },
     ])
+  })
+
+  test("parses v4 Plugin-owned Skill directories without changing legacy companion semantics", () => {
+    const parsed = parseWebPluginManifest(ownedSkillsManifest())
+
+    expect(parsed.schema).toBe("convax.plugin/4")
+    expect(parsed.contributes.skills).toEqual([
+      { name: "canvas-director", path: "skills/canvas-director" },
+      { name: "asset-reviewer", path: "skills/asset-reviewer" },
+    ])
+    expect(parsed.skill).toBeUndefined()
+
+    expect(() => parseWebPluginManifest({ ...ownedSkillsManifest(), skill: "skills/legacy/SKILL.md" })).toThrow(
+      "unsupported field",
+    )
+    expect(() => {
+      const v3 = executableManifestV3()
+      return parseWebPluginManifest({
+        ...v3,
+        contributes: { ...v3.contributes, skills: [{ name: "canvas-director", path: "skills/canvas-director" }] },
+      })
+    }).toThrow("unsupported field")
+  })
+
+  test("rejects ambiguous, unsafe, or standalone v4 Skill contributions", () => {
+    const withSkills = (skills: unknown) => {
+      const manifest = ownedSkillsManifest()
+      return parseWebPluginManifest({ ...manifest, contributes: { ...manifest.contributes, skills } })
+    }
+
+    expect(() => withSkills([])).toThrow("non-empty array")
+    expect(() => withSkills([{ name: "Bad_Name", path: "skills/Bad_Name" }])).toThrow("kebab-case")
+    expect(() => withSkills([{ name: "canvas-director", path: "skills/other" }])).toThrow(
+      "must name its Skill directory",
+    )
+    expect(() =>
+      withSkills([
+        { name: "canvas-director", path: "skills/canvas-director" },
+        { name: "canvas-director", path: "other/canvas-director" },
+      ]),
+    ).toThrow("duplicate names")
+    expect(() =>
+      withSkills([
+        { name: "canvas-director", path: "skills/canvas-director" },
+        { name: "asset-reviewer", path: "skills/canvas-director" },
+      ]),
+    ).toThrow()
+    expect(() =>
+      parseWebPluginManifest({
+        capabilities: [],
+        contributes: { skills: [{ name: "canvas-director", path: "skills/canvas-director" }] },
+        description: "Only a Skill",
+        id: "skill-wrapper",
+        name: "Skill Wrapper",
+        schema: "convax.plugin/4",
+        version: "1.0.0",
+      }),
+    ).toThrow("beyond owned Skills")
   })
 
   test("rejects ambiguous v3 model, Agent, and selection-action references", () => {

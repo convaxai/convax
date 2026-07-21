@@ -1,7 +1,7 @@
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
 import { compareWebPluginVersions, type InstalledWebPluginSummary, type WebPluginClient } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
-import type { WebPluginManager, WebPluginPublicationTransaction } from "./plugin-manager"
+import type { WebPluginManager, WebPluginPublicationCandidate, WebPluginPublicationTransaction } from "./plugin-manager"
 import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
 type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChange">> = Parameters<
@@ -29,16 +29,25 @@ export function registerPluginManagementIpc(
   lifecycle?: {
     beforeChange?(pluginId: string): Promise<void> | void
     onDidChange(pluginId: string): Promise<void> | void
-    prepareInstall?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
-    revokeAuthorization?(pluginId: string): Promise<void>
+    prepareInstall?(
+      plugin: InstalledWebPluginSummary,
+      candidate: WebPluginPublicationCandidate,
+    ): Promise<WebPluginPublicationTransaction>
+    prepareRemove?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
   },
 ) {
   const prepareInstall = lifecycle?.prepareInstall?.bind(lifecycle)
   const preparePublication =
     prepareInstall || lifecycle?.beforeChange
-      ? async (plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction> => {
-          const authorization = await prepareInstall?.(plugin)
+      ? async (
+          plugin: InstalledWebPluginSummary,
+          candidate: WebPluginPublicationCandidate,
+        ): Promise<WebPluginPublicationTransaction> => {
+          const authorization = await prepareInstall?.(plugin, candidate)
           return {
+            async activate() {
+              await authorization?.activate?.()
+            },
             async publish() {
               await lifecycle?.beforeChange?.(plugin.id)
               await authorization?.publish()
@@ -48,6 +57,34 @@ export function registerPluginManagementIpc(
             },
             async rollback() {
               await authorization?.rollback()
+            },
+            async deferToRecovery() {
+              await authorization?.deferToRecovery?.()
+            },
+          }
+        }
+      : undefined
+  const prepareRemove = lifecycle?.prepareRemove?.bind(lifecycle)
+  const prepareRemoval =
+    prepareRemove || lifecycle?.beforeChange
+      ? async (plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction> => {
+          const publication = await prepareRemove?.(plugin)
+          return {
+            async activate() {
+              await publication?.activate?.()
+            },
+            async publish() {
+              await lifecycle?.beforeChange?.(plugin.id)
+              await publication?.publish()
+            },
+            async commit() {
+              await publication?.commit()
+            },
+            async rollback() {
+              await publication?.rollback()
+            },
+            async deferToRecovery() {
+              await publication?.deferToRecovery?.()
             },
           }
         }
@@ -116,7 +153,9 @@ export function registerPluginManagementIpc(
     const changedPluginId = pluginId(result)
     if (changedPluginId) {
       try {
-        await lifecycle?.onDidChange(changedPluginId)
+        await manager.withPluginMutation(changedPluginId, () =>
+          Promise.resolve(lifecycle?.onDidChange(changedPluginId)),
+        )
       } catch (error) {
         // The package mutation is already committed. Startup reconciliation
         // retries cleanup; never report a successful install as a failure.
@@ -190,9 +229,9 @@ export function registerPluginManagementIpc(
       (_event, input) =>
         changed(
           async () => {
-            await lifecycle?.beforeChange?.(input.id)
-            const removed = await manager.uninstall(input.id)
-            if (removed) await lifecycle?.revokeAuthorization?.(input.id).catch(() => undefined)
+            const removed = prepareRemoval
+              ? await manager.uninstall(input.id, { beforeRemove: prepareRemoval })
+              : await manager.uninstall(input.id)
             return removed
           },
           (removed) => (removed ? input.id : undefined),

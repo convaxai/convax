@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import type { DesktopSkillInventory, DesktopSkillShowcase } from "../skill-management-contracts"
-import type { DesktopSkillManager } from "./skill-manager"
 import type { WebPluginManager } from "./plugin-manager"
+import type { DesktopSkillManager } from "./skill-manager"
 import type { RemoteSkillCatalogPort } from "./remote-capability-installer"
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
@@ -83,12 +83,14 @@ function createManager(inventory: DesktopSkillInventory = { catalog: [], skills:
     hasCatalogSkill: mock((id: string) => id === "storyboard"),
     importFromDirectory: mock(async (source: string) => ({
       location: `${source}/SKILL.md`,
+      management: { kind: "standalone" as const },
       managed: true,
       name: "imported",
       source: "managed" as const,
     })),
     installCatalogSkill: mock(async (id: string) => ({
       location: `/managed/${id}/SKILL.md`,
+      management: { kind: "standalone" as const },
       managed: true,
       name: id,
       source: "managed" as const,
@@ -132,6 +134,7 @@ function createRemoteCatalog() {
     })),
     installSkill: mock(async (id: string) => ({
       location: `/managed/${id}/SKILL.md`,
+      management: { kind: "standalone" as const },
       managed: true,
       name: id,
       source: "managed" as const,
@@ -210,12 +213,7 @@ describe("registerSkillManagementIpc", () => {
     const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
     const setup = createManager()
     const projects = { resolveEntryPath: mock(async () => "/project") }
-    const dispose = registerSkillManagementIpc(
-      setup.manager,
-      projects,
-      createPlugins(),
-      (event) => event.sender.id === 1,
-    )
+    const dispose = registerSkillManagementIpc(setup.manager, projects, (event) => event.sender.id === 1)
 
     for (const channel of [
       skillManagementIpcChannels.getSkillDetails,
@@ -236,7 +234,7 @@ describe("registerSkillManagementIpc", () => {
     dispose()
   })
 
-  test("resolves Project scope and routes import, catalog, plugin Skill, open, and uninstall operations", async () => {
+  test("resolves Project scope and routes import, catalog, open, and uninstall operations", async () => {
     const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
     const setup = createManager()
     const projects = {
@@ -244,7 +242,7 @@ describe("registerSkillManagementIpc", () => {
     }
     const plugins = createPlugins()
     dialogResult = { canceled: false, filePaths: ["/skills/import-me"] }
-    const dispose = registerSkillManagementIpc(setup.manager, projects, plugins, () => true)
+    const dispose = registerSkillManagementIpc(setup.manager, projects, () => true, undefined, plugins)
 
     await invoke(skillManagementIpcChannels.listSkills)
     expect(setup.manager.list).toHaveBeenLastCalledWith(undefined)
@@ -278,7 +276,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
     )
 
@@ -290,34 +287,47 @@ describe("registerSkillManagementIpc", () => {
     dispose()
   })
 
-  test("handles canceled import and invalid companion Skills without mutating the manager", async () => {
+  test("handles canceled import without mutating the manager", async () => {
     const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
     const setup = createManager()
     const projects = { resolveEntryPath: mock(async () => "/project") }
-    const plugins = createPlugins()
-    plugins.list.mockResolvedValueOnce([])
-    const dispose = registerSkillManagementIpc(setup.manager, projects, plugins, () => true)
+    const dispose = registerSkillManagementIpc(setup.manager, projects, () => true)
 
     await expect(invoke(skillManagementIpcChannels.importSkill)).resolves.toBeNull()
     expect(setup.manager.importFromDirectory).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  test("rejects unavailable or v4 Plugin-owned Skills through the legacy companion endpoint", async () => {
+    const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
+    const setup = createManager()
+    const plugins = createPlugins()
+    plugins.list.mockResolvedValueOnce([])
+    const dispose = registerSkillManagementIpc(
+      setup.manager,
+      { resolveEntryPath: mock(async () => "/project") },
+      () => true,
+      undefined,
+      plugins,
+    )
+
     await expect(invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "missing" })).rejects.toThrow(
       "Installed Plugin was not found",
     )
-
     plugins.list.mockResolvedValueOnce([
       {
         capabilities: [],
-        contributes: { canvas: { renderer: { create: true } } },
-        description: "No Skill",
+        contributes: { skills: [{ name: "owned-workflow", path: "skills/owned-workflow" }] },
+        description: "Owned workflow",
         entry: "index.html",
-        id: "no-skill",
-        name: "No Skill",
-        schema: "convax.plugin/1",
+        id: "owned-tools",
+        name: "Owned Tools",
+        schema: "convax.plugin/4",
         version: "1.0.0",
       },
     ])
-    await expect(invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "no-skill" })).rejects.toThrow(
-      "does not include a companion Skill",
+    await expect(invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "owned-tools" })).rejects.toThrow(
+      "does not include a legacy companion Skill",
     )
     expect(plugins.resolveAsset).not.toHaveBeenCalled()
     dispose()
@@ -332,7 +342,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
       remote,
     )
@@ -358,6 +367,7 @@ describe("registerSkillManagementIpc", () => {
       skills: [
         {
           location: "/managed/remote-review/SKILL.md",
+          management: { kind: "standalone" },
           managed: true,
           name: "remote-review",
           source: "managed",
@@ -368,7 +378,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
       remote,
     )
@@ -381,6 +390,7 @@ describe("registerSkillManagementIpc", () => {
       skills: [
         {
           location: "/managed/remote-review/SKILL.md",
+          management: { kind: "standalone" },
           managed: true,
           name: "remote-review",
           source: "managed",
@@ -410,7 +420,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
       remote,
     )
@@ -477,7 +486,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
       remote,
     )
@@ -540,7 +548,6 @@ describe("registerSkillManagementIpc", () => {
     const dispose = registerSkillManagementIpc(
       setup.manager,
       { resolveEntryPath: mock(async () => "/project") },
-      createPlugins(),
       () => true,
       remote,
     )

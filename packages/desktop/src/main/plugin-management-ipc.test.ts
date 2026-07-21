@@ -74,6 +74,9 @@ function createManager(installed: InstalledWebPluginSummary[] = []) {
     isBuiltinBundleInstalled: mock(async () => false),
     list: mock(async () => installed),
     uninstall: mock(async (_id: string) => true),
+    async withPluginMutation<Result>(pluginId: string, operation: (mutation: { pluginId: string }) => Promise<Result>) {
+      return operation({ pluginId })
+    },
   } as unknown as WebPluginManager
 }
 
@@ -300,7 +303,7 @@ describe("registerPluginManagementIpc", () => {
     dispose()
   })
 
-  test("forwards install authorization and revokes it only after a successful uninstall", async () => {
+  test("forwards install authorization and reconciles only after a successful uninstall", async () => {
     const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
     const manager = createManager()
     const item = catalogEntry("catalog-plugin")
@@ -309,13 +312,11 @@ describe("registerPluginManagementIpc", () => {
       publish: async () => undefined,
       rollback: async () => undefined,
     }))
-    const revokeAuthorization = mock(async () => undefined)
     const onDidChange = mock((_pluginId: string) => undefined)
     dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
     const dispose = registerPluginManagementIpc(manager, [item], () => true, undefined, {
       onDidChange,
       prepareInstall,
-      revokeAuthorization,
     })
 
     await invoke(pluginManagementIpcChannels.importPlugin)
@@ -327,11 +328,10 @@ describe("registerPluginManagementIpc", () => {
       beforePublish: expect.any(Function),
     })
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })
-    expect(revokeAuthorization).toHaveBeenCalledWith("installed-plugin")
+    expect(onDidChange).toHaveBeenCalledWith("installed-plugin")
 
     manager.uninstall = mock(async () => false) as WebPluginManager["uninstall"]
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "missing-plugin" })
-    expect(revokeAuthorization).toHaveBeenCalledTimes(1)
     expect(onDidChange).toHaveBeenCalledTimes(3)
     dispose()
   })
@@ -348,14 +348,24 @@ describe("registerPluginManagementIpc", () => {
       await transaction?.commit()
       return installed
     }) as WebPluginManager["install"]
-    manager.uninstall = mock(async () => {
+    manager.uninstall = mock(async (_pluginId: string, options) => {
+      const transaction = await options.beforeRemove?.(manifest("imported-plugin"))
+      await transaction?.publish()
       order.push("package.uninstall")
+      await transaction?.activate?.()
+      await transaction?.commit()
       return true
     }) as WebPluginManager["uninstall"]
-    const beforeChange = mock(async (pluginId: string) => { order.push(`before:${pluginId}`) })
+    const beforeChange = mock(async (pluginId: string) => {
+      order.push(`before:${pluginId}`)
+    })
     const prepareInstall = mock(async () => ({
-      commit: async () => { order.push("authorization.commit") },
-      publish: async () => { order.push("authorization.publish") },
+      commit: async () => {
+        order.push("authorization.commit")
+      },
+      publish: async () => {
+        order.push("authorization.publish")
+      },
       rollback: async () => undefined,
     }))
     dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
@@ -385,12 +395,12 @@ describe("registerPluginManagementIpc", () => {
     windows.push(target)
     const warning = spyOn(console, "warn").mockImplementation(() => undefined)
     const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
-      onDidChange: async () => { throw new Error("temporary cleanup failure") },
+      onDidChange: async () => {
+        throw new Error("temporary cleanup failure")
+      },
     })
     try {
-      await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(
-        true,
-      )
+      await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
       expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
       expect(warning).toHaveBeenCalledTimes(1)
     } finally {

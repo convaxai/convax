@@ -347,6 +347,7 @@ export interface SkillDetailDialogProps {
   details: DesktopSkillDetails | null
   error: string | null
   installed: boolean
+  installLabel?: string
   locale: AppLocale
   loading: boolean
   managedName?: string
@@ -355,6 +356,7 @@ export interface SkillDetailDialogProps {
   onRetry(): void
   onUninstall(): void
   readOnly?: boolean
+  readOnlyLabel?: string
   skill: DesktopSkillCatalogItem
 }
 
@@ -363,6 +365,7 @@ export function SkillDetailDialog({
   details,
   error,
   installed,
+  installLabel,
   locale,
   loading,
   managedName,
@@ -371,6 +374,7 @@ export function SkillDetailDialog({
   onRetry,
   onUninstall,
   readOnly = false,
+  readOnlyLabel,
   skill,
 }: SkillDetailDialogProps) {
   const tree = useMemo(() => buildSkillFileTree(details?.files ?? []), [details])
@@ -589,7 +593,7 @@ export function SkillDetailDialog({
           <p className="text-xs text-muted-foreground">{skill.id}</p>
           {readOnly ? (
             <span className="rounded-full border border-border bg-muted/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {appMessage(locale, "capabilities.globalReadOnly")}
+              {readOnlyLabel ?? appMessage(locale, "capabilities.globalReadOnly")}
             </span>
           ) : managedName ? (
             <Button disabled={busy} onClick={onUninstall} size="sm" variant="ghost">
@@ -599,7 +603,9 @@ export function SkillDetailDialog({
           ) : (
             <Button disabled={busy || installed} onClick={onInstall} size="sm" variant="outline">
               {installed ? <Sparkles /> : <Play />}
-              {appMessage(locale, installed ? "capabilities.installed" : "capabilities.installSkill")}
+              {installed
+                ? appMessage(locale, "capabilities.installed")
+                : (installLabel ?? appMessage(locale, "capabilities.installSkill"))}
             </Button>
           )}
         </footer>

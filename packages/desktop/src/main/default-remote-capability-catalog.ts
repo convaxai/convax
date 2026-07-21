@@ -7,7 +7,6 @@ import type { DefaultRemoteCapability } from "./default-capability-provisioner"
  */
 export const desktopDefaultRemoteCapabilityCatalog = [
   {
-    companionSkillName: "ffmpeg-canvas",
     pluginId: "ffmpeg-tools",
   },
 ] as const satisfies readonly DefaultRemoteCapability[]

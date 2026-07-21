@@ -51,7 +51,7 @@ function selection(nodeIds: string[], edgeIds: string[] = []) {
   )
 }
 
-function operationPlugin(): InstalledWebPluginSummary {
+function operationPlugin(schema: "convax.plugin/3" | "convax.plugin/4" = "convax.plugin/3"): InstalledWebPluginSummary {
   const localized = (defaultText: string, chinese: string) => ({ default: defaultText, "zh-CN": chinese })
   return {
     capabilities: [],
@@ -104,12 +104,13 @@ function operationPlugin(): InstalledWebPluginSummary {
           tool("audio.extract", "audio"),
         ],
       },
+      ...(schema === "convax.plugin/4" ? { skills: [{ name: "media-workflow", path: "skills/media-workflow" }] } : {}),
     },
     description: "A replaceable media operation Plugin.",
     id: "acme-media",
     name: "Acme Media",
     runtime: { command: "acme-media-mcp", type: "mcp-stdio" },
-    schema: "convax.plugin/3",
+    schema,
     version: "1.0.0",
   }
 }
@@ -133,6 +134,14 @@ describe("manifest-driven media operation visibility", () => {
       steps: [{ output: "image", toolId: "acme-media/frame.extract" }],
     })
     expect(listInstalledMediaOperationActions([])).toEqual([])
+  })
+
+  test("preserves manifest-driven actions for a v4 Plugin with owned Skills", () => {
+    const v3Actions = listInstalledMediaOperationActions([operationPlugin()])
+    const v4Plugin = operationPlugin("convax.plugin/4")
+
+    expect(v4Plugin.contributes.skills).toEqual([{ name: "media-workflow", path: "skills/media-workflow" }])
+    expect(listInstalledMediaOperationActions([v4Plugin])).toEqual(v3Actions)
   })
 
   test("accepts exactly one managed Project video without a selected edge", () => {
