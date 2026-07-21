@@ -24,11 +24,12 @@ describe("Agent generation model picker", () => {
   test("renders media tabs and only the active installed-tool group", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
-        activeOutput="image"
+        activeTab="image"
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         toolInput={{}}
         tools={[tool(), tool({ id: "plugin.example:video.generate", output: "video", title: "Video Model" })]}
@@ -39,7 +40,9 @@ describe("Agent generation model picker", () => {
     expect(markup).toContain("Image")
     expect(markup).toContain("Video")
     expect(markup).toContain("Audio")
-    expect(markup).toContain('aria-label="Generation media type"')
+    expect(markup).toContain("LLM")
+    expect(markup.indexOf(">LLM<")).toBeLessThan(markup.indexOf(">Image<"))
+    expect(markup).toContain('aria-label="Model type"')
     expect(markup).toContain('role="tablist"')
     expect(markup).toContain('role="tabpanel"')
     expect(markup).toMatch(/aria-labelledby="[^"]+-agent-generation-model-tab-image"/)
@@ -56,11 +59,12 @@ describe("Agent generation model picker", () => {
     const installed = tool()
     const selected = renderToStaticMarkup(
       <AgentGenerationModelPicker
-        activeOutput="image"
+        activeTab="image"
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         selected={{ id: installed.id, output: "image" }}
         toolInput={{}}
@@ -71,11 +75,12 @@ describe("Agent generation model picker", () => {
 
     const empty = renderToStaticMarkup(
       <AgentGenerationModelPicker
-        activeOutput="audio"
+        activeTab="audio"
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         toolInput={{}}
         tools={[installed]}
@@ -87,11 +92,12 @@ describe("Agent generation model picker", () => {
   test("renders services as the first level and their supported models as the second level", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
-        activeOutput="image"
+        activeTab="image"
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         toolInput={{}}
         tools={[
@@ -118,12 +124,13 @@ describe("Agent generation model picker", () => {
   test("uses instance-scoped tab relationships when multiple pickers are mounted", () => {
     const picker = (key: string) => (
       <AgentGenerationModelPicker
-        activeOutput="image"
+        activeTab="image"
         key={key}
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         toolInput={{}}
         tools={[tool()]}
@@ -148,7 +155,7 @@ describe("Agent generation model picker", () => {
     const installed = tool()
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
-        activeOutput="image"
+        activeTab="image"
         description={{
           fields: [
             {
@@ -166,8 +173,9 @@ describe("Agent generation model picker", () => {
         }}
         loading={false}
         onClose={mock(() => undefined)}
-        onOutputChange={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
         onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
         selected={{ id: installed.id, output: "image" }}
         toolInput={{ style: "cinematic" }}
@@ -178,5 +186,45 @@ describe("Agent generation model picker", () => {
     expect(markup).toContain('data-tool-input-form="true"')
     expect(markup).toContain("Style")
     expect(markup).toContain("Cinematic")
+  })
+
+  test("renders connected OpenCode providers and selects a concrete LLM model", () => {
+    const markup = renderToStaticMarkup(
+      <AgentGenerationModelPicker
+        activeTab="llm"
+        llmCatalog={{
+          providers: [
+            {
+              connected: true,
+              defaultModelId: "main",
+              models: [{ default: true, modelId: "main", modelName: "Pippit GLM Main" }],
+              providerId: "plugin-xiaoyunque-generation-pippit-glm",
+              providerName: "小云雀生成",
+            },
+            {
+              connected: false,
+              models: [{ default: false, modelId: "offline", modelName: "Offline model" }],
+              providerId: "offline",
+              providerName: "Offline provider",
+            },
+          ],
+        }}
+        llmSelected={{ modelId: "main", providerId: "plugin-xiaoyunque-generation-pippit-glm" }}
+        loading={false}
+        onClose={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
+        onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
+        onToolInputChange={mock(() => undefined)}
+        toolInput={{}}
+        tools={[]}
+      />,
+    )
+
+    expect(markup).toContain("Agent runtime")
+    expect(markup).toContain("Use the agent runtime default model")
+    expect(markup).toContain("小云雀生成")
+    expect(markup).toMatch(/aria-checked="true" aria-label="Pippit GLM Main by 小云雀生成"/)
+    expect(markup).not.toContain("Offline model")
   })
 })

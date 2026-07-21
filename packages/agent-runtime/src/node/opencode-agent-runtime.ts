@@ -61,6 +61,8 @@ export interface OpenCodeAgentRuntimeOptions {
   /** Maximum time to wait for the OpenCode server process to start. */
   timeout?: number
   config?: ServerOptions["config"]
+  /** Host-owned dynamic OpenCode providers, resolved only when a server connection is created. */
+  resolveProviders?: () => Promise<NonNullable<ServerOptions["config"]>["provider"]>
   /** Lexical OpenCode permission patterns. These are not a filesystem sandbox. */
   protectedPathPatterns?: readonly string[]
   /**
@@ -618,6 +620,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   private protectedPathArtifact?: Promise<{ directory: string; marker: string; specifier: string }>
   private activePromptCount = 0
   private skillRefreshRequested = false
+  private providerRefreshRequested = false
   private skillRefreshInFlight?: Promise<void>
   private readonly skillRefreshWaiters: SkillRefreshWaiter[] = []
 
@@ -670,8 +673,19 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     const waiters = this.skillRefreshWaiters.splice(0)
     const refresh = (async () => {
       try {
-        const client = await this.getClient()
-        unwrap(await client.global.dispose(), "Refresh OpenCode skills")
+        if (this.providerRefreshRequested) {
+          this.providerRefreshRequested = false
+          await this.startup?.catch(() => undefined)
+          this.connectionGeneration += 1
+          this.server?.close()
+          this.server = undefined
+          this.client = undefined
+          this.startup = undefined
+          this.lifecycle = { state: "stopped" }
+        } else {
+          const client = await this.getClient()
+          unwrap(await client.global.dispose(), "Refresh OpenCode skills")
+        }
       } finally {
         // Global disposal invalidates per-directory instances, including their
         // MCP tool and strong path-guard initialization.
@@ -715,6 +729,17 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     return this.refreshCapabilities()
   }
 
+  /** Recreate the lazy OpenCode connection so host-provided provider configuration is re-resolved. */
+  refreshProviders(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error("OpenCode agent runtime has been disposed"))
+    this.providerRefreshRequested = true
+    if (!this.client && !this.startup && !this.server) {
+      this.providerRefreshRequested = false
+      return Promise.resolve()
+    }
+    return this.refreshCapabilities()
+  }
+
   private materializeProtectedPathPlugin() {
     if (this.protectedPathArtifact) return this.protectedPathArtifact
     this.protectedPathArtifact = (async () => {
@@ -740,10 +765,17 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   }
 
   private async serverConfig() {
+    const providers = await this.options.resolveProviders?.()
+    const baseConfig: OpenCodeConfig = providers === undefined
+      ? { ...this.options.config }
+      : {
+          ...this.options.config,
+          provider: { ...this.options.config?.provider, ...providers },
+        }
     const paths = this.options.protectedPaths ?? []
-    if (paths.length === 0) return this.options.config
+    if (paths.length === 0) return baseConfig
     const plugin = await this.materializeProtectedPathPlugin()
-    return withProtectedPathGuard(this.options.config, paths, plugin.specifier, plugin.marker)
+    return withProtectedPathGuard(baseConfig, paths, plugin.specifier, plugin.marker)
   }
 
   private async getClient(): Promise<OpenCodeClient> {
@@ -1087,6 +1119,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     this.disposed = true
     const disposalError = new Error("OpenCode agent runtime disposed")
     this.skillRefreshRequested = false
+    this.providerRefreshRequested = false
     for (const waiter of this.skillRefreshWaiters.splice(0)) waiter.reject(disposalError)
     this.controller.abort(disposalError)
     await this.startup?.catch(() => undefined)

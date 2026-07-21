@@ -459,6 +459,23 @@ function startApplication() {
     })
     const agentRuntime = new OpenCodeAgentRuntime({
       configDirectory: openCodeConfigDirectory,
+      async resolveProviders() {
+        try {
+          const providers = await generationRuntime.connectLlmProviders()
+          return Object.fromEntries(providers.map((provider) => [provider.providerId, {
+            models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
+            name: provider.name,
+            npm: "@ai-sdk/openai-compatible",
+            options: {
+              apiKey: provider.apiKey,
+              baseURL: provider.baseUrl,
+            },
+          }]))
+        } catch (error) {
+          console.warn("Could not connect installed Plugin LLM providers", error)
+          return {}
+        }
+      },
       protectedPathPatterns: [".convax", ".convax/**", "**/.convax", "**/.convax/**"],
       protectedPaths: [".convax"],
       // Progress heartbeats reset this inactivity guard, so accepted generation
@@ -659,8 +676,8 @@ function startApplication() {
         async onDidChange(pluginId) {
           generationRuntime.disposePlugin(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
-          void agentRuntime.refreshHostTools().catch((error) => {
-            console.warn("Could not immediately refresh OpenCode generation tools", error)
+          void agentRuntime.refreshProviders().catch((error) => {
+            console.warn("Could not immediately refresh OpenCode Plugin providers and tools", error)
           })
           void skillManager.refresh().catch((error) => {
             console.warn("Could not immediately refresh OpenCode Plugin-owned Skills", error)

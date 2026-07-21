@@ -407,6 +407,17 @@ contributes a safe display-only projection of its connected LLM model catalog th
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
 select an OpenCode provider/model pair.
+
+`convax.plugin/5` adds one generic LLM contribution without introducing a built-in
+vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
+Plugin manifest, verifies and starts the same authorized companion lifecycle, and
+calls only `llm.gateway.start`. The sidecar returns a Main-only, ephemeral
+`127.0.0.1` OpenAI-compatible base URL and random bearer key. OpenCode receives that
+connection material only in its in-memory host configuration; renderer, service
+status, manifests, and durable config never receive it. The sidecar retains upstream
+URLs, routing headers, vendor credentials and Cookies, and owns streaming,
+backpressure and cancellation. Plugin changes dispose the exact sidecar and cause the
+Agent runtime to rebuild its lazy OpenCode connection without deleting sessions.
 Choosing Configure and personally completing the service sign-in is the explicit
 authorization: an allowlisted cookie add/update triggers an exact-origin cookie
 check and continues automatically, without a second confirmation dialog. Closing
