@@ -532,7 +532,7 @@ export class ProjectManagedAssetStore {
 }
 ```
 
-Admission must run inside `runExclusive`, open the source without following a final symlink, stream into `.convax/assets/.staging/<operation-id>` with `wx`, hash actual bytes, enforce the size ceiling, fsync/close, re-hash staging, and publish to `blobs/<sha256>` with a no-replace operation. If a concurrent winner exists, verify its digest before deleting staging. Every error removes only the operation's staging file. Also provide `withAdmittedExternalFiles(input, commit)`; it admits all input files and invokes the supplied async `commit(references)` callback before releasing the Project mutex, so a due orphan cannot be deleted between reuse and Canvas commit. `withVerifiedReferences` similarly verifies every supplied blob and invokes `commit()` under one lock; neither callback may call another locking store method.
+Admission must run inside `runExclusive`, open the source without following a final symlink, stream into `.convax/assets/.staging/<operation-id>` with `wx`, hash actual bytes, enforce a configurable size ceiling whose v1 default is 8 GiB, fsync/close, re-hash staging, and publish to `blobs/<sha256>` with a no-replace operation. If a concurrent winner exists, verify its digest before deleting staging. Every error removes only the operation's staging file and must identify that file by the inode created by this operation rather than pathname alone. Revalidate the real staging/blob directory identities around create and publish so parent-directory replacement fails closed. Also provide `withAdmittedExternalFiles(input, commit)`; it admits all input files and invokes the supplied async `commit(references)` callback before releasing the Project mutex, so a due orphan cannot be deleted between reuse and Canvas commit. `withVerifiedReferences` similarly verifies every supplied blob and invokes `commit()` under one lock. It is the sole locking operation allowed to reuse the still-active same-store/same-Project async lock context, so an admission callback can reach repository save without self-deadlocking; all other nested locking calls remain forbidden, and an expired/escaped context must enqueue normally.
 
 - [ ] **Step 5: Close general Project Files access to private assets**
 
@@ -547,7 +547,7 @@ for (const operation of ["copyEntries", "importEntries", "writeTextFile"] as con
 }
 ```
 
-Keep `resolveProjectRoot` public for the dedicated Node store. General renderer-safe Project Files methods must reject every `.convax` case variant.
+Keep `resolveProjectRoot`, typed private storage, and `resolvePrivatePath` available only to their dedicated Node callers. Every general renderer-safe Project Files read, listing, path-resolution, and mutation method must reject every `.convax` case variant.
 
 - [ ] **Step 6: Run Project tests and pack check**
 
@@ -578,8 +578,15 @@ git commit -m "feat(project): add content-addressed managed assets"
 - Test: `packages/canvas/src/application/resources.test.ts`
 - Modify: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.ts`
 - Test: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts`
+- Create: `packages/project/src/node/project-canvas/project-file-publisher.ts`
+- Test: `packages/project/src/node/project-canvas/project-file-publisher.test.ts`
 - Modify: `packages/project/src/node/project-canvas/project-canvas-document-repository.ts`
 - Test: `packages/project/src/node/project-canvas/project-canvas-document-repository.test.ts`
+- Modify: `packages/project/src/node/project-canvas/index.ts`
+- Modify: `packages/project/src/canvas/project-resources.ts`
+- Test: `packages/project/src/canvas/project-resources.test.ts`
+- Modify: `packages/desktop/src/main/index.ts`
+- Test: `packages/desktop/src/main/open-project-ipc.test.ts`
 
 - [ ] **Step 1: Write failing business-source validation tests**
 
@@ -731,15 +738,19 @@ constructor(
   private readonly mediaInspector?: ProjectCanvasMediaInspector,
 ) {}
 
-admitExternalFiles(input: {
+withAdmittedExternalFiles<T>(input: {
   files: readonly { mediaType?: string; name: string; sourcePath: string; sourceId: string }[]
   projectId: string
-}): Promise<CanvasResourcePreparationResult>
+}, commit: (prepared: CanvasResourcePreparationResult) => Promise<T>): Promise<T>
 ```
 
-`host-file` must read metadata/content directly from its existing Project path and never invoke `copyEntries`. `host-directory` must call `listDirectory` and return `project-directory`. `new-text` must publish first, then return a `project-file` text item. `admitExternalFiles` must reject directories and call the managed store for regular external files only.
+`host-file` must read metadata/content directly from its existing Project path and never invoke `copyEntries`. `host-directory` must call `listDirectory` and return `project-directory`. `new-text` must publish first, then return a `project-file` text item. `withAdmittedExternalFiles` must reject directories, call the managed store for regular external files only, map the returned typed references to prepared items, and invoke `commit` before releasing the Project asset mutex. Do not expose a second external-admission API that returns prepared items after releasing the lock. The old path-based media inspector must not receive a private managed-asset path; external items may remain `stale` until hydration.
 
 - [ ] **Step 6: Make repository save validate and dehydrate atomically**
+
+In `ProjectCanvasDocumentRepository.load`, parse the v2 envelope and then run the same strict Project-owned reference validation used for save before returning a live document. A syntactically valid Canvas document with missing, malformed, or kind-incompatible Project references must fail without touching the catalog or mutating the original bytes. Let `UnsupportedCanvasDocumentVersionError` propagate unchanged.
+
+Move the exact managed-reference collector needed by repository admission forward from Task 9 as `collectProjectManagedAssetReferences(document)`. It must traverse only `convaxProjectResource` and the typed values below `convaxProjectResourceBindings`, validate every encountered reference, return complete `managed-asset` references rather than reconstructing them from digest strings, deduplicate by digest, and ignore opaque Plugin JSON.
 
 In `ProjectCanvasDocumentRepository.save`, compute the durable document before writing:
 
@@ -753,9 +764,13 @@ const result = await this.storage.writePrivateTextFile({
 })
 ```
 
-Wrap the private write and catalog touch in `assets.withVerifiedReferences({ projectId: request.ref.scopeId, references }, commit)`, where `references` is the validated list behind `collectManagedAssetDigests(durableDocument)`. This makes every managed-reference admission—including clipboard paste and duplication—serialize with GC. In `load`, let `UnsupportedCanvasDocumentVersionError` propagate without invoking `touchCanvas` or writing any file. Add tests that capture the original stored bytes and assert read failure leaves them byte-for-byte unchanged, plus a barrier test proving GC cannot pass the repository save between digest verification and the committed document write.
+Wrap the private write and catalog touch in `assets.withVerifiedReferences({ projectId: request.ref.scopeId, references }, commit)`, where `references` is the exact validated list collected from `durableDocument`. This makes every managed-reference admission—including clipboard paste and duplication—serialize with GC. Add tests that capture the original stored bytes and assert every load failure leaves them byte-for-byte unchanged, plus a barrier test proving GC cannot pass the repository save between digest verification and the committed document write. Also cover the real external-admission callback → Canvas application → repository save chain to prove the same active lock context does not self-deadlock and is not released before the document write.
 
-- [ ] **Step 7: Run package gates**
+- [ ] **Step 7: Hard-cut Desktop composition to one store instance**
+
+At the Desktop composition root, construct exactly one `ProjectManagedAssetStore` for the Project manager/root resolver and inject that same instance into resource preparation and every `ProjectCanvasDocumentRepository`; retain it for the later GC scheduler. Construct and inject the concrete `ProjectFilePublisher` there as well. Update every repository/preparation test harness and Desktop constructor call in this task. Do not add optional constructor parameters, fallback stores, or old preparation signatures.
+
+- [ ] **Step 8: Run package gates**
 
 Run:
 
@@ -769,10 +784,10 @@ bun run pack:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 8: Commit Project resource preparation**
+- [ ] **Step 9: Commit Project resource preparation**
 
 ```bash
-git add packages/canvas/src/application packages/project/src/node/project-canvas
+git add packages/canvas/src/application packages/project/src/canvas packages/project/src/node/project-canvas packages/desktop/src/main
 git commit -m "feat(project): prepare file-backed canvas resources"
 ```
 
@@ -1403,17 +1418,17 @@ bun test packages/project/src/canvas/project-resources.test.ts
 bun test packages/project/src/node/project-canvas/project-asset-gc.test.ts
 ```
 
-Expected: failure because digest traversal and GC do not exist.
+Expected: failure because the GC digest projection and GC service do not exist; the exact typed-reference traversal added in Task 4 remains green.
 
 - [ ] **Step 4: Implement strict managed-root traversal**
 
-Export:
+Export the GC-facing projection over the Task 4 exact collector:
 
 ```ts
 export function collectManagedAssetDigests(document: CanvasDocument): ReadonlySet<string>
 ```
 
-Walk only the exact host-owned keys declared by the v2 schema. Call `requireProjectResourceReference` on each encountered binding. Throw on malformed declared bindings; ignore ordinary strings and opaque Plugin state. Never scan JSON text heuristically.
+`collectManagedAssetDigests` maps `collectProjectManagedAssetReferences(document)` to a digest set; it does not perform a second traversal. The underlying collector walks only the exact host-owned keys declared by the v2 schema, calls `requireProjectResourceReference` on each encountered binding, throws on malformed declared bindings, ignores ordinary strings and opaque Plugin state, and never scans JSON text heuristically.
 
 - [ ] **Step 5: Implement rebuildable GC state**
 

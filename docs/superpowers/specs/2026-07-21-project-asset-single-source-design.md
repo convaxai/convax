@@ -173,7 +173,7 @@ Project 内文件不复制。拖入两次的结果是两个 Canvas 节点引用�
 导入过程由 `@convax/project/node` 的 managed asset store 执行：
 
 1. 把外部文件流式复制到 `.convax/assets/.staging/<operation-id>`；
-2. 复制时计算实际字节 SHA-256，并执行大小、文件类型和必要的签名检查；
+2. 复制时计算实际字节 SHA-256，要求输入仍是同一个普通文件，并执行可配置的流式大小限制；v1 默认单文件上限为 8 GiB，避免把常见视频误判为不支持；
 3. 完成后再次从 staging 文件验证摘要；
 4. 若 `blobs/<sha256>` 已存在，验证其实际摘要；一致则删除 staging 并复用现有 blob；
 5. 若目标不存在，使用同文件系统的原子 no-replace 发布；并发失败者验证 winner 后复用；
@@ -184,6 +184,8 @@ Project 内文件不复制。拖入两次的结果是两个 Canvas 节点引用�
 导入是 value copy。Canvas 和 Project 元数据都不持久化、监听或继续访问原始外部路径；复制完成后，managed blob 是该引用的权威字节来源。原始外部文件后续发生修改、移动或删除都不会自动传播到 Canvas。
 
 如果 blob 已存在但实际摘要与路径不符，导入失败并报告 managed store 损坏，不能覆盖或信任该文件。
+
+`name` 和 `mediaType` 只是每个引用自己的展示提示，不参与内容地址，也不是文件系统信任依据。实际读取和 hydration 仍从 blob 字节重新校验；managed store 不为任意文件格式维护第二套扩展名或魔数目录。
 
 ### 5.4 Partial success
 
@@ -363,9 +365,9 @@ GC 不监听每次节点删除，也不创建高频定时器：
 
 ### 9.5 与导入和重新引用的并发
 
-managed import、managed reference admission 和 GC 扫描/删除共享一个进程内 Project asset mutex。
+managed import、managed reference admission 和 GC 扫描/删除共享同一个 Desktop 组合出的 `ProjectManagedAssetStore` 实例及其中的进程内 Project asset mutex；不得为 preparation、repository 和 GC 分别创建互不相干的 store。
 
-新增 managed 引用前必须在 mutex 内确认 `blobs/<sha256>` 存在且摘要正确，并让该引用的 Canvas commit 在同一 mutex 临界区完成。GC 从最终引用扫描到候选删除也始终持有该 mutex，因此新引用不能插入到最终复查与删除之间。managed blob 发布成功但 Canvas 提交失败时，留下的 blob 仍是安全的无引用文件，下一轮 GC 会开始计时。
+新增 managed 引用前必须在 mutex 内确认 `blobs/<sha256>` 存在且摘要正确，并让该引用的 Canvas commit 在同一 mutex 临界区完成。外部导入回调进入 repository save 时，只允许 repository 的引用复核复用仍有效的同 store、同 Project 异步锁上下文；其他重入失败，过期上下文重新排队。这避免自锁，也不在 admission 与 commit 之间释放锁。GC 从最终引用扫描到候选删除也始终持有该 mutex，因此新引用不能插入到最终复查与删除之间。managed blob 发布成功但 Canvas 提交失败时，留下的 blob 仍是安全的无引用文件，下一轮 GC 会开始计时。
 
 进程崩溃不需要前滚或回滚事务：
 

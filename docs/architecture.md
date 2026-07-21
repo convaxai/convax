@@ -313,9 +313,10 @@ retained and the UI reports partial success. Canvas undo never rewrites an alrea
 saved user file.
 
 Managed assets are immutable SHA-256-addressed value copies. The original external
-path is not persisted or watched after admission. Project Node serializes import,
-reference admission and GC with one in-process Project asset mutex. GC derives
-liveness by scanning typed references in every supported Canvas document, records the
+path is not persisted or watched after admission. Desktop composes one
+`ProjectManagedAssetStore` shared by preparation, repositories and GC; Project Node
+serializes import, reference admission and GC with its in-process per-Project asset
+mutex. GC derives liveness by scanning typed references in every supported Canvas document, records the
 first unreferenced time, waits seven days and completes another full scan before
 deletion. It atomically saves the next `gc.json` timing state before unlinking due
 blobs; stale records after a crash are removed by the next scan. Any unreadable Canvas
