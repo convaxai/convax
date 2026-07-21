@@ -8,8 +8,8 @@ This package owns the durable Project aggregate and native Project adapters.
 - `@convax/project/canvas`: Project Canvas catalog, relationships, drag protocol,
   resource references, and catalog controller only.
 - `@convax/project/node`: native registry, root resolution, private storage,
-  Project Files implementation, Canvas repositories, migrations, and explicit
-  unsupported-schema rejection.
+  Project Files implementation, Canvas repositories, migrations, managed assets,
+  delayed GC, and explicit unsupported-schema rejection.
 
 ## Invariants
 
@@ -26,21 +26,18 @@ This package owns the durable Project aggregate and native Project adapters.
 - Browser creation requests carry only a Project name. The host injects a trusted
   parent directory; the Node adapter creates the child root, initializes identity,
   and publishes the registry binding without adopting an existing directory.
-- In-process queues and coordinators provide ordering only. Cross-file Project
-  mutations such as file/directory moves, Canvas catalog create/delete and managed
-  asset delete require a durable WAL, exact-identity/no-clobber recovery, and must
-  resolve before editing or GC. GC must quarantine a candidate, revalidate its exact
-  identity/digest there, and delete only within a fresh OS-private transaction through
-  platform-specific parent-handle/no-follow primitives, never a previously validated
-  blob path. A platform without the required no-replace/private-dir/anchored-delete
-  guarantees is mark-only. Do not claim protection from hostile same-UID tampering of
-  private `.convax` transaction state without a different-principal helper.
-- Publishing user-visible `Notes/` or `Generated/` files requires a same-filesystem
-  temporary file plus native atomic no-replace. Existing files, directories, symlinks,
-  case-folded equivalents and concurrent winners are preserved; adapters without that
-  primitive fail before publication. Generated publication has a durable transaction;
-  recovery may delete only exact unpublished transaction staging and must retain every
-  output that reached the user-visible namespace.
+- Files inside the Project are referenced directly. Only files admitted from outside
+  the Project are copied to deterministic content-addressed paths below
+  `.convax/assets/blobs/`; duplicate bytes share one blob.
+- Managed-asset admission, reference admission, trash restore and GC use one
+  Project-scoped in-process asset mutex. GC derives liveness from typed Canvas
+  references, waits through a grace period and trash retention, and fails safe when
+  it cannot scan every document. `gc.json` is rebuildable timing state, not a catalog.
+- Publishing user-visible `Notes/` or `Generated/` files is file-first and no-clobber.
+  If the later Canvas commit fails, retain the file and report partial success. Do not
+  add a cross-file WAL or delete a user file to simulate atomicity.
+- Project file moves and renames do not rewrite Canvas references in v1. Missing
+  references remain visible until the user relinks them.
 - `project.json` stores identity and the Canvas catalog stores no selection. Schema
   changes include versioned migration tests by default. An explicitly approved
   breaking cutover instead includes unsupported-version rejection tests and preserves

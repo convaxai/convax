@@ -252,8 +252,11 @@ browser localStorage                    per-user Workbench/renderer preferences
     project.json                        stable Project identity only
     canvases/catalog.json               portable Canvas catalog, no selection
     canvases/<canvas-id>/document.json  Canvas document
-    assets/                             managed Canvas resources
-    transactions/                       short-lived Project WAL/staging/quarantine
+    assets/blobs/<sha256>               deduplicated copies admitted from outside the Project
+    assets/.staging/                    short-lived managed-asset imports
+    assets/.trash/                      managed blobs waiting for final GC deletion
+    assets/gc.json                      rebuildable delayed-GC timing state
+    staging/                            short-lived user-file publication staging
 ```
 
 `Create Project` receives only a portable project name from renderer and creates a
@@ -265,9 +268,10 @@ directory creation, identity initialization, and registry publication.
 
 Private Project metadata is owned by `@convax/project/node`. Renderer, preload,
 Agent tools, and general Project Files operations do not read or write its JSON.
-Managed assets are the explicit exception: they are imported/copied through the
-scoped Project Files capability into `.convax/assets`, while the rest of `.convax`
-remains hidden and protected.
+Managed assets are the explicit exception: scoped Project resource capabilities copy
+only files admitted from outside the Project into deterministic content-addressed
+paths below `.convax/assets`. Files already inside the Project are referenced
+directly. The rest of `.convax` remains hidden and protected.
 
 The remote capability catalog and showcase caches are Desktop-owned, user-global,
 and non-authoritative. Catalog reads may return the validated local snapshot
@@ -291,46 +295,31 @@ capabilities; an invalid or rolled-back network response never replaces it.
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
 application services. A schema change needs a new version and tests. It provides a
 migration path using real old data by default. An explicitly approved breaking
-cutover may instead reject the old version when the canonical architecture and design
-record the decision, data impact, version/protocol bump and release boundary. That
-rejection must fail closed without parsing the old format into the live model or
-resetting, overwriting, deleting, or garbage-collecting unsupported portable data.
+cutover may instead reject the old version without migration. Rejection must preserve
+unsupported bytes and keep them outside new mutation and GC paths.
 
 The Project asset single-source transition is one approved breaking cutover under
 this rule. Its authoritative scope and safeguards are recorded in
-[the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md):
-the new Canvas resource schema, content-addressed managed-asset layout and related
-protocol replace their legacy forms without migration or compatibility reads, while
-unsupported documents and legacy assets remain untouched and outside new GC.
+[the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
+The new Canvas schema stores only typed `project-file` or `managed-asset` references.
+It does not migrate legacy path-only references, inline text, or remote URLs.
 
-Project Node serializes managed-reference commits and GC deletion through one
-Project-scoped coordinator. Before a Canvas commit can make a managed hash live, it
-durably clears that hash's old orphan timestamp; GC reloads the latest state under
-its exclusive deletion barrier. Managed path hashes are expected identities only:
-any authoritative content revision or external call hashes the actual bytes from a
-verified handle and fails closed on mismatch.
+Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
+is a normal user-visible Project file below `Generated/`. Both flows publish the file
+first and commit its Canvas reference second. If the Canvas commit fails, the file is
+retained and the UI reports partial success. Canvas undo never rewrites an already
+saved user file.
 
-GC never validates a blob path and later unlinks that same path. It records a durable
-delete transaction, atomically moves the exact candidate into a private quarantine,
-revalidates identity and digest there, and deletes through the platform's anchored
-no-follow primitive inside that fresh OS-private namespace. macOS/Linux use a `0700`
-random transaction directory plus parent-fd operations; Windows prefers handle-bound
-disposition in a private ACL directory. Platforms missing the required primitives are
-mark-only. This closes races in the untrusted blob namespace but does not claim defense
-against a hostile same-UID process directly rewriting private `.convax` transactions.
-Project open follows the full phase/source/quarantine/state recovery matrix; ambiguous
-identities preserve all bytes and enter repair before editing or later GC.
+Managed assets are immutable SHA-256-addressed copies. Project Node serializes import,
+reference admission, trash restore and GC with one in-process Project asset mutex.
+GC derives liveness by scanning typed references in every supported Canvas document,
+waits seven days, moves an orphan into `.trash`, waits another seven days, then
+rescans before deletion. `gc.json` stores only rebuildable timing state. Any unreadable
+Canvas document, corrupt state or digest mismatch stops deletion conservatively.
 
-Canvas text content is also Project-file content. Plain text and Markdown use UTF-8
-`.txt`/`.md`; structured rich text uses the versioned, lossless user-visible
-`.convax-note.json` format. Canvas persists only the typed Project resource reference
-and text-format discriminator, never the body or editor JSON.
-
-The same in-process coordinator is not treated as crash atomicity. Canvas catalog
-create/delete uses a Project-owned WAL plus staged/quarantined Canvas directories.
-Project open recovers every transaction to a provable before/after state before
-exposing controllers or starting GC; ambiguous catalog digests or directory
-identities preserve all bytes and enter repair.
+Project file watcher events invalidate runtime snapshots and refresh or mark nodes
+missing; they are not an event log. File and directory moves do not rewrite Canvas
+references in v1. Users explicitly relink missing nodes.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
@@ -343,9 +332,9 @@ schema version and migrations; an unknown or invalid schema is preserved and mus
 not be replaced with defaults. Node/Canvas copy carries the latest snapshot already
 committed to Canvas. Continuous iframe edits may be throttled, but semantic gesture
 completion and frame teardown must request an immediate commit. Large images,
-models, captures, and other binary payloads belong in managed Project assets and
-are referenced only through host-owned typed resource bindings on the node. Plugin
-state stores binding keys, never Project paths, managed hashes, or resource envelopes.
+models, captures, and other binary payloads use host-owned typed resource bindings on
+the node. Opaque Plugin state cannot keep an asset alive merely by containing a path
+or hash string.
 
 Portable Plugin presentation state may share that namespaced snapshot while staying
 separate from the Plugin's domain document. A 3D director camera/orbit is portable;
@@ -433,13 +422,12 @@ Missing and changed bindings fail installation without replacing a working versi
 Listing or installing never starts the command.
 Desktop stages bounded typed Canvas references, rechecks live scope and revision
 before the external call, admits only bounded signature-checked results, and commits
-generated media through `CanvasResourceBusinessService` after atomically publishing
-it with native no-replace semantics as user-visible Project files under `Generated/`.
-Existing files, directories, symlinks, case-folded equivalents and concurrent winners
-are never overwritten. A Project-owned publication WAL distinguishes exact unpublished
-transaction staging from files that reached the user-visible namespace; recovery never
-deletes published output. Tool-specific controls come only from the selected MCP tool's
-current `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
+generated content through `CanvasResourceBusinessService` after publishing it without
+overwriting an existing object as a user-visible Project file under `Generated/`.
+If Canvas insertion fails, the generated file remains available for a later retry;
+unpublished staging is best-effort cleanup rather than a durable transaction. Tool-
+specific controls come only from the selected MCP tool's current
+`tools/list.inputSchema`; Main projects bounded scalar fields across preload and
 validates them again immediately before execution.
 
 On execution Desktop silently resolves and fingerprints the binding again and
@@ -824,18 +812,10 @@ document without first saving its stale projection. Delayed or failed renderer
 synchronization cannot block or reverse a Main commit. Agent and Tool signals are
 rechecked before durable Canvas saves.
 
-The host's public-URL importer is not one of those Plugin capabilities. One narrow
-typed preload command is available only to the trusted top-level host frame and an
-explicit UI import action; it returns an admitted resource, never arbitrary response
-bytes. It is absent from the Plugin MessageChannel and Agent tool registry.
-Connected-image, file-read and generation permission cannot be used as an arbitrary
-public-network proxy. Any future Plugin or Agent URL-import capability requires a
-separate authorization and protocol design.
-
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas
-edge. Desktop derives the managed Project file reference from that node, preflights
-the exact `.convax/assets` reference, and delegates one bounded read to Main. Main
+edge. Desktop derives the typed Project-file or managed-asset reference from that
+node and delegates one bounded read to Main. Main
 opens one no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling, performs
 a fixed-length read and rejects identity changes before returning bytes. Desktop
 then rechecks scope, connectivity and the exact source reference. This legacy

@@ -214,11 +214,6 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   scope. Enforce the
   manifest allowlist and delegate to existing typed clients; never add a generic
   IPC/function-call escape hatch.
-- The host public-URL importer may use one narrow typed preload command available only
-  to the trusted top-level host frame and an explicit UI action. Never expose or relay
-  it through Plugin RPC or Agent tools, and never return arbitrary response bytes.
-  Connected-media, file-read and generation permissions do not grant it; the static
-  Plugin iframe has no ambient public network capability.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned typed Project-resource read, and reject stale or
   caller-selected paths.
