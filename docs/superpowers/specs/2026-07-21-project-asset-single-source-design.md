@@ -1,8 +1,11 @@
 # Project 资产单一事实来源与 Managed Asset 回收设计
 
 日期：2026-07-21
-状态：待实现
-范围：Project 文件引用、Canvas 文件节点、外部资产接纳、文本编辑、生成结果发布、文件监听、去重与垃圾回收
+状态：待实现（破坏性重构）
+范围：Project 文件引用、Canvas 文件节点、外部资产接纳、文本编辑、生成结果发布、文件监听、去重、垃圾回收和旧资源模型删除
+
+> 本设计采用一次性破坏性切换。新版本只实现并持久化本文定义的新资源模型，
+> 不兼容、不迁移、不双读、不双写旧 Canvas 资源格式和旧 managed asset 布局。
 
 ## 1. 背景
 
@@ -40,6 +43,7 @@
 - 无引用 managed asset 在安全宽限期后自动回收；
 - Agent、Plugin、UI 和原生集成通过同一受控资源能力读取文件；
 - 保持 Project 可移植性，不持久化主机绝对路径。
+- 一次性删除旧资源模型、旧 API 和旧行为，不保留运行时兼容分支。
 
 ### 2.2 非目标
 
@@ -49,7 +53,10 @@
 - 不自动删除任何 Project 可见目录中的文件；
 - 不承诺无歧义地识别所有外部文件移动；
 - 不用持久化引用计数代替对 Canvas 文档的真实扫描；
-- 不改变现有内部 package 依赖方向。
+- 不改变现有内部 package 依赖方向；
+- 不自动迁移、转换或修复旧 Canvas 资源数据；
+- 不保证使用旧资源 schema 的 Project 可由新版本打开；
+- 不提供旧格式导入器、兼容模式、feature flag 或回退写入路径。
 
 ## 3. 核心决策
 
@@ -94,8 +101,10 @@ Canvas 文档不再持久化：
 | 每次拖入都复制到 `.convax/assets` | 拒绝 | 重复占用空间并产生第二内容来源 |
 | 长期引用 Project 外绝对路径 | 拒绝 | 不可移植、授权复杂且容易失效 |
 | Project 内直接引用，Project 外导入并按内容去重 | 采用 | 保持用户资产主权、可移植性和安全边界 |
-| 持久化引用计数并在归零时立即删除 | 拒绝 | 容易因崩溃、迁移和并发漂移而误删 |
+| 持久化引用计数并在归零时立即删除 | 拒绝 | 容易因崩溃和并发漂移而误删 |
 | 延迟 mark-and-sweep | 采用 | 可以从真实 Canvas 文档重建引用并提供撤销宽限期 |
+| 保留旧资源模型并渐进迁移 | 拒绝 | 形成长期双轨逻辑，扩大状态组合和测试面 |
+| 一次性切换并删除旧资源逻辑 | 采用 | 只维护一种 schema、资产布局和资源语义 |
 
 ## 4. 持久化布局
 
@@ -425,7 +434,7 @@ GC 使用事件触发加时间节流，不为每个 Project 创建持续高频�
 
 从所有合法 Canvas 节点中收集 managed SHA-256，形成 `liveHashes`。
 
-如果任何 Canvas 文档不存在、损坏、无法迁移或读取失败，本轮 GC fail closed：
+如果任何 Canvas 文档不存在、损坏、不是当前 schema 或读取失败，本轮 GC fail closed：
 
 - 不删除 blob；
 - 不推进 `unreferencedSince`；
@@ -576,7 +585,7 @@ Main 负责：
 ### `@convax/canvas`
 
 - host-neutral 文件节点与资源引用槽位；
-- 文本不内嵌后的 Canvas schema 与迁移接口；
+- 文本不内嵌后的唯一 Canvas schema；
 - 资源读取、写入和 revision conflict 的 host port；
 - 资源添加、节点布局和关系的业务操作；
 - 不认识 Project 路径、`.convax`、Node 或 Electron。
@@ -595,7 +604,7 @@ Main 负责：
 - 外部资产 staging、哈希、去重和发布；
 - `.convax/assets/gc.json` 持久化；
 - GC 扫描、lease、二次确认和删除；
-- Canvas repository 访问和迁移；
+- 仅支持当前 schema 的 Canvas repository 访问；
 - 短生命周期文件移动事务记录与崩溃恢复；
 - 文件监听的 native adapter。
 
@@ -615,36 +624,43 @@ Main 负责：
 
 依赖方向保持不变。由于这是持久化、Canvas schema、IPC 和安全能力的架构变更，需要同步更新根/局部 `AGENTS.md`、`docs/architecture.md`、边界策略和 Desktop protocol version。
 
-## 22. 迁移方案
+## 22. 破坏性切换策略
 
-### 22.1 现有文本节点
+### 22.1 破坏范围
 
-- 节点有有效 Project 源路径且内嵌正文与文件一致：改为 Project 文件引用并移除正文；
-- 节点有源路径但正文已分叉：将 Canvas 版本写入 `Notes/Migrated/`，避免覆盖用户源文件；
-- 节点没有源路径：将正文写入 `Notes/Migrated/<canvas>-<node>.md`；
-- 迁移成功后节点只持久化文件引用；
-- 任何写入或 Canvas 提交失败都保留旧文档，不做部分覆盖。
+本次切换只破坏被本设计替换的资源语义：
 
-### 22.2 现有 managed 媒体
+- Canvas 内嵌文本正文；
+- 按原文件名存放、按名称避冲突的 managed asset；
+- `data:`、`blob:`、远程 URL 和原生绝对路径等旧资源引用；
+- 仅接受 `.convax/assets` 文件的旧 Agent、Plugin 和原生集成接口；
+- 为上述旧格式服务的读取、写入、转换、回退和测试代码。
 
-- 如果节点保留原 Project 路径，且原文件存在并与 managed copy 内容一致：改为直接引用 Project 文件；
-- 原文件缺失或内容不同：保留 managed copy，把它视为外部导入快照；
-- 对保留的 managed copy 计算 SHA-256 并发布到内容寻址路径；
-- 更新所有相关 Canvas 引用后，旧名称副本进入 GC 宽限期；
-- 相同内容的多个旧副本收敛为同一 SHA-256。
+未被本设计修改的 Project identity、Canvas catalog 和其他 Canvas 业务数据不因为本次重构主动变更格式。
 
-### 22.3 现有远程资源
+### 22.2 旧数据行为
 
-迁移过程不静默联网。旧远程引用保持只读 legacy 状态；用户首次需要稳定使用时显式导入 Project，成功后转为 managed asset。
+新版本不读取或转换旧资源节点，不扫描旧 managed asset 布局，也不尝试把旧数据写入 `Notes/`、`Generated/` 或内容寻址 blob。
 
-### 22.4 迁移属性
+Canvas 文档必须携带明确的新 schema version。repository 在发现旧版本、缺少版本或旧资源字段时：
 
-- schema 有明确版本；
-- 迁移可重复执行；
-- 迁移使用真实旧数据 fixture；
-- 迁移前保留可恢复旧文档；
-- 不删除无法证明已迁移成功的旧资产；
-- Project 切换和并发保存期间不得运行同一 Canvas 的迁移。
+1. 返回类型化 `UnsupportedCanvasResourceSchema` 错误；
+2. 阻止该 Canvas 进入可编辑状态；
+3. 不修改 Canvas 文档；
+4. 不把旧资产纳入新 GC 的可删除候选；
+5. 提示该 Project 需要使用旧版本应用处理。
+
+这只是 fail-fast 安全边界，不是兼容层。新代码不得解析旧节点以提供预览、只读打开或自动修复。
+
+### 22.3 代码切换约束
+
+- 不保留 dual-read、dual-write、legacy adapter 或兼容 feature flag；
+- 不接受新旧资源字段同时存在的文档；
+- 不从旧资产路径 fallback 读取；
+- 不在新公共 API 中保留 deprecated 参数或返回字段；
+- 删除旧逻辑后同步删除对应 fixture、mock、IPC 和 UI 分支；
+- schema 和 Desktop protocol 直接提升到新版本，版本不匹配时 fail fast；
+- 实现分支可以分提交开发，但合入主线时必须是完整切换状态。
 
 ## 23. 安全与跨平台要求
 
@@ -665,7 +681,8 @@ Main 负责：
 
 - 新 schema 不持久化文本正文和运行时 URL；
 - Project/managed 引用解析与校验；
-- 旧文本节点迁移；
+- 旧 schema、缺少版本和混合新旧字段被明确拒绝；
+- 不注册旧 schema decoder 或 migration；
 - 资源 revision conflict；
 - stale async 内容读取不会覆盖新 Project/Canvas 状态；
 - 多节点共享同一资源引用。
@@ -702,7 +719,7 @@ Main 负责：
 
 ### Desktop 与集成
 
-- preload/main/renderer 协议兼容测试；
+- preload/main/renderer 新协议一致性和旧协议拒绝测试；
 - 外部文件导入 token 不泄露原生路径；
 - 文件变动刷新 Canvas 且规避缓存；
 - Agent 读取最新文本内容；
@@ -713,9 +730,9 @@ Main 负责：
 
 按变更范围运行相关 package 的 `bun typecheck` 与 `bun test`，并运行根目录 `bun check`、`bun run pack:check`。Desktop persistence/IPC 变更还需执行 `bun run build` 和 `bun run smoke:open-project`。
 
-## 25. 分阶段实施
+## 25. 实施顺序
 
-1. 引入类型化 Project/managed resource reference，并保持旧 schema 兼容读取；
+1. 定义唯一的新 Canvas resource schema，并提升 schema version；
 2. 建立统一的 Project-scoped resource read/write/revision port；
 3. 改造 Project 内文件拖入流程为直接引用；
 4. 实现外部导入 staging、SHA-256 内容寻址和并发去重；
@@ -725,10 +742,10 @@ Main 负责：
 8. 接入文件监听刷新、App 内路径更新和外部 missing/relink；
 9. 实现 `.convax/assets/gc.json`、GC 调度、mark-and-sweep 和存储统计；
 10. 更新 Agent、Plugin 和原生集成的资源读取边界；
-11. 执行旧数据迁移并验证无损；
-12. 更新架构文档、包契约、IPC protocol 和边界策略。
+11. 删除旧 schema、旧 managed asset、旧资源 API 和全部运行时兼容分支；
+12. 更新架构文档、包契约、IPC protocol、边界策略和破坏性变更说明。
 
-每一阶段必须保持旧 Project 可打开，且不得通过清空或重建用户数据绕过迁移。
+实现过程中每个提交仍需通过其所有权边界的类型检查和测试，但不要求旧资源 Project 可打开。合入主线前必须确认生产代码中不存在旧资源 decoder、migration、fallback 或 dual-write。
 
 ## 26. 验收标准
 
@@ -746,7 +763,9 @@ Main 负责：
 - `gc.json` 损坏、Canvas 文档损坏或路径验证失败时不会删除资产；
 - GC 不删除 Project 可见文件、有效引用文件或活动 lease 文件；
 - Agent、Plugin、Renderer 不接收原生路径；
-- 现有文本和媒体数据可以无损迁移。
+- 旧资源 schema 被明确拒绝且不会被新版本修改；
+- 生产代码不包含旧资源迁移、兼容读取、兼容写入或 fallback；
+- 旧 managed asset 布局永远不进入新 GC 的删除集合。
 
 ## 27. 最终设计摘要
 
@@ -769,6 +788,11 @@ GC
   -> 扫描所有 Canvas 文档获得真实引用
   -> gc.json 只记录首次无引用时间
   -> 7 天宽限 + 删除前二次确认
+
+Cutover
+  -> 只接受新 resource schema
+  -> 删除 migration / fallback / dual-read / dual-write
+  -> 旧 schema fail fast 且不被修改
 ```
 
 由此保证用户资产是唯一内容来源，Canvas 是关系与视图层，`.convax/assets` 只承担外部资产的去重接纳和安全延迟回收。
