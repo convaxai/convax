@@ -246,11 +246,14 @@ Packaged app Resources/
 browser localStorage                    per-user Workbench/renderer preferences
 
 <project root>/
+  Notes/                                user-visible Canvas-created text files
+  Generated/                            user-visible generated output files
   .convax/
     project.json                        stable Project identity only
     canvases/catalog.json               portable Canvas catalog, no selection
     canvases/<canvas-id>/document.json  Canvas document
     assets/                             managed Canvas resources
+    transactions/                       short-lived Project WAL/staging/quarantine
 ```
 
 `Create Project` receives only a portable project name from renderer and creates a
@@ -306,6 +309,22 @@ durably clears that hash's old orphan timestamp; GC reloads the latest state und
 its exclusive deletion barrier. Managed path hashes are expected identities only:
 any authoritative content revision or external call hashes the actual bytes from a
 verified handle and fails closed on mismatch.
+
+GC never validates a blob path and later unlinks that same path. It records a durable
+delete transaction, atomically moves the exact candidate into a private quarantine,
+revalidates identity and digest there, and deletes through the platform's anchored
+no-follow primitive inside that fresh OS-private namespace. macOS/Linux use a `0700`
+random transaction directory plus parent-fd operations; Windows prefers handle-bound
+disposition in a private ACL directory. Platforms missing the required primitives are
+mark-only. This closes races in the untrusted blob namespace but does not claim defense
+against a hostile same-UID process directly rewriting private `.convax` transactions.
+Project open follows the full phase/source/quarantine/state recovery matrix; ambiguous
+identities preserve all bytes and enter repair before editing or later GC.
+
+Canvas text content is also Project-file content. Plain text and Markdown use UTF-8
+`.txt`/`.md`; structured rich text uses the versioned, lossless user-visible
+`.convax-note.json` format. Canvas persists only the typed Project resource reference
+and text-format discriminator, never the body or editor JSON.
 
 The same in-process coordinator is not treated as crash atomicity. Canvas catalog
 create/delete uses a Project-owned WAL plus staged/quarantined Canvas directories.
@@ -413,9 +432,14 @@ that declares a managed companion cannot fall back to a same-named PATH command.
 Missing and changed bindings fail installation without replacing a working version.
 Listing or installing never starts the command.
 Desktop stages bounded typed Canvas references, rechecks live scope and revision
-before the external call and admits only bounded signature-checked results.
-Tool-specific controls come only from the selected MCP tool's current
-`tools/list.inputSchema`; Main projects bounded scalar fields across preload and
+before the external call, admits only bounded signature-checked results, and commits
+generated media through `CanvasResourceBusinessService` after atomically publishing
+it with native no-replace semantics as user-visible Project files under `Generated/`.
+Existing files, directories, symlinks, case-folded equivalents and concurrent winners
+are never overwritten. A Project-owned publication WAL distinguishes exact unpublished
+transaction staging from files that reached the user-visible namespace; recovery never
+deletes published output. Tool-specific controls come only from the selected MCP tool's
+current `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
 validates them again immediately before execution.
 
 On execution Desktop silently resolves and fingerprints the binding again and
@@ -799,6 +823,14 @@ invalidation through `CanvasDocumentChangeBus`; renderer reloads the authoritati
 document without first saving its stale projection. Delayed or failed renderer
 synchronization cannot block or reverse a Main commit. Agent and Tool signals are
 rechecked before durable Canvas saves.
+
+The host's public-URL importer is not one of those Plugin capabilities. One narrow
+typed preload command is available only to the trusted top-level host frame and an
+explicit UI import action; it returns an admitted resource, never arbitrary response
+bytes. It is absent from the Plugin MessageChannel and Agent tool registry.
+Connected-image, file-read and generation permission cannot be used as an arbitrary
+public-network proxy. Any future Plugin or Agent URL-import capability requires a
+separate authorization and protocol design.
 
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas

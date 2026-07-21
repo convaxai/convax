@@ -112,6 +112,7 @@ Canvas 文档不再持久化：
 <project root>/
   Notes/
     Untitled.md
+    Untitled.convax-note.json
 
   Generated/
     image-20260721-001.png
@@ -128,6 +129,14 @@ Canvas 文档不再持久化：
       canvas-catalog-<operation-id>/
         transaction.json
         canvas/
+      generated-publish-<operation-id>/
+        transaction.json
+        outputs/
+          <output-index>
+      asset-gc-delete-<operation-id>/
+        transaction.json
+        quarantine/
+          <64-character-sha256>
 
     assets/
       gc.json
@@ -146,7 +155,7 @@ Canvas 文档不再持久化：
 - `.convax/assets/blobs` 只保存从 Project 外部接纳的持久副本；
 - `.convax/assets/staging` 只保存尚未完成发布的临时文件；
 - `.convax/assets/gc.json` 只保存 GC 调度和孤儿宽限状态；
-- `.convax/transactions` 只保存尚未完成的短生命周期跨文件事务记录以及 create/delete Canvas 的 staged/quarantined 目录，成功恢复或提交后立即删除；
+- `.convax/transactions` 只保存尚未完成的短生命周期跨文件事务记录、create/delete Canvas 的 staged/quarantined 目录、生成发布 staging 和 GC 的私有删除隔离区，成功恢复或提交后立即删除；
 - `.convax/assets` 不保存 Project 内已有文件的副本；
 - Project 可见文件永远不参与 managed asset 自动回收。
 
@@ -223,14 +232,17 @@ Canvas 保持 host-neutral。新 schema 为所有已有 node kind 定义唯一�
 
 | node kind | 新 schema 资源字段 | 明确删除的旧持久化字段 |
 | --- | --- | --- |
-| `text` | `resources.primary` 必填；可引用 Project 文件或只读 managed asset | `text`、`richText`、`url` |
+| `text` | `resources.primary` 必填；可引用 Project 文件或只读 managed asset；`format` 只允许 `plain`、`markdown` 或 `rich-text-json` | `text`、`richText`、`url` |
 | `image` / `video` / `audio` / `file` | `resources.primary` 必填；`resources.poster` 仅在海报本身是独立持久文件时使用 | `url`、`posterUrl` |
 | `folder` | `resources.primary` 必填且只能是 `project-directory` | 顶层 `path` |
 | `plugin.*` 文件节点 | `resources.plugin` 保存 host 管理的命名资源绑定；是否需要 `primary` 由 host 注册的节点契约决定 | Plugin state 内嵌路径、哈希或资源 envelope |
 | `group` / `agent` | 不允许持久化资源字段 | 任意资源字段 |
 
 `url`、`posterUrl` 和文本正文只存在于 runtime hydrated view model，不属于
-`CanvasDocument`。文件名、MIME、尺寸、时长和文本格式可以作为非权威展示提示；读取时仍从实际文件验证。
+`CanvasDocument`。文件名、MIME、尺寸和时长可以作为非权威展示提示。文本
+`format` 是选择严格文件解码器所需的 schema 判别值，但文件扩展名、MIME 和
+内容头仍必须与它一致；任何不一致都 fail closed，不能把二进制或未知格式当作
+纯文本打开后覆盖。
 
 Plugin 的 `convaxPluginState` 仍是 Plugin 拥有的有界 JSON，但不得直接持有 Project 路径、managed SHA-256 或 resource envelope。Plugin 如需持久拥有二进制资源，必须通过 host 能力创建 `resources.plugin[slot]` 绑定，私有 state 只保存 slot key。通过 Canvas 入边读取的文件仍由源 file node 持有，不在 Plugin node 上复制引用。
 
@@ -335,7 +347,24 @@ admission API 必须把“staging lease、哈希、coordinator-ordered managed-b
 
 ### 8.3 远程 URL
 
-远程 URL 不是长期可移植用户资产。新增远程资源只能由 Desktop Main 的受控下载器进入 staging，完成验证后按 Project 外文件处理。Renderer、Plugin 和 Agent 只能提交 URL 值，不能选择网络代理、请求头、解析地址或落盘路径。
+远程 URL 不是长期可移植用户资产。新增远程资源只能由 Desktop host UI 中
+明确的“从 URL 导入”用户操作发起，由 Desktop Main 的受控下载器进入 staging，
+完成验证后按 Project 外文件处理。该命令只返回已接纳的类型化资源结果，不返回
+任意响应正文，因此不是通用 fetch 代理。
+
+本次重构不向 sandboxed Plugin、Plugin MessageChannel RPC 或 Agent tool 暴露该
+命令。`connected-image`、文件读取、生成工具等既有 Plugin 权限均不得隐式获得
+URL 导入能力；Plugin 即使知道 URL 也不能请求 Main 下载。未来若 Agent 或 Plugin
+确实需要公共网络导入，必须设计独立的命名能力、授权提示、审计和流量边界，不能
+复用文件读取或生成权限。Tool Plugin 自身经安装授权的外部可执行文件是否访问
+供应商网络，属于 generation executor 的另一条信任边界，不会获得此下载器。
+
+顶层 trusted host renderer 只能通过一个命名的 narrow typed bridge 提交规范化 URL
+值和当前 Project/Canvas 作用域，不能选择网络代理、请求头、解析地址或落盘路径。
+Main 校验 IPC sender 是当前应用主 frame、scope 未过期且命令来自 host UI 的显式
+导入动作；bridge 只返回已接纳资源结果。Plugin iframe 没有 preload，host 也不会
+把该 bridge 转发到 MessageChannel；Agent tool registry 不注册此能力。禁止的是
+Plugin/Agent 入口和 generic fetch，不是顶层 host UI 到 Main 的受控调用链。
 
 下载器必须落实以下 SSRF 和资源消耗边界：
 
@@ -354,12 +383,68 @@ admission API 必须把“staging lease、哈希、coordinator-ordered managed-b
 
 ### 9.1 新建文本
 
-1. 在 `Notes/` 选择可用文件名，例如 `Untitled.md`；
-2. 使用原子创建避免覆盖已有文件；
+1. 根据用户选择的文本格式，在 `Notes/` 选择可用文件名，例如纯文本
+   `Untitled.txt`、Markdown `Untitled.md` 或富文本
+   `Untitled.convax-note.json`；
+2. 使用 no-clobber 原子创建避免覆盖已有文件；
 3. 创建引用该 Project 相对路径的 Canvas 节点；
 4. 用户编辑时写入该文件，Canvas 文档不保存正文。
 
 如果文件创建成功但 Canvas 节点提交失败，保留用户可见文件并明确提示，避免删除已经成为用户资产的内容。
+
+三种格式的持久化契约如下：
+
+| `format` | 文件与 MIME | 权威内容 |
+| --- | --- | --- |
+| `plain` | `.txt`，`text/plain; charset=utf-8` | UTF-8 纯文本；无富文本语义 |
+| `markdown` | `.md`，`text/markdown; charset=utf-8` | UTF-8 Markdown 源码 |
+| `rich-text-json` | `.convax-note.json`，`application/vnd.convax.rich-text+json` | 下述版本化结构化文档 |
+
+富文本文件 v1 是用户可见、可复制和可版本控制的普通 JSON 文件：
+
+```json
+{
+  "kind": "convax-rich-text",
+  "schemaVersion": 1,
+  "document": {
+    "type": "doc",
+    "content": []
+  }
+}
+```
+
+`document` 使用 `@convax/canvas` 发布的有界富文本文件 schema，完整表达允许的
+node type、text、marks、attrs、顺序和嵌套。保存前验证 JSON 值、深度、节点数和
+总字节上限；`NaN`、二进制、函数、原生路径和 `data:`/`blob:` 资源不得进入该
+格式。富文本 attrs 中的 URL 只是文档内容，不授予 host 资源访问或 GC 存活权；
+持久二进制仍必须通过 Canvas 的显式资源槽位引用。
+
+“无损”定义为对当前版本允许的富文本树执行 decode → encode → decode 后得到
+结构等价的 node、text、marks 和 attrs，而不是要求 JSON 空白或对象 key 顺序逐
+字节相同。实现不得把富文本静默降级为 Markdown/纯文本，也不得丢弃无法识别的
+节点后保存；未知 `schemaVersion`、未知 node/mark 或不满足约束的文件只读报错，
+禁止覆盖。破坏性切换只拒绝旧 Canvas 内嵌 `richText`，不意味着新格式可以丢失
+富文本能力。
+
+v1 schema 冻结为当前编辑器配置可产生的 ProseMirror JSON 子集：
+
+- node 只允许 `doc`、`paragraph`、`text`、`heading`、`blockquote`、
+  `bulletList`、`orderedList`、`listItem`、`codeBlock`、`hardBreak`、
+  `horizontalRule`、`table`、`tableRow`、`tableHeader` 和 `tableCell`；根必须是
+  唯一 `doc`，子节点组合必须通过对应 ProseMirror content expression；
+- mark 只允许 `bold`、`italic`、`strike`、`underline`、`code` 和 `link`；mark
+  顺序规范化但集合和属性不得丢失；
+- `heading.level` 只允许 1、2、3；`paragraph.textAlign` 与
+  `heading.textAlign` 只允许 `null/left/center/right/justify`；
+- `orderedList.start` 是正整数，`orderedList.type` 只允许
+  `null/1/a/A/i/I`；`codeBlock.language` 只允许 bounded string 或 null；
+- `tableCell`/`tableHeader` 只允许正整数 `colspan/rowspan`、与 colspan 长度一致
+  的正整数 `colwidth` 数组或 null，以及 `null/left/center/right` 的 `align`；
+- `link` 只允许 bounded `href`、`target`、`rel`、`class`、`title` 字符串或 null，
+  URI 仍经过现有 Link allowlist；其他 node/mark 不允许 attrs；
+- 所有 object 拒绝未知 key 和 prototype-bearing 值。codec 的规范来源是 Convax
+  自己导出的 `ConvaxRichTextFileV1` validator/encoder，不在运行时把第三方 TipTap
+  版本当作持久化 schema；升级编辑器 extension 时必须显式提升或兼容此文件版本。
 
 ### 9.2 文本编辑
 
@@ -394,12 +479,62 @@ managed asset 按 SHA-256 寻址且不可原位编辑。用户首次编辑引用
 
 1. 外部生成工具把结果写入 host-controlled staging；
 2. Main 验证调用作用域、结果数量、大小、MIME 和文件签名；
-3. Main 将结果原子发布到用户可见的 `Generated/`；
+3. Main 通过下述 `publishGeneratedNoReplace` 协议发布到用户可见的
+   `Generated/`；
 4. 创建引用新 Project 文件的 Canvas 节点；
 5. 通过 `CanvasResourceBusinessService` 提交节点、关系和 revision；
 6. 可选 view 效果不能把成功的文件与 Canvas 提交变成失败。
 
 如果结果已发布但 Canvas 提交失败，保留 `Generated/` 中的文件并报告“生成成功，添加到 Canvas 失败”。不得因为 UI 或 Canvas 错误删除用户生成成果。
+
+`publishGeneratedNoReplace` 不信任外部工具返回的目录或文件名。Main 只接受
+bounded suggested basename，规范化扩展名后在 `Generated/` 内选择候选名，并把
+整次多结果发布封装为 `generated-publish-<operation-id>` durable transaction：
+
+`transaction.json.outputs[i]` 为每个输出独立保存 basename、expected digest、
+source/target identity、最终相对路径、错误和 phase；一个输出的失败或发布不能
+覆盖另一个输出的恢复证据。顶层只记录 operation identity 与整体终态。
+
+1. 先原子创建并 fsync `transaction.json`，记录 operation、输出个数、随机 staging
+   basename 和 `phase: "planned"`，再在同一 transaction 的 `outputs/` 下用
+   exclusive create 创建文件；文件创建后、写入任何结果字节前立即记录 exact
+   identity 和 `phase: "copying"`；staging 与 `Generated/` 位于同一文件系统；
+2. 从外部 host-controlled staging 复制每个输出，同时验证字节、大小、MIME、签名
+   和结果摘要；flush/fsync 后在 WAL 记录 digest 和 `phase: "prepared"`；
+3. 为该输出记录当前候选 Project 相对路径，然后使用 native `moveNoReplace` 把
+   transaction output 原子发布到已验证的 `Generated/` parent；普通 POSIX
+   `rename` 的覆盖语义不满足要求；
+4. 若目标已存在、发生大小写等价冲突或并发发布抢占，保留现有目标不变，在 WAL
+   记录新的 bounded 数字后缀候选并重试 no-replace；
+5. move 后 fsync/flush 两个 parent，再持久化最终路径、发布后 exact identity/digest
+   和 `phase: "published"`，此时文件转为用户资产，后续恢复不得删除它；
+6. 全部输出达到 `published` 或明确 `failed` 后返回精确结果列表并清理 transaction；
+   Canvas commit 独立发生，失败时仍保留已发布文件。
+
+目标是文件、目录、symlink 或任何未知对象时一律视为冲突，绝不覆盖或跟随。
+如果当前平台 adapter 不能提供原子 no-replace，生成调用在产生用户可见文件前
+fail closed。多结果生成逐个发布；部分结果已经发布后发生失败时保留这些用户
+文件、返回精确 partial-success 列表，绝不通过回滚覆盖或删除已有路径。
+
+Project open 在编辑和 watcher 启动前恢复 generated publish transaction：
+
+- `planned` 且 output 不存在时清理空事务；`copying`/`prepared` 且 output 仍只位于
+  transaction 时，按 WAL 验证 private parent、basename 和 exact identity 后删除
+  未发布 staging；
+- `planned` 却出现 output、未知 entry、identity 不符或 transaction parent 不明时
+  保留全部字节并进入 repair，不递归清理；这覆盖 create 与 `copying` phase commit
+  之间无法证明 identity 的 crash window；
+- `prepared` 且 exact transaction output 仍存在时，可以证明 no-replace move 尚未
+  发生：无论当前候选 target 不存在、是原有用户对象还是并发发布 winner，都保留
+  target 不动、删除 exact private staging 并把该输出记为 `aborted`；恢复不重试
+  生成，也不因 source/target 同时存在进入 repair；
+- WAL 仍为 `prepared`、transaction output 已消失且目标路径存在相同
+  identity/digest，说明 crash 发生在 move 与 phase commit 之间，前滚为
+  `published` 并保留用户文件；
+- `published` 的目标无论仍存在、已被用户移动/删除或 identity 已改变，都不再由
+  transaction 删除或覆盖，只完成 transaction cleanup 并报告恢复诊断；
+- transaction source 缺失而 target 也缺失或不匹配、WAL/parent identity 不明，
+  或其他无法唯一判断的状态保留所有字节并进入 repair。
 
 ## 11. 文件监听与同步
 
@@ -711,25 +846,102 @@ hash 不在 liveHashes，且宽限期已结束
 5. 重新读取 `GcStateRepository` 的最新持久状态，不能继续使用阶段一读取的旧 orphan snapshot；
 6. 在 barrier 内用最新 `liveHashes` 完整协调 orphan 状态：live hash 删除记录，首次确认无引用的 hash 以当前时间建记录；
 7. 只有最新持久状态中仍保留同一 `unreferencedSince`、当前仍无引用、无 lease 且宽限期已结束的哈希才继续；任何被 reference commit 预先 clear 的旧候选都退出本轮删除；
-8. 对剩余候选再次执行 `lstat`、realpath、文件 identity 和实际 SHA-256 校验；
-9. 将仍满足全部条件的普通受管 blob 固化为 `confirmedCandidates`；
-10. 保持 exclusive barrier，进入阶段五完成同步删除和 `gc.json` 提交后才释放，随后才允许新的 reference commit。
+8. 对剩余候选从 no-follow 句柄再次执行 parent containment、文件 identity 和实际
+   SHA-256 校验；
+9. 将仍满足全部条件的普通受管 blob 固化为 `confirmedCandidates`，记录其 exact
+   identity、实际 digest、原路径和 `unreferencedSince`；
+10. 保持 exclusive barrier，进入阶段五完成“隔离、隔离后复核、删除和
+    `gc.json` 提交”后才释放，随后才允许新的 reference commit。
 
 步骤 8 的实际 digest 与路径哈希不符时，该文件从 `confirmedCandidates` 移除并报告 `ManagedAssetCorruption`；GC 不删除、覆盖或把它重新命名为另一个哈希。
 
 Canvas 添加 managed asset 时必须先创建 lease，再进入 shared barrier 提交节点或 Plugin binding；节点引用提交成功或失败后才释放 lease。因为所有合法引用写入、catalog 变化与 GC 删除都共享同一 coordinator，不存在“二次扫描完成后新增引用、blob 随后被删除”的提交窗口。
 
-### 15.5 阶段五：提交 GC 状态
+### 15.5 阶段五：隔离删除并提交 GC 状态
 
-仍在阶段四取得的 exclusive barrier 内执行：
+阶段四的校验结果不能直接交给稍后的 path-based `unlink`，因为 blob path 可能在
+两者之间被替换。仍在 exclusive barrier 内，对每个 confirmed candidate 执行一
+个 Project-owned `asset-gc-delete-<operation-id>` 事务：
 
-1. 同步删除 `confirmedCandidates` 中的 blob；
-2. 基于阶段四重载的最新状态提交完整协调结果：删除 live hash 和已成功删除 blob 的 orphan 项，为首次无引用 hash 建立新时间，并保留未删除旧 orphan 的原时间；
-3. 设置 `lastSuccessfulScanAt`；
-4. 设置 `requiresFullScan: false`，将新状态写入同目录临时文件；
-5. fsync 必要边界并原子替换 `gc.json`。
+1. 在随机、private、未向 Renderer/Plugin/Agent/watcher 暴露的 transaction 目录中
+   原子写入并 fsync `transaction.json`，记录 hash、原 Project 相对路径、阶段四的
+   exact identity/实际 digest/`unreferencedSince` 和 `phase: "prepared"`；
+2. 通过已验证 source/quarantine parent 的 native `moveNoReplace`，把候选从 blob
+   namespace 原子移动到事务的唯一 `quarantine/<hash>`；源消失或目标已存在时不
+   覆盖任何对象并中止该候选，校验后到 move 之间发生的 source replacement 则由
+   下一步隔离后复核识别；
+3. fsync 两个 parent，持久化 `phase: "quarantined"`，再从 quarantine parent
+   anchored 的 no-follow 句柄重新计算 identity 和完整 SHA-256；两者必须同时等于
+   WAL 和路径 hash；
+4. 隔离后复核不一致时绝不删除。仅当原 blob path 仍为空时用 `moveNoReplace`
+   恢复被隔离对象；原路径已被占用、parent identity 改变或无法证明恢复安全时，
+   保留隔离字节并进入 repair，阻止编辑和后续 GC；成功恢复时持久化
+   `phase: "restored"`，move 未发生时持久化 `phase: "aborted"`，两者都保留原
+   orphan 状态、fsync 后安全清理 transaction；
+5. 复核一致后持久化 `phase: "delete-authorized"`。native adapter 在同一个同步
+   critical section 中，以已打开的 quarantine parent handle 对固定 hash basename
+   做最后一次 anchored no-follow identity compare，随后执行平台删除；期间不得
+   yield 到 Renderer/Plugin/Agent/watcher 或 application callback。它绝不接收原
+   blob path、Project 可见路径或递归路径；成功后 fsync/flush parent 并持久化
+   `phase: "deleted"`；
+6. 全部候选得到明确的 deleted/retained/repair 结果后，基于阶段四重载的最新状态
+   提交完整协调结果：删除 live hash 和已成功删除 blob 的 orphan 项，为首次无
+   引用 hash 建立新时间，并保留未删除旧 orphan 的原时间；
+7. 设置 `lastSuccessfulScanAt` 和 `requiresFullScan: false`，通过同目录临时文件、
+   fsync 和原子替换提交 `gc.json`；
+8. 对已删除候选持久化 `phase: "state-committed"`，再删除对应 transaction
+   directory 并 fsync `.convax/transactions` parent。
 
-如果 blob 删除成功但 `gc.json` 更新失败，旧 orphan 记录是无害的；下次扫描会发现文件不存在并移除记录。记录错误后释放 barrier，不得先宣告成功再异步执行不可观测删除。
+原子 quarantine 是删除授权的 namespace transfer：原 blob path 在移动后即使被
+外部进程创建新文件，也永远不会传给删除操作。quarantine 目录只能包含 WAL 精确
+列出的一个普通文件；出现额外 entry、symlink、parent replacement 或 identity
+变化立即进入 repair，不能递归清理。平台能力矩阵为：
+
+| 平台 | no-replace namespace transfer | quarantine 验证与删除 | sweep 条件 |
+| --- | --- | --- | --- |
+| macOS | 同卷 `renamex_np(..., RENAME_EXCL)` | `0700` 随机 private dir、parent-fd anchored `openat(O_NOFOLLOW)`/`fstat`/digest，随后同步 `unlinkat` 与 parent `fsync` | 全部原语和 writer guard 可用 |
+| Linux | 同卷 `renameat2(..., RENAME_NOREPLACE)` | `0700` 随机 private dir、`openat2`/`openat` no-follow containment、`fstat`/digest，随后同步 `unlinkat` 与 parent `fsync` | kernel/filesystem 支持所需 flags |
+| Windows | no-replace move 且拒绝 reparse point | private ACL directory、handle/file-id 复核，优先 handle-bound `FileDispositionInfoEx` 并 flush parent | volume 支持 file-id、no-replace 与安全 disposition |
+
+macOS/Linux 的 `unlinkat` 是 name-based，不伪装成 identity-conditional syscall。本设计
+关闭的是对不受信 blob namespace 执行“校验后按路径删除”的窗口：atomic move 把
+待删除对象转入 fresh、随机、权限收紧、只由当前 Main 持有的 private namespace，
+隔离后才复核和删除。Project APIs、watcher、Plugin、Agent、Renderer 和其他 Convax
+进程均不能进入该 namespace；writer guard 保证没有第二个 Main。
+
+威胁模型仍覆盖 Project 可见路径和 blob store 上的任意 symlink/path replacement；
+它不声称抵御拥有相同 OS 用户身份、绕过 Convax 直接故意改写
+`.convax/transactions` 的恶意进程——该进程同样可以在任意两次 syscall 之间改写
+WAL 或其他 Project 私有元数据。发现 private parent/entry 在最终检查前变化仍
+fail closed 进入 repair。若产品未来要求抵御 hostile same-UID process，必须引入
+不同 OS principal 的 privileged helper 或平台 identity-bound delete；在此之前不
+得扩大威胁声明。缺少表中平台原语、private ACL/mode 或 writer guard 时自动 GC
+只允许 mark，不执行 sweep。
+
+Project open 必须在暴露 controller 或启动 GC 前恢复这些事务：
+
+| durable phase | source / quarantine / GC state | 唯一恢复动作 |
+| --- | --- | --- |
+| `prepared` | exact source / absent / original orphan | 写 `aborted`，保留 source，清理事务 |
+| `prepared` 或 `quarantined` | absent / exact quarantine / original orphan | no-clobber 恢复 source，写 `restored`，清理事务；不延续旧进程删除决定 |
+| `quarantined` | exact source / absent / original orphan | 视为已恢复，写 `restored` 并清理事务 |
+| `delete-authorized` | absent / exact quarantine / original orphan | 删除尚未发生；no-clobber 恢复，写 `restored` 并清理事务 |
+| `delete-authorized` | absent / absent / original orphan 或 orphan 已清除 | exact delete 已发生；写/确认 `deleted`，幂等清除该 WAL 指定的旧 orphan，再写 `state-committed` |
+| `deleted` | absent / absent / original orphan 或 orphan 已清除 | 幂等清除该 WAL 指定的旧 orphan，写 `state-committed` |
+| `state-committed` | absent / absent / orphan 已清除 | 只清理 transaction directory |
+| `aborted` 或 `restored` | exact source / absent / original orphan | 只清理 transaction directory |
+
+恢复中的 `restored`/`aborted` phase 与 GC state 写入也必须 fsync 后再清理事务。
+上表之外的任意组合——包括 source/quarantine 同时存在、`deleted` 后又出现对象、
+source 被占用、identity/digest 不明、terminal phase 与 orphan 状态矛盾——都保留
+全部字节并进入 repair，不猜测 cleanup。这样 crash 位于 move 与 phase 写入之间、
+`delete-authorized` 与 exact delete 之间、exact delete 与 `deleted` 之间、state
+replace 与 `state-committed` 之间、以及 terminal phase 与事务目录清理之间都有
+唯一且幂等的恢复结果。
+
+因此，blob 删除成功但 `gc.json` 更新失败时，durable transaction 能在下次打开时
+完成状态提交；删除前崩溃则默认恢复文件。任何路径都不得先宣告成功再异步执行
+不可观测删除。
 
 ## 16. GC 时间示例
 
@@ -813,7 +1025,7 @@ Main 负责：
 ### `@convax/canvas`
 
 - host-neutral 文件节点、显式资源引用槽位与唯一 schema traversal；
-- 文本不内嵌后的唯一 Canvas schema；
+- 文本不内嵌后的唯一 Canvas schema，以及版本化富文本文件 schema/codec；
 - 资源读取、写入和 revision conflict 的 host port；
 - 资源添加、节点布局和关系的业务操作；
 - 不认识 Project 路径、`.convax`、Node 或 Electron。
@@ -832,8 +1044,9 @@ Main 负责：
 - Project 路径解析与安全文件访问；
 - Project writer ownership guard 和 resource commit coordinator；
 - 外部资产 staging、哈希、去重和发布；
+- 用户可见文本/生成文件的 atomic no-replace 发布与 generated publish WAL 恢复；
 - `.convax/assets/gc.json` 持久化；
-- GC 扫描、lease、二次确认和删除；
+- GC 扫描、lease、二次确认、删除隔离事务和启动恢复；
 - 仅支持当前 schema 的 Canvas repository 访问；
 - 短生命周期文件移动事务记录与崩溃恢复；
 - Canvas catalog create/delete WAL、quarantine 与启动恢复；
@@ -913,9 +1126,14 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - 校验 Windows 保留设备名、ADS、尾随点/空格和大小写碰撞；
 - `.convax` 大小写变体必须受保护；
 - native 边界执行 realpath、containment 和 no-follow/identity 检查；
-- 删除前重新验证文件，防止 symlink replacement；
+- GC 不对校验过的 blob path 直接 `unlink`；先原子移入 fresh OS-private transaction
+  quarantine，隔离后复核 exact identity/digest，再使用平台 anchored no-follow
+  delete；缺少所需平台原语时只 mark、不 sweep；
 - GC 只删除合法内容寻址 blob，未知文件 fail closed；
+- `Notes/` 和 `Generated/` 的创建/发布使用 atomic no-replace，任何并发冲突、
+  symlink、目录或大小写等价目标都不覆盖；
 - 外部 Plugin、Agent 和 Renderer 不获得原生路径；
+- sandboxed Plugin 和 Agent 不获得公共 URL 导入器或其他隐式网络代理；
 - 不能为了方便资源读取而削弱 protected-path 或 scope 检查。
 
 ## 24. 测试计划
@@ -924,6 +1142,10 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 
 - 新 schema 不持久化文本正文和运行时 URL；
 - `text`、全部 media/file、folder、Plugin、group 和 agent 的新持久化形态均有正反 fixture；
+- plain、Markdown 和富文本文件各自严格匹配扩展名、MIME、format 与内容 schema；
+- 富文本文件对全部允许 node/mark/attrs/Unicode/嵌套执行结构无损 round-trip；
+- v1 每种允许 node/mark/attrs 都有 fixture，未知 key 与第三方 extension 节点被拒绝；
+- 富文本未知版本、未知 node/mark、超限或非法资源值 fail closed 且不覆盖原文件；
 - Project/managed 引用解析与校验；
 - 唯一 traversal 完整枚举 primary、poster 和 Plugin bindings；
 - 旧 schema、缺少版本和混合新旧字段被明确拒绝；
@@ -943,6 +1165,15 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - host API 不暴露脱离 lease 的 prepared managed reference；
 - staging 取消、失败和崩溃恢复；
 - 远程下载拒绝私网/loopback/metadata IPv4 与 IPv6、DNS rebinding、非法 redirect、非 HTTPS、自定义端口、超时和流式超限；
+- 远程下载只接受 host UI 的显式命令，Plugin RPC 和 Agent tool 均不存在该入口；
+- `Generated/` 同名、并发、大小写等价、symlink/目录目标均通过 no-replace
+  选择新名称且原对象字节不变；
+- generated publish WAL 在 planned/copying/prepared、move 前后和
+  published/cleanup 的每个 crash point 只清理 exact private staging、保留已发布
+  用户文件；无法证明 identity 的 pre-copy window 进入 repair，并报告精确 partial
+  success；不支持 atomic no-replace 的 adapter 在发布前失败；
+- no-replace 返回目标冲突后、写入下一个候选名前崩溃时，exact transaction source
+  证明 move 未发生；恢复保留既有 target，只清理 private staging，不进入 repair；
 - SHA-256 路径验证；
 - managed blob 实际内容与路径哈希不符时返回 corruption，既不返回 content revision/字节也不自动删除；
 - symlink replacement、Windows 路径和大小写碰撞；
@@ -985,16 +1216,30 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - 系统时钟回退不提前删除；
 - staging 使用独立 24 小时规则；
 - 非法文件、目录和符号链接不删除；
-- blob 删除成功但状态写入失败可以安全重试；
+- blob 校验后、quarantine move 前被替换时不删除替换对象；
+- quarantine 后 identity/digest 不匹配时 no-clobber 恢复，原路径被占用时保留
+  隔离字节并进入 repair；
+- GC delete WAL 的每个 crash phase 都恢复为保留 blob 或已提交删除，歧义时阻止
+  编辑和 GC；
+- quarantine final check 前注入 parent/entry replacement 时进入 repair；平台测试
+  还必须验证对应 no-replace/private-directory/no-follow/delete 原语，不支持时只
+  mark、不 sweep；
+- `prepared`、`quarantined`、`delete-authorized`、`deleted`、`state-committed`、
+  `aborted`、`restored` 的恢复矩阵逐项覆盖 source/quarantine/orphan 组合；
+- blob 删除成功但状态写入失败由 durable transaction 完成状态提交；
 - single-flight 与 rerun 合并。
 
 ### Desktop 与集成
 
 - preload/main/renderer 新协议一致性和旧协议拒绝测试；
 - 外部文件导入 token 不泄露原生路径；
+- 公共 URL 导入的 narrow preload 只接受当前 trusted top-level main frame、active
+  Project/Canvas 和显式 host UI command，并只返回 admitted resource；
 - 文件变动刷新 Canvas 且规避缓存；
 - Agent 读取最新文本内容；
 - Plugin 只能读取当前节点授权的资源；
+- Plugin 即使持有任意 HTTPS URL、文件读取或 generation 权限也不能调用公共 URL
+  导入器，preload/MessageChannel 不存在通用 fetch IPC；
 - JianYing 等原生集成对 Project 文件使用短生命周期 staging；
 - Project 切换取消旧作用域的监听、编辑和 GC 任务；
 - 存储占用和手动清理 UI。
@@ -1009,11 +1254,15 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 4. 实现 Project writer guard 和 shared/exclusive resource commit coordinator，并将所有 repository/catalog/asset 写路径接入；
 5. 实现 Canvas catalog create/delete WAL、staged/quarantined directory 与启动恢复，移除首次 load 懒创建；
 6. 改造 Project 内文件拖入流程为直接引用；
-7. 实现外部导入 staging、精确定义的 admission lease、SHA-256 内容寻址、并发去重和远程 URL SSRF 防护；
-8. 改造 Canvas 文本为文件引用及 content-hash OCC 编辑，并验证 managed 实际 digest；
-9. 将 Canvas 新建内容发布到 `Notes/`，将生成结果发布到 `Generated/`；
+7. 实现外部导入 staging、精确定义的 admission lease、SHA-256 内容寻址、并发
+   去重和仅 host UI 可用的远程 URL SSRF 防护；
+8. 定义富文本文件 codec，改造 Canvas 文本为文件引用及 content-hash OCC 编辑，
+   并验证 managed 实际 digest；
+9. 用 atomic no-replace 将 Canvas 新建内容发布到 `Notes/`，用 generated publish
+   WAL 和 atomic no-replace 将生成结果发布到 `Generated/`；
 10. 接入文件监听刷新、文件/目录移动的 descendant rewrite、物理 no-clobber rollback 和外部 missing/relink；
-11. 实现 `.convax/assets/gc.json`、reference pre-clear、完整引用根扫描、exclusive 删除屏障、GC 调度和存储统计；
+11. 实现 `.convax/assets/gc.json`、reference pre-clear、完整引用根扫描、exclusive
+    删除屏障、quarantine delete WAL/恢复、GC 调度和存储统计；
 12. 更新 Agent、Plugin 和原生集成的资源读取边界；
 13. 删除旧 schema、旧 managed asset、旧资源 API 和全部运行时兼容分支；
 14. 更新其余架构文档、IPC protocol、边界策略、发布说明和破坏性变更验收。
@@ -1027,8 +1276,11 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - Project 外相同内容在 `.convax/assets` 最多有一个持久 blob；
 - Canvas 文档不保存文本正文或媒体内容；
 - 每个现有 node kind 都有唯一的新 schema 表达，不存在隐式 metadata 资源变体；
-- Canvas 新建文本成为 `Notes/` 下的真实文件；
-- 生成内容成为 `Generated/` 下的真实文件；
+- Canvas 新建纯文本、Markdown 和富文本成为 `Notes/` 下可无损重读的真实文件；
+- 生成内容通过 atomic no-replace 成为 `Generated/` 下的真实文件，永不覆盖已有
+  文件、目录或 symlink；
+- generated publish crash recovery 只删除 exact private staging，永不回收已经进入
+  `Generated/` 的用户文件；
 - 外部修改会刷新所有引用节点；
 - stale 文本编辑不会静默覆盖外部修改；
 - expected content revision 使用实际内容 SHA-256，相同 metadata 的内容变化也会冲突；
@@ -1038,14 +1290,21 @@ Canvas 文档必须携带明确的新 schema version。repository 在发现旧�
 - 文件移动失败会安全恢复物理位置，目录移动会重写所有 descendant typed references；
 - Canvas catalog create/delete 的任一 crash point 都可恢复为完整 before/after，无法证明时阻止编辑和 GC；
 - 外部删除产生可恢复 missing 状态；
-- 无引用 managed asset 首次只标记，7 天后经二次确认才删除；
+- 在支持上述安全 sweep 原语的平台，无引用 managed asset 首次只标记，7 天后经
+  二次确认和 quarantine 复核才删除；不支持的平台明确保持 mark-only 并提示用户；
 - 任意一次成功 managed reference commit 都在 Canvas 写入前持久重置旧 orphan 宽限期；
 - `gc.json` 损坏、Canvas 文档损坏或路径验证失败时不会删除资产；
 - GC 不删除 Project 可见文件、有效引用文件或活动 lease 文件；
 - primary、poster、Plugin binding 与 in-flight lease 共同构成完整 GC 引用根；
 - exclusive commit barrier 关闭最终扫描与 blob 删除之间的引用提交窗口；
+- GC 只对已原子移出 blob namespace、进入 host-private quarantine 且隔离后复核
+  成功的对象执行物理删除；任何 crash 或 identity 歧义都恢复或进入 repair，
+  并明确不宣称抵御 hostile same-UID 对 private transaction 的直接篡改；
 - Agent、Plugin、Renderer 不接收原生路径；
 - 公共远程 URL 导入不能访问本机、私网、metadata 服务或通过 redirect/DNS rebinding 绕过限制；
+- sandboxed Plugin 和 Agent 不获得公共 URL 导入网络出口；
+- trusted top-level host UI 仍通过 narrow typed bridge 完成显式 URL 导入，不存在
+  generic fetch 或任意响应读取；
 - 旧资源 schema 被明确拒绝且不会被新版本修改；
 - 生产代码不包含旧资源迁移、兼容读取、兼容写入或 fallback；
 - 旧 managed asset 布局永远不进入新 GC 的删除集合。
@@ -1064,18 +1323,21 @@ Project 外文件
   -> Canvas 保存 managed SHA-256 引用
 
 Canvas 新建 / AI 生成
-  -> 用户可见 Project 文件
+  -> 富文本使用版本化无损文件，其他文本使用 UTF-8/Markdown
+  -> 用户可见 Project 文件 + atomic no-replace
   -> Canvas 保存 Project 路径引用
 
 GC
   -> 扫描所有 Canvas 文档获得真实引用
   -> reference commit 在写 Canvas 前 clear 旧 orphan
   -> gc.json 记录首次无引用时间与 full-scan guard
-  -> 7 天宽限 + 删除前二次确认
+  -> 7 天宽限 + 删除前二次确认 + private quarantine 后复核
 
 Project transactions
   -> file/directory move WAL + physical no-clobber rollback
   -> Canvas catalog create/delete WAL + startup recovery
+  -> generated publish WAL + preserve-published recovery
+  -> GC private-quarantine delete WAL + full phase recovery matrix
 
 Cutover
   -> 只接受新 resource schema

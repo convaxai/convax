@@ -113,7 +113,8 @@ source, or ambient application state.
 - `<project>/.convax/assets/`: managed Canvas assets accessed through the scoped
   Project Files capability.
 - `<project>/.convax/transactions/`: short-lived Project Node WAL and staged or
-  quarantined state for cross-file moves and Canvas catalog create/delete recovery.
+  quarantined state for cross-file moves, Canvas catalog create/delete, generated
+  output publication, and managed asset GC delete recovery.
 - Electron `userData/opencode/skills/user/<name>/`: materialized Convax-managed
   OpenCode Skills, including independently managed standalone Skills and Plugin-owned
   Skills. Ownership is never inferred from this shared discovery path.
@@ -166,7 +167,13 @@ delete it. All successful writes use the current schema.
   a whole document or arbitrates Main mutations.
 - A process-local mutation barrier is not crash atomicity. Project Node uses durable
   WAL plus identity-checked recovery for file/directory moves and Canvas catalog
-  create/delete, and completes recovery before Canvas editing or managed-asset GC.
+  create/delete. Managed-asset GC atomically transfers a confirmed candidate into a
+  fresh OS-private WAL-owned quarantine, revalidates it there, and deletes only through
+  platform-specific parent-handle/no-follow primitives, never by passing a previously
+  checked blob path to unlink. Platforms without the required no-replace/private-dir/
+  anchored-delete guarantees are mark-only. This does not claim protection from a
+  hostile process running as the same OS user and directly tampering with private
+  `.convax` transactions. All recovery completes before Canvas editing or later GC.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.
@@ -185,6 +192,9 @@ delete it. All successful writes use the current schema.
 
 - Tools are typed, narrow executable capabilities. Skills compose tools into a
   workflow; they do not bypass package APIs or become a second implementation.
+- The host UI's public-URL import command is not an Agent tool. Adding network import
+  for Agents requires a separately designed, named and authorized capability; file or
+  Canvas resource tools never imply it.
 - Agent tool adapters stay thin and live at the composition edge. Product rules,
   validation, sizing, placement, relationships, persistence, and conflict handling
   live in the same business services used by UI actions.
@@ -303,9 +313,13 @@ delete it. All successful writes use the current schema.
   terminate the whole process tree on disposal, and fail closed on platforms where
   the host lacks a process-tree ownership primitive.
 - Generated media enters Canvas only through `CanvasResourceBusinessService` after
-  Main atomically publishes it as a user-visible Project file under `Generated/`;
-  existing `file` nodes reference that Project file. A failed Canvas commit retains
-  the generated file and reports the partial success instead of deleting user output.
+  Main atomically publishes it with native no-replace semantics as a user-visible
+  Project file under `Generated/`; an existing file, directory, symlink, case-folded
+  equivalent, or concurrent winner is never overwritten. Existing `file` nodes
+  reference that Project file. A failed Canvas commit retains the generated file and
+  reports the partial success instead of deleting user output. Publication uses a
+  Project-owned WAL so recovery deletes only exact unpublished transaction staging
+  and never a published user file.
 - A Plugin-requested immediate generation result is a host-owned pending Canvas
   resource lifecycle. Canvas creates and commits the node id in Main before the
   external call, replaces it only through an exact content guard, and retains a
@@ -354,6 +368,10 @@ delete it. All successful writes use the current schema.
   source reference afterward.
 - Gate browser feature-policy exceptions such as fullscreen through an explicit
   manifest capability. Preserve every unrelated iframe permission denial.
+- Never expose the host public-URL importer or any generic fetch/download proxy to a
+  sandboxed Plugin. File-read, connected-input and generation permissions do not
+  imply network-import permission; any future capability requires a separate design
+  and explicit authorization.
 - Direct Plugin calls are thin adapters over existing typed Project, Canvas and
   Agent capabilities. They do not read private JSON or recreate domain invariants.
 

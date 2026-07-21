@@ -590,16 +590,27 @@ file. Text input/output is bounded separately. Inline base64 is additionally
 constrained by the MCP message limit.
 
 For a non-text tool, text content is normalized into at most 32 bounded warnings
-rather than inserted as Canvas nodes. After admission, Desktop atomically publishes
-validated media and text outputs under the user-visible `Generated/` directory,
-calls `CanvasResourceBusinessService.addResources`, creates normal Canvas file nodes
-and connects them to the referenced input nodes. A failed Canvas commit retains the
+rather than inserted as Canvas nodes. After admission, Desktop writes a Project-owned
+publication WAL, copies each result into that transaction's same-filesystem private
+staging, verifies it again, and publishes it under the user-visible `Generated/`
+directory with native atomic no-replace semantics.
+Existing files, directories, symlinks, case-folded equivalents and concurrent winners
+are preserved; unsupported platforms fail before publication. Desktop then calls
+`CanvasResourceBusinessService.addResources`, creates normal Canvas file nodes and
+connects them to the referenced input nodes. A failed Canvas commit retains the
 published files and reports “generation succeeded, Canvas insertion failed”; it does
 not delete user output. The sidecar never writes Canvas JSON or chooses Project
 scope, revision, placement or node ids.
 A v5 sidecar with separate Canvas grants may make explicit broker calls, but those
 remain revision-checked application transactions rather than generation result
 admission.
+
+Project-open recovery removes only WAL-proven exact staging that never left the private
+transaction. A target matching a prepared output proves the no-replace move won before
+its phase record and is preserved as published. If exact transaction staging still
+exists, the move did not happen: an existing target is preserved as a collision and
+only the private staging is removed. Every genuinely ambiguous state preserves bytes
+and enters repair. Once an output reaches `Generated/`, recovery never deletes it.
 
 The entire temporary tree is removed after success, failure or cancellation.
 
@@ -697,7 +708,8 @@ Changes to this boundary must preserve all of the following:
 - install-authorized and runtime-verified execution before staging, aggregate-bounded
   temporary inputs and bounded outputs;
 - generated media entering Canvas only through user-visible `Generated/` Project
-  files and the shared resource business flow;
+  files published with native atomic no-replace, durable publication WAL recovery and
+  the shared resource business flow;
 - strict v1-v5 manifest compatibility, `plugin-host/1-4` compatibility, and the
   independent `plugin-capability/1` contract for v5;
 - explicit install/update authorization, no first-call prompt and no shell execution;
