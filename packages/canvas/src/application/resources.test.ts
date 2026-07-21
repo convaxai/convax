@@ -839,5 +839,27 @@ describe("canvas resource business service", () => {
         sources: [source()],
       }),
     ).rejects.toBeInstanceOf(CanvasCommandValidationError)
+
+    for (const status of [["ready"], { toString: () => "ready" }]) {
+      const invalidState = new CanvasResourceBusinessService(
+        {
+          async prepare() {
+            return {
+              items: [{ id: "broken-state", kind: "text", metadata: {}, state: { status } as never }],
+            }
+          },
+        },
+        application,
+      )
+      await expect(invalidState.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas",
+        commandId: "invalid_state",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [source()],
+      })).rejects.toBeInstanceOf(CanvasCommandValidationError)
+    }
   })
 })

@@ -218,6 +218,14 @@ describe("canvas history", () => {
         nodes: [{ ...image, data: { ...image.data, url: "blob:legacy" } }],
       }),
     ).toBeNull()
+    for (const status of [["ready"], { toString: () => "ready" }]) {
+      expect(
+        parseCanvasDocument({
+          ...createCanvasDocument({ id: "invalid-runtime-status", nodes: [text] }),
+          nodes: [{ ...text, data: { ...text.data, resourceState: { status } } }],
+        }),
+      ).toBeNull()
+    }
     expect(
       parseCanvasDocument({
         ...createCanvasDocument({ id: "bad-folder", nodes: [text] }),

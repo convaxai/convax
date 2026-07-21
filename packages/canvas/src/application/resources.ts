@@ -584,7 +584,8 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
 
 function requireResourceRuntimeState(value: unknown) {
   if (!isRecord(value)
-    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(value.status))) {
+    || typeof value.status !== "string"
+    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)) {
     throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
   }
   for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {

@@ -5,6 +5,7 @@ import {
   dehydrateProjectCanvasDocument,
   getProjectResourceReference,
   managedAssetPath,
+  projectResourceBindingsKey,
   projectResourceReferenceKey,
   requireProjectResourceReference,
   type ProjectResourceReference,
@@ -39,6 +40,7 @@ describe("Project resource references", () => {
     { kind: "project-file", path: "Notes/brief.md:stream" },
     { kind: "project-directory", path: "../outside" },
     { kind: "project-directory", path: "assets/trailing. " },
+    { kind: "project-file", path: { toString: null, valueOf: null } },
     { kind: "managed-asset", name: "hero.png", sha256: "A".repeat(64) },
     { kind: "managed-asset", name: "hero.png", sha256: "a".repeat(63) },
     { kind: "managed-asset", name: "../hero.png", sha256: "a".repeat(64) },
@@ -64,6 +66,13 @@ describe("Project resource references", () => {
       name: "😀".repeat(256),
       sha256: digest,
     })).toThrow()
+  })
+
+  test("reports a stable domain error for non-string path values", () => {
+    const poisoned = { toString: null, valueOf: null }
+    expect(() => requireProjectResourceReference({ kind: "project-file", path: poisoned })).toThrow(
+      "Invalid portable Project path",
+    )
   })
 
   test("normalizes a valid managed media type", () => {
@@ -216,17 +225,51 @@ describe("Project Canvas document dehydration", () => {
   test.each([
     { poster: { url: "blob:runtime-poster" } },
     { inputs: [{ nativePath: "/Users/example/private.png" }] },
+    { inputs: [{ nativePath: "\\Users\\alice\\secret.png" }] },
     { inputs: [{ nativePath: "C:\\Users\\example\\private.png" }] },
   ])("rejects native paths and runtime URLs in host-owned resource slots %#", (binding) => {
     const text = createTextNode({
       metadata: {
         ...metadataFor({ kind: "project-file", path: "Notes/brief.md" }),
-        convaxProjectResourceBindings: binding,
+        [projectResourceBindingsKey]: binding,
       },
       position: { x: 0, y: 0 },
       resourceState: readyState,
     })
     expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [text] }))).toThrow("host-owned")
+  })
+
+  test.each([
+    ["plugin.surface", "file"],
+    ["agent", "agent"],
+    ["group", "file"],
+  ] as const)("checks the exact host-owned binding slot on %s nodes", (kind, type) => {
+    const node = {
+      id: kind,
+      type,
+      position: { x: 0, y: 0 },
+      data: {
+        kind,
+        label: kind,
+        metadata: { [projectResourceBindingsKey]: { url: "blob:runtime" } },
+      },
+    } as CanvasNode
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("host-owned")
+  })
+
+  test("preserves similarly named opaque Plugin metadata", () => {
+    const node = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: { convaxProjectResourceOpaque: { url: "blob:plugin-owned" } },
+      },
+    } as CanvasNode
+    const persisted = dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))
+    expect(persisted.nodes[0]!.data.metadata).toEqual(node.data.metadata)
   })
 })
 

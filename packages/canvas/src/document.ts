@@ -255,7 +255,8 @@ function isResourceKind(value: string) {
 
 function isResourceRuntimeState(value: unknown) {
   if (!isRecord(value)
-    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(value.status))) return false
+    || typeof value.status !== "string"
+    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)) return false
   return ["contentRevision", "error", "posterUrl", "text", "url"].every((key) =>
     value[key] === undefined || typeof value[key] === "string")
 }

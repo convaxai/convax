@@ -1,6 +1,7 @@
 import type { CanvasDocument } from "@convax/canvas/core"
 
 export const projectResourceReferenceKey = "convaxProjectResource"
+export const projectResourceBindingsKey = "convaxProjectResourceBindings"
 export const managedProjectAssetBlobDirectory = ".convax/assets/blobs"
 
 export type ProjectResourceReference =
@@ -52,8 +53,15 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
   return {
     ...document,
     nodes: document.nodes.map((node) => {
-      if (!resourceNodeKinds.has(node.data.kind)) return node
       const metadata = node.data.metadata
+      if (
+        isRecord(metadata)
+        && Object.hasOwn(metadata, projectResourceBindingsKey)
+      ) {
+        assertSafeHostOwnedResourceSlot(metadata[projectResourceBindingsKey])
+      }
+
+      if (!resourceNodeKinds.has(node.data.kind)) return node
       if (!isRecord(metadata)) {
         throw new Error(`Canvas resource node ${node.id} requires Project resource reference metadata`)
       }
@@ -68,11 +76,6 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
 
       const reference = getProjectResourceReference(metadata)
       if (!reference) throw new Error(`Canvas resource node ${node.id} requires a valid Project resource reference`)
-      for (const [key, value] of Object.entries(metadata)) {
-        if (key !== projectResourceReferenceKey && key.startsWith(projectResourceReferenceKey)) {
-          assertSafeHostOwnedResourceSlot(value)
-        }
-      }
       if (node.data.kind === "folder" && reference.kind !== "project-directory") {
         throw new Error(`Canvas folder node ${node.id} requires a project-directory reference`)
       }
@@ -93,8 +96,10 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
 }
 
 function requirePortableProjectPath(value: unknown) {
-  if (typeof value !== "string"
-    || !value
+  if (typeof value !== "string") {
+    throw new Error("Invalid portable Project path")
+  }
+  if (!value
     || value.length > 4_096
     || value !== value.trim()
     || value.includes("\\")
@@ -102,7 +107,7 @@ function requirePortableProjectPath(value: unknown) {
     || value.startsWith("//")
     || /^[A-Za-z]:/.test(value)
     || !hasOnlyUnicodeScalars(value)) {
-    throw new Error(`Invalid portable Project path: ${String(value)}`)
+    throw new Error(`Invalid portable Project path: ${value}`)
   }
   const segments = value.split("/")
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
@@ -169,7 +174,7 @@ function assertSafeHostOwnedResourceSlot(value: unknown, seen = new WeakSet<obje
   if (depth > 100) throw new Error("Canvas host-owned resource slot is too deeply nested")
   if (typeof value === "string") {
     if (value.startsWith("/")
-      || value.startsWith("\\\\")
+      || value.startsWith("\\")
       || /^[A-Za-z]:[\\/]/.test(value)
       || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) {
       throw new Error("Canvas host-owned resource slot contains a native path or runtime URL")
