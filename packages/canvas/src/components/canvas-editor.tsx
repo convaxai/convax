@@ -49,6 +49,7 @@ import {
   Columns3,
   Copy,
   Download,
+  FileOutput,
   FileUp,
   Focus,
   Group,
@@ -70,6 +71,7 @@ import {
   Ungroup,
   Video,
   Workflow,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react"
@@ -94,6 +96,7 @@ import {
   createAddCanvasResourcesCommand,
   findOpenCanvasPoint,
   queryCanvasNodes,
+  type CanvasAutoLayoutStrategy,
 } from "../application"
 import {
   addCanvasNodes,
@@ -119,7 +122,16 @@ import {
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { createMediaNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
+import {
+  CanvasExternalMutationLeaseController,
+  type CanvasExternalMutationLeaseCallbacks,
+} from "../external-mutation-lease"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
+import {
+  applyReactFlowEdgeSelectionChanges,
+  applyReactFlowNodeSelectionChanges,
+  createReactFlowSelectionSnapshot,
+} from "./canvas-selection-sync"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
@@ -150,11 +162,16 @@ import {
   createCanvasShortcutHandler,
   isCanvasExternalDragChordHeld,
   isCanvasExternalDragChordKey,
+  resolveCanvasTidyShortcutScope,
   type CanvasShortcutOptions,
 } from "../use-canvas-shortcuts"
 import { useSpacePanning } from "../use-space-panning"
 import {
   assertCanvasViewGuard,
+  CANVAS_VIEW_MAX_ZOOM,
+  CANVAS_VIEW_MIN_ZOOM,
+  resolveCanvasDocumentFitEffect,
+  resolveCanvasFitTargetNodeIds,
   type CanvasViewCommand,
   type CanvasViewCommandResult,
   type CanvasViewExecutionGuard,
@@ -167,6 +184,17 @@ import { createCanvasCardConnection, PendingConnectionMenu } from "./connection-
 import { getCanvasNodeInsertionItems } from "./insertion-items"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
+const CANVAS_FIT_DURATION = 220
+const CANVAS_FIT_MAX_ZOOM = 1
+const CANVAS_FIT_PADDING = 0.18
+const CANVAS_CENTER_FIT_MAX_ZOOM = 1.2
+const CANVAS_CENTER_FIT_PADDING = 0.08
+const CANVAS_MIN_ZOOM = CANVAS_VIEW_MIN_ZOOM
+const CANVAS_MAX_ZOOM = CANVAS_VIEW_MAX_ZOOM
+type CanvasDirectedAutoLayoutStrategy = Extract<
+  CanvasAutoLayoutStrategy,
+  "horizontal-directed-cluster" | "vertical-directed-cluster"
+>
 
 type CanvasGenerationImageRole = Extract<CanvasGenerationInputRole, "reference_image" | "first_frame" | "last_frame">
 
@@ -295,6 +323,10 @@ export interface CanvasEditorProps {
 }
 
 export interface CanvasEditorHandle {
+  /** Quiesces local mutation and persists the exact document an external writer will build from. */
+  beginExternalMutation: (signal?: AbortSignal) => Promise<void>
+  /** Accepts the authoritative persisted result, or simply releases after an aborted external write. */
+  endExternalMutation: (outcome: "committed" | "aborted") => Promise<void>
   flush: () => Promise<void>
   prepareToLeave: () => Promise<void>
   reload: () => Promise<void>
@@ -336,6 +368,8 @@ function CanvasEditorContent(
   const [edgesHidden, setEdgesHidden] = useState(false)
   const [miniMapVisible, setMiniMapVisible] = useState(true)
   const [snapToGrid, setSnapToGrid] = useState(true)
+  const [autoLayoutStrategy, setAutoLayoutStrategy] =
+    useState<CanvasDirectedAutoLayoutStrategy>("horizontal-directed-cluster")
   const [prompt, setPrompt] = useState("")
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
@@ -353,6 +387,8 @@ function CanvasEditorContent(
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [leaving, setLeaving] = useState(false)
+  const [externalMutationReadOnly, setExternalMutationReadOnly] = useState(false)
+  const [selectionDragModeActive, setSelectionDragModeActive] = useState(false)
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const [connectionTargetNodeId, setConnectionTargetNodeId] = useState<string | null>(null)
@@ -360,9 +396,11 @@ function CanvasEditorContent(
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
+  const discardImplicitSelectionEdgesRef = useRef(false)
   const selectionRef = useRef(selection)
   const selectionDragAutoSelectedNodeRef = useRef<string | null>(null)
   const selectionDragCandidateNodeRef = useRef<string | null>(null)
+  const selectionDragModeActiveRef = useRef(false)
   const connectionStartRef = useRef<ConnectionStart | null>(null)
   const connectionTargetNodeIdRef = useRef<string | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
@@ -378,6 +416,9 @@ function CanvasEditorContent(
   const savedRevisionRef = useRef(history.document.revision)
   const reloadQueueRef = useRef(new CanvasReloadQueue())
   const operationControllersRef = useRef(new Set<AbortController>())
+  const externalMutationCallbacksRef = useRef<CanvasExternalMutationLeaseCallbacks | null>(null)
+  const externalMutationLeaseRef = useRef<CanvasExternalMutationLeaseController | null>(null)
+  const authoritativeLoadRequestedRef = useRef(false)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const reactFlow = useReactFlow<CanvasNode>()
@@ -400,7 +441,7 @@ function CanvasEditorContent(
     setConnectionTargetNodeId(nodeId)
   }, [])
   const dispatch = useCallback((action: CanvasHistoryAction) => {
-    if (leavingRef.current || hydratingRef.current) return
+    if (leavingRef.current || hydratingRef.current || externalMutationLeaseRef.current?.locked) return
     if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
       hasLocalEditsRef.current = true
     }
@@ -417,7 +458,13 @@ function CanvasEditorContent(
     props.fileRendererRegistry.getVersion,
   )
 
-  const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
+  const readOnly =
+    (props.readOnly ?? false) ||
+    leaving ||
+    externalMutationReadOnly ||
+    hydrating ||
+    Boolean(loadError) ||
+    Boolean(saveError)
   const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
   const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
@@ -471,7 +518,7 @@ function CanvasEditorContent(
     () => history.document.nodes.filter((node) => !node.parentId).map((node) => node.id),
     [history.document.nodes],
   )
-  const canLayoutCanvas = canvasNodeIds.length >= 2
+  const canLayoutCanvas = !readOnly && canvasNodeIds.length >= 2
   const nodes = useMemo(() => {
     const depth = (node: CanvasNode, visited = new Set<string>()): number => {
       if (visited.has(node.id)) return 0
@@ -565,14 +612,35 @@ function CanvasEditorContent(
 
   useEffect(() => () => generationControllerRef.current?.controller.abort(), [generateService])
 
-  const updateSelection = useCallback((nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
-    const next = { nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) }
+  const replaceSelection = useCallback((next: CanvasSelection) => {
     selectionRef.current = next
     setSelection((current) => {
       if (equalIds(current.nodeIds, next.nodeIds) && equalIds(current.edgeIds, next.edgeIds)) return current
       return next
     })
   }, [])
+  const updateSelection = useCallback(
+    (nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
+      replaceSelection({ nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) })
+    },
+    [replaceSelection],
+  )
+  const synchronizeReactFlowSelection = useCallback(
+    ({ edges, nodes }: { edges: readonly { id: string }[]; nodes: readonly { id: string }[] }) => {
+      const discardImplicitEdges = discardImplicitSelectionEdgesRef.current
+      replaceSelection(
+        createReactFlowSelectionSnapshot(
+          nodes.map((node) => node.id),
+          edges.map((edge) => edge.id),
+          { discardImplicitEdges },
+        ),
+      )
+      if (discardImplicitEdges && (nodes.length === 0 || edges.length === 0)) {
+        discardImplicitSelectionEdgesRef.current = false
+      }
+    },
+    [replaceSelection],
+  )
   const getViewSnapshot = useCallback(
     (): CanvasViewSnapshot => ({
       documentId: documentRef.current.id,
@@ -584,6 +652,49 @@ function CanvasEditorContent(
       viewport: reactFlow.getViewport(),
     }),
     [props.viewId, props.viewScopeId, reactFlow],
+  )
+  const fitDocumentViewport = useCallback(
+    async (
+      document: CanvasDocument,
+      options: { duration?: number; maxZoom?: number; nodeIds?: readonly string[]; padding?: number } = {},
+    ) => {
+      const maxZoom = options.maxZoom ?? CANVAS_MAX_ZOOM
+      const padding = options.padding ?? CANVAS_FIT_PADDING
+      if (!Number.isFinite(maxZoom) || maxZoom < CANVAS_MIN_ZOOM || maxZoom > CANVAS_MAX_ZOOM) {
+        throw new Error(`Canvas fit maxZoom must be between ${CANVAS_MIN_ZOOM} and ${CANVAS_MAX_ZOOM}`)
+      }
+      if (!Number.isFinite(padding) || padding < 0) {
+        throw new Error("Canvas fit padding must be a finite non-negative number")
+      }
+      const bounds = rootRef.current?.getBoundingClientRect()
+      const effect = resolveCanvasDocumentFitEffect({
+        bounds: bounds
+          ? {
+              height: bounds.height,
+              maxZoom: CANVAS_MAX_ZOOM,
+              minZoom: CANVAS_MIN_ZOOM,
+              width: bounds.width,
+            }
+          : undefined,
+        document,
+        maxZoom,
+        nodeIds: options.nodeIds,
+        padding,
+      })
+      if (effect.kind === "renderer-fallback") {
+        await reactFlow.fitView({
+          duration: options.duration ?? CANVAS_FIT_DURATION,
+          maxZoom: effect.maxZoom,
+          padding: effect.padding,
+          ...(effect.nodeIds ? { nodes: effect.nodeIds.map((id) => ({ id })) } : {}),
+        })
+        return
+      }
+      if (effect.kind === "viewport") {
+        await reactFlow.setViewport(effect.viewport, { duration: options.duration ?? CANVAS_FIT_DURATION })
+      }
+    },
+    [reactFlow],
   )
   const waitForStableLoad = useCallback(async () => {
     while (true) {
@@ -623,38 +734,38 @@ function CanvasEditorContent(
         missingNodeIds = resolved.missingNodeIds
         if (command.select) updateSelection(foundNodeIds)
         if ((command.fit ?? "contain") !== "none" && foundNodeIds.length > 0) {
-          const ids = new Set(foundNodeIds)
-          const renderedNodes = reactFlow.getNodes().filter((node) => ids.has(node.id))
-          if (renderedNodes.length > 0) {
-            await reactFlow.fitView({
-              duration,
-              maxZoom: (command.fit ?? "contain") === "center" ? 1.2 : 1.1,
-              nodes: renderedNodes,
-              padding: (command.fit ?? "contain") === "center" ? 0.8 : 0.3,
-            })
-          }
+          const center = command.fit === "center"
+          await fitDocumentViewport(document, {
+            duration,
+            maxZoom: center ? CANVAS_CENTER_FIT_MAX_ZOOM : CANVAS_FIT_MAX_ZOOM,
+            nodeIds: foundNodeIds,
+            padding: center ? CANVAS_CENTER_FIT_PADDING : CANVAS_FIT_PADDING,
+          })
         }
       }
       if (command.type === "viewport.fit") {
-        const requested = command.nodeIds ?? document.nodes.map((node) => node.id)
-        const resolved = resolveNodeIds(requested)
+        const resolved = resolveCanvasFitTargetNodeIds(document, command.nodeIds)
         foundNodeIds = resolved.foundNodeIds
         missingNodeIds = resolved.missingNodeIds
-        const ids = new Set(foundNodeIds)
-        const renderedNodes = reactFlow.getNodes().filter((node) => ids.has(node.id))
-        if (command.nodeIds && renderedNodes.length === 0) {
+        if (resolved.explicit && foundNodeIds.length === 0) {
           return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
         }
-        await reactFlow.fitView({
+        await fitDocumentViewport(document, {
           duration,
-          maxZoom: command.maxZoom ?? 1.2,
-          nodes: command.nodeIds ? renderedNodes : undefined,
-          padding: command.padding ?? 0.3,
+          maxZoom: command.maxZoom,
+          nodeIds: resolved.explicit ? foundNodeIds : undefined,
+          padding: command.padding,
         })
       }
       if (command.type === "viewport.center") {
         if (!Number.isFinite(command.position.x) || !Number.isFinite(command.position.y)) {
           throw new Error("Canvas viewport center must contain finite coordinates")
+        }
+        if (
+          command.zoom !== undefined &&
+          (!Number.isFinite(command.zoom) || command.zoom < CANVAS_MIN_ZOOM || command.zoom > CANVAS_MAX_ZOOM)
+        ) {
+          throw new Error(`Canvas viewport zoom must be between ${CANVAS_MIN_ZOOM} and ${CANVAS_MAX_ZOOM}`)
         }
         await reactFlow.setCenter(command.position.x, command.position.y, {
           duration,
@@ -662,8 +773,8 @@ function CanvasEditorContent(
         })
       }
       if (command.type === "viewport.zoom") {
-        if (!Number.isFinite(command.zoom) || command.zoom <= 0)
-          throw new Error("Canvas viewport zoom must be positive")
+        if (!Number.isFinite(command.zoom) || command.zoom < CANVAS_MIN_ZOOM || command.zoom > CANVAS_MAX_ZOOM)
+          throw new Error(`Canvas viewport zoom must be between ${CANVAS_MIN_ZOOM} and ${CANVAS_MAX_ZOOM}`)
         await reactFlow.zoomTo(command.zoom, { duration })
       }
       if (command.type === "notification.show") {
@@ -675,7 +786,7 @@ function CanvasEditorContent(
       }
       return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
     },
-    [getViewSnapshot, notificationService, reactFlow, updateSelection, waitForStableLoad],
+    [fitDocumentViewport, getViewSnapshot, notificationService, reactFlow, updateSelection, waitForStableLoad],
   )
   const viewSession = useMemo<CanvasViewSession | null>(
     () =>
@@ -706,13 +817,7 @@ function CanvasEditorContent(
     if (!bounds) return { x: 0, y: 0 }
     return reactFlow.screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
   }, [reactFlow])
-  const fitAfterLayout = useCallback(() => {
-    window.requestAnimationFrame(() =>
-      window.requestAnimationFrame(() => {
-        void reactFlow.fitView({ duration: 220, maxZoom: 1.1, padding: 0.3 })
-      }),
-    )
-  }, [reactFlow])
+  const fitCanvas = useCallback(() => void fitDocumentViewport(documentRef.current), [fitDocumentViewport])
   const notifyError = useCallback(
     (title: string, error: unknown) => {
       notificationService?.show({
@@ -775,13 +880,11 @@ function CanvasEditorContent(
     })
   }
   const selectionDragGesture = selectionDragGestureRef.current
+  selectionDragModeActiveRef.current = selectionDragModeActive
   selectionDragShortcutModifierRef.current = props.selectionDragSource?.shortcutModifier
   const selectionDragChordHeld = selectionDragGesture.held
   const selectionDragArmed = Boolean(
-    selectionDragChordHeld &&
-      !selectionDragGesture.consumed &&
-      visibleSelectionDragSource &&
-      selectionDragGesture.status !== "unavailable",
+    selectionDragChordHeld && !selectionDragGesture.consumed && visibleSelectionDragSource,
   )
   useEffect(() => {
     selectionActionsMountedRef.current = true
@@ -809,11 +912,18 @@ function CanvasEditorContent(
     if (!selectionDragGesture.held || selectionDragGesture.consumed) return
     selectionDragGesture.reconcile(props.selectionDragSource, selectionActionContext)
   }, [props.selectionDragSource, selectionActionContext, selectionDragGesture])
+  useLayoutEffect(() => {
+    if (!selectionDragModeActive || readOnly || !props.selectionDragSource?.mode || selectionDragGesture.held) {
+      return
+    }
+    selectionDragGesture.hold(props.selectionDragSource, selectionActionContext)
+  }, [props.selectionDragSource, readOnly, selectionActionContext, selectionDragGesture, selectionDragModeActive])
   const executeSelectionAction = useCallback(
     (action: CanvasSelectionAction) => {
       if (
         hydratingRef.current ||
         leavingRef.current ||
+        externalMutationLeaseRef.current?.locked ||
         selectionActionContext.document !== documentRef.current ||
         !equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) ||
         !equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds)
@@ -831,6 +941,7 @@ function CanvasEditorContent(
     () =>
       !hydratingRef.current &&
       !leavingRef.current &&
+      !externalMutationLeaseRef.current?.locked &&
       selectionActionContext.document === documentRef.current &&
       equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) &&
       equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds),
@@ -868,7 +979,7 @@ function CanvasEditorContent(
   const setSelectionDragCandidateNode = useCallback(
     (nodeId: string | null) => {
       selectionDragCandidateNodeRef.current = nodeId
-      if (nodeId) selectHeldSelectionDragCandidate(nodeId)
+      if (nodeId && !selectionDragModeActiveRef.current) selectHeldSelectionDragCandidate(nodeId)
     },
     [selectHeldSelectionDragCandidate],
   )
@@ -890,13 +1001,55 @@ function CanvasEditorContent(
     selectionDragAutoSelectedNodeRef.current = null
     return selectionDragGesture.release()
   }, [selectionDragGesture])
+  const enterSelectionDragMode = useCallback(() => {
+    if (readOnly || !props.selectionDragSource || !props.selectionDragSource.mode || !selectionDragContextIsCurrent()) {
+      return false
+    }
+    selectionDragModeActiveRef.current = true
+    setSelectionDragModeActive(true)
+    selectionDragAutoSelectedNodeRef.current = null
+    selectionDragGesture.restart(props.selectionDragSource, selectionActionContext)
+    rootRef.current?.focus()
+    return true
+  }, [props.selectionDragSource, readOnly, selectionActionContext, selectionDragContextIsCurrent, selectionDragGesture])
+  const exitSelectionDragMode = useCallback(() => {
+    selectionDragModeActiveRef.current = false
+    setSelectionDragModeActive(false)
+    return cancelSelectionDrag()
+  }, [cancelSelectionDrag])
+  const finishSelectionDrag = useCallback(() => {
+    if (
+      selectionDragModeActiveRef.current &&
+      !readOnly &&
+      props.selectionDragSource &&
+      selectionDragContextIsCurrent()
+    ) {
+      if (selectionDragGesture.consumed) {
+        selectionDragGesture.restart(props.selectionDragSource, selectionActionContext)
+      }
+      return
+    }
+    cancelSelectionDrag()
+  }, [
+    cancelSelectionDrag,
+    props.selectionDragSource,
+    readOnly,
+    selectionActionContext,
+    selectionDragContextIsCurrent,
+    selectionDragGesture,
+  ])
+  useEffect(() => {
+    if (!selectionDragModeActive) return
+    if (!props.selectionDragSource?.mode || readOnly) exitSelectionDragMode()
+  }, [exitSelectionDragMode, props.selectionDragSource, readOnly, selectionDragModeActive])
   useEffect(() => {
     const cancelActiveDrag = () => {
-      if (selectionDragGesture.held) cancelSelectionDrag()
+      if (selectionDragGesture.held && !selectionDragModeActiveRef.current) cancelSelectionDrag()
     }
     const cancelOnKeyUp = (event: globalThis.KeyboardEvent) => {
       if (
         selectionDragGesture.held &&
+        !selectionDragModeActiveRef.current &&
         isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current) &&
         !isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current)
       ) {
@@ -905,13 +1058,18 @@ function CanvasEditorContent(
     }
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (
+        !selectionDragModeActiveRef.current &&
         isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current) &&
         isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current)
       ) {
         armSelectionDrag()
         return
       }
-      if (selectionDragGesture.held && !["Meta", "Control", "Shift"].includes(event.key)) {
+      if (
+        selectionDragGesture.held &&
+        !selectionDragModeActiveRef.current &&
+        !["Meta", "Control", "Shift"].includes(event.key)
+      ) {
         cancelSelectionDrag()
       }
     }
@@ -934,8 +1092,31 @@ function CanvasEditorContent(
       cancelSelectionDrag()
       return false
     }
-    return selectionDragGesture.start()
-  }, [cancelSelectionDrag, selectionDragContextIsCurrent, selectionDragGesture])
+    const started = selectionDragGesture.start()
+    if (started && selectionDragModeActiveRef.current) {
+      // A canceled HTML dragstart does not consistently emit dragend after
+      // Electron takes over the native drag. Rearm independently so the mode
+      // remains useful for consecutive exports.
+      window.setTimeout(() => {
+        if (
+          !selectionDragMountedRef.current ||
+          !selectionDragModeActiveRef.current ||
+          !props.selectionDragSource ||
+          !selectionDragContextIsCurrent()
+        ) {
+          return
+        }
+        selectionDragGesture.restart(props.selectionDragSource, selectionActionContext)
+      }, 0)
+    }
+    return started
+  }, [
+    cancelSelectionDrag,
+    props.selectionDragSource,
+    selectionActionContext,
+    selectionDragContextIsCurrent,
+    selectionDragGesture,
+  ])
   const startSave = useCallback(
     (document: CanvasDocument) => {
       if (!persistenceService || loadError || document.revision === 0) {
@@ -981,6 +1162,20 @@ function CanvasEditorContent(
     },
     [loadError, notifyError, persistenceService],
   )
+  const abortPendingOperations = useCallback(() => {
+    for (const controller of operationControllersRef.current) controller.abort()
+    operationControllersRef.current.clear()
+  }, [])
+  const finalizeGestureAndSave = useCallback(async () => {
+    const current = historyRef.current
+    const finalized = current.gestureStart ? canvasHistoryReducer(current, { type: "end-gesture" }) : current
+    if (finalized !== current) {
+      historyRef.current = finalized
+      documentRef.current = finalized.document
+      reduce({ type: "end-gesture" })
+    }
+    await startSave(finalized.document)
+  }, [startSave])
   const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
     selectionActionControllerRef.current?.abort()
     hasLocalEditsRef.current = false
@@ -1023,36 +1218,121 @@ function CanvasEditorContent(
       }
     })
   }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad])
+  const reloadAfterExternalCommit = useCallback(() => {
+    if (!persistenceService) {
+      return Promise.reject(new Error("Canvas persistence is required to accept an external mutation"))
+    }
+    selectionActionControllerRef.current?.abort()
+    return reloadQueueRef.current.request(async () => {
+      const loadBarrier = createCanvasLoadBarrier()
+      loadBarrierRef.current = loadBarrier
+      hydratingRef.current = true
+      setHydrating(true)
+      const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      try {
+        const documentId = documentRef.current.id
+        // The external commit is already authoritative. Saving here would overwrite it with the stale editor snapshot.
+        const document = await persistenceService.load(documentId, controller.signal)
+        if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
+        if (document.id !== documentId || documentRef.current.id !== documentId) {
+          throw new Error("Canvas changed while accepting an external mutation")
+        }
+        acceptHydratedDocument(document)
+        loadBarrier.resolve()
+      } catch (error) {
+        loadBarrier.reject(error)
+        // The external document is already authoritative. Release the lease so
+        // host recovery can continue, but keep this stale editor read-only until
+        // a successful load; allowing another save could overwrite the commit.
+        setLoadError(error instanceof Error ? error.message : String(error))
+        notifyError("Could not accept external canvas mutation", error)
+        throw error
+      } finally {
+        if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
+          loadBarrierRef.current = createCanvasLoadBarrier(true)
+        }
+        hydratingRef.current = false
+        setHydrating(false)
+        operationControllersRef.current.delete(controller)
+      }
+    })
+  }, [acceptHydratedDocument, notifyError, persistenceService])
+  externalMutationCallbacksRef.current = {
+    enter() {
+      if (leavingRef.current) throw new Error("Canvas editor is preparing to leave")
+      setExternalMutationReadOnly(true)
+      selectionActionControllerRef.current?.abort()
+      selectionDragGesture.release()
+      abortPendingOperations()
+    },
+    async flush() {
+      await waitForStableLoad()
+      await finalizeGestureAndSave()
+    },
+    reloadCommitted: reloadAfterExternalCommit,
+    release() {
+      setExternalMutationReadOnly(false)
+    },
+  }
+  const getExternalMutationLease = useCallback(() => {
+    if (!externalMutationLeaseRef.current) {
+      externalMutationLeaseRef.current = new CanvasExternalMutationLeaseController({
+        enter: () => externalMutationCallbacksRef.current!.enter(),
+        flush: () => externalMutationCallbacksRef.current!.flush(),
+        reloadCommitted: () => externalMutationCallbacksRef.current!.reloadCommitted(),
+        release: () => externalMutationCallbacksRef.current!.release(),
+      })
+    }
+    return externalMutationLeaseRef.current
+  }, [])
   useImperativeHandle(
     props.editorRef,
     () => ({
+      beginExternalMutation(signal) {
+        return getExternalMutationLease().begin(signal)
+      },
+      endExternalMutation(outcome) {
+        return getExternalMutationLease().end(outcome)
+      },
       async flush() {
+        if (externalMutationLeaseRef.current?.locked) {
+          throw new Error("Canvas flush is unavailable during an external mutation")
+        }
         await waitForStableLoad()
         await startSave(historyRef.current.document)
       },
       async prepareToLeave() {
+        if (externalMutationLeaseRef.current?.locked) {
+          throw new Error("Canvas cannot leave during an external mutation")
+        }
         await waitForStableLoad()
         leavingRef.current = true
         setLeaving(true)
-        for (const controller of operationControllersRef.current) controller.abort()
-        operationControllersRef.current.clear()
-
-        const current = historyRef.current
-        const finalized = current.gestureStart ? canvasHistoryReducer(current, { type: "end-gesture" }) : current
-        if (finalized !== current) {
-          historyRef.current = finalized
-          documentRef.current = finalized.document
-          reduce({ type: "end-gesture" })
-        }
-        await startSave(finalized.document)
+        abortPendingOperations()
+        await finalizeGestureAndSave()
       },
-      reload: reloadDocument,
+      async reload() {
+        if (externalMutationLeaseRef.current?.locked) {
+          throw new Error("Canvas reload is unavailable during an external mutation")
+        }
+        await reloadDocument()
+      },
       resumeAfterLeaveCanceled() {
+        if (externalMutationLeaseRef.current?.locked) return
         leavingRef.current = false
         setLeaving(false)
       },
     }),
-    [props.editorRef, reloadDocument, startSave, waitForStableLoad],
+    [
+      abortPendingOperations,
+      finalizeGestureAndSave,
+      getExternalMutationLease,
+      props.editorRef,
+      reloadDocument,
+      startSave,
+      waitForStableLoad,
+    ],
   )
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
@@ -1083,15 +1363,25 @@ function CanvasEditorContent(
     const documentId = history.document.id
     void persistenceService.load(documentId, controller.signal).then(
       (document) => {
+        const authoritativeRetry = authoritativeLoadRequestedRef.current
+        if (!controller.signal.aborted && authoritativeRetry && !document) {
+          const error = new Error(`Canvas document was not found: ${documentId}`)
+          setHydrating(false)
+          hydratingRef.current = false
+          setLoadError(error.message)
+          loadBarrier.reject(error)
+          notifyError("Could not load canvas", error)
+          return
+        }
         if (
           !controller.signal.aborted &&
           document &&
           documentRef.current.id === documentId &&
-          documentRef.current.revision === 0 &&
-          !hasLocalEditsRef.current
+          (authoritativeRetry || (documentRef.current.revision === 0 && !hasLocalEditsRef.current))
         ) {
           if (!leavingRef.current) {
             acceptHydratedDocument(document)
+            authoritativeLoadRequestedRef.current = false
           }
         }
         if (!controller.signal.aborted) {
@@ -1305,11 +1595,41 @@ function CanvasEditorContent(
     },
     [arrangeNodeIds, canArrangeSelection, commit, hasNodeOnlySelection],
   )
-  const layoutCanvas = useCallback(() => {
-    if (!canLayoutCanvas) return
-    commit((document) => layoutCanvasNodes(document, { nodeIds: canvasNodeIds, layout: "grid" }))
-    fitAfterLayout()
-  }, [canLayoutCanvas, canvasNodeIds, commit, fitAfterLayout])
+  const tidySelection = useCallback(() => {
+    if (!canArrangeSelection) return
+    commit(
+      (document) =>
+        applyCanvasBusinessCommand(document, {
+          type: "canvas.auto-layout",
+          nodeIds: arrangeNodeIds,
+          options: { strategy: autoLayoutStrategy },
+        }).document,
+    )
+  }, [arrangeNodeIds, autoLayoutStrategy, canArrangeSelection, commit])
+  const runCanvasLayout = useCallback(
+    (strategy: CanvasDirectedAutoLayoutStrategy) => {
+      if (!canLayoutCanvas || hydratingRef.current || leavingRef.current || externalMutationLeaseRef.current?.locked)
+        return
+      const result = applyCanvasBusinessCommand(documentRef.current, {
+        options: { strategy },
+        type: "canvas.auto-layout",
+      })
+      dispatch({ document: result.document, type: "commit" })
+      void fitDocumentViewport(result.document, {
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        padding: CANVAS_FIT_PADDING,
+      })
+    },
+    [canLayoutCanvas, dispatch, fitDocumentViewport],
+  )
+  const layoutCanvas = useCallback(() => runCanvasLayout(autoLayoutStrategy), [autoLayoutStrategy, runCanvasLayout])
+  const changeAutoLayoutStrategy = useCallback(
+    (strategy: CanvasDirectedAutoLayoutStrategy) => {
+      setAutoLayoutStrategy(strategy)
+      runCanvasLayout(strategy)
+    },
+    [runCanvasLayout],
+  )
   const copy = useCallback(() => {
     if (!hasNodeOnlySelection) return
     const payload = createCanvasClipboardPayload(history.document, selectedNodeIds, props.clipboardScope)
@@ -1362,7 +1682,8 @@ function CanvasEditorContent(
       position?: CanvasPoint,
       transfer?: { data: Readonly<Record<string, string>>; types: readonly string[] },
     ) => {
-      if (!uploadService || (files.length === 0 && !transfer) || readOnly) return
+      if (!uploadService || (files.length === 0 && !transfer) || readOnly || externalMutationLeaseRef.current?.locked)
+        return
       const controller = new AbortController()
       operationControllersRef.current.add(controller)
       const documentId = documentRef.current.id
@@ -1404,7 +1725,7 @@ function CanvasEditorContent(
   )
   const replaceNodeMedia = useCallback(
     (nodeId: string, file: File) => {
-      if (!uploadService || readOnly) return
+      if (!uploadService || readOnly || externalMutationLeaseRef.current?.locked) return
       const sourceNode = documentRef.current.nodes.find((node) => node.id === nodeId)
       if (!sourceNode || !["image", "video", "audio", "file"].includes(sourceNode.data.kind)) return
       const expectedKind = sourceNode.data.kind
@@ -1458,7 +1779,7 @@ function CanvasEditorContent(
     [commit, notificationService, notifyError, readOnly, selectNodes, uploadService],
   )
   const runGenerate = useCallback(() => {
-    if (!generateService || readOnly) return
+    if (!generateService || readOnly || externalMutationLeaseRef.current?.locked) return
     if (!prompt.trim()) {
       setGenerateOpen(true)
       return
@@ -1561,19 +1882,23 @@ function CanvasEditorContent(
     {
       addNode: () => setNodeMenuOpen(true),
       armExternalDrag: () => {
-        armSelectionDrag()
+        if (!selectionDragModeActiveRef.current) armSelectionDrag()
       },
       cancelExternalDrag: () => {
-        cancelSelectionDrag()
+        if (selectionDragModeActiveRef.current) exitSelectionDragMode()
+        else cancelSelectionDrag()
       },
       clearSelection: clearOverlays,
       copy,
       delete: remove,
       duplicate,
-      fitView: () => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 }),
+      fitView: fitCanvas,
       generate: runGenerate,
       group,
-      layout: () => (selectedNodeIds.length > 0 ? layout() : layoutCanvas()),
+      layout: () =>
+        resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
+          ? tidySelection()
+          : layoutCanvas(),
       openSearch: () => setSearchOpen(true),
       paste,
       redo: () => dispatch({ type: "redo" }),
@@ -1586,7 +1911,7 @@ function CanvasEditorContent(
     },
     readOnly,
     {
-      canArmExternalDrag: Boolean(props.selectionDragSource) && !readOnly,
+      canArmExternalDrag: Boolean(props.selectionDragSource) && !readOnly && !selectionDragModeActive,
       externalDragShortcutModifier: props.selectionDragSource?.shortcutModifier,
       externalDragArmed: selectionDragChordHeld,
     },
@@ -1605,6 +1930,7 @@ function CanvasEditorContent(
       visibleSelectionDragSource,
       selectionDragArmed,
       selectionDragChordHeld,
+      selectionDragModeActive,
       selectionDragStatus: selectionDragGesture.status,
       beginGesture: () => dispatch({ type: "begin-gesture" }),
       cancelGesture: () => dispatch({ type: "cancel-gesture" }),
@@ -1613,7 +1939,7 @@ function CanvasEditorContent(
       duplicateNode,
       executeSelectionAction,
       isSelectionActionPending,
-      releaseSelectionDrag: cancelSelectionDrag,
+      finishSelectionDrag,
       setSelectionDragCandidateNode,
       startSelectionDrag,
       quickConnect,
@@ -1632,7 +1958,7 @@ function CanvasEditorContent(
       props.fileRendererRegistry,
       quickConnect,
       readOnly,
-      cancelSelectionDrag,
+      finishSelectionDrag,
       removeNode,
       replaceNodeMedia,
       selectNodes,
@@ -1640,6 +1966,7 @@ function CanvasEditorContent(
       selectionActionStateVersion,
       selectionDragArmed,
       selectionDragChordHeld,
+      selectionDragModeActive,
       selectionDragGesture,
       selectionDragStateVersion,
       selectionContext,
@@ -1719,9 +2046,9 @@ function CanvasEditorContent(
                 edges={edges}
                 elementsSelectable={!readOnly}
                 fitView
-                fitViewOptions={{ maxZoom: 1.2, padding: 0.3 }}
-                maxZoom={2.5}
-                minZoom={0.15}
+                fitViewOptions={{ maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_FIT_PADDING }}
+                maxZoom={CANVAS_MAX_ZOOM}
+                minZoom={CANVAS_MIN_ZOOM}
                 nodeTypes={nodeTypes}
                 nodes={nodes}
                 nodesConnectable={!readOnly}
@@ -1814,14 +2141,7 @@ function CanvasEditorContent(
                 onEdgesChange={(changes) => {
                   const selectionChanges = changes.filter((change) => change.type === "select")
                   if (selectionChanges.length > 0) {
-                    setSelection((current) => {
-                      const edgeIds = new Set(current.edgeIds)
-                      selectionChanges.forEach((change) =>
-                        change.selected ? edgeIds.add(change.id) : edgeIds.delete(change.id),
-                      )
-                      if (equalIds(current.edgeIds, edgeIds)) return current
-                      return { nodeIds: current.nodeIds, edgeIds }
-                    })
+                    replaceSelection(applyReactFlowEdgeSelectionChanges(selectionRef.current, selectionChanges))
                   }
                   const documentChanges = changes.filter((change) => change.type !== "select")
                   if (documentChanges.length === 0) return
@@ -1877,14 +2197,7 @@ function CanvasEditorContent(
                 onNodesChange={(changes) => {
                   const selectionChanges = changes.filter((change) => change.type === "select")
                   if (selectionChanges.length > 0) {
-                    setSelection((current) => {
-                      const nodeIds = new Set(current.nodeIds)
-                      selectionChanges.forEach((change) =>
-                        change.selected ? nodeIds.add(change.id) : nodeIds.delete(change.id),
-                      )
-                      if (equalIds(current.nodeIds, nodeIds)) return current
-                      return { nodeIds, edgeIds: current.edgeIds }
-                    })
+                    replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
                   }
                   const documentChanges = changes.filter(
                     (change) => change.type !== "select" && change.type !== "remove",
@@ -1914,6 +2227,16 @@ function CanvasEditorContent(
                       },
                     })
                   }
+                }}
+                // React Flow runs its selection-listener effect again whenever
+                // this callback's identity changes. Keep it memoized: an inline
+                // callback can oscillate controlled selection after a pane click.
+                onSelectionChange={synchronizeReactFlowSelection}
+                onSelectionStart={() => {
+                  // React Flow automatically selects every edge connected to a
+                  // box-selected node. Canvas keeps the gesture node-only while
+                  // preserving deliberate mixed selections from direct clicks.
+                  discardImplicitSelectionEdgesRef.current = true
                 }}
                 onPaneClick={() => {
                   if (ignoreConnectionPaneClickRef.current) {
@@ -1966,6 +2289,10 @@ function CanvasEditorContent(
                 onAddText={() => addNode("text")}
                 onAddVideo={() => addNode("video")}
                 onExport={exportCanvas}
+                onSelectionDragModeChange={(active) => {
+                  if (active) enterSelectionDragMode()
+                  else exitSelectionDragMode()
+                }}
                 onRedo={() => dispatch({ type: "redo" })}
                 onSearch={() => setSearchOpen(true)}
                 onSelect={activateSelectTool}
@@ -1973,6 +2300,15 @@ function CanvasEditorContent(
                 onUpload={() => uploadInputRef.current?.click()}
                 readOnly={readOnly}
                 saveState={saveState}
+                selectionDragMode={
+                  props.selectionDragSource?.mode
+                    ? {
+                        ...props.selectionDragSource.mode,
+                        active: selectionDragModeActive,
+                        icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                      }
+                    : undefined
+                }
                 title={props.title}
               />
 
@@ -1988,6 +2324,7 @@ function CanvasEditorContent(
                         </div>
                         <Button
                           onClick={() => {
+                            authoritativeLoadRequestedRef.current = true
                             loadBarrierRef.current = createCanvasLoadBarrier()
                             setLoadAttempt((attempt) => attempt + 1)
                           }}
@@ -2053,18 +2390,21 @@ function CanvasEditorContent(
                   onDuplicate={duplicate}
                   onGroup={group}
                   onLayout={layout}
+                  onTidy={tidySelection}
                   nodeIds={selectedNodeIds}
                   onUngroup={ungroup}
                 />
               ) : null}
 
               <ViewportToolbar
+                autoLayoutStrategy={autoLayoutStrategy}
                 canLayout={canLayoutCanvas}
                 edgesHidden={edgesHidden}
                 miniMapVisible={miniMapVisible}
                 onEdgesHiddenChange={() => setEdgesHidden((hidden) => !hidden)}
-                onFit={() => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 })}
+                onFit={fitCanvas}
                 onLayout={layoutCanvas}
+                onLayoutStrategyChange={changeAutoLayoutStrategy}
                 onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
                 onSnapChange={() => setSnapToGrid((enabled) => !enabled)}
                 onZoomIn={() => void reactFlow.zoomIn({ duration: 140 })}
@@ -2319,9 +2659,9 @@ function CanvasEditorContent(
             onDelete={remove}
             onDistribute={distribute}
             onDuplicate={duplicate}
-            onFit={() => void reactFlow.fitView({ duration: 220, maxZoom: 1.2, padding: 0.3 })}
+            onFit={fitCanvas}
             onGroup={group}
-            onLayout={() => layout("grid")}
+            onLayout={tidySelection}
             onPaste={paste}
             onRedo={() => dispatch({ type: "redo" })}
             onUngroup={ungroup}
@@ -2411,10 +2751,18 @@ function CanvasHeader(props: {
   onRedo: () => void
   onSearch: () => void
   onSelect: () => void
+  onSelectionDragModeChange: (active: boolean) => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
   saveState: "idle" | "saving" | "saved"
+  selectionDragMode?: {
+    active: boolean
+    description: string
+    exitLabel: string
+    icon: ReactNode
+    label: string
+  }
   title?: string
 }) {
   return (
@@ -2433,6 +2781,15 @@ function CanvasHeader(props: {
       </ToolSurface>
       <ToolSurface className="left-1/2 top-4 -translate-x-1/2 gap-0.5 max-[820px]:top-16">
         <IconButton icon={<MousePointer2 />} label="Select" onClick={props.onSelect} pressed shortcut="V" />
+        {props.selectionDragMode ? (
+          <IconButton
+            disabled={props.readOnly}
+            icon={props.selectionDragMode.icon}
+            label={props.selectionDragMode.label}
+            onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
+            pressed={props.selectionDragMode.active}
+          />
+        ) : null}
         <span className="mx-1 h-5 w-px bg-border" />
         <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
         <IconButton disabled={props.readOnly} icon={<ImagePlus />} label="Image" onClick={props.onAddImage} />
@@ -2460,6 +2817,24 @@ function CanvasHeader(props: {
         <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" />
         {props.canExport ? <IconButton icon={<Download />} label="Export" onClick={props.onExport} /> : null}
       </ToolSurface>
+      {props.selectionDragMode?.active ? (
+        <ToolSurface className="left-1/2 top-16 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 gap-2 border-primary/30 bg-card/95 px-3 py-2 shadow-md backdrop-blur max-[820px]:top-28">
+          <span className="shrink-0 text-primary">{props.selectionDragMode.icon}</span>
+          <span aria-live="polite" className="min-w-0 text-xs font-medium" role="status">
+            {props.selectionDragMode.description}
+          </span>
+          <Button
+            aria-label={props.selectionDragMode.exitLabel}
+            className="shrink-0 gap-1"
+            onClick={() => props.onSelectionDragModeChange(false)}
+            size="sm"
+            variant="ghost"
+          >
+            <X className="size-3.5" />
+            {props.selectionDragMode.exitLabel}
+          </Button>
+        </ToolSurface>
+      ) : null}
     </>
   )
 }
@@ -2499,6 +2874,7 @@ function SelectionToolbar(props: {
   onDuplicate: () => void
   onGroup: () => void
   onLayout: (layout: CanvasLayout) => void
+  onTidy: () => void
   onUngroup: () => void
 }) {
   const [arrangeMenuOpen, setArrangeMenuOpen] = useState(false)
@@ -2640,7 +3016,7 @@ function SelectionToolbar(props: {
           disabled={!props.canArrange}
           icon={<LayoutGrid />}
           label="Tidy up"
-          onClick={() => props.onLayout("grid")}
+          onClick={props.onTidy}
           shortcut="⌥⇧F"
           tooltipSide="top"
         />
@@ -2653,13 +3029,58 @@ function SelectionToolbar(props: {
 
 const zoomPresets = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2] as const
 
+/** Matches the Canvas edge-visibility affordance: topology, not generic visibility. */
+function CanvasEdgeVisibilityIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      data-canvas-toolbar-icon="edge-visibility"
+      fill="none"
+      height="16"
+      viewBox="0 0 16 16"
+      width="16"
+    >
+      <path
+        d="M4.25 4.75h3.5M8.25 4.75h3.5M4.25 11.25h7.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.25"
+      />
+      <circle cx="3" cy="4.75" fill="currentColor" r="1.35" />
+      <circle cx="8" cy="4.75" fill="currentColor" r="1.35" />
+      <circle cx="13" cy="4.75" fill="currentColor" r="1.35" />
+      <circle cx="3" cy="11.25" fill="currentColor" r="1.35" />
+      <circle cx="13" cy="11.25" fill="currentColor" r="1.35" />
+    </svg>
+  )
+}
+
+const canvasDirectedLayoutActions = [
+  {
+    icon: <AlignHorizontalSpaceBetween />,
+    label: "Horizontal flow",
+    strategy: "horizontal-directed-cluster",
+  },
+  {
+    icon: <AlignVerticalSpaceBetween />,
+    label: "Vertical flow",
+    strategy: "vertical-directed-cluster",
+  },
+] satisfies readonly {
+  icon: ReactNode
+  label: string
+  strategy: CanvasDirectedAutoLayoutStrategy
+}[]
+
 function ViewportToolbar(props: {
+  autoLayoutStrategy: CanvasDirectedAutoLayoutStrategy
   canLayout: boolean
   edgesHidden: boolean
   miniMapVisible: boolean
   onEdgesHiddenChange: () => void
   onFit: () => void
   onLayout: () => void
+  onLayoutStrategyChange: (strategy: CanvasDirectedAutoLayoutStrategy) => void
   onMiniMapChange: () => void
   onSnapChange: () => void
   onZoomIn: () => void
@@ -2668,8 +3089,26 @@ function ViewportToolbar(props: {
 }) {
   const viewport = useViewport()
   const reactFlow = useReactFlow<CanvasNode>()
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false)
+  const layoutMenuRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!layoutMenuOpen) return
+    const closeMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && layoutMenuRef.current?.contains(event.target)) return
+      setLayoutMenuOpen(false)
+    }
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLayoutMenuOpen(false)
+    }
+    window.addEventListener("pointerdown", closeMenu)
+    window.addEventListener("keydown", closeMenuOnEscape)
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu)
+      window.removeEventListener("keydown", closeMenuOnEscape)
+    }
+  }, [layoutMenuOpen])
   useEffect(() => {
     if (!zoomMenuOpen) return
     const closeMenu = (event: PointerEvent) => {
@@ -2683,20 +3122,60 @@ function ViewportToolbar(props: {
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
       <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
       <IconButton
-        icon={<Workflow />}
+        icon={<CanvasEdgeVisibilityIcon />}
         label={props.edgesHidden ? "Show edges" : "Hide edges"}
         onClick={props.onEdgesHiddenChange}
         pressed={props.edgesHidden}
         tooltipSide="top"
       />
-      <IconButton
-        disabled={!props.canLayout}
-        icon={<LayoutGrid />}
-        label="Tidy canvas"
-        onClick={props.onLayout}
-        shortcut="⌥⇧F"
-        tooltipSide="top"
-      />
+      <div ref={layoutMenuRef} className="relative flex items-center">
+        <IconButton
+          disabled={!props.canLayout}
+          icon={<LayoutGrid />}
+          label="Tidy canvas"
+          onClick={props.onLayout}
+          shortcut="⌥⇧F"
+          tooltipSide="top"
+        />
+        <Tooltip content="Tidy direction" side="top">
+          <Button
+            aria-expanded={layoutMenuOpen}
+            aria-haspopup="menu"
+            aria-label="Choose tidy direction"
+            className="-ml-1 size-6 px-0"
+            disabled={!props.canLayout}
+            onClick={() => setLayoutMenuOpen((open) => !open)}
+            size="sm"
+            variant="ghost"
+          >
+            <ChevronUp className={cn("size-3 transition-transform", layoutMenuOpen && "rotate-180")} />
+          </Button>
+        </Tooltip>
+        {layoutMenuOpen ? (
+          <div className="convax-zoom-menu convax-layout-menu" data-canvas-shortcuts="ignore" role="menu">
+            <div className="convax-zoom-menu__title">Tidy direction</div>
+            {canvasDirectedLayoutActions.map((action) => (
+              <button
+                key={action.strategy}
+                aria-checked={props.autoLayoutStrategy === action.strategy}
+                className="convax-zoom-menu__item"
+                onClick={() => {
+                  props.onLayoutStrategyChange(action.strategy)
+                  setLayoutMenuOpen(false)
+                }}
+                role="menuitemradio"
+                type="button"
+              >
+                <span className="flex items-center gap-2">
+                  {action.icon}
+                  <span>{action.label}</span>
+                </span>
+                {props.autoLayoutStrategy === action.strategy ? <Check /> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
       <IconButton
         icon={<Magnet />}
         label="Snap to grid"

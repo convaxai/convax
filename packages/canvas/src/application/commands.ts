@@ -7,13 +7,21 @@ import {
   layoutCanvasNodes,
   moveCanvasNodes,
   removeCanvasElements,
+  setCanvasNodeGeometry,
   ungroupCanvasNode,
   type CanvasAlign,
   type CanvasDistribute,
   type CanvasLayout,
+  type CanvasNodeGeometryUpdate,
 } from "../commands"
 import { createCanvasId, createFolderNode, createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
 import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
+import {
+  applyCanvasAutoLayoutPlan,
+  CanvasLayoutValidationError,
+  planCanvasLayout,
+  type CanvasAutoLayoutOptions,
+} from "./layout"
 
 /** Host-defined actor identity. Canvas does not prescribe application roles. */
 export interface CanvasCommandActor {
@@ -57,11 +65,17 @@ export interface CanvasReplaceResourceCommand {
   targetNodeId: string
 }
 
+export interface CanvasAutoLayoutCommand {
+  type: "canvas.auto-layout"
+  nodeIds?: readonly string[]
+  options?: CanvasAutoLayoutOptions
+}
+
 /**
  * Product-level operations that preserve the same behavior across UI and Agent
  * callers. Business commands may compose several primitive mutations.
  */
-export type CanvasBusinessCommand = CanvasAddResourcesCommand | CanvasReplaceResourceCommand
+export type CanvasBusinessCommand = CanvasAddResourcesCommand | CanvasReplaceResourceCommand | CanvasAutoLayoutCommand
 
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
@@ -70,8 +84,9 @@ export type CanvasPrimitiveCommand =
   | { type: "nodes.connect"; connection: Pick<CanvasEdge, "source" | "target"> & Partial<CanvasEdge> }
   | { type: "nodes.distribute"; axis: CanvasDistribute; nodeIds: readonly string[] }
   | { type: "nodes.group"; label?: string; nodeIds: readonly string[] }
-  | { type: "nodes.layout"; gap?: number; layout?: CanvasLayout; nodeIds?: readonly string[] }
+  | { type: "nodes.layout"; gap?: number; layout?: CanvasLayout; nodeIds: readonly string[] }
   | { type: "nodes.move"; delta: CanvasPoint; nodeIds: readonly string[] }
+  | { type: "nodes.setGeometry"; updates: readonly CanvasNodeGeometryUpdate[] }
   | { type: "nodes.ungroup"; nodeId: string }
 
 export type CanvasApplicationCommand = CanvasBusinessCommand | CanvasPrimitiveCommand
@@ -81,6 +96,13 @@ export interface CanvasCommandEnvelope {
   command: CanvasApplicationCommand
   commandId: string
   expectedRevision: number
+}
+
+export interface CanvasTransactionEnvelope {
+  actor: CanvasCommandActor
+  commands: readonly CanvasApplicationCommand[]
+  expectedRevision: number
+  transactionId: string
 }
 
 export interface CanvasBusinessCommandResult {
@@ -180,6 +202,22 @@ export function applyCanvasApplicationCommand(
 ): CanvasBusinessCommandResult {
   if (command.type === "resources.add") return addResources(document, command)
   if (command.type === "resources.replace") return replaceResource(document, command)
+  if (command.type === "canvas.auto-layout") {
+    if (command.nodeIds) requireNodeIds(document, command.nodeIds)
+    if (command.nodeIds?.length === 0) return result(document, document)
+    try {
+      const plan = planCanvasLayout(document, { nodeIds: command.nodeIds, options: command.options })
+      const next = applyCanvasAutoLayoutPlan(document, plan)
+      const affectedNodeIds = new Set(plan.positions.map((entry) => entry.nodeId))
+      next.nodes.forEach((node, index) => {
+        if (node !== document.nodes[index]) affectedNodeIds.add(node.id)
+      })
+      return result(document, next, [...affectedNodeIds])
+    } catch (error) {
+      if (error instanceof CanvasLayoutValidationError) throw new CanvasCommandValidationError(error.message)
+      throw error
+    }
+  }
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -199,6 +237,34 @@ export function applyCanvasApplicationCommand(
     requireNodeIds(document, command.nodeIds)
     return result(document, moveCanvasNodes(document, command.nodeIds, command.delta), [...command.nodeIds])
   }
+  if (command.type === "nodes.setGeometry") {
+    const seen = new Set<string>()
+    for (const update of command.updates) {
+      if (seen.has(update.nodeId)) {
+        throw new CanvasCommandValidationError(`Canvas geometry contains a duplicate node: ${update.nodeId}`)
+      }
+      seen.add(update.nodeId)
+      requireFinitePoint(update.position, "Canvas geometry position")
+      if (
+        update.size &&
+        (!Number.isFinite(update.size.width) ||
+          update.size.width <= 0 ||
+          !Number.isFinite(update.size.height) ||
+          update.size.height <= 0)
+      ) {
+        throw new CanvasCommandValidationError("Canvas geometry size must contain finite positive dimensions")
+      }
+    }
+    requireNodeIds(
+      document,
+      command.updates.map((update) => update.nodeId),
+    )
+    return result(
+      document,
+      setCanvasNodeGeometry(document, command.updates),
+      command.updates.map((update) => update.nodeId),
+    )
+  }
   if (command.type === "nodes.group") {
     requireNodeIds(document, command.nodeIds)
     const grouped = groupCanvasNodes(document, command.nodeIds, command.label)
@@ -212,14 +278,17 @@ export function applyCanvasApplicationCommand(
     return result(document, ungrouped.document, ungrouped.selectedNodeIds)
   }
   if (command.type === "nodes.layout") {
-    if (command.nodeIds) requireNodeIds(document, command.nodeIds)
-    if (command.nodeIds?.length === 0) return result(document, document)
+    if (!command.nodeIds) {
+      throw new CanvasCommandValidationError("Primitive node layout requires explicit node ids")
+    }
+    requireNodeIds(document, command.nodeIds)
+    if (command.nodeIds.length === 0) return result(document, document)
     const next = layoutCanvasNodes(document, {
       gap: command.gap,
       layout: command.layout,
       nodeIds: command.nodeIds,
     })
-    return result(document, next, command.nodeIds ? [...command.nodeIds] : document.nodes.map((node) => node.id))
+    return result(document, next, [...command.nodeIds])
   }
   if (command.type === "nodes.align") {
     requireNodeIds(document, command.nodeIds)
@@ -233,7 +302,7 @@ export function executeCanvasApplicationCommand(
   document: CanvasDocument,
   envelope: CanvasCommandEnvelope,
 ): CanvasBusinessCommandResult {
-  if (!envelope.commandId.trim() || !envelope.actor.id.trim() || !envelope.actor.kind.trim()) {
+  if (!envelope.commandId.trim() || !validActor(envelope.actor)) {
     throw new CanvasCommandValidationError("Canvas command and actor ids are required")
   }
   if (document.revision !== envelope.expectedRevision) {
@@ -242,6 +311,38 @@ export function executeCanvasApplicationCommand(
   const applied = applyCanvasApplicationCommand(document, envelope.command)
   if (!applied.changed) return applied
   return { ...applied, document: { ...applied.document, revision: document.revision + 1 } }
+}
+
+/** Applies all commands in order and publishes at most one logical revision. */
+export function executeCanvasApplicationTransaction(
+  document: CanvasDocument,
+  envelope: CanvasTransactionEnvelope,
+): CanvasBusinessCommandResult {
+  if (!envelope.transactionId.trim() || !validActor(envelope.actor)) {
+    throw new CanvasCommandValidationError("Canvas transaction and actor ids are required")
+  }
+  if (document.revision !== envelope.expectedRevision) {
+    throw new CanvasRevisionConflictError(envelope.expectedRevision, document.revision)
+  }
+  let current = document
+  const affectedNodeIds = new Set<string>()
+  const createdNodeIds = new Set<string>()
+  const warnings: string[] = []
+  for (const command of envelope.commands) {
+    const applied = applyCanvasApplicationCommand(current, command)
+    current = applied.document
+    applied.affectedNodeIds.forEach((nodeId) => affectedNodeIds.add(nodeId))
+    applied.createdNodeIds.forEach((nodeId) => createdNodeIds.add(nodeId))
+    warnings.push(...applied.warnings)
+  }
+  if (current === document) return result(document, document)
+  return {
+    affectedNodeIds: [...affectedNodeIds],
+    changed: true,
+    createdNodeIds: [...createdNodeIds],
+    document: { ...current, revision: document.revision + 1 },
+    warnings,
+  }
 }
 
 /**
@@ -377,4 +478,8 @@ function requireFinitePoint(point: CanvasPoint, label: string) {
   if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
     throw new CanvasCommandValidationError(`${label} must contain finite coordinates`)
   }
+}
+
+function validActor(actor: CanvasCommandActor) {
+  return Boolean(actor.id.trim() && actor.kind.trim())
 }

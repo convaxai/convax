@@ -981,6 +981,10 @@
   line-height: 26px;
 }
 
+.convax-canvas .convax-layout-menu {
+  width: 164px;
+}
+
 .convax-canvas .convax-zoom-menu__item {
   display: flex;
   width: 100%;

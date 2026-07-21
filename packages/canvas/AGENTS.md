@@ -19,8 +19,22 @@ Canvas owns document and editor semantics independently of Project and Agent.
   validation logic at either edge.
 - Primitive commands are explicit low-level operations and still pass through actor,
   command-id, revision and persistence rules.
+- Ordered application transactions execute against one starting revision, advance
+  the document at most once, and persist with one repository CAS. Transaction
+  idempotency is owned here, not by Desktop transports. Reject empty transport
+  transactions and bound retained replay results by aggregate document size rather
+  than only by receipt count.
+- Whole-Canvas tidy uses the Canvas-owned size-aware directed-cluster business
+  operation, including component packing, cycles, groups and isolates. Directed
+  strategies compact otherwise unrelated nodes into a deterministic shelf;
+  conservative component packing may explicitly preserve their mental map. Primitive
+  grid/horizontal/vertical layout requires explicit node ids. Host or Plugin layout
+  engines may only return a host-neutral revision-bound geometry plan; Canvas
+  validates and applies it atomically.
 - View effects are valid capabilities but cannot turn a committed domain mutation
   into a failed mutation.
+- Fit and reveal derive world bounds from the authoritative Canvas document, including
+  parent coordinates. Do not wait for or trust stale mounted renderer geometry.
 - Ordinary document mutations such as adding, importing, duplicating, or generating
   nodes preserve the mounted viewport. Fit, center, zoom, and reveal movement require
   an explicit user action or view command.
@@ -34,6 +48,13 @@ Canvas owns document and editor semantics independently of Project and Agent.
   packages, permissions, iframe transport, Project/Agent calls and package storage
   belong to the host. A Web Plugin renderer still produces a `file` node and must
   mutate the document through the same editor/application APIs as built-in UI.
+- Before a main-owned external read or mutation of a mounted document, the editor
+  lease synchronously blocks new local edits, aborts pending operations, finalizes
+  gestures and flushes. A committed mutation reloads authoritative persistence
+  without first saving the stale editor snapshot; abort always releases the lease.
+- Application and resource requests may carry `AbortSignal`. Check it after every
+  awaited preparation/load/conflict step and immediately before persistence; caller
+  cancellation must never become a late durable write.
 - Selection action surfaces accept only explicit host-owned actions over an immutable
   document/selection snapshot. Canvas may render them in the multi-selection toolbar
   and an eligible single-node toolbar. Canvas owns visibility isolation,
@@ -42,6 +63,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   or native integration supplied an action. Hosts crossing IPC must translate cancellation
   into their own cloneable protocol and cancel safely interruptible external work;
   Canvas must not own an operation-id registry.
+- A host-neutral selection drag source may expose a persistent drag-out mode. Canvas
+  owns its top-level mode UI and interaction semantics: selection, pan and zoom stay
+  available, in-Canvas node movement is disabled, and each completed native drag
+  rearms the current immutable selection. Host/native paths and ticket publication
+  remain outside Canvas.
 
 Run `bun typecheck && bun test`. For public command, plugin or export changes also
 run root `bun run pack:check`.

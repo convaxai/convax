@@ -1,5 +1,6 @@
 export * from "./capabilities"
 export * from "./commands"
+export * from "./layout"
 export * from "./persistence"
 export * from "./queries"
 export * from "./resources"

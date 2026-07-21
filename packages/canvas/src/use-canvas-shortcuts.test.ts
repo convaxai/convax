@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react"
 import {
   createCanvasShortcutHandler,
   createCanvasShortcutReleaseHandler,
+  resolveCanvasTidyShortcutScope,
   type CanvasShortcutActions,
 } from "./use-canvas-shortcuts"
 
@@ -50,6 +51,13 @@ function keyboardEvent(key: string, overrides: Partial<KeyboardEvent<HTMLElement
 }
 
 describe("canvas shortcuts", () => {
+  test("keeps invalid multi-node tidy intent from falling through to the whole Canvas", () => {
+    expect(resolveCanvasTidyShortcutScope(false, 0)).toBe("canvas")
+    expect(resolveCanvasTidyShortcutScope(false, 1)).toBe("canvas")
+    expect(resolveCanvasTidyShortcutScope(true, 1)).toBe("selection")
+    expect(resolveCanvasTidyShortcutScope(false, 2)).toBe("selection")
+  })
+
   test("activates the selection tool with V", () => {
     const select = mock(() => undefined)
     const event = keyboardEvent("v")

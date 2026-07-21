@@ -14,6 +14,13 @@ export interface CanvasSelectionDragSource {
   readonly icon?: ReactNode
   readonly id: string
   readonly label: string
+  /** Optional labels that let Canvas expose this source as a persistent editor mode. */
+  readonly mode?: {
+    readonly description: string
+    readonly exitLabel: string
+    readonly label: string
+    readonly preparingLabel: string
+  }
   readonly prepare: (context: CanvasSelectionActionContext) => Promise<CanvasPreparedSelectionDrag>
   readonly preparingLabel?: string
   /** Host-selected primary modifier. Omit only for platform-neutral Canvas integrations. */
@@ -294,6 +301,23 @@ export class CanvasSelectionDragGestureController {
     if (!started) return false
     this.#consumed = true
     this.#notifyChange()
+    return true
+  }
+
+  /**
+   * Starts a fresh preparation without leaving the held state. Persistent drag
+   * modes use this after one native drag completes or when the user retries an
+   * expired preparation.
+   */
+  restart(source: CanvasSelectionDragSource | null | undefined, context: CanvasSelectionActionContext): boolean {
+    if (!this.#held) return this.hold(source, context)
+    this.#consumed = false
+    this.#hasReconciled = false
+    this.#reconciledContext = undefined
+    this.#reconciledSource = undefined
+    this.#preparation.reset()
+    this.#notifyChange()
+    this.reconcile(source, context)
     return true
   }
 

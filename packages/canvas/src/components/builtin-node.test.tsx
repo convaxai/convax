@@ -106,11 +106,11 @@ function renderWithEditor(
     endGesture: () => {},
     executeSelectionAction: options.executeSelectionAction ?? (() => {}),
     fileRenderers,
+    finishSelectionDrag: () => {},
     hydrating,
     isSelectionActionPending: () => false,
     quickConnect: () => {},
     readOnly,
-    releaseSelectionDrag: () => {},
     removeNode: () => {},
     replaceNodeMedia: () => {},
     selectNodes: () => {},
@@ -118,6 +118,7 @@ function renderWithEditor(
     selectionContext: deriveCanvasSelectionContext(currentSelection),
     selectionDragArmed: options.selectionDragArmed ?? false,
     selectionDragChordHeld: options.selectionDragArmed ?? false,
+    selectionDragModeActive: false,
     selectionDragStatus: options.selectionDragStatus ?? "unavailable",
     setSelectionDragCandidateNode: () => {},
     startSelectionDrag: options.startSelectionDrag ?? (() => false),
@@ -290,16 +291,19 @@ describe("built-in node toolbar visibility", () => {
     })
 
     const notReady = dragEvent({ metaKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(notReady, false, "meta", start)).toBeFalse()
+    expect(startCanvasSelectionDragFromNode(notReady, false, false, "meta", start)).toBeFalse()
     const released = dragEvent({ metaKey: true })
-    expect(startCanvasSelectionDragFromNode(released, true, "meta", start)).toBeFalse()
+    expect(startCanvasSelectionDragFromNode(released, true, false, "meta", start)).toBeFalse()
     const otherPlatform = dragEvent({ ctrlKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(otherPlatform, true, "meta", start)).toBeFalse()
+    expect(startCanvasSelectionDragFromNode(otherPlatform, true, false, "meta", start)).toBeFalse()
     const held = dragEvent({ metaKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(held, true, "meta", start)).toBeTrue()
+    expect(startCanvasSelectionDragFromNode(held, true, false, "meta", start)).toBeTrue()
 
-    expect(start).toHaveBeenCalledTimes(1)
-    for (const event of [notReady, released, otherPlatform, held]) {
+    const modeDrag = dragEvent()
+    expect(startCanvasSelectionDragFromNode(modeDrag, true, true, "meta", start)).toBeTrue()
+
+    expect(start).toHaveBeenCalledTimes(2)
+    for (const event of [notReady, released, otherPlatform, held, modeDrag]) {
       expect(event.preventDefault).toHaveBeenCalledTimes(1)
       expect(event.stopPropagation).toHaveBeenCalledTimes(1)
     }

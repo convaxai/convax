@@ -23,6 +23,7 @@ export interface CanvasEditorController {
   visibleSelectionDragSource: CanvasSelectionDragSource | null
   selectionDragArmed: boolean
   selectionDragChordHeld: boolean
+  selectionDragModeActive: boolean
   selectionDragStatus: CanvasSelectionDragPreparationStatus
   beginGesture: () => void
   cancelGesture: () => void
@@ -31,7 +32,7 @@ export interface CanvasEditorController {
   duplicateNode: (nodeId: string) => void
   executeSelectionAction: (action: CanvasSelectionAction) => void
   isSelectionActionPending: (actionId: string) => boolean
-  releaseSelectionDrag: () => void
+  finishSelectionDrag: () => void
   setSelectionDragCandidateNode: (nodeId: string | null) => void
   startSelectionDrag: () => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
