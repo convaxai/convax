@@ -16,7 +16,9 @@ import {
   createCanvasClipboardPayload,
   parseCanvasClipboard,
   pasteCanvasClipboard,
+  readCanvasClipboard,
   serializeCanvasClipboard,
+  writeCanvasClipboard,
 } from "./clipboard"
 import { getConnectedCanvasFileNodeIds, getIncomingConnectedCanvasFileNodeIds } from "./connections"
 import {
@@ -371,6 +373,28 @@ describe("canvas commands", () => {
     expect(clones[0]?.data.metadata).not.toBe(first.data.metadata)
   })
 
+  test("duplicates connected edges by default and can create a detached copy", () => {
+    const source = createTextNode({ id: "source", position: { x: -320, y: 0 } })
+    const selected = createTextNode({ id: "selected", position: { x: 0, y: 0 } })
+    const target = createTextNode({ id: "target", position: { x: 320, y: 0 } })
+    let initial = createCanvasDocument({ nodes: [source, selected, target] })
+    initial = connectCanvasNodes(initial, { id: "incoming", source: source.id, target: selected.id })
+    initial = connectCanvasNodes(initial, { id: "outgoing", source: selected.id, target: target.id })
+
+    const connected = duplicateCanvasSelection(initial, [selected.id])
+    const connectedId = connected.duplicatedNodeIdBySourceId.get(selected.id)
+    const duplicatedEdges = connected.document.edges.filter((edge) => !["incoming", "outgoing"].includes(edge.id))
+    expect(duplicatedEdges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: source.id, target: connectedId }),
+        expect.objectContaining({ source: connectedId, target: target.id }),
+      ]),
+    )
+
+    const detached = duplicateCanvasSelection(initial, [selected.id], { x: 0, y: 0 }, { edgeScope: "internal" })
+    expect(detached.document.edges).toEqual(initial.edges)
+  })
+
   test("recursively removes group descendants and connected edges", () => {
     const first = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
     const second = createTextNode({ id: "node_b", position: { x: 320, y: 0 } })
@@ -511,6 +535,26 @@ describe("canvas clipboard", () => {
     expect(parseCanvasClipboard("plain text")).toBeNull()
     expect(parseCanvasClipboard('{"version":2,"nodes":[],"edges":[]}')).toBeNull()
     expect(parseCanvasClipboard('{"version":1,"nodes":[{}],"edges":[]}')).toBeNull()
+  })
+
+  test("round trips a graph fragment through native clipboard data across Canvas instances", () => {
+    const values = new Map<string, string>()
+    const clipboardData = {
+      getData: (type: string) => values.get(type) ?? "",
+      setData: (type: string, value: string) => values.set(type, value),
+    } as unknown as DataTransfer
+    const source = createCanvasDocument({
+      nodes: [createTextNode({ id: "shared", position: { x: 20, y: 40 }, text: "Across canvases" })],
+    })
+    const payload = createCanvasClipboardPayload(source, ["shared"], "project-one")
+    expect(payload).not.toBeNull()
+    if (!payload) throw new Error("Clipboard payload was not created")
+
+    writeCanvasClipboard(clipboardData, payload)
+    const restored = readCanvasClipboard(clipboardData)
+
+    expect(restored).toEqual(payload)
+    expect(canvasClipboardHasScopeConflict(restored!, "project-one")).toBeFalse()
   })
 })
 

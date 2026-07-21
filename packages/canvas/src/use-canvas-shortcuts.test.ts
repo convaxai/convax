@@ -68,14 +68,63 @@ describe("canvas shortcuts", () => {
     expect(event.preventDefault).toHaveBeenCalledTimes(1)
   })
 
-  test("keeps command-V assigned to paste", () => {
+  test("leaves command copy and paste to native clipboard events", () => {
+    const copy = mock(() => undefined)
     const paste = mock(() => undefined)
     const select = mock(() => undefined)
+    const copyEvent = keyboardEvent("c", { metaKey: true })
+    const pasteEvent = keyboardEvent("v", { metaKey: true })
 
-    createCanvasShortcutHandler(shortcutActions({ paste, select }), false)(keyboardEvent("v", { metaKey: true }))
+    const handler = createCanvasShortcutHandler(shortcutActions({ copy, paste, select }), false)
+    handler(copyEvent)
+    handler(pasteEvent)
 
-    expect(paste).toHaveBeenCalledTimes(1)
+    expect(copy).not.toHaveBeenCalled()
+    expect(paste).not.toHaveBeenCalled()
     expect(select).not.toHaveBeenCalled()
+    expect(copyEvent.preventDefault).not.toHaveBeenCalled()
+    expect(pasteEvent.preventDefault).not.toHaveBeenCalled()
+  })
+
+  test("matches Pippit editing and viewport modifier chords exactly", () => {
+    const duplicate = mock(() => undefined)
+    const fitView = mock(() => undefined)
+    const group = mock(() => undefined)
+    const layout = mock(() => undefined)
+    const redo = mock(() => undefined)
+    const undo = mock(() => undefined)
+    const ungroup = mock(() => undefined)
+    const handler = createCanvasShortcutHandler(
+      shortcutActions({ duplicate, fitView, group, layout, redo, undo, ungroup }),
+      false,
+    )
+
+    handler(keyboardEvent("d", { metaKey: true }))
+    handler(keyboardEvent("0", { ctrlKey: true }))
+    handler(keyboardEvent("g", { ctrlKey: true }))
+    handler(keyboardEvent("G", { metaKey: true, shiftKey: true }))
+    handler(keyboardEvent("z", { metaKey: true }))
+    handler(keyboardEvent("Z", { metaKey: true, shiftKey: true }))
+    handler(keyboardEvent("y", { ctrlKey: true }))
+    handler(keyboardEvent("f", { altKey: true, shiftKey: true }))
+
+    expect(duplicate).toHaveBeenCalledTimes(1)
+    expect(fitView).toHaveBeenCalledTimes(1)
+    expect(group).toHaveBeenCalledTimes(1)
+    expect(ungroup).toHaveBeenCalledTimes(1)
+    expect(undo).toHaveBeenCalledTimes(1)
+    expect(redo).toHaveBeenCalledTimes(2)
+    expect(layout).toHaveBeenCalledTimes(1)
+
+    handler(keyboardEvent("d", { altKey: true, metaKey: true }))
+    handler(keyboardEvent("g", { altKey: true, ctrlKey: true }))
+    handler(keyboardEvent("0", { ctrlKey: true, shiftKey: true }))
+    handler(keyboardEvent("f", { altKey: true, ctrlKey: true, shiftKey: true }))
+
+    expect(duplicate).toHaveBeenCalledTimes(1)
+    expect(group).toHaveBeenCalledTimes(1)
+    expect(fitView).toHaveBeenCalledTimes(1)
+    expect(layout).toHaveBeenCalledTimes(1)
   })
 
   test("arms external drag while command/control-shift is held in either key order", () => {
