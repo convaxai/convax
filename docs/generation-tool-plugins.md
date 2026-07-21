@@ -609,10 +609,15 @@ A Web surface with `generation.execute` receives exactly two generation methods 
 the protocol matching its manifest (`convax.plugin-host/2`, `/3`, or `/4`; v5 uses
 `convax.plugin-capability/1`):
 
-| Method                      | Params                                                 | Result                                                              |
-| --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------- |
-| `generation.tools.list`     | optional `{ "output": "image" }` filter                | sanitized installed tool summaries                                  |
-| `generation.canvas.execute` | `prompt`, optional `output`, `toolId` and `references` | created node ids, committed revision, selected tool id and warnings |
+| Method                      | Params                                                                                      | Result                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `generation.tools.list`     | optional `{ "output": "image" }` filter                                                     | sanitized installed tool summaries                                  |
+| `generation.canvas.execute` | `prompt`, optional `output`, `toolId`, `references` and `resultMode: "create-pending-node"` | created node ids, committed revision, selected tool id and warnings |
+
+Tool summaries contain only the bounded `id`, `title`, `description`, `kind`,
+`output` and `acceptedInputs` fields. `kind` is either `model` or `operation`, so a
+generic Plugin can select the intended contribution class without learning provider
+credentials, runtime details or manifest internals.
 
 For `generation.canvas.execute`, `references` contains only `{ nodeId, role }`
 items. Explicit references must be supported nodes connected by a direct incoming
@@ -627,6 +632,13 @@ allows only one generation call in flight per frame. A caller may omit `toolId` 
 when exactly one installed tool accepts the requested output and reference roles.
 For this direct-incoming mode, any Canvas revision, edge or referenced source change
 during generation fails the operation; it is never replayed onto a newer document.
+
+With `resultMode: "create-pending-node"`, the host commits and reloads one pending
+resource beside the Plugin before the external tool is invoked. The caller cannot
+provide a node id. Success replaces that exact node after normal managed-asset
+admission; failure or cancellation leaves it visible with a safe host-authored error.
+The placeholder commit becomes the guarded generation revision, and later edits or
+deletion of the pending node fail closed instead of recreating it.
 
 The generation capability does not expose process control, environment variables,
 arbitrary MCP methods, unrelated Canvas nodes, or a general function-call bridge.

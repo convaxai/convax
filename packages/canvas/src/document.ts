@@ -227,6 +227,14 @@ function isCanvasNode(value: unknown) {
       || value.data.path !== undefined && typeof value.data.path !== "string")) return false
   if (value.data.kind === "agent" && value.data.agentId !== undefined && typeof value.data.agentId !== "string") return false
   if (value.data.metadata !== undefined && !isRecord(value.data.metadata)) return false
+  if (
+    value.data.status !== undefined &&
+    value.data.status !== "idle" &&
+    value.data.status !== "pending" &&
+    value.data.status !== "error"
+  )
+    return false
+  if (value.data.error !== undefined && typeof value.data.error !== "string") return false
   if (["image", "video", "audio", "file"].includes(value.data.kind) && typeof value.data.url !== "string") return false
   if (["image", "video", "audio", "file"].includes(value.data.kind)
     && value.data.fit !== undefined

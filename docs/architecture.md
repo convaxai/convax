@@ -375,6 +375,18 @@ generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
 
+A sandboxed Plugin may request the host-owned pending-result mode when the user
+expects immediate Canvas feedback. Canvas creates exactly one typed pending `file`
+node through its resource business service; the Plugin cannot choose its id or a
+replacement target. Desktop commits and reloads that node before invoking the
+external generation tool, advances the guarded request to the committed revision,
+and rechecks the same live references before the potentially billable call. A
+successful admitted result replaces the pending resource in place, preserving its
+id, placement and edges. Failure or cancellation keeps the node and marks it with a
+bounded host-authored error. If the node is removed, edited or otherwise no longer
+matches its exact content guard, Desktop fails closed and never recreates or writes
+through it.
+
 Tool-custom generation controls come only from the selected sidecar's current MCP
 `tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
 registry. Main lazily describes one explicitly selected tool, projects only bounded

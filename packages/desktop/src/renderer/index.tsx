@@ -427,6 +427,7 @@ function App() {
             ref: { canvasId: input.canvasId, scopeId: input.projectId },
             referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
             references: input.references,
+            ...(input.resultMode ? { resultMode: { type: input.resultMode } } : {}),
             ...(input.toolId ? { toolId: input.toolId } : {}),
           })
           throwIfAborted(input.signal)
@@ -459,6 +460,7 @@ function App() {
           acceptedInputs: tool.acceptedInputs,
           description: tool.description,
           id: tool.id,
+          kind: tool.kind,
           output: tool.output,
           title: tool.title,
         }))

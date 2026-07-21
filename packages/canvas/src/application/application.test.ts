@@ -168,6 +168,103 @@ describe("canvas application commands", () => {
     })
   })
 
+  test.each(["text", "image", "video", "audio"] as const)(
+    "creates a host-neutral pending %s file resource with placement and relations",
+    (kind) => {
+      const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Source" })
+      const document = createCanvasDocument({ id: "canvas-pending", nodes: [anchor] })
+      const applied = applyCanvasBusinessCommand(document, {
+        type: "resources.pending.create",
+        kind,
+        label: `Pending ${kind}`,
+        nodeId: `pending-${kind}`,
+        placement: { anchor: { x: 0, y: 0 }, strategy: "avoid-overlap-cascade" },
+        relation: { anchorNodeIds: [anchor.id], mode: "connect" },
+      })
+
+      expect(applied.createdNodeIds).toEqual([`pending-${kind}`])
+      expect(applied.document.nodes.find((node) => node.id === `pending-${kind}`)).toMatchObject({
+        data: {
+          kind,
+          label: `Pending ${kind}`,
+          status: "pending",
+          ...(kind === "text" ? { text: "" } : { url: "" }),
+        },
+        position: { x: 304, y: 0 },
+        type: "file",
+      })
+      expect(applied.document.edges).toEqual([
+        expect.objectContaining({ source: anchor.id, target: `pending-${kind}` }),
+      ])
+    },
+  )
+
+  test("fails an exact pending target and lets normal replacement clear persisted lifecycle state", () => {
+    const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Source" })
+    const created = applyCanvasBusinessCommand(createCanvasDocument({ nodes: [anchor] }), {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Relit image",
+      nodeId: "pending-image",
+      placement: { anchor: { x: 0, y: 0 } },
+      relation: { anchorNodeIds: [anchor.id], mode: "connect" },
+    })
+    const pending = created.document.nodes.find((node) => node.id === "pending-image")!
+    const failed = applyCanvasBusinessCommand(created.document, {
+      type: "resources.pending.fail",
+      expectedTarget: createCanvasNodeContentGuard(pending),
+      message: "Generation could not be completed",
+      targetNodeId: pending.id,
+    })
+
+    expect(failed.document.edges).toEqual(created.document.edges)
+    expect(failed.document.nodes.find((node) => node.id === pending.id)).toMatchObject({
+      data: { error: "Generation could not be completed", kind: "image", status: "error", url: "" },
+      position: pending.position,
+    })
+
+    const replacementTarget = failed.document.nodes.find((node) => node.id === pending.id)!
+    const replaced = applyCanvasBusinessCommand(failed.document, {
+      type: "resources.replace",
+      expectedTarget: createCanvasNodeContentGuard(replacementTarget),
+      item: { id: "generated", kind: "image", url: "asset://generated" },
+      targetNodeId: replacementTarget.id,
+    })
+    const finalNode = replaced.document.nodes.find((node) => node.id === pending.id)!
+    expect(finalNode.id).toBe(pending.id)
+    expect(finalNode.position).toEqual(pending.position)
+    expect(replaced.document.edges).toEqual(failed.document.edges)
+    expect(finalNode.data).toMatchObject({ kind: "image", url: "asset://generated" })
+    expect(finalNode.data).not.toHaveProperty("status")
+    expect(finalNode.data).not.toHaveProperty("error")
+  })
+
+  test("rejects pending failure after deletion or any content change", () => {
+    const created = applyCanvasBusinessCommand(createCanvasDocument(), {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Generated image",
+      nodeId: "pending-image",
+      placement: { anchor: { x: 0, y: 0 } },
+    })
+    const pending = created.document.nodes[0]
+    if (!pending) throw new Error("Pending resource was not created")
+    const command = {
+      type: "resources.pending.fail" as const,
+      expectedTarget: createCanvasNodeContentGuard(pending),
+      message: "Generation could not be completed",
+      targetNodeId: pending.id,
+    }
+
+    expect(() => applyCanvasBusinessCommand(createCanvasDocument(), command)).toThrow("was not found")
+    expect(() =>
+      applyCanvasBusinessCommand(
+        createCanvasDocument({ nodes: [{ ...pending, data: { ...pending.data, label: "Changed" } }] }),
+        command,
+      ),
+    ).toThrow("content changed")
+  })
+
   test("replaces only a guarded file node's type and data while preserving its identity, layout, and edges", () => {
     const parent = createGroupNode({ id: "group", height: 600, position: { x: 100, y: 200 }, width: 800 })
     const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Keep the edge" })

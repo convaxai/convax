@@ -15,7 +15,15 @@ import {
   type CanvasNodeGeometryUpdate,
 } from "../commands"
 import { createCanvasId, createFolderNode, createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
-import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
+import type {
+  CanvasDocument,
+  CanvasEdge,
+  CanvasNode,
+  CanvasPendingResourceKind,
+  CanvasPoint,
+  CanvasSize,
+  CanvasUploadItem,
+} from "../types"
 import {
   applyCanvasAutoLayoutPlan,
   CanvasLayoutValidationError,
@@ -71,11 +79,32 @@ export interface CanvasAutoLayoutCommand {
   options?: CanvasAutoLayoutOptions
 }
 
+export interface CanvasCreatePendingResourceCommand {
+  type: "resources.pending.create"
+  kind: CanvasPendingResourceKind
+  label: string
+  nodeId: string
+  placement: CanvasAddResourcesCommand["placement"]
+  relation?: CanvasAddResourcesCommand["relation"]
+}
+
+export interface CanvasFailPendingResourceCommand {
+  type: "resources.pending.fail"
+  expectedTarget: CanvasNodeContentGuard
+  message: string
+  targetNodeId: string
+}
+
 /**
  * Product-level operations that preserve the same behavior across UI and Agent
  * callers. Business commands may compose several primitive mutations.
  */
-export type CanvasBusinessCommand = CanvasAddResourcesCommand | CanvasReplaceResourceCommand | CanvasAutoLayoutCommand
+export type CanvasBusinessCommand =
+  | CanvasAddResourcesCommand
+  | CanvasReplaceResourceCommand
+  | CanvasCreatePendingResourceCommand
+  | CanvasFailPendingResourceCommand
+  | CanvasAutoLayoutCommand
 
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
@@ -140,6 +169,22 @@ export function createAddCanvasResourcesCommand(input: {
   return {
     type: "resources.add",
     items: input.items.map((item) => ({ item, nodeId: createCanvasId("node") })),
+    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    relation: input.relation,
+  }
+}
+
+export function createCanvasPendingResourceCommand(input: {
+  anchor: CanvasPoint
+  kind: CanvasPendingResourceKind
+  label: string
+  relation?: CanvasAddResourcesCommand["relation"]
+}): CanvasCreatePendingResourceCommand {
+  return {
+    type: "resources.pending.create",
+    kind: input.kind,
+    label: input.label,
+    nodeId: createCanvasId("node"),
     placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
     relation: input.relation,
   }
@@ -218,6 +263,8 @@ export function applyCanvasApplicationCommand(
       throw error
     }
   }
+  if (command.type === "resources.pending.create") return createPendingResource(document, command)
+  if (command.type === "resources.pending.fail") return failPendingResource(document, command)
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -417,6 +464,96 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
   return result(document, next, [target.id])
 }
 
+function createPendingResource(
+  document: CanvasDocument,
+  command: CanvasCreatePendingResourceCommand,
+): CanvasBusinessCommandResult {
+  requireFinitePoint(command.placement.anchor, "Placement anchor")
+  requirePendingResourceKind(command.kind)
+  requireNonEmptyBoundedString(command.nodeId, "Pending resource node id", 256)
+  requireNonEmptyBoundedString(command.label, "Pending resource label", 200)
+  if (document.nodes.some((node) => node.id === command.nodeId)) {
+    throw new CanvasCommandValidationError(`Canvas node already exists: ${command.nodeId}`)
+  }
+
+  const relation = command.relation
+  const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
+  requireNodeIds(document, anchorNodeIds)
+
+  const node = createPendingResourceNode(command)
+  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(node))
+  let next = addCanvasNodes(document, [{ ...node, position: openPoint }]).document
+  if (relation?.mode === "connect") {
+    const direction = relation.direction ?? "from-anchor"
+    for (const anchorNodeId of anchorNodeIds) {
+      next = connectCanvasNodes(
+        next,
+        direction === "from-anchor"
+          ? { source: anchorNodeId, target: command.nodeId }
+          : { source: command.nodeId, target: anchorNodeId },
+      )
+    }
+  }
+  return result(document, next, [...new Set([...anchorNodeIds, command.nodeId])], [command.nodeId])
+}
+
+function failPendingResource(
+  document: CanvasDocument,
+  command: CanvasFailPendingResourceCommand,
+): CanvasBusinessCommandResult {
+  requireSafePendingResourceErrorMessage(command.message)
+  const target = document.nodes.find((node) => node.id === command.targetNodeId)
+  if (!target) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.targetNodeId}`)
+  if (target.type !== "file" || !isPendingResourceNode(target)) {
+    throw new CanvasCommandValidationError(`Canvas pending resource failure requires a pending file node: ${target.id}`)
+  }
+  if (!sameNodeContent(target, command.expectedTarget)) {
+    throw new CanvasCommandValidationError(`Canvas node content changed before pending resource failure: ${target.id}`)
+  }
+
+  const next = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === target.id
+        ? {
+            ...node,
+            data: { ...node.data, error: command.message, status: "error" as const },
+          }
+        : node,
+    ),
+  }
+  return result(document, next, [target.id])
+}
+
+function createPendingResourceNode(command: CanvasCreatePendingResourceCommand): CanvasNode {
+  if (command.kind === "text") {
+    const node = createTextNode({
+      id: command.nodeId,
+      label: command.label,
+      position: command.placement.anchor,
+      text: "",
+    })
+    return { ...node, data: { ...node.data, status: "pending" } }
+  }
+  const node = createMediaNode({
+    id: command.nodeId,
+    label: command.label,
+    position: command.placement.anchor,
+    resource: { id: command.nodeId, kind: command.kind, url: "" },
+  })
+  return { ...node, data: { ...node.data, status: "pending" } }
+}
+
+function isPendingResourceNode(node: CanvasNode) {
+  return (
+    node.data.status === "pending" &&
+    (node.data.kind === "text" ||
+      node.data.kind === "image" ||
+      node.data.kind === "video" ||
+      node.data.kind === "audio")
+  )
+}
+
 function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position: CanvasPoint): CanvasNode {
   if (item.kind === "text") {
     return createTextNode({
@@ -482,4 +619,22 @@ function requireFinitePoint(point: CanvasPoint, label: string) {
 
 function validActor(actor: CanvasCommandActor) {
   return Boolean(actor.id.trim() && actor.kind.trim())
+}
+
+function requirePendingResourceKind(kind: unknown): asserts kind is CanvasPendingResourceKind {
+  if (kind !== "text" && kind !== "image" && kind !== "video" && kind !== "audio") {
+    throw new CanvasCommandValidationError(`Unsupported pending resource kind: ${String(kind)}`)
+  }
+}
+
+function requireNonEmptyBoundedString(value: unknown, label: string, maxLength: number): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) throw new CanvasCommandValidationError(`${label} is required`)
+  if (value.length > maxLength) throw new CanvasCommandValidationError(`${label} exceeds ${maxLength} characters`)
+}
+
+function requireSafePendingResourceErrorMessage(message: unknown): asserts message is string {
+  requireNonEmptyBoundedString(message, "Pending resource error message", 500)
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(message)) {
+    throw new CanvasCommandValidationError("Pending resource error message contains unsupported control characters")
+  }
 }

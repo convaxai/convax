@@ -90,8 +90,11 @@ export interface GenerationCanvasReference {
   role: GenerationInputRole
 }
 
-/** Host-neutral Canvas mutation for admitted results. Omission means add. */
-export type GenerationResultMode = { type: "add" } | { nodeId: string; type: "replace-node" }
+/** Host-neutral Canvas mutation for admitted results. Omission means add after generation completes. */
+export type GenerationResultMode =
+  | { type: "add" }
+  | { type: "create-pending-node" }
+  | { nodeId: string; type: "replace-node" }
 
 /** Host-derived relationship guard used by card/Plugin callers. */
 export interface GenerationReferenceConstraint {

@@ -83,6 +83,21 @@ function commandResult(document: CanvasDocument, createdNodeIds = ["generated-on
   }
 }
 
+function persistedCommandResult(
+  document: CanvasDocument,
+  createdNodeIds: readonly string[],
+  affectedNodeIds: readonly string[] = createdNodeIds,
+): CanvasApplicationCommandResult {
+  return {
+    affectedNodeIds: [...affectedNodeIds],
+    changed: true,
+    createdNodeIds: [...createdNodeIds],
+    document,
+    storageVersion: `storage-${document.revision}`,
+    warnings: [],
+  }
+}
+
 function setup(options: {
   document?: CanvasDocument
   loadDocument?: () => Promise<{ document: CanvasDocument | null }> | { document: CanvasDocument | null }
@@ -144,6 +159,12 @@ function setup(options: {
     async addResources(input) {
       resourceRequests.push(input)
       return commandResult(document)
+    },
+    async createPendingResource() {
+      throw new Error("Unexpected createPendingResource")
+    },
+    async failPendingResource() {
+      throw new Error("Unexpected failPendingResource")
     },
     async replaceResource(input) {
       replacementRequests.push(input)
@@ -207,6 +228,133 @@ function setup(options: {
       tools,
     }),
     viewRequests,
+  }
+}
+
+function setupPendingGeneration(
+  result: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>),
+  options: {
+    prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
+  } = {},
+) {
+  const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
+  let currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
+  let liveRevision = currentDocument.revision
+  const createRequests: Parameters<GenerationCanvasResourcePort["createPendingResource"]>[0][] = []
+  const failureRequests: Parameters<GenerationCanvasResourcePort["failPendingResource"]>[0][] = []
+  const replacementRequests: Parameters<GenerationCanvasResourcePort["replaceResource"]>[0][] = []
+  const reloadRevisions: number[] = []
+  const pendingNodeId = "pending-one"
+
+  const harness = setup({
+    document: currentDocument,
+    loadDocument: () => ({ document: currentDocument }),
+    prepareTool: options.prepareTool,
+    resource: {
+      async addResources() {
+        throw new Error("Pending generation must not add a second Canvas node")
+      },
+      async createPendingResource(input) {
+        createRequests.push(input)
+        const node = createMediaNode({
+          id: pendingNodeId,
+          label: "Image",
+          position: input.anchor,
+          resource: { id: pendingNodeId, kind: "image", url: "" },
+        })
+        node.data.status = "pending"
+        currentDocument = {
+          ...currentDocument,
+          edges: [
+            ...currentDocument.edges,
+            ...(input.relation?.mode === "connect"
+              ? input.relation.anchorNodeIds.map((anchorNodeId, index) => ({
+                  id: `pending-edge-${index}`,
+                  source: anchorNodeId,
+                  target: pendingNodeId,
+                }))
+              : []),
+          ],
+          nodes: [...currentDocument.nodes, node],
+          revision: currentDocument.revision + 1,
+        }
+        return persistedCommandResult(
+          currentDocument,
+          [pendingNodeId],
+          [...(input.relation?.mode === "connect" ? input.relation.anchorNodeIds : []), pendingNodeId],
+        )
+      },
+      async failPendingResource(input) {
+        failureRequests.push(input)
+        const target = currentDocument.nodes.find((node) => node.id === input.targetNodeId)
+        if (
+          !target ||
+          target.data.status !== "pending" ||
+          JSON.stringify(createCanvasNodeContentGuard(target)) !== JSON.stringify(input.expectedTarget)
+        ) {
+          throw new Error("Pending target changed")
+        }
+        currentDocument = {
+          ...currentDocument,
+          nodes: currentDocument.nodes.map((node) =>
+            node.id === input.targetNodeId
+              ? { ...node, data: { ...node.data, error: input.message, status: "error" as const } }
+              : node,
+          ),
+          revision: currentDocument.revision + 1,
+        }
+        return persistedCommandResult(currentDocument, [], [input.targetNodeId])
+      },
+      async replaceResource(input) {
+        replacementRequests.push(input)
+        currentDocument = {
+          ...currentDocument,
+          nodes: currentDocument.nodes.map((node) =>
+            node.id === input.targetNodeId
+              ? { ...node, data: { ...node.data, error: undefined, status: "idle" as const, url: "managed" } }
+              : node,
+          ),
+          revision: currentDocument.revision + 1,
+        }
+        return persistedCommandResult(currentDocument, [], [input.targetNodeId])
+      },
+    },
+    result,
+    selectedTool: tool({
+      acceptedInputs: ["text"],
+      id: "creative-tools/draw",
+      output: "image",
+      toolId: "draw",
+    }),
+  })
+  harness.renderer.getViewSnapshot = mock(async () => ({
+    documentId: currentDocument.id,
+    revision: liveRevision,
+    scopeId: "project-one",
+    selectedEdgeIds: [],
+    selectedNodeIds: [],
+    viewId: "desktop-main",
+    viewport: { x: 0, y: 0, zoom: 1 },
+  }))
+  harness.renderer.reloadDocument = mock(async () => {
+    liveRevision = currentDocument.revision
+    reloadRevisions.push(liveRevision)
+    return true
+  })
+
+  return {
+    ...harness,
+    createRequests,
+    failureRequests,
+    getDocument: () => currentDocument,
+    mutateDocument(mutate: (document: CanvasDocument) => CanvasDocument) {
+      currentDocument = mutate(currentDocument)
+      liveRevision = currentDocument.revision
+    },
+    pendingNodeId,
+    reference,
+    reloadRevisions,
+    replacementRequests,
   }
 }
 
@@ -280,6 +428,291 @@ describe("GenerationCanvasService", () => {
     expect(viewRequests[0]).toMatchObject({
       expectedRevision: 1,
     })
+  })
+
+  test("creates and reveals a pending node before the external tool resolves, then replaces that same node", async () => {
+    let markStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = setupPendingGeneration(async () => {
+      markStarted()
+      await gate
+      return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+    })
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    await started
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.createRequests[0]).toMatchObject({
+      actor: { id: "renderer:1", kind: "ui" },
+      anchor: { x: 120, y: 80 },
+      canvasId: "canvas-one",
+      commandId: "generation-pending:operation-one",
+      conflictPolicy: "reject",
+      expectedRevision: 0,
+      kind: "image",
+      relation: {
+        anchorNodeIds: [harness.reference.id],
+        direction: "from-anchor",
+        mode: "connect",
+      },
+      scopeId: "project-one",
+    })
+    expect(harness.getDocument().revision).toBe(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
+      kind: "image",
+      status: "pending",
+    })
+    expect(harness.reloadRevisions).toEqual([1])
+    expect(harness.viewRequests).toHaveLength(1)
+    expect(harness.viewRequests[0]).toMatchObject({
+      command: {
+        fit: "none",
+        nodeIds: [harness.pendingNodeId],
+        select: false,
+        type: "nodes.reveal",
+      },
+      expectedRevision: 1,
+    })
+    expect(harness.replacementRequests).toEqual([])
+
+    release()
+    const generated = await generation
+    expect(generated).toEqual({
+      createdNodeIds: [harness.pendingNodeId],
+      revision: 2,
+      toolId: "creative-tools/draw",
+      warnings: [],
+    })
+    expect(harness.resourceRequests).toEqual([])
+    expect(harness.replacementRequests).toHaveLength(1)
+    expect(harness.replacementRequests[0]).toMatchObject({
+      commandId: "generation:operation-one",
+      conflictPolicy: "reject",
+      expectedRevision: 1,
+      expectedTarget: expect.objectContaining({
+        data: expect.objectContaining({ kind: "image", status: "pending" }),
+        type: "file",
+      }),
+      targetNodeId: harness.pendingNodeId,
+    })
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
+    expect(harness.reloadRevisions).toEqual([1, 2])
+  })
+
+  test("does not create a pending node when cancellation wins during preflight", async () => {
+    let markLoadStarted!: () => void
+    let releaseLoad!: () => void
+    const loadStarted = new Promise<void>((resolve) => {
+      markLoadStarted = resolve
+    })
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve
+    })
+    const document = createCanvasDocument({ id: "canvas-one", title: "Canvas" })
+    let createPendingCalls = 0
+    const harness = setup({
+      document,
+      async loadDocument() {
+        markLoadStarted()
+        await loadGate
+        return { document }
+      },
+      resource: {
+        async createPendingResource() {
+          createPendingCalls += 1
+          throw new Error("Pending generation must not start after cancellation")
+        },
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+    const controller = new AbortController()
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+      controller.signal,
+    )
+
+    await loadStarted
+    controller.abort("user canceled")
+    releaseLoad()
+
+    await expect(generation).rejects.toMatchObject({ name: "AbortError" })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(createPendingCalls).toBe(0)
+    expect(harness.calls).toEqual([])
+  })
+
+  test("retains a failed pending node with a host-safe error instead of raw sidecar details", async () => {
+    const harness = setupPendingGeneration({
+      content: [{ text: "Failed at /private/tmp/vendor-secret-output.png", type: "text" }],
+      isError: true,
+    })
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toMatchObject({
+      message: "Generation tool reported a failure",
+      name: "GenerationToolReportedError",
+    })
+
+    expect(harness.replacementRequests).toEqual([])
+    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.failureRequests[0]).toMatchObject({
+      commandId: "generation-pending-fail:operation-one",
+      conflictPolicy: "retry",
+      expectedRevision: 1,
+      expectedTarget: expect.objectContaining({
+        data: expect.objectContaining({ kind: "image", status: "pending" }),
+        type: "file",
+      }),
+      message: "Generation could not be completed",
+      targetNodeId: harness.pendingNodeId,
+    })
+    expect(harness.failureRequests[0]?.message).not.toContain("vendor-secret")
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
+      error: "Generation could not be completed",
+      status: "error",
+    })
+    expect(harness.reloadRevisions).toEqual([1, 2])
+  })
+
+  test("does not create a second pending node when preparation fails after the first node commit", async () => {
+    const harness = setupPendingGeneration(
+      { content: [{ text: "Unused output", type: "text" }] },
+      {
+        async prepareTool() {
+          throw new Error("Executable authorization was denied")
+        },
+      },
+    )
+    const generationRequest = request({
+      output: "image",
+      references: [{ nodeId: harness.reference.id, role: "text" }],
+      resultMode: { type: "create-pending-node" },
+      toolId: "creative-tools/draw",
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+
+    await expect(harness.service.generate(generationRequest, actor)).rejects.toThrow("authorization was denied")
+    await expect(harness.service.generate(generationRequest, actor)).rejects.toThrow("authorization was denied")
+
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.calls).toEqual([])
+    expect(harness.getDocument().nodes.filter((node) => node.id === harness.pendingNodeId)).toHaveLength(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
+  })
+
+  test("marks a canceled pending node without deleting it", async () => {
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const harness = setupPendingGeneration(async (_input, signal) => {
+      markStarted()
+      return new Promise<McpToolCallResult>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const error = new Error("vendor cancellation details")
+            error.name = "AbortError"
+            reject(error)
+          },
+          { once: true },
+        )
+      })
+    })
+    const controller = new AbortController()
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+      controller.signal,
+    )
+
+    await started
+    controller.abort("user canceled")
+    await expect(generation).rejects.toMatchObject({ name: "AbortError" })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.failureRequests[0]?.message).toBe("Generation was canceled")
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
+      error: "Generation was canceled",
+      status: "error",
+    })
+    expect(harness.replacementRequests).toEqual([])
+  })
+
+  test("does not recreate a pending node that the user removed while generation was running", async () => {
+    let markStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const harness = setupPendingGeneration(async () => {
+      markStarted()
+      await gate
+      return { content: [], isError: true }
+    })
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    await started
+    harness.mutateDocument((document) => ({
+      ...document,
+      edges: document.edges.filter(
+        (edge) => edge.source !== harness.pendingNodeId && edge.target !== harness.pendingNodeId,
+      ),
+      nodes: document.nodes.filter((node) => node.id !== harness.pendingNodeId),
+      revision: document.revision + 1,
+    }))
+    release()
+
+    await expect(generation).rejects.toThrow("revision must match")
+    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.getDocument().nodes.some((node) => node.id === harness.pendingNodeId)).toBe(false)
+    expect(harness.replacementRequests).toEqual([])
   })
 
   test("rejects unexpected output counts before committing resources", async () => {

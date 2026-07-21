@@ -38,6 +38,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Ordinary document mutations such as adding, importing, duplicating, or generating
   nodes preserve the mounted viewport. Fit, center, zoom, and reveal movement require
   an explicit user action or view command.
+- Pending generated resources are a persisted resource business lifecycle, not
+  renderer-only state. Canvas owns node-id creation, pending/error validation and
+  guarded in-place replacement semantics; hosts own external execution and supply
+  only bounded user-safe failure text.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.

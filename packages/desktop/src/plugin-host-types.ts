@@ -39,6 +39,7 @@ export interface PluginGenerationToolSummary {
   acceptedInputs: readonly WebPluginGenerationInputRole[]
   description: string
   id: string
+  kind: "model" | "operation"
   output: WebPluginGenerationModality
   title: string
 }
@@ -55,6 +56,8 @@ export interface PluginGenerationCanvasResult {
   warnings: readonly string[]
 }
 
+export type PluginGenerationResultMode = "create-pending-node"
+
 /** Product ports supplied by Desktop composition, independent of Plugin transport. */
 export interface PluginCanvasHost {
   executeCanvasGeneration(
@@ -64,6 +67,7 @@ export interface PluginCanvasHost {
       output?: WebPluginGenerationModality
       prompt: string
       references: readonly PluginGenerationReference[]
+      resultMode?: PluginGenerationResultMode
       signal: AbortSignal
       toolId?: string
     },
@@ -120,6 +124,7 @@ export interface PluginHostRequestContext {
       output?: WebPluginGenerationModality
       prompt: string
       references: readonly PluginGenerationReference[]
+      resultMode?: PluginGenerationResultMode
       signal: AbortSignal
       toolId?: string
     },
@@ -155,6 +160,7 @@ export type WebPluginAgentPromptResult = PluginAgentPromptResult
 export type WebPluginGenerationToolSummary = PluginGenerationToolSummary
 export type WebPluginGenerationReference = PluginGenerationReference
 export type WebPluginGenerationCanvasResult = PluginGenerationCanvasResult
+export type WebPluginGenerationResultMode = PluginGenerationResultMode
 export type WebPluginCanvasHost = PluginCanvasHost
 export type WebPluginCanvasHostLimits = PluginHostLimits
 export type WebPluginHostRequestContext = PluginHostRequestContext

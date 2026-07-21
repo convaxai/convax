@@ -238,6 +238,11 @@ current schema.
 - Generated media enters Canvas only through `CanvasResourceBusinessService` and
   the managed `.convax/assets/` flow before existing `file` nodes reference it;
   failed commits must roll back newly admitted assets.
+- A Plugin-requested immediate generation result is a host-owned pending Canvas
+  resource lifecycle. Canvas creates the node id; Desktop reloads it before the
+  external call, replaces it only through an exact content guard, and retains a
+  bounded safe error on failure or cancellation. Plugins never choose the pending
+  node id or replacement target, and deleted or edited placeholders are not revived.
 - Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
   surface is a `file` node; do not add an extension bus, service locator, or node
   role to route Plugin behavior.

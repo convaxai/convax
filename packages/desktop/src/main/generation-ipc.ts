@@ -109,6 +109,10 @@ function requireResultMode(value: unknown): GenerationResultMode {
     requireExactKeys(mode, ["type"], ["type"], "Generation result mode")
     return { type: "add" }
   }
+  if (mode.type === "create-pending-node") {
+    requireExactKeys(mode, ["type"], ["type"], "Generation result mode")
+    return { type: "create-pending-node" }
+  }
   if (mode.type === "replace-node") {
     requireExactKeys(mode, ["nodeId", "type"], ["nodeId", "type"], "Generation result mode")
     return {

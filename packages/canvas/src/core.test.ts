@@ -132,6 +132,24 @@ describe("canvas history", () => {
         nodes: [{ ...text, data: { agentId: [], kind: "agent", label: "Agent" } }],
       }),
     ).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "bad-status", nodes: [text] }),
+        nodes: [{ ...text, data: { ...text.data, status: "running" } }],
+      }),
+    ).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "bad-error", nodes: [text] }),
+        nodes: [{ ...text, data: { ...text.data, error: { raw: "unsafe" }, status: "error" } }],
+      }),
+    ).toBeNull()
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "pending", nodes: [text] }),
+        nodes: [{ ...text, data: { ...text.data, status: "pending" } }],
+      })?.nodes[0]?.data.status,
+    ).toBe("pending")
   })
   test("migrates legacy notes into text nodes", () => {
     const legacy = {

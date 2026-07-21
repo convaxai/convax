@@ -115,6 +115,11 @@ it must not become the permanent home of reusable domain rules.
   vendor state until a terminal result or caller cancellation. Agent transport must
   relay content-free MCP progress so its timeout remains an inactivity guard rather
   than an absolute generation cutoff.
+- For immediate Plugin generation feedback, create and reload a host-owned pending
+  Canvas resource before `tools/call`, then replace or fail that exact guarded node.
+  The sandboxed caller may opt into the mode but cannot choose a node id or target;
+  cancellation and sidecar failures keep a safe visible error and never revive a
+  removed or edited placeholder.
 - Tool-custom generation controls come from only the explicitly selected MCP tool's
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before
