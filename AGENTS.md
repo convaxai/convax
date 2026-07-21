@@ -133,6 +133,14 @@ current schema.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.
+- Whole-Canvas tidy is a size-aware directed-graph business operation. Primitive
+  grid/horizontal/vertical layout requires explicit node ids and must never be used
+  as an implicit whole-Canvas fallback. External layout providers return a
+  revision-bound geometry plan that Canvas validates and commits atomically.
+- A multi-command Canvas transaction validates against one document revision and
+  persists with one CAS write. Callers must not emulate atomicity with a sequence of
+  independent saves. Transport transactions must be non-empty, request-bounded, and
+  must not retain unbounded full-document idempotency results.
 - A business operation commits domain state first. Optional view effects must not
   turn a successful mutation into a failed mutation.
 
@@ -143,8 +151,10 @@ current schema.
 - Agent tool adapters stay thin and live at the composition edge. Product rules,
   validation, sizing, placement, relationships, persistence, and conflict handling
   live in the same business services used by UI actions.
-- Every Agent call is scoped by the host's active Project/Canvas. Tool arguments
-  cannot switch or widen that scope.
+- Every Agent call is scoped by the host's current Project. Document tools may name
+  any Canvas in that Project's live catalog; they cannot select another Project.
+  View tools remain bound to the mounted active Canvas. External document access
+  must pass through the renderer flush/lock/reload barrier.
 - Structured resources are validated and prepared by the host. Canvas snapshots are
   pathless/read-only; mutations use Canvas tools.
 - OpenCode Skills remain native instruction bundles. Project-local ambient Skills
@@ -152,10 +162,11 @@ current schema.
 - Standalone Skills have their own package identity and install/update/removal
   lifecycle. The optional top-level `skill` in `convax.plugin/1` through `/3` is a
   legacy independently managed companion and keeps that behavior while that schema
-  remains installed. An explicit v1-v3 to v4 update may transfer ownership only when
-  the current managed Skill tree exactly matches the old installed Plugin's embedded
-  companion; modified or unrelated same-name Skills fail closed.
-- `convax.plugin/4` may declare owned Skill directories through
+  remains installed. An explicit v1-v3 update to a v4-or-later owned schema may
+  transfer ownership only when the current managed Skill tree exactly matches the
+  old installed Plugin's embedded companion; modified or unrelated same-name Skills
+  fail closed.
+- `convax.plugin/4` and later may declare owned Skill directories through
   `contributes.skills`. Desktop validates and publishes those Skills atomically with
   their owner Plugin; they cannot be installed, updated, or removed independently.
   A persisted owner binding continues to reserve the Skill name if its materialized
@@ -222,12 +233,28 @@ current schema.
 - Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
   surface is a `file` node; do not add an extension bus, service locator, or node
   role to route Plugin behavior.
+- Project-wide Canvas authority is a main-owned, principal-bound broker capability,
+  never a property of a Web node. `convax.plugin/5` declares separate Project,
+  catalog, document-read, document-write, and event grants. Calls carry an explicit
+  portable `{ projectId, canvasId }`, revalidate the installed manifest identity and
+  catalog scope, and use the same Canvas application services as UI and Agent.
+- Plugin document reads expose bounded geometry or portable structure projections;
+  neither projection exposes native paths or resource bytes. Document transactions
+  are revision-bound, command-bounded, atomic, and cannot admit/replace resources or
+  forge resource references. Resource bytes and admission remain separate Project
+  business capabilities.
 - Third-party Plugin code is static Web content in an iframe with exactly
   `sandbox="allow-scripts"`. Never import it into the host, use Electron `webview`,
   enable same-origin/Node/Electron access, or expose a generic function-call bridge.
-- Bind every MessageChannel to the installed Plugin plus current Project, Canvas and
-  owning node. Check manifest permissions, message size, stale scope and target on
-  every call. Plugin node state writes stay inside a namespaced field.
+- Bind every MessageChannel to the exact installed Plugin and owning Web frame.
+  Legacy node methods additionally bind current Project, Canvas and node; Plugin
+  node state writes stay inside that node's namespaced field. V5 Project/Canvas
+  methods route through an opaque sender-scoped main connection and derive authority
+  only from the installed principal and its declared grants, not from node ownership.
+- Bound in-flight Plugin RPC before asynchronous connection/subscription work. Tool
+  and Agent cancellation must cross queue and preparation boundaries and be checked
+  immediately before any Canvas persistence call.
+  Check permissions, message size, stale scope and target on every call.
 - Connected Plugin inputs must be derived from direct incoming Canvas edges. Never
   accept a caller-supplied Project path or widen that access to unrelated nodes;
   use the bounded Main-owned managed-asset reader and recheck the exact edge and
@@ -246,7 +273,8 @@ current schema.
   starts Electron's drag. Renderer/preload never receive native paths, and targets
   such as Finder or JianYing must not introduce UI automation branches.
 - Keep bridge namespaces separate: `projects`, `projectFiles`, `projects.canvases`,
-  `canvas`, `generation`, `agent`, `plugins`, and `pluginServices`; keep IPC prefixes
+  `canvas`, `generation`, `agent`, `plugins`, `pluginCapabilities`, and
+  `pluginServices`; keep IPC prefixes
   `project:*`, `project-files:*`, `project:canvas-*`, `canvas:*`, `generation:*`,
   `agent:*`, `plugin:*`, and `plugin-service:*`.
 - Bump the Desktop protocol version and update its compatibility tests when the

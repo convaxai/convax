@@ -1,5 +1,5 @@
 import { createCanvasId, createGroupNode, getCanvasNodeSize } from "./document"
-import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint } from "./types"
+import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export type CanvasAlign = "left" | "center" | "right" | "top" | "middle" | "bottom"
 export type CanvasDistribute = "horizontal" | "vertical"
@@ -8,6 +8,12 @@ export type CanvasLayout = "grid" | "horizontal" | "vertical"
 export interface CanvasCommandResult {
   document: CanvasDocument
   selectedNodeIds: string[]
+}
+
+export interface CanvasNodeGeometryUpdate {
+  nodeId: string
+  position: CanvasPoint
+  size?: CanvasSize
 }
 
 function nodeMap(document: CanvasDocument) {
@@ -122,6 +128,39 @@ export function moveCanvasNodes(
   })
 }
 
+/** Absolute, batched geometry replacement used by layout and advanced callers. */
+export function setCanvasNodeGeometry(
+  document: CanvasDocument,
+  updates: readonly CanvasNodeGeometryUpdate[],
+): CanvasDocument {
+  if (updates.length === 0) return document
+  const updateById = new Map(updates.map((update) => [update.nodeId, update]))
+  let changed = false
+  const nodes = document.nodes.map((node) => {
+    const update = updateById.get(node.id)
+    if (!update) return node
+    const positionChanged = node.position.x !== update.position.x || node.position.y !== update.position.y
+    const sizeChanged =
+      Boolean(update.size) &&
+      (node.style?.width !== update.size?.width ||
+        node.style?.height !== update.size?.height ||
+        node.width !== undefined ||
+        node.height !== undefined ||
+        node.measured !== undefined)
+    if (!positionChanged && !sizeChanged) return node
+    changed = true
+    return {
+      ...node,
+      height: update.size ? undefined : node.height,
+      measured: update.size ? undefined : node.measured,
+      position: { ...update.position },
+      style: update.size ? { ...node.style, height: update.size.height, width: update.size.width } : node.style,
+      width: update.size ? undefined : node.width,
+    }
+  })
+  return changed ? { ...document, nodes } : document
+}
+
 export function duplicateCanvasSelection(
   document: CanvasDocument,
   nodeIds: readonly string[],
@@ -139,9 +178,7 @@ export function duplicateCanvasSelection(
         ...structuredClone(node),
         id: ids.get(node.id) ?? createCanvasId("node"),
         parentId,
-        position: isNestedClone
-          ? node.position
-          : { x: node.position.x + offset.x, y: node.position.y + offset.y },
+        position: isNestedClone ? node.position : { x: node.position.x + offset.x, y: node.position.y + offset.y },
         selected: false,
       } satisfies CanvasNode
     })
@@ -243,15 +280,13 @@ export function layoutCanvasNodes(
   const maxWidth = Math.max(...selected.map((node) => getCanvasNodeSize(node).width))
   const maxHeight = Math.max(...selected.map((node) => getCanvasNodeSize(node).height))
   const layout = input?.layout ?? "grid"
-  const columns = layout === "grid" ? Math.ceil(Math.sqrt(selected.length)) : layout === "horizontal" ? selected.length : 1
+  const columns =
+    layout === "grid" ? Math.ceil(Math.sqrt(selected.length)) : layout === "horizontal" ? selected.length : 1
   const positions = new Map(
     selected.map((node, index) => {
       const column = index % columns
       const row = Math.floor(index / columns)
-      return [
-        node.id,
-        { x: startX + column * (maxWidth + gap), y: startY + row * (maxHeight + gap) },
-      ]
+      return [node.id, { x: startX + column * (maxWidth + gap), y: startY + row * (maxHeight + gap) }]
     }),
   )
   return updateNodes(document, (node) => {
@@ -275,8 +310,22 @@ export function alignCanvasNodes(
   return updateNodes(document, (node) => {
     if (!ids.has(node.id)) return node
     const size = getCanvasNodeSize(node)
-    const x = direction === "left" ? left : direction === "center" ? (left + right - size.width) / 2 : direction === "right" ? right - size.width : node.position.x
-    const y = direction === "top" ? top : direction === "middle" ? (top + bottom - size.height) / 2 : direction === "bottom" ? bottom - size.height : node.position.y
+    const x =
+      direction === "left"
+        ? left
+        : direction === "center"
+          ? (left + right - size.width) / 2
+          : direction === "right"
+            ? right - size.width
+            : node.position.x
+    const y =
+      direction === "top"
+        ? top
+        : direction === "middle"
+          ? (top + bottom - size.height) / 2
+          : direction === "bottom"
+            ? bottom - size.height
+            : node.position.y
     return { ...node, position: { x, y } }
   })
 }
@@ -289,19 +338,22 @@ export function distributeCanvasNodes(
   const ids = new Set(getTopLevelNodeIds(document, nodeIds))
   const selected = document.nodes
     .filter((node) => ids.has(node.id))
-    .sort((left, right) => axis === "horizontal" ? left.position.x - right.position.x : left.position.y - right.position.y)
+    .sort((left, right) =>
+      axis === "horizontal" ? left.position.x - right.position.x : left.position.y - right.position.y,
+    )
   if (selected.length < 3) return document
   const first = selected[0]
   const last = selected.at(-1)
   if (!last) return document
   const firstSize = getCanvasNodeSize(first)
-  const lastSize = getCanvasNodeSize(last)
   const start = axis === "horizontal" ? first.position.x + firstSize.width : first.position.y + firstSize.height
   const end = axis === "horizontal" ? last.position.x : last.position.y
-  const middleSize = selected.slice(1, -1).reduce(
-    (total, node) => total + (axis === "horizontal" ? getCanvasNodeSize(node).width : getCanvasNodeSize(node).height),
-    0,
-  )
+  const middleSize = selected
+    .slice(1, -1)
+    .reduce(
+      (total, node) => total + (axis === "horizontal" ? getCanvasNodeSize(node).width : getCanvasNodeSize(node).height),
+      0,
+    )
   const gap = (end - start - middleSize) / (selected.length - 1)
   const positions = new Map<string, number>()
   selected.slice(1, -1).reduce((cursor, node) => {

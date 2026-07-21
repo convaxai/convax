@@ -47,6 +47,7 @@ import {
 import { createCanvasExternalMediaDragIconFactory } from "./canvas-external-media-drag-icon"
 import { CanvasExternalMediaDragService } from "./canvas-external-media-drag-service"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
+import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
 import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
 import { desktopBuiltinSkillPresentations } from "./builtin-skill-presentations"
@@ -65,6 +66,9 @@ import {
   webPluginIdForAssetUrl,
 } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
+import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
+import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
+import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
   WebPluginManager,
@@ -354,7 +358,18 @@ function startApplication() {
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
-    const canvasApplication = new CanvasApplicationService(canvasDocumentRepository)
+    const canvasDocumentChanges = new CanvasDocumentChangeBus()
+    // The application service uses the initializing document service so a
+    // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
+    const canvasApplication = new CanvasApplicationService(canvasDocuments, {
+      onDidCommit(event) {
+        canvasDocumentChanges.publish({
+          ref: { canvasId: event.canvasId, projectId: event.scopeId },
+          revision: event.revision,
+          source: event.actor.kind === "plugin" ? "plugin" : "host",
+        })
+      },
+    })
     const canvasResources = new CanvasResourceBusinessService(
       new ProjectCanvasResourcePreparation(projectManager),
       canvasApplication,
@@ -404,7 +419,26 @@ function startApplication() {
       isTrustedSender: ipcSecurity.isTrustedSender,
       isTrustedWebContentsId: (id) => trustedWebContents.has(id),
     })
+    const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginManager)
+    const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
+      application: canvasApplication,
+      canvases: projectCanvases,
+      changes: canvasDocumentChanges,
+      documents: canvasDocuments,
+      mutations: {
+        read: (ref, read, signal) =>
+          canvasRenderer.runDocumentRead({ canvasId: ref.canvasId, scopeId: ref.projectId }, read, signal),
+        run: (ref, mutate, signal) =>
+          canvasRenderer.runDocumentMutation({ canvasId: ref.canvasId, scopeId: ref.projectId }, mutate, signal),
+      },
+      plugins: pluginPrincipals,
+      projects: projectManager,
+    })
     const generationRuntime = new GenerationPluginRuntime({
+      canvasCapabilities: {
+        broker: pluginCanvasCapabilities,
+        principals: pluginPrincipals,
+      },
       environment: generationEnvironment,
       plugins: pluginManager,
       resolveManagedExecutable: (pluginId, pluginVersion, command) =>
@@ -434,6 +468,7 @@ function startApplication() {
       toolProvider: createCompositeAgentToolProvider([
         createCanvasAgentToolProvider({
           application: canvasApplication,
+          canvases: projectCanvases,
           renderer: canvasRenderer,
           resources: canvasResources,
         }),
@@ -550,7 +585,16 @@ function startApplication() {
       projectCreationDirectory,
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
-    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, ipcSecurity)
+    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, {
+      ...ipcSecurity,
+      onDidSave(request) {
+        canvasDocumentChanges.publish({
+          ref: { canvasId: request.ref.canvasId, projectId: request.ref.scopeId },
+          revision: request.document.revision,
+          source: "renderer",
+        })
+      },
+    })
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       onError: (error) => console.warn("Canvas native media drag failed", error),
@@ -584,6 +628,11 @@ function startApplication() {
     )
     const disposePluginServiceIpc = registerPluginServiceIpc(pluginServices, {
       isTrustedSender: ipcSecurity.isTrustedSender,
+    })
+    const disposePluginCapabilityIpc = registerPluginCapabilityIpc({
+      broker: pluginCanvasCapabilities,
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      principals: pluginPrincipals,
     })
     const disposeJianyingIpc = registerJianyingIpc(jianying, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -672,6 +721,7 @@ function startApplication() {
         disposeCanvasExternalMediaDragIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,
+        disposePluginCapabilityIpc,
         disposeJianyingIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,

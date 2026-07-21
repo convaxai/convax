@@ -81,13 +81,15 @@ describe("project canvas resource preparation", () => {
     })
 
     expect(directoryRequests).toEqual([{ path: "design/references", projectId: "project_one" }])
-    expect(result.items).toEqual([{
-      id: "folder",
-      kind: "folder",
-      metadata: { [projectFileReferenceKey]: { path: "design/references" } },
-      name: "references",
-      path: "design/references",
-    }])
+    expect(result.items).toEqual([
+      {
+        id: "folder",
+        kind: "folder",
+        metadata: { [projectFileReferenceKey]: { path: "design/references" } },
+        name: "references",
+        path: "design/references",
+      },
+    ])
   })
 
   test("copies project media into managed assets and uses the returned collision path", async () => {
@@ -181,13 +183,15 @@ describe("project canvas resource preparation", () => {
     })
 
     expect(copied).toBe(false)
-    expect(inspections).toEqual([{
-      kind: "video",
-      mimeType: "video/mp4",
-      name: "clip.mp4",
-      path: ".convax/assets/clip.mp4",
-      projectId: "project_one",
-    }])
+    expect(inspections).toEqual([
+      {
+        kind: "video",
+        mimeType: "video/mp4",
+        name: "clip.mp4",
+        path: ".convax/assets/clip.mp4",
+        projectId: "project_one",
+      },
+    ])
     expect(result.items[0]).toMatchObject({
       durationMs: 2_400,
       height: 720,
@@ -196,6 +200,40 @@ describe("project canvas resource preparation", () => {
       url: "",
       width: 1_280,
     })
+  })
+
+  test("does not copy a resource when cancellation wins after file inspection", async () => {
+    let resolveInfo!: (value: Awaited<ReturnType<ProjectCanvasResourceHost["readFileInfo"]>>) => void
+    const pendingInfo = new Promise<Awaited<ReturnType<ProjectCanvasResourceHost["readFileInfo"]>>>((resolve) => {
+      resolveInfo = resolve
+    })
+    let copyCalls = 0
+    const host: ProjectCanvasResourceHost = {
+      async copyEntries() {
+        copyCalls += 1
+        throw new Error("Canceled resource preparation reached asset admission")
+      },
+      async listDirectory() {
+        throw new Error("Unexpected directory read")
+      },
+      async readFileInfo() {
+        return pendingInfo
+      },
+      async readTextFile() {
+        throw new Error("Unexpected text read")
+      },
+    }
+    const controller = new AbortController()
+    const operation = new ProjectCanvasResourcePreparation(host).prepare({
+      ...requestRef,
+      signal: controller.signal,
+      sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
+    })
+    controller.abort(new DOMException("Agent stopped", "AbortError"))
+    resolveInfo({ mimeType: "image/png", name: "hero.png", path: "media/hero.png", size: 42 })
+
+    await expect(operation).rejects.toThrow("Agent stopped")
+    expect(copyCalls).toBe(0)
   })
 
   test("maps remote URLs by MIME type without touching the Project host", async () => {
@@ -232,10 +270,12 @@ describe("project canvas resource preparation", () => {
   test("rejects remote URLs outside HTTP and HTTPS", async () => {
     const preparation = new ProjectCanvasResourcePreparation(unusedHost())
 
-    await expect(preparation.prepare({
-      ...requestRef,
-      sources: [{ kind: "remote-url", sourceId: "local", url: "file:///tmp/secret.png" }],
-    })).rejects.toThrow("HTTP or HTTPS")
+    await expect(
+      preparation.prepare({
+        ...requestRef,
+        sources: [{ kind: "remote-url", sourceId: "local", url: "file:///tmp/secret.png" }],
+      }),
+    ).rejects.toThrow("HTTP or HTTPS")
   })
 
   test.each([
@@ -249,24 +289,27 @@ describe("project canvas resource preparation", () => {
   ])("rejects non-portable project paths: %s", async (path) => {
     const preparation = new ProjectCanvasResourcePreparation(unusedHost())
 
-    await expect(preparation.prepare({
-      ...requestRef,
-      sources: [{ kind: "host-file", path, sourceId: "unsafe" }],
-    })).rejects.toThrow(/Invalid portable project path|Project path escapes its root/)
+    await expect(
+      preparation.prepare({
+        ...requestRef,
+        sources: [{ kind: "host-file", path, sourceId: "unsafe" }],
+      }),
+    ).rejects.toThrow(/Invalid portable project path|Project path escapes its root/)
   })
 
-  test.each([
-    ".convax/project.json",
-    ".convax/canvases/canvas-main/document.json",
-    ".CONVAX/assets/image.png",
-  ])("rejects project private storage as a resource: %s", async (path) => {
-    const preparation = new ProjectCanvasResourcePreparation(unusedHost())
+  test.each([".convax/project.json", ".convax/canvases/canvas-main/document.json", ".CONVAX/assets/image.png"])(
+    "rejects project private storage as a resource: %s",
+    async (path) => {
+      const preparation = new ProjectCanvasResourcePreparation(unusedHost())
 
-    await expect(preparation.prepare({
-      ...requestRef,
-      sources: [{ kind: "host-file", path, sourceId: "private" }],
-    })).rejects.toThrow("Project private storage")
-  })
+      await expect(
+        preparation.prepare({
+          ...requestRef,
+          sources: [{ kind: "host-file", path, sourceId: "private" }],
+        }),
+      ).rejects.toThrow("Project private storage")
+    },
+  )
 })
 
 function unusedHost(): ProjectCanvasResourceHost {

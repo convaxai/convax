@@ -48,14 +48,21 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   ) {}
 
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
+    throwIfAborted(request.signal)
     const items: CanvasUploadItem[] = []
     for (const source of request.sources) {
-      items.push(await this.prepareSource(request.scopeId, source))
+      items.push(await this.prepareSource(request.scopeId, source, request.signal))
+      throwIfAborted(request.signal)
     }
     return { items }
   }
 
-  private async prepareSource(projectId: string, source: CanvasResourceSource): Promise<CanvasUploadItem> {
+  private async prepareSource(
+    projectId: string,
+    source: CanvasResourceSource,
+    signal?: AbortSignal,
+  ): Promise<CanvasUploadItem> {
+    throwIfAborted(signal)
     if (source.kind === "inline-text") {
       return {
         format: source.format,
@@ -84,6 +91,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     const sourcePath = requireProjectCanvasResourcePath(source.path)
     if (source.kind === "host-directory") {
       await this.project.listDirectory({ path: sourcePath, projectId })
+      throwIfAborted(signal)
       return {
         id: source.sourceId,
         kind: "folder",
@@ -94,9 +102,11 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     const sourceInfo = await this.project.readFileInfo({ path: sourcePath, projectId })
+    throwIfAborted(signal)
     const textFormat = getCanvasTextFileFormat(sourceInfo)
     if (textFormat) {
       const text = await this.project.readTextFile({ path: sourcePath, projectId })
+      throwIfAborted(signal)
       if (!text.exists) throw new Error(`Project text file was not found: ${sourcePath}`)
       return {
         format: textFormat,
@@ -109,7 +119,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       }
     }
 
-    const asset = await this.materializeAsset(projectId, sourcePath, sourceInfo)
+    const asset = await this.materializeAsset(projectId, sourcePath, sourceInfo, signal)
     const kind = mediaKindForMimeType(asset.mimeType)
     const inspection =
       kind !== "file" && this.mediaInspector
@@ -121,6 +131,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
             projectId,
           })
         : undefined
+    throwIfAborted(signal)
     return {
       durationMs: inspection?.durationMs,
       height: inspection?.height,
@@ -139,7 +150,9 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     projectId: string,
     sourcePath: string,
     sourceInfo: ProjectFileInfo,
+    signal?: AbortSignal,
   ): Promise<ProjectFileInfo> {
+    throwIfAborted(signal)
     if (isProjectCanvasManagedAssetPath(sourcePath)) {
       return { ...sourceInfo, mimeType: normalizeMimeType(sourceInfo.mimeType), path: sourcePath }
     }
@@ -149,6 +162,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       paths: [sourcePath],
       projectId,
     })
+    throwIfAborted(signal)
     if (copied.targetPaths?.length !== 1) {
       throw new Error(`Project resource copy did not produce one asset: ${sourcePath}`)
     }
@@ -157,6 +171,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       throw new Error(`Project resource copy escaped the managed asset directory: ${assetPath}`)
     }
     const assetInfo = await this.project.readFileInfo({ path: assetPath, projectId })
+    throwIfAborted(signal)
     return { ...assetInfo, mimeType: normalizeMimeType(assetInfo.mimeType), path: assetPath }
   }
 }
@@ -179,4 +194,9 @@ function remoteResourceName(value: URL) {
   } catch {
     return undefined
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError")
 }

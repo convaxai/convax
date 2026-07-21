@@ -1018,6 +1018,10 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
   const ready = armed && editor.selectionDragStatus === "ready"
   const preparing = armed && editor.selectionDragStatus === "preparing"
   const showsHint = armed && editor.selection.nodeIds.values().next().value === props.node.id
+  const label = editor.selectionDragModeActive ? (source?.mode?.label ?? source?.label) : source?.label
+  const preparingLabel = editor.selectionDragModeActive
+    ? (source?.mode?.preparingLabel ?? label)
+    : (source?.preparingLabel ?? label)
 
   return (
     <div
@@ -1030,9 +1034,15 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
       data-canvas-selection-drag-state={armed ? editor.selectionDragStatus : undefined}
       draggable={ready}
       onDragStart={(event) =>
-        startCanvasSelectionDragFromNode(event, ready, source?.shortcutModifier, editor.startSelectionDrag)
+        startCanvasSelectionDragFromNode(
+          event,
+          ready,
+          editor.selectionDragModeActive,
+          source?.shortcutModifier,
+          editor.startSelectionDrag,
+        )
       }
-      onDragEnd={editor.releaseSelectionDrag}
+      onDragEnd={editor.finishSelectionDrag}
       onPointerEnter={() => editor.setSelectionDragCandidateNode(props.node.id)}
       onPointerLeave={() => editor.setSelectionDragCandidateNode(null)}
       onPointerDown={armed ? (event) => event.stopPropagation() : undefined}
@@ -1046,7 +1056,7 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
           role="status"
         >
           {preparing ? <LoaderCircle className="size-3 animate-spin" /> : source?.icon}
-          <span className="truncate">{preparing ? (source?.preparingLabel ?? source?.label) : source?.label}</span>
+          <span className="truncate">{preparing ? preparingLabel : label}</span>
         </div>
       ) : null}
     </div>
@@ -1059,12 +1069,13 @@ export function startCanvasSelectionDragFromNode(
     "altKey" | "ctrlKey" | "metaKey" | "preventDefault" | "shiftKey" | "stopPropagation"
   >,
   ready: boolean,
+  modeActive: boolean,
   shortcutModifier: "control" | "meta" | undefined,
   start: () => boolean,
 ) {
   event.preventDefault()
   event.stopPropagation()
-  if (!ready || !isCanvasExternalDragChordHeld(event, shortcutModifier)) return false
+  if (!ready || (!modeActive && !isCanvasExternalDragChordHeld(event, shortcutModifier))) return false
   return start()
 }
 

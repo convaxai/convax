@@ -3,11 +3,13 @@ import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 
 const fitView = mock(async () => undefined)
+const setViewport = mock(async () => undefined)
 const setCenter = mock(async () => undefined)
 const zoomIn = mock(async () => undefined)
 const zoomOut = mock(async () => undefined)
 const zoomTo = mock(async () => undefined)
 const buttonActions = new Map<string, () => void>()
+const buttonContents = new Map<string, ReactNode>()
 let dropOnCanvas:
   | ((event: {
       clientX: number
@@ -55,7 +57,10 @@ function Passthrough(props: { children?: ReactNode }) {
 
 mock.module("@convax/ui", () => ({
   Button: (props: { "aria-label"?: string; children?: ReactNode; onClick?: () => void }) => {
-    if (props["aria-label"] && props.onClick) buttonActions.set(props["aria-label"], props.onClick)
+    if (props["aria-label"]) {
+      buttonContents.set(props["aria-label"], props.children)
+      if (props.onClick) buttonActions.set(props["aria-label"], props.onClick)
+    }
     return <button>{props.children}</button>
   },
   ContextMenu: Passthrough,
@@ -110,6 +115,7 @@ mock.module("@xyflow/react", () => ({
     getViewport: () => ({ x: 17, y: 29, zoom: 1.35 }),
     screenToFlowPosition: (point: { x: number; y: number }) => point,
     setCenter,
+    setViewport,
     zoomIn,
     zoomOut,
     zoomTo,
@@ -117,7 +123,7 @@ mock.module("@xyflow/react", () => ({
   useViewport: () => ({ x: 17, y: 29, zoom: 1.35 }),
 }))
 
-const { createCanvasDocument } = await import("../document")
+const { createCanvasDocument, createTextNode } = await import("../document")
 const { CanvasEditor } = await import("./canvas-editor")
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
@@ -125,10 +131,12 @@ const { createCanvasServices } = await import("../services")
 
 beforeEach(() => {
   buttonActions.clear()
+  buttonContents.clear()
   dropOnCanvas = undefined
   keyDownOnCanvas = undefined
   fitView.mockClear()
   setCenter.mockClear()
+  setViewport.mockClear()
   zoomIn.mockClear()
   zoomOut.mockClear()
   zoomTo.mockClear()
@@ -137,6 +145,7 @@ beforeEach(() => {
 function expectViewportUnchanged() {
   expect(fitView).not.toHaveBeenCalled()
   expect(setCenter).not.toHaveBeenCalled()
+  expect(setViewport).not.toHaveBeenCalled()
   expect(zoomIn).not.toHaveBeenCalled()
   expect(zoomOut).not.toHaveBeenCalled()
   expect(zoomTo).not.toHaveBeenCalled()
@@ -145,12 +154,15 @@ function expectViewportUnchanged() {
 function renderEditor(
   services = createCanvasServices(),
   options: {
+    initialDocument?: ReturnType<typeof createCanvasDocument>
+    readOnly?: boolean
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
 ) {
   renderToStaticMarkup(
     <CanvasEditor
-      initialDocument={createCanvasDocument({ id: "canvas-viewport" })}
+      initialDocument={options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })}
+      readOnly={options.readOnly}
       selectionDragSource={options.selectionDragSource}
       services={services}
     />,
@@ -202,6 +214,70 @@ describe("CanvasEditor viewport ownership", () => {
 
     expectViewportUnchanged()
   })
+
+  test("fits only as an explicit view effect after the user tidies the canvas", () => {
+    renderEditor(createCanvasServices(), {
+      initialDocument: createCanvasDocument({
+        edges: [{ id: "edge", source: "first", target: "second" }],
+        id: "canvas-layout",
+        nodes: [
+          createTextNode({ id: "first", position: { x: 400, y: 200 } }),
+          createTextNode({ id: "second", position: { x: 0, y: 0 } }),
+        ],
+      }),
+    })
+
+    expect(buttonActions.get("Tidy canvas")).toBeFunction()
+    buttonActions.get("Tidy canvas")?.()
+
+    expect(fitView).toHaveBeenCalledWith({ duration: 220, maxZoom: 1, padding: 0.18 })
+  })
+
+  test("lets the explicit Fit view use the Canvas zoom ceiling", () => {
+    renderEditor(createCanvasServices(), {
+      initialDocument: createCanvasDocument({
+        nodes: [createTextNode({ id: "small", position: { x: 0, y: 0 } })],
+      }),
+    })
+
+    buttonActions.get("Fit view")?.()
+
+    expect(fitView).toHaveBeenCalledWith({ duration: 220, maxZoom: 2.5, padding: 0.18 })
+  })
+
+  test("keeps edge visibility and tidy as distinct toolbar actions", () => {
+    renderEditor(createCanvasServices(), {
+      initialDocument: createCanvasDocument({
+        nodes: [
+          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
+          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+        ],
+      }),
+    })
+
+    const edgeIcon = renderToStaticMarkup(<>{buttonContents.get("Hide edges")}</>)
+    const tidyIcon = renderToStaticMarkup(<>{buttonContents.get("Tidy canvas")}</>)
+    expect(buttonActions.get("Choose tidy direction")).toBeFunction()
+    expect(edgeIcon).toContain('data-canvas-toolbar-icon="edge-visibility"')
+    expect(edgeIcon).not.toContain("lucide-eye")
+    expect(tidyIcon).toContain("lucide-layout-grid")
+    expect(tidyIcon).not.toBe(edgeIcon)
+  })
+
+  test("does not tidy or move the viewport while the Canvas is read-only", () => {
+    renderEditor(createCanvasServices(), {
+      initialDocument: createCanvasDocument({
+        nodes: [
+          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
+          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+        ],
+      }),
+      readOnly: true,
+    })
+
+    buttonActions.get("Tidy canvas")?.()
+    expectViewportUnchanged()
+  })
 })
 
 describe("CanvasEditor insertion surfaces", () => {
@@ -251,6 +327,25 @@ describe("CanvasEditor insertion surfaces", () => {
 })
 
 describe("CanvasEditor external drag mode", () => {
+  test("offers a persistent drag-to-other-apps mode when the host supplies labels", () => {
+    renderEditor(createCanvasServices(), {
+      selectionDragSource: {
+        id: "native-files",
+        label: "Keep holding Command-Shift",
+        mode: {
+          description: "Drag selected media to another app.",
+          exitLabel: "Exit",
+          label: "Drag to Other Apps",
+          preparingLabel: "Preparing selected media",
+        },
+        prepare: async () => ({ dispose: () => undefined, start: () => undefined }),
+        visible: () => true,
+      },
+    })
+
+    expect(buttonActions.get("Drag to Other Apps")).toBeFunction()
+  })
+
   test("does not prepare until command-shift is held for a visible drag source", () => {
     const prepare = mock(
       () =>

@@ -45,22 +45,49 @@ interface PendingRequest {
   resolve(value: unknown): void
 }
 
+export interface StdioMcpServerRequest {
+  method: string
+  params?: unknown
+}
+
+export interface StdioMcpServerRequestContext {
+  /** Aborted when the sidecar cancels this request or the process lifecycle closes. */
+  signal: AbortSignal
+  /** Transport primitive. Capability adapters must keep their notification names fixed. */
+  sendNotification(method: string, params?: unknown): void
+}
+
+/**
+ * Optional, explicitly allowlisted server-to-client request surface. Methods not
+ * listed here retain the MCP client's default JSON-RPC -32601 response.
+ */
+export interface StdioMcpServerRequestHandler {
+  close?(): void
+  handle(request: StdioMcpServerRequest, context: StdioMcpServerRequestContext): Promise<unknown>
+  methods: readonly string[]
+}
+
 export interface StdioMcpClientOptions {
   args?: readonly string[]
   command: string
   cwd: string
   env?: Readonly<Record<string, string | undefined>>
+  maxConcurrentServerRequests?: number
   maxMessageBytes?: number
   requestTimeoutMs?: number
+  serverRequestHandler?: StdioMcpServerRequestHandler
   shutdownGraceMs?: number
   spawn?: typeof spawn
 }
 
 const defaultMaxMessageBytes = 64 * 1024 * 1024
+const defaultMaxConcurrentServerRequests = 8
 const defaultRequestTimeoutMs = 60 * 60_000
 const defaultShutdownGraceMs = 2_000
 const maximumToolResultContentItems = 1_024
 const supportedMcpProtocolVersion = "2025-03-26"
+const maximumServerRequestMethods = 64
+const maximumServerErrorBytes = 512
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -159,14 +186,71 @@ function normalizeToolResult(value: unknown): McpToolCallResult {
   }
 }
 
+function serverRequestKey(id: number | string) {
+  return `${typeof id}:${id}`
+}
+
+function validServerRequestId(value: unknown): value is number | string {
+  return (
+    (typeof value === "number" && Number.isSafeInteger(value)) ||
+    (typeof value === "string" && value.length > 0 && value.length <= 128)
+  )
+}
+
+function boundedServerError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Host request failed"
+  let bytes = 0
+  let result = ""
+  for (const character of (message || "Host request failed").slice(0, maximumServerErrorBytes)) {
+    const size = Buffer.byteLength(character, "utf8")
+    if (bytes + size > maximumServerErrorBytes) break
+    bytes += size
+    result += character
+  }
+  return result.trim() || "Host request failed"
+}
+
+function requireServerRequestMethods(handler: StdioMcpServerRequestHandler | undefined) {
+  if (!handler) return new Set<string>()
+  if (!Array.isArray(handler.methods) || handler.methods.length > maximumServerRequestMethods) {
+    throw new Error(`MCP server request handler may expose at most ${maximumServerRequestMethods} methods`)
+  }
+  const methods = handler.methods.map((method) => {
+    if (
+      typeof method !== "string" ||
+      !method.trim() ||
+      method !== method.trim() ||
+      method.length > 256 ||
+      /[\u0000-\u001f\u007f]/.test(method)
+    ) {
+      throw new Error("MCP server request handler contains an invalid method")
+    }
+    return method
+  })
+  if (new Set(methods).size !== methods.length) {
+    throw new Error("MCP server request handler contains duplicate methods")
+  }
+  return new Set(methods)
+}
+
 /**
- * Small stdio MCP client for explicitly installed external commands. It speaks
- * only initialize and tools/list|call; Plugins do not gain an Electron or Node
- * bridge through this transport.
+ * Small stdio MCP client for explicitly installed external commands. Beyond
+ * initialize and tools/list|call, server requests remain disabled unless the
+ * host installs one bounded explicit-method handler.
  */
 export class StdioMcpClient {
-  readonly #options: Required<Pick<StdioMcpClientOptions, "maxMessageBytes" | "requestTimeoutMs" | "shutdownGraceMs">> &
-    Omit<StdioMcpClientOptions, "maxMessageBytes" | "requestTimeoutMs" | "shutdownGraceMs">
+  readonly #options: Required<
+    Pick<
+      StdioMcpClientOptions,
+      "maxConcurrentServerRequests" | "maxMessageBytes" | "requestTimeoutMs" | "shutdownGraceMs"
+    >
+  > &
+    Omit<
+      StdioMcpClientOptions,
+      "maxConcurrentServerRequests" | "maxMessageBytes" | "requestTimeoutMs" | "shutdownGraceMs"
+    >
+  readonly #serverRequestMethods: ReadonlySet<string>
+  readonly #serverRequests = new Map<string, { controller: AbortController; id: number | string }>()
   readonly #pending = new Map<number, PendingRequest>()
   #buffer = Buffer.alloc(0)
   #child?: ChildProcessWithoutNullStreams
@@ -174,13 +258,24 @@ export class StdioMcpClient {
   #connecting?: Promise<void>
   #nextId = 1
   #shutdownChild?: ChildProcessWithoutNullStreams
+  #serverRequestHandlerClosed = false
   #shutdownTimer?: ReturnType<typeof setTimeout>
 
   constructor(options: StdioMcpClientOptions) {
     if (!options.command.trim()) throw new Error("MCP command is required")
     if (!options.cwd.trim()) throw new Error("MCP working directory is required")
+    const maxConcurrentServerRequests = options.maxConcurrentServerRequests ?? defaultMaxConcurrentServerRequests
+    if (
+      !Number.isSafeInteger(maxConcurrentServerRequests) ||
+      maxConcurrentServerRequests < 1 ||
+      maxConcurrentServerRequests > 64
+    ) {
+      throw new Error("MCP concurrent server request limit must be an integer between 1 and 64")
+    }
+    this.#serverRequestMethods = requireServerRequestMethods(options.serverRequestHandler)
     this.#options = {
       ...options,
+      maxConcurrentServerRequests,
       maxMessageBytes: options.maxMessageBytes ?? defaultMaxMessageBytes,
       requestTimeoutMs: options.requestTimeoutMs ?? defaultRequestTimeoutMs,
       shutdownGraceMs: options.shutdownGraceMs ?? defaultShutdownGraceMs,
@@ -327,21 +422,27 @@ export class StdioMcpClient {
       this.#fail(new Error("MCP response used an unsupported JSON-RPC version"))
       return
     }
-    if (message.id === undefined || message.id === null) return
-    if (typeof message.id !== "number") {
-      this.#write({ error: { code: -32600, message: "Unsupported request id" }, id: message.id, jsonrpc: "2.0" })
+    if (message.method !== undefined) {
+      if (typeof message.method !== "string" || !message.method) {
+        if (message.id !== undefined && message.id !== null) {
+          this.#write({ error: { code: -32600, message: "Invalid request" }, id: null, jsonrpc: "2.0" })
+        }
+        return
+      }
+      if (message.id === undefined || message.id === null) {
+        this.#handleServerNotification(message.method, message.params)
+        return
+      }
+      if (message.result !== undefined || message.error !== undefined) {
+        this.#write({ error: { code: -32600, message: "Invalid request" }, id: null, jsonrpc: "2.0" })
+        return
+      }
+      this.#handleServerRequest(message)
       return
     }
-    if (message.method) {
-      try {
-        this.#write({
-          error: { code: -32601, message: `Method not found: ${message.method}` },
-          id: message.id,
-          jsonrpc: "2.0",
-        })
-      } catch (error) {
-        this.#fail(error)
-      }
+    if (message.id === undefined || message.id === null) return
+    if (typeof message.id !== "number") {
+      this.#write({ error: { code: -32600, message: "Unsupported response id" }, id: null, jsonrpc: "2.0" })
       return
     }
     const pending = this.#pending.get(message.id)
@@ -357,6 +458,73 @@ export class StdioMcpClient {
       return
     }
     pending.resolve(message.result)
+  }
+
+  #handleServerNotification(method: string, params: unknown) {
+    if (method !== "notifications/cancelled" || !isRecord(params)) return
+    const requestId = params.requestId
+    if (!validServerRequestId(requestId)) return
+    this.#serverRequests.get(serverRequestKey(requestId))?.controller.abort("MCP server canceled the host request")
+  }
+
+  #handleServerRequest(message: JsonRpcMessage) {
+    const id = message.id
+    if (!validServerRequestId(id)) {
+      this.#write({ error: { code: -32600, message: "Unsupported request id" }, id: null, jsonrpc: "2.0" })
+      return
+    }
+    const method = message.method!
+    const handler = this.#options.serverRequestHandler
+    if (!handler || !this.#serverRequestMethods.has(method)) {
+      this.#write({ error: { code: -32601, message: "Method not found" }, id, jsonrpc: "2.0" })
+      return
+    }
+    const key = serverRequestKey(id)
+    if (this.#serverRequests.has(key)) {
+      this.#write({ error: { code: -32600, message: "Duplicate request id" }, id, jsonrpc: "2.0" })
+      return
+    }
+    if (this.#serverRequests.size >= this.#options.maxConcurrentServerRequests) {
+      this.#write({ error: { code: -32000, message: "Too many concurrent host requests" }, id, jsonrpc: "2.0" })
+      return
+    }
+    const controller = new AbortController()
+    const active = { controller, id }
+    this.#serverRequests.set(key, active)
+    const context: StdioMcpServerRequestContext = {
+      sendNotification: (notificationMethod, params) => {
+        if (this.#closed) throw new Error("MCP client is closed")
+        this.#notify(notificationMethod, params ?? {})
+      },
+      signal: controller.signal,
+    }
+    void Promise.resolve()
+      .then(() =>
+        handler.handle({ method, ...(message.params === undefined ? {} : { params: message.params }) }, context),
+      )
+      .then(
+        (result) => this.#completeServerRequest(key, active, { result: result ?? null }),
+        (error) =>
+          this.#completeServerRequest(key, active, {
+            error: controller.signal.aborted
+              ? { code: -32800, message: "Request canceled" }
+              : { code: -32603, message: boundedServerError(error) },
+          }),
+      )
+  }
+
+  #completeServerRequest(
+    key: string,
+    active: { controller: AbortController; id: number | string },
+    outcome: { error: { code: number; message: string } } | { result: unknown },
+  ) {
+    if (this.#closed || this.#serverRequests.get(key) !== active) return
+    this.#serverRequests.delete(key)
+    try {
+      this.#write({ ...outcome, id: active.id, jsonrpc: "2.0" })
+    } catch (error) {
+      this.#fail(error)
+    }
   }
 
   #request(
@@ -430,6 +598,16 @@ export class StdioMcpClient {
       return
     }
     this.#closed = true
+    for (const request of this.#serverRequests.values()) request.controller.abort("MCP client was closed")
+    this.#serverRequests.clear()
+    if (!this.#serverRequestHandlerClosed) {
+      this.#serverRequestHandlerClosed = true
+      try {
+        this.#options.serverRequestHandler?.close?.()
+      } catch {
+        // Handler disposal must not prevent process-tree termination.
+      }
+    }
     const child = this.#child
     this.#child = undefined
     for (const pending of this.#pending.values()) {
@@ -484,15 +662,13 @@ export class StdioMcpClient {
   #kill(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals) {
     if (process.platform === "win32" && child.pid) {
       const systemRoot = this.#options.env?.SystemRoot ?? process.env.SystemRoot
-      const taskkill = systemRoot && path.isAbsolute(systemRoot)
-        ? path.join(systemRoot, "System32", "taskkill.exe")
-        : "taskkill.exe"
+      const taskkill =
+        systemRoot && path.isAbsolute(systemRoot) ? path.join(systemRoot, "System32", "taskkill.exe") : "taskkill.exe"
       try {
-        const killer = spawn(
-          taskkill,
-          ["/PID", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])],
-          { stdio: "ignore", windowsHide: true },
-        )
+        const killer = spawn(taskkill, ["/PID", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])], {
+          stdio: "ignore",
+          windowsHide: true,
+        })
         killer.once("error", () => {
           try {
             child.kill(signal)

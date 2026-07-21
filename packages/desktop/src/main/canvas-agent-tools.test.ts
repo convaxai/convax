@@ -1,8 +1,37 @@
 import { describe, expect, test } from "bun:test"
-import { CanvasApplicationService, CanvasResourceBusinessService } from "@convax/canvas/application"
+import {
+  CanvasApplicationService,
+  CanvasResourceBusinessService,
+  CanvasRevisionConflictError,
+  type CanvasDocumentRef,
+} from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
 import type { CanvasViewSnapshot } from "@convax/canvas/view"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
+import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
+
+const passthroughDocumentLease = {
+  async runDocumentMutation<Result>(_ref: CanvasDocumentRef, mutate: () => Result | PromiseLike<Result>) {
+    return mutate()
+  },
+  async runDocumentRead<Result>(_ref: CanvasDocumentRef, read: () => Result | PromiseLike<Result>) {
+    return read()
+  },
+} satisfies Pick<CanvasRendererBridge, "runDocumentMutation" | "runDocumentRead">
+
+const projectCanvases = {
+  async getCanvasCatalog({ projectId }: { projectId: string }) {
+    return {
+      canvases: ["canvas-main", "canvas-inactive"].map((id, index) => ({
+        createdAt: index,
+        id,
+        name: id === "canvas-main" ? "Main" : "Inactive",
+        updatedAt: index,
+      })),
+      projectId,
+    }
+  },
+}
 
 function activeCanvasSnapshot(
   revision: number,
@@ -23,11 +52,11 @@ describe("Canvas Agent tools", () => {
   test("maps the Agent scope to generic Canvas document and live-view scopes", async () => {
     const executed: unknown[] = []
     const queried: unknown[] = []
-    const reloaded: unknown[] = []
     const viewed: unknown[] = []
     const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 4 }
     let liveRevision = 4
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute(request) {
           executed.push(request)
@@ -47,6 +76,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(liveRevision)
         },
@@ -66,8 +96,7 @@ describe("Canvas Agent tools", () => {
             },
           }
         },
-        async reloadDocument(ref) {
-          reloaded.push(ref)
+        async reloadDocument() {
           return true
         },
       },
@@ -109,8 +138,6 @@ describe("Canvas Agent tools", () => {
         scopeId: "project-a",
       },
     ])
-    expect(reloaded).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
-
     await provider.callTool(scope, "canvas_view", {
       canvasId: "canvas-main",
       command: { nodeIds: ["node-a"], select: true, type: "nodes.reveal" },
@@ -126,21 +153,40 @@ describe("Canvas Agent tools", () => {
     ])
   })
 
-  test("rejects model-selected inactive Canvas ids for every Canvas tool", async () => {
+  test("allows document tools on an inactive catalog Canvas while keeping view commands active-only", async () => {
     const calls = { execute: 0, query: 0, resources: 0, view: 0 }
+    const mutationRefs: CanvasDocumentRef[] = []
+    const readRefs: CanvasDocumentRef[] = []
     const snapshotViewIds: string[] = []
+    const inactiveDocument = { ...createCanvasDocument({ id: "canvas-inactive" }), revision: 8 }
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           calls.execute += 1
-          throw new Error("Unexpected execute")
+          return {
+            affectedNodeIds: ["node-a"],
+            changed: true,
+            createdNodeIds: [],
+            document: inactiveDocument,
+            storageVersion: "v8",
+            warnings: [],
+          }
         },
         async query() {
           calls.query += 1
-          throw new Error("Unexpected query")
+          return { nodes: [], revision: 7, storageVersion: "v7" }
         },
       },
       renderer: {
+        async runDocumentMutation(ref, mutate) {
+          mutationRefs.push(ref)
+          return mutate()
+        },
+        async runDocumentRead(ref, read) {
+          readRefs.push(ref)
+          return read()
+        },
         async getViewSnapshot(viewId) {
           snapshotViewIds.push(viewId)
           return activeCanvasSnapshot(7)
@@ -156,55 +202,61 @@ describe("Canvas Agent tools", () => {
       resources: {
         async addResources() {
           calls.resources += 1
-          throw new Error("Unexpected resources")
+          return {
+            affectedNodeIds: ["created"],
+            changed: true,
+            createdNodeIds: ["created"],
+            document: inactiveDocument,
+            storageVersion: "v8",
+            warnings: [],
+          }
         },
       },
     })
     const scope = { directory: "/project", scopeId: "project-a" }
-    const requests = [
-      ["canvas_query_nodes", { canvasId: "canvas-inactive" }],
-      [
-        "canvas_add_resources",
-        {
-          anchor: { x: 0, y: 0 },
-          canvasId: "canvas-inactive",
-          commandId: "inactive-add",
-          expectedRevision: 7,
-          sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
-        },
-      ],
-      [
-        "canvas_apply_primitive",
-        {
-          canvasId: "canvas-inactive",
-          command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
-          commandId: "inactive-move",
-          expectedRevision: 7,
-        },
-      ],
-      [
-        "canvas_view",
-        {
-          canvasId: "canvas-inactive",
-          command: { type: "selection.clear" },
-          expectedRevision: 7,
-        },
-      ],
-    ] as const
 
-    for (const [name, request] of requests) {
-      await expect(provider.callTool(scope, name, request)).rejects.toThrow(
-        "canvasId must match the live active Canvas",
-      )
-    }
-    expect(calls).toEqual({ execute: 0, query: 0, resources: 0, view: 0 })
-    expect(snapshotViewIds).toEqual(requests.map(() => "desktop-main"))
+    await provider.callTool(scope, "canvas_query_nodes", { canvasId: "canvas-inactive" })
+    await provider.callTool(scope, "canvas_apply_primitive", {
+      canvasId: "canvas-inactive",
+      command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
+      commandId: "inactive-move",
+      expectedRevision: 7,
+    })
+    await provider.callTool(scope, "canvas_add_resources", {
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-inactive",
+      commandId: "inactive-add",
+      expectedRevision: 7,
+      sources: [{ kind: "inline-text", sourceId: "source", text: "Text" }],
+    })
+    await expect(
+      provider.callTool(scope, "canvas_view", {
+        canvasId: "canvas-inactive",
+        command: { type: "selection.clear" },
+        expectedRevision: 7,
+      }),
+    ).rejects.toThrow("canvasId must match the live active Canvas")
+
+    expect(calls).toEqual({ execute: 1, query: 1, resources: 1, view: 0 })
+    expect(readRefs).toEqual([{ canvasId: "canvas-inactive", scopeId: "project-a" }])
+    expect(mutationRefs).toEqual([
+      { canvasId: "canvas-inactive", scopeId: "project-a" },
+      { canvasId: "canvas-inactive", scopeId: "project-a" },
+    ])
+    expect(snapshotViewIds).toEqual(["desktop-main", "desktop-main", "desktop-main"])
   })
 
-  test("fails closed without a live Canvas or when the live Canvas belongs to another Project", async () => {
-    let liveSnapshot: CanvasViewSnapshot | null = null
+  test("lists and reads Canvases from the host Project scope without requiring a mounted view", async () => {
+    const catalogProjectIds: string[] = []
     let queryCalls = 0
+    let returnedProjectId = "project-a"
     const provider = createCanvasAgentToolProvider({
+      canvases: {
+        async getCanvasCatalog({ projectId }) {
+          catalogProjectIds.push(projectId)
+          return { ...(await projectCanvases.getCanvasCatalog({ projectId })), projectId: returnedProjectId }
+        },
+      },
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -215,8 +267,9 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
-          return liveSnapshot
+          throw new Error("Document reads must not require the mounted view")
         },
         async executeView() {
           throw new Error("Unexpected view")
@@ -233,34 +286,40 @@ describe("Canvas Agent tools", () => {
     })
     const scope = { directory: "/project", scopeId: "project-a" }
 
+    await expect(provider.callTool(scope, "canvas_list", { projectId: "project-b" })).rejects.toThrow(
+      "does not accept Project selection arguments",
+    )
+    expect(await provider.callTool(scope, "canvas_list", {})).toMatchObject({
+      canvases: [{ id: "canvas-main" }, { id: "canvas-inactive" }],
+      projectId: "project-a",
+    })
+    await provider.callTool(scope, "canvas_query_nodes", { canvasId: "canvas-main" })
     await expect(
       provider.callTool(scope, "canvas_query_nodes", {
-        canvasId: "canvas-main",
+        canvasId: "canvas-missing",
       }),
-    ).rejects.toThrow("No live active Canvas")
-
-    liveSnapshot = activeCanvasSnapshot(0, { scopeId: "project-b" })
-    await expect(
-      provider.callTool(scope, "canvas_query_nodes", {
-        canvasId: "canvas-main",
-      }),
-    ).rejects.toThrow("outside the Agent Project scope")
-    expect(queryCalls).toBe(0)
+    ).rejects.toThrow("current Agent Project catalog")
+    expect(queryCalls).toBe(1)
+    returnedProjectId = "project-b"
+    await expect(provider.callTool(scope, "canvas_list", {})).rejects.toThrow("outside the Agent Project scope")
+    expect(catalogProjectIds).toEqual(["project-a", "project-a", "project-a", "project-a"])
   })
 
-  test("rejects stale revisions before primitive mutation or view execution", async () => {
+  test("preserves application revision conflicts and mounted-view revision guards", async () => {
     const calls = { execute: 0, view: 0 }
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           calls.execute += 1
-          throw new Error("Unexpected execute")
+          throw new CanvasRevisionConflictError(7, 8)
         },
         async query() {
           return { nodes: [], revision: 8, storageVersion: "v8" }
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(8)
         },
@@ -279,34 +338,109 @@ describe("Canvas Agent tools", () => {
       },
     })
     const scope = { directory: "/project", scopeId: "project-a" }
-    const requests = [
-      [
-        "canvas_apply_primitive",
-        {
-          canvasId: "canvas-main",
-          command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
-          commandId: "stale-move",
-          expectedRevision: 7,
-        },
-      ],
-      [
-        "canvas_view",
-        {
-          canvasId: "canvas-main",
-          command: { type: "selection.clear" },
-          expectedRevision: 7,
-        },
-      ],
-    ] as const
+    await expect(
+      provider.callTool(scope, "canvas_apply_primitive", {
+        canvasId: "canvas-main",
+        command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
+        commandId: "stale-move",
+        expectedRevision: 7,
+      }),
+    ).rejects.toThrow("Canvas revision conflict")
+    await expect(
+      provider.callTool(scope, "canvas_view", {
+        canvasId: "canvas-main",
+        command: { type: "selection.clear" },
+        expectedRevision: 7,
+      }),
+    ).rejects.toThrow("expectedRevision does not match")
+    expect(calls).toEqual({ execute: 1, view: 0 })
+  })
 
-    for (const [name, request] of requests) {
-      await expect(provider.callTool(scope, name, request)).rejects.toThrow("expectedRevision does not match")
-    }
-    expect(calls).toEqual({ execute: 0, view: 0 })
+  test("executes auto-layout as a business command for an inactive Canvas", async () => {
+    const executed: unknown[] = []
+    const mutationRefs: CanvasDocumentRef[] = []
+    const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
+      application: {
+        async execute(request) {
+          executed.push(request)
+          return {
+            affectedNodeIds: ["node-a", "node-b"],
+            changed: true,
+            createdNodeIds: [],
+            document: { ...createCanvasDocument({ id: "canvas-inactive" }), revision: 6 },
+            storageVersion: "v6",
+            warnings: [],
+          }
+        },
+        async query() {
+          throw new Error("Unexpected query")
+        },
+      },
+      renderer: {
+        async runDocumentMutation(ref, mutate) {
+          mutationRefs.push(ref)
+          return mutate()
+        },
+        async runDocumentRead(_ref, read) {
+          return read()
+        },
+        async getViewSnapshot() {
+          throw new Error("Auto-layout must not require the mounted view")
+        },
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          throw new Error("Unexpected resources")
+        },
+      },
+    })
+
+    const result = await provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_auto_layout", {
+      canvasId: "canvas-inactive",
+      commandId: "layout-inactive",
+      expectedRevision: 5,
+      nodeIds: ["node-a", "node-b"],
+      options: {
+        componentPackingScale: 0.7,
+        isolatedPlacement: "left",
+        strategy: "vertical-directed-cluster",
+      },
+    })
+
+    expect(result).toMatchObject({ changed: true, revision: 6, sync: { reloaded: false } })
+    expect(mutationRefs).toEqual([{ canvasId: "canvas-inactive", scopeId: "project-a" }])
+    expect(executed).toMatchObject([
+      {
+        canvasId: "canvas-inactive",
+        envelope: {
+          actor: { id: "opencode:project-a", kind: "agent" },
+          command: {
+            nodeIds: ["node-a", "node-b"],
+            options: {
+              componentPackingScale: 0.7,
+              isolatedPlacement: "left",
+              strategy: "vertical-directed-cluster",
+            },
+            type: "canvas.auto-layout",
+          },
+          commandId: "layout-inactive",
+          expectedRevision: 5,
+        },
+        scopeId: "project-a",
+      },
+    ])
   })
 
   test("exposes business tools by default while validating unsafe view values", async () => {
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -316,6 +450,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -334,7 +469,9 @@ describe("Canvas Agent tools", () => {
     })
     const definitions = await provider.listTools({ directory: "/project", scopeId: "project-a" })
     expect(definitions.map((tool) => tool.name)).toEqual([
+      "canvas_list",
       "canvas_query_nodes",
+      "canvas_auto_layout",
       "canvas_add_resources",
       "canvas_apply_primitive",
       "canvas_view",
@@ -343,6 +480,27 @@ describe("Canvas Agent tools", () => {
       provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
         canvasId: "canvas-main",
         command: { type: "viewport.zoom", zoom: 0 },
+        expectedRevision: 0,
+      }),
+    ).rejects.toThrow("command.zoom")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
+        canvasId: "canvas-main",
+        command: { maxZoom: 0.1, type: "viewport.fit" },
+        expectedRevision: 0,
+      }),
+    ).rejects.toThrow("command.maxZoom")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
+        canvasId: "canvas-main",
+        command: { position: { x: 0, y: 0 }, type: "viewport.center", zoom: 0.1 },
+        expectedRevision: 0,
+      }),
+    ).rejects.toThrow("command.zoom")
+    await expect(
+      provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
+        canvasId: "canvas-main",
+        command: { type: "viewport.zoom", zoom: 3 },
         expectedRevision: 0,
       }),
     ).rejects.toThrow("command.zoom")
@@ -360,6 +518,7 @@ describe("Canvas Agent tools", () => {
 
   test("publishes host file and directory source schemas without project-specific source kinds", async () => {
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -369,6 +528,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -400,7 +560,6 @@ describe("Canvas Agent tools", () => {
     const loadedRefs: unknown[] = []
     const savedRefs: unknown[] = []
     const preparationRequests: unknown[] = []
-    const reloadedRefs: unknown[] = []
     const application = new CanvasApplicationService({
       async load(ref) {
         loadedRefs.push(ref)
@@ -433,15 +592,16 @@ describe("Canvas Agent tools", () => {
     )
     const provider = createCanvasAgentToolProvider({
       application,
+      canvases: projectCanvases,
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
-          return activeCanvasSnapshot(0)
+          return activeCanvasSnapshot(document.revision)
         },
         async executeView() {
           throw new Error("Unexpected view")
         },
-        async reloadDocument(ref) {
-          reloadedRefs.push(ref)
+        async reloadDocument() {
           return true
         },
       },
@@ -466,7 +626,6 @@ describe("Canvas Agent tools", () => {
     ])
     expect(loadedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
     expect(savedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
-    expect(reloadedRefs).toEqual([{ canvasId: "canvas-main", scopeId: "project-a" }])
     expect(document.nodes).toHaveLength(1)
     expect(document.nodes[0]).toMatchObject({
       data: { kind: "folder", name: "references", path: "design/references" },
@@ -499,9 +658,11 @@ describe("Canvas Agent tools", () => {
     )
     const provider = createCanvasAgentToolProvider({
       application,
+      canvases: projectCanvases,
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
-          return activeCanvasSnapshot(1)
+          return activeCanvasSnapshot(document.revision)
         },
         async executeView() {
           throw new Error("Unexpected view")
@@ -536,6 +697,7 @@ describe("Canvas Agent tools", () => {
   test("rejects malformed and legacy project-specific resource inputs before business execution", async () => {
     let calls = 0
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -545,6 +707,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -600,6 +763,7 @@ describe("Canvas Agent tools", () => {
   test("keeps a committed business mutation successful when its optional view update fails", async () => {
     const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 3 }
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -609,8 +773,9 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
-          return activeCanvasSnapshot(2)
+          return activeCanvasSnapshot(document.revision)
         },
         async executeView() {
           throw new Error("View changed before reveal")
@@ -647,5 +812,65 @@ describe("Canvas Agent tools", () => {
       revision: 3,
       warnings: [expect.stringContaining("resources were saved")],
     })
+  })
+
+  test("does not start a durable Agent mutation when cancellation wins after catalog lookup", async () => {
+    type Catalog = Awaited<ReturnType<typeof projectCanvases.getCanvasCatalog>>
+    let resolveCatalog!: (catalog: Catalog) => void
+    const catalog = new Promise<Catalog>((resolve) => {
+      resolveCatalog = resolve
+    })
+    let executeCalls = 0
+    const provider = createCanvasAgentToolProvider({
+      canvases: {
+        async getCanvasCatalog() {
+          return catalog
+        },
+      },
+      application: {
+        async execute() {
+          executeCalls += 1
+          throw new Error("Canceled Agent mutation reached durable execution")
+        },
+        async query() {
+          throw new Error("Unexpected query")
+        },
+      },
+      renderer: {
+        ...passthroughDocumentLease,
+        async executeView() {
+          throw new Error("Unexpected view")
+        },
+        async getViewSnapshot() {
+          return null
+        },
+        async reloadDocument() {
+          return false
+        },
+      },
+      resources: {
+        async addResources() {
+          throw new Error("Unexpected resources")
+        },
+      },
+    })
+    const controller = new AbortController()
+    const operation = provider.callTool(
+      { directory: "/project", scopeId: "project-a" },
+      "canvas_apply_primitive",
+      {
+        canvasId: "canvas-main",
+        command: { delta: { x: 1, y: 1 }, nodeIds: ["node-a"], type: "nodes.move" },
+        commandId: "canceled-move",
+        expectedRevision: 0,
+      },
+      { signal: controller.signal },
+    )
+    await Promise.resolve()
+    controller.abort(new DOMException("Agent stopped", "AbortError"))
+    resolveCatalog(await projectCanvases.getCanvasCatalog({ projectId: "project-a" }))
+
+    await expect(operation).rejects.toThrow("Agent stopped")
+    expect(executeCalls).toBe(0)
   })
 })

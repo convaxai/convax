@@ -49,6 +49,7 @@ import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { createInitialCanvasDocument } from "./canvas-document"
 import { CanvasCardConversationPanel, canvasCardAgentContextNodeIds } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
+import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { resolveCanvasUploadItems } from "./canvas-upload"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
 import {
@@ -205,6 +206,11 @@ function App() {
     activeProject?: { id: string; name: string }
   }>({})
   const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
+  const externalDocumentMutationRef = useRef<{ canvasId: string; scopeId: string } | null>(null)
+  const assertNoExternalDocumentMutation = useCallback(() => {
+    const mutation = externalDocumentMutationRef.current
+    if (mutation) throw new Error(`Canvas ${mutation.canvasId} is being updated by an external capability`)
+  }, [])
   const drainCanvasSaves = useCallback(async () => {
     while (true) {
       const pending = latestCanvasSaveRef.current
@@ -226,12 +232,14 @@ function App() {
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
+          assertNoExternalDocumentMutation()
           await canvasEditorRef.current?.prepareToLeave()
           await drainCanvasSaves()
+          assertNoExternalDocumentMutation()
         },
         onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [drainCanvasSaves],
+    [assertNoExternalDocumentMutation, drainCanvasSaves],
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
@@ -267,13 +275,16 @@ function App() {
     () =>
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
-          if (currentInput?.kind !== "canvas") return
-          await canvasEditorRef.current?.prepareToLeave()
-          await drainCanvasSaves()
+          assertNoExternalDocumentMutation()
+          if (currentInput?.kind === "canvas") {
+            await canvasEditorRef.current?.prepareToLeave()
+            await drainCanvasSaves()
+          }
+          assertNoExternalDocumentMutation()
         },
         onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [drainCanvasSaves],
+    [assertNoExternalDocumentMutation, drainCanvasSaves],
   )
   const projectCanvasWorkbench = useMemo(
     () => new ProjectCanvasWorkbenchCoordinator(projectCanvasController, workbenchController),
@@ -616,27 +627,24 @@ function App() {
     canvases: projectCanvasSnapshot.canvases,
     generationCatalogVersion: generationToolCatalogVersionRef.current,
   }
-  useEffect(
+  const canvasRendererRequestHandler = useMemo(
     () =>
-      window.convax.canvas.renderer.onRequest(async (request) => {
-        if (request.type === "view.snapshot") {
-          const snapshots = canvasViewRegistry.list().filter((snapshot) => snapshot.viewId === request.viewId)
-          return { snapshot: snapshots.length === 1 ? snapshots[0]! : null, type: "view.snapshot" }
-        }
-        if (request.type === "document.reload") {
-          if (request.ref.scopeId !== activeProjectId || request.ref.canvasId !== activeCanvasId) {
-            return { type: "document.reload", reloaded: false }
-          }
-          const editor = canvasEditorRef.current
-          if (!editor) return { type: "document.reload", reloaded: false }
-          await editor.reload()
-          return { type: "document.reload", reloaded: true }
-        }
-        const result = await canvasViewRegistry.execute(request.input)
-        return { type: "view.execute", result }
+      createCanvasRendererRequestHandler({
+        getActiveRef: () => {
+          const current = pluginHostContextRef.current
+          return current.activeProject && current.activeCanvas
+            ? { canvasId: current.activeCanvas.id, scopeId: current.activeProject.id }
+            : null
+        },
+        getEditor: () => canvasEditorRef.current,
+        onDocumentMutationChange: (ref) => {
+          externalDocumentMutationRef.current = ref
+        },
+        views: canvasViewRegistry,
       }),
-    [activeCanvasId, activeProjectId, canvasViewRegistry],
+    [canvasViewRegistry],
   )
+  useEffect(() => window.convax.canvas.renderer.onRequest(canvasRendererRequestHandler), [canvasRendererRequestHandler])
   const activeCanvasNameRef = useRef(activeCanvas?.name)
   activeCanvasNameRef.current = activeCanvas?.name
   const initialDocument = useMemo(() => {
@@ -796,11 +804,14 @@ function App() {
             canvasId: activeCanvasId,
             scopeId: activeProjectId,
           })
-          storageVersion = result.storageVersion
-          if (!result.document) return null
+          if (!result.document) {
+            if (signal.aborted) throw signal.reason
+            storageVersion = result.storageVersion
+            return null
+          }
           if (result.document.id !== documentId) throw new Error("Loaded the wrong canvas document")
           if (signal.aborted) throw signal.reason
-          return hydrateProjectCanvasDocument(
+          const document = hydrateProjectCanvasDocument(
             {
               ...result.document,
               metadata: {
@@ -810,6 +821,11 @@ function App() {
             },
             ({ path }) => projectAssetUrl(activeProjectId, path),
           )
+          if (signal.aborted) throw signal.reason
+          // A failed hydration must not grant a stale renderer snapshot the
+          // freshly loaded CAS token for a later overwrite.
+          storageVersion = result.storageVersion
+          return document
         },
         async save(document, signal) {
           const save = saveQueue
@@ -1038,6 +1054,15 @@ function App() {
       icon: <FileOutput />,
       label:
         locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder、剪映或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+      mode: {
+        description:
+          locale === "zh-CN"
+            ? "已进入跨应用拖出模式。拖动已选素材会将文件拖到其他 App；仍可选择素材、移动和缩放画布。"
+            : "Drag selected media to another app. You can still select media, pan, and zoom the canvas.",
+        exitLabel: locale === "zh-CN" ? "退出" : "Exit",
+        label: locale === "zh-CN" ? "跨应用拖出" : "Drag to Other Apps",
+        preparingLabel: locale === "zh-CN" ? "正在准备选中素材" : "Preparing selected media",
+      },
       preparingLabel: locale === "zh-CN" ? "正在准备素材，请继续按住 ⌘⇧" : "Preparing media — keep holding ⌘⇧",
       scopeId: activeProjectId,
     })

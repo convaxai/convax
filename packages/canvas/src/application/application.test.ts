@@ -142,6 +142,11 @@ describe("canvas application commands", () => {
     ).toBeFalse()
     expect(() => applyCanvasBusinessCommand(document, addResourcesCommand())).toThrow(CanvasCommandValidationError)
     expect(applyCanvasBusinessCommand(document, { type: "nodes.layout", nodeIds: [] }).changed).toBeFalse()
+    expect(() =>
+      applyCanvasBusinessCommand(document, {
+        type: "nodes.layout",
+      } as never),
+    ).toThrow("requires explicit node ids")
   })
 
   test("adds folders as file nodes with the folder renderer discriminator", () => {

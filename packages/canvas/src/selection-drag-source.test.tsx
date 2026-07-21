@@ -349,6 +349,28 @@ describe("Canvas selection drag held gesture", () => {
     expect(controller.status).toBe("ready")
   })
 
+  test("restarts a persistent held mode after a consumed native drag", async () => {
+    const firstPrepared = prepared()
+    const nextPrepared = prepared()
+    const prepare = mock(async () => (prepare.mock.calls.length === 1 ? firstPrepared : nextPrepared))
+    const currentSource = source(prepare)
+    const currentContext = context()
+    const controller = new CanvasSelectionDragGestureController()
+
+    controller.hold(currentSource, currentContext)
+    await Promise.resolve()
+    expect(controller.start()).toBeTrue()
+    expect(controller.consumed).toBeTrue()
+
+    expect(controller.restart(currentSource, currentContext)).toBeTrue()
+    await Promise.resolve()
+    expect(controller.held).toBeTrue()
+    expect(controller.consumed).toBeFalse()
+    expect(controller.status).toBe("ready")
+    expect(prepare).toHaveBeenCalledTimes(2)
+    expect(nextPrepared.start).not.toHaveBeenCalled()
+  })
+
   test("release aborts pending preparation and disposes its late result", async () => {
     const pending = deferred<CanvasPreparedSelectionDrag>()
     const latePrepared = prepared()

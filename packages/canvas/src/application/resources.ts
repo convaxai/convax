@@ -51,6 +51,7 @@ export type CanvasResourceSource =
     })
 
 export interface CanvasResourcePreparationRequest extends CanvasDocumentRef {
+  signal?: AbortSignal
   sources: readonly CanvasResourceSource[]
 }
 
@@ -75,6 +76,7 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   conflictPolicy?: "reject" | "retry"
   expectedRevision: number
   relation?: CanvasAddResourcesCommand["relation"]
+  signal?: AbortSignal
   sources: readonly CanvasResourceSource[]
 }
 
@@ -86,6 +88,7 @@ export interface CanvasReplaceResourceSourceRequest extends CanvasDocumentRef {
   expectedRevision: number
   expectedTarget: CanvasNodeContentGuard
   source: CanvasResourceSource
+  signal?: AbortSignal
   targetNodeId: string
 }
 
@@ -180,6 +183,7 @@ export class CanvasResourceBusinessService {
   }
 
   private async addResourcesOnce(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
+    throwIfAborted(request.signal)
     if (!request.commandId.trim() || !request.actor.id.trim()) {
       throw new CanvasCommandValidationError("Canvas command and actor ids are required")
     }
@@ -200,9 +204,11 @@ export class CanvasResourceBusinessService {
 
     const prepared = await this.preparation.prepare({
       canvasId: request.canvasId,
+      ...(request.signal ? { signal: request.signal } : {}),
       scopeId: request.scopeId,
       sources: request.sources,
     })
+    throwIfAborted(request.signal)
     validatePreparedCanvasResources(prepared)
     const command = createAddCanvasResourcesCommand({
       anchor: request.anchor,
@@ -226,7 +232,11 @@ export class CanvasResourceBusinessService {
         scopeId: request.scopeId,
       }
       try {
-        const result = await this.application.execute(applicationRequest)
+        throwIfAborted(request.signal)
+        const result = await this.application.execute({
+          ...applicationRequest,
+          ...(request.signal ? { signal: request.signal } : {}),
+        })
         const replayWarning =
           conflictRetries > 0
             ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
@@ -246,6 +256,7 @@ export class CanvasResourceBusinessService {
         conflictRetries += 1
         // A storage conflict has no document revision, so both conflict types use
         // one fresh query before reapplying the business command.
+        throwIfAborted(request.signal)
         const latest = await this.application.query(
           {
             canvasId: request.canvasId,
@@ -253,6 +264,7 @@ export class CanvasResourceBusinessService {
           },
           { limit: 0 },
         )
+        throwIfAborted(request.signal)
         expectedRevision = latest.revision
       }
     }
@@ -261,6 +273,7 @@ export class CanvasResourceBusinessService {
   private async replaceResourceOnce(
     request: CanvasReplaceResourceSourceRequest,
   ): Promise<CanvasApplicationCommandResult> {
+    throwIfAborted(request.signal)
     validateResourceOperation(request)
     requireNonEmptyString(request.targetNodeId, "Canvas replacement target node id")
     if (
@@ -276,9 +289,11 @@ export class CanvasResourceBusinessService {
 
     const prepared = await this.preparation.prepare({
       canvasId: request.canvasId,
+      ...(request.signal ? { signal: request.signal } : {}),
       scopeId: request.scopeId,
       sources: [request.source],
     })
+    throwIfAborted(request.signal)
     validatePreparedCanvasResources(prepared)
     if (prepared.items.length !== 1) {
       throw new CanvasCommandValidationError("Canvas resource replacement must prepare exactly one item")
@@ -297,7 +312,7 @@ export class CanvasResourceBusinessService {
     request: Pick<
       CanvasReplaceResourceSourceRequest,
       "actor" | "canvasId" | "commandId" | "conflictPolicy" | "expectedRevision" | "scopeId"
-    >,
+    > & { signal?: AbortSignal },
     command: CanvasReplaceResourceCommand,
     preparationWarnings: readonly string[],
   ): Promise<CanvasApplicationCommandResult> {
@@ -305,6 +320,7 @@ export class CanvasResourceBusinessService {
     let conflictRetries = 0
     while (true) {
       try {
+        throwIfAborted(request.signal)
         const result = await this.application.execute({
           canvasId: request.canvasId,
           envelope: {
@@ -313,6 +329,7 @@ export class CanvasResourceBusinessService {
             commandId: request.commandId,
             expectedRevision,
           },
+          ...(request.signal ? { signal: request.signal } : {}),
           scopeId: request.scopeId,
         })
         const replayWarning =
@@ -332,10 +349,12 @@ export class CanvasResourceBusinessService {
           throw error
         }
         conflictRetries += 1
+        throwIfAborted(request.signal)
         const latest = await this.application.query(
           { canvasId: request.canvasId, scopeId: request.scopeId },
           { limit: 0 },
         )
+        throwIfAborted(request.signal)
         expectedRevision = latest.revision
       }
     }
@@ -456,4 +475,9 @@ function stableJson(value: unknown): string {
       .join(",")}}`
   }
   return JSON.stringify(value) ?? "null"
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason ?? new DOMException("Canvas resource operation was canceled", "AbortError")
 }

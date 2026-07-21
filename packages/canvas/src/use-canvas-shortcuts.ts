@@ -29,6 +29,13 @@ export interface CanvasShortcutOptions {
   externalDragArmed?: boolean
 }
 
+export function resolveCanvasTidyShortcutScope(
+  canArrangeSelection: boolean,
+  selectedNodeCount: number,
+): "canvas" | "selection" {
+  return canArrangeSelection || selectedNodeCount >= 2 ? "selection" : "canvas"
+}
+
 type CanvasExternalDragChordEvent = Pick<KeyboardEvent<HTMLElement>, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">
 
 function ignoresCanvasShortcuts(target: EventTarget | null) {

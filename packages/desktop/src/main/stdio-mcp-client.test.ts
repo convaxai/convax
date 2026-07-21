@@ -1,14 +1,19 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { StdioMcpClient } from "./stdio-mcp-client"
+import { StdioMcpClient, type StdioMcpClientOptions } from "./stdio-mcp-client"
 
 const clients = new Set<StdioMcpClient>()
 
-function createClient(options: { fixtureArgs?: readonly string[]; requestTimeoutMs?: number; shutdownGraceMs?: number } = {}) {
+function createClient(
+  options: Pick<
+    StdioMcpClientOptions,
+    "maxConcurrentServerRequests" | "requestTimeoutMs" | "serverRequestHandler" | "shutdownGraceMs"
+  > & { fixtureArgs?: readonly string[] } = {},
+) {
   const { fixtureArgs = [], ...clientOptions } = options
   const client = new StdioMcpClient({
     args: [path.join(import.meta.dir, "stdio-mcp-client.fixture.ts"), ...fixtureArgs],
@@ -115,6 +120,82 @@ describe("StdioMcpClient", () => {
     await expect(client.callTool("echo", { after: "cancel" })).resolves.toMatchObject({
       structuredContent: { artifacts: [] },
     })
+  })
+
+  test("rejects server-to-client requests by default and invokes only explicitly allowlisted methods", async () => {
+    const rejected = createClient({ fixtureArgs: ["--host-request-method=convax/test"] })
+    expect((await rejected.callTool("echo", {})).structuredContent).toMatchObject({
+      hostResponses: [{ error: { code: -32601, message: "Method not found" } }],
+    })
+
+    const handle = mock(async ({ params }) => ({ accepted: params }))
+    const allowed = createClient({
+      fixtureArgs: ["--host-request-method=convax/allowed"],
+      serverRequestHandler: { handle, methods: ["convax/allowed"] },
+    })
+    expect((await allowed.callTool("echo", {})).structuredContent).toMatchObject({
+      hostResponses: [{ result: { accepted: { index: 0 } } }],
+    })
+    expect(handle).toHaveBeenCalledTimes(1)
+
+    const unknown = createClient({
+      fixtureArgs: ["--host-request-method=convax/unknown"],
+      serverRequestHandler: { handle, methods: ["convax/allowed"] },
+    })
+    expect((await unknown.callTool("echo", {})).structuredContent).toMatchObject({
+      hostResponses: [{ error: { code: -32601 } }],
+    })
+    expect(handle).toHaveBeenCalledTimes(1)
+  })
+
+  test("bounds concurrent host requests and caller-visible handler errors", async () => {
+    let first = true
+    const client = createClient({
+      fixtureArgs: ["--host-request-method=convax/allowed", "--host-request-count=2"],
+      maxConcurrentServerRequests: 1,
+      serverRequestHandler: {
+        async handle() {
+          if (first) {
+            first = false
+            await Bun.sleep(20)
+          }
+          throw new Error("x".repeat(2_000))
+        },
+        methods: ["convax/allowed"],
+      },
+    })
+    const responses = (await client.callTool("echo", {})).structuredContent?.hostResponses as Array<{
+      error: { code: number; message: string }
+    }>
+    expect(responses.map(({ error }) => error.code).sort((left, right) => left - right)).toEqual([-32603, -32000])
+    expect(Buffer.byteLength(responses.find(({ error }) => error.code === -32603)!.error.message)).toBeLessThanOrEqual(
+      512,
+    )
+  })
+
+  test("aborts and closes the optional server request handler with the process lifecycle", async () => {
+    let contextSignal: AbortSignal | undefined
+    let start!: () => void
+    const started = new Promise<void>((resolve) => (start = resolve))
+    const close = mock(() => undefined)
+    const client = createClient({
+      fixtureArgs: ["--host-request-method=convax/allowed"],
+      serverRequestHandler: {
+        close,
+        handle(_request, context) {
+          contextSignal = context.signal
+          start()
+          return new Promise(() => undefined)
+        },
+        methods: ["convax/allowed"],
+      },
+    })
+    const call = client.callTool("echo", {})
+    await started
+    client.close()
+    expect(contextSignal?.aborted).toBeTrue()
+    expect(close).toHaveBeenCalledTimes(1)
+    await expect(call).rejects.toThrow("closed")
   })
 
   test("force-stops a sidecar that ignores graceful termination", async () => {

@@ -108,6 +108,100 @@ describe("canvas resource business service", () => {
     ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
   })
 
+  test("does not execute when resource preparation finishes after cancellation", async () => {
+    const preparationStarted = Promise.withResolvers<void>()
+    const preparationResult = Promise.withResolvers<{
+      items: [{ id: string; kind: "text"; text: string }]
+    }>()
+    let executeCalls = 0
+    let queryCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare(request) {
+          expect(request.signal).toBe(controller.signal)
+          preparationStarted.resolve()
+          return preparationResult.promise
+        },
+      },
+      {
+        async execute() {
+          executeCalls += 1
+          throw new Error("A canceled preparation must not execute")
+        },
+        async query() {
+          queryCalls += 1
+          throw new Error("A canceled preparation must not query")
+        },
+      },
+    )
+    const controller = new AbortController()
+    const cancellation = new DOMException("Preparation canceled", "AbortError")
+    const operation = business.addResources({
+      actor: { id: "agent", kind: "agent" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "canceled-preparation",
+      expectedRevision: 0,
+      scopeId: "project",
+      signal: controller.signal,
+      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+    })
+
+    await preparationStarted.promise
+    controller.abort(cancellation)
+    preparationResult.resolve({ items: [{ id: "prepared", kind: "text", text: "New resource" }] })
+
+    await expect(operation).rejects.toBe(cancellation)
+    expect(executeCalls).toBe(0)
+    expect(queryCalls).toBe(0)
+  })
+
+  test("does not replay a resource command canceled while its conflict query is pending", async () => {
+    const conflictQuery = Promise.withResolvers<{ nodes: []; revision: number; storageVersion: string }>()
+    const queryStarted = Promise.withResolvers<void>()
+    let executeCalls = 0
+    let committed = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [{ id: "prepared", kind: "text" as const, text: "New resource" }] }
+        },
+      },
+      {
+        async execute() {
+          executeCalls += 1
+          if (executeCalls === 1) throw new CanvasRevisionConflictError(0, 1)
+          committed += 1
+          throw new Error("A canceled conflict replay must not execute")
+        },
+        async query() {
+          queryStarted.resolve()
+          return conflictQuery.promise
+        },
+      },
+    )
+    const controller = new AbortController()
+    const cancellation = new DOMException("Conflict replay canceled", "AbortError")
+    const operation = business.addResources({
+      actor: { id: "agent", kind: "agent" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "canceled-conflict-replay",
+      expectedRevision: 0,
+      scopeId: "project",
+      signal: controller.signal,
+      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+    })
+
+    await queryStarted.promise
+    controller.abort(cancellation)
+    conflictQuery.resolve({ nodes: [], revision: 1, storageVersion: "v1" })
+
+    await expect(operation).rejects.toBe(cancellation)
+    expect(executeCalls).toBe(1)
+    expect(committed).toBe(0)
+  })
+
   test("rebases a stale resource addition on the latest document without losing an unrelated concurrent edit", async () => {
     const concurrent = createTextNode({ id: "concurrent", position: { x: 0, y: 0 }, text: "Keep me" })
     let snapshot: CanvasDocumentSnapshot = {

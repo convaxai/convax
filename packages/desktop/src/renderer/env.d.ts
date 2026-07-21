@@ -11,6 +11,7 @@ import type { JianyingRendererClient } from "../jianying-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
+import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 
 declare global {
   interface Window {
@@ -24,6 +25,7 @@ declare global {
       generation: GenerationClient
       jianying: JianyingRendererClient
       platform: NodeJS.Platform
+      pluginCapabilities: PluginCapabilityRendererClient
       plugins: WebPluginClient
       pluginServices: PluginServiceClient
       projectFiles: ProjectFilesClient

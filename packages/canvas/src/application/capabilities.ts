@@ -15,6 +15,12 @@ export interface CanvasCommandCapability {
  */
 export const canvasCommandCapabilities = [
   {
+    commandType: "canvas.auto-layout",
+    defaultForAgent: true,
+    description: "Arrange related canvas nodes with a deterministic, size-aware directed layout.",
+    layer: "business",
+  },
+  {
     commandType: "resources.add",
     defaultForAgent: true,
     description: "Prepare resources and add correctly sized, placed, and optionally related nodes.",
@@ -53,13 +59,19 @@ export const canvasCommandCapabilities = [
   {
     commandType: "nodes.layout",
     defaultForAgent: false,
-    description: "Apply a layout to canvas nodes.",
+    description: "Explicitly arrange a selected node set as a grid, row, or column.",
     layer: "primitive",
   },
   {
     commandType: "nodes.move",
     defaultForAgent: false,
     description: "Move canvas nodes by a delta.",
+    layer: "primitive",
+  },
+  {
+    commandType: "nodes.setGeometry",
+    defaultForAgent: false,
+    description: "Atomically replace absolute positions and optional sizes for a set of nodes.",
     layer: "primitive",
   },
   {

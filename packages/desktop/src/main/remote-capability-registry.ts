@@ -8,6 +8,7 @@ import {
   webPluginManifestSchemaV2,
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
+  webPluginManifestSchemaV5,
 } from "../plugin-contracts"
 import { type SafeZipLimits, unpackSafeZip } from "./safe-zip"
 
@@ -21,6 +22,7 @@ export const remotePluginHostSchema = "convax.plugin-host/1" as const
 export const remotePluginHostSchemaV2 = "convax.plugin-host/2" as const
 export const remotePluginHostSchemaV3 = "convax.plugin-host/3" as const
 export const remotePluginHostSchemaV4 = "convax.plugin-host/4" as const
+export const remotePluginCapabilitySchemaV1 = "convax.plugin-capability/1" as const
 export const remoteSkillSchema = "opencode.skill/1" as const
 
 export type RemotePluginCompatibility =
@@ -39,6 +41,10 @@ export type RemotePluginCompatibility =
   | {
       pluginHost: typeof remotePluginHostSchemaV4
       pluginSchema: typeof webPluginManifestSchemaV4
+    }
+  | {
+      pluginHost: typeof remotePluginCapabilitySchemaV1
+      pluginSchema: typeof webPluginManifestSchemaV5
     }
 
 const maxRegistryBytes = 2 * 1024 * 1024
@@ -556,7 +562,10 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
     compatibility.pluginHost === remotePluginHostSchemaV3 && compatibility.pluginSchema === webPluginManifestSchemaV3
   const compatibleV4 =
     compatibility.pluginHost === remotePluginHostSchemaV4 && compatibility.pluginSchema === webPluginManifestSchemaV4
-  if (!compatibleV1 && !compatibleV2 && !compatibleV3 && !compatibleV4) {
+  const compatibleV5 =
+    compatibility.pluginHost === remotePluginCapabilitySchemaV1 &&
+    compatibility.pluginSchema === webPluginManifestSchemaV5
+  if (!compatibleV1 && !compatibleV2 && !compatibleV3 && !compatibleV4 && !compatibleV5) {
     validationError("Remote Plugin compatibility is not supported by this host")
   }
   const parsedCompatibility: RemotePluginCompatibility = compatibleV1
@@ -565,7 +574,9 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
       ? { pluginHost: remotePluginHostSchemaV2, pluginSchema: webPluginManifestSchemaV2 }
       : compatibleV3
         ? { pluginHost: remotePluginHostSchemaV3, pluginSchema: webPluginManifestSchemaV3 }
-        : { pluginHost: remotePluginHostSchemaV4, pluginSchema: webPluginManifestSchemaV4 }
+        : compatibleV4
+          ? { pluginHost: remotePluginHostSchemaV4, pluginSchema: webPluginManifestSchemaV4 }
+          : { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV5 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)
@@ -681,7 +692,11 @@ export function parseRemoteCapabilityRegistry(value: unknown): RemoteCapabilityR
   }
   const contributedSkillOwners = new Map<string, string>()
   for (const item of packages) {
-    if (item.kind !== "plugin" || item.manifest.schema !== webPluginManifestSchemaV4) continue
+    if (
+      item.kind !== "plugin" ||
+      (item.manifest.schema !== webPluginManifestSchemaV4 && item.manifest.schema !== webPluginManifestSchemaV5)
+    )
+      continue
     for (const skill of item.manifest.contributes.skills ?? []) {
       const previousOwner = contributedSkillOwners.get(skill.name)
       if (previousOwner && previousOwner !== item.id) {
