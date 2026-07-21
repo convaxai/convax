@@ -49,6 +49,33 @@ export interface ProjectTextPreviewContents {
   truncated: boolean
 }
 
+export interface ProjectTextFileCompareAndReplaceInput {
+  content: string
+  expectedRevision: string
+  path: string
+  projectId: string
+}
+
+export interface ProjectTextFileCompareAndReplaceResult {
+  contentRevision: string
+}
+
+export interface ProjectTextFileCompareAndReplacePort {
+  compareAndReplaceTextFile(
+    input: ProjectTextFileCompareAndReplaceInput,
+  ): Promise<ProjectTextFileCompareAndReplaceResult>
+}
+
+export class ProjectTextFileConflictError extends Error {
+  constructor(
+    readonly expectedRevision: string,
+    readonly actualRevision: string | null,
+  ) {
+    super("Project text file changed outside Convax")
+    this.name = "ProjectTextFileConflictError"
+  }
+}
+
 export interface ProjectChangeEvent {
   kind: "filesystem" | "mutation"
   path?: string
@@ -77,7 +104,6 @@ export interface ProjectFilesClient {
   openEntry(input: { path: string; projectId: string }): Promise<{ error?: string }>
   readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo>
-  readManagedImageFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents>
   readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents>
   renameEntry(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult>

@@ -7,14 +7,16 @@ import {
   type CanvasResourceSource,
 } from "@convax/canvas/application"
 import type { CanvasPoint } from "@convax/canvas/core"
-import { requireProjectResourceReference } from "@convax/project/canvas"
-import type { ProjectCanvasResourcePreparation } from "@convax/project/node"
+import { getProjectResourceReference, requireProjectResourceReference } from "@convax/project/canvas"
+import type { ProjectCanvasResourceHydrator, ProjectCanvasResourcePreparation } from "@convax/project/node"
+import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import {
   canvasResourcePartialFailureKind,
+  canvasTextResourceConflictKind,
   type CanvasResourcePartialFailureResponse,
 } from "../canvas-resource-private-contract"
-import { canvasResourceIpcChannel } from "../desktop-protocol"
+import { canvasResourceIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
 import {
   canvasDocumentIpcChannels,
   type CanvasRendererCommandRequest,
@@ -22,31 +24,64 @@ import {
 
 const commandIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
+interface CanvasDocumentIpcOptions {
+  isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+}
+
 export function registerCanvasDocumentIpc(
-  documents: Pick<CanvasDocumentClient, "load">,
-  application: Pick<CanvasApplicationService, "execute">,
-  options: { isTrustedSender: (event: IpcMainInvokeEvent) => boolean },
+  documents: CanvasDocumentClient,
+  applicationOrHydrator:
+    | Pick<CanvasApplicationService, "execute">
+    | Pick<ProjectCanvasResourceHydrator, "hydrate">,
+  hydratorOrOptions: Pick<ProjectCanvasResourceHydrator, "hydrate"> | CanvasDocumentIpcOptions,
+  maybeOptions?: CanvasDocumentIpcOptions,
 ) {
+  const application = "execute" in applicationOrHydrator ? applicationOrHydrator : undefined
+  const hydrator =
+    "hydrate" in applicationOrHydrator
+      ? applicationOrHydrator
+      : "hydrate" in hydratorOrOptions
+        ? hydratorOrOptions
+        : undefined
+  const options = maybeOptions ?? (hydratorOrOptions as CanvasDocumentIpcOptions)
   ipcMain.handle(canvasDocumentIpcChannels.load, (event, input) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
-    return documents.load(input)
-  })
-  ipcMain.handle(canvasDocumentIpcChannels.execute, (event, input: CanvasRendererCommandRequest) => {
-    if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
-    const request = requireRendererCommandRequest(input)
-    return application.execute({
-      canvasId: request.ref.canvasId,
-      envelope: {
-        actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
-        command: structuredClone(request.command),
-        commandId: request.commandId,
-        expectedRevision: request.expectedRevision,
-      },
-      scopeId: request.ref.scopeId,
+    return Promise.resolve(documents.load(input)).then(async (result) => {
+      if (!result.document || !hydrator) return result
+      return {
+        ...result,
+        document: await hydrator.hydrate({ document: result.document, projectId: input.scopeId }),
+      }
     })
   })
+  if (application) {
+    ipcMain.handle(canvasDocumentIpcChannels.execute, (event, input: CanvasRendererCommandRequest) => {
+      if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
+      const request = requireRendererCommandRequest(input)
+      return Promise.resolve(application.execute({
+        canvasId: request.ref.canvasId,
+        envelope: {
+          actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
+          command: structuredClone(request.command),
+          commandId: request.commandId,
+          expectedRevision: request.expectedRevision,
+        },
+        scopeId: request.ref.scopeId,
+      })).then(async (result) =>
+        hydrator
+          ? {
+              ...result,
+              document: await hydrator.hydrate({
+                document: result.document,
+                projectId: request.ref.scopeId,
+              }),
+            }
+          : result,
+      )
+    })
+  }
   return () => {
-    ipcMain.removeHandler(canvasDocumentIpcChannels.execute)
+    if (application) ipcMain.removeHandler(canvasDocumentIpcChannels.execute)
     ipcMain.removeHandler(canvasDocumentIpcChannels.load)
   }
 }
@@ -83,6 +118,109 @@ function requireRendererCommandRequest(value: unknown): CanvasRendererCommandReq
     throw new Error("Canvas command reference is invalid")
   }
   return value as CanvasRendererCommandRequest
+}
+
+interface ActiveCanvasScope {
+  canvasId: string
+  projectId: string
+  revision: number
+}
+
+interface CanvasTextResourceMainRequest {
+  content: string
+  contentRevision: string
+  nodeId: string
+}
+
+export function registerCanvasTextResourceIpc(
+  files: ProjectTextFileCompareAndReplacePort,
+  documents: Pick<CanvasDocumentClient, "load">,
+  options: {
+    isTrustedSender(event: IpcMainInvokeEvent): boolean
+    resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
+  },
+) {
+  ipcMain.handle(canvasTextResourceIpcChannel, async (event, value: unknown) => {
+    if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
+    try {
+      const input = requireCanvasTextResourceMainRequest(value)
+      const active = await options.resolveActiveCanvas(event)
+      if (!active) throw new CanvasTextResourceRequestError("Canvas text resource request has no live Workbench scope")
+      const loaded = await documents.load({ canvasId: active.canvasId, scopeId: active.projectId })
+      const document = loaded.document
+      if (!document) throw new CanvasTextResourceRequestError("Canvas text resource document was not found")
+      if (document.revision !== active.revision) {
+        throw new CanvasTextResourceRequestError(
+          "Canvas text resource request does not match the invoking window's live Workbench scope",
+        )
+      }
+      const matches = document.nodes.filter((node) => node.id === input.nodeId)
+      const node = matches.length === 1 ? matches[0] : undefined
+      const reference = node ? getProjectResourceReference(node.data.metadata) : null
+      if (
+        !node ||
+        node.data.kind !== "text" ||
+        reference?.kind !== "project-file" ||
+        !isEditableProjectTextPath(reference.path)
+      ) {
+        throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
+      }
+
+      const current = await options.resolveActiveCanvas(event)
+      if (!sameActiveCanvasScope(active, current)) {
+        throw new CanvasTextResourceRequestError(
+          "Canvas text resource request does not match the invoking window's live Workbench scope",
+        )
+      }
+
+      return await files.compareAndReplaceTextFile({
+        content: input.content,
+        expectedRevision: input.contentRevision,
+        path: reference.path,
+        projectId: active.projectId,
+      })
+    } catch (error) {
+      if (error instanceof ProjectTextFileConflictError) {
+        return { actualRevision: error.actualRevision, kind: canvasTextResourceConflictKind }
+      }
+      if (error instanceof CanvasTextResourceRequestError) throw error
+      throw new Error("Could not save the Canvas text resource")
+    }
+  })
+  return () => ipcMain.removeHandler(canvasTextResourceIpcChannel)
+}
+
+class CanvasTextResourceRequestError extends Error {}
+
+function requireCanvasTextResourceMainRequest(value: unknown): CanvasTextResourceMainRequest {
+  if (!isRecord(value)) throw new CanvasTextResourceRequestError("Canvas text resource request must be an object")
+  for (const key of Object.keys(value)) {
+    if (key !== "content" && key !== "contentRevision" && key !== "nodeId") {
+      throw new CanvasTextResourceRequestError(`Canvas text resource request contains unsupported field: ${key}`)
+    }
+  }
+  const content = requireString(value.content, "Canvas text content")
+  if (Buffer.byteLength(content, "utf8") > 16 * 1024 * 1024) {
+    throw new CanvasTextResourceRequestError("Canvas text content is too large")
+  }
+  const contentRevision = requireString(value.contentRevision, "Canvas text content revision")
+  if (!/^[a-f0-9]{64}$/.test(contentRevision)) {
+    throw new CanvasTextResourceRequestError("Canvas text content revision is invalid")
+  }
+  const nodeId = requireNonEmptyString(value.nodeId, "Canvas text node id")
+  if (nodeId.length > 256) throw new CanvasTextResourceRequestError("Canvas text node id is too long")
+  return { content, contentRevision, nodeId }
+}
+
+function isEditableProjectTextPath(value: string) {
+  const lower = value.toLowerCase()
+  return lower.endsWith(".md") || lower.endsWith(".txt")
+}
+
+function sameActiveCanvasScope(left: ActiveCanvasScope, right: ActiveCanvasScope | null) {
+  return Boolean(
+    right && left.canvasId === right.canvasId && left.projectId === right.projectId && left.revision === right.revision,
+  )
 }
 
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addPreparedResources" | "addResources">

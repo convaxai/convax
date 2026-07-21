@@ -5,6 +5,7 @@ import {
   collectProjectManagedAssetReferences,
   dehydrateProjectCanvasDocument,
   getProjectResourceReference,
+  hydrateProjectCanvasDocument,
   managedAssetPath,
   projectResourceBindingsKey,
   projectResourceReferenceKey,
@@ -579,6 +580,140 @@ describe("Project Canvas document dehydration", () => {
     } as CanvasNode
     const persisted = dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))
     expect(persisted.nodes[0]!.data.metadata).toEqual(node.data.metadata)
+  })
+})
+
+describe("Project Canvas document hydration", () => {
+  const documentFor = (reference: ProjectResourceReference) => ({
+    ...createCanvasDocument({
+      id: "canvas-hydration",
+      nodes: [
+        reference.kind === "project-directory"
+          ? createFolderNode({
+              id: "resource-node",
+              position: { x: 10, y: 20 },
+              resource: {
+                id: "folder-resource",
+                kind: "folder",
+                metadata: { [projectResourceReferenceKey]: reference },
+                name: "Folder",
+                state: { status: "stale" },
+              },
+            })
+          : createTextNode({
+              id: "resource-node",
+              metadata: { [projectResourceReferenceKey]: reference },
+              name: reference.kind === "managed-asset" ? reference.name : reference.path,
+              position: { x: 10, y: 20 },
+              resourceState: { status: "stale" },
+            }),
+      ],
+    }),
+    revision: 17,
+  })
+
+  test.each([
+    ["missing", { kind: "project-file", path: "missing.md" }],
+    ["corrupt", { kind: "managed-asset", name: "bad.png", sha256: "d".repeat(64) }],
+    ["unsupported", { kind: "project-file", path: "archive.bin" }],
+  ] as const)("applies %s without deleting the exact typed reference", async (status, reference) => {
+    const document = documentFor(reference)
+
+    const hydrated = await hydrateProjectCanvasDocument(document, async () => ({ status }))
+
+    expect(hydrated.revision).toBe(17)
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({ status })
+    expect(getProjectResourceReference(hydrated.nodes[0]!.data.metadata)).toEqual(reference)
+    expect(getProjectResourceReference(hydrated.nodes[0]!.data.metadata)).not.toBe(reference)
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "stale" })
+  })
+
+  test("hydrates editable text entirely into transient runtime state", async () => {
+    const reference = { kind: "project-file", path: "Notes/brief.md" } as const
+    const document = documentFor(reference)
+
+    const hydrated = await hydrateProjectCanvasDocument(document, async (resolved) => {
+      expect(resolved).toEqual(reference)
+      return {
+        contentRevision: "a".repeat(64),
+        editableText: true,
+        mediaType: "text/markdown",
+        name: "brief.md",
+        status: "ready",
+        text: "# Brief",
+      }
+    })
+
+    expect(hydrated).not.toBe(document)
+    expect(hydrated.revision).toBe(document.revision)
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: "a".repeat(64),
+      editableText: true,
+      mediaType: "text/markdown",
+      name: "brief.md",
+      status: "ready",
+      text: "# Brief",
+    })
+    expect(dehydrateProjectCanvasDocument(hydrated)).toEqual(dehydrateProjectCanvasDocument(document))
+  })
+
+  test("hydrates media with a typed URL and no native path", async () => {
+    const reference = {
+      kind: "managed-asset",
+      mediaType: "image/png",
+      name: "hero.png",
+      sha256: "e".repeat(64),
+    } as const
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-media-hydration",
+        nodes: [
+        createMediaNode({
+          id: "hero",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "hero-resource",
+            kind: "image",
+            metadata: { [projectResourceReferenceKey]: reference },
+            name: reference.name,
+            state: { status: "stale" },
+          },
+        }),
+        ],
+      }),
+      revision: 3,
+    }
+
+    const hydrated = await hydrateProjectCanvasDocument(document, async () => ({
+      mediaType: "image/png",
+      name: "hero.png",
+      status: "ready",
+      url: "convax-asset://project-one/managed-asset?sha256=opaque",
+    }))
+
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({
+      mediaType: "image/png",
+      name: "hero.png",
+      status: "ready",
+      url: "convax-asset://project-one/managed-asset?sha256=opaque",
+    })
+    expect(JSON.stringify(hydrated)).not.toContain("/native/")
+  })
+
+  test("bounds a resolver failure per node without changing durable state", async () => {
+    const reference = { kind: "project-file", path: "Notes/brief.md" } as const
+    const document = documentFor(reference)
+
+    const hydrated = await hydrateProjectCanvasDocument(document, async () => {
+      throw new Error(`/native/private/${"x".repeat(2_000)}`)
+    })
+
+    expect(hydrated.nodes[0]!.data.resourceState).toEqual({
+      error: "Project resource could not be hydrated",
+      status: "corrupt",
+    })
+    expect(JSON.stringify(hydrated)).not.toContain("/native/")
+    expect(dehydrateProjectCanvasDocument(hydrated)).toEqual(dehydrateProjectCanvasDocument(document))
   })
 })
 

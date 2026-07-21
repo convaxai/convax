@@ -23,7 +23,7 @@ import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
 } from "../plugin-canvas-image-contracts"
-import { createCanvasResourcePreloadClient } from "./canvas-resource-client"
+import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -50,7 +50,6 @@ const projectFilesChannels = {
   openEntry: "project-files:open-entry",
   readFile: "project-files:read-file",
   readFileInfo: "project-files:read-file-info",
-  readManagedImageFile: "project-files:read-managed-image-file",
   readTextPreview: "project-files:read-text-preview",
   readTextFile: "project-files:read-text-file",
   renameEntry: "project-files:rename-entry",
@@ -320,7 +319,6 @@ const projectFilesClient = {
   openEntry: (input) => ipcRenderer.invoke(projectFilesChannels.openEntry, input),
   readFile: (input) => ipcRenderer.invoke(projectFilesChannels.readFile, input),
   readFileInfo: (input) => ipcRenderer.invoke(projectFilesChannels.readFileInfo, input),
-  readManagedImageFile: (input) => ipcRenderer.invoke(projectFilesChannels.readManagedImageFile, input),
   readTextPreview: (input) => ipcRenderer.invoke(projectFilesChannels.readTextPreview, input),
   readTextFile: (input) => ipcRenderer.invoke(projectFilesChannels.readTextFile, input),
   renameEntry: (input) => ipcRenderer.invoke(projectFilesChannels.renameEntry, input),
@@ -382,6 +380,10 @@ const canvasDocumentClient = {
 
 const canvasResourceClient = createCanvasResourcePreloadClient({
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  invoke: (channel, input) => ipcRenderer.invoke(channel, input),
+})
+
+const canvasTextResourceClient = createCanvasTextResourcePreloadClient({
   invoke: (channel, input) => ipcRenderer.invoke(channel, input),
 })
 
@@ -548,6 +550,7 @@ contextBridge.exposeInMainWorld("convax", {
     pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
     resources: canvasResourceClient,
+    textResources: canvasTextResourceClient,
   },
   generation: generationClient,
   jianying: jianyingClient,

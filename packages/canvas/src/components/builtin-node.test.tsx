@@ -26,12 +26,21 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const {
+  applyCanvasTextDraftBase,
   BuiltinCanvasNode,
   BuiltinMediaFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
   ExpandedTextEditorDialog,
+  completeCanvasTextDraftSave,
+  createCanvasTextDraftSaveQueue,
+  createCanvasTextDraftState,
+  discardCanvasTextDraft,
+  failCanvasTextDraftSave,
+  isCanvasTextResourceEditable,
+  saveCanvasTextDraft,
   startCanvasSelectionDragFromNode,
+  updateCanvasTextDraft,
 } = await import("./builtin-node")
 
 const node: CanvasNode = {
@@ -117,6 +126,8 @@ function renderWithEditor(
     hydrating,
     isSelectionActionPending: () => false,
     quickConnect: () => {},
+    replaceResourceState: () => {},
+    registerPendingDraft: () => () => {},
     readOnly,
     removeNode: () => {},
     selectNodes: () => {},
@@ -145,6 +156,98 @@ function renderWithEditor(
 function toolbarCount(markup: string) {
   return markup.match(/data-node-toolbar/g)?.length ?? 0
 }
+
+describe("built-in text file drafts", () => {
+  test("shares one in-flight file save with a simultaneous leave guard", async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const operation = mock(async () => pending)
+    const queue = createCanvasTextDraftSaveQueue()
+
+    const manualSave = queue.run(operation)
+    const leaveSave = queue.run(operation)
+
+    expect(queue.inFlight()).toBe(manualSave)
+    expect(leaveSave).toBe(manualSave)
+    expect(operation).toHaveBeenCalledTimes(1)
+    release()
+    await manualSave
+    expect(queue.inFlight()).toBeNull()
+    await queue.run(operation)
+    expect(operation).toHaveBeenCalledTimes(2)
+  })
+
+  test("keeps edits local when late hydrated props arrive", () => {
+    const initial = createCanvasTextDraftState({ contentRevision: "rev-before", text: "original" })
+    const dirty = updateCanvasTextDraft(initial, "my draft")
+    const afterLateProps = applyCanvasTextDraftBase(dirty, {
+      contentRevision: "rev-late",
+      text: "late hydration",
+    })
+
+    expect(afterLateProps).toEqual(dirty)
+    expect(afterLateProps.content).toBe("my draft")
+    expect(afterLateProps.dirty).toBeTrue()
+  })
+
+  test("preserves a conflicted draft and updates only the local base after save", () => {
+    const dirty = updateCanvasTextDraft(
+      createCanvasTextDraftState({ contentRevision: "rev-before", text: "original" }),
+      "my draft",
+    )
+    const conflicted = failCanvasTextDraftSave(dirty, "This file changed outside Convax.")
+
+    expect(conflicted).toMatchObject({ content: "my draft", dirty: true, error: expect.any(String) })
+
+    const saved = completeCanvasTextDraftSave(conflicted, "rev-after")
+    expect(saved).toEqual({
+      baseContent: "my draft",
+      baseRevision: "rev-after",
+      content: "my draft",
+      dirty: false,
+      error: null,
+    })
+    expect(discardCanvasTextDraft(dirty)).toMatchObject({ content: "original", dirty: false })
+  })
+
+  test("saves the local draft through the text resource service only", async () => {
+    const save = mock(async () => ({ contentRevision: "rev-after" }))
+    const dirty = updateCanvasTextDraft(
+      createCanvasTextDraftState({ contentRevision: "rev-before", text: "original" }),
+      "# Changed",
+    )
+
+    const saved = await saveCanvasTextDraft(dirty, "text-node", { save }, new AbortController().signal)
+
+    expect(save).toHaveBeenCalledWith(
+      { content: "# Changed", contentRevision: "rev-before", nodeId: "text-node" },
+      expect.any(AbortSignal),
+    )
+    expect(saved).toMatchObject({ baseContent: "# Changed", baseRevision: "rev-after", dirty: false })
+  })
+
+  test("enables editing only for explicitly editable hydrated Project text", () => {
+    expect(
+      isCanvasTextResourceEditable({
+        contentRevision: "a".repeat(64),
+        editableText: true,
+        status: "ready",
+        text: "project",
+      }),
+    ).toBeTrue()
+    expect(
+      isCanvasTextResourceEditable({
+        contentRevision: "a".repeat(64),
+        editableText: false,
+        status: "ready",
+        text: "managed",
+      }),
+    ).toBeFalse()
+    expect(isCanvasTextResourceEditable({ editableText: true, status: "ready", text: "missing revision" })).toBeFalse()
+  })
+})
 
 describe("built-in node toolbar visibility", () => {
   test("renders an almost full-screen editor dialog for text nodes", () => {
@@ -175,29 +278,22 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain('aria-label="刷新图片"')
   })
 
-  test("keeps an empty media body passive while upload remains in the node toolbar", () => {
+  test("keeps an empty media body unavailable until the host provides relinking", () => {
     const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
       <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Image", url: "" }} />
     ))
 
-    expect(markup).toContain("convax-media-empty__content")
-    expect(markup).toContain("Use the toolbar to add content")
-    expect(markup).toContain('aria-label="Add image"')
-    expect(markup).not.toContain("convax-media-empty__action")
+    expect(markup).toContain("image unavailable")
+    expect(markup).toContain("Relink is not available yet")
+    expect(markup).not.toContain('aria-label="Add image"')
   })
 
   test("marks image and video cards for aligned borderless media chrome", () => {
     const imageMarkup = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinMediaFileNode
-        {...props}
-        data={{ kind: "image", label: "Portrait", url: "asset://portrait" }}
-      />
+      <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Portrait", url: "asset://portrait" }} />
     ))
     const videoMarkup = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinMediaFileNode
-        {...props}
-        data={{ kind: "video", label: "Clip", url: "asset://clip" }}
-      />
+      <BuiltinMediaFileNode {...props} data={{ kind: "video", label: "Clip", url: "asset://clip" }} />
     ))
 
     expect(imageMarkup).toContain("convax-node__surface--media")
@@ -493,13 +589,19 @@ describe("built-in node toolbar visibility", () => {
         type: "file",
       }
       let request: CanvasAssistantRequest | undefined
-      const markup = renderWithEditor(selection([mediaNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
-        assistantRender: (next) => {
-          request = next
-          return <div data-assistant-toolbar />
+      const markup = renderWithEditor(
+        selection([mediaNode.id]),
+        false,
+        (props) => <BuiltinCanvasNode {...props} />,
+        false,
+        {
+          assistantRender: (next) => {
+            request = next
+            return <div data-assistant-toolbar />
+          },
+          node: mediaNode,
         },
-        node: mediaNode,
-      })
+      )
 
       expect(request?.generation?.output).toBe(output)
       expect(request?.generation?.onActivityChange).toBeFunction()
@@ -577,20 +679,14 @@ describe("built-in node toolbar visibility", () => {
       nodes: [imageOwner, incoming, outgoing],
     })
     let fileRequest: CanvasAssistantRequest | undefined
-    renderWithEditor(
-      selection([imageOwner.id]),
-      false,
-      (props) => <BuiltinCanvasNode {...props} />,
-      false,
-      {
-        assistantRender: (request) => {
-          fileRequest = request
-          return <div data-assistant-toolbar />
-        },
-        document: imageDocument,
-        node: imageOwner,
+    renderWithEditor(selection([imageOwner.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      assistantRender: (request) => {
+        fileRequest = request
+        return <div data-assistant-toolbar />
       },
-    )
+      document: imageDocument,
+      node: imageOwner,
+    })
     expect(fileRequest?.mentionedNodeIds).toEqual([incoming.id])
 
     const agentOwner = createAgentNode({ id: "agent-owner", position: { x: 0, y: 0 } })
@@ -603,20 +699,14 @@ describe("built-in node toolbar visibility", () => {
       nodes: [agentOwner, incoming, outgoing],
     })
     let agentRequest: CanvasAssistantRequest | undefined
-    renderWithEditor(
-      selection([agentOwner.id]),
-      false,
-      (props) => <BuiltinCanvasNode {...props} />,
-      false,
-      {
-        assistantRender: (request) => {
-          agentRequest = request
-          return <div data-assistant-toolbar />
-        },
-        document: agentDocument,
-        node: agentOwner,
+    renderWithEditor(selection([agentOwner.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      assistantRender: (request) => {
+        agentRequest = request
+        return <div data-assistant-toolbar />
       },
-    )
+      document: agentDocument,
+      node: agentOwner,
+    })
     expect(agentRequest?.mode).toBe("agent")
     expect(agentRequest?.mentionedNodeIds).toEqual([incoming.id])
   })

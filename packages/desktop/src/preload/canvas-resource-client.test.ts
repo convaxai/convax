@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
 import { canvasResourcePartialFailureKind } from "../canvas-resource-private-contract"
-import { createCanvasResourcePreloadClient } from "./canvas-resource-client"
+import { CanvasTextResourceConflictError } from "@convax/canvas"
+import { canvasTextResourceIpcChannel } from "../desktop-protocol"
+import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
@@ -239,5 +241,72 @@ describe("preload Canvas resource client", () => {
     expect(message).not.toContain("retained")
     expect(message).not.toContain("Notes/Private.md")
     expect(message).not.toContain("/native/")
+  })
+})
+
+describe("Canvas text resource preload client", () => {
+  test("sends only node id, content, and content revision", async () => {
+    const invoke = mock(async () => ({ contentRevision: "b".repeat(64) }))
+    const client = createCanvasTextResourcePreloadClient({ invoke })
+
+    await expect(
+      client.save(
+        { content: "# Changed", contentRevision: "a".repeat(64), nodeId: "text-node" },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ contentRevision: "b".repeat(64) })
+
+    expect(invoke).toHaveBeenCalledWith(canvasTextResourceIpcChannel, {
+      content: "# Changed",
+      contentRevision: "a".repeat(64),
+      nodeId: "text-node",
+    })
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("projectId")
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("path")
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("reference")
+  })
+
+  test("does not invoke Main when already aborted", async () => {
+    const invoke = mock(async () => ({ contentRevision: "b".repeat(64) }))
+    const client = createCanvasTextResourcePreloadClient({ invoke })
+    const controller = new AbortController()
+    controller.abort(new DOMException("Aborted", "AbortError"))
+
+    await expect(
+      client.save(
+        { content: "changed", contentRevision: "a".repeat(64), nodeId: "text-node" },
+        controller.signal,
+      ),
+    ).rejects.toHaveProperty("name", "AbortError")
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  test("reconstructs a typed conflict and bounds ordinary native failures", async () => {
+    const conflict = createCanvasTextResourcePreloadClient({
+      invoke: async () => ({ actualRevision: "c".repeat(64), kind: "canvas-text-resource-conflict" }),
+    })
+    let conflictError: unknown
+    try {
+      await conflict.save(
+        { content: "changed", contentRevision: "a".repeat(64), nodeId: "text-node" },
+        new AbortController().signal,
+      )
+    } catch (error) {
+      conflictError = error
+    }
+    expect(conflictError).toBeInstanceOf(CanvasTextResourceConflictError)
+    expect((conflictError as CanvasTextResourceConflictError).actualRevision).toBe("c".repeat(64))
+
+    const failed = createCanvasTextResourcePreloadClient({
+      invoke: async () => {
+        throw new Error("ENOENT /native/private/project/Notes/brief.md")
+      },
+    })
+    await expect(
+      failed.save(
+        { content: "changed", contentRevision: "a".repeat(64), nodeId: "text-node" },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("Could not save the Canvas text resource")
   })
 })

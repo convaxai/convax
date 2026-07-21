@@ -1,8 +1,23 @@
 export const canvasResourcePartialFailureKind = "canvas-resource-partial-failure" as const
+export const canvasTextResourceConflictKind = "canvas-text-resource-conflict" as const
 
 export interface CanvasResourcePartialFailureResponse {
   kind: typeof canvasResourcePartialFailureKind
   retainedLabels: readonly string[]
+}
+
+export interface CanvasTextResourceConflictResponse {
+  actualRevision: string | null
+  kind: typeof canvasTextResourceConflictKind
+}
+
+export function isCanvasTextResourceConflictResponse(value: unknown): value is CanvasTextResourceConflictResponse {
+  if (!isRecord(value) || value.kind !== canvasTextResourceConflictKind) return false
+  return value.actualRevision === null || isSha256(value.actualRevision)
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
 }
 
 export function isCanvasResourcePartialFailureResponse(value: unknown): value is CanvasResourcePartialFailureResponse {

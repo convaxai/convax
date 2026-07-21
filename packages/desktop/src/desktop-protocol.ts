@@ -1,9 +1,13 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
 import type { CanvasPoint } from "@convax/canvas/core"
+import type { CanvasTextResourceService } from "@convax/canvas"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
 export const desktopProtocolVersion = "convax.desktop-ipc/18"
 export const canvasResourceIpcChannel = "canvas:resource-add"
+export const canvasTextResourceIpcChannel = "canvas:text-resource-save"
+
+export type CanvasTextResourceClient = CanvasTextResourceService
 
 export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]

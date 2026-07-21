@@ -21,7 +21,10 @@ const initialSnapshot: ProjectControllerSnapshot = {
 }
 
 export interface ProjectControllerOptions {
-  beforeActiveProjectChange?: (currentProjectId: string | null, nextProjectId: string | null) => Promise<void> | void
+  beforeActiveProjectChange?: (
+    currentProjectId: string | null,
+    nextProjectId: string | null,
+  ) => Promise<boolean | void> | boolean | void
   onActiveProjectChangeCanceled?: () => void
 }
 
@@ -80,8 +83,13 @@ export class ProjectController {
     const request = ++this.transitionRequest
     this.update({ changingActiveProject: true, error: null })
     try {
-      await this.options.beforeActiveProjectChange?.(this.snapshot.activeProjectId, projectId)
+      const proceed = await this.options.beforeActiveProjectChange?.(this.snapshot.activeProjectId, projectId)
       if (request !== this.transitionRequest) return
+      if (proceed === false) {
+        this.options.onActiveProjectChangeCanceled?.()
+        this.update({ changingActiveProject: false, error: null })
+        return
+      }
       this.applyActiveProject(projectId)
     } catch (error) {
       if (request === this.transitionRequest) {
@@ -134,7 +142,13 @@ export class ProjectController {
     if (removesActiveProject) {
       this.update({ changingActiveProject: true, error: null })
       try {
-        await this.options.beforeActiveProjectChange?.(projectId, null)
+        const proceed = await this.options.beforeActiveProjectChange?.(projectId, null)
+        if (request !== this.transitionRequest) return
+        if (proceed === false) {
+          this.options.onActiveProjectChangeCanceled?.()
+          this.update({ changingActiveProject: false, error: null })
+          return
+        }
       } catch (error) {
         if (request === this.transitionRequest) {
           this.options.onActiveProjectChangeCanceled?.()

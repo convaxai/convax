@@ -14,11 +14,7 @@ import {
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController } from "@convax/project-files"
-import {
-  dehydrateProjectCanvasDocument,
-  ProjectCanvasController,
-  hydrateProjectCanvasDocument,
-} from "@convax/project/canvas"
+import { dehydrateProjectCanvasDocument, ProjectCanvasController } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
@@ -105,34 +101,11 @@ const collapsedSecondarySidebarSize = 44
 const minimumCanvasPeekSize = 160
 const overlaySidebarBreakpoint = 1040
 
-function projectAssetUrl(projectId: string, path: string) {
-  const url = new URL(`convax-asset://${projectId}/file`)
-  url.searchParams.set("path", path)
-  return url.href
-}
-
-function hydrateRendererCanvasDocument(document: CanvasDocument, projectId: string, title?: string) {
-  return hydrateProjectCanvasDocument(
-    {
-      ...document,
-      metadata: { ...document.metadata, title: title ?? document.metadata.title },
-    },
-    ({ path }) => projectAssetUrl(projectId, path),
-  )
-}
 function mediaOperationActionIcon(editor: MediaOperationEditor) {
   if (editor === "time-point") return <ImageDown />
   if (editor === "time-range") return <Scissors />
   if (editor === "crop-region") return <Crop />
   return <Layers3 />
-}
-
-function canvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
-  return {
-    kind: "resource",
-    name,
-    uri: agentCanvasNodeResourceUri(canvasId, nodeId),
-  }
 }
 
 function App() {
@@ -201,8 +174,10 @@ function App() {
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
-          await canvasEditorRef.current?.prepareToLeave()
+          const canLeave = await canvasEditorRef.current?.prepareToLeave()
+          if (canLeave === false) return false
           await drainCanvasSaves()
+          return true
         },
         onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
@@ -243,9 +218,11 @@ function App() {
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
           if (currentInput?.kind === "canvas") {
-            await canvasEditorRef.current?.prepareToLeave()
+            const canLeave = await canvasEditorRef.current?.prepareToLeave()
+            if (canLeave === false) return false
             await drainCanvasSaves()
           }
+          return true
         },
         onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
@@ -556,20 +533,7 @@ function App() {
       },
       async readManagedProjectImage(input) {
         throwIfAborted(input.signal)
-        const current = pluginHostContextRef.current
-        if (current.activeProject?.id !== input.projectId || !current.activeCanvas) {
-          throw new Error("Plugin call is no longer in the active Project")
-        }
-        const result = await window.convax.projectFiles.readManagedImageFile({
-          path: input.path,
-          projectId: input.projectId,
-        })
-        throwIfAborted(input.signal)
-        const latest = pluginHostContextRef.current
-        if (latest.activeProject?.id !== input.projectId || latest.activeCanvas?.id !== current.activeCanvas.id) {
-          throw new Error("Plugin call completed after its Project or Canvas changed")
-        }
-        return result
+        throw new Error("Legacy managed-image path reads are not supported")
       },
       async waitForGenerationProjection(input) {
         await webPluginGenerationProjection.wait(input, input.signal)
@@ -769,6 +733,14 @@ function App() {
       },
     }
     return createCanvasServices({
+      draftDecision: {
+        decide({ count }) {
+          if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
+            return "save"
+          }
+          return window.confirm("Discard the pending text draft changes?") ? "discard" : "cancel"
+        },
+      },
       assistant: {
         render(request) {
           const host = assistantHostRef.current
@@ -847,8 +819,13 @@ function App() {
               client: window.convax.canvas.documents,
               commandId: () => `renderer-${globalThis.crypto.randomUUID()}`,
               dehydrate: dehydrateProjectCanvasDocument,
-              hydrate: (document) =>
-                hydrateRendererCanvasDocument(document, activeProjectId, activeCanvasNameRef.current),
+              hydrate: (document) => ({
+                ...document,
+                metadata: {
+                  ...document.metadata,
+                  title: activeCanvasNameRef.current ?? document.metadata.title,
+                },
+              }),
               onSavePending: (pending) => {
                 latestCanvasSaveRef.current = pending
               },
@@ -873,6 +850,7 @@ function App() {
           console.info("[convax]", event.name, event.properties ?? {})
         },
       },
+      textResources: window.convax.canvas.textResources,
     })
   }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas])
 
@@ -1305,7 +1283,6 @@ function App() {
                 <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
               }
               hideWhenNoProject
-              resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
             />
           ) : (
             <aside className="flex h-full w-full flex-col items-center border-r border-border bg-card py-2 text-card-foreground">

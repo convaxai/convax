@@ -1023,7 +1023,7 @@ to Task 8 so no direct document rewrite is added.
 - Modify: `packages/workbench/src/controller.ts`
 - Test: `packages/workbench/src/controller.test.ts`
 
-- [ ] **Step 1: Write failing hydration-state tests**
+- [x] **Step 1: Write failing hydration-state tests**
 
 Add Project resource tests for all terminal states:
 
@@ -1041,7 +1041,7 @@ test.each([
 
 Add a ready text case whose runtime state includes actual text and `contentRevision`, and a ready media case whose state includes only a custom-protocol URL.
 
-- [ ] **Step 2: Write failing text draft/save tests**
+- [x] **Step 2: Write failing text draft/save tests**
 
 In `builtin-node.test.tsx`, test these user-visible transitions:
 
@@ -1079,7 +1079,7 @@ test("shows conflict when the Project file revision changed", async () => {
 })
 ```
 
-- [ ] **Step 3: Run hydration and editor tests and verify RED**
+- [x] **Step 3: Run hydration and editor tests and verify RED**
 
 Run:
 
@@ -1090,7 +1090,7 @@ bun test packages/canvas/src/components/builtin-node.test.tsx
 
 Expected: failures because hydration and file-backed text services are not implemented.
 
-- [ ] **Step 4: Implement typed resource hydration**
+- [x] **Step 4: Implement typed resource hydration**
 
 Expose the following Project-owned snapshot and pure application function:
 
@@ -1121,7 +1121,7 @@ plus the raw-byte SHA-256 `contentRevision`; for media it returns metadata and a
 filesystem errors. Do not add a hydration cache in this task: disk remains the only content truth and Task 8
 will define watcher-driven refresh before any caching policy exists.
 
-- [ ] **Step 5: Add file-backed text read/save ports**
+- [x] **Step 5: Add file-backed text read/save ports**
 
 Add this host-neutral Canvas service:
 
@@ -1156,7 +1156,7 @@ assets as read-only, and calls that port. The IPC request must not accept a path
 Managed `.md`/`.txt` remains read-only in this task. Task 8 adds typed relink and then implements
 `Save editable copy`; do not mutate document references directly in Desktop or Project Node code.
 
-- [ ] **Step 6: Keep draft lifecycle out of Canvas persistence**
+- [x] **Step 6: Keep draft lifecycle out of Canvas persistence**
 
 Add a CanvasEditor draft registry:
 
@@ -1173,10 +1173,12 @@ registerPendingDraft(draft: CanvasPendingDraft): () => void
 every registered draft, discard calls each discard callback, and cancel returns `false`. Project and Workbench
 before-change guards must accept that result as a clean cancellation, retain the current scope, clear their
 changing state, and keep `error` null instead of surfacing a Canvas-specific exception.
-Browser `beforeunload` remains guarded while any draft is registered. Abort before file commit performs no
-write; after atomic commit the operation reports success and scope departure waits for it.
+Browser `beforeunload` remains guarded while any draft is registered. Cancellation before Main accepts a save
+performs no write. Once Main accepts it, the compare-and-replace completes atomically; scope departure first
+awaits that result, then decides whether any unsaved draft remains. A completed save is never subsequently
+presented as discardable.
 
-- [ ] **Step 7: Change BuiltinTextFileNode to explicit Save/Cancel**
+- [x] **Step 7: Change BuiltinTextFileNode to explicit Save/Cancel**
 
 Read display content from `data.resourceState.text ?? ""`. Tiptap updates only a component-local draft.
 Replace “Finish editing” with separate `Save text` and `Cancel text` actions. Successful save refreshes runtime
@@ -1184,7 +1186,7 @@ state without calling full history hydration (which clears undo/redo), `updateCa
 `beginGesture`, or Canvas undo. Enable editing only for Project `.md`/`.txt`; managed text and every other
 format remain read-only until typed relink lands in Task 8.
 
-- [ ] **Step 8: Run package gates**
+- [x] **Step 8: Run affected package gates**
 
 Run:
 
@@ -1193,14 +1195,19 @@ bun --cwd packages/canvas typecheck
 bun --cwd packages/canvas test
 bun --cwd packages/project typecheck
 bun --cwd packages/project test
-bun --cwd packages/desktop typecheck
-bun --cwd packages/desktop test
+bun test packages/desktop/src/desktop-protocol.test.ts \
+  packages/desktop/src/main/agent-resource-preparation.test.ts \
+  packages/desktop/src/main/canvas-document-ipc.test.ts \
+  packages/desktop/src/main/project-resource-protocol.test.ts \
+  packages/desktop/src/preload/canvas-resource-client.test.ts
+bun test packages/desktop/src/main/project-ipc.test.ts
 bun run pack:check
 ```
 
-Expected: all commands exit 0.
+Expected: all commands exit 0. The remaining Desktop-wide legacy schema/import failures are removed and the
+full Desktop gate is run in Task 10, so they cannot contaminate these Electron-mocked focused suites.
 
-- [ ] **Step 9: Commit hydration and text editing**
+- [x] **Step 9: Commit hydration and text editing**
 
 ```bash
 git add packages/canvas packages/project packages/desktop
@@ -1335,13 +1342,27 @@ git commit -m "feat(generation): publish outputs to project files"
 
 **Files:**
 
+- Modify: `packages/project/src/canvas/project-resources.ts`
+- Test: `packages/project/src/canvas/project-resources.test.ts`
 - Modify: `packages/canvas/src/services.tsx`
+- Modify: `packages/canvas/src/application/resources.ts`
+- Test: `packages/canvas/src/application/resources.test.ts`
 - Modify: `packages/canvas/src/components/canvas-editor.tsx`
 - Test: `packages/canvas/src/components/canvas-editor.test.tsx`
 - Modify: `packages/canvas/src/components/builtin-node.tsx`
 - Test: `packages/canvas/src/components/builtin-node.test.tsx`
 - Modify: `packages/project-files/src/contracts.ts`
 - Test: `packages/project-files/src/controller.test.ts`
+- Modify: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.ts`
+- Test: `packages/project/src/node/project-canvas/project-canvas-resource-preparation.test.ts`
+- Modify: `packages/project/src/node/project-canvas/project-file-publisher.ts`
+- Test: `packages/project/src/node/project-canvas/project-file-publisher.test.ts`
+- Modify: `packages/desktop/src/desktop-protocol.ts`
+- Test: `packages/desktop/src/desktop-protocol.test.ts`
+- Modify: `packages/desktop/src/preload/canvas-resource-client.ts`
+- Test: `packages/desktop/src/preload/canvas-resource-client.test.ts`
+- Modify: `packages/desktop/src/main/canvas-document-ipc.ts`
+- Test: `packages/desktop/src/main/canvas-document-ipc.test.ts`
 - Modify: `packages/desktop/src/renderer/index.tsx`
 - Test: `packages/desktop/src/renderer/project-canvas-workbench.test.ts`
 
@@ -1354,16 +1375,15 @@ test("invalidates every mounted resource for one coalesced Project event", async
   renderEditorWithResources(["Notes/a.md", "media/b.png"])
   projectChanges.emit({ kind: "filesystem", path: "Notes/a.md", projectId: "project_one" })
 
-  expect(resourceHydration.invalidate).toHaveBeenCalledWith({
-    priorityPath: "Notes/a.md",
-    reason: "filesystem",
-  })
   expect(getResourceStatus("Notes/a.md")).toBe("stale")
   expect(getResourceStatus("media/b.png")).toBe("stale")
+  expect(resourceHydration.hydrateStale).toHaveBeenCalledTimes(1)
 })
 ```
 
-Add cases for missing path, rename-shaped events, watcher restart, another Project, and an event received after Project switch.
+Add cases for missing path, rename-shaped events, another Project, and an event received after Project switch.
+One event path must never narrow the refresh set. Add modify/delete/recreate coverage and assert that project-file
+media gets a new revision-bound URL while managed-asset URLs remain digest-stable.
 
 Add a relink test that starts with a missing `project-file`, selects a different Project file, and verifies a normal Canvas command replaces only that node's typed reference. A raw watcher rename must leave the old reference unchanged.
 
@@ -1379,32 +1399,55 @@ bun test packages/desktop/src/renderer/project-canvas-workbench.test.ts
 
 Expected: failure because only file-tree refresh exists and mounted Canvas resources have no invalidation service.
 
-- [ ] **Step 3: Add a host-neutral hydration cache contract**
+- [ ] **Step 3: Add host-neutral no-cache runtime refresh**
 
 Define in `packages/canvas/src/services.tsx`:
 
 ```ts
 export interface CanvasResourceHydrationService {
-  hydrate(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
-  invalidate(input: { priorityPath?: string; reason: "filesystem" | "manual" | "watcher-restart" }): void
-  subscribe(listener: () => void): () => void
-  version(): number
+  markStale(document: CanvasDocument): CanvasDocument
+  hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
 }
 ```
 
-The service marks all mounted Project resource snapshots stale on every invalidation. `priorityPath` may order work but must never select the only invalidated nodes. CanvasEditor rehydrates the currently visible/accessed document without changing revision, history, selection, or viewport.
+The Project implementation of `markStale` marks only mutable `project-file` and `project-directory` runtime
+snapshots; ordinary filesystem events do not re-hash managed assets. CanvasEditor exposes
+`invalidateResources()`, synchronously applies the runtime-only stale document with the history-preserving
+`replace` path, and then uses the existing reload queue for one single-flight plus trailing `hydrateStale` pass.
+It must not use the full `hydrate` history action, persist a Canvas revision, change selection/viewport, or add
+another cache, timer, subscription/version store, path index, or event log. A scope token rejects late results;
+if the Canvas revision/reference changes during I/O, discard the stale result and schedule one trailing pass.
 
-Extend `CanvasResourceMutationService` with a `relink` operation that accepts `nodeId` plus either one portable Project source or one local `File`. Desktop binds the active scope, prepares the replacement, verifies its kind is compatible with the existing node, and commits a typed `resources.relink` business command. Missing-node toolbars expose `Relink resource`; no watcher event calls this operation automatically.
+Add a typed `resources.relink` Canvas business command rather than mutating node metadata in Renderer. The Desktop
+bridge accepts only `nodeId` plus one portable Project source or one preload local-file token, binds the live active
+scope, reloads the live node, prepares/adopts an exact typed reference, verifies node-kind compatibility, and
+commits through normal revision handling. Relink preserves node id, geometry, parentage, edges, and unrelated
+metadata. Missing-node toolbars expose `Relink resource`; no watcher event calls it automatically.
+
+For a verified read-only managed `.md`/`.txt`, `Save editable copy` reads bytes again in Main, publishes no-clobber
+to `Notes/`, then uses the same relink command. It never uploads the draft or reference from Renderer, never
+changes the original blob, and retains the published Note on Canvas commit failure with the existing bounded
+partial-success result. GC alone later decides whether the old blob is orphaned.
 
 - [ ] **Step 4: Wire Project events at the Desktop composition edge**
 
-Subscribe once to `window.convax.projectFiles.onDidChange`. For an event matching the active Project, call the mounted hydration service regardless of `event.path`. Do not rewrite references, infer rename pairs, or dispatch a Canvas document mutation.
+Subscribe once to `window.convax.projectFiles.onDidChange`. For an event matching the active Project, call every
+mounted editor handle regardless of `event.path`. Do not rewrite references, infer rename pairs, or dispatch a
+durable Canvas document mutation. The current product has one active editor; do not scan unopened catalog
+documents.
 
-Use a generation token so an async hydration started for Project A cannot replace the mounted document after switching to Project B.
+Use a generation token so an async hydration started for Project A cannot replace the mounted document after
+switching to Project B. Treat every move or rename as old-path removal plus new-path addition. The old reference
+becomes `missing`; no rename pairing, digest guessing, directory-prefix rewrite, automatic relink, or background
+reference mutation is allowed. A directory rename therefore makes every old descendant reference missing until
+the user explicitly relinks it.
 
 - [ ] **Step 5: Keep ProjectFilesController behavior independent**
 
-The Project Files tree continues to debounce and refresh visible directories. Its tests should assert the original optional `path` is preserved in the event contract but does not affect which visible directories refresh. Do not put Canvas state in `ProjectFilesController`.
+The Project Files tree continues to debounce and refresh visible directories. Its tests should assert the original
+optional `path` is preserved in the event contract but does not affect which Canvas resources refresh. After a
+successful parent refresh, prune listings below directories that disappeared so an external directory rename is
+represented consistently as remove plus add. Do not put Canvas state in `ProjectFilesController`.
 
 - [ ] **Step 6: Run Canvas, Project Files, and Desktop gates**
 
@@ -1438,10 +1481,14 @@ git commit -m "feat(canvas): invalidate project resources on file changes"
 - Test: `packages/project/src/canvas/project-resources.test.ts`
 - Modify: `packages/project/src/node/project-canvas/project-canvas-manager.ts`
 - Test: `packages/project/src/node/project-canvas/project-canvas-manager.test.ts`
+- Modify: `packages/project/src/node/project-canvas/project-canvas-document-repository.ts`
+- Test: `packages/project/src/node/project-canvas/project-canvas-document-repository.test.ts`
+- Modify: `packages/project/src/node/project-canvas/project-file-publisher.ts`
+- Test: `packages/project/src/node/project-canvas/project-file-publisher.test.ts`
+- Create: `packages/desktop/src/main/project-asset-gc-scheduler.ts`
+- Test: `packages/desktop/src/main/project-asset-gc-scheduler.test.ts`
 - Modify: `packages/desktop/src/main/index.ts`
 - Test: `packages/desktop/src/main/application-lifecycle.test.ts`
-- Modify: `packages/desktop/src/renderer/settings-view.tsx`
-- Test: `packages/desktop/src/renderer/settings-view.test.tsx`
 
 - [ ] **Step 1: Write failing reference-root traversal tests**
 
@@ -1478,7 +1525,7 @@ test("marks on the first scan and deletes only after seven days plus a fresh ful
 
   clock.set(day(7))
   await gc.scan(projectId)
-  expect(canvasRepository.loadAll).toHaveBeenCalledTimes(3)
+  expect(maintenanceDocuments.loadAllStrict).toHaveBeenCalledTimes(4)
   expect(await blobExists(orphan)).toBe(false)
 })
 
@@ -1488,8 +1535,8 @@ test("does not unlink when gc.json publication fails", async () => {
   expect(await blobExists(due)).toBe(true)
 })
 
-test("retains a due mark when unlink fails and retries next scan", async () => {
-  unlink.failOnce(due)
+test("retains a due mark when quarantine deletion fails and retries next scan", async () => {
+  quarantineUnlink.failOnce(due)
   await gc.scan(projectId)
   expect(await readGcEntry(due)).toEqual({ unreferencedSince: day(0) })
   await gc.scan(projectId)
@@ -1497,7 +1544,10 @@ test("retains a due mark when unlink fails and retries next scan", async () => {
 })
 ```
 
-Also test corrupt/missing `gc.json`, unreadable Canvas, unsupported Canvas schema, digest mismatch, symlink entries, unknown blob names, re-reference, missing blob record pruning, active staging, and staging older than 24 hours.
+Also test corrupt/missing `gc.json`, unreadable Canvas, unsupported Canvas schema, digest mismatch, symlink entries,
+unknown blob names, re-reference, missing blob record pruning, publisher/asset staging, quarantine crash recovery,
+and staging older than 24 hours. Assert that maintenance reads never create or migrate a catalog and that GC never
+enumerates or unlinks `Notes/`, `Generated/`, or any other Project-public directory.
 
 - [ ] **Step 3: Run GC tests and verify RED**
 
@@ -1527,23 +1577,35 @@ Use this exact durable shape at `.convax/assets/gc.json`:
 ```ts
 export interface ProjectAssetGcState {
   schemaVersion: 1
-  lastSuccessfulScanAt: string
   entries: Record<string, { unreferencedSince: string }>
 }
 ```
 
 `ProjectAssetGc.scan(projectId)` must run inside the same `ProjectManagedAssetStore.runExclusive` mutex and perform:
 
-1. load every current v2 Canvas document and collect typed digests; abort on any failure;
+1. load the current catalog through a strict Node-internal maintenance reader that never creates, migrates, or
+   touches state; load every referenced current v2 document and collect typed digests; abort on any failure;
 2. enumerate only regular `blobs/<lowercase-sha256>` files without following symlinks;
 3. verify each blob hashes to its filename;
 4. clear records for live digests and add the current time for first-seen orphans;
 5. retain due records in the next state and atomically publish `gc.json` first;
-6. unlink due candidates only after state publication;
-7. retain failed-unlink records and prune missing-blob records on the next full scan;
-8. remove inactive `.convax/assets/.staging/*` and `.convax/staging/*` regular entries older than 24 hours.
+6. before deletion, perform a second complete durable-reference scan; if any due digest became live, clear its
+   entry, republish state, and stop deletion for that digest;
+7. revalidate candidate identity, size/mtime, and digest, then atomically rename the canonical blob to a reserved
+   `.convax/assets/.staging/gc-delete-<sha256>` quarantine alias; re-open that no-follow alias, verify the same
+   identity and digest, and unlink only the private quarantine alias;
+8. retain failed-delete records and retry quarantined aliases after crashes; prune missing-blob records only on a
+   later successful full scan;
+9. remove only regular `.convax/assets/.staging/*` and `.convax/staging/*` entries older than 24 hours, using the
+   safer of ctime/mtime and excluding reserved GC quarantine aliases from ordinary staging cleanup.
 
-If `gc.json` is absent or invalid, build a fresh state and delete nothing in that scan.
+The state file is exact-schema validated and published atomically. If it is absent, invalid, future-dated, or has
+an unknown version, rebuild it after a full scan and delete nothing in that scan. If state publication fails,
+delete nothing. Short-lived re-reference removes the old entry; a later orphan period starts a fresh seven-day
+grace. `ProjectFilePublisher` must also use the same Project asset mutex, so no second active-operation registry,
+lock, Resource Catalog, reference count, or WAL is introduced. The quarantine protocol closes Convax-internal
+validation-to-unlink races; malicious same-UID directory-entry replacement remains outside the declared threat
+model because portable Node cannot conditionally unlink by inode.
 
 - [ ] **Step 6: Add low-frequency scheduling**
 
@@ -1556,9 +1618,17 @@ export const projectAssetGcOpenDelayMs = 30 * 1_000
 export const projectAssetStagingRetentionMs = 24 * 60 * 60 * 1_000
 ```
 
-On Project open, schedule one idle scan only when `lastSuccessfulScanAt` is at least 24 hours old. While open, allow at most one scan per 24 hours; merge duplicate requests. Project close and App exit cancel timers and never force a scan. Limit different Projects to one background scan at a time.
+Project open or first Canvas access schedules an idle scan after 30 seconds. Successful Canvas save, managed
+admission, a failed admission that may have staged bytes, and Canvas deletion request a trailing scan with the
+same 30-second debounce. While a Project remains open, schedule the next check 24 hours after each successful
+scan rather than running a high-frequency interval. A valid `gc.json` mtime plus in-process last-success time may
+throttle work, but neither is a correctness source. Failures delete nothing and retry after 15 minutes. Merge
+duplicate requests, keep one in-flight promise per Project, and run at most one Project GC globally. Project
+close/forget, window destruction, and App exit cancel timers and never force a scan.
 
-Add a narrow user-triggered `canvas.resources.collectGarbage` bridge method and a Settings action labelled `Clean reclaimable assets`. It starts an immediate full scan for the active Project, still honors the seven-day grace, and reports scanned/deleted/retried counts without exposing private paths. Add a test proving repeated clicks merge into the same Project scan.
+Do not add a Renderer/Settings bridge or manual clean action in this cutover. GC is a conservative Project Node
+maintenance concern; public Project files are never candidates and no private path or maintenance state crosses
+IPC.
 
 - [ ] **Step 7: Run Project and Desktop gates**
 

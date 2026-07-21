@@ -36,6 +36,90 @@ export interface CanvasResourceMutationService {
   }>
 }
 
+export class CanvasTextResourceConflictError extends Error {
+  constructor(
+    readonly expectedRevision: string,
+    readonly actualRevision: string | null,
+  ) {
+    super("Canvas text resource changed outside Convax")
+    this.name = "CanvasTextResourceConflictError"
+  }
+}
+
+export interface CanvasTextResourceService {
+  save(
+    input: {
+      content: string
+      contentRevision: string
+      nodeId: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ contentRevision: string }>
+}
+
+export interface CanvasPendingDraft {
+  discard(): void
+  inFlightSave(): Promise<void> | null
+  isDirty(): boolean
+  save(): Promise<void>
+}
+
+export type CanvasPendingDraftDecision = "save" | "discard" | "cancel"
+
+export interface CanvasPendingDraftDecisionService {
+  decide(input: { count: number }): Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision
+}
+
+export interface CanvasPendingDraftRegistry {
+  hasPending(): boolean
+  pendingCount(): number
+  prepareToLeave(decide: () => Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision): Promise<boolean>
+  register(draft: CanvasPendingDraft): () => void
+}
+
+export function createCanvasPendingDraftRegistry(): CanvasPendingDraftRegistry {
+  const drafts = new Set<CanvasPendingDraft>()
+  const pendingDrafts = () => [...drafts].filter((draft) => draft.isDirty())
+  const settleStartedSaves = () => {
+    const started = [...drafts]
+      .map((draft) => draft.inFlightSave())
+      .filter((save): save is Promise<void> => Boolean(save))
+    if (started.length === 0) return null
+    return Promise.allSettled(started).then((results) => {
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failure) throw failure.reason
+    })
+  }
+  return {
+    hasPending: () => pendingDrafts().length > 0,
+    pendingCount: () => pendingDrafts().length,
+    async prepareToLeave(decide) {
+      const startedBeforeDecision = settleStartedSaves()
+      if (startedBeforeDecision) await startedBeforeDecision
+      let pending = pendingDrafts()
+      if (pending.length === 0) return true
+      const decision = await decide()
+      if (decision === "cancel") return false
+      const startedDuringDecision = settleStartedSaves()
+      if (startedDuringDecision) await startedDuringDecision
+      pending = pendingDrafts()
+      if (pending.length === 0) return true
+      if (decision === "discard") {
+        for (const draft of pending) draft.discard()
+        return true
+      }
+      const results = await Promise.allSettled(pending.map((draft) => draft.save()))
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failure) throw failure.reason
+      return true
+    },
+    register(draft) {
+      drafts.add(draft)
+      return () => drafts.delete(draft)
+    },
+  }
+}
+
 export type CanvasGenerationOutput = "text" | "image" | "video" | "audio"
 
 export type CanvasGenerationInputRole =
@@ -275,6 +359,8 @@ export interface CanvasServiceMap {
   export: CanvasExportService
   notify: CanvasNotificationService
   telemetry: CanvasTelemetryService
+  textResources: CanvasTextResourceService
+  draftDecision: CanvasPendingDraftDecisionService
 }
 
 export interface CanvasServices {

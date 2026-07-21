@@ -14,6 +14,7 @@ import {
   ProjectCanvasDocumentService,
   ProjectFilePublisher,
   NodeProjectCanvasManager,
+  ProjectCanvasResourceHydrator,
   ProjectCanvasResourcePreparation,
   ProjectManagedAssetStore,
 } from "@convax/project/node"
@@ -62,7 +63,11 @@ import {
   GenerationPluginRuntime,
   resolveGenerationPluginExecutable,
 } from "./generation-plugin-runtime"
-import { registerCanvasDocumentIpc, registerCanvasResourceIpc } from "./canvas-document-ipc"
+import {
+  registerCanvasDocumentIpc,
+  registerCanvasResourceIpc,
+  registerCanvasTextResourceIpc,
+} from "./canvas-document-ipc"
 import { createPluginOperationAgentToolProvider } from "./plugin-operation-agent-tools"
 import {
   registerCanvasExternalMediaDragIpc,
@@ -146,6 +151,7 @@ import {
   PluginSkillLifecycle,
   PluginSkillOwnershipStore,
 } from "./plugin-skill-lifecycle"
+import { createProjectResourceUrl, resolveProjectResourceProtocolPath } from "./project-resource-protocol"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -432,6 +438,11 @@ function startApplication() {
     const projectFilePublisher = new ProjectFilePublisher(projectManager)
     const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases, projectAssets)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
+    const canvasResourceHydrator = new ProjectCanvasResourceHydrator(
+      projectManager,
+      projectAssets,
+      createProjectResourceUrl,
+    )
     const canvasDocumentChanges = new CanvasDocumentChangeBus()
     // The application service uses the initializing document service so a
     // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
@@ -875,7 +886,22 @@ function startApplication() {
       projectCreationDirectory,
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
-    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, canvasApplication, ipcSecurity)
+    const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
+      const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
+      return snapshot
+        ? {
+            canvasId: snapshot.documentId,
+            projectId: snapshot.scopeId,
+            revision: snapshot.revision,
+          }
+        : null
+    }
+    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(
+      canvasDocuments,
+      canvasApplication,
+      canvasResourceHydrator,
+      ipcSecurity,
+    )
     const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -902,16 +928,11 @@ function startApplication() {
     })
     const disposeCanvasResourceIpc = registerCanvasResourceIpc(canvasResources, canvasResourcePreparation, {
       ...ipcSecurity,
-      async resolveActiveCanvas(event) {
-        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
-        return snapshot
-          ? {
-              canvasId: snapshot.documentId,
-              projectId: snapshot.scopeId,
-              revision: snapshot.revision,
-            }
-          : null
-      },
+      resolveActiveCanvas,
+    })
+    const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasDocuments, {
+      ...ipcSecurity,
+      resolveActiveCanvas,
     })
     const disposeGenerationIpc = registerGenerationIpc(
       {
@@ -1017,11 +1038,18 @@ function startApplication() {
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
-        const url = new URL(request.url)
-        const relativePath = url.searchParams.get("path")
-        if (!url.hostname || !relativePath) return new Response("Asset was not found", { status: 404 })
-        const absolutePath = await projectManager.resolveEntryPath({ path: relativePath, projectId: url.hostname })
-        return net.fetch(pathToFileURL(absolutePath).href, { headers: request.headers })
+        const resolved = await resolveProjectResourceProtocolPath(request.url, projectManager, projectAssets)
+        const response = await net.fetch(pathToFileURL(resolved.absolutePath).href, { headers: request.headers })
+        const headers = new Headers(response.headers)
+        headers.set(
+          "Cache-Control",
+          resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+        )
+        return new Response(response.body, {
+          headers,
+          status: response.status,
+          statusText: response.statusText,
+        })
       } catch {
         return new Response("Asset was not found", { status: 404 })
       }
@@ -1041,6 +1069,7 @@ function startApplication() {
         disposePluginCanvasImageIpc,
         disposeCanvasExternalMediaDragIpc,
         disposeCanvasResourceIpc,
+        disposeCanvasTextResourceIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,

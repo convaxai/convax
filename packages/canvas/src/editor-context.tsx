@@ -3,7 +3,8 @@ import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
 import type { CanvasSelectionContext } from "./selection-context"
 import type { CanvasSelectionAction } from "./selection-actions"
 import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "./selection-drag-source"
-import type { CanvasDocument, CanvasPoint, CanvasSelection } from "./types"
+import type { CanvasDocument, CanvasPoint, CanvasResourceRuntimeState, CanvasSelection } from "./types"
+import type { CanvasPendingDraft } from "./services"
 
 export interface CanvasConnectionNodeType {
   label: string
@@ -36,6 +37,8 @@ export interface CanvasEditorController {
   setSelectionDragCandidateNode: (nodeId: string | null) => void
   startSelectionDrag: () => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
+  replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) => void
+  registerPendingDraft: (draft: CanvasPendingDraft) => () => void
   removeNode: (nodeId: string) => void
   selectNodes: (nodeIds: readonly string[]) => void
 }

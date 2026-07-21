@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
+import { projectResourceReferenceKey } from "../../canvas/project-resources"
+import { NodeProjectManager } from "../project-manager"
+import { ProjectCanvasResourceHydrator } from "./project-canvas-resource-hydrator"
+import { ProjectManagedAssetStore } from "./project-managed-asset-store"
+
+let temporaryRoot = ""
+let projectRoot = ""
+let projectId = ""
+let manager: NodeProjectManager
+let assets: ProjectManagedAssetStore
+let hydrator: ProjectCanvasResourceHydrator
+
+beforeEach(async () => {
+  temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-resource-hydrator-"))
+  projectRoot = path.join(temporaryRoot, "project")
+  await fs.mkdir(projectRoot)
+  manager = new NodeProjectManager({
+    maxReadableFileBytes: 1024,
+    maxTextFileBytes: 1024,
+    registryFile: path.join(temporaryRoot, "user-data", "projects.json"),
+  })
+  projectId = (await manager.addProject(projectRoot)).id
+  assets = new ProjectManagedAssetStore(manager, { maximumBytes: 1024 })
+  hydrator = new ProjectCanvasResourceHydrator(
+    manager,
+    assets,
+    ({ contentRevision, projectId: scopedProjectId, reference }) => {
+    const url = new URL(`convax-asset://${scopedProjectId}/${reference.kind}`)
+    if (reference.kind === "project-file") url.searchParams.set("path", reference.path)
+    if (reference.kind === "managed-asset") url.searchParams.set("sha256", reference.sha256)
+    if (contentRevision) url.searchParams.set("revision", contentRevision)
+    return url.href
+    },
+    { maximumMediaBytes: 1024 },
+  )
+})
+
+afterEach(async () => {
+  await fs.rm(temporaryRoot, { force: true, recursive: true })
+})
+
+describe("ProjectCanvasResourceHydrator", () => {
+  test("re-reads editable Project Markdown from disk without a cache", async () => {
+    await fs.mkdir(path.join(projectRoot, "Notes"))
+    const target = path.join(projectRoot, "Notes", "brief.md")
+    await fs.writeFile(target, "# First")
+    const reference = { kind: "project-file", path: "Notes/brief.md" } as const
+
+    const first = await hydrator.resolve({ projectId, reference })
+    await fs.writeFile(target, "# Second")
+    const second = await hydrator.resolve({ projectId, reference })
+
+    expect(first).toEqual({
+      contentRevision: createHash("sha256").update("# First").digest("hex"),
+      editableText: true,
+      mediaType: "text/markdown",
+      name: "brief.md",
+      status: "ready",
+      text: "# First",
+    })
+    expect(second).toEqual({
+      contentRevision: createHash("sha256").update("# Second").digest("hex"),
+      editableText: true,
+      mediaType: "text/markdown",
+      name: "brief.md",
+      status: "ready",
+      text: "# Second",
+    })
+  })
+
+  test("returns bounded missing, corrupt UTF-8, and unsupported states", async () => {
+    await fs.writeFile(path.join(projectRoot, "invalid.txt"), Buffer.from([0xc3, 0x28]))
+    await fs.writeFile(path.join(projectRoot, "archive.bin"), "binary")
+
+    await expect(
+      hydrator.resolve({ projectId, reference: { kind: "project-file", path: "missing.md" } }),
+    ).resolves.toEqual({ status: "missing" })
+    await expect(
+      hydrator.resolve({ projectId, reference: { kind: "project-file", path: "invalid.txt" } }),
+    ).resolves.toEqual({ error: "Project text resource is corrupt", status: "corrupt" })
+    await expect(
+      hydrator.resolve({ projectId, reference: { kind: "project-file", path: "archive.bin" } }),
+    ).resolves.toEqual({ status: "unsupported" })
+  })
+
+  test("hydrates Project media to a typed revision URL that changes with same-path bytes", async () => {
+    await fs.writeFile(path.join(projectRoot, "hero.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+    const first = await hydrator.resolve({
+      projectId,
+      reference: { kind: "project-file", path: "hero.png" },
+    })
+    await fs.writeFile(path.join(projectRoot, "hero.png"), Buffer.from([0x89, 0x50, 0x4e, 0x48]))
+    const second = await hydrator.resolve({
+      projectId,
+      reference: { kind: "project-file", path: "hero.png" },
+    })
+
+    const firstRevision = createHash("sha256").update(Buffer.from([0x89, 0x50, 0x4e, 0x47])).digest("hex")
+    const secondRevision = createHash("sha256").update(Buffer.from([0x89, 0x50, 0x4e, 0x48])).digest("hex")
+    expect(first).toEqual({
+      contentRevision: firstRevision,
+      mediaType: "image/png",
+      name: "hero.png",
+      status: "ready",
+      url: `convax-asset://${projectId}/project-file?path=hero.png&revision=${firstRevision}`,
+    })
+    expect(second).toEqual({
+      contentRevision: secondRevision,
+      mediaType: "image/png",
+      name: "hero.png",
+      status: "ready",
+      url: `convax-asset://${projectId}/project-file?path=hero.png&revision=${secondRevision}`,
+    })
+    expect(first.url).not.toBe(second.url)
+    expect(JSON.stringify([first, second])).not.toContain(projectRoot)
+  })
+
+  test("reuses managed-asset digest verification and keeps managed text read-only", async () => {
+    const outside = path.join(temporaryRoot, "outside.md")
+    await fs.writeFile(outside, "managed text")
+    const reference = await assets.admitExternalFile({ name: "outside.md", projectId, sourcePath: outside })
+
+    const result = await hydrator.resolve({ projectId, reference })
+
+    expect(result).toEqual({
+      contentRevision: reference.sha256,
+      editableText: false,
+      mediaType: "text/markdown",
+      name: "outside.md",
+      status: "ready",
+      text: "managed text",
+    })
+
+    await fs.writeFile(path.join(projectRoot, ".convax", "assets", "blobs", reference.sha256), "tampered")
+    await expect(hydrator.resolve({ projectId, reference })).resolves.toEqual({
+      error: "Managed resource is corrupt",
+      status: "corrupt",
+    })
+  })
+
+  test("hydrates managed media with only its typed URL", async () => {
+    const outside = path.join(temporaryRoot, "outside.png")
+    await fs.writeFile(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    const reference = await assets.admitExternalFile({
+      mediaType: "image/png",
+      name: "outside.png",
+      projectId,
+      sourcePath: outside,
+    })
+
+    const result = await hydrator.resolve({ projectId, reference })
+
+    expect(result).toEqual({
+      mediaType: "image/png",
+      name: "outside.png",
+      status: "ready",
+      url: `convax-asset://${projectId}/managed-asset?sha256=${reference.sha256}`,
+    })
+    expect(JSON.stringify(result)).not.toContain(".convax")
+    expect(JSON.stringify(result)).not.toContain(projectRoot)
+  })
+
+  test("hydrates a full document while preserving the typed reference and revision", async () => {
+    await fs.writeFile(path.join(projectRoot, "brief.txt"), "hello")
+    const reference = { kind: "project-file", path: "brief.txt" } as const
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-main",
+        nodes: [
+          createTextNode({
+            id: "brief",
+            metadata: { [projectResourceReferenceKey]: reference },
+            position: { x: 0, y: 0 },
+            resourceState: { status: "stale" },
+          }),
+        ],
+      }),
+      revision: 9,
+    }
+
+    const hydrated = await hydrator.hydrate({ document, projectId })
+
+    expect(hydrated.revision).toBe(9)
+    expect(hydrated.nodes[0]!.data.metadata).toEqual({ [projectResourceReferenceKey]: reference })
+    expect(hydrated.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "hello" })
+  })
+})

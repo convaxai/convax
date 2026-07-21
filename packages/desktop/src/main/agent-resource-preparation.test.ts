@@ -17,22 +17,34 @@ function canvasSnapshot() {
     metadata: { title: "Canvas 1" },
     nodes: [
       {
-        data: { kind: "file", label: "Launch brief", url: "" },
+        data: {
+          kind: "file",
+          label: "Launch brief",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Docs/launch.pdf" } },
+        },
         id: "node-1",
         position: { x: 0, y: 0 },
         type: "file",
       },
       {
-        data: { kind: "text", label: "Related", text: "Related text" },
+        data: {
+          kind: "text",
+          label: "Related",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/related.md" } },
+        },
         id: "node-2",
         position: { x: 320, y: 0 },
-        type: "text",
+        type: "file",
       },
       {
-        data: { kind: "text", label: "Unrelated", text: "Unrelated text" },
+        data: {
+          kind: "text",
+          label: "Unrelated",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/unrelated.md" } },
+        },
         id: "node-3",
         position: { x: 640, y: 0 },
-        type: "text",
+        type: "file",
       },
     ],
     revision: 4,

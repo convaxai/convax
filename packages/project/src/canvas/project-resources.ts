@@ -1,4 +1,4 @@
-import type { CanvasDocument } from "@convax/canvas/core"
+import type { CanvasDocument, CanvasResourceStatus } from "@convax/canvas/core"
 
 export const projectResourceReferenceKey = "convaxProjectResource"
 export const projectResourceBindingsKey = "convaxProjectResourceBindings"
@@ -10,6 +10,18 @@ export type ProjectResourceReference =
   | { kind: "project-directory"; path: string }
 
 export type ProjectResourceBindings = Record<string, Exclude<ProjectResourceReference, { kind: "project-directory" }>>
+
+export interface ProjectResourceSnapshot {
+  contentRevision?: string
+  editableText?: boolean
+  error?: string
+  mediaType?: string
+  name?: string
+  posterUrl?: string
+  status: CanvasResourceStatus
+  text?: string
+  url?: string
+}
 
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
@@ -181,6 +193,91 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
       }
     }),
   }
+}
+
+export async function hydrateProjectCanvasDocument(
+  document: CanvasDocument,
+  resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
+): Promise<CanvasDocument> {
+  const nodes = await Promise.all(
+    document.nodes.map(async (node) => {
+      if (!resourceNodeKinds.has(node.data.kind)) return node
+      const reference = getProjectResourceReference(node.data.metadata)
+      if (!reference) {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: boundedHydrationFailure("Project resource reference is invalid"),
+          },
+        }
+      }
+      try {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: requireProjectResourceSnapshot(await resolve(reference)),
+          },
+        }
+      } catch {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: boundedHydrationFailure("Project resource could not be hydrated"),
+          },
+        }
+      }
+    }),
+  )
+  return { ...document, nodes }
+}
+
+function requireProjectResourceSnapshot(value: ProjectResourceSnapshot): ProjectResourceSnapshot {
+  if (!isRecord(value) || !resourceStatuses.has(value.status as CanvasResourceStatus)) {
+    throw new Error("Project resource snapshot is invalid")
+  }
+  const snapshot: ProjectResourceSnapshot = { status: value.status as CanvasResourceStatus }
+  copyBoundedString(value, snapshot, "contentRevision", 128)
+  copyBoundedString(value, snapshot, "error", 512)
+  copyBoundedString(value, snapshot, "mediaType", 255)
+  copyBoundedString(value, snapshot, "name", 255)
+  copyBoundedString(value, snapshot, "posterUrl", 8_192)
+  copyBoundedString(value, snapshot, "text", 16 * 1024 * 1024)
+  copyBoundedString(value, snapshot, "url", 8_192)
+  if (value.editableText !== undefined) {
+    if (typeof value.editableText !== "boolean") throw new Error("Project resource snapshot is invalid")
+    snapshot.editableText = value.editableText
+  }
+  return snapshot
+}
+
+const resourceStatuses = new Set<CanvasResourceStatus>([
+  "stale",
+  "ready",
+  "missing",
+  "corrupt",
+  "unsupported",
+  "conflict",
+])
+
+function copyBoundedString<Key extends keyof ProjectResourceSnapshot>(
+  source: ProjectResourceSnapshot,
+  target: ProjectResourceSnapshot,
+  key: Key,
+  maximumLength: number,
+) {
+  const value = source[key]
+  if (value === undefined) return
+  if (typeof value !== "string" || value.length > maximumLength) {
+    throw new Error("Project resource snapshot is invalid")
+  }
+  Object.assign(target, { [key]: value })
+}
+
+function boundedHydrationFailure(error: string): ProjectResourceSnapshot {
+  return { error, status: "corrupt" }
 }
 
 function requirePortableProjectPath(value: unknown) {

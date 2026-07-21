@@ -1,14 +1,164 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { createAgentNode, createFolderNode, createGroupNode, createMediaNode, createTextNode } from "./document"
 import {
   CanvasFileGenerationActivityOwner,
   getCompatibleCanvasGenerationTools,
   getCanvasGenerationReferenceError,
   inferCanvasGenerationReferences,
+  CanvasTextResourceConflictError,
+  createCanvasPendingDraftRegistry,
   type CanvasGenerateService,
   type CanvasGenerationReference,
   type CanvasGenerationToolSummary,
 } from "./services"
+
+describe("Canvas text draft services", () => {
+  test("keeps typed conflict revisions host-neutral", () => {
+    const error = new CanvasTextResourceConflictError("before", "after")
+
+    expect(error.name).toBe("CanvasTextResourceConflictError")
+    expect(error.message).toMatch(/changed outside Convax/i)
+    expect(error.expectedRevision).toBe("before")
+    expect(error.actualRevision).toBe("after")
+  })
+
+  test("awaits every pending draft save before allowing departure", async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const first = {
+      discard: mock(),
+      inFlightSave: () => null,
+      isDirty: () => true,
+      save: mock(async () => pending),
+    }
+    const second = {
+      discard: mock(),
+      inFlightSave: () => null,
+      isDirty: () => true,
+      save: mock(async () => undefined),
+    }
+    const registry = createCanvasPendingDraftRegistry()
+    registry.register(first)
+    registry.register(second)
+
+    let settled = false
+    const leaving = registry
+      .prepareToLeave(async () => "save" as const)
+      .then((result) => {
+        settled = true
+        return result
+      })
+    await Promise.resolve()
+
+    expect(first.save).toHaveBeenCalledTimes(1)
+    expect(second.save).toHaveBeenCalledTimes(1)
+    expect(settled).toBeFalse()
+    release()
+    await expect(leaving).resolves.toBeTrue()
+    expect(first.discard).not.toHaveBeenCalled()
+  })
+
+  test("waits for every save to settle before reporting one draft failure", async () => {
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const failure = new Error("first draft failed")
+    const registry = createCanvasPendingDraftRegistry()
+    registry.register({
+      discard: mock(),
+      inFlightSave: () => null,
+      isDirty: () => true,
+      save: async () => Promise.reject(failure),
+    })
+    registry.register({ discard: mock(), inFlightSave: () => null, isDirty: () => true, save: async () => pending })
+
+    let settled = false
+    const leaving = registry
+      .prepareToLeave(async () => "save" as const)
+      .finally(() => {
+        settled = true
+      })
+    const observed = leaving.catch((error) => error)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(settled).toBeFalse()
+    release()
+    await expect(observed).resolves.toBe(failure)
+  })
+
+  test("discards callbacks or cleanly cancels without running saves", async () => {
+    let dirty = true
+    const draft = {
+      discard: mock(() => {
+        dirty = false
+      }),
+      inFlightSave: () => null,
+      isDirty: () => dirty,
+      save: mock(async () => undefined),
+    }
+    const registry = createCanvasPendingDraftRegistry()
+    const unregister = registry.register(draft)
+
+    await expect(registry.prepareToLeave(async () => "cancel" as const)).resolves.toBeFalse()
+    expect(registry.hasPending()).toBeTrue()
+    expect(draft.discard).not.toHaveBeenCalled()
+    expect(draft.save).not.toHaveBeenCalled()
+
+    await expect(registry.prepareToLeave(async () => "discard" as const)).resolves.toBeTrue()
+    expect(draft.discard).toHaveBeenCalledTimes(1)
+    expect(draft.save).not.toHaveBeenCalled()
+    unregister()
+    expect(registry.hasPending()).toBeFalse()
+  })
+
+  test("settles an already-started save before offering discard", async () => {
+    let dirty = true
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = () => {
+        dirty = false
+        resolve()
+      }
+    })
+    const decide = mock(async () => "discard" as const)
+    const discard = mock(() => {
+      dirty = false
+    })
+    const registry = createCanvasPendingDraftRegistry()
+    registry.register({ discard, inFlightSave: () => pending, isDirty: () => dirty, save: mock() })
+
+    const leaving = registry.prepareToLeave(decide)
+    await Promise.resolve()
+
+    expect(decide).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+    release()
+    await expect(leaving).resolves.toBeTrue()
+    expect(decide).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+  })
+
+  test("keeps the draft and stops departure when an already-started save fails", async () => {
+    const failure = new Error("save failed")
+    const decide = mock(async () => "discard" as const)
+    const discard = mock()
+    const registry = createCanvasPendingDraftRegistry()
+    registry.register({
+      discard,
+      inFlightSave: () => Promise.reject(failure),
+      isDirty: () => true,
+      save: mock(),
+    })
+
+    await expect(registry.prepareToLeave(decide)).rejects.toBe(failure)
+    expect(decide).not.toHaveBeenCalled()
+    expect(discard).not.toHaveBeenCalled()
+    expect(registry.hasPending()).toBeTrue()
+  })
+})
 
 describe("Canvas generation services", () => {
   test("keeps a direct generation alive across composer dismissal and cancels only with its file-node owner", () => {
@@ -101,17 +251,32 @@ describe("Canvas generation services", () => {
       createMediaNode({
         id: "image",
         position: { x: 0, y: 0 },
-        resource: { id: "image-resource", kind: "image", metadata: {}, state: { status: "ready", url: "asset://image" } },
+        resource: {
+          id: "image-resource",
+          kind: "image",
+          metadata: {},
+          state: { status: "ready", url: "asset://image" },
+        },
       }),
       createMediaNode({
         id: "video",
         position: { x: 0, y: 0 },
-        resource: { id: "video-resource", kind: "video", metadata: {}, state: { status: "ready", url: "asset://video" } },
+        resource: {
+          id: "video-resource",
+          kind: "video",
+          metadata: {},
+          state: { status: "ready", url: "asset://video" },
+        },
       }),
       createMediaNode({
         id: "audio",
         position: { x: 0, y: 0 },
-        resource: { id: "audio-resource", kind: "audio", metadata: {}, state: { status: "ready", url: "asset://audio" } },
+        resource: {
+          id: "audio-resource",
+          kind: "audio",
+          metadata: {},
+          state: { status: "ready", url: "asset://audio" },
+        },
       }),
       createMediaNode({
         id: "file",

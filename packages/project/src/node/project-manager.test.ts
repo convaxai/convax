@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { ProjectTextFileConflictError } from "@convax/project-files"
 import { NodeProjectManager } from "./project-manager"
 import { copyPath } from "./project-manager-helpers"
 import { ProjectPrivateStorageConflictError } from "./project-private-storage"
@@ -459,6 +460,145 @@ describe("NodeProjectManager files", () => {
     await fs.writeFile(path.join(projectRoot, "invalid.txt"), Buffer.from([0xc3, 0x28]))
 
     await expect(manager.readTextFile({ path: "invalid.txt", projectId })).rejects.toThrow(/UTF-8/i)
+  })
+
+  test("allows only one of two concurrent compare-and-replace saves", async () => {
+    await fs.writeFile(path.join(projectRoot, "brief.md"), "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const results = await Promise.allSettled([
+      manager.compareAndReplaceTextFile({ content: "first", expectedRevision, path: "brief.md", projectId }),
+      manager.compareAndReplaceTextFile({ content: "second", expectedRevision, path: "brief.md", projectId }),
+    ])
+
+    const success = results.find((result) => result.status === "fulfilled")
+    const conflict = results.find((result) => result.status === "rejected")
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(conflict?.status === "rejected" && conflict.reason).toBeInstanceOf(ProjectTextFileConflictError)
+    const finalBytes = await fs.readFile(path.join(projectRoot, "brief.md"))
+    const finalRevision = createHash("sha256").update(finalBytes).digest("hex")
+    expect(success?.status === "fulfilled" && success.value.contentRevision).toBe(finalRevision)
+    expect(
+      conflict?.status === "rejected" && (conflict.reason as ProjectTextFileConflictError).actualRevision,
+    ).toBe(finalRevision)
+  })
+
+  test("does not overwrite an external replacement staged before compare-and-replace commit", async () => {
+    let stagedPath = ""
+    let enterBarrier!: () => void
+    let releaseBarrier!: () => void
+    const barrierEntered = new Promise<void>((resolve) => {
+      enterBarrier = resolve
+    })
+    const barrierReleased = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    class BarrierProjectManager extends NodeProjectManager {
+      protected async beforeCompareAndReplaceCommit(input: { targetPath: string; temporaryPath: string }) {
+        stagedPath = input.temporaryPath
+        enterBarrier()
+        await barrierReleased
+      }
+    }
+    const racingManager = new BarrierProjectManager({
+      registryFile: path.join(temporaryRoot, "state", "projects.json"),
+    })
+    const targetPath = path.join(projectRoot, "brief.md")
+    const displacedPath = path.join(projectRoot, "brief-before-external.md")
+    await fs.writeFile(targetPath, "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const save = racingManager.compareAndReplaceTextFile({
+      content: "convax replacement",
+      expectedRevision,
+      path: "brief.md",
+      projectId,
+    })
+    const enteredBeforeSaveSettled = await Promise.race([
+      barrierEntered.then(() => true),
+      save.then(
+        () => false,
+        () => false,
+      ),
+    ])
+
+    expect(enteredBeforeSaveSettled).toBeTrue()
+    try {
+      expect(await fs.readFile(stagedPath, "utf8")).toBe("convax replacement")
+      await fs.rename(targetPath, displacedPath)
+      await fs.writeFile(targetPath, "external replacement", { flag: "wx" })
+    } finally {
+      releaseBarrier()
+    }
+
+    await expect(save).rejects.toBeInstanceOf(ProjectTextFileConflictError)
+    expect(await fs.readFile(targetPath, "utf8")).toBe("external replacement")
+    expect(await fs.readFile(displacedPath, "utf8")).toBe("before")
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("serializes compare-and-replace with ordinary Project text writes", async () => {
+    await fs.writeFile(path.join(projectRoot, "brief.md"), "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const compare = manager.compareAndReplaceTextFile({
+      content: "compared",
+      expectedRevision,
+      path: "brief.md",
+      projectId,
+    })
+    const ordinary = manager.writeTextFile({ content: "ordinary", path: "brief.md", projectId })
+
+    await expect(compare).resolves.toEqual({
+      contentRevision: createHash("sha256").update("compared").digest("hex"),
+    })
+    await expect(ordinary).resolves.toMatchObject({ operation: "write" })
+    expect(await fs.readFile(path.join(projectRoot, "brief.md"), "utf8")).toBe("ordinary")
+  })
+
+  test("does not create a missing compare-and-replace target", async () => {
+    let failure: unknown
+    try {
+      await manager.compareAndReplaceTextFile({
+        content: "new",
+        expectedRevision: "a".repeat(64),
+        path: "missing.md",
+        projectId,
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(ProjectTextFileConflictError)
+    expect((failure as ProjectTextFileConflictError).actualRevision).toBeNull()
+    await expect(fs.stat(path.join(projectRoot, "missing.md"))).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("does not replace invalid UTF-8 or a symlink target", async () => {
+    const invalid = Buffer.from([0xc3, 0x28])
+    await fs.writeFile(path.join(projectRoot, "invalid.txt"), invalid)
+    await expect(
+      manager.compareAndReplaceTextFile({
+        content: "replacement",
+        expectedRevision: createHash("sha256").update(invalid).digest("hex"),
+        path: "invalid.txt",
+        projectId,
+      }),
+    ).rejects.toThrow(/UTF-8/i)
+    expect(await fs.readFile(path.join(projectRoot, "invalid.txt"))).toEqual(invalid)
+
+    const outside = path.join(temporaryRoot, "outside.txt")
+    await fs.writeFile(outside, "outside")
+    await fs.symlink(outside, path.join(projectRoot, "linked.txt"))
+    await expect(
+      manager.compareAndReplaceTextFile({
+        content: "replacement",
+        expectedRevision: createHash("sha256").update("outside").digest("hex"),
+        path: "linked.txt",
+        projectId,
+      }),
+    ).rejects.toThrow(/symbolic link/i)
+    expect(await fs.readFile(outside, "utf8")).toBe("outside")
   })
 
   test("flushes pending project writes before forgetting the registry entry", async () => {

@@ -1,5 +1,15 @@
-import { canvasResourceIpcChannel, type CanvasResourceAddResult, type CanvasResourceClient } from "../desktop-protocol"
-import { isCanvasResourcePartialFailureResponse } from "../canvas-resource-private-contract"
+import { CanvasTextResourceConflictError } from "@convax/canvas"
+import {
+  canvasResourceIpcChannel,
+  canvasTextResourceIpcChannel,
+  type CanvasResourceAddResult,
+  type CanvasResourceClient,
+  type CanvasTextResourceClient,
+} from "../desktop-protocol"
+import {
+  isCanvasResourcePartialFailureResponse,
+  isCanvasTextResourceConflictResponse,
+} from "../canvas-resource-private-contract"
 
 interface CanvasResourcePreloadClientOptions {
   getPathForFile(file: File): string
@@ -8,9 +18,40 @@ interface CanvasResourcePreloadClientOptions {
   randomUUID?: () => string
 }
 
+interface CanvasTextResourcePreloadClientOptions {
+  invoke(channel: string, input: unknown): Promise<unknown>
+}
+
 interface LocalFileToken {
   expiresAt: number
   path: string
+}
+
+export function createCanvasTextResourcePreloadClient(
+  options: CanvasTextResourcePreloadClientOptions,
+): CanvasTextResourceClient {
+  return {
+    async save(input, signal) {
+      if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError")
+      let result: unknown
+      try {
+        result = await options.invoke(canvasTextResourceIpcChannel, {
+          content: input.content,
+          contentRevision: input.contentRevision,
+          nodeId: input.nodeId,
+        })
+      } catch {
+        throw new Error("Could not save the Canvas text resource")
+      }
+      if (isCanvasTextResourceConflictResponse(result)) {
+        throw new CanvasTextResourceConflictError(input.contentRevision, result.actualRevision)
+      }
+      if (!isRecord(result) || !isSha256(result.contentRevision)) {
+        throw new Error("Canvas text resource response is invalid")
+      }
+      return { contentRevision: result.contentRevision }
+    },
+  }
 }
 
 const localFileTokenLifetimeMs = 60_000
@@ -136,4 +177,8 @@ function requireCanvasResourceAddResult(value: unknown): CanvasResourceAddResult
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value)
 }

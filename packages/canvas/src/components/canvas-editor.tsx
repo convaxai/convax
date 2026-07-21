@@ -150,17 +150,26 @@ import {
 } from "../selection-drag-source"
 import {
   CanvasServicesProvider,
+  createCanvasPendingDraftRegistry,
   getCanvasGenerationReferenceError,
   getCompatibleCanvasGenerationTools,
   inferCanvasGenerationReferences,
   type CanvasNotification,
+  type CanvasPendingDraft,
   type CanvasGenerationInputRole,
   type CanvasGenerationToolSummary,
   type CanvasResourceMutationRequest,
   type CanvasServices,
   useCanvasService,
 } from "../services"
-import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
+import type {
+  CanvasDocument,
+  CanvasEdge,
+  CanvasNode,
+  CanvasPoint,
+  CanvasResourceRuntimeState,
+  CanvasSelection,
+} from "../types"
 import {
   createCanvasShortcutHandler,
   isCanvasEditableShortcutTarget,
@@ -375,7 +384,7 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
   insertNode: (type: string) => string | undefined
-  prepareToLeave: () => Promise<void>
+  prepareToLeave: () => Promise<boolean>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
@@ -386,6 +395,20 @@ export interface CanvasResourceMutationScopeToken {
   documentId: string
   generation: number
   scopeId: string
+}
+
+export function replaceCanvasNodeResourceState(
+  document: CanvasDocument,
+  nodeId: string,
+  resourceState: CanvasResourceRuntimeState,
+): CanvasDocument {
+  let changed = false
+  const nodes = document.nodes.map((node) => {
+    if (node.id !== nodeId || !("resourceState" in node.data)) return node
+    changed = true
+    return { ...node, data: { ...node.data, resourceState } }
+  })
+  return changed ? { ...document, nodes } : document
 }
 
 function isCanvasResourceMutationScopeCurrent(
@@ -614,6 +637,7 @@ function CanvasEditorContent(
   const authoritativeLoadRequestedRef = useRef(false)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
+  const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
   const mutationService = useCanvasService("mutation")
   const generateService = useCanvasService("generate")
@@ -621,6 +645,7 @@ function CanvasEditorContent(
   const exportService = useCanvasService("export")
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
+  const draftDecisionService = useCanvasService("draftDecision")
   const [hydrating, setHydrating] = useState(Boolean(persistenceService))
   const hydratingRef = useRef(Boolean(persistenceService))
   const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
@@ -1640,6 +1665,7 @@ function CanvasEditorContent(
     const preventUnsavedClose = (event: BeforeUnloadEvent) => {
       const hasUnsavedRevision = documentRef.current.revision !== savedRevisionRef.current
       if (
+        !pendingDraftsRef.current.hasPending() &&
         !saveErrorRef.current &&
         !saveControllerRef.current &&
         !historyRef.current.gestureStart &&
@@ -1788,8 +1814,13 @@ function CanvasEditorContent(
         await waitForStableLoad()
         leavingRef.current = true
         setLeaving(true)
+        const canLeave = await pendingDraftsRef.current.prepareToLeave(
+          () => draftDecisionService?.decide({ count: pendingDraftsRef.current.pendingCount() }) ?? "cancel",
+        )
+        if (!canLeave) return false
         abortPendingOperations()
         await finalizeGestureAndSave()
+        return true
       },
       async reload() {
         await reloadDocument()
@@ -1805,6 +1836,7 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       addNode,
+      draftDecisionService,
       finalizeGestureAndSave,
       props.editorRef,
       reloadDocument,
@@ -2255,6 +2287,12 @@ function CanvasEditorContent(
       setSelectionDragCandidateNode,
       startSelectionDrag,
       quickConnect,
+      replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) =>
+        dispatch({
+          type: "replace-update",
+          update: (document) => replaceCanvasNodeResourceState(document, nodeId, state),
+        }),
+      registerPendingDraft: (draft: CanvasPendingDraft) => pendingDraftsRef.current.register(draft),
       removeNode,
       selectNodes,
     }),

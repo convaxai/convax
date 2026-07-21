@@ -16,7 +16,10 @@ export type CanvasResourceStatus = "stale" | "ready" | "missing" | "corrupt" | "
 
 export interface CanvasResourceRuntimeState {
   contentRevision?: string
+  editableText?: boolean
   error?: string
+  mediaType?: string
+  name?: string
   posterUrl?: string
   status: CanvasResourceStatus
   text?: string

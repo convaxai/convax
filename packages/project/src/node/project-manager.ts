@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { constants as fsConstants, watch as watchFileSystem, type BigIntStats, type FSWatcher } from "node:fs"
+import { watch as watchFileSystem, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type {
@@ -12,6 +12,12 @@ import type {
   ProjectTextFileContents,
   ProjectTextPreviewContents,
 } from "../contracts"
+import {
+  ProjectTextFileConflictError,
+  type ProjectTextFileCompareAndReplaceInput,
+  type ProjectTextFileCompareAndReplacePort,
+  type ProjectTextFileCompareAndReplaceResult,
+} from "@convax/project-files"
 import {
   assertNoSymlinkSegments,
   assertNotProjectRoot,
@@ -61,6 +67,11 @@ import {
   type ProjectPrivateTextFileRef,
   type ProjectPrivateTextFileWrite,
 } from "./project-private-storage"
+import {
+  readStableProjectFile,
+  readStableProjectUtf8File,
+  sameProjectFileSnapshot,
+} from "./stable-project-file"
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
@@ -99,7 +110,9 @@ function privateTextVersion(content: string) {
   return createHash("sha256").update(content).digest("hex")
 }
 
-export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
+export class NodeProjectManager
+  implements ProjectPrivatePathResolver, ProjectPrivateStorage, ProjectTextFileCompareAndReplacePort
+{
   private readonly now: () => number
   private projectCreationQueue: Promise<void> = Promise.resolve()
   private registryQueue: Promise<unknown> = Promise.resolve()
@@ -109,6 +122,8 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   constructor(private readonly options: NodeProjectManagerOptions) {
     this.now = options.now ?? Date.now
   }
+
+  protected async beforeCompareAndReplaceCommit(_input: { targetPath: string; temporaryPath: string }) {}
 
   list() {
     return this.listProjects()
@@ -602,7 +617,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
-    const content = await readStableFile(absolutePath, relativePath, maxBytes)
+    const { bytes: content } = await readStableProjectFile(absolutePath, relativePath, maxBytes)
     const mimeType = mimeTypeForPath(relativePath)
     return {
       dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
@@ -635,20 +650,14 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     const output = await this.resolveOutput(input.projectId, relativePath)
     try {
       const existing = await this.resolveExisting(input.projectId, relativePath)
-      const bytes = await readStableFile(
+      const { content, contentRevision } = await readStableProjectUtf8File(
         existing.absolutePath,
         relativePath,
         this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
       )
-      let content: string
-      try {
-        content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
-      } catch (error) {
-        throw new Error(`Project text file is not valid UTF-8: ${relativePath}`, { cause: error })
-      }
       return {
         content,
-        contentRevision: createHash("sha256").update(bytes).digest("hex"),
+        contentRevision,
         exists: true,
         path: relativePath,
       }
@@ -685,6 +694,87 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       })
     })
     return mutation("write", input.projectId, [relativePath], undefined, [relativePath])
+  }
+
+  async compareAndReplaceTextFile(
+    input: ProjectTextFileCompareAndReplaceInput,
+  ): Promise<ProjectTextFileCompareAndReplaceResult> {
+    const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
+    if (!/^[a-f0-9]{64}$/.test(input.expectedRevision)) {
+      throw new Error("Expected Project text revision is invalid")
+    }
+    if (typeof input.content !== "string") throw new Error("Project text content must be a string")
+    if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+      throw new Error(`Project text file is too large to write: ${relativePath}`)
+    }
+
+    let contentRevision = ""
+    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
+      await this.queueProjectMutation(input.projectId, async () => {
+        let existing: Awaited<ReturnType<NodeProjectManager["resolveExisting"]>>
+        try {
+          existing = await this.resolveExisting(input.projectId, relativePath)
+        } catch (error) {
+          if (isNodeError(error) && error.code === "ENOENT") {
+            throw new ProjectTextFileConflictError(input.expectedRevision, null)
+          }
+          throw error
+        }
+
+        const current = await readStableProjectUtf8File(
+          existing.absolutePath,
+          relativePath,
+          this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
+        )
+        if (current.contentRevision !== input.expectedRevision) {
+          throw new ProjectTextFileConflictError(input.expectedRevision, current.contentRevision)
+        }
+
+        await writeFileReplacing(existing.absolutePath, input.content, async (staged) => {
+          await this.beforeCompareAndReplaceCommit(staged)
+
+          let resolvedBeforeReplace: string
+          let targetBeforeReplace: Awaited<ReturnType<typeof fs.lstat>>
+          try {
+            resolvedBeforeReplace = await fs.realpath(existing.absolutePath)
+            targetBeforeReplace = await fs.lstat(existing.absolutePath, { bigint: true })
+          } catch (error) {
+            if (isNodeError(error) && error.code === "ENOENT") {
+              throw new ProjectTextFileConflictError(input.expectedRevision, null)
+            }
+            throw error
+          }
+          if (
+            targetBeforeReplace.isSymbolicLink() ||
+            !targetBeforeReplace.isFile() ||
+            !sameNativePath(resolvedBeforeReplace, existing.absolutePath)
+          ) {
+            throw new Error(`Project text file changed before it could be replaced: ${relativePath}`)
+          }
+          if (!sameProjectFileSnapshot(current.snapshot, targetBeforeReplace)) {
+            try {
+              const replacement = await readStableProjectFile(
+                existing.absolutePath,
+                relativePath,
+                this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
+              )
+              throw new ProjectTextFileConflictError(
+                input.expectedRevision,
+                createHash("sha256").update(replacement.bytes).digest("hex"),
+              )
+            } catch (error) {
+              if (isNodeError(error) && error.code === "ENOENT") {
+                throw new ProjectTextFileConflictError(input.expectedRevision, null)
+              }
+              throw error
+            }
+          }
+        })
+        contentRevision = createHash("sha256").update(Buffer.from(input.content, "utf8")).digest("hex")
+      })
+    })
+    return { contentRevision }
   }
 
   async resolveEntryPath(input: { path?: string; projectId: string }) {
@@ -947,63 +1037,4 @@ async function ensureSafeDirectory(directory: string, description: string) {
   const stat = await fs.lstat(directory)
   if (stat.isSymbolicLink()) throw new Error(`${description} cannot be a symbolic link: ${directory}`)
   if (!stat.isDirectory()) throw new Error(`${description} is not a directory: ${directory}`)
-}
-
-async function readStableFile(absolutePath: string, relativePath: string, maximumBytes: number) {
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
-    throw new Error("Project file byte limit must be a positive integer")
-  }
-  const pathBeforeOpen = await fs.lstat(absolutePath, { bigint: true })
-  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink()) {
-    throw new Error(`Project path is not a regular file: ${relativePath}`)
-  }
-  const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW
-  const handle = await fs.open(absolutePath, fsConstants.O_RDONLY | noFollow)
-  try {
-    const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || !sameFileIdentity(pathBeforeOpen, before)) {
-      throw new Error(`Project file changed before it could be read: ${relativePath}`)
-    }
-    if (before.size > BigInt(maximumBytes)) {
-      throw new Error(`Project file is too large to read: ${relativePath}`)
-    }
-    const size = Number(before.size)
-    const content = Buffer.allocUnsafe(size)
-    let offset = 0
-    while (offset < size) {
-      const { bytesRead } = await handle.read(content, offset, size - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    const extra = Buffer.allocUnsafe(1)
-    const { bytesRead: extraBytes } = await handle.read(extra, 0, 1, size)
-    const after = await handle.stat({ bigint: true })
-    const pathAfterRead = await fs.lstat(absolutePath, { bigint: true })
-    const resolvedAfterRead = await fs.realpath(absolutePath)
-    if (
-      offset !== size ||
-      extraBytes !== 0 ||
-      !sameFileSnapshot(before, after) ||
-      !sameFileIdentity(after, pathAfterRead) ||
-      !sameNativePath(resolvedAfterRead, absolutePath)
-    ) {
-      throw new Error(`Project file changed while it was being read: ${relativePath}`)
-    }
-    return content
-  } finally {
-    await handle.close()
-  }
-}
-
-function sameFileIdentity(left: BigIntStats, right: BigIntStats) {
-  return left.dev === right.dev && left.ino === right.ino
-}
-
-function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
-  return (
-    sameFileIdentity(left, right) &&
-    left.size === right.size &&
-    left.mtimeNs === right.mtimeNs &&
-    left.ctimeNs === right.ctimeNs
-  )
 }

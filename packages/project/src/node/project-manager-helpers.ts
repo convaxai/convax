@@ -256,10 +256,15 @@ export function sameNativePath(left: string, right: string) {
     : leftPath === rightPath
 }
 
-export async function writeFileReplacing(target: string, content: string) {
+export async function writeFileReplacing(
+  target: string,
+  content: string,
+  beforeReplace?: (input: { targetPath: string; temporaryPath: string }) => Promise<void>,
+) {
   const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
   try {
     await fs.writeFile(temporary, content, { encoding: "utf8", flag: "wx" })
+    await beforeReplace?.({ targetPath: target, temporaryPath: temporary })
     await replaceFile(temporary, target)
   } finally {
     await fs.rm(temporary, { force: true })

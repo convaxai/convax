@@ -144,6 +144,7 @@ const {
   completeCanvasResourceMutation,
   handleCanvasResourceMutationFailure,
   linkCanvasReloadAbortSignal,
+  replaceCanvasNodeResourceState,
   runCanvasReloadScopeEffect,
   settleCanvasReloadFailure,
 } = await import("./canvas-editor")
@@ -245,6 +246,41 @@ describe("CanvasEditor node dimension projection", () => {
 })
 
 describe("CanvasEditor resource mutation", () => {
+  test("replaces only transient resource state without changing the Canvas revision", () => {
+    const document = createCanvasDocument({
+      id: "canvas-runtime-refresh",
+      nodes: [
+        {
+          id: "note",
+          data: {
+            kind: "text",
+            label: "Note",
+            metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/a.md" } },
+            resourceState: { contentRevision: "a".repeat(64), status: "ready", text: "before" },
+          },
+          position: { x: 0, y: 0 },
+          type: "file",
+        },
+      ],
+    })
+
+    const updated = replaceCanvasNodeResourceState(document, "note", {
+      contentRevision: "b".repeat(64),
+      editableText: true,
+      status: "ready",
+      text: "after",
+    })
+
+    expect(updated.revision).toBe(document.revision)
+    expect(updated.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: "b".repeat(64),
+      editableText: true,
+      status: "ready",
+      text: "after",
+    })
+    expect(updated.nodes[0]!.data.metadata).toBe(document.nodes[0]!.data.metadata)
+  })
+
   test("ignores delayed success and failure after switching to another scope with the same Canvas id", async () => {
     const operation = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     let current = operation

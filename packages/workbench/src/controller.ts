@@ -19,7 +19,10 @@ const initialSnapshot: WorkbenchSnapshot = {
 }
 
 export interface WorkbenchControllerOptions {
-  beforeInputChange?: (currentInput: WorkbenchInput | null, nextInput: WorkbenchInput | null) => Promise<void> | void
+  beforeInputChange?: (
+    currentInput: WorkbenchInput | null,
+    nextInput: WorkbenchInput | null,
+  ) => Promise<boolean | void> | boolean | void
   onInputChangeCanceled?: () => void
 }
 
@@ -123,8 +126,13 @@ export class WorkbenchController {
     const request = ++this.transitionRequest
     this.update({ changingInput: true, error: null })
     try {
-      await this.options.beforeInputChange?.(currentInput, nextInput)
+      const proceed = await this.options.beforeInputChange?.(currentInput, nextInput)
       if (request !== this.transitionRequest) return false
+      if (proceed === false) {
+        this.update({ changingInput: false, error: null })
+        this.options.onInputChangeCanceled?.()
+        return false
+      }
       this.update({
         activeInput: nextInput,
         changingInput: false,
