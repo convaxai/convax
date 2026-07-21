@@ -13,6 +13,8 @@ import {
   requireProjectResourceReference,
   type ProjectResourceReference,
 } from "../../canvas/project-resources"
+import { readStableProjectUtf8File } from "../stable-project-file"
+import { defaultProjectTextPublicationMaximumBytes } from "./project-file-publisher"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 export type ProjectCanvasResourceHost = Pick<ProjectFilesClient, "listDirectory" | "readFileInfo" | "readTextFile">
@@ -21,7 +23,7 @@ export interface ProjectCanvasFilePublisher {
   publishText(input: {
     content: string
     directory: "Notes"
-    extension: ".md"
+    extension: ".md" | ".txt"
     name?: string
     projectId: string
   }): Promise<{ contentRevision: string; path: string }>
@@ -66,10 +68,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     } catch (error) {
       if (error instanceof CanvasResourcePartialFailureError) {
         if (retainedOnFailure.length === 0) throw error
-        throw new CanvasResourcePartialFailureError(error.cause, [
-          ...retainedOnFailure,
-          ...error.retainedOnFailure,
-        ])
+        throw new CanvasResourcePartialFailureError(error.cause, [...retainedOnFailure, ...error.retainedOnFailure])
       }
       if (retainedOnFailure.length > 0) {
         throw new CanvasResourcePartialFailureError(error, retainedOnFailure)
@@ -79,6 +78,58 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     return {
       items,
       ...(retainedOnFailure.length === 0 ? {} : { retainedOnFailure }),
+    }
+  }
+
+  async prepareManagedTextEditableCopy(input: {
+    projectId: string
+    reference: ProjectResourceReference
+    sourceId: string
+  }): Promise<CanvasResourcePreparationResult> {
+    if (typeof input.projectId !== "string" || !input.projectId.trim()) throw new Error("Project id is required")
+    if (typeof input.sourceId !== "string" || !input.sourceId.trim()) {
+      throw new Error("Managed text editable-copy source id is required")
+    }
+    const reference = requireProjectResourceReference(input.reference)
+    if (reference.kind !== "managed-asset") {
+      throw new Error("Managed text editable copy requires a managed asset reference")
+    }
+    const extension = managedEditableTextExtension(reference.name)
+    if (!extension) throw new Error("Managed editable copy requires Markdown or plain text")
+    const sourcePath = await this.assets.resolve({ projectId: input.projectId, reference })
+    const contents = await readStableProjectUtf8File(
+      sourcePath,
+      `managed:${reference.sha256}`,
+      defaultProjectTextPublicationMaximumBytes,
+    )
+    if (contents.contentRevision !== reference.sha256) {
+      throw new Error("Managed editable-copy source digest does not match its reference")
+    }
+    const published = await this.publisher.publishText({
+      content: contents.content,
+      directory: "Notes",
+      extension,
+      name: reference.name,
+      projectId: input.projectId,
+    })
+    const publishedReference = requireProjectFileReference(published.path)
+    return {
+      items: [
+        {
+          id: input.sourceId,
+          kind: "text",
+          metadata: metadataFor(publishedReference),
+          mimeType: extension === ".md" ? "text/markdown" : "text/plain",
+          name: path.posix.basename(publishedReference.path),
+          state: {
+            contentRevision: published.contentRevision,
+            editableText: true,
+            status: "ready",
+            text: contents.content,
+          },
+        },
+      ],
+      retainedOnFailure: [{ label: publishedReference.path }],
     }
   }
 
@@ -292,4 +343,9 @@ function textMimeTypeFor(format: "markdown" | "plain") {
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return
   throw signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError")
+}
+
+function managedEditableTextExtension(value: string): ".md" | ".txt" | null {
+  const extension = path.posix.extname(value).toLowerCase()
+  return extension === ".md" || extension === ".txt" ? extension : null
 }

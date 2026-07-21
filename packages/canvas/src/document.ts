@@ -283,8 +283,11 @@ function isResourceRuntimeState(value: unknown) {
     !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)
   )
     return false
-  return ["contentRevision", "error", "posterUrl", "text", "url"].every(
-    (key) => value[key] === undefined || typeof value[key] === "string",
+  return (
+    ["contentRevision", "error", "posterUrl", "text", "url"].every(
+      (key) => value[key] === undefined || typeof value[key] === "string",
+    ) &&
+    ["canSaveEditableCopy", "editableText"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
   )
 }
 

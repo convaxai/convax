@@ -37,9 +37,12 @@ export interface CanvasEditorController {
   setSelectionDragCandidateNode: (nodeId: string | null) => void
   startSelectionDrag: () => boolean
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
+  relinkResource: (nodeId: string) => void
+  relinkSelectedResource: (nodeId: string) => void
   replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) => void
   registerPendingDraft: (draft: CanvasPendingDraft) => () => void
   removeNode: (nodeId: string) => void
+  saveEditableCopy: (nodeId: string) => Promise<void>
   selectNodes: (nodeIds: readonly string[]) => void
 }
 

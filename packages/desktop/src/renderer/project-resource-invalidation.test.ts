@@ -12,9 +12,11 @@ describe("mounted Canvas resource invalidation", () => {
       }
     })
     const invalidateResources = mock(async () => undefined)
+    const relinkResource = mock(async () => undefined)
+    const editor = { invalidateResources, relinkResource }
     let projectId: string | null = "project-one"
     const dispose = subscribeMountedCanvasResourceInvalidation({
-      currentEditor: () => ({ invalidateResources }),
+      currentEditor: () => editor,
       currentProjectId: () => projectId,
       projectFiles: { onDidChange },
     })
@@ -28,6 +30,7 @@ describe("mounted Canvas resource invalidation", () => {
 
     expect(onDidChange).toHaveBeenCalledTimes(1)
     expect(invalidateResources).toHaveBeenCalledTimes(3)
+    expect(relinkResource).not.toHaveBeenCalled()
     dispose()
     expect(listener).toBeUndefined()
   })

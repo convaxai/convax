@@ -1366,7 +1366,7 @@ git commit -m "feat(generation): publish outputs to project files"
 - Modify: `packages/desktop/src/renderer/index.tsx`
 - Test: `packages/desktop/src/renderer/project-canvas-workbench.test.ts`
 
-- [ ] **Step 1: Write a failing coalesced-event test**
+- [x] **Step 1: Write a failing coalesced-event test**
 
 Add a CanvasEditor test that mounts two Project resources, emits one event containing only the first path, and verifies both snapshots become stale while the path is only a priority hint:
 
@@ -1387,7 +1387,7 @@ media gets a new revision-bound URL while managed-asset URLs remain digest-stabl
 
 Add a relink test that starts with a missing `project-file`, selects a different Project file, and verifies a normal Canvas command replaces only that node's typed reference. A raw watcher rename must leave the old reference unchanged.
 
-- [ ] **Step 2: Run watcher tests and verify RED**
+- [x] **Step 2: Run watcher tests and verify RED**
 
 Run:
 
@@ -1399,7 +1399,7 @@ bun test packages/desktop/src/renderer/project-canvas-workbench.test.ts
 
 Expected: failure because only file-tree refresh exists and mounted Canvas resources have no invalidation service.
 
-- [ ] **Step 3: Add host-neutral no-cache runtime refresh**
+- [x] **Step 3: Add host-neutral no-cache runtime refresh**
 
 Define in `packages/canvas/src/services.tsx`:
 
@@ -1429,7 +1429,7 @@ to `Notes/`, then uses the same relink command. It never uploads the draft or re
 changes the original blob, and retains the published Note on Canvas commit failure with the existing bounded
 partial-success result. GC alone later decides whether the old blob is orphaned.
 
-- [ ] **Step 4: Wire Project events at the Desktop composition edge**
+- [x] **Step 4: Wire Project events at the Desktop composition edge**
 
 Subscribe once to `window.convax.projectFiles.onDidChange`. For an event matching the active Project, call every
 mounted editor handle regardless of `event.path`. Do not rewrite references, infer rename pairs, or dispatch a
@@ -1442,33 +1442,38 @@ becomes `missing`; no rename pairing, digest guessing, directory-prefix rewrite,
 reference mutation is allowed. A directory rename therefore makes every old descendant reference missing until
 the user explicitly relinks it.
 
-- [ ] **Step 5: Keep ProjectFilesController behavior independent**
+- [x] **Step 5: Keep ProjectFilesController behavior independent**
 
 The Project Files tree continues to debounce and refresh visible directories. Its tests should assert the original
 optional `path` is preserved in the event contract but does not affect which Canvas resources refresh. After a
 successful parent refresh, prune listings below directories that disappeared so an external directory rename is
 represented consistently as remove plus add. Do not put Canvas state in `ProjectFilesController`.
 
-- [ ] **Step 6: Run Canvas, Project Files, and Desktop gates**
+- [x] **Step 6: Run Canvas, Project Files, and Desktop gates**
 
 Run:
 
 ```bash
 bun --cwd packages/canvas typecheck
 bun --cwd packages/canvas test
+bun --cwd packages/project typecheck
+bun --cwd packages/project test
 bun --cwd packages/project-files typecheck
 bun --cwd packages/project-files test
-bun --cwd packages/desktop typecheck
-bun --cwd packages/desktop test
+bun test packages/desktop/src/desktop-protocol.test.ts packages/desktop/src/main/canvas-document-ipc.test.ts packages/desktop/src/preload/canvas-resource-client.test.ts packages/desktop/src/renderer/project-resource-invalidation.test.ts packages/desktop/src/renderer/project-canvas-workbench.test.ts
+bun run package:boundaries
+bun run pack:check
 ```
 
-Expected: all commands exit 0.
+Expected: all commands exit 0. The full Desktop typecheck/test gate remains intentionally deferred to Task 10,
+where every removed resource variant and fixture is cut over together.
 
-- [ ] **Step 7: Commit watcher invalidation**
+- [x] **Step 7: Commit watcher invalidation**
 
 ```bash
-git add packages/canvas packages/project-files packages/desktop/src/renderer
-git commit -m "feat(canvas): invalidate project resources on file changes"
+git add packages/canvas packages/project packages/project-files packages/desktop
+git commit -m "feat(canvas): refresh project resources on file changes"
+git commit -m "feat(canvas): relink project resources explicitly"
 ```
 
 ## Task 9: Implement delayed managed-asset GC
@@ -1477,8 +1482,6 @@ git commit -m "feat(canvas): invalidate project resources on file changes"
 
 - Create: `packages/project/src/node/project-canvas/project-asset-gc.ts`
 - Create: `packages/project/src/node/project-canvas/project-asset-gc.test.ts`
-- Modify: `packages/project/src/canvas/project-resources.ts`
-- Test: `packages/project/src/canvas/project-resources.test.ts`
 - Modify: `packages/project/src/node/project-canvas/project-canvas-manager.ts`
 - Test: `packages/project/src/node/project-canvas/project-canvas-manager.test.ts`
 - Modify: `packages/project/src/node/project-canvas/project-canvas-document-repository.ts`
@@ -1487,12 +1490,18 @@ git commit -m "feat(canvas): invalidate project resources on file changes"
 - Test: `packages/project/src/node/project-canvas/project-file-publisher.test.ts`
 - Create: `packages/desktop/src/main/project-asset-gc-scheduler.ts`
 - Test: `packages/desktop/src/main/project-asset-gc-scheduler.test.ts`
+- Modify: `packages/desktop/src/main/canvas-document-ipc.ts`
+- Test: `packages/desktop/src/main/canvas-document-ipc.test.ts`
 - Modify: `packages/desktop/src/main/index.ts`
-- Test: `packages/desktop/src/main/application-lifecycle.test.ts`
 
-- [ ] **Step 1: Write failing reference-root traversal tests**
+- [ ] **Step 1: Write failing strict maintenance-scan tests**
 
-Add a pure traversal test:
+Add manager/repository tests that hold the manager's per-Project queue while reading the current catalog and every
+current document. Missing, legacy, malformed, unsupported, and unreadable state must fail without creating,
+migrating, touching, or writing any file. A Canvas delete rollback interleaved with maintenance must not expose a
+temporarily incomplete reference root.
+
+Reuse the existing exact typed-reference collector. Its established tests already cover the equivalent of:
 
 ```ts
 test("enumerates only typed managed references", () => {
@@ -1503,7 +1512,7 @@ test("enumerates only typed managed references", () => {
     convaxPluginState: { arbitrary: fake },
     log: `managed-asset:${fake}`,
   })
-  expect(collectManagedAssetDigests(document)).toEqual(new Set([live]))
+  expect(collectProjectManagedAssetReferences(document).map((reference) => reference.sha256)).toEqual([live])
 })
 ```
 
@@ -1554,21 +1563,21 @@ enumerates or unlinks `Notes/`, `Generated/`, or any other Project-public direct
 Run:
 
 ```bash
-bun test packages/project/src/canvas/project-resources.test.ts
+bun test packages/project/src/node/project-canvas/project-canvas-manager.test.ts
+bun test packages/project/src/node/project-canvas/project-canvas-document-repository.test.ts
 bun test packages/project/src/node/project-canvas/project-asset-gc.test.ts
 ```
 
-Expected: failure because the GC digest projection and GC service do not exist; the exact typed-reference traversal added in Task 4 remains green.
+Expected: failure because the strict maintenance reader and GC service do not exist; the exact typed-reference
+traversal added in Task 4 remains green.
 
-- [ ] **Step 4: Implement strict managed-root traversal**
+- [ ] **Step 4: Implement a strict durable reference scanner**
 
-Export the GC-facing projection over the Task 4 exact collector:
-
-```ts
-export function collectManagedAssetDigests(document: CanvasDocument): ReadonlySet<string>
-```
-
-`collectManagedAssetDigests` maps `collectProjectManagedAssetReferences(document)` to a digest set; it does not perform a second traversal. The underlying collector walks only the exact host-owned keys declared by the v2 schema, calls `requireProjectResourceReference` on each encountered binding, throws on malformed declared bindings, ignores ordinary strings and opaque Plugin state, and never scans JSON text heuristically.
+Add a Node-internal manager callback that keeps the existing per-Project mutation queue held while it reads a
+strict current `convax.project-canvases/2` catalog and invokes the repository maintenance scan. The scanner reads
+each current document directly through the strict current-schema parser and maps the already-existing
+`collectProjectManagedAssetReferences` result to a local digest set. It must never call the ordinary catalog or
+repository load paths because those may create or migrate state. Do not add a second public digest collector.
 
 - [ ] **Step 5: Implement rebuildable GC state**
 
@@ -1591,9 +1600,10 @@ export interface ProjectAssetGcState {
 5. retain due records in the next state and atomically publish `gc.json` first;
 6. before deletion, perform a second complete durable-reference scan; if any due digest became live, clear its
    entry, republish state, and stop deletion for that digest;
-7. revalidate candidate identity, size/mtime, and digest, then atomically rename the canonical blob to a reserved
-   `.convax/assets/.staging/gc-delete-<sha256>` quarantine alias; re-open that no-follow alias, verify the same
-   identity and digest, and unlink only the private quarantine alias;
+7. preflight every due candidate, require the fixed `.convax/assets/.staging/gc-delete-<sha256>` alias to be
+   absent or safely recovered, then revalidate identity, size/mtime, and digest and atomically rename the
+   canonical blob; re-open that no-follow alias, verify the same identity and digest, and unlink only the private
+   quarantine alias—never rely on POSIX `rename` to provide no-replace semantics;
 8. retain failed-delete records and retry quarantined aliases after crashes; prune missing-blob records only on a
    later successful full scan;
 9. remove only regular `.convax/assets/.staging/*` and `.convax/staging/*` entries older than 24 hours, using the
@@ -1615,16 +1625,16 @@ Create a Desktop-owned scheduler with constants exported from the GC module:
 export const projectAssetGcGraceMs = 7 * 24 * 60 * 60 * 1_000
 export const projectAssetGcMinimumIntervalMs = 24 * 60 * 60 * 1_000
 export const projectAssetGcOpenDelayMs = 30 * 1_000
+export const projectAssetGcRetryMs = 15 * 60 * 1_000
 export const projectAssetStagingRetentionMs = 24 * 60 * 60 * 1_000
 ```
 
-Project open or first Canvas access schedules an idle scan after 30 seconds. Successful Canvas save, managed
-admission, a failed admission that may have staged bytes, and Canvas deletion request a trailing scan with the
-same 30-second debounce. While a Project remains open, schedule the next check 24 hours after each successful
-scan rather than running a high-frequency interval. A valid `gc.json` mtime plus in-process last-success time may
-throttle work, but neither is a correctness source. Failures delete nothing and retry after 15 minutes. Merge
-duplicate requests, keep one in-flight promise per Project, and run at most one Project GC globally. Project
-close/forget, window destruction, and App exit cancel timers and never force a scan.
+Project open or first Canvas access calls `open(projectId)` and schedules an idle scan after 30 seconds. While the
+Project remains open, schedule the next check 24 hours after each successful scan; failures delete nothing and
+retry after 15 minutes. Merge duplicate opens/requests, keep one in-flight promise per Project, and run at most
+one Project GC globally. Project forget, window destruction, and App exit call `close`/`closeAll`/`dispose`, cancel
+timers, and never force a scan. Keep only in-process scheduling state: restarting may perform an extra safe scan,
+so do not use `gc.json` mtime as a throttle and do not wire save, admission, failure, or deletion event chains.
 
 Do not add a Renderer/Settings bridge or manual clean action in this cutover. GC is a conservative Project Node
 maintenance concern; public Project files are never candidates and no private path or maintenance state crosses

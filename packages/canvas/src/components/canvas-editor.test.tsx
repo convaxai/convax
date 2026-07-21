@@ -145,6 +145,8 @@ const {
   CanvasResourceRefreshController,
   completeCanvasResourceMutation,
   handleCanvasResourceMutationFailure,
+  handleCanvasResourceRelinkSelection,
+  handleCanvasResourceUploadSelection,
   linkCanvasReloadAbortSignal,
   replaceCanvasNodeResourceState,
   runCanvasReloadScopeEffect,
@@ -187,7 +189,7 @@ function renderEditor(
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
 ) {
-  renderToStaticMarkup(
+  return renderToStaticMarkup(
     <CanvasEditor
       initialDocument={options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })}
       readOnly={options.readOnly}
@@ -248,6 +250,31 @@ describe("CanvasEditor node dimension projection", () => {
 })
 
 describe("CanvasEditor resource mutation", () => {
+  test("keeps a cancelled relink selection isolated from the next ordinary multi-file upload", () => {
+    const uploaded: File[][] = []
+    const relinked: Array<{ file: File; nodeId: string }> = []
+    const first = new File(["first"], "first.png", { type: "image/png" })
+    const second = new File(["second"], "second.png", { type: "image/png" })
+
+    // Cancelling the dedicated relink picker produces no change event. The next
+    // ordinary picker selection must still route every file through Add.
+    handleCanvasResourceUploadSelection([first, second], (files) => uploaded.push([...files]))
+
+    expect(uploaded).toEqual([[first, second]])
+    expect(relinked).toEqual([])
+
+    handleCanvasResourceRelinkSelection("missing-image", [first, second], (nodeId, file) => {
+      relinked.push({ file, nodeId })
+    })
+    expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
+
+    const markup = renderEditor()
+    expect(markup).toContain('data-canvas-resource-picker="upload"')
+    expect(markup).toContain('data-canvas-resource-picker="relink"')
+    expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="relink"[^>]*multiple/)
+  })
+
   test("replaces only transient resource state without changing the Canvas revision", () => {
     const document = createCanvasDocument({
       id: "canvas-runtime-refresh",

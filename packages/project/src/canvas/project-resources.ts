@@ -12,6 +12,7 @@ export type ProjectResourceReference =
 export type ProjectResourceBindings = Record<string, Exclude<ProjectResourceReference, { kind: "project-directory" }>>
 
 export interface ProjectResourceSnapshot {
+  canSaveEditableCopy?: boolean
   contentRevision?: string
   editableText?: boolean
   error?: string
@@ -199,7 +200,12 @@ export async function hydrateProjectCanvasDocument(
   document: CanvasDocument,
   resolve: (reference: ProjectResourceReference) => Promise<ProjectResourceSnapshot>,
 ): Promise<CanvasDocument> {
-  return hydrateProjectCanvasResources(document, resolve, () => true, () => true)
+  return hydrateProjectCanvasResources(
+    document,
+    resolve,
+    () => true,
+    () => true,
+  )
 }
 
 export function markProjectCanvasResourcesStale(document: CanvasDocument): CanvasDocument {
@@ -215,7 +221,8 @@ export function markProjectCanvasResourcesStale(document: CanvasDocument): Canva
         typeof resourceState === "object" &&
         "status" in resourceState &&
         resourceState.status === "stale")
-    ) return node
+    )
+      return node
     changed = true
     return {
       ...node,
@@ -309,9 +316,11 @@ function requireProjectResourceSnapshot(value: ProjectResourceSnapshot): Project
   copyBoundedString(value, snapshot, "posterUrl", 8_192)
   copyBoundedString(value, snapshot, "text", 16 * 1024 * 1024)
   copyBoundedString(value, snapshot, "url", 8_192)
-  if (value.editableText !== undefined) {
-    if (typeof value.editableText !== "boolean") throw new Error("Project resource snapshot is invalid")
-    snapshot.editableText = value.editableText
+  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
+    if (value[key] !== undefined) {
+      if (typeof value[key] !== "boolean") throw new Error("Project resource snapshot is invalid")
+      snapshot[key] = value[key]
+    }
   }
   return snapshot
 }

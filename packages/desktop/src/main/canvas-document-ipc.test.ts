@@ -1,12 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { CanvasResourcePartialFailureError, type CanvasResourceBusinessService } from "@convax/canvas/application"
-import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
+import { createCanvasDocument, createFolderNode, createMediaNode, createTextNode } from "@convax/canvas/core"
 import { ProjectTextFileConflictError } from "@convax/project-files"
 import { dehydrateProjectCanvasDocument, projectResourceReferenceKey } from "@convax/project/canvas"
-import {
-  canvasResourcePartialFailureKind,
-  canvasTextResourceConflictKind,
-} from "../canvas-resource-private-contract"
+import { canvasResourcePartialFailureKind, canvasTextResourceConflictKind } from "../canvas-resource-private-contract"
 
 type InvokeHandler = (event: TestEvent, input: unknown) => unknown
 interface TestEvent {
@@ -53,6 +50,371 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Canvas resource IPC", () => {
+  test("binds portable relink to the live node and commits one exactly compatible prepared resource", async () => {
+    const oldReference = { kind: "project-file" as const, path: "media/missing.png" }
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-main",
+        nodes: [
+          createMediaNode({
+            id: "image-node",
+            position: { x: 0, y: 0 },
+            resource: {
+              id: "old",
+              kind: "image",
+              metadata: { [projectResourceReferenceKey]: oldReference },
+              state: { status: "missing" },
+            },
+          }),
+        ],
+      }),
+      revision: 7,
+    }
+    const prepared = {
+      items: [
+        {
+          id: "relink",
+          kind: "image" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "media/replacement.png" } },
+          name: "replacement.png",
+          state: { status: "stale" as const },
+        },
+      ],
+    }
+    const prepare = mock(async () => prepared)
+    const relinkPreparedResource = mock(async () => applicationResult())
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { prepare, withAdmittedExternalFiles: mock() },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 7 }),
+      },
+    )
+
+    const result = await handlers.get("canvas:resource-relink")!(
+      { sender: { id: 1 } },
+      {
+        canvasId: "canvas-main",
+        commandId: "relink-project-file",
+        expectedRevision: 7,
+        nodeId: "image-node",
+        source: { kind: "host-file", path: "media/replacement.png" },
+      },
+    )
+
+    expect(prepare).toHaveBeenCalledWith({
+      canvasId: "canvas-main",
+      scopeId: "project-one",
+      sources: [{ kind: "host-file", path: "media/replacement.png", sourceId: "relink" }],
+    })
+    expect(relinkPreparedResource).toHaveBeenCalledWith(
+      {
+        actor: { id: "desktop:renderer", kind: "ui" },
+        canvasId: "canvas-main",
+        commandId: "relink-project-file",
+        expectedRevision: 7,
+        metadataKeysToRemove: ["convaxProjectResourceBindings"],
+        nodeId: "image-node",
+        scopeId: "project-one",
+      },
+      prepared,
+    )
+    expect(result).toEqual({ revision: 8, warnings: ["normalized"] })
+  })
+
+  test("consumes a sender-scoped local relink token once and rejects stale scope, native fields, and incompatible types", async () => {
+    const image = createMediaNode({
+      id: "image-node",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "old",
+        kind: "image",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "old.png" } },
+        state: { status: "missing" },
+      },
+    })
+    const document = { ...createCanvasDocument({ id: "canvas-main", nodes: [image] }), revision: 7 }
+    const withAdmittedExternalFiles = mock(async (_input, commit) =>
+      commit({
+        items: [
+          {
+            id: "relink",
+            kind: "video",
+            metadata: {
+              [projectResourceReferenceKey]: { kind: "managed-asset", name: "wrong.mp4", sha256: "a".repeat(64) },
+            },
+            state: { status: "stale" },
+          },
+        ],
+      }),
+    )
+    const relinkPreparedResource = mock()
+    let scopeCalls = 0
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { prepare: mock(), withAdmittedExternalFiles },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => {
+          scopeCalls += 1
+          return { canvasId: "canvas-main", projectId: "project-one", revision: 7 }
+        },
+      },
+    )
+    const event = { sender: { id: 11 } }
+    await handlers.get("canvas:resource-local-file-register")!(event, {
+      sourcePath: "/native/replacement.mp4",
+      sourceToken: "canvas-resource_token-one",
+    })
+    const relink = {
+      canvasId: "canvas-main",
+      commandId: "relink-local",
+      expectedRevision: 7,
+      nodeId: "image-node",
+      source: { kind: "local-file", name: "replacement.mp4", sourceToken: "canvas-resource_token-one" },
+    }
+
+    await expect(handlers.get("canvas:resource-relink")!(event, relink)).rejects.toThrow("selected local file")
+    expect(withAdmittedExternalFiles).toHaveBeenCalledTimes(1)
+    expect(relinkPreparedResource).not.toHaveBeenCalled()
+    await expect(handlers.get("canvas:resource-relink")!(event, { ...relink, commandId: "reused" })).rejects.toThrow(
+      "selected local file",
+    )
+    await expect(
+      handlers.get("canvas:resource-relink")!(event, { ...relink, nativePath: "/native/attack" }),
+    ).rejects.toThrow("unsupported field")
+    expect(scopeCalls).toBeGreaterThan(0)
+  })
+
+  test("publishes a managed text editable copy, returns bounded txt partial success, and rejects a scope switch", async () => {
+    const reference = {
+      kind: "managed-asset" as const,
+      mediaType: "text/plain",
+      name: "notes.txt",
+      sha256: "b".repeat(64),
+    }
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-main",
+        nodes: [
+          createTextNode({
+            id: "text-node",
+            metadata: { [projectResourceReferenceKey]: reference },
+            name: "notes.txt",
+            position: { x: 0, y: 0 },
+            resourceState: { editableText: false, status: "ready", text: "managed" },
+          }),
+        ],
+      }),
+      revision: 7,
+    }
+    const prepared = {
+      items: [
+        {
+          id: "editable-copy",
+          kind: "text" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/notes-copy.txt" } },
+          name: "notes-copy.txt",
+          state: { editableText: true, status: "ready" as const, text: "managed" },
+        },
+      ],
+      retainedOnFailure: [{ label: "Notes/notes-copy.txt" }],
+    }
+    const prepareManagedTextEditableCopy = mock(async () => prepared)
+    let failRelink = true
+    const relinkPreparedResource = mock(async () => {
+      if (failRelink) {
+        throw new CanvasResourcePartialFailureError(
+          new Error("save failed /native/private"),
+          prepared.retainedOnFailure,
+        )
+      }
+      return applicationResult()
+    })
+    let active = { canvasId: "canvas-main", projectId: "project-one", revision: 7 }
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { prepare: mock(), prepareManagedTextEditableCopy, withAdmittedExternalFiles: mock() },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => active,
+      },
+    )
+    const input = {
+      canvasId: "canvas-main",
+      commandId: "editable-copy",
+      expectedRevision: 7,
+      nodeId: "text-node",
+    }
+
+    await expect(handlers.get("canvas:resource-save-editable-copy")!({ sender: { id: 4 } }, input)).resolves.toEqual({
+      kind: canvasResourcePartialFailureKind,
+      retainedLabels: ["Notes/notes-copy.txt"],
+    })
+    expect(prepareManagedTextEditableCopy).toHaveBeenCalledWith({
+      projectId: "project-one",
+      reference,
+      sourceId: "editable-copy",
+    })
+    expect(JSON.stringify(prepareManagedTextEditableCopy.mock.calls)).not.toContain('managed"')
+
+    failRelink = false
+    prepareManagedTextEditableCopy.mockImplementation(async () => {
+      active = { canvasId: "other", projectId: "project-two", revision: 0 }
+      return prepared
+    })
+    await expect(
+      handlers.get("canvas:resource-save-editable-copy")!(
+        { sender: { id: 4 } },
+        {
+          ...input,
+          commandId: "scope-switch",
+        },
+      ),
+    ).resolves.toEqual({
+      kind: canvasResourcePartialFailureKind,
+      retainedLabels: ["Notes/notes-copy.txt"],
+    })
+    expect(relinkPreparedResource).toHaveBeenCalledTimes(1)
+  })
+
+  test("rejects text and folder relinks whose prepared typed reference is incompatible", async () => {
+    const cases = [
+      {
+        node: createTextNode({
+          id: "resource-node",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "missing.md" } },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "missing" },
+        }),
+        prepared: {
+          id: "relink",
+          kind: "text" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "replacement.html" } },
+          state: { status: "stale" as const },
+        },
+        expected: "Markdown or plain text",
+      },
+      {
+        node: createFolderNode({
+          id: "resource-node",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "old",
+            kind: "folder",
+            metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "missing" } },
+            name: "missing",
+            state: { status: "missing" },
+          },
+        }),
+        prepared: {
+          id: "relink",
+          kind: "folder" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "replacement" } },
+          name: "replacement",
+          state: { status: "stale" as const },
+        },
+        expected: "Project directory",
+      },
+    ]
+
+    for (const item of cases) {
+      handlers.clear()
+      const document = {
+        ...createCanvasDocument({ id: "canvas-main", nodes: [item.node] }),
+        revision: 7,
+      }
+      const relinkPreparedResource = mock()
+      registerCanvasResourceIpc(
+        { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+        {
+          prepare: mock(async () => ({ items: [item.prepared] })),
+          withAdmittedExternalFiles: mock(),
+        },
+        {
+          documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+          isTrustedSender: () => true,
+          resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 7 }),
+        },
+      )
+
+      await expect(
+        handlers.get("canvas:resource-relink")!(
+          { sender: { id: 1 } },
+          {
+            canvasId: "canvas-main",
+            commandId: `invalid-${item.node.data.kind}`,
+            expectedRevision: 7,
+            nodeId: "resource-node",
+            source: { kind: "host-file", path: "replacement" },
+          },
+        ),
+      ).rejects.toThrow(item.expected)
+      expect(relinkPreparedResource).not.toHaveBeenCalled()
+    }
+  })
+
+  test("rejects an external directory before relink commit and consumes its local token", async () => {
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-main",
+        nodes: [
+          createMediaNode({
+            id: "file-node",
+            position: { x: 0, y: 0 },
+            resource: {
+              id: "old",
+              kind: "file",
+              metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "missing.bin" } },
+              state: { status: "missing" },
+            },
+          }),
+        ],
+      }),
+      revision: 7,
+    }
+    const relinkPreparedResource = mock()
+    const withAdmittedExternalFiles = mock(async () => {
+      throw new Error("External managed asset source is not a regular file")
+    })
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { withAdmittedExternalFiles },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 7 }),
+      },
+    )
+    const event = { sender: { id: 18 } }
+    const sourceToken = "canvas-resource_directory-token"
+    await handlers.get("canvas:resource-local-file-register")!(event, {
+      sourcePath: "/native/external-directory",
+      sourceToken,
+    })
+    const request = {
+      canvasId: "canvas-main",
+      commandId: "external-directory",
+      expectedRevision: 7,
+      nodeId: "file-node",
+      source: { kind: "local-file", name: "external-directory", sourceToken },
+    }
+
+    await expect(handlers.get("canvas:resource-relink")!(event, request)).rejects.toThrow("selected local file")
+    await expect(
+      handlers.get("canvas:resource-relink")!(event, {
+        ...request,
+        commandId: "external-directory-reuse",
+      }),
+    ).rejects.toThrow("selected local file")
+    expect(withAdmittedExternalFiles).toHaveBeenCalledTimes(1)
+    expect(relinkPreparedResource).not.toHaveBeenCalled()
+  })
+
   test("binds resource addition to the invoking renderer scope and fixes the UI actor in Main", async () => {
     const event = { sender: { id: 42 } }
     const resolvedEvents: TestEvent[] = []
@@ -287,7 +649,7 @@ describe("Canvas resource IPC", () => {
       "../private.md",
       "Generated/private.md",
       "Notes/nested/private.md",
-      "Notes/private.txt",
+      "Notes/private.rtf",
       "Notes/C:/private.md",
     ]) {
       handlers.clear()
@@ -361,11 +723,7 @@ describe("Canvas document hydration IPC", () => {
         data: { ...node.data, resourceState: { status: "ready", text: "# Hydrated" } },
       })),
     }))
-    registerCanvasDocumentIpc(
-      { load, save: mock() },
-      { hydrate },
-      { isTrustedSender: () => true },
-    )
+    registerCanvasDocumentIpc({ load, save: mock() }, { hydrate }, { isTrustedSender: () => true })
 
     const result = await handlers.get("canvas:document-load")!(
       { sender: { id: 2 } },
@@ -374,7 +732,13 @@ describe("Canvas document hydration IPC", () => {
 
     expect(hydrate).toHaveBeenCalledWith({ document, projectId: "project-one" })
     expect(result).toMatchObject({
-      document: { nodes: [expect.objectContaining({ data: expect.objectContaining({ resourceState: { status: "ready", text: "# Hydrated" } }) })] },
+      document: {
+        nodes: [
+          expect.objectContaining({
+            data: expect.objectContaining({ resourceState: { status: "ready", text: "# Hydrated" } }),
+          }),
+        ],
+      },
       storageVersion: "storage-4",
     })
   })
@@ -410,12 +774,21 @@ describe("Canvas document hydration IPC", () => {
 
     expect(load).toHaveBeenCalledWith({ canvasId: "canvas-main", scopeId: "project-one" })
     expect(hydrateStale).toHaveBeenCalledWith({ document, projectId: "project-one" })
-    expect(result).toMatchObject({ nodes: [expect.objectContaining({ data: expect.objectContaining({ resourceState: { status: "ready", text: "fresh" } }) })] })
+    expect(result).toMatchObject({
+      nodes: [
+        expect.objectContaining({
+          data: expect.objectContaining({ resourceState: { status: "ready", text: "fresh" } }),
+        }),
+      ],
+    })
   })
 
   test("rejects renderer-supplied scope and document fields before a forged reference can be read", async () => {
     const forged = textDocument({ kind: "project-file", path: "Secrets/forged.md" })
-    const load = mock(async () => ({ document: dehydrateProjectCanvasDocument(textDocument()), storageVersion: "storage-4" }))
+    const load = mock(async () => ({
+      document: dehydrateProjectCanvasDocument(textDocument()),
+      storageVersion: "storage-4",
+    }))
     const hydrateStale = mock(async () => {
       throw new Error("forged reference was read")
     })
@@ -429,11 +802,14 @@ describe("Canvas document hydration IPC", () => {
     )
 
     await expect(
-      handlers.get("canvas:resource-hydrate-stale")!({ sender: { id: 27 } }, {
-        canvasId: "canvas-main",
-        document: forged,
-        projectId: "project-one",
-      }),
+      handlers.get("canvas:resource-hydrate-stale")!(
+        { sender: { id: 27 } },
+        {
+          canvasId: "canvas-main",
+          document: forged,
+          projectId: "project-one",
+        },
+      ),
     ).rejects.toThrow("unsupported field")
     expect(load).not.toHaveBeenCalled()
     expect(hydrateStale).not.toHaveBeenCalled()
@@ -441,14 +817,14 @@ describe("Canvas document hydration IPC", () => {
 })
 
 describe("Canvas text resource IPC", () => {
-  function register(options: {
-    document?: ReturnType<typeof textDocument>
-    replace?: (input: unknown) => Promise<{ contentRevision: string }>
-    resolve?: (event: TestEvent) => Promise<{ canvasId: string; projectId: string; revision: number } | null>
-  } = {}) {
-    const compareAndReplaceTextFile = mock(
-      options.replace ?? (async () => ({ contentRevision: "b".repeat(64) })),
-    )
+  function register(
+    options: {
+      document?: ReturnType<typeof textDocument>
+      replace?: (input: unknown) => Promise<{ contentRevision: string }>
+      resolve?: (event: TestEvent) => Promise<{ canvasId: string; projectId: string; revision: number } | null>
+    } = {},
+  ) {
+    const compareAndReplaceTextFile = mock(options.replace ?? (async () => ({ contentRevision: "b".repeat(64) })))
     const load = mock(async () => ({
       document: options.document ?? textDocument(),
       storageVersion: "storage-4",
@@ -495,12 +871,15 @@ describe("Canvas text resource IPC", () => {
       handlers.clear()
       const ports = register()
       await expect(
-        handlers.get("canvas:text-resource-save")!({ sender: { id: 1 } }, {
-          content: "changed",
-          contentRevision: "a".repeat(64),
-          nodeId: "text-node",
-          ...extra,
-        }),
+        handlers.get("canvas:text-resource-save")!(
+          { sender: { id: 1 } },
+          {
+            content: "changed",
+            contentRevision: "a".repeat(64),
+            nodeId: "text-node",
+            ...extra,
+          },
+        ),
       ).rejects.toThrow(/unsupported field/i)
       expect(ports.load).not.toHaveBeenCalled()
       expect(ports.compareAndReplaceTextFile).not.toHaveBeenCalled()
@@ -517,11 +896,14 @@ describe("Canvas text resource IPC", () => {
       handlers.clear()
       const ports = register({ document: textDocument(reference) })
       await expect(
-        handlers.get("canvas:text-resource-save")!({ sender: { id: 1 } }, {
-          content: "changed",
-          contentRevision: "a".repeat(64),
-          nodeId: "text-node",
-        }),
+        handlers.get("canvas:text-resource-save")!(
+          { sender: { id: 1 } },
+          {
+            content: "changed",
+            contentRevision: "a".repeat(64),
+            nodeId: "text-node",
+          },
+        ),
       ).rejects.toThrow("not editable")
       expect(ports.compareAndReplaceTextFile).not.toHaveBeenCalled()
     }
@@ -531,11 +913,14 @@ describe("Canvas text resource IPC", () => {
     document.nodes[0] = { ...document.nodes[0]!, data: { ...document.nodes[0]!.data, kind: "image" } }
     const ports = register({ document })
     await expect(
-      handlers.get("canvas:text-resource-save")!({ sender: { id: 1 } }, {
-        content: "changed",
-        contentRevision: "a".repeat(64),
-        nodeId: "text-node",
-      }),
+      handlers.get("canvas:text-resource-save")!(
+        { sender: { id: 1 } },
+        {
+          content: "changed",
+          contentRevision: "a".repeat(64),
+          nodeId: "text-node",
+        },
+      ),
     ).rejects.toThrow("not editable")
     expect(ports.compareAndReplaceTextFile).not.toHaveBeenCalled()
   })
@@ -550,11 +935,14 @@ describe("Canvas text resource IPC", () => {
     })
 
     await expect(
-      handlers.get("canvas:text-resource-save")!({ sender: { id: 8 } }, {
-        content: "changed",
-        contentRevision: "a".repeat(64),
-        nodeId: "text-node",
-      }),
+      handlers.get("canvas:text-resource-save")!(
+        { sender: { id: 8 } },
+        {
+          content: "changed",
+          contentRevision: "a".repeat(64),
+          nodeId: "text-node",
+        },
+      ),
     ).rejects.toThrow("live Workbench scope")
     expect(ports.compareAndReplaceTextFile).not.toHaveBeenCalled()
   })
@@ -563,11 +951,14 @@ describe("Canvas text resource IPC", () => {
     const ports = register({ document: { ...textDocument(), revision: 5 } })
 
     await expect(
-      handlers.get("canvas:text-resource-save")!({ sender: { id: 8 } }, {
-        content: "changed",
-        contentRevision: "a".repeat(64),
-        nodeId: "text-node",
-      }),
+      handlers.get("canvas:text-resource-save")!(
+        { sender: { id: 8 } },
+        {
+          content: "changed",
+          contentRevision: "a".repeat(64),
+          nodeId: "text-node",
+        },
+      ),
     ).rejects.toThrow("live Workbench scope")
 
     expect(ports.resolveActiveCanvas).toHaveBeenCalledTimes(1)
@@ -585,11 +976,14 @@ describe("Canvas text resource IPC", () => {
     })
 
     await expect(
-      handlers.get("canvas:text-resource-save")!({ sender: { id: 8 } }, {
-        content: "changed",
-        contentRevision: "a".repeat(64),
-        nodeId: "text-node",
-      }),
+      handlers.get("canvas:text-resource-save")!(
+        { sender: { id: 8 } },
+        {
+          content: "changed",
+          contentRevision: "a".repeat(64),
+          nodeId: "text-node",
+        },
+      ),
     ).rejects.toThrow("live Workbench scope")
 
     expect(ports.resolveActiveCanvas).toHaveBeenCalledTimes(2)
@@ -603,11 +997,14 @@ describe("Canvas text resource IPC", () => {
       },
     })
 
-    const result = await handlers.get("canvas:text-resource-save")!({ sender: { id: 1 } }, {
-      content: "changed",
-      contentRevision: "a".repeat(64),
-      nodeId: "text-node",
-    })
+    const result = await handlers.get("canvas:text-resource-save")!(
+      { sender: { id: 1 } },
+      {
+        content: "changed",
+        contentRevision: "a".repeat(64),
+        nodeId: "text-node",
+      },
+    )
 
     expect(result).toEqual({ actualRevision: "c".repeat(64), kind: canvasTextResourceConflictKind })
     expect(JSON.stringify(result)).not.toContain("/native/")

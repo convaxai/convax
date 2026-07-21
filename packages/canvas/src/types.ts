@@ -15,6 +15,7 @@ export type CanvasTextFormat = "plain" | "markdown"
 export type CanvasResourceStatus = "stale" | "ready" | "missing" | "corrupt" | "unsupported" | "conflict"
 
 export interface CanvasResourceRuntimeState {
+  canSaveEditableCopy?: boolean
   contentRevision?: string
   editableText?: boolean
   error?: string

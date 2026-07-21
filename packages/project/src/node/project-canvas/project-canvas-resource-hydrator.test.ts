@@ -31,11 +31,11 @@ beforeEach(async () => {
     manager,
     assets,
     ({ contentRevision, projectId: scopedProjectId, reference }) => {
-    const url = new URL(`convax-asset://${scopedProjectId}/${reference.kind}`)
-    if (reference.kind === "project-file") url.searchParams.set("path", reference.path)
-    if (reference.kind === "managed-asset") url.searchParams.set("sha256", reference.sha256)
-    if (contentRevision) url.searchParams.set("revision", contentRevision)
-    return url.href
+      const url = new URL(`convax-asset://${scopedProjectId}/${reference.kind}`)
+      if (reference.kind === "project-file") url.searchParams.set("path", reference.path)
+      if (reference.kind === "managed-asset") url.searchParams.set("sha256", reference.sha256)
+      if (contentRevision) url.searchParams.set("revision", contentRevision)
+      return url.href
     },
     { maximumMediaBytes: 1024 },
   )
@@ -102,8 +102,12 @@ describe("ProjectCanvasResourceHydrator", () => {
       reference: { kind: "project-file", path: "hero.png" },
     })
 
-    const firstRevision = createHash("sha256").update(Buffer.from([0x89, 0x50, 0x4e, 0x47])).digest("hex")
-    const secondRevision = createHash("sha256").update(Buffer.from([0x89, 0x50, 0x4e, 0x48])).digest("hex")
+    const firstRevision = createHash("sha256")
+      .update(Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+      .digest("hex")
+    const secondRevision = createHash("sha256")
+      .update(Buffer.from([0x89, 0x50, 0x4e, 0x48]))
+      .digest("hex")
     expect(first).toEqual({
       contentRevision: firstRevision,
       mediaType: "image/png",
@@ -132,6 +136,7 @@ describe("ProjectCanvasResourceHydrator", () => {
     expect(result).toEqual({
       contentRevision: reference.sha256,
       editableText: false,
+      canSaveEditableCopy: true,
       mediaType: "text/markdown",
       name: "outside.md",
       status: "ready",

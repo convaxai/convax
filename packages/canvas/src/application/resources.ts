@@ -4,6 +4,7 @@ import {
   CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
   createCanvasPendingResourceCommand,
+  createRelinkCanvasResourceCommand,
   type CanvasNodeContentGuard,
   type CanvasAddResourcesCommand,
   type CanvasBusinessCommand,
@@ -126,6 +127,14 @@ export interface CanvasFailPendingResourceRequest extends CanvasDocumentRef {
   targetNodeId: string
 }
 
+export interface CanvasRelinkPreparedResourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  commandId: string
+  expectedRevision: number
+  metadataKeysToRemove?: readonly string[]
+  nodeId: string
+}
+
 type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
 
 const maxCanvasResourceConflictRetries = 2
@@ -206,6 +215,37 @@ export class CanvasResourceBusinessService {
     return this.addResourcesShared(request, prepared)
   }
 
+  async relinkPreparedResource(
+    request: CanvasRelinkPreparedResourceRequest,
+    prepared: CanvasResourcePreparationResult,
+  ): Promise<CanvasApplicationCommandResult> {
+    try {
+      validateCanvasResourceCommandIdentity(request)
+      requireNonEmptyString(request.nodeId, "Canvas resource node id")
+      validatePreparedCanvasResources(prepared)
+      if (prepared.items.length !== 1) {
+        throw new CanvasCommandValidationError("Relink preparation must return exactly one Canvas resource")
+      }
+      const result = await this.application.execute({
+        canvasId: request.canvasId,
+        envelope: {
+          actor: request.actor,
+          command: createRelinkCanvasResourceCommand({
+            item: prepared.items[0],
+            metadataKeysToRemove: request.metadataKeysToRemove,
+            nodeId: request.nodeId,
+          }),
+          commandId: request.commandId,
+          expectedRevision: request.expectedRevision,
+        },
+        scopeId: request.scopeId,
+      })
+      return { ...result, warnings: [...(prepared.warnings ?? []), ...result.warnings] }
+    } catch (error) {
+      return throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
+    }
+  }
+
   private addResourcesShared(
     request: CanvasAddResourceSourcesRequest,
     hostPrepared?: CanvasResourcePreparationResult,
@@ -273,7 +313,8 @@ export class CanvasResourceBusinessService {
     const execution = { fingerprint, result }
     this.executions.set(key, execution)
     if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
-    void result.catch(() => {
+    void result.catch((error) => {
+      if (error instanceof CanvasResourcePartialFailureError) return
       if (this.executions.get(key) === execution) this.executions.delete(key)
     })
     return result
@@ -329,12 +370,7 @@ export class CanvasResourceBusinessService {
     hostPrepared?: CanvasResourcePreparationResult,
   ): Promise<CanvasApplicationCommandResult> {
     throwIfAborted(request.signal)
-    if (!request.commandId.trim() || !request.actor.id.trim()) {
-      throw new CanvasCommandValidationError("Canvas command and actor ids are required")
-    }
-    if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-      throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
-    }
+    validateCanvasResourceCommandIdentity(request)
     if (
       request.conflictPolicy !== undefined &&
       request.conflictPolicy !== "reject" &&
@@ -569,6 +605,19 @@ function validateResourceOperation(request: {
   }
 }
 
+function validateCanvasResourceCommandIdentity(request: {
+  actor: CanvasCommandActor
+  commandId: string
+  expectedRevision: number
+}) {
+  if (!request.commandId.trim() || !request.actor.id.trim() || !request.actor.kind.trim()) {
+    throw new CanvasCommandValidationError("Canvas command and actor ids are required")
+  }
+  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
+    throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
+  }
+}
+
 function isCanvasResourceConflict(error: unknown) {
   return error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError
 }
@@ -708,6 +757,11 @@ function requireResourceRuntimeState(value: unknown) {
   for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {
     if (value[key] !== undefined && typeof value[key] !== "string") {
       throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a string`)
+    }
+  }
+  for (const key of ["canSaveEditableCopy", "editableText"]) {
+    if (value[key] !== undefined && typeof value[key] !== "boolean") {
+      throw new CanvasCommandValidationError(`Prepared resource runtime ${key} must be a boolean`)
     }
   }
 }

@@ -928,6 +928,7 @@ function startApplication() {
     })
     const disposeCanvasResourceIpc = registerCanvasResourceIpc(canvasResources, canvasResourcePreparation, {
       ...ipcSecurity,
+      documents: canvasDocuments,
       resolveActiveCanvas,
     })
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasDocuments, {

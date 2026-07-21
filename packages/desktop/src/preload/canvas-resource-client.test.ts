@@ -38,6 +38,94 @@ function setup(
 }
 
 describe("preload Canvas resource client", () => {
+  test("relinks from one portable Project source without accepting Project ids, references, native paths, or bodies", async () => {
+    const { client, invoke } = setup()
+
+    await expect(
+      client.relink({
+        canvasId: "canvas-main",
+        commandId: "relink-project-file",
+        expectedRevision: 3,
+        nodeId: "image-node",
+        source: { kind: "host-file", path: "media/replacement.png" },
+      }),
+    ).resolves.toMatchObject({ revision: 4 })
+
+    expect(invoke).toHaveBeenCalledWith("canvas:resource-relink", {
+      canvasId: "canvas-main",
+      commandId: "relink-project-file",
+      expectedRevision: 3,
+      nodeId: "image-node",
+      source: { kind: "host-file", path: "media/replacement.png" },
+    })
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("projectId")
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("reference")
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("body")
+    expect(JSON.stringify(invoke.mock.calls)).not.toContain("/native/")
+  })
+
+  test("registers and consumes a local-file relink token exactly once while keeping its path out of relink IPC", async () => {
+    const invoke = mock(
+      async (channel?: string, _input?: unknown): Promise<unknown> =>
+        channel === "canvas:resource-local-file-register"
+          ? undefined
+          : { createdNodeIds: [], revision: 4, warnings: [] },
+    )
+    const { client } = setup(invoke)
+    const file = new File(["replacement"], "replacement.png", { type: "image/png" })
+    const sourceToken = client.createLocalFileToken(file)
+    const input = {
+      canvasId: "canvas-main",
+      commandId: "relink-local-file",
+      expectedRevision: 3,
+      nodeId: "image-node",
+      source: { kind: "local-file" as const, mediaType: file.type, name: file.name, sourceToken },
+    }
+
+    await expect(client.relink(input)).resolves.toMatchObject({ revision: 4 })
+    expect(invoke.mock.calls[0]).toEqual([
+      "canvas:resource-local-file-register",
+      { sourcePath: "/native/replacement.png", sourceToken },
+    ])
+    expect(invoke.mock.calls[1]).toEqual([
+      "canvas:resource-relink",
+      {
+        canvasId: "canvas-main",
+        commandId: "relink-local-file",
+        expectedRevision: 3,
+        nodeId: "image-node",
+        source: { kind: "local-file", mediaType: "image/png", name: "replacement.png", sourceToken },
+      },
+    ])
+    expect(JSON.stringify(invoke.mock.calls[1])).not.toContain("/native/")
+    await expect(client.relink({ ...input, commandId: "reuse-local-file" })).rejects.toThrow("authorization")
+  })
+
+  test("requests an editable managed-text copy without sending text, a reference, path, or Project id", async () => {
+    const { client, invoke } = setup()
+
+    await expect(
+      client.saveEditableCopy({
+        canvasId: "canvas-main",
+        commandId: "save-editable-copy",
+        expectedRevision: 3,
+        nodeId: "managed-text",
+      }),
+    ).resolves.toMatchObject({ revision: 4 })
+
+    expect(invoke).toHaveBeenCalledWith("canvas:resource-save-editable-copy", {
+      canvasId: "canvas-main",
+      commandId: "save-editable-copy",
+      expectedRevision: 3,
+      nodeId: "managed-text",
+    })
+    const serialized = JSON.stringify(invoke.mock.calls)
+    expect(serialized).not.toContain("projectId")
+    expect(serialized).not.toContain("reference")
+    expect(serialized).not.toContain("content")
+    expect(serialized).not.toContain("path")
+  })
+
   test("requests stale runtime hydration without exposing a native path", async () => {
     const document = createCanvasDocument({
       id: "canvas-main",
@@ -60,8 +148,9 @@ describe("preload Canvas resource client", () => {
     const invoke = mock(async () => hydrated)
     const { client } = setup(invoke)
 
-    await expect(client.hydrateStale({ canvasId: "canvas-main", revision: document.revision }))
-      .resolves.toEqual(hydrated)
+    await expect(client.hydrateStale({ canvasId: "canvas-main", revision: document.revision })).resolves.toEqual(
+      hydrated,
+    )
     expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
       canvasId: "canvas-main",
       revision: document.revision,
@@ -304,10 +393,7 @@ describe("Canvas text resource preload client", () => {
     controller.abort(new DOMException("Aborted", "AbortError"))
 
     await expect(
-      client.save(
-        { content: "changed", contentRevision: "a".repeat(64), nodeId: "text-node" },
-        controller.signal,
-      ),
+      client.save({ content: "changed", contentRevision: "a".repeat(64), nodeId: "text-node" }, controller.signal),
     ).rejects.toHaveProperty("name", "AbortError")
     expect(invoke).not.toHaveBeenCalled()
   })

@@ -3,6 +3,9 @@ import { parseCanvasDocument } from "@convax/canvas/core"
 import {
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
+  canvasResourceLocalFileRegisterIpcChannel,
+  canvasResourceRelinkIpcChannel,
+  canvasResourceSaveEditableCopyIpcChannel,
   canvasTextResourceIpcChannel,
   type CanvasResourceAddResult,
   type CanvasResourceClient,
@@ -158,7 +161,82 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       if (!document) throw new Error("Canvas resource refresh response is invalid")
       return document
     },
+    async relink(input) {
+      let source: Parameters<CanvasResourceClient["relink"]>[0]["source"]
+      if (input.source.kind === "host-file" || input.source.kind === "host-directory") {
+        source = { kind: input.source.kind, path: input.source.path }
+      } else if (input.source.kind === "local-file") {
+        const currentTime = now()
+        pruneExpired(currentTime)
+        const token = tokens.get(input.source.sourceToken)
+        if (!token || token.expiresAt < currentTime) {
+          throw new Error("Local file authorization has expired or is invalid")
+        }
+        tokens.delete(input.source.sourceToken)
+        try {
+          await options.invoke(canvasResourceLocalFileRegisterIpcChannel, {
+            sourcePath: token.path,
+            sourceToken: input.source.sourceToken,
+          })
+        } catch {
+          throw new Error("Could not authorize the selected local file")
+        }
+        source = {
+          kind: "local-file",
+          ...(input.source.mediaType === undefined ? {} : { mediaType: input.source.mediaType }),
+          name: input.source.name,
+          sourceToken: input.source.sourceToken,
+        }
+      } else {
+        throw new Error("Canvas relink source is invalid")
+      }
+      return invokeCanvasResourceRelink(options, canvasResourceRelinkIpcChannel, {
+        canvasId: input.canvasId,
+        commandId: input.commandId,
+        expectedRevision: input.expectedRevision,
+        nodeId: input.nodeId,
+        source,
+      })
+    },
+    saveEditableCopy(input) {
+      return invokeCanvasResourceRelink(options, canvasResourceSaveEditableCopyIpcChannel, {
+        canvasId: input.canvasId,
+        commandId: input.commandId,
+        expectedRevision: input.expectedRevision,
+        nodeId: input.nodeId,
+      })
+    },
   }
+}
+
+async function invokeCanvasResourceRelink(
+  options: CanvasResourcePreloadClientOptions,
+  channel: string,
+  input: unknown,
+) {
+  let result: unknown
+  try {
+    result = await options.invoke(channel, input)
+  } catch {
+    throw new Error("Could not relink the Canvas resource")
+  }
+  if (isCanvasResourcePartialFailureResponse(result)) {
+    throw new Error(
+      `Could not relink the Canvas resource; these Notes files were retained: ${result.retainedLabels.join(", ")}`,
+    )
+  }
+  if (!isRecord(result) || !isStringArray(result.warnings)) {
+    throw new Error("Canvas relink response is invalid")
+  }
+  const revision = result.revision
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error("Canvas relink response is invalid")
+  }
+  return { revision, warnings: result.warnings }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === "string")
 }
 
 function addUniqueSourceId(sourceIds: Set<string>, value: unknown) {

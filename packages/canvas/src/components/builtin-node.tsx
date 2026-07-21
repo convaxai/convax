@@ -16,6 +16,7 @@ import {
   Download,
   Bot,
   File,
+  FileUp,
   Folder,
   Heading1,
   Heading2,
@@ -32,6 +33,7 @@ import {
   Play,
   Plus,
   Quote,
+  RefreshCw,
   Save,
   Scan,
   Strikethrough,
@@ -536,6 +538,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingEditableCopy, setSavingEditableCopy] = useState(false)
   const [draft, setDraft] = useState(() => createCanvasTextDraftState(data.resourceState ?? {}))
   const draftRef = useRef(draft)
   const mountedRef = useRef(true)
@@ -712,6 +715,42 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     beginEditing()
     command(textEditor)
   }
+
+  const resourceActionToolbar =
+    data.resourceState?.status === "missing" ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+        <ToolbarButton
+          icon={<RefreshCw />}
+          label="Relink selected Project resource"
+          onClick={() => canvasEditor.relinkSelectedResource(props.id)}
+        />
+        <ToolbarButton
+          icon={<FileUp />}
+          label="Relink local file"
+          onClick={() => canvasEditor.relinkResource(props.id)}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => canvasEditor.removeNode(props.id)} />
+      </div>
+    ) : data.resourceState?.status === "ready" &&
+      data.resourceState.editableText === false &&
+      data.resourceState.canSaveEditableCopy === true ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+        <ToolbarButton
+          disabled={savingEditableCopy}
+          icon={savingEditableCopy ? <LoaderCircle className="animate-spin" /> : <Save />}
+          label="Save editable copy"
+          onClick={() => {
+            setSavingEditableCopy(true)
+            void canvasEditor.saveEditableCopy(props.id).finally(() => setSavingEditableCopy(false))
+          }}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => canvasEditor.removeNode(props.id)} />
+      </div>
+    ) : null
 
   const formattingToolbar =
     textEditor && editableResource ? (
@@ -915,7 +954,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           }}
         />
       </div>
-    ) : null
+    ) : (
+      resourceActionToolbar
+    )
 
   return (
     <>
@@ -1091,7 +1132,7 @@ function EmptyMedia(props: { kind: CanvasMediaKind }) {
       <div className="convax-media-empty__action nodrag nowheel">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
         <span className="convax-media-empty__title">{label} unavailable</span>
-        <span className="convax-media-empty__hint">Relink is not available yet</span>
+        <span className="convax-media-empty__hint">Relink a selected Project resource or choose a local file</span>
       </div>
     </div>
   )
@@ -1161,6 +1202,17 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const supportsFit = data.kind === "image" || data.kind === "video"
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      {data.resourceState?.status === "missing" ? (
+        <>
+          <ToolbarButton
+            icon={<RefreshCw />}
+            label="Relink selected Project resource"
+            onClick={() => editor.relinkSelectedResource(props.id)}
+          />
+          <ToolbarButton icon={<FileUp />} label="Relink local file" onClick={() => editor.relinkResource(props.id)} />
+          <ToolbarDivider />
+        </>
+      ) : null}
       {supportsFit ? (
         <ToolbarButton
           disabled={!url}
@@ -1249,6 +1301,16 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
   const data = props.data as CanvasFolderNodeData
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      {data.resourceState?.status === "missing" ? (
+        <>
+          <ToolbarButton
+            icon={<RefreshCw />}
+            label="Relink selected Project directory"
+            onClick={() => editor.relinkSelectedResource(props.id)}
+          />
+          <ToolbarDivider />
+        </>
+      ) : null}
       <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
       <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
     </div>

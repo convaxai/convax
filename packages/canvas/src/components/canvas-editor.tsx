@@ -708,10 +708,23 @@ export function handleCanvasResourceMutationFailure(input: {
   notifyError: (title: string, error: unknown) => void
   operationScope: CanvasResourceMutationScopeToken
   signal: AbortSignal
+  title?: string
 }) {
   if (!input.signal.aborted && isCanvasResourceMutationScopeCurrent(input.currentScope, input.operationScope)) {
-    input.notifyError("Could not add resources", input.error)
+    input.notifyError(input.title ?? "Could not add resources", input.error)
   }
+}
+export function handleCanvasResourceUploadSelection(files: readonly File[], upload: (files: readonly File[]) => void) {
+  upload(files)
+}
+
+export function handleCanvasResourceRelinkSelection(
+  nodeId: string | null,
+  files: readonly File[],
+  relink: (nodeId: string, file: File) => void,
+) {
+  const file = files[0]
+  if (nodeId && file) relink(nodeId, file)
 }
 export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(function CanvasEditor(props, ref) {
   const nodeRegistry = useMemo(() => props.nodeRegistry ?? createDefaultCanvasNodeRegistry(), [props.nodeRegistry])
@@ -774,6 +787,8 @@ function CanvasEditorContent(
   const spacePanning = useSpacePanning()
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const relinkInputRef = useRef<HTMLInputElement>(null)
+  const relinkNodeIdRef = useRef<string | null>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
   const boxSelectionActiveRef = useRef(false)
   const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
@@ -1942,6 +1957,93 @@ function CanvasEditorContent(
     },
     [mutationService, notificationService, notifyError, readOnly, reloadAuthoritativeDocument, selectNodes],
   )
+  const runResourceRelink = useCallback(
+    async (
+      operation: (input: { expectedRevision: number; signal: AbortSignal }) => Promise<{
+        revision: number
+        warnings: readonly string[]
+      }>,
+      successTitle: string,
+    ) => {
+      if (readOnly) return
+      const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      const operationScope = resourceMutationScopeRef.current
+      try {
+        const result = await operation({
+          expectedRevision: documentRef.current.revision,
+          signal: controller.signal,
+        })
+        if (
+          controller.signal.aborted ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, operationScope)
+        )
+          return
+        try {
+          await reloadDocument(controller.signal)
+        } catch {
+          if (!controller.signal.aborted) {
+            notificationService?.show({
+              description: "Reload the Canvas to show the committed resource.",
+              kind: "warning",
+              title: `${successTitle}, but refresh failed`,
+            })
+          }
+          return
+        }
+        if (
+          controller.signal.aborted ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, operationScope)
+        )
+          return
+        notificationService?.show({
+          description: result.warnings.length ? result.warnings.join("\n") : undefined,
+          kind: result.warnings.length ? "warning" : "success",
+          title: successTitle,
+        })
+      } catch (error) {
+        handleCanvasResourceMutationFailure({
+          currentScope: () => resourceMutationScopeRef.current,
+          error,
+          notifyError,
+          operationScope,
+          signal: controller.signal,
+          title: "Could not relink resource",
+        })
+      } finally {
+        operationControllersRef.current.delete(controller)
+      }
+    },
+    [notificationService, notifyError, readOnly, reloadDocument],
+  )
+  const requestResourceRelink = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.relink || readOnly) return
+      relinkNodeIdRef.current = nodeId
+      relinkInputRef.current?.click()
+    },
+    [mutationService, readOnly],
+  )
+  const requestSelectedResourceRelink = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.relink || readOnly) return
+      void runResourceRelink(
+        ({ expectedRevision, signal }) => mutationService.relink!({ expectedRevision, nodeId, signal }),
+        "Resource relinked",
+      )
+    },
+    [mutationService, readOnly, runResourceRelink],
+  )
+  const saveEditableCopy = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.saveEditableCopy || readOnly) return Promise.resolve()
+      return runResourceRelink(
+        ({ expectedRevision, signal }) => mutationService.saveEditableCopy!({ expectedRevision, nodeId, signal }),
+        "Editable copy saved",
+      )
+    },
+    [mutationService, readOnly, runResourceRelink],
+  )
   const addTextResource = useCallback(
     (position?: CanvasPoint, relation?: CanvasResourceMutationRequest["relation"]) => {
       runResourceMutation({
@@ -2493,6 +2595,8 @@ function CanvasEditorContent(
       setSelectionDragCandidateNode,
       startSelectionDrag,
       quickConnect,
+      relinkResource: requestResourceRelink,
+      relinkSelectedResource: requestSelectedResourceRelink,
       replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) =>
         dispatch({
           type: "replace-update",
@@ -2500,6 +2604,7 @@ function CanvasEditorContent(
         }),
       registerPendingDraft: (draft: CanvasPendingDraft) => pendingDraftsRef.current.register(draft),
       removeNode,
+      saveEditableCopy,
       selectNodes,
     }),
     [
@@ -2514,7 +2619,10 @@ function CanvasEditorContent(
       quickConnect,
       readOnly,
       finishSelectionDrag,
+      requestResourceRelink,
+      requestSelectedResourceRelink,
       removeNode,
+      saveEditableCopy,
       selectNodes,
       selection,
       selectionActionStateVersion,
@@ -3208,9 +3316,34 @@ function CanvasEditorContent(
               <input
                 ref={uploadInputRef}
                 className="hidden"
+                data-canvas-resource-picker="upload"
                 multiple
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  uploadFiles([...(event.currentTarget.files ?? [])])
+                  const files = [...(event.currentTarget.files ?? [])]
+                  handleCanvasResourceUploadSelection(files, uploadFiles)
+                  event.currentTarget.value = ""
+                }}
+                type="file"
+              />
+              <input
+                ref={relinkInputRef}
+                className="hidden"
+                data-canvas-resource-picker="relink"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  const relinkNodeId = relinkNodeIdRef.current
+                  relinkNodeIdRef.current = null
+                  handleCanvasResourceRelinkSelection(
+                    relinkNodeId,
+                    [...(event.currentTarget.files ?? [])],
+                    (nodeId, file) => {
+                      if (!mutationService?.relink) return
+                      void runResourceRelink(
+                        ({ expectedRevision, signal }) =>
+                          mutationService.relink!({ expectedRevision, file, nodeId, signal }),
+                        "Resource relinked",
+                      )
+                    },
+                  )
                   event.currentTarget.value = ""
                 }}
                 type="file"

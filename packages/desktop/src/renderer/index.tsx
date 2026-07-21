@@ -85,7 +85,7 @@ import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
-import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController } from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
@@ -840,6 +840,29 @@ function App() {
             projectId: activeProjectId,
             ...(request.relation === undefined ? {} : { relation: request.relation }),
             sources: [...request.sources, ...transport.sources],
+          })
+        },
+        async relink(request) {
+          return runProjectCanvasResourceRelink({
+            activeCanvasId,
+            activeProjectId,
+            createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+            flush: flushCanvasForAgent,
+            projectFiles: projectFilesController,
+            request,
+            resources: window.convax.canvas.resources,
+          })
+        },
+        async saveEditableCopy(request) {
+          if (request.signal.aborted) throw request.signal.reason
+          if (!activeCanvasId) throw new Error("Open a Project Canvas before saving an editable copy")
+          await flushCanvasForAgent()
+          if (request.signal.aborted) throw request.signal.reason
+          return window.convax.canvas.resources.saveEditableCopy({
+            canvasId: activeCanvasId,
+            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+            expectedRevision: request.expectedRevision,
+            nodeId: request.nodeId,
           })
         },
       },

@@ -34,6 +34,18 @@ export interface CanvasResourceMutationService {
     revision: number
     warnings: readonly string[]
   }>
+  relink?(input: {
+    expectedRevision: number
+    file?: File
+    nodeId: string
+    signal: AbortSignal
+    source?: Extract<CanvasResourceSource, { kind: "host-directory" | "host-file" }>
+  }): Promise<{ revision: number; warnings: readonly string[] }>
+  saveEditableCopy?(input: {
+    expectedRevision: number
+    nodeId: string
+    signal: AbortSignal
+  }): Promise<{ revision: number; warnings: readonly string[] }>
 }
 
 export interface CanvasResourceHydrationService {

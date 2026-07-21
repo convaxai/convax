@@ -1,9 +1,12 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import type { ProjectCanvas, ProjectCanvasControllerSnapshot } from "@convax/project/canvas"
+import type { ProjectFilesControllerSnapshot } from "@convax/project-files"
 import { WorkbenchController } from "@convax/workbench"
 import {
   ProjectCanvasWorkbenchCoordinator,
   projectCanvasInput,
+  resolveSelectedProjectCanvasRelinkSource,
+  runProjectCanvasResourceRelink,
   type ProjectCanvasCatalogControllerPort,
 } from "./project-canvas-workbench"
 
@@ -44,6 +47,137 @@ function catalogHarness(initial = [canvas("canvas-one"), canvas("canvas-two")]) 
 }
 
 describe("Project Canvas Workbench coordination", () => {
+  test("captures the selected Project resource before waiting for a slow Canvas flush", async () => {
+    let snapshot: ProjectFilesControllerSnapshot = {
+      error: null,
+      expandedPaths: [],
+      listings: {
+        "": {
+          entries: [
+            { kind: "file", modifiedAt: 1, name: "first.png", parentPath: "", path: "first.png", size: 1 },
+            { kind: "file", modifiedAt: 2, name: "later.png", parentPath: "", path: "later.png", size: 2 },
+          ],
+          path: "",
+          projectId: "project-one",
+        },
+      },
+      loadingPaths: [],
+      projectId: "project-one",
+      selectedPaths: ["first.png"],
+    }
+    let releaseFlush!: () => void
+    let markFlushStarted!: () => void
+    const flushStarted = new Promise<void>((resolve) => {
+      markFlushStarted = resolve
+    })
+    const flushBarrier = new Promise<void>((resolve) => {
+      releaseFlush = resolve
+    })
+    const flush = mock(async () => {
+      markFlushStarted()
+      await flushBarrier
+    })
+    const relink = mock(async (input: unknown) => ({ input, revision: 8, warnings: [] }))
+
+    const operation = runProjectCanvasResourceRelink({
+      activeCanvasId: "canvas-one",
+      activeProjectId: "project-one",
+      createCommandId: () => "renderer:relink",
+      flush,
+      projectFiles: { getSnapshot: () => snapshot },
+      request: {
+        expectedRevision: 7,
+        nodeId: "missing-image",
+        signal: new AbortController().signal,
+      },
+      resources: { createLocalFileToken: mock(), relink },
+    })
+    await flushStarted
+    snapshot = { ...snapshot, selectedPaths: ["later.png"] }
+    releaseFlush()
+    await operation
+
+    expect(relink).toHaveBeenCalledWith({
+      canvasId: "canvas-one",
+      commandId: "renderer:relink",
+      expectedRevision: 7,
+      nodeId: "missing-image",
+      source: { kind: "host-file", path: "first.png" },
+    })
+  })
+
+  test("rejects an invalid Project selection before flushing or invoking relink IPC", async () => {
+    const flush = mock(async () => undefined)
+    const relink = mock(async () => ({ revision: 8, warnings: [] }))
+
+    await expect(
+      runProjectCanvasResourceRelink({
+        activeCanvasId: "canvas-one",
+        activeProjectId: "project-one",
+        createCommandId: () => "renderer:relink",
+        flush,
+        projectFiles: {
+          getSnapshot: () => ({
+            error: null,
+            expandedPaths: [],
+            listings: {},
+            loadingPaths: [],
+            projectId: "project-one",
+            selectedPaths: [],
+          }),
+        },
+        request: {
+          expectedRevision: 7,
+          nodeId: "missing-image",
+          signal: new AbortController().signal,
+        },
+        resources: { createLocalFileToken: mock(), relink },
+      }),
+    ).rejects.toThrow("Select exactly one Project file or directory")
+    expect(flush).not.toHaveBeenCalled()
+    expect(relink).not.toHaveBeenCalled()
+  })
+
+  test("maps one live selected Project file or directory to a portable relink source", () => {
+    const snapshot: ProjectFilesControllerSnapshot = {
+      error: null,
+      expandedPaths: ["Media"],
+      listings: {
+        "": {
+          entries: [{ kind: "directory", modifiedAt: 1, name: "Media", parentPath: "", path: "Media" }],
+          path: "",
+          projectId: "project-one",
+        },
+        Media: {
+          entries: [
+            { kind: "file", modifiedAt: 2, name: "clip.mp4", parentPath: "Media", path: "Media/clip.mp4", size: 3 },
+          ],
+          path: "Media",
+          projectId: "project-one",
+        },
+      },
+      loadingPaths: [],
+      projectId: "project-one",
+      selectedPaths: ["Media/clip.mp4"],
+    }
+    const input = (next: Partial<ProjectFilesControllerSnapshot> = {}) => ({
+      activeProjectId: "project-one",
+      projectFiles: { getSnapshot: () => ({ ...snapshot, ...next }) },
+    })
+
+    expect(resolveSelectedProjectCanvasRelinkSource(input())).toEqual({ kind: "host-file", path: "Media/clip.mp4" })
+    expect(resolveSelectedProjectCanvasRelinkSource(input({ selectedPaths: ["Media"] }))).toEqual({
+      kind: "host-directory",
+      path: "Media",
+    })
+    expect(() => resolveSelectedProjectCanvasRelinkSource(input({ selectedPaths: [] }))).toThrow(
+      "Select exactly one Project file or directory",
+    )
+    expect(() => resolveSelectedProjectCanvasRelinkSource(input({ projectId: "project-two" }))).toThrow(
+      "active Project",
+    )
+  })
+
   test("restores a valid preference and falls back when that Canvas disappears", async () => {
     const catalog = catalogHarness()
     const workbench = new WorkbenchController()
@@ -93,7 +227,9 @@ describe("Project Canvas Workbench coordination", () => {
     }
     const workbench = new WorkbenchController({
       beforeInputChange(current, next) {
-        events.push(`leave:${current?.kind === "canvas" ? current.canvasId : "none"}->${next?.kind === "canvas" ? next.canvasId : "none"}`)
+        events.push(
+          `leave:${current?.kind === "canvas" ? current.canvasId : "none"}->${next?.kind === "canvas" ? next.canvasId : "none"}`,
+        )
       },
     })
     workbench.setProject("project-one", projectCanvasInput("project-one", "canvas-one"))

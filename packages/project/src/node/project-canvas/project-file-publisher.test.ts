@@ -184,6 +184,25 @@ describe("ProjectFilePublisher", () => {
     expect((await fs.lstat(path.join(projectRoot, "Notes", "Brief-link.md"))).isSymbolicLink()).toBe(true)
   })
 
+  test("publishes plain text with a .txt extension without clobbering an existing Note", async () => {
+    await fs.mkdir(path.join(projectRoot, "Notes"))
+    await fs.writeFile(path.join(projectRoot, "Notes", "notes-taken.txt"), "existing")
+    const ids = ["taken", "fresh"]
+    const publisher = new ProjectFilePublisher(roots(), { randomId: () => ids.shift()! })
+
+    const published = await publisher.publishText({
+      content: "editable copy",
+      directory: "Notes",
+      extension: ".txt",
+      name: "notes.txt",
+      projectId: "project_one",
+    })
+
+    expect(published.path).toBe("Notes/notes-fresh.txt")
+    expect(await fs.readFile(path.join(projectRoot, "Notes", "notes-taken.txt"), "utf8")).toBe("existing")
+    expect(await fs.readFile(path.join(projectRoot, "Notes", "notes-fresh.txt"), "utf8")).toBe("editable copy")
+  })
+
   test("normalizes an optional display name to one portable extensionless stem", async () => {
     const publisher = new ProjectFilePublisher(roots(), { randomId: () => "portable" })
 

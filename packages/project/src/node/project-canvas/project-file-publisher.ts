@@ -46,12 +46,12 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   async publishText(input: {
     content: string
     directory: "Notes"
-    extension: ".md"
+    extension: ".md" | ".txt"
     name?: string
     projectId: string
   }) {
-    if (input.directory !== "Notes" || input.extension !== ".md") {
-      throw new Error("Project text publication only supports Notes Markdown files")
+    if (input.directory !== "Notes" || (input.extension !== ".md" && input.extension !== ".txt")) {
+      throw new Error("Project text publication only supports Notes Markdown and plain-text files")
     }
     if (typeof input.content !== "string") throw new Error("Project text publication content must be a string")
     if (typeof input.projectId !== "string" || !input.projectId) throw new Error("Project id is required")

@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import { getProjectResourceReference, type ProjectResourceReference } from "../../canvas/project-resources"
@@ -11,6 +15,131 @@ import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 const requestRef = { canvasId: "canvas_main", scopeId: "project_one" }
 
 describe("project canvas resource preparation", () => {
+  test.each([
+    ["Brief.md", ".md", "text/markdown"],
+    ["notes.TXT", ".txt", "text/plain"],
+  ] as const)("publishes a verified managed %s as an editable Notes copy", async (name, extension, mimeType) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-editable-copy-"))
+    const sourcePath = path.join(root, name)
+    const content = "# 你好\nPlain text"
+    const bytes = Buffer.from(content, "utf8")
+    const sha256 = createHash("sha256").update(bytes).digest("hex")
+    await fs.writeFile(sourcePath, bytes)
+    const publications: unknown[] = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      {
+        async publishText(input) {
+          publications.push(input)
+          return { contentRevision: sha256, path: `Notes/${name}-copy${extension}` }
+        },
+      },
+      {
+        async resolve(input: unknown) {
+          expect(input).toEqual({
+            projectId: "project_one",
+            reference: { kind: "managed-asset", mediaType: mimeType, name, sha256 },
+          })
+          return fs.realpath(sourcePath)
+        },
+      } as unknown as ProjectManagedAssetStore,
+    )
+
+    try {
+      const prepared = await preparation.prepareManagedTextEditableCopy({
+        projectId: "project_one",
+        reference: { kind: "managed-asset", mediaType: mimeType, name, sha256 },
+        sourceId: "editable-copy",
+      })
+
+      expect(publications).toEqual([
+        {
+          content,
+          directory: "Notes",
+          extension,
+          name,
+          projectId: "project_one",
+        },
+      ])
+      expect(prepared.retainedOnFailure).toEqual([{ label: `Notes/${name}-copy${extension}` }])
+      expect(prepared.items[0]).toMatchObject({
+        id: "editable-copy",
+        kind: "text",
+        metadata: {
+          convaxProjectResource: { kind: "project-file", path: `Notes/${name}-copy${extension}` },
+        },
+        mimeType,
+        name: `${name}-copy${extension}`,
+        state: {
+          contentRevision: sha256,
+          editableText: true,
+          status: "ready",
+          text: content,
+        },
+      })
+      expect(await fs.readFile(sourcePath)).toEqual(bytes)
+    } finally {
+      await fs.rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects non-text, invalid UTF-8, and digest-mismatched managed editable copies before publication", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-invalid-editable-copy-"))
+    const sourcePath = path.join(root, "invalid.md")
+    let publications = 0
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      {
+        async publishText() {
+          publications += 1
+          throw new Error("must not publish")
+        },
+      },
+      {
+        async resolve() {
+          return fs.realpath(sourcePath)
+        },
+      } as unknown as ProjectManagedAssetStore,
+    )
+    const base = { projectId: "project_one", sourceId: "editable-copy" }
+
+    try {
+      await fs.writeFile(sourcePath, "valid")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "image.png", sha256: "a".repeat(64) },
+        }),
+      ).rejects.toThrow("Markdown or plain text")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "project-file", path: "Notes/already.md" },
+        }),
+      ).rejects.toThrow("managed asset")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "wrong.md", sha256: "a".repeat(64) },
+        }),
+      ).rejects.toThrow("digest")
+
+      await fs.writeFile(sourcePath, Buffer.from([0xc3, 0x28]))
+      const invalidDigest = createHash("sha256")
+        .update(Buffer.from([0xc3, 0x28]))
+        .digest("hex")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "invalid.md", sha256: invalidDigest },
+        }),
+      ).rejects.toThrow("UTF-8")
+      expect(publications).toBe(0)
+    } finally {
+      await fs.rm(root, { force: true, recursive: true })
+    }
+  })
+
   test("keeps every Project file in place", async () => {
     let assetCalls = 0
     const preparation = new ProjectCanvasResourcePreparation(

@@ -3,9 +3,12 @@ import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/19"
+export const desktopProtocolVersion = "convax.desktop-ipc/20"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
+export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
+export const canvasResourceRelinkIpcChannel = "canvas:resource-relink"
+export const canvasResourceSaveEditableCopyIpcChannel = "canvas:resource-save-editable-copy"
 export const canvasTextResourceIpcChannel = "canvas:text-resource-save"
 
 export type CanvasTextResourceClient = CanvasTextResourceService
@@ -36,10 +39,34 @@ export interface CanvasResourceAddInput {
   sources: readonly CanvasResourceSource[]
 }
 
+export interface CanvasResourceRelinkInput {
+  canvasId: string
+  commandId: string
+  expectedRevision: number
+  nodeId: string
+  source:
+    | { kind: "host-directory" | "host-file"; path: string }
+    | { kind: "local-file"; mediaType?: string; name: string; sourceToken: string }
+}
+
+export interface CanvasResourceSaveEditableCopyInput {
+  canvasId: string
+  commandId: string
+  expectedRevision: number
+  nodeId: string
+}
+
+export interface CanvasResourceRelinkResult {
+  revision: number
+  warnings: readonly string[]
+}
+
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
   hydrateStale(input: { canvasId: string; revision: number }): Promise<CanvasDocument>
+  relink(input: CanvasResourceRelinkInput): Promise<CanvasResourceRelinkResult>
+  saveEditableCopy(input: CanvasResourceSaveEditableCopyInput): Promise<CanvasResourceRelinkResult>
 }
 
 export interface DesktopProtocolClient {

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode, createTextNode as createCanvasTextNode } from "../document"
+import {
+  createCanvasDocument,
+  createGroupNode,
+  createMediaNode,
+  createTextNode as createCanvasTextNode,
+} from "../document"
 import type { CanvasTextResource } from "../types"
 import { CanvasCommandValidationError, CanvasRevisionConflictError, createCanvasNodeContentGuard } from "./commands"
 import {
@@ -39,6 +44,258 @@ function preparedText(text: string): CanvasTextResource {
 }
 
 describe("canvas resource business service", () => {
+  test("relinks one resource while preserving its identity, geometry, relationships, and unrelated data", async () => {
+    const parent = createGroupNode({
+      height: 640,
+      id: "parent",
+      position: { x: 30, y: 40 },
+      width: 960,
+    })
+    const image = {
+      ...createMediaNode({
+        id: "image",
+        label: "Pinned title",
+        position: { x: 120, y: 80 },
+        resource: {
+          height: 720,
+          id: "old-resource",
+          kind: "image" as const,
+          metadata: {
+            convaxPluginState: { crop: "center" },
+            convaxProjectResource: { kind: "project-file", path: "old.png" },
+            convaxProjectResourceBindings: {
+              poster: { kind: "managed-asset", name: "old-poster.jpg", sha256: "f".repeat(64) },
+            },
+          },
+          mimeType: "image/png",
+          name: "old.png",
+          state: { contentRevision: "old", status: "missing" as const },
+          width: 1_280,
+        },
+      }),
+      measured: { height: 181, width: 321 },
+      parentId: "parent",
+      zIndex: 7,
+    }
+    const document = {
+      ...createCanvasDocument({
+        edges: [{ id: "edge", source: "image", target: "parent", type: "smoothstep" }],
+        id: "canvas-main",
+        nodes: [parent, image],
+      }),
+      revision: 4,
+    }
+    let snapshot: CanvasDocumentSnapshot = { document, storageVersion: "v4" }
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          throw new Error("prepared relink must not prepare again")
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          snapshot = { document: request.document, storageVersion: "v5" }
+          return { storageVersion: "v5" }
+        },
+      }),
+    )
+
+    const result = await business.relinkPreparedResource(
+      {
+        actor: { id: "desktop:renderer", kind: "ui" },
+        canvasId: "canvas-main",
+        commandId: "relink-image",
+        expectedRevision: 4,
+        nodeId: "image",
+        metadataKeysToRemove: ["convaxProjectResourceBindings"],
+        scopeId: "project-one",
+      },
+      {
+        items: [
+          {
+            id: "replacement",
+            kind: "image",
+            metadata: { convaxProjectResource: { kind: "managed-asset", name: "new.webp", sha256: "a".repeat(64) } },
+            mimeType: "image/webp",
+            name: "new.webp",
+            state: { status: "stale" },
+          },
+        ],
+      },
+    )
+
+    const next = result.document.nodes.find((node) => node.id === "image")!
+    expect(result).toMatchObject({ affectedNodeIds: ["image"], createdNodeIds: [], storageVersion: "v5" })
+    expect(result.document).toMatchObject({ edges: document.edges, revision: 5 })
+    expect(next).toMatchObject({
+      id: "image",
+      measured: { height: 181, width: 321 },
+      parentId: "parent",
+      position: { x: 120, y: 80 },
+      style: image.style,
+      zIndex: 7,
+      data: {
+        kind: "image",
+        label: "Pinned title",
+        metadata: {
+          convaxPluginState: { crop: "center" },
+          convaxProjectResource: { kind: "managed-asset", name: "new.webp", sha256: "a".repeat(64) },
+        },
+        mimeType: "image/webp",
+        name: "new.webp",
+        resourceState: { status: "stale" },
+      },
+    })
+    expect(next.data).not.toHaveProperty("height")
+    expect(next.data).not.toHaveProperty("width")
+    expect(next.data).not.toHaveProperty("durationMs")
+    expect(next.data.metadata).not.toHaveProperty("convaxProjectResourceBindings")
+  })
+
+  test("replaces media dimensions and duration without resizing its Canvas geometry or changing fit", async () => {
+    const video = {
+      ...createMediaNode({
+        id: "video",
+        position: { x: 40, y: 60 },
+        resource: {
+          durationMs: 120_000,
+          height: 1_080,
+          id: "old-video",
+          kind: "video" as const,
+          metadata: { convaxProjectResource: { kind: "project-file", path: "old.mp4" } },
+          mimeType: "video/mp4",
+          name: "old.mp4",
+          state: { status: "missing" as const },
+          width: 1_920,
+        },
+      }),
+      height: 277,
+      measured: { height: 279, width: 499 },
+      style: { height: 277, width: 500 },
+      width: 500,
+    }
+    video.data.fit = "cover"
+    let snapshot: CanvasDocumentSnapshot = {
+      document: { ...createCanvasDocument({ id: "canvas-video", nodes: [video] }), revision: 9 },
+      storageVersion: "v9",
+    }
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          throw new Error("not used")
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          snapshot = { document: request.document, storageVersion: "v10" }
+          return { storageVersion: "v10" }
+        },
+      }),
+    )
+
+    const result = await business.relinkPreparedResource(
+      {
+        actor: { id: "desktop:renderer", kind: "ui" },
+        canvasId: "canvas-video",
+        commandId: "relink-video",
+        expectedRevision: 9,
+        nodeId: "video",
+        scopeId: "project-one",
+      },
+      {
+        items: [
+          {
+            durationMs: 3_000,
+            height: 360,
+            id: "new-video",
+            kind: "video",
+            metadata: { convaxProjectResource: { kind: "project-file", path: "short.mp4" } },
+            mimeType: "video/mp4",
+            name: "short.mp4",
+            state: { status: "stale" },
+            width: 640,
+          },
+        ],
+      },
+    )
+
+    const next = result.document.nodes[0]
+    expect(next).toMatchObject({
+      height: 277,
+      measured: { height: 279, width: 499 },
+      position: { x: 40, y: 60 },
+      style: { height: 277, width: 500 },
+      width: 500,
+      data: { durationMs: 3_000, fit: "cover", height: 360, width: 640 },
+    })
+  })
+
+  test("rejects missing nodes, stale revisions, and incompatible relink kinds", async () => {
+    const image = createMediaNode({
+      id: "image",
+      position: { x: 0, y: 0 },
+      resource: { id: "old", kind: "image", metadata: {}, state: { status: "missing" } },
+    })
+    const snapshot: CanvasDocumentSnapshot = {
+      document: { ...createCanvasDocument({ id: "canvas-main", nodes: [image] }), revision: 2 },
+      storageVersion: "v2",
+    }
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [] }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save() {
+          saveCalls += 1
+          return { storageVersion: "unexpected" }
+        },
+      }),
+    )
+    const request = {
+      actor: { id: "desktop:renderer", kind: "ui" },
+      canvasId: "canvas-main",
+      expectedRevision: 2,
+      nodeId: "image",
+      scopeId: "project-one",
+    }
+    const video = {
+      id: "replacement",
+      kind: "video" as const,
+      metadata: {},
+      name: "replacement.mp4",
+      state: { status: "stale" as const },
+    }
+
+    await expect(
+      business.relinkPreparedResource({ ...request, commandId: "wrong-kind" }, { items: [video] }),
+    ).rejects.toThrow("cannot be relinked")
+    await expect(
+      business.relinkPreparedResource(
+        { ...request, commandId: "missing-node", nodeId: "missing" },
+        { items: [{ ...video, kind: "image" }] },
+      ),
+    ).rejects.toThrow("Canvas node was not found")
+    await expect(
+      business.relinkPreparedResource(
+        { ...request, commandId: "stale", expectedRevision: 1 },
+        { items: [{ ...video, kind: "image" }] },
+      ),
+    ).rejects.toBeInstanceOf(CanvasRevisionConflictError)
+    expect(saveCalls).toBe(0)
+  })
+
   test("merges retained labels and wraps only a final application failure", async () => {
     const commitFailure = new Error("repository save failed")
     let attempts = 0

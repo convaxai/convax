@@ -70,10 +70,7 @@ export class ProjectCanvasResourceHydrator {
     )
   }
 
-  async resolve(input: {
-    projectId: string
-    reference: ProjectResourceReference
-  }): Promise<ProjectResourceSnapshot> {
+  async resolve(input: { projectId: string; reference: ProjectResourceReference }): Promise<ProjectResourceSnapshot> {
     let reference: ProjectResourceReference
     try {
       reference = requireProjectResourceReference(input.reference)
@@ -86,7 +83,9 @@ export class ProjectCanvasResourceHydrator {
         await this.files.listDirectory({ path: reference.path, projectId: input.projectId })
         return { name: path.posix.basename(reference.path), status: "ready" }
       } catch (error) {
-        return isMissing(error) ? { status: "missing" } : { error: "Project directory is unavailable", status: "corrupt" }
+        return isMissing(error)
+          ? { status: "missing" }
+          : { error: "Project directory is unavailable", status: "corrupt" }
       }
     }
 
@@ -122,11 +121,7 @@ export class ProjectCanvasResourceHydrator {
       const info = await this.files.readFileInfo({ path: reference.path, projectId })
       if (!isUrlResourceMediaType(info.mimeType)) return { status: "unsupported" }
       const absolutePath = await this.files.resolveEntryPath({ path: reference.path, projectId })
-      const { bytes } = await readStableProjectFile(
-        absolutePath,
-        reference.path,
-        this.#maximumMediaBytes,
-      )
+      const { bytes } = await readStableProjectFile(absolutePath, reference.path, this.#maximumMediaBytes)
       const contentRevision = createHash("sha256").update(bytes).digest("hex")
       return {
         contentRevision,
@@ -163,6 +158,7 @@ export class ProjectCanvasResourceHydrator {
           return { error: "Managed resource is corrupt", status: "corrupt" }
         }
         return {
+          canSaveEditableCopy: true,
           contentRevision: contents.contentRevision,
           editableText: false,
           mediaType,

@@ -28,7 +28,9 @@ mock.module("@xyflow/react", () => ({
 const {
   applyCanvasTextDraftBase,
   BuiltinCanvasNode,
+  BuiltinFolderFileNode,
   BuiltinMediaFileNode,
+  BuiltinTextFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
   ExpandedTextEditorDialog,
@@ -126,10 +128,13 @@ function renderWithEditor(
     hydrating,
     isSelectionActionPending: () => false,
     quickConnect: () => {},
+    relinkResource: () => {},
+    relinkSelectedResource: () => {},
     replaceResourceState: () => {},
     registerPendingDraft: () => () => {},
     readOnly,
     removeNode: () => {},
+    saveEditableCopy: async () => {},
     selectNodes: () => {},
     selection: currentSelection,
     selectionContext: deriveCanvasSelectionContext(currentSelection),
@@ -278,14 +283,98 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain('aria-label="刷新图片"')
   })
 
-  test("keeps an empty media body unavailable until the host provides relinking", () => {
-    const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
-      <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Image", url: "" }} />
-    ))
+  test("exposes explicit relink actions for missing resources and editable-copy for managed text", () => {
+    const missingImage: CanvasNode = {
+      id: "missing-image",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "image",
+        label: "Missing image",
+        metadata: {},
+        resourceState: { status: "missing" },
+      },
+    }
+    const missingFolder: CanvasNode = {
+      id: "missing-folder",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "folder",
+        label: "Missing folder",
+        metadata: {},
+        resourceState: { status: "missing" },
+      },
+    }
+    const managedText: CanvasNode = {
+      id: "managed-text",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "text",
+        label: "Managed text",
+        metadata: {},
+        name: "brief.md",
+        resourceState: {
+          canSaveEditableCopy: true,
+          contentRevision: "a".repeat(64),
+          editableText: false,
+          status: "ready",
+          text: "# Brief",
+        },
+      },
+    }
 
-    expect(markup).toContain("image unavailable")
-    expect(markup).toContain("Relink is not available yet")
-    expect(markup).not.toContain('aria-label="Add image"')
+    const imageMarkup = renderWithEditor(
+      selection([missingImage.id]),
+      false,
+      (props) => <BuiltinMediaFileNode {...props} />,
+      false,
+      { node: missingImage },
+    )
+    const folderMarkup = renderWithEditor(
+      selection([missingFolder.id]),
+      false,
+      (props) => <BuiltinFolderFileNode {...props} />,
+      false,
+      { node: missingFolder },
+    )
+    const textMarkup = renderWithEditor(
+      selection([managedText.id]),
+      false,
+      (props) => <BuiltinTextFileNode {...props} />,
+      false,
+      { node: managedText },
+    )
+
+    expect(imageMarkup).toContain('aria-label="Relink selected Project resource"')
+    expect(imageMarkup).toContain('aria-label="Relink local file"')
+    expect(imageMarkup).not.toContain("Relink is not available yet")
+    expect(folderMarkup).toContain('aria-label="Relink selected Project directory"')
+    expect(folderMarkup).not.toContain('aria-label="Relink local file"')
+    expect(textMarkup).toContain('aria-label="Save editable copy"')
+
+    const unmanagedTextMarkup = renderWithEditor(
+      selection([managedText.id]),
+      false,
+      (props) => <BuiltinTextFileNode {...props} />,
+      false,
+      {
+        node: {
+          ...managedText,
+          data: {
+            ...managedText.data,
+            resourceState: {
+              contentRevision: "a".repeat(64),
+              editableText: false,
+              status: "ready",
+              text: "# Brief",
+            },
+          },
+        },
+      },
+    )
+    expect(unmanagedTextMarkup).not.toContain('aria-label="Save editable copy"')
   })
 
   test("marks image and video cards for aligned borderless media chrome", () => {
