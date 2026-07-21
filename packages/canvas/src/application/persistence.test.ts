@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument } from "../document"
+import { createCanvasDocument, createFolderNode, createMediaNode, createTextNode } from "../document"
+import type { CanvasNode } from "../types"
 import {
   InvalidCanvasDocumentError,
   parseStoredCanvasDocument,
@@ -8,6 +9,44 @@ import {
 } from "./persistence"
 
 describe("canvas document persistence", () => {
+  test("strips runtime state from every resource kind before serialization", () => {
+    const document = createCanvasDocument({
+      id: "canvas_runtime",
+      nodes: resourceNodes("SECRET-RUNTIME-VALUE"),
+    })
+
+    const bytes = serializeCanvasDocument(document)
+    const stored = JSON.parse(bytes) as { document: { nodes: CanvasNode[] } }
+
+    expect(bytes).not.toContain("resourceState")
+    expect(bytes).not.toContain("SECRET-RUNTIME-VALUE")
+    expect(stored.document.nodes).toHaveLength(6)
+    for (const node of stored.document.nodes) {
+      expect(node.data).not.toHaveProperty("resourceState")
+    }
+  })
+
+  test.each(["text", "image", "video", "audio", "file", "folder"] as const)(
+    "rejects durable v2 %s nodes containing runtime state",
+    (kind) => {
+      const node = resourceNodes("SECRET-PERSISTED").find((candidate) => candidate.data.kind === kind)!
+      const document = createCanvasDocument({ id: `canvas_${kind}`, nodes: [node] })
+
+      expect(() => parseStoredCanvasDocument(JSON.stringify({
+        document,
+        schemaVersion: "convax.canvas/2",
+      }), document.id)).toThrow(InvalidCanvasDocumentError)
+    },
+  )
+
+  test("round trips resource nodes that have no runtime state", () => {
+    const node = resourceNodes("TRANSIENT")[0]!
+    const { resourceState: _resourceState, ...data } = node.data
+    const document = createCanvasDocument({ nodes: [{ ...node, data }] })
+
+    expect(parseStoredCanvasDocument(serializeCanvasDocument(document), document.id)).toEqual(document)
+  })
+
   test("round trips a valid document owned by the expected canvas", () => {
     const pluginState = {
       directorProject: { objects: [{ id: "cube" }] },
@@ -116,3 +155,35 @@ describe("canvas document persistence", () => {
     expect(thrown.schemaVersion).toEqual(schemaVersion)
   })
 })
+
+function resourceNodes(secret: string): CanvasNode[] {
+  return [
+    createTextNode({
+      id: "text",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: secret },
+    }),
+    ...(["image", "video", "audio", "file"] as const).map((kind, index) => createMediaNode({
+      id: kind,
+      position: { x: (index + 1) * 100, y: 0 },
+      resource: {
+        id: `${kind}-resource`,
+        kind,
+        metadata: {},
+        state: { error: secret, status: "ready", url: secret },
+      },
+    })),
+    createFolderNode({
+      id: "folder",
+      position: { x: 500, y: 0 },
+      resource: {
+        id: "folder-resource",
+        kind: "folder",
+        metadata: {},
+        name: "Folder",
+        state: { error: secret, status: "ready" },
+      },
+    }),
+  ]
+}

@@ -9,12 +9,33 @@ export type ProjectResourceReference =
   | { kind: "managed-asset"; sha256: string; name: string; mediaType?: string }
   | { kind: "project-directory"; path: string }
 
+export type ProjectResourceBindings = Record<
+  string,
+  Exclude<ProjectResourceReference, { kind: "project-directory" }>
+>
+
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
 const legacyResourceKeys = ["text", "richText", "url", "posterUrl", "path"] as const
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 const mediaTypePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const sha256Pattern = /^[a-f0-9]{64}$/
+const projectResourceBindingSlotPattern = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/
+const dangerousBindingSlotNames = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "__proto__",
+  "constructor",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "propertyIsEnumerable",
+  "prototype",
+  "toLocaleString",
+  "toString",
+  "valueOf",
+])
 
 export function managedAssetPath(sha256: string) {
   requireSha256(sha256)
@@ -22,7 +43,7 @@ export function managedAssetPath(sha256: string) {
 }
 
 export function requireProjectResourceReference(value: unknown): ProjectResourceReference {
-  if (!isRecord(value) || typeof value.kind !== "string" || !projectResourceKinds.has(value.kind)) {
+  if (!isPlainJsonRecord(value) || typeof value.kind !== "string" || !projectResourceKinds.has(value.kind)) {
     throw new Error("Project resource reference is invalid")
   }
   if (value.kind === "project-file" || value.kind === "project-directory") {
@@ -40,6 +61,37 @@ export function requireProjectResourceReference(value: unknown): ProjectResource
   return reference
 }
 
+export function requireProjectResourceBindings(value: unknown): ProjectResourceBindings {
+  if (!isPlainJsonRecord(value) || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new Error("Project resource bindings must be a plain JSON record")
+  }
+
+  const bindings = Object.create(null) as ProjectResourceBindings
+  for (const slot of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, slot)
+    if (
+      !projectResourceBindingSlotPattern.test(slot)
+      || dangerousBindingSlotNames.has(slot)
+      || !descriptor?.enumerable
+      || !("value" in descriptor)
+    ) {
+      throw new Error("Project resource binding slot is invalid")
+    }
+
+    let reference: ProjectResourceReference
+    try {
+      reference = requireProjectResourceReference(descriptor.value)
+    } catch {
+      throw new Error(`Project resource binding ${slot} is invalid`)
+    }
+    if (reference.kind === "project-directory") {
+      throw new Error(`Project resource binding ${slot} cannot reference a directory`)
+    }
+    bindings[slot] = reference
+  }
+  return bindings
+}
+
 export function getProjectResourceReference(metadata: unknown): ProjectResourceReference | null {
   if (!isRecord(metadata)) return null
   try {
@@ -54,20 +106,28 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
     ...document,
     nodes: document.nodes.map((node) => {
       const metadata = node.data.metadata
-      if (
-        isRecord(metadata)
-        && Object.hasOwn(metadata, projectResourceBindingsKey)
-      ) {
-        assertSafeHostOwnedResourceSlot(metadata[projectResourceBindingsKey])
+      if (isRecord(metadata) && Object.hasOwn(metadata, "convaxProjectFile")) {
+        throw new Error(`Canvas node ${node.id} contains legacy convaxProjectFile metadata`)
       }
 
-      if (!resourceNodeKinds.has(node.data.kind)) return node
+      let persistedMetadata = metadata
+      if (isRecord(metadata) && Object.hasOwn(metadata, projectResourceBindingsKey)) {
+        persistedMetadata = {
+          ...metadata,
+          [projectResourceBindingsKey]: requireProjectResourceBindings(
+            metadata[projectResourceBindingsKey],
+          ),
+        }
+      }
+
+      if (!resourceNodeKinds.has(node.data.kind)) {
+        if (persistedMetadata === metadata) return node
+        return { ...node, data: { ...node.data, metadata: persistedMetadata } }
+      }
       if (!isRecord(metadata)) {
         throw new Error(`Canvas resource node ${node.id} requires Project resource reference metadata`)
       }
-      if (Object.hasOwn(metadata, "convaxProjectFile")) {
-        throw new Error(`Canvas resource node ${node.id} contains legacy convaxProjectFile metadata`)
-      }
+      const resourceMetadata = isRecord(persistedMetadata) ? persistedMetadata : metadata
       for (const key of legacyResourceKeys) {
         if (Object.hasOwn(node.data, key)) {
           throw new Error(`Canvas resource node ${node.id} contains legacy ${key} data`)
@@ -88,7 +148,7 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         ...node,
         data: {
           ...persistedData,
-          metadata: { ...metadata, [projectResourceReferenceKey]: reference },
+          metadata: { ...resourceMetadata, [projectResourceReferenceKey]: reference },
         },
       }
     }),
@@ -170,28 +230,6 @@ function requireExactKeys(
   if (missing) throw new Error(`Project resource reference is missing field: ${missing}`)
 }
 
-function assertSafeHostOwnedResourceSlot(value: unknown, seen = new WeakSet<object>(), depth = 0): void {
-  if (depth > 100) throw new Error("Canvas host-owned resource slot is too deeply nested")
-  if (typeof value === "string") {
-    if (value.startsWith("/")
-      || value.startsWith("\\")
-      || /^[A-Za-z]:[\\/]/.test(value)
-      || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) {
-      throw new Error("Canvas host-owned resource slot contains a native path or runtime URL")
-    }
-    return
-  }
-  if (!value || typeof value !== "object") return
-  if (seen.has(value)) throw new Error("Canvas host-owned resource slot contains a cycle")
-  seen.add(value)
-  if (Array.isArray(value)) {
-    for (const entry of value) assertSafeHostOwnedResourceSlot(entry, seen, depth + 1)
-  } else {
-    for (const entry of Object.values(value)) assertSafeHostOwnedResourceSlot(entry, seen, depth + 1)
-  }
-  seen.delete(value)
-}
-
 function unicodeScalarLength(value: string) {
   if (!hasOnlyUnicodeScalars(value)) return Number.POSITIVE_INFINITY
   return [...value].length
@@ -207,4 +245,10 @@ function hasOnlyUnicodeScalars(value: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function isPlainJsonRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }

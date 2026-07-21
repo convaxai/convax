@@ -7,7 +7,9 @@ import {
   managedAssetPath,
   projectResourceBindingsKey,
   projectResourceReferenceKey,
+  requireProjectResourceBindings,
   requireProjectResourceReference,
+  type ProjectResourceBindings,
   type ProjectResourceReference,
 } from "./project-resources"
 
@@ -100,6 +102,67 @@ describe("Project resource references", () => {
     expect(managedAssetPath("b".repeat(64))).toBe(`.convax/assets/blobs/${"b".repeat(64)}`)
     expect(() => managedAssetPath("B".repeat(64))).toThrow()
     expect(() => managedAssetPath("b".repeat(63))).toThrow()
+  })
+})
+
+describe("Project resource bindings", () => {
+  const fileReference = { kind: "project-file" as const, path: "Notes/brief.md" }
+
+  test("normalizes and clones multiple content bindings", () => {
+    const input = Object.assign(Object.create(null), {
+      "plugin.input": fileReference,
+      poster: {
+        kind: "managed-asset",
+        mediaType: "IMAGE/PNG",
+        name: "poster.png",
+        sha256: "d".repeat(64),
+      },
+    }) as ProjectResourceBindings
+
+    const bindings = requireProjectResourceBindings(input)
+
+    expect(bindings).toEqual({
+      "plugin.input": fileReference,
+      poster: {
+        kind: "managed-asset",
+        mediaType: "image/png",
+        name: "poster.png",
+        sha256: "d".repeat(64),
+      },
+    })
+    expect(bindings).not.toBe(input)
+    expect(bindings.poster).not.toBe(input.poster)
+    expect(bindings["plugin.input"]).not.toBe(input["plugin.input"])
+  })
+
+  test.each([
+    ["array container", []],
+    ["date container", new Date(0)],
+    ["boxed container", new String("runtime")],
+    ["function container", () => undefined],
+    ["leading-space runtime string", { poster: " blob:runtime" }],
+    ["boxed string leaf", { poster: new String("blob:runtime") }],
+    ["BigInt leaf", { poster: 1n }],
+    ["NaN leaf", { poster: Number.NaN }],
+    ["function leaf", { poster: () => undefined }],
+    ["Date leaf", { poster: new Date(0) }],
+    ["unknown leaf", { poster: { value: "Notes/brief.md" } }],
+    ["directory leaf", { poster: { kind: "project-directory", path: "references" } }],
+    ["empty slot", { "": fileReference }],
+    ["leading-space slot", { " poster": fileReference }],
+    ["numeric slot", { "1poster": fileReference }],
+    ["oversized slot", { [`p${"x".repeat(128)}`]: fileReference }],
+    ["dangerous proto slot", { ["__proto__"]: fileReference }],
+    ["dangerous constructor slot", { constructor: fileReference }],
+    ["dangerous prototype slot", { prototype: fileReference }],
+  ] as const)("rejects non-portable %s", (_label, value) => {
+    expect(() => requireProjectResourceBindings(value)).toThrow("Project resource binding")
+  })
+
+  test("rejects cyclic bindings without leaking a runtime exception", () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.poster = cyclic
+    expect(() => requireProjectResourceBindings(cyclic)).toThrow("Project resource binding")
   })
 })
 
@@ -227,7 +290,7 @@ describe("Project Canvas document dehydration", () => {
     { inputs: [{ nativePath: "/Users/example/private.png" }] },
     { inputs: [{ nativePath: "\\Users\\alice\\secret.png" }] },
     { inputs: [{ nativePath: "C:\\Users\\example\\private.png" }] },
-  ])("rejects native paths and runtime URLs in host-owned resource slots %#", (binding) => {
+  ])("rejects former untyped host-owned binding shapes %#", (binding) => {
     const text = createTextNode({
       metadata: {
         ...metadataFor({ kind: "project-file", path: "Notes/brief.md" }),
@@ -236,7 +299,69 @@ describe("Project Canvas document dehydration", () => {
       position: { x: 0, y: 0 },
       resourceState: readyState,
     })
-    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [text] }))).toThrow("host-owned")
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [text] }))).toThrow(
+      "Project resource binding",
+    )
+  })
+
+  test("normalizes and clones exact bindings during dehydration", () => {
+    const bindings = {
+      "plugin.input": { kind: "project-file" as const, path: "Inputs/reference.png" },
+      poster: {
+        kind: "managed-asset" as const,
+        mediaType: "IMAGE/PNG",
+        name: "poster.png",
+        sha256: "e".repeat(64),
+      },
+    }
+    const node = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: { [projectResourceBindingsKey]: bindings },
+      },
+    } as CanvasNode
+
+    const persisted = dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))
+    const persistedMetadata = persisted.nodes[0]!.data.metadata as Record<string, unknown>
+    const persistedBindings = persistedMetadata[projectResourceBindingsKey]
+
+    expect(persistedBindings).toEqual({
+      "plugin.input": { kind: "project-file", path: "Inputs/reference.png" },
+      poster: {
+        kind: "managed-asset",
+        mediaType: "image/png",
+        name: "poster.png",
+        sha256: "e".repeat(64),
+      },
+    })
+    expect(persistedBindings).not.toBe(bindings)
+  })
+
+  test.each([
+    ["leading-space runtime string", { poster: " blob:runtime" }],
+    ["boxed string", { poster: new String("blob:runtime") }],
+    ["BigInt", { poster: 1n }],
+    ["Date", { poster: new Date(0) }],
+    ["NaN", { poster: Number.NaN }],
+    ["function", { poster: () => undefined }],
+  ] as const)("rejects invalid exact bindings during dehydration: %s", (_label, bindings) => {
+    const node = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: { [projectResourceBindingsKey]: bindings },
+      },
+    } as CanvasNode
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow(
+      "Project resource binding",
+    )
   })
 
   test.each([
@@ -254,7 +379,27 @@ describe("Project Canvas document dehydration", () => {
         metadata: { [projectResourceBindingsKey]: { url: "blob:runtime" } },
       },
     } as CanvasNode
-    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("host-owned")
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow(
+      "Project resource binding",
+    )
+  })
+
+  test.each([
+    ["plugin.surface", "file"],
+    ["agent", "agent"],
+    ["group", "file"],
+  ] as const)("rejects the exact legacy Project file key on %s nodes", (kind, type) => {
+    const node = {
+      id: kind,
+      type,
+      position: { x: 0, y: 0 },
+      data: {
+        kind,
+        label: kind,
+        metadata: { convaxProjectFile: { path: "Notes/legacy.md" } },
+      },
+    } as CanvasNode
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("legacy")
   })
 
   test("preserves similarly named opaque Plugin metadata", () => {
@@ -265,7 +410,10 @@ describe("Project Canvas document dehydration", () => {
       data: {
         kind: "plugin.surface",
         label: "Plugin",
-        metadata: { convaxProjectResourceOpaque: { url: "blob:plugin-owned" } },
+        metadata: {
+          convaxProjectFileOpaque: { path: "/plugin/opaque/path" },
+          convaxProjectResourceOpaque: { url: "blob:plugin-owned" },
+        },
       },
     } as CanvasNode
     const persisted = dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))
