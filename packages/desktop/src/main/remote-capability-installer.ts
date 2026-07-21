@@ -415,7 +415,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   }
 
   async getSkillDetails(id: string): Promise<DesktopSkillDetails> {
-    const item = this.#skills(await this.#packages()).find((candidate) => candidate.id === id)
+    const item = this.#skills(await this.#packages("cache-first")).find((candidate) => candidate.id === id)
     if (!item) throw new Error(`Remote Skill catalog item was not found: ${id}`)
     const bundle = await this.#registry.downloadBundle(item, {
       zipLimits: {

@@ -9,6 +9,7 @@ import type {
   DesktopSkillInventory,
   DesktopSkillShowcase,
   DesktopSkillShowcaseMedia,
+  DesktopSkillSummary,
   DesktopSkillTarget,
 } from "../skill-management-contracts"
 import { appMessage, type AppLocale } from "./app-language"
@@ -348,6 +349,13 @@ function skillTargetKey(target: DesktopSkillTarget) {
   return target.kind === "catalog" ? `catalog:${target.id}` : `installed:${target.source}:${target.name}`
 }
 
+export function catalogSkillDetailsTarget(
+  id: string,
+  managed?: Pick<DesktopSkillSummary, "name" | "source">,
+): DesktopSkillTarget {
+  return managed ? { kind: "installed", name: managed.name, source: managed.source } : { id, kind: "catalog" }
+}
+
 function SkillsPanel({
   busy,
   inventory,
@@ -426,7 +434,7 @@ function SkillsPanel({
               const installLabel = skill.ownerPluginId
                 ? appMessage(locale, "capabilities.installProvidingPlugin")
                 : undefined
-              const target = { id: skill.id, kind: "catalog" } as const
+              const target = catalogSkillDetailsTarget(skill.id, managed)
               const selection: SelectedSkillDetails = {
                 installLabel,
                 managedName: managed?.name,

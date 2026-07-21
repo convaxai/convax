@@ -18,6 +18,7 @@ import {
   type RemoteCapabilityPackage,
   type RemotePluginCompanion,
   type RemoteSkillShowcaseDownload,
+  RemoteRegistryValidationError,
 } from "./remote-capability-registry"
 
 const encoder = new TextEncoder()
@@ -143,7 +144,7 @@ function setup(
     downloadBundle: mock(async (_item: RemoteCapabilityPackage) => ({ files })),
     downloadCompanionArtifact: mock(async () => encoder.encode("companion")),
     downloadSkillShowcase: mock(async (): Promise<RemoteSkillShowcaseDownload | null> => null),
-    fetchRegistry: mock(async (_options: { signal?: AbortSignal } = {}) => ({
+    fetchRegistry: mock<RemoteCapabilityRegistryPort["fetchRegistry"]>(async () => ({
       registry: {
         packages,
         revision: "a".repeat(40),
@@ -757,6 +758,35 @@ describe("RemoteCapabilityInstaller", () => {
 
     const unsafe = setup([item], { "../private.txt": encoder.encode("secret") })
     await expect(unsafe.installer.getSkillDetails("remote-skill")).rejects.toThrow("unsafe portable path")
+  })
+
+  test("reads Skill details from cache when the live Registry would roll back while installs still revalidate", async () => {
+    const item = skillPackage("remote-skill", { name: "Remote Skill" })
+    const files = { "SKILL.md": encoder.encode("---\nname: remote-skill\n---\n") }
+    const setupResult = setup([item], files)
+    setupResult.registry.fetchRegistry.mockImplementation(async (options = {}) => {
+      if (options.cachePolicy !== "cache-first") {
+        throw new RemoteRegistryValidationError("Remote registry sequence would roll back the cache")
+      }
+      return {
+        registry: {
+          packages: [item],
+          revision: "b".repeat(40),
+          schema: remoteCapabilityRegistrySchema,
+          sequence: 17,
+        },
+        source: "cache" as const,
+      }
+    })
+
+    await expect(setupResult.installer.getSkillDetails("remote-skill")).resolves.toMatchObject({
+      id: "remote-skill",
+      name: "Remote Skill",
+    })
+    expect(setupResult.registry.fetchRegistry).toHaveBeenLastCalledWith({ cachePolicy: "cache-first" })
+
+    await expect(setupResult.installer.installSkill("remote-skill")).rejects.toThrow("roll back the cache")
+    expect(setupResult.registry.fetchRegistry).toHaveBeenLastCalledWith({ cachePolicy: "network-first" })
   })
 
   test("loads showcase bytes through Main and degrades every sidecar failure to no media", async () => {

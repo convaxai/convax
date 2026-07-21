@@ -7,6 +7,7 @@ import {
   CapabilityCenter,
   CapabilityCenterDialog,
   CapabilityManagementSurface,
+  catalogSkillDetailsTarget,
   type CapabilityCenterDialogProps,
 } from "./capability-center"
 
@@ -120,6 +121,15 @@ const pluginClient: WebPluginClient = {
 }
 
 describe("CapabilityCenter", () => {
+  test("uses the installed target for a managed Skill shown on its catalog card", () => {
+    expect(catalogSkillDetailsTarget("storyboard", skillInventory.skills[0])).toEqual({
+      kind: "installed",
+      name: "storyboard",
+      source: "managed",
+    })
+    expect(catalogSkillDetailsTarget("storyboard")).toEqual({ id: "storyboard", kind: "catalog" })
+  })
+
   test("renders a compact entry without opening the management surface", () => {
     const markup = renderToStaticMarkup(<CapabilityCenter pluginClient={pluginClient} skillClient={skillClient} />)
 
