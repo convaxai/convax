@@ -77,6 +77,49 @@ describe("Project resource references", () => {
     )
   })
 
+  test("rejects symbol and non-enumerable fields from exact references", () => {
+    const symbolExtra = {
+      kind: "project-file",
+      path: "Notes/brief.md",
+      [Symbol("extra")]: true,
+    }
+    const hiddenExtra = { kind: "project-file", path: "Notes/brief.md" }
+    Object.defineProperty(hiddenExtra, "extra", { value: true })
+    const hiddenAllowed = { kind: "project-file" }
+    Object.defineProperty(hiddenAllowed, "path", { value: "Notes/brief.md" })
+
+    expect(() => requireProjectResourceReference(symbolExtra)).toThrow("Project resource reference")
+    expect(() => requireProjectResourceReference(hiddenExtra)).toThrow("Project resource reference")
+    expect(() => requireProjectResourceReference(hiddenAllowed)).toThrow("Project resource reference")
+  })
+
+  test("rejects accessor references without executing kind or path getters", () => {
+    let kindReads = 0
+    const accessorKind = { path: "Notes/brief.md" }
+    Object.defineProperty(accessorKind, "kind", {
+      enumerable: true,
+      get() {
+        kindReads += 1
+        return "project-file"
+      },
+    })
+
+    let pathReads = 0
+    const accessorPath = { kind: "project-file" }
+    Object.defineProperty(accessorPath, "path", {
+      enumerable: true,
+      get() {
+        pathReads += 1
+        return "Notes/brief.md"
+      },
+    })
+
+    expect(() => requireProjectResourceReference(accessorKind)).toThrow("Project resource reference")
+    expect(() => requireProjectResourceReference(accessorPath)).toThrow("Project resource reference")
+    expect(kindReads).toBe(0)
+    expect(pathReads).toBe(0)
+  })
+
   test("normalizes a valid managed media type", () => {
     expect(requireProjectResourceReference({
       kind: "managed-asset",
@@ -339,6 +382,38 @@ describe("Project Canvas document dehydration", () => {
       },
     })
     expect(persistedBindings).not.toBe(bindings)
+  })
+
+  test("strips custom Plugin runtime state while normalizing bindings in the same clone", () => {
+    const bindings = {
+      poster: { kind: "project-file" as const, path: "Generated/poster.png" },
+    }
+    const node = {
+      id: "plugin-runtime",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: {
+          [projectResourceBindingsKey]: bindings,
+          convaxPluginState: { title: "Portable" },
+        },
+        resourceState: { status: "ready", text: "SECRET-PLUGIN-RUNTIME" },
+      },
+    } as CanvasNode
+
+    const persisted = dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))
+    const persistedNode = persisted.nodes[0]!
+    const metadata = persistedNode.data.metadata as Record<string, unknown>
+
+    expect(persistedNode.data).not.toHaveProperty("resourceState")
+    expect(JSON.stringify(persistedNode)).not.toContain("SECRET-PLUGIN-RUNTIME")
+    expect(metadata.convaxPluginState).toEqual({ title: "Portable" })
+    expect(metadata[projectResourceBindingsKey]).toEqual({
+      poster: { kind: "project-file", path: "Generated/poster.png" },
+    })
+    expect(metadata[projectResourceBindingsKey]).not.toBe(bindings)
   })
 
   test.each([

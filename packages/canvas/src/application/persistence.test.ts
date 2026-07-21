@@ -26,6 +26,20 @@ describe("canvas document persistence", () => {
     }
   })
 
+  test("strips top-level runtime state from a custom Plugin node while preserving namespaced metadata", () => {
+    const node = pluginNodeWithRuntimeState("SECRET-PLUGIN-RUNTIME")
+    const document = createCanvasDocument({ id: "canvas_plugin_runtime", nodes: [node] })
+
+    const bytes = serializeCanvasDocument(document)
+    const stored = JSON.parse(bytes) as { document: { nodes: CanvasNode[] } }
+
+    expect(bytes).not.toContain("resourceState")
+    expect(bytes).not.toContain("SECRET-PLUGIN-RUNTIME")
+    expect(stored.document.nodes[0]!.data.metadata).toEqual({
+      convaxPluginState: { title: "Portable Plugin state" },
+    })
+  })
+
   test.each(["text", "image", "video", "audio", "file", "folder"] as const)(
     "rejects durable v2 %s nodes containing runtime state",
     (kind) => {
@@ -38,6 +52,18 @@ describe("canvas document persistence", () => {
       }), document.id)).toThrow(InvalidCanvasDocumentError)
     },
   )
+
+  test("rejects a durable v2 custom Plugin node containing top-level runtime state", () => {
+    const document = createCanvasDocument({
+      id: "canvas_plugin_persisted_runtime",
+      nodes: [pluginNodeWithRuntimeState("SECRET-PERSISTED-PLUGIN")],
+    })
+
+    expect(() => parseStoredCanvasDocument(JSON.stringify({
+      document,
+      schemaVersion: "convax.canvas/2",
+    }), document.id)).toThrow(InvalidCanvasDocumentError)
+  })
 
   test("round trips resource nodes that have no runtime state", () => {
     const node = resourceNodes("TRANSIENT")[0]!
@@ -186,4 +212,18 @@ function resourceNodes(secret: string): CanvasNode[] {
       },
     }),
   ]
+}
+
+function pluginNodeWithRuntimeState(secret: string): CanvasNode {
+  return {
+    data: {
+      kind: "plugin.surface",
+      label: "Plugin",
+      metadata: { convaxPluginState: { title: "Portable Plugin state" } },
+      resourceState: { status: "ready", text: secret },
+    },
+    id: "plugin",
+    position: { x: 0, y: 0 },
+    type: "file",
+  }
 }

@@ -3,8 +3,6 @@ import type { CanvasDocument } from "../types"
 
 export const canvasDocumentSchemaVersion = "convax.canvas/2" as const
 
-const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
-
 interface StoredCanvasDocumentV2 {
   document: unknown
   schemaVersion: typeof canvasDocumentSchemaVersion
@@ -83,7 +81,7 @@ export function parseStoredCanvasDocument(content: string, expectedCanvasId: str
     schemaVersion: stored.schemaVersion,
   }
   const document = parseCanvasDocument(envelope.document, expectedCanvasId)
-  if (!document || hasDurableResourceRuntimeState(document)) {
+  if (!document || hasDurableRuntimeState(document)) {
     throw new InvalidCanvasDocumentError(expectedCanvasId)
   }
   return document
@@ -93,22 +91,21 @@ export function serializeCanvasDocument(document: CanvasDocument) {
   const parsed = parseCanvasDocument(document, document.id)
   if (!parsed) throw new InvalidCanvasDocumentError(document.id)
   const envelope: StoredCanvasDocumentV2 = {
-    document: stripResourceRuntimeState(parsed),
+    document: stripRuntimeState(parsed),
     schemaVersion: canvasDocumentSchemaVersion,
   }
   return `${JSON.stringify(envelope, null, 2)}\n`
 }
 
-function hasDurableResourceRuntimeState(document: CanvasDocument) {
-  return document.nodes.some((node) =>
-    resourceNodeKinds.has(node.data.kind) && Object.hasOwn(node.data, "resourceState"))
+function hasDurableRuntimeState(document: CanvasDocument) {
+  return document.nodes.some((node) => Object.hasOwn(node.data, "resourceState"))
 }
 
-function stripResourceRuntimeState(document: CanvasDocument): CanvasDocument {
+function stripRuntimeState(document: CanvasDocument): CanvasDocument {
   return {
     ...document,
     nodes: document.nodes.map((node) => {
-      if (!resourceNodeKinds.has(node.data.kind) || !Object.hasOwn(node.data, "resourceState")) {
+      if (!Object.hasOwn(node.data, "resourceState")) {
         return node
       }
       const { resourceState: _resourceState, ...data } = node.data

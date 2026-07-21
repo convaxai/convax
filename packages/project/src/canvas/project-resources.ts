@@ -43,21 +43,29 @@ export function managedAssetPath(sha256: string) {
 }
 
 export function requireProjectResourceReference(value: unknown): ProjectResourceReference {
-  if (!isPlainJsonRecord(value) || typeof value.kind !== "string" || !projectResourceKinds.has(value.kind)) {
+  if (!isPlainJsonRecord(value)) {
     throw new Error("Project resource reference is invalid")
   }
-  if (value.kind === "project-file" || value.kind === "project-directory") {
-    requireExactKeys(value, ["kind", "path"], ["kind", "path"])
-    return { kind: value.kind, path: requirePortableProjectPath(value.path) }
+  const kind = requireEnumerableDataProperty(value, "kind")
+  if (typeof kind !== "string" || !projectResourceKinds.has(kind)) {
+    throw new Error("Project resource reference is invalid")
+  }
+  if (kind === "project-file" || kind === "project-directory") {
+    const fields = requireExactDataProperties(value, ["kind", "path"], ["kind", "path"])
+    return { kind, path: requirePortableProjectPath(fields.path) }
   }
 
-  requireExactKeys(value, ["kind", "sha256", "name", "mediaType"], ["kind", "sha256", "name"])
+  const fields = requireExactDataProperties(
+    value,
+    ["kind", "sha256", "name", "mediaType"],
+    ["kind", "sha256", "name"],
+  )
   const reference: ProjectResourceReference = {
     kind: "managed-asset",
-    name: requireManagedAssetName(value.name),
-    sha256: requireSha256(value.sha256),
+    name: requireManagedAssetName(fields.name),
+    sha256: requireSha256(fields.sha256),
   }
-  if (value.mediaType !== undefined) reference.mediaType = requireMediaType(value.mediaType)
+  if (fields.mediaType !== undefined) reference.mediaType = requireMediaType(fields.mediaType)
   return reference
 }
 
@@ -120,9 +128,15 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         }
       }
 
+      const hasRuntimeState = Object.hasOwn(node.data, "resourceState")
+      const { resourceState: _resourceState, ...persistedData } = node.data
+
       if (!resourceNodeKinds.has(node.data.kind)) {
-        if (persistedMetadata === metadata) return node
-        return { ...node, data: { ...node.data, metadata: persistedMetadata } }
+        if (persistedMetadata === metadata && !hasRuntimeState) return node
+        const data = persistedMetadata === metadata
+          ? persistedData
+          : { ...persistedData, metadata: persistedMetadata }
+        return { ...node, data }
       }
       if (!isRecord(metadata)) {
         throw new Error(`Canvas resource node ${node.id} requires Project resource reference metadata`)
@@ -143,7 +157,6 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         throw new Error(`Canvas content node ${node.id} cannot use a project-directory reference`)
       }
 
-      const { resourceState: _resourceState, ...persistedData } = node.data
       return {
         ...node,
         data: {
@@ -218,16 +231,33 @@ function requireMediaType(value: unknown) {
   return normalized
 }
 
-function requireExactKeys(
+function requireEnumerableDataProperty(value: Record<string, unknown>, key: string) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  if (!descriptor?.enumerable || !("value" in descriptor)) {
+    throw new Error("Project resource reference fields must be enumerable data properties")
+  }
+  return descriptor.value
+}
+
+function requireExactDataProperties(
   value: Record<string, unknown>,
   allowed: readonly string[],
   required: readonly string[],
 ) {
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new Error("Project resource reference contains unsupported symbol fields")
+  }
   const allowedKeys = new Set(allowed)
-  const extra = Object.keys(value).find((key) => !allowedKeys.has(key))
-  if (extra) throw new Error(`Project resource reference contains unsupported field: ${extra}`)
-  const missing = required.find((key) => !Object.hasOwn(value, key))
+  const fields = Object.create(null) as Record<string, unknown>
+  for (const key of Object.getOwnPropertyNames(value)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`Project resource reference contains unsupported field: ${key}`)
+    }
+    fields[key] = requireEnumerableDataProperty(value, key)
+  }
+  const missing = required.find((key) => !Object.hasOwn(fields, key))
   if (missing) throw new Error(`Project resource reference is missing field: ${missing}`)
+  return fields
 }
 
 function unicodeScalarLength(value: string) {
