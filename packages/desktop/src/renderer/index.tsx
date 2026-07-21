@@ -882,7 +882,7 @@ function App() {
               const result = await window.convax.projectFiles.readTextFile({ path, projectId: activeProjectId })
               if (!result.exists) throw new Error(`Could not read ${path}`)
               if (signal.aborted) throw signal.reason
-              return result.content
+              return { content: result.content, contentRevision: result.contentRevision }
             },
           })
         },

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createFolderNode, createMediaNode, createTextNode } from "@convax/canvas/core"
 import type { CanvasNode } from "@convax/canvas/core"
 import {
+  collectProjectManagedAssetReferences,
   dehydrateProjectCanvasDocument,
   getProjectResourceReference,
   managedAssetPath,
@@ -58,16 +59,20 @@ describe("Project resource references", () => {
 
   test("bounds managed asset names by Unicode scalar values", () => {
     const digest = "a".repeat(64)
-    expect(requireProjectResourceReference({
-      kind: "managed-asset",
-      name: "😀".repeat(255),
-      sha256: digest,
-    })).toEqual({ kind: "managed-asset", name: "😀".repeat(255), sha256: digest })
-    expect(() => requireProjectResourceReference({
-      kind: "managed-asset",
-      name: "😀".repeat(256),
-      sha256: digest,
-    })).toThrow()
+    expect(
+      requireProjectResourceReference({
+        kind: "managed-asset",
+        name: "😀".repeat(255),
+        sha256: digest,
+      }),
+    ).toEqual({ kind: "managed-asset", name: "😀".repeat(255), sha256: digest })
+    expect(() =>
+      requireProjectResourceReference({
+        kind: "managed-asset",
+        name: "😀".repeat(256),
+        sha256: digest,
+      }),
+    ).toThrow()
   })
 
   test("reports a stable domain error for non-string path values", () => {
@@ -121,12 +126,14 @@ describe("Project resource references", () => {
   })
 
   test("normalizes a valid managed media type", () => {
-    expect(requireProjectResourceReference({
-      kind: "managed-asset",
-      mediaType: "IMAGE/PNG",
-      name: "hero.png",
-      sha256: "a".repeat(64),
-    })).toEqual({
+    expect(
+      requireProjectResourceReference({
+        kind: "managed-asset",
+        mediaType: "IMAGE/PNG",
+        name: "hero.png",
+        sha256: "a".repeat(64),
+      }),
+    ).toEqual({
       kind: "managed-asset",
       mediaType: "image/png",
       name: "hero.png",
@@ -136,8 +143,14 @@ describe("Project resource references", () => {
 
   test("returns null when metadata does not contain one valid exact reference", () => {
     expect(getProjectResourceReference(null)).toBeNull()
-    expect(getProjectResourceReference({ [projectResourceReferenceKey]: { kind: "project-file", path: "../bad" } })).toBeNull()
-    expect(getProjectResourceReference({ [projectResourceReferenceKey]: { extra: true, kind: "project-file", path: "safe.md" } })).toBeNull()
+    expect(
+      getProjectResourceReference({ [projectResourceReferenceKey]: { kind: "project-file", path: "../bad" } }),
+    ).toBeNull()
+    expect(
+      getProjectResourceReference({
+        [projectResourceReferenceKey]: { extra: true, kind: "project-file", path: "safe.md" },
+      }),
+    ).toBeNull()
     expect(getProjectResourceReference({ convaxProjectFile: { path: "safe.md" } })).toBeNull()
   })
 
@@ -209,6 +222,76 @@ describe("Project resource bindings", () => {
   })
 })
 
+describe("Project managed asset reference collection", () => {
+  test("collects exact main and binding references by digest while ignoring opaque Plugin JSON", () => {
+    const primary = {
+      kind: "managed-asset" as const,
+      mediaType: "image/png",
+      name: "hero.png",
+      sha256: "a".repeat(64),
+    }
+    const bound = {
+      kind: "managed-asset" as const,
+      mediaType: "audio/mpeg",
+      name: "sound.mp3",
+      sha256: "b".repeat(64),
+    }
+    const image = createMediaNode({
+      id: "image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "image-resource",
+        kind: "image",
+        metadata: { [projectResourceReferenceKey]: primary },
+        state: readyState,
+      },
+    })
+    const plugin = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: {
+          [projectResourceBindingsKey]: {
+            duplicate: { ...primary, name: "duplicate-name.png" },
+            input: { kind: "project-file", path: "Inputs/reference.png" },
+            soundtrack: bound,
+          },
+          convaxPluginState: {
+            fakeDigest: "c".repeat(64),
+            nested: { kind: "managed-asset", name: "opaque.bin", sha256: "d".repeat(64) },
+          },
+        },
+      },
+    } as CanvasNode
+
+    expect(collectProjectManagedAssetReferences(createCanvasDocument({ nodes: [image, plugin] }))).toEqual([
+      primary,
+      bound,
+    ])
+  })
+
+  test.each([
+    [projectResourceReferenceKey, { kind: "managed-asset", name: "bad.bin", sha256: "A".repeat(64) }],
+    [projectResourceBindingsKey, { poster: { kind: "managed-asset", name: "bad.bin", sha256: "short" } }],
+  ] as const)("strictly rejects malformed typed metadata in %s", (key, value) => {
+    const node = {
+      id: "plugin",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "plugin.surface",
+        label: "Plugin",
+        metadata: { [key]: value },
+      },
+    } as CanvasNode
+
+    expect(() => collectProjectManagedAssetReferences(createCanvasDocument({ nodes: [node] }))).toThrow()
+  })
+})
+
 describe("Project Canvas document dehydration", () => {
   test("dehydrates resource nodes to references and view state only", () => {
     const textReference = { kind: "project-file" as const, path: "Notes/brief.md" }
@@ -257,17 +340,18 @@ describe("Project Canvas document dehydration", () => {
   test.each(["text", "image", "video", "audio", "file", "folder"] as const)(
     "requires a Project reference for %s nodes",
     (kind) => {
-      const node = kind === "text"
-        ? createTextNode({ metadata: {}, position: { x: 0, y: 0 }, resourceState: readyState })
-        : kind === "folder"
-          ? createFolderNode({
-              position: { x: 0, y: 0 },
-              resource: { id: "folder", kind, metadata: {}, name: "Folder", state: readyState },
-            })
-          : createMediaNode({
-              position: { x: 0, y: 0 },
-              resource: { id: kind, kind, metadata: {}, state: readyState },
-            })
+      const node =
+        kind === "text"
+          ? createTextNode({ metadata: {}, position: { x: 0, y: 0 }, resourceState: readyState })
+          : kind === "folder"
+            ? createFolderNode({
+                position: { x: 0, y: 0 },
+                resource: { id: "folder", kind, metadata: {}, name: "Folder", state: readyState },
+              })
+            : createMediaNode({
+                position: { x: 0, y: 0 },
+                resource: { id: kind, kind, metadata: {}, state: readyState },
+              })
       expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("reference")
     },
   )
@@ -281,7 +365,9 @@ describe("Project Canvas document dehydration", () => {
     })
     const directoryMetadata = metadataFor({ kind: "project-directory", path: "references" })
     const contentWithDirectory = { ...text, data: { ...text.data, metadata: directoryMetadata } }
-    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [contentWithDirectory] }))).toThrow("directory")
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [contentWithDirectory] }))).toThrow(
+      "directory",
+    )
 
     const folder = createFolderNode({
       id: "folder",
@@ -297,7 +383,7 @@ describe("Project Canvas document dehydration", () => {
     expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [folder] }))).toThrow("directory")
   })
 
-  test.each(["text", "richText", "url", "posterUrl", "path"])("rejects legacy resource key %s", (key) => {
+  test.each(["format", "text", "richText", "url", "posterUrl", "path"])("rejects legacy resource key %s", (key) => {
     const node = legacyResourceNode(key)
     expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("legacy")
   })

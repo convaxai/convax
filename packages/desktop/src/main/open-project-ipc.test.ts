@@ -102,6 +102,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       NodeProjectCanvasManager,
       ProjectCanvasDocumentRepository,
       ProjectCanvasDocumentService,
+      ProjectManagedAssetStore,
     } = await import("@convax/project/node")
     const [{ registerAgentIpc }, { registerCanvasDocumentIpc }, { registerProjectIpc }, { registerProjectCanvasIpc }] =
       await Promise.all([
@@ -116,8 +117,9 @@ describe("desktop Project lifecycle IPC smoke", () => {
       registryFile: path.join(temporaryRoot, "user-data", "projects.json"),
     })
     const canvases = new NodeProjectCanvasManager(projects, projects)
+    const assets = new ProjectManagedAssetStore(projects)
     const canvasDocuments = new ProjectCanvasDocumentService(
-      new ProjectCanvasDocumentRepository(projects, canvases),
+      new ProjectCanvasDocumentRepository(projects, canvases, assets),
       canvases,
     )
     const canvasApplication = new CanvasApplicationService(canvasDocuments)

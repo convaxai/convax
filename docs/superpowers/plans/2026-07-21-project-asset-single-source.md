@@ -78,20 +78,23 @@ test("serializes the breaking Canvas v2 envelope", () => {
 
 test("rejects the former unversioned document without rewriting its bytes", () => {
   const legacy = JSON.stringify(createCanvasDocument({ id: "canvas_legacy" }))
-  expect(() => parseStoredCanvasDocument(legacy, "canvas_legacy"))
-    .toThrow(UnsupportedCanvasDocumentVersionError)
+  expect(() => parseStoredCanvasDocument(legacy, "canvas_legacy")).toThrow(UnsupportedCanvasDocumentVersionError)
   expect(legacy).toBe(JSON.stringify(createCanvasDocument({ id: "canvas_legacy" })))
 })
 
 test("distinguishes unsupported versions from malformed v2 documents", () => {
-  expect(() => parseStoredCanvasDocument(
-    JSON.stringify({ document: createCanvasDocument({ id: "canvas" }), schemaVersion: "convax.canvas/1" }),
-    "canvas",
-  )).toThrow(UnsupportedCanvasDocumentVersionError)
-  expect(() => parseStoredCanvasDocument(
-    JSON.stringify({ document: { id: "canvas" }, schemaVersion: "convax.canvas/2" }),
-    "canvas",
-  )).toThrow(InvalidCanvasDocumentError)
+  expect(() =>
+    parseStoredCanvasDocument(
+      JSON.stringify({ document: createCanvasDocument({ id: "canvas" }), schemaVersion: "convax.canvas/1" }),
+      "canvas",
+    ),
+  ).toThrow(UnsupportedCanvasDocumentVersionError)
+  expect(() =>
+    parseStoredCanvasDocument(
+      JSON.stringify({ document: { id: "canvas" }, schemaVersion: "convax.canvas/2" }),
+      "canvas",
+    ),
+  ).toThrow(InvalidCanvasDocumentError)
 })
 ```
 
@@ -303,7 +306,8 @@ export interface CanvasResourceRuntimeState {
 
 export interface CanvasTextNodeData extends CanvasBaseNodeData {
   kind: "text"
-  format?: CanvasTextFormat
+  name?: string
+  mimeType?: string
   metadata: Record<string, unknown>
   resourceState?: CanvasResourceRuntimeState
 }
@@ -328,7 +332,7 @@ export interface CanvasFolderNodeData extends CanvasBaseNodeData {
 }
 ```
 
-`resourceState` is optional only because a durable document intentionally omits it; every mounted resource node receives it from preparation or hydration. Make `CanvasTextResource`, `CanvasResource`, and `CanvasFolderResource` carry required `state: CanvasResourceRuntimeState` plus `metadata`, and update the three node factories to copy `state` into `resourceState`. Do not add aliases for the removed durable fields.
+`resourceState` is optional only because a durable document intentionally omits it; every mounted resource node receives it from preparation or hydration. Make `CanvasTextResource`, `CanvasResource`, and `CanvasFolderResource` carry required `state: CanvasResourceRuntimeState` plus `metadata`, and update the three node factories to copy `state` into `resourceState`. Text nodes and text resources persist `name` plus `mimeType`, never `format`; the UI derives Markdown/plain behavior with `getCanvasTextFileFormat`. Do not add aliases for the removed durable fields, and reject persisted `format` as a legacy content shape during dehydration/load.
 
 - [ ] **Step 5: Implement the Project reference owner**
 
@@ -476,7 +480,9 @@ class ProjectAssetMutex {
   async run<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.#queues.get(projectId) ?? Promise.resolve()
     let release!: () => void
-    const current = new Promise<void>((resolve) => { release = resolve })
+    const current = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const queued = previous.catch(() => undefined).then(() => current)
     this.#queues.set(projectId, queued)
     await previous.catch(() => undefined)
@@ -523,10 +529,13 @@ export class ProjectManagedAssetStore {
     reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>
   }): Promise<string>
 
-  withVerifiedReferences<T>(input: {
-    projectId: string
-    references: readonly Extract<ProjectResourceReference, { kind: "managed-asset" }>[]
-  }, commit: () => Promise<T>): Promise<T>
+  withVerifiedReferences<T>(
+    input: {
+      projectId: string
+      references: readonly Extract<ProjectResourceReference, { kind: "managed-asset" }>[]
+    },
+    commit: () => Promise<T>,
+  ): Promise<T>
 
   runExclusive<T>(projectId: string, operation: () => Promise<T>): Promise<T>
 }
@@ -541,8 +550,7 @@ Delete `managedAssetDirectory`, `assertCopyOrImportTarget(..., true)`, `deleteMa
 ```ts
 for (const operation of ["copyEntries", "importEntries", "writeTextFile"] as const) {
   test(`${operation} cannot write private managed assets`, async () => {
-    await expect(invoke(operation, ".convax/assets/blobs/" + "a".repeat(64)))
-      .rejects.toThrow("reserved for Convax")
+    await expect(invoke(operation, ".convax/assets/blobs/" + "a".repeat(64))).rejects.toThrow("reserved for Convax")
   })
 }
 ```
@@ -613,22 +621,26 @@ In `packages/canvas/src/application/resources.test.ts`, add:
 
 ```ts
 test.each(["inline-text", "remote-url"])("rejects removed source kind %s", async (kind) => {
-  await expect(service.addResources({
-    ...request,
-    sources: [{ kind, sourceId: "legacy", text: "legacy", url: "https://example.com" } as never],
-  })).rejects.toThrow("Unsupported canvas resource source")
+  await expect(
+    service.addResources({
+      ...request,
+      sources: [{ kind, sourceId: "legacy", text: "legacy", url: "https://example.com" } as never],
+    }),
+  ).rejects.toThrow("Unsupported canvas resource source")
 })
 
 test("passes new text to host preparation without putting text into the command fingerprint result", async () => {
   preparation.prepare = mock(async () => ({
-    items: [{
-      format: "markdown",
-      id: "prepared",
-      kind: "text",
-      metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/Untitled-a.md" } },
-      name: "Untitled-a.md",
-      state: { contentRevision: "rev-a", status: "ready", text: "Hello" },
-    }],
+    items: [
+      {
+        id: "prepared",
+        kind: "text",
+        metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/Untitled-a.md" } },
+        mimeType: "text/markdown",
+        name: "Untitled-a.md",
+        state: { contentRevision: "rev-a", status: "ready", text: "Hello" },
+      },
+    ],
   }))
   const result = await service.addResources({
     ...request,
@@ -718,13 +730,10 @@ export interface ProjectCanvasFilePublisher {
   }): Promise<{ contentRevision: string; path: string }>
 }
 
-export type ProjectCanvasResourceHost = Pick<
-  ProjectFilesClient,
-  "listDirectory" | "readFileInfo" | "readTextFile"
->
+export type ProjectCanvasResourceHost = Pick<ProjectFilesClient, "listDirectory" | "readFileInfo" | "readTextFile">
 ```
 
-Implement `publishText` in a focused Node file `packages/project/src/node/project-canvas/project-file-publisher.ts`. It must normalize the display stem, create `.convax/staging/<operation-id>` on the Project filesystem, write UTF-8 bytes with `wx`, atomically publish with no replace to `Notes/<stem>-<short-id>.md`, return a SHA-256 `contentRevision`, and retain the published file after return. It must never overwrite a file, directory, or symlink.
+Implement `publishText` in a focused Node file `packages/project/src/node/project-canvas/project-file-publisher.ts`. It must normalize the display stem, create `.convax/staging/<operation-id>` on the Project filesystem, write UTF-8 bytes with `wx`, atomically publish with no replace to `Notes/<stem>-<short-id>.md`, return a SHA-256 `contentRevision`, and retain the published file after return. It must never overwrite a file, directory, or symlink, and it must never pathname-unlink successful or failed Project-publication staging aliases; Task 9 reclaims them after 24 hours. Repeated directory-identity checks still fail closed on ordinary symlinks and replacements completed before a check, but portable Node cannot make parent-directory validation and `link` one atomic operation, so the publisher does not claim to resist a same-UID actor replacing current-Project directory entries—including `.convax/` or `Notes/`—between validation and the syscall; §2.2 explicitly excludes that direct-tampering case from the threat model.
 
 - [ ] **Step 5: Implement direct preparation and external admission**
 
@@ -837,12 +846,14 @@ Add tests proving:
 ```ts
 expect(canvasResourceBusinessService.addResources).toHaveBeenCalledTimes(1)
 expect(mainRequest.sources).toEqual([{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }])
-expect(mainRequest.externalFiles).toEqual([{
-  mediaType: "image/png",
-  name: "outside.png",
-  sourceId: "outside",
-  sourcePath: "/native/outside.png",
-}])
+expect(mainRequest.externalFiles).toEqual([
+  {
+    mediaType: "image/png",
+    name: "outside.png",
+    sourceId: "outside",
+    sourcePath: "/native/outside.png",
+  },
+])
 expect(rendererResult).not.toContain("/native/outside.png")
 ```
 
@@ -1058,22 +1069,31 @@ Add this host-neutral Canvas service:
 
 ```ts
 export class CanvasTextResourceConflictError extends Error {
-  constructor(readonly expectedRevision: string, readonly actualRevision: string) {
+  constructor(
+    readonly expectedRevision: string,
+    readonly actualRevision: string,
+  ) {
     super("Canvas text resource changed outside Convax")
     this.name = "CanvasTextResourceConflictError"
   }
 }
 
 export interface CanvasTextResourceService {
-  save(input: {
-    content: string
-    contentRevision: string
-    nodeId: string
-  }, signal: AbortSignal): Promise<{ contentRevision: string }>
-  saveManagedCopy(input: {
-    content: string
-    nodeId: string
-  }, signal: AbortSignal): Promise<{ contentRevision: string }>
+  save(
+    input: {
+      content: string
+      contentRevision: string
+      nodeId: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ contentRevision: string }>
+  saveManagedCopy(
+    input: {
+      content: string
+      nodeId: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ contentRevision: string }>
 }
 ```
 
@@ -1140,25 +1160,31 @@ Replace managed-output assertions in `generation-canvas-service.test.ts` with:
 ```ts
 test("publishes generated media below Generated before Canvas commit", async () => {
   const result = await service.generate(imageRequest, actor)
-  expect(projectFiles.publishGenerated).toHaveBeenCalledWith(expect.objectContaining({
-    extension: ".png",
-    projectId: "project_one",
-  }))
-  expect(resourceRequests[0]!.sources).toEqual([{
-    kind: "host-file",
-    path: expect.stringMatching(/^Generated\/generated-[a-z0-9]+\.png$/),
-    sourceId: expect.any(String),
-  }])
+  expect(projectFiles.publishGenerated).toHaveBeenCalledWith(
+    expect.objectContaining({
+      extension: ".png",
+      projectId: "project_one",
+    }),
+  )
+  expect(resourceRequests[0]!.sources).toEqual([
+    {
+      kind: "host-file",
+      path: expect.stringMatching(/^Generated\/generated-[a-z0-9]+\.png$/),
+      sourceId: expect.any(String),
+    },
+  ])
   expect(result.createdNodeIds).toHaveLength(1)
 })
 
 test("publishes generated text as UTF-8 Markdown", async () => {
   await service.generate(textRequest, actor)
-  expect(projectFiles.publishGenerated).toHaveBeenCalledWith(expect.objectContaining({
-    bytes: Buffer.from("A generated paragraph", "utf8"),
-    extension: ".md",
-    projectId: "project_one",
-  }))
+  expect(projectFiles.publishGenerated).toHaveBeenCalledWith(
+    expect.objectContaining({
+      bytes: Buffer.from("A generated paragraph", "utf8"),
+      extension: ".md",
+      projectId: "project_one",
+    }),
+  )
   expect(resourceRequests[0]!.sources[0]).toMatchObject({
     kind: "host-file",
     path: expect.stringMatching(/^Generated\/generated-[a-z0-9]+\.md$/),

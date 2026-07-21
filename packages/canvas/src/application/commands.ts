@@ -269,7 +269,7 @@ export function findOpenCanvasPoint(
       (left, right) =>
         Math.hypot(left.position.x - preferred.x, left.position.y - preferred.y) -
         Math.hypot(right.position.x - preferred.x, right.position.y - preferred.y),
-    )
+  )
   const candidates = [
     preferred,
     ...occupied.flatMap((node) => {
@@ -693,10 +693,11 @@ function isPendingResourceNode(node: CanvasNode) {
 function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position: CanvasPoint): CanvasNode {
   if (item.kind === "text") {
     return createTextNode({
-      format: item.format,
       id: nodeId,
       label: item.name ?? "Text",
       metadata: item.metadata,
+      mimeType: item.mimeType,
+      name: item.name,
       position,
       resourceState: item.state,
     })

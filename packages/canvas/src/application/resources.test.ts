@@ -19,10 +19,12 @@ function source(): CanvasResourceSource {
   return { kind: "host-file", path: "assets/poster.png", sourceId: "poster_source" }
 }
 
-function createTextNode(input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
-  metadata?: Record<string, unknown>
-  text?: string
-}) {
+function createTextNode(
+  input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
+    metadata?: Record<string, unknown>
+    text?: string
+  },
+) {
   const { text, ...nodeInput } = input
   return createCanvasTextNode({
     ...nodeInput,
@@ -36,6 +38,130 @@ function preparedText(text: string): CanvasTextResource {
 }
 
 describe("canvas resource business service", () => {
+  test.each(["inline-text", "remote-url"])("rejects removed source kind %s", async (kind) => {
+    let preparationCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [] }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application should not run")
+        },
+        async query() {
+          throw new Error("application should not run")
+        },
+      },
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas",
+        commandId: `removed-${kind}`,
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind, sourceId: "legacy", text: "legacy", url: "https://example.com" } as never],
+      }),
+    ).rejects.toThrow("Unsupported canvas resource source")
+    expect(preparationCalls).toBe(0)
+  })
+
+  test("rejects a non-string new text name before preparation", async () => {
+    let preparationCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          return { items: [] }
+        },
+      },
+      {
+        async execute() {
+          throw new Error("application should not run")
+        },
+        async query() {
+          throw new Error("application should not run")
+        },
+      },
+    )
+
+    await expect(
+      business.addResources({
+        actor: { id: "ui", kind: "ui" },
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas",
+        commandId: "invalid-new-text-name",
+        expectedRevision: 0,
+        scopeId: "project",
+        sources: [{ kind: "new-text", name: { unsafe: true }, sourceId: "draft", text: "Hello" } as never],
+      }),
+    ).rejects.toThrow("New resource name must be a string")
+    expect(preparationCalls).toBe(0)
+  })
+
+  test("keeps prepared new text only in runtime resource state", async () => {
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main" }),
+      storageVersion: null,
+    }
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return {
+            items: [
+              {
+                id: "prepared",
+                kind: "text",
+                metadata: {
+                  convaxProjectResource: { kind: "project-file", path: "Notes/Untitled-a.md" },
+                },
+                mimeType: "text/markdown",
+                name: "Untitled-a.md",
+                state: { contentRevision: "rev-a", status: "ready", text: "Hello" },
+              },
+            ],
+          }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          snapshot = { document: request.document, storageVersion: "v1" }
+          return { storageVersion: "v1" }
+        },
+      }),
+    )
+
+    const result = await business.addResources({
+      actor: { id: "ui", kind: "ui" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "new-text",
+      expectedRevision: 0,
+      scopeId: "project",
+      sources: [{ kind: "new-text", sourceId: "draft", text: "Hello" }],
+    })
+
+    expect(result.document.nodes[0]!.data).not.toHaveProperty("text")
+    expect(result.document.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: "rev-a",
+      status: "ready",
+      text: "Hello",
+    })
+    expect(result.document.nodes[0]!.data).toMatchObject({
+      mimeType: "text/markdown",
+      name: "Untitled-a.md",
+    })
+    expect(result.document.nodes[0]!.data).not.toHaveProperty("format")
+  })
+
   test("prepares serializable sources then applies the shared sizing, placement, relation, and persistence rules", async () => {
     let snapshot: CanvasDocumentSnapshot = {
       document: createCanvasDocument({
@@ -121,7 +247,7 @@ describe("canvas resource business service", () => {
     await expect(
       business.addResources({
         ...request,
-        sources: [{ kind: "remote-url", sourceId: "different", url: "https://example.com/image.png" }],
+        sources: [{ kind: "new-text", sourceId: "different", text: "Different" }],
       }),
     ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
   })
@@ -255,7 +381,7 @@ describe("canvas resource business service", () => {
       commandId: "stale-add",
       expectedRevision: 0,
       scopeId: "project",
-      sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+      sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
     })
 
     expect(preparationCalls).toBe(1)
@@ -321,7 +447,7 @@ describe("canvas resource business service", () => {
       commandId: "storage-retry",
       expectedRevision: 0,
       scopeId: "project",
-      sources: [{ kind: "inline-text" as const, sourceId: "prepared", text: "New resource" }],
+      sources: [{ kind: "new-text" as const, sourceId: "prepared", text: "New resource" }],
     }
 
     const result = await business.addResources(request)
@@ -670,7 +796,7 @@ describe("canvas resource business service", () => {
         conflictPolicy: "reject",
         expectedRevision: 0,
         scopeId: "project",
-        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
       }),
     ).rejects.toBe(conflict)
     expect(preparationCalls).toBe(1)
@@ -712,7 +838,7 @@ describe("canvas resource business service", () => {
         expectedRevision: 0,
         relation: { anchorNodeIds: ["anchor"], mode: "connect" },
         scopeId: "project",
-        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
       }),
     ).rejects.toThrow("Canvas node was not found: anchor")
     expect(preparationCalls).toBe(1)
@@ -769,7 +895,7 @@ describe("canvas resource business service", () => {
         commandId: "retry-limit",
         expectedRevision: 0,
         scopeId: "project",
-        sources: [{ kind: "inline-text", sourceId: "prepared", text: "New resource" }],
+        sources: [{ kind: "new-text", sourceId: "prepared", text: "New resource" }],
       }),
     ).rejects.toBeInstanceOf(CanvasStorageConflictError)
     expect(preparationCalls).toBe(1)
@@ -816,13 +942,15 @@ describe("canvas resource business service", () => {
       {
         async prepare() {
           return {
-            items: [{
-              id: "broken",
-              kind: "image",
-              metadata: {},
-              state: { status: "ready", url: "asset://broken" },
-              width: -1,
-            }],
+            items: [
+              {
+                id: "broken",
+                kind: "image",
+                metadata: {},
+                state: { status: "ready", url: "asset://broken" },
+                width: -1,
+              },
+            ],
           }
         },
       },
@@ -851,15 +979,17 @@ describe("canvas resource business service", () => {
         },
         application,
       )
-      await expect(invalidState.addResources({
-        actor: { id: "ui", kind: "ui" },
-        anchor: { x: 0, y: 0 },
-        canvasId: "canvas",
-        commandId: "invalid_state",
-        expectedRevision: 0,
-        scopeId: "project",
-        sources: [source()],
-      })).rejects.toBeInstanceOf(CanvasCommandValidationError)
+      await expect(
+        invalidState.addResources({
+          actor: { id: "ui", kind: "ui" },
+          anchor: { x: 0, y: 0 },
+          canvasId: "canvas",
+          commandId: "invalid_state",
+          expectedRevision: 0,
+          scopeId: "project",
+          sources: [source()],
+        }),
+      ).rejects.toBeInstanceOf(CanvasCommandValidationError)
     }
   })
 })

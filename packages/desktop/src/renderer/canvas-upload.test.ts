@@ -1,11 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { CanvasResource, CanvasUploadRequest } from "@convax/canvas"
 import { PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag } from "@convax/project-files/drag"
-import {
-  canvasProjectEntryReferenceKey,
-  resolveCanvasUploadItems,
-  type CanvasUploadHost,
-} from "./canvas-upload"
+import { canvasProjectEntryReferenceKey, resolveCanvasUploadItems, type CanvasUploadHost } from "./canvas-upload"
 
 function request(input: Partial<CanvasUploadRequest>): CanvasUploadRequest {
   return {
@@ -17,7 +13,13 @@ function request(input: Partial<CanvasUploadRequest>): CanvasUploadRequest {
 }
 
 function mediaResource(kind: "image" | "video", name: string): CanvasResource {
-  return { id: `resource_${name}`, kind, name, url: `convax-asset://${name}` }
+  return {
+    id: `resource_${name}`,
+    kind,
+    metadata: {},
+    name,
+    state: { status: "ready", url: `convax-asset://${name}` },
+  }
 }
 
 function host(overrides: Partial<CanvasUploadHost> = {}): CanvasUploadHost {
@@ -25,7 +27,7 @@ function host(overrides: Partial<CanvasUploadHost> = {}): CanvasUploadHost {
     copyProjectMediaFiles: mock(async () => []),
     importLocalMediaFiles: mock(async () => []),
     projectId: "project-a",
-    readProjectTextFile: mock(async () => ""),
+    readProjectTextFile: mock(async () => ({ content: "", contentRevision: "" })),
     ...overrides,
   }
 }
@@ -35,15 +37,23 @@ describe("desktop canvas uploads", () => {
     const uploadHost = host({
       importLocalMediaFiles: mock(async () => [mediaResource("video", "clip.mp4")]),
     })
-    const items = await resolveCanvasUploadItems(request({
-      files: [
-        new File(["# Brief"], "brief.md", { type: "text/markdown" }),
-        new File(["video"], "clip.mp4", { type: "video/mp4" }),
-      ],
-    }), uploadHost)
+    const items = await resolveCanvasUploadItems(
+      request({
+        files: [
+          new File(["# Brief"], "brief.md", { type: "text/markdown" }),
+          new File(["video"], "clip.mp4", { type: "video/mp4" }),
+        ],
+      }),
+      uploadHost,
+    )
 
     expect(items.map((item) => item.kind)).toEqual(["text", "video"])
-    expect(items[0]).toMatchObject({ format: "markdown", name: "brief.md", text: "# Brief" })
+    expect(items[0]).toMatchObject({
+      mimeType: "text/markdown",
+      name: "brief.md",
+      state: { status: "ready", text: "# Brief" },
+    })
+    expect(items[0]).not.toHaveProperty("format")
     expect(uploadHost.importLocalMediaFiles).toHaveBeenCalledWith(
       [expect.objectContaining({ name: "clip.mp4" })],
       expect.any(AbortSignal),
@@ -52,7 +62,7 @@ describe("desktop canvas uploads", () => {
 
   test("reads project text in place and copies only project media", async () => {
     const copyProjectMediaFiles = mock(async () => [mediaResource("image", "cover.png")])
-    const readProjectTextFile = mock(async () => "Project brief")
+    const readProjectTextFile = mock(async () => ({ content: "Project brief", contentRevision: "revision-a" }))
     const uploadHost = host({ copyProjectMediaFiles, readProjectTextFile })
     const drag = serializeProjectEntryDrag({
       entries: [
@@ -62,9 +72,12 @@ describe("desktop canvas uploads", () => {
       projectId: "project-a",
       version: 1,
     })
-    const items = await resolveCanvasUploadItems(request({
-      transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
-    }), uploadHost)
+    const items = await resolveCanvasUploadItems(
+      request({
+        transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
+      }),
+      uploadHost,
+    )
 
     expect(items.map((item) => item.kind)).toEqual(["text", "image"])
     expect(readProjectTextFile).toHaveBeenCalledWith("docs/brief.md", expect.any(AbortSignal))
@@ -78,9 +91,12 @@ describe("desktop canvas uploads", () => {
       projectId: "project-b",
       version: 1,
     })
-    const items = await resolveCanvasUploadItems(request({
-      transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
-    }), uploadHost)
+    const items = await resolveCanvasUploadItems(
+      request({
+        transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
+      }),
+      uploadHost,
+    )
 
     expect(items).toEqual([])
     expect(uploadHost.readProjectTextFile).not.toHaveBeenCalled()
@@ -94,9 +110,12 @@ describe("desktop canvas uploads", () => {
       version: 1,
     })
 
-    const items = await resolveCanvasUploadItems(request({
-      transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
-    }), uploadHost)
+    const items = await resolveCanvasUploadItems(
+      request({
+        transfer: { data: { [PROJECT_ENTRY_DRAG_TYPE]: drag }, types: [PROJECT_ENTRY_DRAG_TYPE] },
+      }),
+      uploadHost,
+    )
 
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({
@@ -105,8 +124,9 @@ describe("desktop canvas uploads", () => {
         [canvasProjectEntryReferenceKey]: { kind: "directory", path: "assets/design" },
       },
       name: "design",
-      path: "assets/design",
+      state: { status: "stale" },
     })
+    expect(items[0]).not.toHaveProperty("path")
     expect(uploadHost.copyProjectMediaFiles).not.toHaveBeenCalled()
     expect(uploadHost.readProjectTextFile).not.toHaveBeenCalled()
   })

@@ -12,8 +12,10 @@ import {
   NodeProjectManager,
   ProjectCanvasDocumentRepository,
   ProjectCanvasDocumentService,
+  ProjectFilePublisher,
   NodeProjectCanvasManager,
   ProjectCanvasResourcePreparation,
+  ProjectManagedAssetStore,
 } from "@convax/project/node"
 import {
   app,
@@ -426,7 +428,9 @@ function startApplication() {
         console.warn("Could not list installed Tool Plugins for execution-state reconciliation", error)
       })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
-    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
+    const projectAssets = new ProjectManagedAssetStore(projectManager)
+    const projectFilePublisher = new ProjectFilePublisher(projectManager)
+    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases, projectAssets)
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
     const canvasDocumentChanges = new CanvasDocumentChangeBus()
     // The application service uses the initializing document service so a
@@ -441,7 +445,7 @@ function startApplication() {
       },
     })
     const canvasResources = new CanvasResourceBusinessService(
-      new ProjectCanvasResourcePreparation(projectManager),
+      new ProjectCanvasResourcePreparation(projectManager, projectFilePublisher, projectAssets),
       canvasApplication,
     )
     const managedCanvasMedia = new ManagedCanvasMediaResolver({

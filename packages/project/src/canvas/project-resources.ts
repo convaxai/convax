@@ -9,14 +9,11 @@ export type ProjectResourceReference =
   | { kind: "managed-asset"; sha256: string; name: string; mediaType?: string }
   | { kind: "project-directory"; path: string }
 
-export type ProjectResourceBindings = Record<
-  string,
-  Exclude<ProjectResourceReference, { kind: "project-directory" }>
->
+export type ProjectResourceBindings = Record<string, Exclude<ProjectResourceReference, { kind: "project-directory" }>>
 
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
-const legacyResourceKeys = ["text", "richText", "url", "posterUrl", "path"] as const
+const legacyResourceKeys = ["format", "text", "richText", "url", "posterUrl", "path"] as const
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 const mediaTypePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const sha256Pattern = /^[a-f0-9]{64}$/
@@ -55,11 +52,7 @@ export function requireProjectResourceReference(value: unknown): ProjectResource
     return { kind, path: requirePortableProjectPath(fields.path) }
   }
 
-  const fields = requireExactDataProperties(
-    value,
-    ["kind", "sha256", "name", "mediaType"],
-    ["kind", "sha256", "name"],
-  )
+  const fields = requireExactDataProperties(value, ["kind", "sha256", "name", "mediaType"], ["kind", "sha256", "name"])
   const reference: ProjectResourceReference = {
     kind: "managed-asset",
     name: requireManagedAssetName(fields.name),
@@ -78,10 +71,10 @@ export function requireProjectResourceBindings(value: unknown): ProjectResourceB
   for (const slot of Object.getOwnPropertyNames(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, slot)
     if (
-      !projectResourceBindingSlotPattern.test(slot)
-      || dangerousBindingSlotNames.has(slot)
-      || !descriptor?.enumerable
-      || !("value" in descriptor)
+      !projectResourceBindingSlotPattern.test(slot) ||
+      dangerousBindingSlotNames.has(slot) ||
+      !descriptor?.enumerable ||
+      !("value" in descriptor)
     ) {
       throw new Error("Project resource binding slot is invalid")
     }
@@ -109,6 +102,32 @@ export function getProjectResourceReference(metadata: unknown): ProjectResourceR
   }
 }
 
+export function collectProjectManagedAssetReferences(
+  document: CanvasDocument,
+): Array<Extract<ProjectResourceReference, { kind: "managed-asset" }>> {
+  const references = new Map<string, Extract<ProjectResourceReference, { kind: "managed-asset" }>>()
+  const collect = (reference: ProjectResourceReference) => {
+    if (reference.kind === "managed-asset" && !references.has(reference.sha256)) {
+      references.set(reference.sha256, reference)
+    }
+  }
+
+  for (const node of document.nodes) {
+    const metadata = node.data.metadata
+    if (!isRecord(metadata)) continue
+
+    if (Object.hasOwn(metadata, projectResourceReferenceKey)) {
+      collect(requireTypedMetadataValue(metadata, projectResourceReferenceKey, requireProjectResourceReference))
+    }
+    if (Object.hasOwn(metadata, projectResourceBindingsKey)) {
+      const bindings = requireTypedMetadataValue(metadata, projectResourceBindingsKey, requireProjectResourceBindings)
+      for (const reference of Object.values(bindings)) collect(reference)
+    }
+  }
+
+  return [...references.values()]
+}
+
 export function dehydrateProjectCanvasDocument(document: CanvasDocument): CanvasDocument {
   return {
     ...document,
@@ -122,9 +141,7 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
       if (isRecord(metadata) && Object.hasOwn(metadata, projectResourceBindingsKey)) {
         persistedMetadata = {
           ...metadata,
-          [projectResourceBindingsKey]: requireProjectResourceBindings(
-            metadata[projectResourceBindingsKey],
-          ),
+          [projectResourceBindingsKey]: requireProjectResourceBindings(metadata[projectResourceBindingsKey]),
         }
       }
 
@@ -133,9 +150,7 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
 
       if (!resourceNodeKinds.has(node.data.kind)) {
         if (persistedMetadata === metadata && !hasRuntimeState) return node
-        const data = persistedMetadata === metadata
-          ? persistedData
-          : { ...persistedData, metadata: persistedMetadata }
+        const data = persistedMetadata === metadata ? persistedData : { ...persistedData, metadata: persistedMetadata }
         return { ...node, data }
       }
       if (!isRecord(metadata)) {
@@ -172,14 +187,16 @@ function requirePortableProjectPath(value: unknown) {
   if (typeof value !== "string") {
     throw new Error("Invalid portable Project path")
   }
-  if (!value
-    || value.length > 4_096
-    || value !== value.trim()
-    || value.includes("\\")
-    || value.startsWith("/")
-    || value.startsWith("//")
-    || /^[A-Za-z]:/.test(value)
-    || !hasOnlyUnicodeScalars(value)) {
+  if (
+    !value ||
+    value.length > 4_096 ||
+    value !== value.trim() ||
+    value.includes("\\") ||
+    value.startsWith("/") ||
+    value.startsWith("//") ||
+    /^[A-Za-z]:/.test(value) ||
+    !hasOnlyUnicodeScalars(value)
+  ) {
     throw new Error(`Invalid portable Project path: ${value}`)
   }
   const segments = value.split("/")
@@ -193,10 +210,20 @@ function requirePortableProjectPath(value: unknown) {
   return segments.join("/")
 }
 
+function requireTypedMetadataValue<T>(
+  metadata: Record<string, unknown>,
+  key: string,
+  requireValue: (value: unknown) => T,
+) {
+  const descriptor = Object.getOwnPropertyDescriptor(metadata, key)
+  if (!descriptor?.enumerable || !("value" in descriptor)) {
+    throw new Error(`Project resource metadata ${key} must be an enumerable data property`)
+  }
+  return requireValue(descriptor.value)
+}
+
 function requireManagedAssetName(value: unknown) {
-  if (typeof value !== "string"
-    || value !== value.trim()
-    || unicodeScalarLength(value) > 255) {
+  if (typeof value !== "string" || value !== value.trim() || unicodeScalarLength(value) > 255) {
     throw new Error("Managed asset name is invalid")
   }
   requirePortableNameSegment(value, "Managed asset name")
@@ -205,13 +232,15 @@ function requireManagedAssetName(value: unknown) {
 
 function requirePortableNameSegment(value: string, label: string) {
   const stem = value.split(".", 1)[0] ?? ""
-  if (!value
-    || value === "."
-    || value === ".."
-    || !hasOnlyUnicodeScalars(value)
-    || /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value)
-    || /[. ]$/.test(value)
-    || windowsReservedName.test(stem)) {
+  if (
+    !value ||
+    value === "." ||
+    value === ".." ||
+    !hasOnlyUnicodeScalars(value) ||
+    /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value) ||
+    /[. ]$/.test(value) ||
+    windowsReservedName.test(stem)
+  ) {
     throw new Error(`${label} is invalid: ${value}`)
   }
   return value

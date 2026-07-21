@@ -33,7 +33,8 @@ export interface CanvasBaseNodeData extends Record<string, unknown> {
 
 export interface CanvasTextNodeData extends CanvasBaseNodeData {
   kind: "text"
-  format?: CanvasTextFormat
+  name?: string
+  mimeType?: string
   metadata: Record<string, unknown>
   resourceState?: CanvasResourceRuntimeState
 }
@@ -124,7 +125,6 @@ export interface CanvasResource {
 export interface CanvasTextResource {
   id: string
   kind: "text"
-  format?: CanvasTextFormat
   metadata: Record<string, unknown>
   name?: string
   mimeType?: string

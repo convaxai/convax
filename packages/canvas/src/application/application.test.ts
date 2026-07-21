@@ -32,10 +32,10 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
       },
       {
         item: {
-          format: "markdown",
           id: "resource_brief",
           kind: "text",
           metadata: { source: "docs/brief.md" },
+          mimeType: "text/markdown",
           name: "Brief.md",
           state: { status: "ready", text: "# Campaign brief" },
         },
@@ -166,11 +166,14 @@ describe("canvas application commands", () => {
     expect(applied.document.nodes.find((node) => node.id === "text_node")).toMatchObject({
       data: {
         metadata: { source: "docs/brief.md" },
+        mimeType: "text/markdown",
+        name: "Brief.md",
         resourceState: { status: "ready", text: "# Campaign brief" },
       },
       position: { x: 380, y: 36 },
       style: { height: 240, width: 360 },
     })
+    expect(applied.document.nodes.find((node) => node.id === "text_node")?.data).not.toHaveProperty("format")
     expect(applied.document.edges.map((edge) => [edge.source, edge.target])).toEqual([
       ["anchor", "image_node"],
       ["anchor", "text_node"],
@@ -210,12 +213,14 @@ describe("canvas application commands", () => {
   test("commits one logical revision and rejects a stale caller", () => {
     const document = createCanvasDocument({
       id: "canvas_revision",
-      nodes: [createTextNode({
-        id: "anchor",
-        metadata: { source: "Notes/anchor.md" },
-        position: { x: 0, y: 0 },
-        resourceState: { status: "ready" },
-      })],
+      nodes: [
+        createTextNode({
+          id: "anchor",
+          metadata: { source: "Notes/anchor.md" },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready" },
+        }),
+      ],
     })
     const envelope = {
       actor: { id: "agent_one", kind: "agent" as const },

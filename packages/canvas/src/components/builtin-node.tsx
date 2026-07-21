@@ -64,6 +64,7 @@ import {
   getIncomingConnectedCanvasFileNodeIds,
 } from "../connections"
 import { useCanvasEditor } from "../editor-context"
+import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
 import type { CanvasSelectionAction } from "../selection-actions"
@@ -321,14 +322,25 @@ function plainTextDocument(text: string): JSONContent {
   }
 }
 
-function textEditorSource(data: CanvasTextNodeData): { content: JSONContent | string; contentType: "json" | "markdown" } {
+function textEditorSource(data: CanvasTextNodeData): {
+  content: JSONContent | string
+  contentType: "json" | "markdown"
+} {
   const text = data.resourceState?.text ?? ""
-  if (data.format === "markdown") return { content: text, contentType: "markdown" }
+  if (textFileFormat(data) === "markdown") return { content: text, contentType: "markdown" }
   return { content: plainTextDocument(text), contentType: "json" }
 }
 
 function textDataFingerprint(data: CanvasTextNodeData) {
-  return `${data.format ?? "plain"}\u0000${data.resourceState?.contentRevision ?? ""}\u0000${data.resourceState?.text ?? ""}`
+  return `${textFileFormat(data)}\u0000${data.resourceState?.contentRevision ?? ""}\u0000${data.resourceState?.text ?? ""}`
+}
+
+function textFileFormat(data: CanvasTextNodeData) {
+  return getCanvasTextFileFormat({ mimeType: data.mimeType, name: data.name ?? "" }) ?? "plain"
+}
+
+function textEditorValue(data: CanvasTextNodeData, editor: Editor) {
+  return textFileFormat(data) === "markdown" ? editor.getMarkdown() : editor.getText({ blockSeparator: "\n" })
 }
 
 function createTextEditorExtensions() {
@@ -437,10 +449,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       const current = dataRef.current
       const nextData: CanvasTextNodeData = {
         ...current,
-        format: "markdown",
         resourceState: {
           ...(current.resourceState ?? { status: "stale" }),
-          text: editor.getMarkdown(),
+          text: textEditorValue(current, editor),
         },
       }
       const nextFingerprint = textDataFingerprint(nextData)
@@ -704,13 +715,13 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <NodeChrome icon={<Type />} label={data.label} node={props} toolbar={textToolbar}>
         {expanded ? (
           <div className="convax-text-editor__expanded-placeholder size-full overflow-hidden whitespace-pre-wrap p-4 text-sm text-muted-foreground">
-            {data.text}
+            {data.resourceState?.text ?? ""}
           </div>
         ) : (
           <EditorContent
             className={cn("convax-text-editor size-full overflow-auto", editing && "nodrag nowheel is-editing")}
             data-canvas-shortcuts={editing ? "ignore" : undefined}
-            data-text-format={data.format ?? "plain"}
+            data-text-format={textFileFormat(data)}
             editor={textEditor}
             onDoubleClick={(event) => {
               event.stopPropagation()

@@ -48,10 +48,12 @@ function createTextNode({ text, ...input }: TestTextNodeInput) {
   })
 }
 
-function createMediaNode(input: Omit<Parameters<typeof createCanvasMediaNode>[0], "resource"> & {
-  resource: Partial<Parameters<typeof createCanvasMediaNode>[0]["resource"]>
-    & Pick<Parameters<typeof createCanvasMediaNode>[0]["resource"], "id" | "kind">
-}) {
+function createMediaNode(
+  input: Omit<Parameters<typeof createCanvasMediaNode>[0], "resource"> & {
+    resource: Partial<Parameters<typeof createCanvasMediaNode>[0]["resource"]> &
+      Pick<Parameters<typeof createCanvasMediaNode>[0]["resource"], "id" | "kind">
+  },
+) {
   return createCanvasMediaNode({
     ...input,
     resource: {
@@ -62,10 +64,12 @@ function createMediaNode(input: Omit<Parameters<typeof createCanvasMediaNode>[0]
   })
 }
 
-function createFolderNode(input: Omit<Parameters<typeof createCanvasFolderNode>[0], "resource"> & {
-  resource: Partial<Parameters<typeof createCanvasFolderNode>[0]["resource"]>
-    & Pick<Parameters<typeof createCanvasFolderNode>[0]["resource"], "id" | "kind" | "name">
-}) {
+function createFolderNode(
+  input: Omit<Parameters<typeof createCanvasFolderNode>[0], "resource"> & {
+    resource: Partial<Parameters<typeof createCanvasFolderNode>[0]["resource"]> &
+      Pick<Parameters<typeof createCanvasFolderNode>[0]["resource"], "id" | "kind" | "name">
+  },
+) {
   return createCanvasFolderNode({
     ...input,
     resource: {
@@ -79,8 +83,9 @@ function createFolderNode(input: Omit<Parameters<typeof createCanvasFolderNode>[
 describe("canvas history", () => {
   test("resource factories keep prepared bytes only in transient resource state", () => {
     const text = createTextNode({
-      format: "markdown",
       metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
       position: { x: 0, y: 0 },
       resourceState: { contentRevision: "rev-text", status: "ready", text: "# Brief" },
     })
@@ -109,7 +114,9 @@ describe("canvas history", () => {
       resourceState: { contentRevision: "rev-text", status: "ready", text: "# Brief" },
     })
     expect(text.data).not.toHaveProperty("text")
-    expect(image.data).toMatchObject({ resourceState: { posterUrl: "blob:poster", status: "ready", url: "blob:image" } })
+    expect(image.data).toMatchObject({
+      resourceState: { posterUrl: "blob:poster", status: "ready", url: "blob:image" },
+    })
     expect(image.data).not.toHaveProperty("url")
     expect(image.data).not.toHaveProperty("posterUrl")
     expect(folder.data).toMatchObject({ resourceState: { status: "stale" } })
@@ -159,9 +166,7 @@ describe("canvas history", () => {
     ).toEqual(["audio", "file", "folder", "image", "text", "video"])
     expect(createDefaultCanvasFileRendererRegistry().get("file")?.hidden).toBeTrue()
     expect(createTextNode({ position: { x: 0, y: 0 } }).type).toBe("file")
-    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image" } }).type).toBe(
-      "file",
-    )
+    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image" } }).type).toBe("file")
     expect(createAgentNode({ position: { x: 0, y: 0 } }).type).toBe("agent")
 
     const text = createTextNode({ position: { x: 0, y: 0 } })
@@ -274,17 +279,20 @@ describe("canvas history", () => {
 
   test("preserves resource view metadata without durable text", () => {
     const node = createTextNode({
-      format: "markdown",
       label: "brief.md",
       metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
       position: { x: 0, y: 0 },
       resourceState: { status: "ready", text: "# Brief" },
     })
     expect(parseCanvasDocument(createCanvasDocument({ nodes: [node] }))?.nodes[0].data).toMatchObject({
-      format: "markdown",
       metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
       resourceState: { status: "ready", text: "# Brief" },
     })
+    expect(node.data).not.toHaveProperty("format")
     expect(node.style).toEqual({ width: 360, height: 240 })
     expect(
       createMediaNode({

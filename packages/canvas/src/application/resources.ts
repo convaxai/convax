@@ -1,4 +1,4 @@
-import type { CanvasPendingResourceKind, CanvasPoint, CanvasTextFormat, CanvasUploadItem } from "../types"
+import type { CanvasPendingResourceKind, CanvasPoint, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
@@ -31,8 +31,7 @@ interface CanvasResourceSourceBase {
  */
 export type CanvasResourceSource =
   | (CanvasResourceSourceBase & {
-      kind: "inline-text"
-      format?: CanvasTextFormat
+      kind: "new-text"
       name?: string
       text: string
     })
@@ -45,12 +44,6 @@ export type CanvasResourceSource =
       /** A portable directory reference interpreted relative to the host scope. */
       kind: "host-directory"
       path: string
-    })
-  | (CanvasResourceSourceBase & {
-      kind: "remote-url"
-      mimeType?: string
-      name?: string
-      url: string
     })
 
 export interface CanvasResourcePreparationRequest extends CanvasDocumentRef {
@@ -534,11 +527,10 @@ export function validateCanvasResourceSources(sources: readonly CanvasResourceSo
     sourceIds.add(source.sourceId)
     if (source.kind === "host-file" || source.kind === "host-directory") {
       requireNonEmptyString(source.path, "Host entry path")
-    } else if (source.kind === "remote-url") requireNonEmptyString(source.url, "Resource URL")
-    else if (source.kind === "inline-text") {
-      if (typeof source.text !== "string") throw new CanvasCommandValidationError("Inline resource text is required")
-      if (source.format !== undefined && source.format !== "markdown" && source.format !== "plain") {
-        throw new CanvasCommandValidationError(`Unsupported inline text format: ${String(source.format)}`)
+    } else if (source.kind === "new-text") {
+      if (typeof source.text !== "string") throw new CanvasCommandValidationError("New resource text is required")
+      if (source.name !== undefined && typeof source.name !== "string") {
+        throw new CanvasCommandValidationError("New resource name must be a string")
       }
     } else {
       throw new CanvasCommandValidationError(`Unsupported canvas resource source: ${String(source.kind)}`)
@@ -555,7 +547,7 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
     requireNonEmptyString(item.id, "Prepared resource id")
     if (!isRecord(item.metadata)) throw new CanvasCommandValidationError("Prepared resource metadata is required")
     requireResourceRuntimeState(item.state)
-    for (const key of ["text", "richText", "url", "posterUrl", "path"]) {
+    for (const key of ["format", "text", "richText", "url", "posterUrl", "path"]) {
       if (Object.hasOwn(item, key)) {
         throw new CanvasCommandValidationError(`Prepared resource contains removed field: ${key}`)
       }
@@ -583,9 +575,11 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
 }
 
 function requireResourceRuntimeState(value: unknown) {
-  if (!isRecord(value)
-    || typeof value.status !== "string"
-    || !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)) {
+  if (
+    !isRecord(value) ||
+    typeof value.status !== "string" ||
+    !["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(value.status)
+  ) {
     throw new CanvasCommandValidationError("Prepared resource runtime state is invalid")
   }
   for (const key of ["contentRevision", "error", "posterUrl", "text", "url"]) {
