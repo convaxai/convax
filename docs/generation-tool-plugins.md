@@ -44,7 +44,7 @@ sandboxed Plugin -- versioned host generation calls -+      | stage selected inp
                                                             v
                                                 CanvasResourceBusinessService
                                                             |
-                                                .convax/assets + normal file/text nodes
+                                                Generated/ + normal file/text nodes
 ```
 
 `GenerationCanvasService` is the one application operation shared by all three
@@ -532,8 +532,9 @@ key when its service supports one. Sidecars must not infer authority or user-vis
 identity from this value.
 
 The host loads the authoritative live Canvas and validates every reference against
-its declared role. Media inputs must already be normal Canvas media nodes backed by
-managed `.convax/assets` references. Desktop opens and copies those files into a
+its declared role. Media and text inputs must already be normal Canvas file nodes
+backed by typed Project-file or managed-asset references. Desktop resolves them
+through the bounded Main-owned resource reader and copies verified snapshots into a
 private temporary input directory; Project native paths never cross the renderer,
 preload, Agent or iframe boundary. Text nodes are copied as bounded text values.
 After staging and immediately before `tools/call`, Desktop rechecks both the persisted
@@ -589,17 +590,16 @@ file. Text input/output is bounded separately. Inline base64 is additionally
 constrained by the MCP message limit.
 
 For a non-text tool, text content is normalized into at most 32 bounded warnings
-rather than inserted as Canvas nodes. After admission, Desktop copies media through the managed
-Project asset import, calls `CanvasResourceBusinessService.addResources`, creates
-normal Canvas file nodes and connects them to the referenced input nodes. A failed
-Canvas commit rolls back newly imported assets. A low-level Project import copy
-failure may conservatively leave a partial target: the portable Node filesystem API
-cannot atomically prove pathname identity and remove it, so Convax never risks
-deleting a concurrent writer's replacement. Text output becomes a normal text
-resource. The generation call/result-admission path never lets the sidecar write
-Canvas JSON or choose Project scope, revision, placement or node ids. A v5 sidecar
-with separate Canvas grants may make explicit broker calls, but those remain
-revision-checked application transactions rather than generation result admission.
+rather than inserted as Canvas nodes. After admission, Desktop atomically publishes
+validated media and text outputs under the user-visible `Generated/` directory,
+calls `CanvasResourceBusinessService.addResources`, creates normal Canvas file nodes
+and connects them to the referenced input nodes. A failed Canvas commit retains the
+published files and reports “generation succeeded, Canvas insertion failed”; it does
+not delete user output. The sidecar never writes Canvas JSON or chooses Project
+scope, revision, placement or node ids.
+A v5 sidecar with separate Canvas grants may make explicit broker calls, but those
+remain revision-checked application transactions rather than generation result
+admission.
 
 The entire temporary tree is removed after success, failure or cancellation.
 
@@ -696,7 +696,8 @@ Changes to this boundary must preserve all of the following:
 - host-derived Project/Canvas scope, revision, placement and mutation actor;
 - install-authorized and runtime-verified execution before staging, aggregate-bounded
   temporary inputs and bounded outputs;
-- generated media entering Canvas only through the managed asset/resource flow;
+- generated media entering Canvas only through user-visible `Generated/` Project
+  files and the shared resource business flow;
 - strict v1-v5 manifest compatibility, `plugin-host/1-4` compatibility, and the
   independent `plugin-capability/1` contract for v5;
 - explicit install/update authorization, no first-call prompt and no shell execution;

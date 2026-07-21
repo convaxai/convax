@@ -8,7 +8,8 @@ This package owns the durable Project aggregate and native Project adapters.
 - `@convax/project/canvas`: Project Canvas catalog, relationships, drag protocol,
   resource references, and catalog controller only.
 - `@convax/project/node`: native registry, root resolution, private storage,
-  Project Files implementation, Canvas repositories, and migrations.
+  Project Files implementation, Canvas repositories, migrations, and explicit
+  unsupported-schema rejection.
 
 ## Invariants
 
@@ -25,8 +26,12 @@ This package owns the durable Project aggregate and native Project adapters.
 - Browser creation requests carry only a Project name. The host injects a trusted
   parent directory; the Node adapter creates the child root, initializes identity,
   and publishes the registry binding without adopting an existing directory.
-- `project.json` stores identity, the Canvas catalog stores no selection, and schema
-  changes include versioned migration tests. Never reset old data silently.
+- `project.json` stores identity and the Canvas catalog stores no selection. Schema
+  changes include versioned migration tests by default. An explicitly approved
+  breaking cutover instead includes unsupported-version rejection tests and preserves
+  the old bytes without opening, resetting, overwriting, deleting, or garbage-collecting
+  them.
 
 Run `bun typecheck && bun test`. Run root `bun run pack:check` for public/storage
-changes and Desktop `bun run smoke:open-project` for creation or migration changes.
+changes and Desktop `bun run smoke:open-project` for creation, migration, or breaking
+cutover changes.

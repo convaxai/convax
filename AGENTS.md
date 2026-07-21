@@ -139,9 +139,12 @@ source, or ambient application state.
 
 No package except `@convax/project/node` may read or write private Project metadata
 JSON directly. Desktop and Agent code must call typed clients/services. Never teach
-an Agent to edit `.convax` JSON; protect it and expose capabilities instead. Legacy
-formats are read only in explicit, tested migration code and are written back in the
-current schema.
+an Agent to edit `.convax` JSON; protect it and expose capabilities instead. A legacy
+format may be read only by explicit, tested migration code, or rejected without
+mutation by a breaking cutover that is explicitly approved in the canonical
+architecture and design. A breaking cutover must bump the schema/protocol, preserve
+unsupported data, provide rejection tests, and never silently reset, overwrite, or
+delete it. All successful writes use the current schema.
 
 ## Project, Canvas, and Workbench rules
 
@@ -289,14 +292,15 @@ current schema.
   manifest and exact Hook bytes. Load only a private host-owned snapshot, never the
   mutable installed package path. Default provisioning and background updates must
   not authorize new or changed Hook bytes.
-- Fingerprint an external Tool Plugin executable before staging aggregate-bounded
-  inputs. Recheck live reference/revision guards immediately
-  before a billable call. Launch the install-authorized entrypoint through a verified
-  host-owned snapshot, terminate the whole process tree on disposal, and fail
-  closed on platforms where the host lacks a process-tree ownership primitive.
-- Generated media enters Canvas only through `CanvasResourceBusinessService` and
-  the managed `.convax/assets/` flow before existing `file` nodes reference it;
-  failed commits must roll back newly admitted assets.
+- Fingerprint the external Tool Plugin executable before staging aggregate-bounded
+  inputs. Recheck live reference/revision guards immediately before a billable call.
+  Launch the install-authorized entrypoint through a verified host-owned snapshot,
+  terminate the whole process tree on disposal, and fail closed on platforms where
+  the host lacks a process-tree ownership primitive.
+- Generated media enters Canvas only through `CanvasResourceBusinessService` after
+  Main atomically publishes it as a user-visible Project file under `Generated/`;
+  existing `file` nodes reference that Project file. A failed Canvas commit retains
+  the generated file and reports the partial success instead of deleting user output.
 - A Plugin-requested immediate generation result is a host-owned pending Canvas
   resource lifecycle. Canvas creates and commits the node id in Main before the
   external call, replaces it only through an exact content guard, and retains a
@@ -332,13 +336,16 @@ current schema.
   node state writes stay inside that node's namespaced field. V5 Project/Canvas
   methods route through an opaque sender-scoped main connection and derive authority
   only from the installed principal and its declared grants, not from node ownership.
+- Durable Plugin resources use host-owned typed node bindings; opaque Plugin state
+  stores only their binding keys and never grants asset liveness by containing a
+  path or hash.
 - Bound in-flight Plugin RPC before asynchronous connection/subscription work. Tool
   and Agent cancellation must cross queue and preparation boundaries and be checked
   immediately before any Canvas persistence call.
   Check permissions, message size, stale scope and target on every call.
 - Connected Plugin inputs must be derived from direct incoming Canvas edges. Never
   accept a caller-supplied Project path or widen that access to unrelated nodes;
-  use the bounded Main-owned managed-asset reader and recheck the exact edge and
+  use the bounded Main-owned typed Project-resource reader and recheck the exact edge and
   source reference afterward.
 - Gate browser feature-policy exceptions such as fullscreen through an explicit
   manifest capability. Preserve every unrelated iframe permission denial.

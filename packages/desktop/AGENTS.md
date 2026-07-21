@@ -39,7 +39,8 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   to flush, lock, or approve a Main read/write; publish committed revisions and let
   renderer reload as a fallible projection.
 - Renderer and Agent never edit private Canvas/Project JSON. Use typed clients and
-  repository/application services. Only managed assets use the scoped file bridge.
+  repository/application services. Native Project-file and managed-asset access uses
+  one narrow typed, scoped resource bridge.
 - Desktop may label and contribute the native media drag source, but Canvas owns the
   persistent drag-out mode and selection interaction. Keep native staging, live
   Project/Canvas/selection revalidation and Electron `startDrag` in Main; renderer
@@ -205,7 +206,7 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   is never a lease or commit prerequisite and its failure cannot report a durable
   mutation as failed.
 - Treat connected media as a narrow input capability: derive it from direct incoming
-  edges, use the bounded Main-owned managed-asset read, and reject stale or
+  edges, use the bounded Main-owned typed Project-resource read, and reject stale or
   caller-selected paths.
 - A v6 connected-input metadata capability is pathless and read-only. Return only
   bounded direct-incoming media descriptors, send edge/source changes as
@@ -233,8 +234,8 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   or replace different bytes at the same version.
 - JianYing native actions and Agent tools currently run on macOS only. Keep an
   explicit Windows WIP adapter that fails closed as unsupported; never substitute UI
-  automation. Export only image/video nodes backed by managed Project references
-  under `.convax/assets`; main reloads the active Canvas, checks
+  automation. Export only image/video nodes backed by valid typed Project resource
+  references; main reloads the active Canvas, checks
   revision/node/MIME/regular-file containment, and resolves or stages native paths
   after that validation.
 - Dispatch JianYing imports through its macOS Deep Link, never Accessibility, Apple
@@ -270,4 +271,5 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   and cannot select authority or scope.
 
 Run `bun typecheck && bun test`. Run `bun run build` for main/preload/renderer changes
-and `bun run smoke:open-project` for Project open, persistence, IPC or migration work.
+and `bun run smoke:open-project` for Project open, persistence, IPC, migration or
+breaking-cutover work.

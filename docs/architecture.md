@@ -286,9 +286,19 @@ current Registry size and SHA-256 before use. Losing any cache never removes ins
 capabilities; an invalid or rolled-back network response never replaces it.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
-application services. A schema change needs a version, a migration path, and tests
-using real old data. Never “fix” an incompatibility by deleting or silently resetting
-portable data.
+application services. A schema change needs a new version and tests. It provides a
+migration path using real old data by default. An explicitly approved breaking
+cutover may instead reject the old version when the canonical architecture and design
+record the decision, data impact, version/protocol bump and release boundary. That
+rejection must fail closed without parsing the old format into the live model or
+resetting, overwriting, deleting, or garbage-collecting unsupported portable data.
+
+The Project asset single-source transition is one approved breaking cutover under
+this rule. Its authoritative scope and safeguards are recorded in
+[the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md):
+the new Canvas resource schema, content-addressed managed-asset layout and related
+protocol replace their legacy forms without migration or compatibility reads, while
+unsupported documents and legacy assets remain untouched and outside new GC.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
@@ -301,8 +311,9 @@ schema version and migrations; an unknown or invalid schema is preserved and mus
 not be replaced with defaults. Node/Canvas copy carries the latest snapshot already
 committed to Canvas. Continuous iframe edits may be throttled, but semantic gesture
 completion and frame teardown must request an immediate commit. Large images,
-models, captures, and other binary payloads belong in managed Project assets; node
-state stores only portable references to them.
+models, captures, and other binary payloads belong in managed Project assets and
+are referenced only through host-owned typed resource bindings on the node. Plugin
+state stores binding keys, never Project paths, managed hashes, or resource envelopes.
 
 Portable Plugin presentation state may share that namespaced snapshot while staying
 separate from the Plugin's domain document. A 3D director camera/orbit is portable;
@@ -357,8 +368,10 @@ Agent, Toolbar/UI, and sandboxed Plugin entry points call the same scoped genera
 tool executor owned by Desktop main. OpenCode is only the Agent-side tool client: it
 does not own generation execution, and direct product actions do not require an
 OpenCode session. Successful media output is prepared through
-`CanvasResourceBusinessService`, imported into managed `.convax/assets/`, and then
-referenced by the existing Canvas `file` node flow.
+`CanvasResourceBusinessService` after Main atomically publishes it as a user-visible
+Project file under `Generated/`; the existing Canvas `file` node flow then references
+that Project file. A failed Canvas commit retains the published output and reports
+the partial success instead of deleting user data.
 
 Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` through
 `/6`: a validated manifest declares generation tools and a separately installed bare
@@ -386,6 +399,11 @@ orphaned state is non-executable and startup reconciliation removes it. A Regist
 that declares a managed companion cannot fall back to a same-named PATH command.
 Missing and changed bindings fail installation without replacing a working version.
 Listing or installing never starts the command.
+Desktop stages bounded typed Canvas references, rechecks live scope and revision
+before the external call and admits only bounded signature-checked results.
+Tool-specific controls come only from the selected MCP tool's current
+`tools/list.inputSchema`; Main projects bounded scalar fields across preload and
+validates them again immediately before execution.
 
 On execution Desktop silently resolves and fingerprints the binding again and
 requires the matching persisted receipt; missing, tampered or drifted state fails
@@ -829,7 +847,7 @@ fingerprint. Missing packages remain missing, so this migration cannot undo a us
 uninstall.
 
 The Canvas toolbar action appears for one or more selected image/video nodes backed
-by managed Project references under `.convax/assets`: single media uses its node
+by valid typed Project-file or managed-asset references: single media uses its node
 toolbar and multiple media use the selection toolbar. Main reloads the live active
 Canvas, checks the expected revision and selected nodes,
 validates matching image/video MIME and regular contained files, and only then
