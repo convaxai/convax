@@ -19,6 +19,7 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import {
+  AtSign,
   Bot,
   Check,
   ChevronDown,
@@ -74,19 +75,45 @@ import {
   selectAgentSessionAfterRefresh,
 } from "./agent-panel-state"
 import {
-  agentComposerSkills,
+  agentComposerResources,
   agentComposerText,
+  closeAgentComposerSuggestion,
   emptyAgentComposerDraft,
-  filterAgentResourcePickerOptions,
-  findAgentSkillSlashQuery,
+  filterAgentSkills,
   hasAgentComposerContent,
+  moveAgentComposerSuggestion,
   normalizeAgentComposerDraft,
-  selectableAgentResourcePickerOptions,
+  openAgentComposerSuggestion,
+  reconcileAgentComposerSuggestionOptions,
+  setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
   type AgentComposerDraft,
-  type AgentResourcePickerOption,
+  type AgentComposerSuggestionState,
 } from "./agent-composer-state"
+import {
+  agentComposerResourceAttribute,
+  agentComposerTokenActionAttribute,
+  agentComposerTokenAttribute,
+  captureAgentComposerSelection,
+  findAgentComposerQueryRange,
+  focusAgentComposerAtEnd,
+  insertAgentComposerPlainText,
+  insertAgentComposerResources,
+  insertAgentComposerTrigger,
+  parseAgentComposerResource,
+  readAgentComposerDraft,
+  removeAgentComposerToken,
+  replaceAgentComposerQuery,
+  replaceAgentComposerToken,
+  writeAgentComposerDraft,
+  type AgentComposerQueryRange,
+} from "./agent-composer-dom"
+import {
+  AgentComposerPicker,
+  type AgentComposerPickerAnchor,
+  type AgentComposerPickerOption,
+} from "./agent-composer-picker"
 import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { findAgentLlmModel, reconcileAgentLlmModelSelection, type AgentLlmModelSelection } from "./agent-llm-models"
@@ -99,16 +126,8 @@ type GenerationDescriptionLoad =
   | { scope: string; status: "loading" }
   | { error: string; scope: string; status: "error" }
   | { scope: string; status: "ready"; value: GenerationToolDescription }
-const skillMentionAttribute = "data-agent-skill"
-
-interface ComposerSlashRange {
-  end: number
-  node: Text
-  start: number
-}
 
 interface FailedAgentSubmission {
-  attachments: AgentResource[]
   draft: AgentComposerDraft
   id: number
   message: string
@@ -119,170 +138,11 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function appendComposerText(segments: AgentComposerDraft["segments"], text: string) {
-  if (!text) return
-  const previous = segments.at(-1)
-  if (previous?.type === "text") previous.text += text
-  else segments.push({ text, type: "text" })
-}
-
-function readComposerDraft(root: HTMLElement): AgentComposerDraft {
-  const segments: AgentComposerDraft["segments"] = []
-  const visit = (node: Node) => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      appendComposerText(segments, node.textContent ?? "")
-      return
-    }
-    if (!(node instanceof HTMLElement)) return
-    const skill = node.getAttribute(skillMentionAttribute)
-    if (skill) {
-      segments.push({ name: skill, type: "skill" })
-      return
-    }
-    if (node.tagName === "BR") {
-      appendComposerText(segments, "\n")
-      return
-    }
-    const block = node !== root && (node.tagName === "DIV" || node.tagName === "P")
-    if (block && segments.length) appendComposerText(segments, "\n")
-    for (const child of node.childNodes) visit(child)
-  }
-  for (const child of root.childNodes) visit(child)
-  return normalizeAgentComposerDraft({ segments })
-}
-
-function createSkillMention(name: string) {
-  const mention = document.createElement("span")
-  mention.setAttribute(skillMentionAttribute, name)
-  mention.setAttribute("contenteditable", "false")
-  mention.setAttribute("role", "button")
-  mention.setAttribute("title", `Open ${name} Skill`)
-  mention.className =
-    "mx-0.5 inline-flex cursor-pointer select-none items-center rounded-md bg-primary/10 px-1.5 py-0.5 align-baseline text-xs font-medium text-primary hover:bg-primary/15"
-  mention.textContent = `✦ ${name}`
-  return mention
-}
-
-function writeComposerDraft(root: HTMLElement, draft: AgentComposerDraft) {
-  const nodes = normalizeAgentComposerDraft(draft).segments.map((segment) =>
-    segment.type === "skill" ? createSkillMention(segment.name) : document.createTextNode(segment.text),
-  )
-  root.replaceChildren(...nodes)
-}
-
-function composerSlashRange(root: HTMLElement): (ComposerSlashRange & { query: string }) | undefined {
-  const selection = window.getSelection()
-  if (!selection?.isCollapsed || selection.rangeCount === 0) return undefined
-  const range = selection.getRangeAt(0)
-  if (!(range.startContainer instanceof Text) || !root.contains(range.startContainer)) return undefined
-  const match = findAgentSkillSlashQuery(range.startContainer.data, range.startOffset)
-  return match ? { ...match, node: range.startContainer } : undefined
-}
-
-function insertComposerSkill(root: HTMLElement, name: string, slash?: ComposerSlashRange) {
-  const selection = window.getSelection()
-  const range = document.createRange()
-  const selected = selection?.rangeCount ? selection.getRangeAt(0) : undefined
-  if (slash?.node.isConnected && root.contains(slash.node)) {
-    range.setStart(slash.node, slash.start)
-    range.setEnd(slash.node, slash.end)
-  } else if (selected && composerContainsRange(root, selected)) {
-    range.setStart(selected.startContainer, selected.startOffset)
-    range.setEnd(selected.endContainer, selected.endOffset)
-  } else {
-    range.selectNodeContents(root)
-    range.collapse(false)
-  }
-  range.deleteContents()
-  const mention = createSkillMention(name)
-  const spacer = document.createTextNode("\u00a0")
-  range.insertNode(spacer)
-  range.insertNode(mention)
-  range.setStart(spacer, spacer.data.length)
-  range.collapse(true)
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-  root.focus()
-}
-
-function removeComposerSlash(root: HTMLElement, slash?: ComposerSlashRange) {
-  if (!slash?.node.isConnected || !root.contains(slash.node)) return
-  const selection = window.getSelection()
-  const range = document.createRange()
-  range.setStart(slash.node, slash.start)
-  range.setEnd(slash.node, slash.end)
-  range.deleteContents()
-  range.collapse(true)
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-  root.focus()
-}
-
-function insertComposerPlainText(root: HTMLElement, text: string) {
-  const selection = window.getSelection()
-  if (!selection) return
-  const selected = selection.rangeCount ? selection.getRangeAt(0) : undefined
-  const range = document.createRange()
-  if (selected && composerContainsRange(root, selected)) {
-    range.setStart(selected.startContainer, selected.startOffset)
-    range.setEnd(selected.endContainer, selected.endOffset)
-  } else {
-    range.selectNodeContents(root)
-    range.collapse(false)
-  }
-  range.deleteContents()
-  const node = document.createTextNode(text)
-  range.insertNode(node)
-  range.setStart(node, node.data.length)
-  range.collapse(true)
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
-function composerContainsRange(root: HTMLElement, range: Range) {
-  return root.contains(range.startContainer) && root.contains(range.endContainer)
-}
-
-function focusComposerAtEnd(root: HTMLElement) {
-  root.focus()
-  const selection = window.getSelection()
-  if (!selection) return
-  const range = document.createRange()
-  range.selectNodeContents(root)
-  range.collapse(false)
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
 function resourceLabel(resource: AgentResource) {
   if (resource.name) return resource.name
   if (resource.kind === "skill") return resource.name
   if (resource.kind === "resource") return resource.uri
   return resource.path.split("/").at(-1) || resource.path
-}
-
-function serializeResource(resource: AgentResource) {
-  return JSON.stringify({ resource, version: 1 })
-}
-
-function parseResource(value: string): AgentResource | null {
-  try {
-    const parsed = JSON.parse(value) as { resource?: AgentResource; version?: number }
-    if (parsed.version !== 1 || !parsed.resource) return null
-    const resource = parsed.resource
-    if (resource.kind === "skill")
-      return typeof resource.name === "string" ? { kind: "skill", name: resource.name } : null
-    if (!(["directory", "file", "resource"] as string[]).includes(resource.kind)) return null
-    if (resource.kind === "resource") {
-      return typeof resource.uri === "string" ? { kind: "resource", name: resource.name, uri: resource.uri } : null
-    }
-    if (typeof resource.path !== "string") return null
-    if (resource.kind === "directory") return { kind: "directory", path: resource.path, name: resource.name }
-    if (resource.kind === "file") return { kind: "file", path: resource.path, name: resource.name }
-    return null
-  } catch {
-    return null
-  }
 }
 
 function supportsResourceDrop(dataTransfer: DataTransfer) {
@@ -292,6 +152,26 @@ function supportsResourceDrop(dataTransfer: DataTransfer) {
     types.includes(PROJECT_CANVAS_DRAG_TYPE) ||
     types.includes(resourceDragType)
   )
+}
+
+function agentComposerPickerAnchor(
+  root: HTMLElement,
+  anchor: HTMLElement | (AgentComposerQueryRange & { query?: string }),
+): AgentComposerPickerAnchor {
+  let rect: DOMRect
+  if (anchor instanceof HTMLElement) rect = anchor.getBoundingClientRect()
+  else {
+    const range = document.createRange()
+    range.setStart(anchor.node, anchor.end)
+    range.collapse(true)
+    rect = range.getBoundingClientRect()
+  }
+  const fallback = root.getBoundingClientRect()
+  const target = rect.width || rect.height ? rect : fallback
+  const width = Math.min(352, Math.max(240, window.innerWidth - 16))
+  const left = Math.max(8, Math.min(target.left, window.innerWidth - width - 8))
+  const top = target.top >= 328 ? target.top - 324 : Math.min(target.bottom + 6, window.innerHeight - 328)
+  return { left, top: Math.max(8, top) }
 }
 
 export interface AgentPanelLayout {
@@ -342,11 +222,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     embedded ? (props.conversationKey ?? null) : null,
   ])
   const contextResources = mergeAgentResources(props.contextResources ?? [])
-  const lockedResourceKeys = new Set(contextResources.map(agentResourceKey))
   const open = embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
   const [showActivity, setShowActivity] = useState(false)
-  const [resourcePickerOpen, setResourcePickerOpen] = useState(false)
+  const [suggestion, setSuggestion] = useState<AgentComposerSuggestionState>({ open: false })
+  const [suggestionQuery, setSuggestionQuery] = useState("")
+  const [referenceTab, setReferenceTab] = useState<"canvas" | "project">("project")
+  const [suggestionAnchor, setSuggestionAnchor] = useState<AgentComposerPickerAnchor>()
   const [generationModelPickerOpen, setGenerationModelPickerOpen] = useState(false)
   const [modelPickerTab, setModelPickerTab] = useState<AgentModelPickerTab>("image")
   const [generationTools, setGenerationTools] = useState<readonly GenerationToolSummary[]>([])
@@ -378,12 +260,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     status: "loading",
   })
   const [generationToolInput, setGenerationToolInput] = useState<Record<string, GenerationToolInputValue>>({})
-  const [skillSlashQuery, setSkillSlashQuery] = useState<string>()
-  const [skillSlashIndex, setSkillSlashIndex] = useState(0)
   const [composerFocused, setComposerFocused] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState<AgentComposerDraft>(emptyAgentComposerDraft)
-  const [attachments, setAttachments] = useState<AgentResource[]>([])
   const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([])
   const [projectEntriesLoading, setProjectEntriesLoading] = useState(false)
   const [sessions, setSessions] = useState<AgentSession[]>([])
@@ -402,8 +281,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
   const composerDraftRef = useRef(composerDraft)
-  const attachmentsRef = useRef(attachments)
-  const skillSlashRangeRef = useRef<ComposerSlashRange | undefined>(undefined)
+  const composerQueryRangeRef = useRef<AgentComposerQueryRange | undefined>(undefined)
+  const composerSelectionRef = useRef<Range | undefined>(undefined)
+  const editingTokenRef = useRef<HTMLElement | undefined>(undefined)
   const scrollViewportRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
   const activeSessionIdRef = useRef(sessionId)
@@ -431,7 +311,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   activeScopeRef.current = conversationScope
   activeSessionIdRef.current = sessionId
   composerDraftRef.current = composerDraft
-  attachmentsRef.current = attachments
   promptingSessionIdsRef.current = promptingSessionIds
   generationCatalogVersionRef.current = generationCatalogVersion
   generationToolSelectionRef.current = generationToolSelection
@@ -478,7 +357,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const normalized = normalizeAgentComposerDraft(next)
     composerDraftRef.current = normalized
     setComposerDraft(normalized)
-    if (composerRef.current) writeComposerDraft(composerRef.current, normalized)
+    if (composerRef.current) writeAgentComposerDraft(composerRef.current, normalized)
   }, [])
 
   const setSessionPrompting = useCallback((targetSessionId: string, prompting: boolean) => {
@@ -697,13 +576,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setLlmCatalogError(undefined)
     setLlmCatalogLoading(false)
     setHistoryVisible(false)
-    setResourcePickerOpen(false)
+    setSuggestion(closeAgentComposerSuggestion())
+    setSuggestionQuery("")
+    setSuggestionAnchor(undefined)
+    setReferenceTab("project")
     setGenerationModelPickerOpen(false)
-    setSkillSlashQuery(undefined)
     setComposerFocused(false)
     pendingComposerFocusRef.current = false
     setDropActive(false)
-    setAttachments([])
     replaceComposerDraft(emptyAgentComposerDraft())
     promptingSessionIdsRef.current = new Set()
     setPromptingSessionIds(new Set())
@@ -812,9 +692,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     sessionState?.status.type === "retry"
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
   const interactionDisabled = runtimeBusy || loading || creatingSession
-  const displayedResources = mergeAgentResources(contextResources, attachments).filter(
-    (resource) => resource.kind !== "skill",
-  )
+  const displayedResources = contextResources
   const sessionContentKey = useMemo(() => agentSessionContentKey(sessionState), [sessionState])
   useEffect(() => {
     if (!runtimeBusy || !sessionId) return
@@ -908,16 +786,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       })
   }, [props.projectId])
 
-  const loadResourceInventory = useCallback(() => {
-    void loadCapabilities().catch(() => undefined)
-    void loadProjectEntries().catch(() => undefined)
-  }, [loadCapabilities, loadProjectEntries])
-
-  const closeResourcePicker = useCallback(() => {
-    skillSlashRangeRef.current = undefined
-    setResourcePickerOpen(false)
-    setSkillSlashQuery(undefined)
-    setSkillSlashIndex(0)
+  const closeComposerSuggestion = useCallback(() => {
+    composerQueryRangeRef.current = undefined
+    editingTokenRef.current = undefined
+    setSuggestion(closeAgentComposerSuggestion())
+    setSuggestionQuery("")
+    setSuggestionAnchor(undefined)
   }, [])
 
   const closeGenerationModelPicker = useCallback(() => {
@@ -926,10 +800,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 
   useEffect(() => {
     if (interactionDisabled) {
-      closeResourcePicker()
+      closeComposerSuggestion()
       closeGenerationModelPicker()
     }
-  }, [closeGenerationModelPicker, closeResourcePicker, interactionDisabled])
+  }, [closeComposerSuggestion, closeGenerationModelPicker, interactionDisabled])
 
   useEffect(() => {
     if (!generationModelPickerOpen) return
@@ -944,33 +818,99 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 
   const syncComposerDraft = useCallback(() => {
     if (!composerRef.current) return
-    const next = readComposerDraft(composerRef.current)
+    const next = readAgentComposerDraft(composerRef.current)
     composerDraftRef.current = next
     setComposerDraft(next)
   }, [])
 
-  const updateSkillSlashQuery = useCallback(() => {
-    if (!composerRef.current) return
-    const match = composerSlashRange(composerRef.current)
-    skillSlashRangeRef.current = match
-    setSkillSlashQuery(match?.query)
-    setSkillSlashIndex(0)
-    setResourcePickerOpen(false)
-    if (match) closeGenerationModelPicker()
-    if (match) {
-      loadResourceInventory()
+  const suggestionOptions = useMemo<AgentComposerPickerOption[]>(() => {
+    if (!suggestion.open) return []
+    if (suggestion.trigger === "skill") {
+      return filterAgentSkills(capabilities?.skills ?? [], suggestionQuery).map((skill) => ({
+        description: skill.description,
+        id: `skill:${skill.name}`,
+        label: skill.name,
+        optionType: "skill",
+        resource: { kind: "skill", name: skill.name },
+      }))
     }
-  }, [closeGenerationModelPicker, loadResourceInventory])
+    const normalized = suggestionQuery.trim().toLocaleLowerCase()
+    const rows: AgentComposerPickerOption[] =
+      referenceTab === "project"
+        ? projectEntries.map((entry) => ({
+            depth: 0,
+            description: entry.path === entry.name ? undefined : entry.path,
+            expandable: false,
+            expanded: false,
+            id: `project:${entry.kind}:${entry.path}`,
+            kind: entry.kind,
+            label: entry.name,
+            optionType: "reference",
+            resource: { kind: entry.kind, name: entry.name, path: entry.path },
+            section: "project",
+          }))
+        : props.canvases.map((canvas) => ({
+            active: canvas.id === props.activeCanvas?.id,
+            depth: 0,
+            expandable: false,
+            expanded: false,
+            id: `canvas:${canvas.id}`,
+            kind: "canvas",
+            label: canvas.name,
+            optionType: "reference",
+            resource: canvasAgentResource(canvas),
+            section: "canvas",
+          }))
+    if (!normalized) return rows
+    return rows.filter((row) => `${row.label} ${row.description ?? ""}`.toLocaleLowerCase().includes(normalized))
+  }, [
+    capabilities?.skills,
+    projectEntries,
+    props.activeCanvas?.id,
+    props.canvases,
+    referenceTab,
+    suggestion,
+    suggestionQuery,
+  ])
 
-  const insertSkill = useCallback(
-    (name: string, slash = false) => {
-      if (!composerRef.current) return
-      insertComposerSkill(composerRef.current, name, slash ? skillSlashRangeRef.current : undefined)
-      closeResourcePicker()
-      syncComposerDraft()
-    },
-    [closeResourcePicker, syncComposerDraft],
-  )
+  useEffect(() => {
+    setSuggestion((current) =>
+      current.open ? reconcileAgentComposerSuggestionOptions(current, suggestionOptions) : current,
+    )
+  }, [suggestionOptions])
+
+  const updateComposerQuery = useCallback(() => {
+    const root = composerRef.current
+    if (!root) return
+    const match = findAgentComposerQueryRange(root)
+    if (!match) {
+      composerQueryRangeRef.current = undefined
+      if (suggestion.open && suggestion.mode === "query") closeComposerSuggestion()
+      return
+    }
+    const continuingQuery = suggestion.open && suggestion.mode === "query" && suggestion.trigger === match.trigger
+    composerQueryRangeRef.current = match
+    composerSelectionRef.current = captureAgentComposerSelection(root)
+    setSuggestionQuery(match.query)
+    setSuggestionAnchor(agentComposerPickerAnchor(root, match))
+    setSuggestion((current) => {
+      if (current.open && current.mode === "query" && current.trigger === match.trigger) return current
+      return openAgentComposerSuggestion(match.trigger, [], { kind: "caret" })
+    })
+    if (match.trigger === "skill") void loadCapabilities().catch(() => undefined)
+    else {
+      if (!continuingQuery) setReferenceTab("project")
+      if (!continuingQuery || referenceTab === "project") void loadProjectEntries().catch(() => undefined)
+    }
+    closeGenerationModelPicker()
+  }, [
+    closeComposerSuggestion,
+    closeGenerationModelPicker,
+    loadCapabilities,
+    loadProjectEntries,
+    referenceTab,
+    suggestion,
+  ])
 
   const openSkill = useCallback(
     async (name: string) => {
@@ -984,56 +924,24 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     [props.projectId],
   )
 
-  const resourcePickerOptions = useMemo(() => {
-    const options: AgentResourcePickerOption[] = [
-      ...(capabilities?.skills ?? []).map((skill) => ({
-        description: skill.description,
-        id: `skill:${skill.name}`,
-        label: skill.name,
-        resource: { kind: "skill" as const, name: skill.name },
-        section: "skills" as const,
-      })),
-      ...projectEntries.map((entry) => ({
-        description: entry.path === entry.name ? undefined : entry.path,
-        id: `${entry.kind}:${entry.path}`,
-        label: entry.name,
-        resource: { kind: entry.kind, name: entry.name, path: entry.path },
-        section: "project" as const,
-      })),
-      ...props.canvases.map((canvas) => ({
-        active: canvas.id === props.activeCanvas?.id,
-        id: `canvas:${canvas.id}`,
-        label: canvas.name,
-        resource: canvasAgentResource(canvas),
-        section: "canvases" as const,
-      })),
-    ]
-    return filterAgentResourcePickerOptions(options, skillSlashQuery ?? "")
-  }, [capabilities?.skills, projectEntries, props.activeCanvas?.id, props.canvases, skillSlashQuery])
-  const selectableResourcePickerOptions = useMemo(
-    () =>
-      selectableAgentResourcePickerOptions(resourcePickerOptions, {
-        project: projectEntriesLoading,
-        skills: capabilitiesLoading,
-      }),
-    [capabilitiesLoading, projectEntriesLoading, resourcePickerOptions],
-  )
-
   const addResources = useCallback(
     (next: readonly AgentResource[]) => {
-      const skills = next.filter(
-        (resource): resource is Extract<AgentResource, { kind: "skill" }> => resource.kind === "skill",
-      )
-      for (const skill of skills) insertSkill(skill.name)
-      setAttachments((current) =>
-        mergeAgentResources(
-          current,
-          next.filter((resource) => resource.kind !== "skill"),
-        ).filter((resource) => !lockedResourceKeys.has(agentResourceKey(resource))),
-      )
-      closeResourcePicker()
+      if (!next.length) return
+      const root = composerRef.current
+      if (root) {
+        insertAgentComposerResources(root, next, composerSelectionRef.current)
+        syncComposerDraft()
+      } else {
+        replaceComposerDraft({
+          segments: [
+            ...composerDraftRef.current.segments,
+            ...next.map((resource) => ({ resource, type: "resource" as const })),
+          ],
+        })
+      }
+      closeComposerSuggestion()
     },
-    [closeResourcePicker, insertSkill, lockedResourceKeys],
+    [closeComposerSuggestion, replaceComposerDraft, syncComposerDraft],
   )
 
   useImperativeHandle(
@@ -1053,37 +961,77 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   useLayoutEffect(() => {
     if (!open || !pendingComposerFocusRef.current || !composerRef.current) return
     pendingComposerFocusRef.current = false
-    focusComposerAtEnd(composerRef.current)
-  }, [attachments, composerFocusRequest, open])
+    writeAgentComposerDraft(composerRef.current, composerDraftRef.current)
+    focusAgentComposerAtEnd(composerRef.current)
+  }, [composerDraft, composerFocusRequest, open])
 
-  const selectPickerResource = useCallback(
-    (resource: AgentResource) => {
-      if (resource.kind === "skill") {
-        insertSkill(resource.name, skillSlashQuery !== undefined)
-        return
+  const selectComposerSuggestion = useCallback(
+    (option: AgentComposerPickerOption) => {
+      const root = composerRef.current
+      if (!root) return
+      const editingToken = editingTokenRef.current
+      const query = composerQueryRangeRef.current
+      if (suggestion.open && suggestion.mode === "edit" && editingToken) {
+        replaceAgentComposerToken(root, editingToken, option.resource)
+      } else if (query) {
+        replaceAgentComposerQuery(root, query, option.resource)
+      } else {
+        insertAgentComposerResources(root, [option.resource], composerSelectionRef.current)
       }
-      if (skillSlashQuery !== undefined && composerRef.current) {
-        removeComposerSlash(composerRef.current, skillSlashRangeRef.current)
-        syncComposerDraft()
-      }
-      addResources([resource])
+      syncComposerDraft()
+      closeComposerSuggestion()
     },
-    [addResources, insertSkill, skillSlashQuery, syncComposerDraft],
+    [closeComposerSuggestion, suggestion, syncComposerDraft],
   )
 
-  const resourcePickerVisible = resourcePickerOpen || skillSlashQuery !== undefined
+  const editComposerToken = useCallback(
+    (root: HTMLElement, token: HTMLElement, resource: AgentResource) => {
+      const trigger = resource.kind === "skill" ? "skill" : "reference"
+      editingTokenRef.current = token
+      composerQueryRangeRef.current = undefined
+      composerSelectionRef.current = captureAgentComposerSelection(root)
+      setSuggestionQuery("")
+      setSuggestionAnchor(agentComposerPickerAnchor(root, token))
+      setSuggestion(
+        openAgentComposerSuggestion(trigger, suggestionOptions, {
+          kind: "token",
+          tokenId: agentResourceKey(resource),
+        }),
+      )
+      if (trigger === "skill") void loadCapabilities().catch(() => undefined)
+      else if (isAgentCanvasResource(resource)) setReferenceTab("canvas")
+      else {
+        setReferenceTab("project")
+        void loadProjectEntries().catch(() => undefined)
+      }
+      closeGenerationModelPicker()
+    },
+    [closeGenerationModelPicker, loadCapabilities, loadProjectEntries, suggestionOptions],
+  )
+
+  const insertComposerQueryTrigger = useCallback(
+    (trigger: "@" | "$") => {
+      const root = composerRef.current
+      if (!root) return
+      insertAgentComposerTrigger(root, trigger, composerSelectionRef.current)
+      syncComposerDraft()
+      updateComposerQuery()
+    },
+    [syncComposerDraft, updateComposerQuery],
+  )
+
   useEffect(() => {
-    if (!resourcePickerVisible) return
+    if (!suggestion.open) return
     const dismissForTarget = (target: EventTarget | null) => {
       if (!(target instanceof Node) || shouldDismissAgentResourcePicker(composerSurfaceRef.current, target))
-        closeResourcePicker()
+        closeComposerSuggestion()
     }
     const onPointerDown = (event: PointerEvent) => dismissForTarget(event.target)
     const onFocusIn = (event: FocusEvent) => dismissForTarget(event.target)
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
-      closeResourcePicker()
+      closeComposerSuggestion()
     }
     document.addEventListener("pointerdown", onPointerDown)
     document.addEventListener("focusin", onFocusIn)
@@ -1093,7 +1041,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       document.removeEventListener("focusin", onFocusIn)
       document.removeEventListener("keydown", onKeyDown)
     }
-  }, [closeResourcePicker, resourcePickerVisible])
+  }, [closeComposerSuggestion, suggestion.open])
+
+  useEffect(() => {
+    if (!composerFocused || (suggestion.open && suggestion.mode === "edit")) return
+    const update = () => window.requestAnimationFrame(updateComposerQuery)
+    document.addEventListener("selectionchange", update)
+    return () => document.removeEventListener("selectionchange", update)
+  }, [composerFocused, suggestion, updateComposerQuery])
 
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
@@ -1118,7 +1073,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         addResources([canvasAgentResource(projectCanvas.canvas)])
         return
       }
-      const resource = parseResource(event.dataTransfer.getData(resourceDragType))
+      const resource = parseAgentComposerResource(event.dataTransfer.getData(resourceDragType))
       if (resource) addResources([resource])
     },
     [addResources, embedded, props.projectId],
@@ -1168,15 +1123,15 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const send = useCallback(async () => {
     const submittedDraft = composerDraftRef.current
     const text = agentComposerText(submittedDraft).trim()
-    const submittedResources = mergeAgentResources(contextResources, attachments, agentComposerSkills(submittedDraft))
+    const submittedResources = mergeAgentResources(contextResources, agentComposerResources(submittedDraft))
     if (!props.projectId || interactionDisabled || (!text && submittedResources.length === 0)) return
     if (validatedGenerationToolSelection && !generationConfigurationReady) {
       setError("Complete the selected generation model's required options before sending.")
-      closeResourcePicker()
+      closeComposerSuggestion()
       setGenerationModelPickerOpen(true)
       return
     }
-    closeResourcePicker()
+    closeComposerSuggestion()
     closeGenerationModelPicker()
     const scopeId = props.projectId
     const scope = conversationScope
@@ -1185,7 +1140,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const submittedGenerationSelection = validatedGenerationToolSelection
     const submittedLlmSelection = llmSelectionRef.current
     const submittedGenerationToolInput = validatedGenerationToolInput
-    const submittedAttachments = attachments
     const submittedActiveCanvas = props.activeCanvas
     const isCurrentScope = () =>
       mountedRef.current &&
@@ -1250,8 +1204,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       if (!targetSessionId || !isCurrentScope()) return
       setSessionPrompting(targetSessionId, true)
       replaceComposerDraft(emptyAgentComposerDraft())
-      setAttachments([])
-      attachmentsRef.current = []
       stickToBottomRef.current = true
       setFollowingLatest(true)
       cleared = true
@@ -1297,14 +1249,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       const activeTarget = Boolean(targetSessionId && isActiveTarget(targetSessionId))
       if (cleared && targetSessionId) {
         const failedSessionId = targetSessionId
-        if (activeTarget && !hasAgentComposerContent(composerDraftRef.current) && attachmentsRef.current.length === 0) {
+        if (activeTarget && !hasAgentComposerContent(composerDraftRef.current)) {
           replaceComposerDraft(submittedDraft)
-          setAttachments((current) => mergeAgentResources(current, submittedAttachments))
         } else {
           setFailedSubmissions((current) => [
             ...current,
             {
-              attachments: submittedAttachments,
               draft: submittedDraft,
               id: ++failedSubmissionIdRef.current,
               message,
@@ -1319,10 +1269,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       if (targetSessionId && isCurrentScope()) setSessionPrompting(targetSessionId, false)
     }
   }, [
-    attachments,
     contextResources,
+    closeComposerSuggestion,
     closeGenerationModelPicker,
-    closeResourcePicker,
     conversationScope,
     createSession,
     embedded,
@@ -1372,9 +1321,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const failedConversationTitle = failedSubmission
     ? sessions.find((session) => session.id === failedSubmission.sessionId)?.title || "another conversation"
     : undefined
-  const canRestoreFailedSubmission = Boolean(
-    failedSubmission && !interactionDisabled && !hasAgentComposerContent(composerDraft) && attachments.length === 0,
-  )
+  const canRestoreFailedSubmission =
+    Boolean(failedSubmission) && !interactionDisabled && !hasAgentComposerContent(composerDraft)
 
   if (!props.projectId) return null
 
@@ -1535,7 +1483,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   <EmptyState
                     icon={<Sparkles />}
                     title="Start a conversation"
-                    description="Ask about the project, add a canvas, or type / to use a Skill."
+                    description="Ask about the project, reference content with @, or use a Skill with $."
                   />
                 ) : (
                   <div className="space-y-5">
@@ -1643,11 +1591,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     disabled={!canRestoreFailedSubmission}
                     onClick={() => {
                       replaceComposerDraft(failedSubmission.draft)
-                      setAttachments(
-                        failedSubmission.attachments.filter(
-                          (resource) => !lockedResourceKeys.has(agentResourceKey(resource)),
-                        ),
-                      )
                       setFailedSubmissions((current) => current.filter((item) => item.id !== failedSubmission.id))
                     }}
                     title={
@@ -1713,15 +1656,34 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     toolInput={generationToolInput}
                     tools={generationTools}
                   />
-                ) : resourcePickerVisible ? (
-                  <ResourcePicker
-                    activeIndex={skillSlashIndex}
-                    loadingProject={projectEntriesLoading}
-                    loadingSkills={capabilitiesLoading}
-                    onOpenSkill={openSkill}
-                    onSelect={selectPickerResource}
-                    options={selectableResourcePickerOptions}
-                    query={skillSlashQuery ?? ""}
+                ) : suggestion.open && suggestionAnchor ? (
+                  <AgentComposerPicker
+                    activeId={suggestion.hoveredId ?? suggestion.activeId}
+                    anchor={suggestionAnchor}
+                    loading={
+                      suggestion.trigger === "skill"
+                        ? capabilitiesLoading
+                        : referenceTab === "project" && projectEntriesLoading
+                    }
+                    onClose={closeComposerSuggestion}
+                    onHoverChange={(hoveredId) =>
+                      setSuggestion((current) =>
+                        current.open ? setAgentComposerSuggestionHover(current, hoveredId) : current,
+                      )
+                    }
+                    onReferenceTabChange={(tab) => {
+                      setReferenceTab(tab)
+                      if (tab === "project") void loadProjectEntries().catch(() => undefined)
+                    }}
+                    onRetry={() => {
+                      if (suggestion.trigger === "skill") void loadCapabilities().catch(() => undefined)
+                      else if (referenceTab === "project") void loadProjectEntries().catch(() => undefined)
+                    }}
+                    onSelect={selectComposerSuggestion}
+                    onToggle={() => undefined}
+                    options={suggestionOptions}
+                    referenceTab={referenceTab}
+                    trigger={suggestion.trigger}
                   />
                 ) : null}
                 <div
@@ -1753,25 +1715,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 >
                   {displayedResources.length > 0 ? (
                     <div className="mb-2 flex flex-wrap gap-1.5">
-                      {displayedResources.map((resource) => {
-                        const key = agentResourceKey(resource)
-                        const locked = lockedResourceKeys.has(key)
-                        return (
-                          <ResourceChip
-                            key={key}
-                            locked={locked}
-                            onRemove={
-                              locked
-                                ? undefined
-                                : () =>
-                                    setAttachments((current) =>
-                                      current.filter((item) => agentResourceKey(item) !== key),
-                                    )
-                            }
-                            resource={resource}
-                          />
-                        )
-                      })}
+                      {displayedResources.map((resource) => (
+                        <ResourceChip key={agentResourceKey(resource)} locked resource={resource} />
+                      ))}
                     </div>
                   ) : null}
                   <div
@@ -1799,17 +1745,28 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         : "Open a project to start chatting"
                     }
                     onClick={(event) => {
-                      const target =
+                      if (interactionDisabled) return
+                      const action =
                         event.target instanceof HTMLElement
-                          ? event.target.closest<HTMLElement>(`[${skillMentionAttribute}]`)
+                          ? event.target.closest<HTMLElement>(`[${agentComposerTokenActionAttribute}]`)
                           : null
-                      const skill = target?.getAttribute(skillMentionAttribute)
-                      if (skill) {
-                        event.preventDefault()
-                        void openSkill(skill)
+                      const token = action?.closest<HTMLElement>(`[${agentComposerTokenAttribute}]`)
+                      if (!action || !token) {
+                        composerSelectionRef.current = captureAgentComposerSelection(event.currentTarget)
+                        updateComposerQuery()
                         return
                       }
-                      updateSkillSlashQuery()
+                      event.preventDefault()
+                      if (action.getAttribute(agentComposerTokenActionAttribute) === "remove") {
+                        removeAgentComposerToken(event.currentTarget, token)
+                        closeComposerSuggestion()
+                        syncComposerDraft()
+                        return
+                      }
+                      const resource = parseAgentComposerResource(
+                        token.getAttribute(agentComposerResourceAttribute) ?? "",
+                      )
+                      if (resource) editComposerToken(event.currentTarget, token, resource)
                     }}
                     onBlur={(event) => {
                       setComposerFocused(false)
@@ -1818,16 +1775,19 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         !(target instanceof Node) ||
                         shouldDismissAgentResourcePicker(composerSurfaceRef.current, target)
                       )
-                        closeResourcePicker()
+                        closeComposerSuggestion()
                     }}
-                    onFocus={() => setComposerFocused(true)}
+                    onFocus={(event) => {
+                      setComposerFocused(true)
+                      composerSelectionRef.current = captureAgentComposerSelection(event.currentTarget)
+                    }}
                     onInput={() => {
                       syncComposerDraft()
-                      updateSkillSlashQuery()
+                      updateComposerQuery()
                     }}
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
-                      if (skillSlashQuery !== undefined) {
+                      if (suggestion.open) {
                         if (
                           (event.key === "ArrowDown" || event.key === "ArrowUp") &&
                           !event.altKey &&
@@ -1836,24 +1796,26 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           !event.shiftKey
                         ) {
                           event.preventDefault()
-                          setSkillSlashIndex((current) => {
-                            if (!selectableResourcePickerOptions.length) return 0
-                            return event.key === "ArrowDown"
-                              ? (current + 1) % selectableResourcePickerOptions.length
-                              : (current - 1 + selectableResourcePickerOptions.length) %
-                                  selectableResourcePickerOptions.length
-                          })
+                          setSuggestion((current) =>
+                            current.open
+                              ? moveAgentComposerSuggestion(
+                                  current,
+                                  event.key === "ArrowDown" ? 1 : -1,
+                                  suggestionOptions,
+                                )
+                              : current,
+                          )
                           return
                         }
                         if (event.key === "Escape") {
                           event.preventDefault()
-                          closeResourcePicker()
+                          closeComposerSuggestion()
                           return
                         }
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault()
-                          const option = selectableResourcePickerOptions[skillSlashIndex]
-                          if (option) selectPickerResource(option.resource)
+                          const option = suggestionOptions.find((candidate) => candidate.id === suggestion.activeId)
+                          if (option) selectComposerSuggestion(option)
                           return
                         }
                       }
@@ -1863,39 +1825,54 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       }
                     }}
                     onKeyUp={(event) => {
-                      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) updateSkillSlashQuery()
+                      composerSelectionRef.current = captureAgentComposerSelection(event.currentTarget)
+                      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) updateComposerQuery()
                     }}
                     onPaste={(event) => {
                       event.preventDefault()
-                      insertComposerPlainText(event.currentTarget, event.clipboardData.getData("text/plain"))
+                      insertAgentComposerPlainText(event.currentTarget, event.clipboardData.getData("text/plain"))
                       syncComposerDraft()
-                      updateSkillSlashQuery()
+                      updateComposerQuery()
                     }}
                     ref={composerRef}
                     role="textbox"
                     suppressContentEditableWarning
                   />
                   <div className="flex items-center gap-1 pt-1">
-                    <Tooltip content="Add context or Skill">
+                    <Tooltip content="Reference Project or Canvas content">
                       <Button
-                        aria-label="Add context or Skill"
+                        aria-controls="agent-composer-reference-picker"
+                        aria-expanded={suggestion.open && suggestion.trigger === "reference"}
+                        aria-label="Reference Project or Canvas content"
                         disabled={!props.projectId || interactionDisabled}
-                        onClick={() => {
-                          if (resourcePickerOpen) {
-                            closeResourcePicker()
-                            return
-                          }
-                          closeGenerationModelPicker()
-                          skillSlashRangeRef.current = undefined
-                          setSkillSlashQuery(undefined)
-                          setSkillSlashIndex(0)
-                          setResourcePickerOpen(true)
-                          loadResourceInventory()
+                        onClick={() => insertComposerQueryTrigger("@")}
+                        onPointerDown={(event) => {
+                          event.preventDefault()
+                          if (composerRef.current)
+                            composerSelectionRef.current = captureAgentComposerSelection(composerRef.current)
                         }}
                         size="icon-sm"
-                        variant={resourcePickerVisible ? "secondary" : "ghost"}
+                        variant={suggestion.open && suggestion.trigger === "reference" ? "secondary" : "ghost"}
                       >
-                        <Plus />
+                        <AtSign />
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content="Use a Skill">
+                      <Button
+                        aria-controls="agent-composer-skill-picker"
+                        aria-expanded={suggestion.open && suggestion.trigger === "skill"}
+                        aria-label="Use a Skill"
+                        disabled={!props.projectId || interactionDisabled}
+                        onClick={() => insertComposerQueryTrigger("$")}
+                        onPointerDown={(event) => {
+                          event.preventDefault()
+                          if (composerRef.current)
+                            composerSelectionRef.current = captureAgentComposerSelection(composerRef.current)
+                        }}
+                        size="icon-sm"
+                        variant={suggestion.open && suggestion.trigger === "skill" ? "secondary" : "ghost"}
+                      >
+                        <Sparkles />
                       </Button>
                     </Tooltip>
                     <button
@@ -1909,7 +1886,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           closeGenerationModelPicker()
                           return
                         }
-                        closeResourcePicker()
+                        closeComposerSuggestion()
                         setGenerationModelPickerOpen(true)
                         if (generationToolsError) void loadGenerationTools()
                         if (modelPickerTab === "llm" && (!llmCatalog || llmCatalogError)) void loadLlmModels()
@@ -2247,138 +2224,6 @@ function SkillBadge(props: { name: string; onOpen: () => Promise<void> }) {
       <span className="truncate">{props.name}</span>
       <ExternalLink className="size-3 opacity-65" />
     </button>
-  )
-}
-
-function ResourcePicker(props: {
-  activeIndex: number
-  loadingProject: boolean
-  loadingSkills: boolean
-  onOpenSkill: (name: string) => Promise<void>
-  onSelect: (resource: AgentResource) => void
-  options: AgentResourcePickerOption[]
-  query: string
-}) {
-  const sections = [
-    { id: "skills" as const, label: "Skills" },
-    { id: "project" as const, label: "Project files and folders" },
-    { id: "canvases" as const, label: "Canvases" },
-  ]
-  let optionIndex = 0
-  return (
-    <div
-      aria-label="Context and Skill picker"
-      className="absolute inset-x-0 bottom-[calc(100%+6px)] z-50 max-h-72 overflow-auto rounded-2xl border border-border/60 bg-popover p-2 text-popover-foreground shadow-xl shadow-black/10"
-      role="listbox"
-    >
-      <div className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        <Plus className="size-3" />
-        Add context or Skill
-        {props.query ? <span className="normal-case tracking-normal">matching /{props.query}</span> : null}
-      </div>
-      {sections.map((section, sectionIndex) => {
-        const options = props.options.filter((option) => option.section === section.id)
-        const loading =
-          (section.id === "skills" && props.loadingSkills) || (section.id === "project" && props.loadingProject)
-        if (!loading && options.length === 0 && props.query) return null
-        return (
-          <div className={cn(sectionIndex > 0 && "mt-1 border-t border-border/60 pt-1")} key={section.id}>
-            <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              {section.label}
-            </div>
-            {loading ? (
-              <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
-                <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                Loading…
-              </div>
-            ) : options.length ? (
-              options.map((option) => {
-                const index = optionIndex++
-                const skillName = option.resource.kind === "skill" ? option.resource.name : undefined
-                const icon =
-                  option.section === "skills" ? (
-                    <Sparkles />
-                  ) : option.section === "canvases" ? (
-                    <PanelsTopLeft />
-                  ) : option.resource.kind === "directory" ? (
-                    <Folder />
-                  ) : (
-                    <FileText />
-                  )
-                return (
-                  <ResourceRow
-                    active={option.active}
-                    description={option.description}
-                    icon={icon}
-                    key={option.id}
-                    onAdd={() => props.onSelect(option.resource)}
-                    onOpen={skillName ? () => props.onOpenSkill(skillName) : undefined}
-                    resource={option.resource}
-                    selected={index === props.activeIndex}
-                  />
-                )
-              })
-            ) : (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">None available.</div>
-            )}
-          </div>
-        )
-      })}
-      {!props.loadingProject && !props.loadingSkills && props.options.length === 0 && props.query ? (
-        <div className="px-2 py-2 text-xs text-muted-foreground">No matching resources.</div>
-      ) : null}
-    </div>
-  )
-}
-
-function ResourceRow(props: {
-  active?: boolean
-  description?: string
-  icon: React.ReactNode
-  onAdd: () => void
-  onOpen?: () => Promise<void>
-  resource: AgentResource
-  selected?: boolean
-}) {
-  return (
-    <div className={cn("flex items-center rounded-md hover:bg-muted", props.selected && "bg-muted")}>
-      <button
-        className="flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left"
-        draggable
-        onClick={props.onAdd}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = "copy"
-          event.dataTransfer.setData(resourceDragType, serializeResource(props.resource))
-          event.dataTransfer.setData("text/plain", resourceLabel(props.resource))
-        }}
-        type="button"
-      >
-        <span className="mt-0.5 text-primary [&_svg]:size-3.5">{props.icon}</span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1.5 text-xs font-medium">
-            <span className="truncate">{resourceLabel(props.resource)}</span>
-            {props.active ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">active</span> : null}
-          </span>
-          {props.description ? (
-            <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
-              {props.description}
-            </span>
-          ) : null}
-        </span>
-      </button>
-      {props.onOpen ? (
-        <Tooltip content="Open Skill file">
-          <Button
-            aria-label={`Open ${resourceLabel(props.resource)} Skill`}
-            onClick={() => void props.onOpen?.()}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <ExternalLink />
-          </Button>
-        </Tooltip>
-      ) : null}
-    </div>
   )
 }
 

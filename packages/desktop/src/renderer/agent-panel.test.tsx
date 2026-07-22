@@ -1,5 +1,7 @@
 import type { AgentMessage, AgentMessagePart } from "@convax/agent-runtime"
 import { describe, expect, mock, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { renderToStaticMarkup } from "react-dom/server"
 import { AgentActivityNotice, ConversationTurnView, MessagePartView } from "./agent-panel"
 import type { AgentConversationTurn } from "./agent-conversation-presentation"
@@ -96,5 +98,17 @@ describe("Agent conversation activity", () => {
     )
 
     expect(markup).not.toContain("Earlier run was interrupted")
+  })
+})
+
+describe("Agent composer source contract", () => {
+  test("uses dedicated @ and $ composer triggers and structured resources", () => {
+    const source = readFileSync(fileURLToPath(new URL("./agent-panel.tsx", import.meta.url)), "utf8")
+
+    expect(source).toContain('aria-label="Reference Project or Canvas content"')
+    expect(source).toContain('aria-label="Use a Skill"')
+    expect(source).toContain("agentComposerResources(submittedDraft)")
+    expect(source).not.toContain("findAgentSkillSlashQuery")
+    expect(source).not.toContain('aria-label="Add context or Skill"')
   })
 })

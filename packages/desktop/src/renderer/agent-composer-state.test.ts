@@ -1,58 +1,63 @@
 import { describe, expect, test } from "bun:test"
 import {
   AgentComposerRequestTracker,
-  agentComposerSkills,
+  agentComposerResources,
   agentComposerText,
   closeAgentComposerSuggestion,
   filterAgentSkills,
-  filterAgentResourcePickerOptions,
   findAgentComposerQuery,
-  findAgentSkillSlashQuery,
   hasAgentComposerContent,
   moveAgentComposerSuggestion,
   normalizeAgentComposerDraft,
   openAgentComposerSuggestion,
   reconcileAgentComposerSuggestionOptions,
-  selectableAgentResourcePickerOptions,
   setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
 } from "./agent-composer-state"
 
 describe("Agent composer state", () => {
-  test("keeps Skill mentions semantic and out of the visible prompt text", () => {
+  test("keeps resources at their sentence position and projects prompt inputs", () => {
     const draft = {
       segments: [
-        { text: "Review this with ", type: "text" as const },
-        { name: "code-review", type: "skill" as const },
-        { text: " please", type: "text" as const },
-        { name: "code-review", type: "skill" as const },
+        { text: "Compare ", type: "text" as const },
+        { resource: { kind: "file" as const, name: "A", path: "a.md" }, type: "resource" as const },
+        { text: " with ", type: "text" as const },
+        { resource: { kind: "skill" as const, name: "review" }, type: "resource" as const },
       ],
     }
 
-    expect(agentComposerText(draft)).toBe("Review this with  please")
-    expect(agentComposerSkills(draft)).toEqual([{ kind: "skill", name: "code-review" }])
+    expect(agentComposerText(draft)).toBe("Compare  with ")
+    expect(agentComposerResources(draft)).toEqual([
+      { kind: "file", name: "A", path: "a.md" },
+      { kind: "skill", name: "review" },
+    ])
     expect(hasAgentComposerContent(draft)).toBeTrue()
   })
 
-  test("normalizes adjacent text and invalid Skill segments", () => {
+  test("normalizes adjacent text and invalid resource segments", () => {
     expect(
       normalizeAgentComposerDraft({
         segments: [
           { text: "one", type: "text" },
           { text: " two", type: "text" },
-          { name: " ", type: "skill" },
+          { resource: { kind: "skill", name: " " }, type: "resource" },
         ],
       }),
     ).toEqual({ segments: [{ text: "one two", type: "text" }] })
   })
 
-  test("recognizes slash queries only at a command boundary", () => {
-    expect(findAgentSkillSlashQuery("/la", 3)).toEqual({ end: 3, query: "la", start: 0 })
-    expect(findAgentSkillSlashQuery("请用 /飞书", 6)).toEqual({ end: 6, query: "飞书", start: 3 })
-    expect(findAgentSkillSlashQuery("line one\n/review", 16)).toEqual({ end: 16, query: "review", start: 9 })
-    expect(findAgentSkillSlashQuery("https://example.com/a", 21)).toBeUndefined()
-    expect(findAgentSkillSlashQuery("value/total", 11)).toBeUndefined()
+  test("keeps multiple Skills visible and lets submission deduplicate later", () => {
+    const draft = normalizeAgentComposerDraft({
+      segments: [
+        { resource: { kind: "skill", name: "review" }, type: "resource" },
+        { resource: { kind: "skill", name: "review" }, type: "resource" },
+        { resource: { kind: "skill", name: "docs" }, type: "resource" },
+      ],
+    })
+
+    expect(draft.segments).toHaveLength(3)
+    expect(agentComposerResources(draft)).toHaveLength(3)
   })
 
   test("recognizes only @ and $ suggestion queries at a command boundary", () => {
@@ -106,62 +111,6 @@ describe("Agent composer state", () => {
 
     expect(filterAgentSkills(skills, "REVIEW").map((skill) => skill.name)).toEqual(["code-review"])
     expect(filterAgentSkills(skills, "飞书").map((skill) => skill.name)).toEqual(["lark-doc"])
-  })
-
-  test("uses one query across Skills, project entries, and canvases", () => {
-    const options = [
-      {
-        description: "Review a pull request",
-        id: "skill:review",
-        label: "code-review",
-        resource: { kind: "skill", name: "code-review" } as const,
-        section: "skills" as const,
-      },
-      {
-        description: "src/components/picker.tsx",
-        id: "file:picker",
-        label: "picker.tsx",
-        resource: { kind: "file", path: "src/components/picker.tsx" } as const,
-        section: "project" as const,
-      },
-      {
-        id: "canvas:launch",
-        label: "Launch plan",
-        resource: { kind: "resource", uri: "convax://canvas/launch" } as const,
-        section: "canvases" as const,
-      },
-    ]
-
-    expect(filterAgentResourcePickerOptions(options, "pick").map((option) => option.id)).toEqual(["file:picker"])
-    expect(filterAgentResourcePickerOptions(options, "launch").map((option) => option.id)).toEqual(["canvas:launch"])
-    expect(filterAgentResourcePickerOptions(options, "review").map((option) => option.id)).toEqual(["skill:review"])
-  })
-
-  test("keeps keyboard selection aligned with rows hidden by loading sections", () => {
-    const options = [
-      {
-        id: "skill:review",
-        label: "review",
-        resource: { kind: "skill", name: "review" } as const,
-        section: "skills" as const,
-      },
-      {
-        id: "file:readme",
-        label: "README.md",
-        resource: { kind: "file", path: "README.md" } as const,
-        section: "project" as const,
-      },
-      {
-        id: "canvas:main",
-        label: "Main",
-        resource: { kind: "resource", uri: "convax://canvas/main" } as const,
-        section: "canvases" as const,
-      },
-    ]
-
-    expect(
-      selectableAgentResourcePickerOptions(options, { project: true, skills: false }).map((option) => option.id),
-    ).toEqual(["skill:review", "canvas:main"])
   })
 
   test("hides an empty placeholder only while the composer is focused", () => {

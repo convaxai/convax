@@ -1,4 +1,10 @@
 import type { AgentResource } from "@convax/agent-runtime"
+import {
+  findAgentComposerQuery,
+  normalizeAgentComposerDraft,
+  type AgentComposerDraft,
+  type AgentComposerQueryTrigger,
+} from "./agent-composer-state"
 
 export const agentComposerResourceAttribute = "data-agent-composer-resource"
 export const agentComposerTokenAttribute = "data-agent-composer-token"
@@ -11,6 +17,13 @@ export interface AgentComposerTokenPresentation {
   prefix: "@" | "$"
   removeLabel: string
   title: string
+}
+
+export interface AgentComposerQueryRange {
+  end: number
+  node: Text
+  start: number
+  trigger: AgentComposerQueryTrigger
 }
 
 export function serializeAgentComposerResource(resource: AgentResource) {
@@ -34,11 +47,7 @@ export function parseAgentComposerResource(value: string): AgentResource | null 
       }
     }
     if (resource.kind === "file" || resource.kind === "directory") {
-      if (
-        !isNonEmptyString(resource.path) ||
-        !isOptionalString(resource.name) ||
-        !isOptionalString(resource.mime)
-      ) {
+      if (!isNonEmptyString(resource.path) || !isOptionalString(resource.name) || !isOptionalString(resource.mime)) {
         return null
       }
       return {
@@ -134,6 +143,171 @@ export function createAgentComposerToken(resource: AgentResource, disabled = fal
 
   token.append(edit, remove)
   return token
+}
+
+export function readAgentComposerDraft(root: HTMLElement): AgentComposerDraft {
+  const segments: AgentComposerDraft["segments"] = []
+  const appendText = (text: string) => {
+    if (!text) return
+    const previous = segments.at(-1)
+    if (previous?.type === "text") previous.text += text
+    else segments.push({ text, type: "text" })
+  }
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendText(node.textContent ?? "")
+      return
+    }
+    if (!(node instanceof HTMLElement)) return
+    const serialized = node.getAttribute(agentComposerResourceAttribute)
+    if (serialized !== null) {
+      const resource = parseAgentComposerResource(serialized)
+      if (resource) segments.push({ resource, type: "resource" })
+      return
+    }
+    if (node.tagName === "BR") {
+      appendText("\n")
+      return
+    }
+    const block = node !== root && (node.tagName === "DIV" || node.tagName === "P")
+    if (block && segments.length) appendText("\n")
+    for (const child of node.childNodes) visit(child)
+  }
+  for (const child of root.childNodes) visit(child)
+  return normalizeAgentComposerDraft({ segments })
+}
+
+export function writeAgentComposerDraft(root: HTMLElement, draft: AgentComposerDraft) {
+  const disabled = root.getAttribute("contenteditable") === "false"
+  const nodes = normalizeAgentComposerDraft(draft).segments.map((segment) =>
+    segment.type === "resource"
+      ? createAgentComposerToken(segment.resource, disabled)
+      : document.createTextNode(segment.text),
+  )
+  root.replaceChildren(...nodes)
+}
+
+export function findAgentComposerQueryRange(
+  root: HTMLElement,
+): (AgentComposerQueryRange & { query: string }) | undefined {
+  const selection = window.getSelection()
+  if (!selection?.isCollapsed || selection.rangeCount === 0) return undefined
+  const range = selection.getRangeAt(0)
+  if (!(range.startContainer instanceof Text) || !root.contains(range.startContainer)) return undefined
+  const query = findAgentComposerQuery(range.startContainer.data, range.startOffset)
+  return query ? { ...query, node: range.startContainer } : undefined
+}
+
+export function captureAgentComposerSelection(root: HTMLElement) {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount) return undefined
+  const range = selection.getRangeAt(0)
+  return composerContainsRange(root, range) ? range.cloneRange() : undefined
+}
+
+export function insertAgentComposerTrigger(root: HTMLElement, trigger: "@" | "$", bookmark?: Range) {
+  const range = resolveComposerRange(root, bookmark)
+  range.deleteContents()
+  const node = document.createTextNode(trigger)
+  range.insertNode(node)
+  placeComposerSelection(root, node, node.data.length)
+}
+
+export function insertAgentComposerPlainText(root: HTMLElement, text: string, bookmark?: Range) {
+  if (!text) return
+  const range = resolveComposerRange(root, bookmark)
+  range.deleteContents()
+  const node = document.createTextNode(text)
+  range.insertNode(node)
+  placeComposerSelection(root, node, node.data.length)
+}
+
+export function insertAgentComposerResources(root: HTMLElement, resources: readonly AgentResource[], bookmark?: Range) {
+  if (!resources.length) return
+  const range = resolveComposerRange(root, bookmark)
+  range.deleteContents()
+  const fragment = document.createDocumentFragment()
+  for (const resource of resources) {
+    fragment.append(createAgentComposerToken(resource), document.createTextNode("\u00a0"))
+  }
+  const finalSpacer = fragment.lastChild
+  range.insertNode(fragment)
+  if (finalSpacer instanceof Text) placeComposerSelection(root, finalSpacer, finalSpacer.data.length)
+}
+
+export function replaceAgentComposerQuery(root: HTMLElement, query: AgentComposerQueryRange, resource: AgentResource) {
+  if (!query.node.isConnected || !root.contains(query.node)) return
+  const range = document.createRange()
+  range.setStart(query.node, query.start)
+  range.setEnd(query.node, query.end)
+  range.deleteContents()
+  const token = createAgentComposerToken(resource)
+  const spacer = document.createTextNode("\u00a0")
+  range.insertNode(spacer)
+  range.insertNode(token)
+  placeComposerSelection(root, spacer, spacer.data.length)
+}
+
+export function replaceAgentComposerToken(root: HTMLElement, token: HTMLElement, resource: AgentResource) {
+  if (!token.isConnected || !root.contains(token)) return
+  const replacement = createAgentComposerToken(resource)
+  token.replaceWith(replacement)
+  placeComposerSelectionAfter(root, replacement)
+}
+
+export function removeAgentComposerToken(root: HTMLElement, token: HTMLElement) {
+  if (!token.isConnected || !root.contains(token)) return
+  const next = token.nextSibling
+  const previous = token.previousSibling
+  token.remove()
+  if (next instanceof Text) placeComposerSelection(root, next, 0)
+  else if (previous instanceof Text) placeComposerSelection(root, previous, previous.data.length)
+  else focusAgentComposerAtEnd(root)
+}
+
+export function focusAgentComposerAtEnd(root: HTMLElement) {
+  root.focus()
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  range.collapse(false)
+  setComposerSelection(range)
+}
+
+function resolveComposerRange(root: HTMLElement, bookmark?: Range) {
+  if (bookmark && composerContainsRange(root, bookmark)) return bookmark.cloneRange()
+  const selected = captureAgentComposerSelection(root)
+  if (selected) return selected
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  range.collapse(false)
+  return range
+}
+
+function composerContainsRange(root: HTMLElement, range: Range) {
+  return root.contains(range.startContainer) && root.contains(range.endContainer)
+}
+
+function placeComposerSelection(root: HTMLElement, node: Node, offset: number) {
+  root.focus()
+  const range = document.createRange()
+  range.setStart(node, offset)
+  range.collapse(true)
+  setComposerSelection(range)
+}
+
+function placeComposerSelectionAfter(root: HTMLElement, node: Node) {
+  root.focus()
+  const range = document.createRange()
+  range.setStartAfter(node)
+  range.collapse(true)
+  setComposerSelection(range)
+}
+
+function setComposerSelection(range: Range) {
+  const selection = window.getSelection()
+  if (!selection) return
+  selection.removeAllRanges()
+  selection.addRange(range)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
