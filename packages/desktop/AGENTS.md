@@ -85,6 +85,9 @@ it must not become the permanent home of reusable domain rules.
   Verify monotonic catalog sequence, compatibility, size, SHA-256 and a bounded safe
   ZIP inventory, then reuse the existing Plugin and managed-Skill installers. A
   remote package never enters the trusted built-in update/provenance path.
+  Catalog UI may display validated package and current-host companion byte counts.
+  Open an official GitHub Release only through id-only Plugin IPC that re-resolves
+  the Registry package and constructs the canonical page in main.
 - A remote Tool Plugin executable is an optional Registry companion, never a file
   inside the static Plugin ZIP. Select only an exact `process.platform`/`arch`
   target, verify its deterministic Release URL plus declared size/SHA-256, and

@@ -41,6 +41,7 @@ const pluginClient: WebPluginClient = {
   }),
   listPlugins: mock(async () => ({ catalog: [], installed: [] })),
   onDidChange: mock(() => noop),
+  openCatalogPluginRelease: mock(async () => true),
   uninstallPlugin: mock(async () => true),
 }
 

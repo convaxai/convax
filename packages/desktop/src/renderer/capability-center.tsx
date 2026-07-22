@@ -1,5 +1,16 @@
 import { Button, cn } from "@convax/ui"
-import { ChevronRight, Download, FolderInput, LoaderCircle, Plug, RefreshCw, Sparkles, Trash2, X } from "lucide-react"
+import {
+  ChevronRight,
+  Download,
+  ExternalLink,
+  FolderInput,
+  LoaderCircle,
+  Plug,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { WebPluginCatalogItem, WebPluginClient, WebPluginInventory, WebPluginManifest } from "../plugin-contracts"
 import type {
@@ -40,6 +51,7 @@ type CapabilityAction =
   | "plugin.import"
   | "skill.import"
   | `plugin.install:${string}`
+  | `plugin.release:${string}`
   | `plugin.skill:${string}`
   | `plugin.uninstall:${string}`
   | `skill.install:${string}`
@@ -61,6 +73,7 @@ export interface CapabilityCenterDialogProps {
     target: DesktopSkillTarget,
     media: DesktopSkillShowcaseMedia,
   ): Promise<DesktopSkillShowcase | null>
+  onOpenPluginRelease(id: string): void
   onTabChange(tab: CapabilityCenterTab): void
   onUninstallPlugin(id: string): void
   onUninstallSkill(name: string): void
@@ -99,6 +112,24 @@ function EmptySection({ children }: { children: React.ReactNode }) {
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">{children}</h3>
 }
+
+export function formatPluginDownloadBytes(bytes: number, locale: AppLocale) {
+  if (bytes < 1_000) return `${bytes} B`
+  const units = ["KB", "MB", "GB"] as const
+  let value = bytes / 1_000
+  let unit: (typeof units)[number] = units[0]
+  for (const candidate of units.slice(1)) {
+    if (value < 1_000) break
+    value /= 1_000
+    unit = candidate
+  }
+  return `${new Intl.NumberFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
+    maximumFractionDigits: 1,
+  }).format(value)} ${unit}`
+}
+
+type PluginCardItem = WebPluginManifest &
+  Partial<Pick<WebPluginCatalogItem, "download" | "releaseAvailable">>
 
 function PluginActions({
   busy,
@@ -171,6 +202,7 @@ function PluginCard({
   locale,
   onInstall,
   onInstallSkill,
+  onOpenRelease,
   onUninstall,
   plugin,
   updateAvailable,
@@ -182,8 +214,9 @@ function PluginCard({
   locale: AppLocale
   onInstall(): void
   onInstallSkill(): void
+  onOpenRelease(): void
   onUninstall(): void
-  plugin: WebPluginManifest
+  plugin: PluginCardItem
   updateAvailable?: boolean
 }) {
   return (
@@ -210,6 +243,37 @@ function PluginCard({
         </div>
       </div>
       <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">{plugin.description}</p>
+      {plugin.download || plugin.releaseAvailable ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {plugin.download ? (
+            <span
+              className="inline-flex items-center gap-1.5"
+              title={appMessage(locale, "capabilities.downloadBreakdown", {
+                companionSize: formatPluginDownloadBytes(plugin.download.companionBytes, locale),
+                packageSize: formatPluginDownloadBytes(plugin.download.packageBytes, locale),
+              })}
+            >
+              <Download className="size-3.5" />
+              {appMessage(locale, "capabilities.downloadSize", {
+                size: formatPluginDownloadBytes(plugin.download.totalBytes, locale),
+              })}
+            </span>
+          ) : null}
+          {plugin.releaseAvailable ? (
+            <Button
+              disabled={busy !== null}
+              onClick={onOpenRelease}
+              size="sm"
+              title={appMessage(locale, "capabilities.githubRelease")}
+              variant="ghost"
+            >
+              <BusyIcon active={busy === `plugin.release:${plugin.id}`} />
+              <ExternalLink />
+              {appMessage(locale, "capabilities.githubRelease")}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {(!installed || updateAvailable) && plugin.runtime ? (
         <p
           className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-foreground"
@@ -564,6 +628,7 @@ function PluginsPanel({
   onImport,
   onInstall,
   onInstallSkill,
+  onOpenRelease,
   onUninstall,
   skills,
 }: {
@@ -573,6 +638,7 @@ function PluginsPanel({
   onImport(): void
   onInstall(id: string): void
   onInstallSkill(id: string): void
+  onOpenRelease(id: string): void
   onUninstall(id: string): void
   skills: DesktopSkillInventory | null
 }) {
@@ -614,6 +680,7 @@ function PluginsPanel({
                 locale={locale}
                 onInstall={() => onInstall(plugin.id)}
                 onInstallSkill={() => onInstallSkill(plugin.id)}
+                onOpenRelease={() => onOpenRelease(plugin.id)}
                 onUninstall={() => onUninstall(plugin.id)}
                 plugin={plugin}
                 updateAvailable={plugin.updateAvailable}
@@ -638,6 +705,7 @@ function PluginsPanel({
                 locale={locale}
                 onInstall={() => undefined}
                 onInstallSkill={() => onInstallSkill(plugin.id)}
+                onOpenRelease={() => undefined}
                 onUninstall={() => onUninstall(plugin.id)}
                 plugin={plugin}
               />
@@ -708,6 +776,7 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             onImport={props.onImportPlugin}
             onInstall={props.onInstallPlugin}
             onInstallSkill={props.onInstallPluginSkill}
+            onOpenRelease={props.onOpenPluginRelease}
             onUninstall={props.onUninstallPlugin}
             skills={props.skills}
           />
@@ -811,13 +880,13 @@ function useCapabilityManagement({
   }, [enabled, pluginClient, refresh, skillClient])
 
   const mutate = useCallback(
-    async (action: CapabilityAction, operation: () => Promise<unknown>) => {
+    async (action: CapabilityAction, operation: () => Promise<unknown>, refreshAfter = true) => {
       if (busy) return
       setBusy(action)
       setError(null)
       try {
         await operation()
-        await refresh()
+        if (refreshAfter) await refresh()
       } catch (mutationError) {
         setError(errorMessage(mutationError))
       } finally {
@@ -847,6 +916,8 @@ function useCapabilityManagement({
     onInstallSkill: (id) => void mutate(`skill.install:${id}`, () => skillClient.installCatalogSkill({ id })),
     onLoadSkillDetails: loadSkillDetails,
     onLoadSkillShowcase: loadSkillShowcase,
+    onOpenPluginRelease: (id) =>
+      void mutate(`plugin.release:${id}`, () => pluginClient.openCatalogPluginRelease({ id }), false),
     onTabChange: setTab,
     onUninstallPlugin: (id) => void mutate(`plugin.uninstall:${id}`, () => pluginClient.uninstallPlugin({ id })),
     onUninstallSkill: (name) => void mutate(`skill.uninstall:${name}`, () => skillClient.uninstallSkill({ name })),

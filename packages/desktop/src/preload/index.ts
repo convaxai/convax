@@ -93,6 +93,7 @@ const pluginChannels = {
   importPlugin: "plugin:import",
   installCatalogPlugin: "plugin:catalog-install",
   listPlugins: "plugin:list",
+  openCatalogPluginRelease: "plugin:catalog-open-release",
   uninstallPlugin: "plugin:uninstall",
 } as const
 
@@ -271,6 +272,7 @@ const pluginClient = {
     ipcRenderer.on(pluginChannels.changed, handleChange)
     return () => ipcRenderer.removeListener(pluginChannels.changed, handleChange)
   },
+  openCatalogPluginRelease: (input) => ipcRenderer.invoke(pluginChannels.openCatalogPluginRelease, input),
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
 

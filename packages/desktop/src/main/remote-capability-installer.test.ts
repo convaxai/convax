@@ -290,8 +290,16 @@ describe("RemoteCapabilityInstaller", () => {
     const { installer, registry } = setup(packages)
 
     await expect(installer.listPluginCatalog(new Set(["remote-plugin"]))).resolves.toEqual([
-      { ...manifest("remote-plugin", "1.1.0"), installed: true },
+      {
+        ...manifest("remote-plugin", "1.1.0"),
+        download: { companionBytes: 0, packageBytes: 1, totalBytes: 1 },
+        installed: true,
+        releaseAvailable: true,
+      },
     ])
+    await expect(installer.getPluginReleaseUrl("remote-plugin")).resolves.toBe(
+      "https://github.com/microvoid/convax-plugins/releases/tag/plugin-remote-plugin-v1.1.0",
+    )
     await expect(installer.listSkillCatalog(new Set())).resolves.toEqual([
       {
         description: "remote-skill description",
@@ -301,7 +309,8 @@ describe("RemoteCapabilityInstaller", () => {
       },
     ])
     expect(registry.fetchRegistry).toHaveBeenNthCalledWith(1, { cachePolicy: "cache-first" })
-    expect(registry.fetchRegistry).toHaveBeenNthCalledWith(2, { cachePolicy: "cache-first" })
+    expect(registry.fetchRegistry).toHaveBeenNthCalledWith(2, { cachePolicy: "network-first" })
+    expect(registry.fetchRegistry).toHaveBeenNthCalledWith(3, { cachePolicy: "cache-first" })
   })
 
   test("keeps Plugin-owned Skills previewable but routes installation through the owner", async () => {
@@ -509,7 +518,12 @@ describe("RemoteCapabilityInstaller", () => {
     const setupResult = setup([item], files)
 
     await expect(setupResult.installer.listPluginCatalog(new Set())).resolves.toEqual([
-      { ...pluginManifest, installed: false },
+      {
+        ...pluginManifest,
+        download: { companionBytes: 0, packageBytes: 1, totalBytes: 1 },
+        installed: false,
+        releaseAvailable: true,
+      },
     ])
     await expect(setupResult.installer.installPlugin("generation-plugin")).resolves.toMatchObject({
       id: "generation-plugin",
@@ -543,6 +557,15 @@ describe("RemoteCapabilityInstaller", () => {
     })
     const files = { "manifest.json": encoder.encode(JSON.stringify(pluginManifest)) }
     const setupResult = setup([item], files)
+
+    await expect(setupResult.installer.listPluginCatalog(new Set())).resolves.toEqual([
+      {
+        ...pluginManifest,
+        download: { companionBytes: 9, packageBytes: 1, totalBytes: 10 },
+        installed: false,
+        releaseAvailable: true,
+      },
+    ])
 
     await setupResult.installer.installPlugin(item.id)
 

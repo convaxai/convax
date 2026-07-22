@@ -219,9 +219,17 @@ export function hasWebPluginCanvasSurface(
 
 export interface WebPluginCatalogItem extends WebPluginManifest {
   companionSkillName?: string
+  /** Current-host immutable download bytes from the validated remote Registry. */
+  download?: {
+    companionBytes: number
+    packageBytes: number
+    totalBytes: number
+  }
   installed: boolean
   /** Validated installed version when the catalog id is already present. */
   installedVersion?: string
+  /** Main can open this remote package's exact validated GitHub Release by id. */
+  releaseAvailable?: true
   /** True only when the trusted catalog contains a newer SemVer. */
   updateAvailable?: boolean
 }
@@ -236,6 +244,7 @@ export interface WebPluginClient {
   installCatalogPlugin(input: { id: string }): Promise<InstalledWebPluginSummary>
   listPlugins(): Promise<WebPluginInventory>
   onDidChange(listener: () => void): () => void
+  openCatalogPluginRelease(input: { id: string }): Promise<boolean>
   uninstallPlugin(input: { id: string }): Promise<boolean>
 }
 

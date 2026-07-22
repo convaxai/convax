@@ -11,6 +11,7 @@ const handlers = new Map<string, InvokeHandler>()
 const removedHandlers: string[] = []
 const windows: TestWindow[] = []
 const dialogCalls: unknown[][] = []
+const openedExternalUrls: string[] = []
 let dialogResult: { canceled: boolean; filePaths: string[] } = { canceled: true, filePaths: [] }
 let dialogOwner: TestWindow | undefined
 
@@ -40,6 +41,11 @@ mock.module("electron", () => ({
       handlers.delete(channel)
     },
   },
+  shell: {
+    openExternal: async (url: string) => {
+      openedExternalUrls.push(url)
+    },
+  },
 }))
 
 afterEach(() => {
@@ -47,6 +53,7 @@ afterEach(() => {
   removedHandlers.splice(0)
   windows.splice(0)
   dialogCalls.splice(0)
+  openedExternalUrls.splice(0)
   dialogResult = { canceled: true, filePaths: [] }
   dialogOwner = undefined
 })
@@ -84,6 +91,9 @@ function createRemoteCatalog() {
   let changeListener: (() => void) | undefined
   const unsubscribe = mock(() => undefined)
   const catalog = {
+    getPluginReleaseUrl: mock(async (id: string) =>
+      `https://github.com/microvoid/convax-plugins/releases/tag/plugin-${id}-v1.0.0`,
+    ),
     installPlugin: mock(async (id: string) => manifest(id)),
     listPluginCatalog: mock(async (installedIds: ReadonlySet<string>) => [
       {
@@ -127,6 +137,7 @@ describe("registerPluginManagementIpc", () => {
       importPlugin: "plugin:import",
       installCatalogPlugin: "plugin:catalog-install",
       listPlugins: "plugin:list",
+      openCatalogPluginRelease: "plugin:catalog-open-release",
       uninstallPlugin: "plugin:uninstall",
     })
   })
@@ -144,6 +155,7 @@ describe("registerPluginManagementIpc", () => {
       pluginManagementIpcChannels.listPlugins,
       pluginManagementIpcChannels.importPlugin,
       pluginManagementIpcChannels.installCatalogPlugin,
+      pluginManagementIpcChannels.openCatalogPluginRelease,
       pluginManagementIpcChannels.uninstallPlugin,
     ]) {
       await expect(Promise.resolve().then(() => invoke(channel, {}, { sender: { id: 2 } }))).rejects.toThrow(
@@ -258,7 +270,7 @@ describe("registerPluginManagementIpc", () => {
 
     const registered = [...handlers.keys()]
     dispose()
-    expect(registered).toHaveLength(4)
+    expect(registered).toHaveLength(5)
     expect(removedHandlers.sort()).toEqual(registered.sort())
     expect(handlers).toHaveLength(0)
   })
@@ -439,6 +451,17 @@ describe("registerPluginManagementIpc", () => {
     ).resolves.toMatchObject({ id: "remote-plugin" })
     expect(remote.installPlugin).toHaveBeenCalledWith("remote-plugin")
     expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+
+    await expect(
+      invoke(pluginManagementIpcChannels.openCatalogPluginRelease, {
+        id: "remote-plugin",
+        url: "https://attacker.invalid/release",
+      }),
+    ).resolves.toBe(true)
+    expect(remote.getPluginReleaseUrl).toHaveBeenCalledWith("remote-plugin")
+    expect(openedExternalUrls).toEqual([
+      "https://github.com/microvoid/convax-plugins/releases/tag/plugin-remote-plugin-v1.0.0",
+    ])
 
     await invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: "builtin-plugin" })
     expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledTimes(1)

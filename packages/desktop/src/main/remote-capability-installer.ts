@@ -42,6 +42,7 @@ export interface RemoteCapabilityRegistryPort {
 }
 
 export interface RemotePluginCatalogPort {
+  getPluginReleaseUrl(id: string): Promise<string>
   installPlugin(id: string, options?: { allowCurrent?: boolean }): Promise<InstalledWebPluginSummary>
   listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]>
 }
@@ -181,6 +182,21 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     )
   }
 
+  #pluginDownload(item: RemotePluginPackage): WebPluginCatalogItem["download"] | undefined {
+    let companionBytes = 0
+    for (const companion of item.companions ?? []) {
+      const target = companion.targets.find(
+        (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
+      )
+      // Do not understate a download for a Plugin that cannot run on this host.
+      if (!target) return undefined
+      companionBytes += target.artifact.size
+    }
+    const totalBytes = item.artifact.size + companionBytes
+    if (!Number.isSafeInteger(totalBytes)) throw new Error(`Remote Plugin download size is invalid: ${item.id}`)
+    return { companionBytes, packageBytes: item.artifact.size, totalBytes }
+  }
+
   #skills(packages: readonly RemoteCapabilityPackage[]) {
     return assertNoIdentityCollisions(
       selectAvailable(
@@ -193,16 +209,26 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   }
 
   async listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]> {
-    return this.#plugins(await this.#packages("cache-first")).map((item) => ({
-      ...item.manifest,
-      installed: installedIds.has(item.id),
-    }))
+    return this.#plugins(await this.#packages("cache-first")).map((item) => {
+      const download = this.#pluginDownload(item)
+      return {
+        ...item.manifest,
+        ...(download ? { download } : {}),
+        installed: installedIds.has(item.id),
+        releaseAvailable: true,
+      }
+    })
   }
 
   async #pluginPackage(id: string) {
     const item = this.#plugins(await this.#packages()).find((candidate) => candidate.id === id)
     if (!item) throw new Error(`Remote Plugin catalog item was not found: ${id}`)
     return item
+  }
+
+  async getPluginReleaseUrl(id: string) {
+    const item = await this.#pluginPackage(id)
+    return `https://github.com/microvoid/convax-plugins/releases/tag/plugin-${item.id}-v${item.version}`
   }
 
   async #downloadPlugin(item: RemotePluginPackage) {

@@ -592,6 +592,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   Desktop verifies catalog sequence, compatibility, immutable artifact metadata,
   bounded download size, SHA-256 and a safe ZIP inventory before calling the same
   local Plugin and managed-Skill installers used by checked-in bundles.
+  Catalog presentation may expose the validated package size plus the exact
+  current-host companion sizes. Opening its GitHub Release remains an id-only
+  renderer request: main re-resolves the package and constructs the canonical
+  official Release page before handing it to Electron.
 - The packaging script may use the same verifier to retain the exact Registry,
   Plugin ZIP and current-target companion bytes as a packaged first-install seed.
   Runtime revalidates that self-describing seed and still routes it through

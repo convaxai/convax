@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
 import { compareWebPluginVersions, type InstalledWebPluginSummary, type WebPluginClient } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { WebPluginManager, WebPluginPublicationCandidate, WebPluginPublicationTransaction } from "./plugin-manager"
@@ -13,6 +13,7 @@ export const pluginManagementIpcChannels = {
   importPlugin: "plugin:import",
   installCatalogPlugin: "plugin:catalog-install",
   listPlugins: "plugin:list",
+  openCatalogPluginRelease: "plugin:catalog-open-release",
   uninstallPlugin: "plugin:uninstall",
 } as const
 
@@ -224,6 +225,14 @@ export function registerPluginManagementIpc(
         throw new Error(`Plugin catalog item was not found: ${input.id}`)
       },
     ),
+    register<
+      PluginClientInput<"openCatalogPluginRelease">,
+      Awaited<ReturnType<WebPluginClient["openCatalogPluginRelease"]>>
+    >(pluginManagementIpcChannels.openCatalogPluginRelease, async (_event, input) => {
+      if (!remoteCatalog) return false
+      await shell.openExternal(await remoteCatalog.getPluginReleaseUrl(input.id))
+      return true
+    }),
     register<PluginClientInput<"uninstallPlugin">, Awaited<ReturnType<WebPluginClient["uninstallPlugin"]>>>(
       pluginManagementIpcChannels.uninstallPlugin,
       (_event, input) =>

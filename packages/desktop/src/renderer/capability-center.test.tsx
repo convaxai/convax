@@ -8,6 +8,7 @@ import {
   CapabilityCenterDialog,
   CapabilityManagementSurface,
   catalogSkillDetailsTarget,
+  formatPluginDownloadBytes,
   type CapabilityCenterDialogProps,
 } from "./capability-center"
 
@@ -33,6 +34,7 @@ const baseDialogProps = {
   onInstallSkill: noop,
   onLoadSkillDetails: mock(async () => skillDetails),
   onLoadSkillShowcase: mock(async () => null),
+  onOpenPluginRelease: noop,
   onTabChange: noop,
   onUninstallPlugin: noop,
   onUninstallSkill: noop,
@@ -117,10 +119,42 @@ const pluginClient: WebPluginClient = {
   installCatalogPlugin: mock(async () => pluginInventory.installed[0]!),
   listPlugins: mock(async () => pluginInventory),
   onDidChange: mock(() => noop),
+  openCatalogPluginRelease: mock(async () => true),
   uninstallPlugin: mock(async () => true),
 }
 
 describe("CapabilityCenter", () => {
+  test("shows the current-host download size and GitHub Release for a remote Plugin", () => {
+    const remotePlugin = {
+      ...pluginInventory.catalog[0]!,
+      download: { companionBytes: 63_780, packageBytes: 4_388, totalBytes: 68_168 },
+      releaseAvailable: true as const,
+    }
+    const englishMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        plugins={{ catalog: [remotePlugin], installed: [] }}
+        tab="plugins"
+      />,
+    )
+    const chineseMarkup = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        locale="zh-CN"
+        plugins={{ catalog: [remotePlugin], installed: [] }}
+        tab="plugins"
+      />,
+    )
+
+    expect(formatPluginDownloadBytes(68_168, "en")).toBe("68.2 KB")
+    expect(englishMarkup).toContain("Download 68.2 KB")
+    expect(englishMarkup).toContain("Plugin 4.4 KB · Companion 63.8 KB")
+    expect(englishMarkup).toContain("GitHub Release")
+    expect(chineseMarkup).toContain("下载 68.2 KB")
+    expect(chineseMarkup).toContain("插件 4.4 KB · 运行组件 63.8 KB")
+    expect(chineseMarkup).toContain("GitHub 发布页")
+  })
+
   test("uses the installed target for a managed Skill shown on its catalog card", () => {
     expect(catalogSkillDetailsTarget("storyboard", skillInventory.skills[0])).toEqual({
       kind: "installed",
