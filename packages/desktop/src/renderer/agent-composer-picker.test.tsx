@@ -46,6 +46,7 @@ describe("Agent composer picker", () => {
     expect(markup).toContain('role="tree"')
     expect(markup).toContain('role="treeitem"')
     expect(markup).toContain('aria-selected="true"')
+    expect(markup).toContain('id="agent-composer-option-project:file:README.md"')
     expect(markup).toContain("Project")
     expect(markup).toContain("Canvas")
     expect(markup).toContain("bg-popover")

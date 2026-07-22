@@ -75,6 +75,8 @@ describe("Agent composer state", () => {
     expect(moved.activeId).toBe("b")
     expect(moveAgentComposerSuggestion({ ...moved, activeId: "c" }, 1, rows).activeId).toBe("a")
     expect(reconcileAgentComposerSuggestionOptions(moved, [{ id: "b" }]).activeId).toBe("b")
+    const empty = openAgentComposerSuggestion("reference", [], { kind: "caret" })
+    expect(reconcileAgentComposerSuggestionOptions(empty, [])).toBe(empty)
     expect(closeAgentComposerSuggestion()).toEqual({ open: false })
   })
 
@@ -92,15 +94,21 @@ describe("Agent composer state", () => {
   test("rejects stale inventory requests independently by key and scope", () => {
     const tracker = new AgentComposerRequestTracker()
     const firstRoot = tracker.begin("project-a", "project:")
+    const assets = tracker.begin("project-a", "project:Assets")
     const canvas = tracker.begin("project-a", "canvas:one")
     const secondRoot = tracker.begin("project-a", "project:")
+    const otherProject = tracker.begin("project-b", "project:")
 
     expect(firstRoot()).toBeFalse()
     expect(secondRoot()).toBeTrue()
+    expect(assets()).toBeTrue()
     expect(canvas()).toBeTrue()
+    expect(otherProject()).toBeTrue()
     tracker.invalidate()
     expect(secondRoot()).toBeFalse()
+    expect(assets()).toBeFalse()
     expect(canvas()).toBeFalse()
+    expect(otherProject()).toBeFalse()
   })
 
   test("filters Skill names and descriptions case-insensitively", () => {

@@ -116,7 +116,8 @@ export function reconcileAgentComposerSuggestionOptions(
   options: readonly AgentComposerSuggestionOptionLike[],
 ): OpenAgentComposerSuggestionState {
   if (state.activeId && options.some((option) => option.id === state.activeId)) return state
-  return { ...state, activeId: options[0]?.id }
+  const activeId = options[0]?.id
+  return state.activeId === activeId ? state : { ...state, activeId }
 }
 
 export function setAgentComposerSuggestionHover(

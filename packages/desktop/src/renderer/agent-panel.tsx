@@ -8,6 +8,7 @@ import type {
   AgentSession,
   AgentSessionState,
 } from "@convax/agent-runtime"
+import type { CanvasDocument } from "@convax/canvas"
 import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
@@ -75,6 +76,7 @@ import {
   selectAgentSessionAfterRefresh,
 } from "./agent-panel-state"
 import {
+  AgentComposerRequestTracker,
   agentComposerResources,
   agentComposerText,
   closeAgentComposerSuggestion,
@@ -91,6 +93,12 @@ import {
   type AgentComposerDraft,
   type AgentComposerSuggestionState,
 } from "./agent-composer-state"
+import {
+  buildAgentCanvasReferenceTree,
+  buildAgentProjectReferenceTree,
+  filterAgentReferenceTree,
+  moveAgentReferenceTreeActive,
+} from "./agent-composer-tree"
 import {
   agentComposerResourceAttribute,
   agentComposerTokenActionAttribute,
@@ -111,6 +119,7 @@ import {
 } from "./agent-composer-dom"
 import {
   AgentComposerPicker,
+  agentComposerPickerOptionId,
   type AgentComposerPickerAnchor,
   type AgentComposerPickerOption,
 } from "./agent-composer-picker"
@@ -170,7 +179,7 @@ function agentComposerPickerAnchor(
   const target = rect.width || rect.height ? rect : fallback
   const width = Math.min(352, Math.max(240, window.innerWidth - 16))
   const left = Math.max(8, Math.min(target.left, window.innerWidth - width - 8))
-  const top = target.top >= 328 ? target.top - 324 : Math.min(target.bottom + 6, window.innerHeight - 328)
+  const top = target.top >= 240 ? Math.max(8, target.top - 324) : Math.min(target.bottom + 6, window.innerHeight - 328)
   return { left, top: Math.max(8, top) }
 }
 
@@ -263,8 +272,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [composerFocused, setComposerFocused] = useState(false)
   const [dropActive, setDropActive] = useState(false)
   const [composerDraft, setComposerDraft] = useState<AgentComposerDraft>(emptyAgentComposerDraft)
-  const [projectEntries, setProjectEntries] = useState<ProjectEntry[]>([])
-  const [projectEntriesLoading, setProjectEntriesLoading] = useState(false)
+  const [projectListings, setProjectListings] = useState<Map<string, readonly ProjectEntry[]>>(() => new Map())
+  const [expandedProjectPaths, setExpandedProjectPaths] = useState<Set<string>>(() => new Set())
+  const [loadedCanvasDocuments, setLoadedCanvasDocuments] = useState<Map<string, CanvasDocument>>(() => new Map())
+  const [expandedCanvasIds, setExpandedCanvasIds] = useState<Set<string>>(() => new Set())
+  const [inventoryLoadingKeys, setInventoryLoadingKeys] = useState<Set<string>>(() => new Set())
+  const [inventoryErrors, setInventoryErrors] = useState<Map<string, string>>(() => new Map())
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [sessionId, setSessionId] = useState<string>()
   const [sessionState, setSessionState] = useState<AgentSessionState>()
@@ -294,7 +307,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const activeProjectRef = useRef(props.projectId)
   const activeScopeRef = useRef(conversationScope)
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
-  const projectEntriesRequestRef = useRef(0)
+  const requestTrackerRef = useRef(new AgentComposerRequestTracker())
   const generationCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const generationDescriptionRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const llmCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
@@ -378,7 +391,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       llmCatalogRequestRef.current.invalidate()
       sessionStateRequestRef.current.clear()
       sessionListRequestRef.current += 1
-      projectEntriesRequestRef.current += 1
+      requestTrackerRef.current.invalidate()
     }
   }, [])
 
@@ -568,9 +581,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setSessionState(undefined)
     setCapabilities(undefined)
     capabilitiesRequestRef.current = undefined
-    projectEntriesRequestRef.current += 1
-    setProjectEntries([])
-    setProjectEntriesLoading(false)
+    requestTrackerRef.current.invalidate()
+    setProjectListings(new Map())
+    setExpandedProjectPaths(new Set())
+    setLoadedCanvasDocuments(new Map())
+    setExpandedCanvasIds(new Set())
+    setInventoryLoadingKeys(new Set())
+    setInventoryErrors(new Map())
     llmCatalogRequestRef.current.invalidate()
     setLlmCatalog(undefined)
     setLlmCatalogError(undefined)
@@ -763,28 +780,84 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     return request
   }, [capabilities, props.projectId])
 
-  const loadProjectEntries = useCallback(() => {
-    if (!props.projectId) return Promise.resolve(undefined)
-    const scopeId = props.projectId
-    const request = ++projectEntriesRequestRef.current
-    setProjectEntriesLoading(true)
-    return window.convax.projectFiles
-      .listDirectory({ path: "", projectId: scopeId })
-      .then((listing) => {
-        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
-          setProjectEntries(listing.entries)
-        return listing
-      })
-      .catch((cause) => {
-        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
-          setError(errorMessage(cause))
-        throw cause
-      })
-      .finally(() => {
-        if (mountedRef.current && activeProjectRef.current === scopeId && request === projectEntriesRequestRef.current)
-          setProjectEntriesLoading(false)
-      })
-  }, [props.projectId])
+  const setInventoryLoading = useCallback((key: string, loading: boolean) => {
+    setInventoryLoadingKeys((current) => {
+      const next = new Set(current)
+      if (loading) next.add(key)
+      else next.delete(key)
+      return next
+    })
+  }, [])
+
+  const clearInventoryError = useCallback((key: string) => {
+    setInventoryErrors((current) => {
+      if (!current.has(key)) return current
+      const next = new Map(current)
+      next.delete(key)
+      return next
+    })
+  }, [])
+
+  const setInventoryError = useCallback((key: string, message: string) => {
+    setInventoryErrors((current) => new Map(current).set(key, message))
+  }, [])
+
+  const loadProjectDirectory = useCallback(
+    async (path: string) => {
+      const scopeId = props.projectId
+      if (!scopeId) return
+      const key = `project:${path}`
+      const isLatest = requestTrackerRef.current.begin(scopeId, key)
+      setInventoryLoading(key, true)
+      clearInventoryError(key)
+      try {
+        const listing = await window.convax.projectFiles.listDirectory({ path, projectId: scopeId })
+        if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
+        setProjectListings((current) => new Map(current).set(path, listing.entries))
+      } catch (cause) {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          setInventoryError(key, errorMessage(cause))
+        }
+      } finally {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) setInventoryLoading(key, false)
+      }
+    },
+    [clearInventoryError, props.projectId, setInventoryError, setInventoryLoading],
+  )
+
+  const loadCanvasDocument = useCallback(
+    async (canvasId: string) => {
+      const scopeId = props.projectId
+      if (!scopeId || !props.canvases.some((canvas) => canvas.id === canvasId)) return
+      const key = `canvas:${canvasId}`
+      const isLatest = requestTrackerRef.current.begin(scopeId, key)
+      setInventoryLoading(key, true)
+      clearInventoryError(key)
+      try {
+        if (canvasId === props.activeCanvas?.id) await props.beforePrompt?.()
+        const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId })
+        if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
+        const document = snapshot.document
+        if (!document) throw new Error(`Canvas document was not found: ${canvasId}`)
+        setLoadedCanvasDocuments((current) => new Map(current).set(canvasId, document))
+      } catch (cause) {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          setInventoryError(key, errorMessage(cause))
+        }
+      } finally {
+        if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) setInventoryLoading(key, false)
+      }
+    },
+    [
+      clearInventoryError,
+      props.activeCanvas?.id,
+      props.beforePrompt,
+      props.canvases,
+      props.projectId,
+      setInventoryError,
+      setInventoryLoading,
+    ],
+  )
 
   const closeComposerSuggestion = useCallback(() => {
     composerQueryRangeRef.current = undefined
@@ -823,6 +896,30 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setComposerDraft(next)
   }, [])
 
+  const referenceRows = useMemo(
+    () =>
+      referenceTab === "project"
+        ? buildAgentProjectReferenceTree({ expandedPaths: expandedProjectPaths, listings: projectListings })
+        : buildAgentCanvasReferenceTree({
+            activeCanvasId: props.activeCanvas?.id,
+            canvases: props.canvases,
+            documents: loadedCanvasDocuments,
+            expandedIds: expandedCanvasIds,
+          }),
+    [
+      expandedCanvasIds,
+      expandedProjectPaths,
+      loadedCanvasDocuments,
+      projectListings,
+      props.activeCanvas?.id,
+      props.canvases,
+      referenceTab,
+    ],
+  )
+  const visibleReferenceRows = useMemo(
+    () => filterAgentReferenceTree(referenceRows, suggestionQuery),
+    [referenceRows, suggestionQuery],
+  )
   const suggestionOptions = useMemo<AgentComposerPickerOption[]>(() => {
     if (!suggestion.open) return []
     if (suggestion.trigger === "skill") {
@@ -834,50 +931,102 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         resource: { kind: "skill", name: skill.name },
       }))
     }
-    const normalized = suggestionQuery.trim().toLocaleLowerCase()
-    const rows: AgentComposerPickerOption[] =
-      referenceTab === "project"
-        ? projectEntries.map((entry) => ({
-            depth: 0,
-            description: entry.path === entry.name ? undefined : entry.path,
-            expandable: false,
-            expanded: false,
-            id: `project:${entry.kind}:${entry.path}`,
-            kind: entry.kind,
-            label: entry.name,
-            optionType: "reference",
-            resource: { kind: entry.kind, name: entry.name, path: entry.path },
-            section: "project",
-          }))
-        : props.canvases.map((canvas) => ({
-            active: canvas.id === props.activeCanvas?.id,
-            depth: 0,
-            expandable: false,
-            expanded: false,
-            id: `canvas:${canvas.id}`,
-            kind: "canvas",
-            label: canvas.name,
-            optionType: "reference",
-            resource: canvasAgentResource(canvas),
-            section: "canvas",
-          }))
-    if (!normalized) return rows
-    return rows.filter((row) => `${row.label} ${row.description ?? ""}`.toLocaleLowerCase().includes(normalized))
+    return visibleReferenceRows.map((row) => ({ ...row, optionType: "reference" }))
   }, [
     capabilities?.skills,
-    projectEntries,
-    props.activeCanvas?.id,
-    props.canvases,
-    referenceTab,
-    suggestion,
+    suggestion.open,
+    suggestion.open ? suggestion.trigger : undefined,
     suggestionQuery,
+    visibleReferenceRows,
   ])
+
+  const inventoryErrorEntry = useMemo(
+    () =>
+      [...inventoryErrors].find(([key]) =>
+        referenceTab === "project" ? key.startsWith("project:") : key.startsWith("canvas:"),
+      ),
+    [inventoryErrors, referenceTab],
+  )
+  const referenceInventoryLoading = [...inventoryLoadingKeys].some((key) =>
+    referenceTab === "project" ? key.startsWith("project:") : key.startsWith("canvas:"),
+  )
+  const suggestionLoading = suggestion.open
+    ? suggestion.trigger === "skill"
+      ? capabilitiesLoading
+      : referenceInventoryLoading
+    : false
+  const suggestionError = suggestion.open && suggestion.trigger === "reference" ? inventoryErrorEntry?.[1] : undefined
+  const selectableSuggestionOptions = useMemo(
+    () => (suggestionLoading || suggestionError ? [] : suggestionOptions),
+    [suggestionError, suggestionLoading, suggestionOptions],
+  )
 
   useEffect(() => {
     setSuggestion((current) =>
-      current.open ? reconcileAgentComposerSuggestionOptions(current, suggestionOptions) : current,
+      current.open ? reconcileAgentComposerSuggestionOptions(current, selectableSuggestionOptions) : current,
     )
-  }, [suggestionOptions])
+  }, [selectableSuggestionOptions])
+
+  const changeReferenceTab = useCallback(
+    (tab: "canvas" | "project") => {
+      setReferenceTab(tab)
+      setSuggestion((current) => (current.open ? { ...current, activeId: undefined, hoveredId: undefined } : current))
+      if (tab === "project" && (!projectListings.has("") || inventoryErrors.has("project:"))) {
+        void loadProjectDirectory("")
+      }
+    },
+    [inventoryErrors, loadProjectDirectory, projectListings],
+  )
+
+  const toggleReferenceOption = useCallback(
+    (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => {
+      if (!option.expandable) return
+      if (option.section === "project") {
+        if (option.resource.kind !== "directory") return
+        const path = option.resource.path
+        const expanding = !expandedProjectPaths.has(path)
+        setExpandedProjectPaths((current) => {
+          const next = new Set(current)
+          if (expanding) next.add(path)
+          else next.delete(path)
+          return next
+        })
+        if (expanding && (!projectListings.has(path) || inventoryErrors.has(`project:${path}`))) {
+          void loadProjectDirectory(path)
+        }
+        return
+      }
+
+      const expanding = !expandedCanvasIds.has(option.id)
+      setExpandedCanvasIds((current) => {
+        const next = new Set(current)
+        if (expanding) next.add(option.id)
+        else next.delete(option.id)
+        return next
+      })
+      if (option.kind !== "canvas" || !expanding) return
+      const canvasId = option.id.slice("canvas:".length)
+      if (!loadedCanvasDocuments.has(canvasId) || inventoryErrors.has(`canvas:${canvasId}`)) {
+        void loadCanvasDocument(canvasId)
+      }
+    },
+    [
+      expandedCanvasIds,
+      expandedProjectPaths,
+      inventoryErrors,
+      loadCanvasDocument,
+      loadedCanvasDocuments,
+      loadProjectDirectory,
+      projectListings,
+    ],
+  )
+
+  const retryReferenceInventory = useCallback(() => {
+    if (!inventoryErrorEntry) return
+    const [key] = inventoryErrorEntry
+    if (key.startsWith("project:")) void loadProjectDirectory(key.slice("project:".length))
+    else if (key.startsWith("canvas:")) void loadCanvasDocument(key.slice("canvas:".length))
+  }, [inventoryErrorEntry, loadCanvasDocument, loadProjectDirectory])
 
   const updateComposerQuery = useCallback(() => {
     const root = composerRef.current
@@ -900,17 +1049,52 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     if (match.trigger === "skill") void loadCapabilities().catch(() => undefined)
     else {
       if (!continuingQuery) setReferenceTab("project")
-      if (!continuingQuery || referenceTab === "project") void loadProjectEntries().catch(() => undefined)
+      if (
+        (!continuingQuery || referenceTab === "project") &&
+        (!projectListings.has("") || inventoryErrors.has("project:"))
+      ) {
+        void loadProjectDirectory("")
+      }
     }
     closeGenerationModelPicker()
   }, [
     closeComposerSuggestion,
     closeGenerationModelPicker,
+    inventoryErrors,
     loadCapabilities,
-    loadProjectEntries,
+    loadProjectDirectory,
+    projectListings,
     referenceTab,
     suggestion,
   ])
+
+  const refreshComposerSuggestionAnchor = useCallback(() => {
+    const root = composerRef.current
+    if (!root) return
+    const token = editingTokenRef.current
+    if (token?.isConnected && root.contains(token)) {
+      setSuggestionAnchor(agentComposerPickerAnchor(root, token))
+      return
+    }
+    const query = composerQueryRangeRef.current
+    if (query?.node.isConnected && root.contains(query.node)) {
+      setSuggestionAnchor(agentComposerPickerAnchor(root, query))
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (suggestion.open) refreshComposerSuggestionAnchor()
+  }, [expandedCanvasIds, expandedProjectPaths, referenceTab, refreshComposerSuggestionAnchor, suggestion.open])
+
+  useEffect(() => {
+    if (!suggestion.open) return
+    window.addEventListener("resize", refreshComposerSuggestionAnchor)
+    window.addEventListener("scroll", refreshComposerSuggestionAnchor, true)
+    return () => {
+      window.removeEventListener("resize", refreshComposerSuggestionAnchor)
+      window.removeEventListener("scroll", refreshComposerSuggestionAnchor, true)
+    }
+  }, [refreshComposerSuggestionAnchor, suggestion.open])
 
   const openSkill = useCallback(
     async (name: string) => {
@@ -993,7 +1177,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       setSuggestionQuery("")
       setSuggestionAnchor(agentComposerPickerAnchor(root, token))
       setSuggestion(
-        openAgentComposerSuggestion(trigger, suggestionOptions, {
+        openAgentComposerSuggestion(trigger, selectableSuggestionOptions, {
           kind: "token",
           tokenId: agentResourceKey(resource),
         }),
@@ -1002,11 +1186,18 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       else if (isAgentCanvasResource(resource)) setReferenceTab("canvas")
       else {
         setReferenceTab("project")
-        void loadProjectEntries().catch(() => undefined)
+        if (!projectListings.has("") || inventoryErrors.has("project:")) void loadProjectDirectory("")
       }
       closeGenerationModelPicker()
     },
-    [closeGenerationModelPicker, loadCapabilities, loadProjectEntries, suggestionOptions],
+    [
+      closeGenerationModelPicker,
+      inventoryErrors,
+      loadCapabilities,
+      loadProjectDirectory,
+      projectListings,
+      selectableSuggestionOptions,
+    ],
   )
 
   const insertComposerQueryTrigger = useCallback(
@@ -1658,30 +1849,24 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   />
                 ) : suggestion.open && suggestionAnchor ? (
                   <AgentComposerPicker
-                    activeId={suggestion.hoveredId ?? suggestion.activeId}
+                    activeId={suggestion.activeId}
                     anchor={suggestionAnchor}
-                    loading={
-                      suggestion.trigger === "skill"
-                        ? capabilitiesLoading
-                        : referenceTab === "project" && projectEntriesLoading
-                    }
+                    error={suggestionError}
+                    loading={suggestionLoading}
                     onClose={closeComposerSuggestion}
                     onHoverChange={(hoveredId) =>
                       setSuggestion((current) =>
                         current.open ? setAgentComposerSuggestionHover(current, hoveredId) : current,
                       )
                     }
-                    onReferenceTabChange={(tab) => {
-                      setReferenceTab(tab)
-                      if (tab === "project") void loadProjectEntries().catch(() => undefined)
-                    }}
+                    onReferenceTabChange={changeReferenceTab}
                     onRetry={() => {
                       if (suggestion.trigger === "skill") void loadCapabilities().catch(() => undefined)
-                      else if (referenceTab === "project") void loadProjectEntries().catch(() => undefined)
+                      else retryReferenceInventory()
                     }}
                     onSelect={selectComposerSuggestion}
-                    onToggle={() => undefined}
-                    options={suggestionOptions}
+                    onToggle={toggleReferenceOption}
+                    options={selectableSuggestionOptions}
                     referenceTab={referenceTab}
                     trigger={suggestion.trigger}
                   />
@@ -1721,6 +1906,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     </div>
                   ) : null}
                   <div
+                    aria-activedescendant={
+                      suggestion.open && suggestion.activeId
+                        ? agentComposerPickerOptionId(suggestion.activeId)
+                        : undefined
+                    }
+                    aria-autocomplete={suggestion.open ? "list" : undefined}
+                    aria-controls={suggestion.open ? `agent-composer-${suggestion.trigger}-picker` : undefined}
+                    aria-expanded={suggestion.open ? true : undefined}
                     aria-label="Message the project agent"
                     aria-multiline="true"
                     aria-placeholder={
@@ -1788,6 +1981,39 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
                       if (suggestion.open) {
+                        if (event.key === "Tab" && suggestion.trigger === "reference") {
+                          event.preventDefault()
+                          changeReferenceTab(referenceTab === "project" ? "canvas" : "project")
+                          return
+                        }
+                        if (
+                          suggestion.trigger === "reference" &&
+                          (event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+                          !event.altKey &&
+                          !event.ctrlKey &&
+                          !event.metaKey &&
+                          !event.shiftKey
+                        ) {
+                          event.preventDefault()
+                          const option = selectableSuggestionOptions.find(
+                            (candidate) => candidate.id === suggestion.activeId && candidate.optionType === "reference",
+                          )
+                          const shouldToggle =
+                            option?.optionType === "reference" &&
+                            option.expandable &&
+                            (event.key === "ArrowRight" ? !option.expanded : option.expanded)
+                          if (shouldToggle && option?.optionType === "reference") {
+                            toggleReferenceOption(option)
+                          } else {
+                            const activeId = moveAgentReferenceTreeActive(
+                              visibleReferenceRows,
+                              suggestion.activeId,
+                              event.key === "ArrowRight" ? "child" : "parent",
+                            )
+                            setSuggestion((current) => (current.open ? { ...current, activeId } : current))
+                          }
+                          return
+                        }
                         if (
                           (event.key === "ArrowDown" || event.key === "ArrowUp") &&
                           !event.altKey &&
@@ -1801,7 +2027,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                               ? moveAgentComposerSuggestion(
                                   current,
                                   event.key === "ArrowDown" ? 1 : -1,
-                                  suggestionOptions,
+                                  selectableSuggestionOptions,
                                 )
                               : current,
                           )
@@ -1814,7 +2040,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         }
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault()
-                          const option = suggestionOptions.find((candidate) => candidate.id === suggestion.activeId)
+                          const option = selectableSuggestionOptions.find(
+                            (candidate) => candidate.id === suggestion.activeId,
+                          )
                           if (option) selectComposerSuggestion(option)
                           return
                         }
@@ -1835,7 +2063,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       updateComposerQuery()
                     }}
                     ref={composerRef}
-                    role="textbox"
+                    role={suggestion.open ? "combobox" : "textbox"}
                     suppressContentEditableWarning
                   />
                   <div className="flex items-center gap-1 pt-1">

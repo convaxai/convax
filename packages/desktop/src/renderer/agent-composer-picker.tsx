@@ -44,6 +44,10 @@ export interface AgentComposerPickerProps {
   trigger: "reference" | "skill"
 }
 
+export function agentComposerPickerOptionId(optionId: string) {
+  return `agent-composer-option-${optionId}`
+}
+
 export function AgentComposerPicker(props: AgentComposerPickerProps) {
   const skill = props.trigger === "skill"
   const pickerId = `agent-composer-${props.trigger}-picker`
@@ -144,6 +148,7 @@ function SkillOption(props: {
       aria-selected={props.active}
       className={rowClassName(props.active)}
       data-agent-composer-option={props.option.id}
+      id={agentComposerPickerOptionId(props.option.id)}
       onClick={() => props.onSelect(props.option)}
       onPointerEnter={() => props.onHoverChange(props.option.id)}
       role="option"
@@ -177,6 +182,7 @@ function ReferenceOption(props: {
       aria-selected={props.active}
       className={`flex items-center rounded-md ${props.active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
       data-agent-composer-option={option.id}
+      id={agentComposerPickerOptionId(option.id)}
       onPointerEnter={() => props.onHoverChange(option.id)}
       role="treeitem"
       style={{ paddingLeft: `${option.depth * 14}px` }}
@@ -209,9 +215,7 @@ function ReferenceOption(props: {
   )
 }
 
-function ReferenceIcon(props: {
-  option: Extract<AgentComposerPickerOption, { optionType: "reference" }>
-}) {
+function ReferenceIcon(props: { option: Extract<AgentComposerPickerOption, { optionType: "reference" }> }) {
   const className = "size-4 shrink-0 text-muted-foreground"
   if (props.option.kind === "directory") return <Folder aria-hidden="true" className={className} />
   if (props.option.kind === "file") return <FileText aria-hidden="true" className={className} />
