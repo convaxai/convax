@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { type WebPluginManifest, compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
+import type { PetAssetInspection } from "./pet-asset-inspector"
 import { WebPluginManager, WebPluginPublicationDeferredError } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
@@ -118,6 +119,36 @@ function projectCanvasManifest(overrides: Partial<WebPluginManifest> = {}): WebP
     version: "1.0.0",
     ...overrides,
   }
+}
+
+function petBundle(asset: Uint8Array | null = Uint8Array.from([1, 2, 3])) {
+  const petManifest = {
+    capabilities: [],
+    contributes: {
+      pet: {
+        alt: "Violet, the Convax pixel companion",
+        description: "A calm companion that reflects Agent activity.",
+        name: "Violet",
+        spritesheet: "assets/violet.webp",
+        spriteVersion: 2,
+      },
+    },
+    description: "Adds Violet as a desktop companion",
+    id: "convax-pet",
+    name: "Convax Pet",
+    schema: "convax.plugin/5",
+    version: "0.1.0",
+  }
+  return {
+    files: {
+      "manifest.json": JSON.stringify(petManifest),
+      ...(asset === null ? {} : { "assets/violet.webp": asset }),
+    },
+  }
+}
+
+function petAssetInspector(inspection: PetAssetInspection) {
+  return { inspect: mock(async () => inspection) }
 }
 
 const noOpPublication = async () => ({
@@ -797,6 +828,41 @@ describe("WebPluginManager", () => {
       schema: "convax.plugin/5",
     })
     expect(installed.entry).toBeUndefined()
+  })
+
+  test("validates a declared pet asset before atomically publishing its Plugin", async () => {
+    const root = await temporaryRoot()
+    const inspector = petAssetInspector({
+      format: "webp",
+      hasTransparency: true,
+      height: 1_872,
+      width: 1_536,
+    })
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, [], { petAssetInspector: inspector })
+
+    await expect(manager.installBundle(petBundle(null))).rejects.toThrow("Pet spritesheet does not exist")
+    expect(await manager.list()).toEqual([])
+
+    inspector.inspect.mockResolvedValue({
+      format: "webp",
+      hasTransparency: true,
+      height: 1_871,
+      width: 1_536,
+    })
+    await expect(manager.installBundle(petBundle())).rejects.toThrow("1536 by 1872")
+    expect(await manager.list()).toEqual([])
+
+    inspector.inspect.mockResolvedValue({
+      format: "webp",
+      hasTransparency: true,
+      height: 1_872,
+      width: 1_536,
+    })
+    await expect(manager.installBundle(petBundle())).resolves.toMatchObject({
+      id: "convax-pet",
+      schema: "convax.plugin/5",
+    })
+    expect(inspector.inspect).toHaveBeenCalled()
   })
 
   test("cannot bypass the owned-Skill lifecycle when an update removes the last Skill or uninstalls", async () => {

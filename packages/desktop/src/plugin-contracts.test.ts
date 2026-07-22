@@ -122,6 +122,27 @@ function ownedSkillsManifest(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function petManifest(overrides: Record<string, unknown> = {}) {
+  return {
+    capabilities: [],
+    contributes: {
+      pet: {
+        alt: "Violet, the Convax pixel companion",
+        description: "A calm companion that reflects Agent activity.",
+        name: "Violet",
+        spritesheet: "assets/violet.webp",
+        spriteVersion: 2,
+      },
+    },
+    description: "Adds Violet as a desktop companion",
+    id: "convax-pet",
+    name: "Convax Pet",
+    schema: "convax.plugin/5",
+    version: "0.1.0",
+    ...overrides,
+  }
+}
+
 describe("versioned Plugin manifest generation declarations", () => {
   test("keeps convax.plugin/1 static-only", () => {
     const parsed = parseWebPluginManifest(staticManifest())
@@ -285,6 +306,40 @@ describe("versioned Plugin manifest generation declarations", () => {
         },
       }),
     ).toThrow("unsupported field")
+  })
+
+  test("parses a v5 inert pet as a Plugin capability", () => {
+    const parsed = parseWebPluginManifest(petManifest())
+
+    expect(parsed.contributes.pet).toEqual({
+      alt: "Violet, the Convax pixel companion",
+      description: "A calm companion that reflects Agent activity.",
+      name: "Violet",
+      spritesheet: "assets/violet.webp",
+      spriteVersion: 2,
+    })
+    expect(parsed.entry).toBeUndefined()
+    expect(parsed.runtime).toBeUndefined()
+    expect(() => parseWebPluginManifest({ ...petManifest(), schema: "convax.plugin/4" })).toThrow(
+      "unsupported field",
+    )
+  })
+
+  test.each([
+    ["remote URL", { spritesheet: "https://example.invalid/violet.webp" }],
+    ["path traversal", { spritesheet: "../violet.webp" }],
+    ["unsupported format", { spritesheet: "assets/violet.gif" }],
+    ["unsupported sprite version", { spriteVersion: 3 }],
+    ["unknown fields", { source: "remote" }],
+  ])("rejects a pet with %s", (_label, override) => {
+    const manifest = petManifest()
+    const pet = manifest.contributes.pet
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: { pet: { ...pet, ...override } },
+      }),
+    ).toThrow()
   })
 
   test("rejects ambiguous, unsafe, or standalone v4 Skill contributions", () => {

@@ -115,6 +115,15 @@ export interface WebPluginLlmContribution {
   provider: { id: string; name: string }
 }
 
+/** An inert local sprite atlas rendered only by the host-owned pet window. */
+export interface WebPluginPetContribution {
+  alt: string
+  description: string
+  name: string
+  spritesheet: string
+  spriteVersion: 2
+}
+
 export interface WebPluginMcpStdioRuntime {
   args?: string[]
   /** A portable executable name resolved by the trusted host; never a path. */
@@ -190,6 +199,8 @@ export interface WebPluginManifest {
     generation?: WebPluginGenerationContribution
     /** Main-only provider metadata; connection details come from the verified runtime. */
     llm?: WebPluginLlmContribution
+    /** Inert display metadata; the Plugin receives no pet window or Agent capability. */
+    pet?: WebPluginPetContribution
     /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
     /** Plugin-owned Skills are available to convax.plugin/4 and later. */
@@ -745,6 +756,23 @@ function parseLlm(value: unknown): WebPluginLlmContribution {
   }
 }
 
+function parsePet(value: unknown): WebPluginPetContribution {
+  const input = asRecord(value, "Pet contribution")
+  assertKeys(input, ["alt", "description", "name", "spritesheet", "spriteVersion"], "Pet contribution")
+  const spritesheet = requireWebPluginRelativePath(input.spritesheet, "Pet spritesheet")
+  if (!/\.(?:png|webp)$/.test(spritesheet)) {
+    throw new Error("Pet spritesheet must be a PNG or WebP file")
+  }
+  if (input.spriteVersion !== 2) throw new Error("Pet spriteVersion must equal 2")
+  return {
+    alt: requireString(input.alt, "Pet alt", 500),
+    description: requireString(input.description, "Pet description", 2_000),
+    name: requireString(input.name, "Pet name", 120),
+    spritesheet,
+    spriteVersion: 2,
+  }
+}
+
 function validateDeclarativeToolReferences(input: {
   agent?: WebPluginAgentContribution
   generation?: WebPluginGenerationContribution
@@ -841,7 +869,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
-      ...(schema === webPluginManifestSchemaV5 ? ["llm"] : []),
+      ...(schema === webPluginManifestSchemaV5 ? ["llm", "pet"] : []),
       ...(declarativeSchema ? ["agent"] : []),
       ...(ownsSkills ? ["skills"] : []),
     ],
@@ -851,6 +879,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const hasGenerationContribution = contributes.generation !== undefined
   const hasServiceContribution = contributes.service !== undefined
   const hasLlmContribution = contributes.llm !== undefined
+  const hasPetContribution = contributes.pet !== undefined
   const hasExecutableContribution = hasGenerationContribution || hasServiceContribution || hasLlmContribution
   const hasCanvasContribution = contributes.canvas !== undefined
   const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined
@@ -896,7 +925,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     !selectionActions?.length &&
     !hasExecutableContribution &&
     !capabilities.includes("generation.execute") &&
-    !hasProjectCanvasCapability
+    !hasProjectCanvasCapability &&
+    !hasPetContribution
   ) {
     throw new Error(`${schema} must declare a Plugin capability beyond owned Skills`)
   }
@@ -913,6 +943,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined
   const llm = hasLlmContribution ? parseLlm(contributes.llm) : undefined
+  const pet = hasPetContribution ? parsePet(contributes.pet) : undefined
   const runtime = hasRuntime ? parseMcpStdioRuntime(input.runtime) : undefined
   if (declarativeSchema) {
     validateDeclarativeToolReferences({ agent, generation, selectionActions })
@@ -932,6 +963,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
           }),
       ...(generation === undefined ? {} : { generation }),
       ...(llm === undefined ? {} : { llm }),
+      ...(pet === undefined ? {} : { pet }),
       ...(service === undefined ? {} : { service }),
       ...(skills === undefined ? {} : { skills }),
     },
