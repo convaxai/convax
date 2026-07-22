@@ -6,9 +6,20 @@
       "persistent": true,
       "dependsOn": ["^build"]
     },
+    "@convax/desktop#dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["^build"],
+      "env": ["CONVAX_FEATURE_SERVICES", "CONVAX_FEATURE_SKILLS_AND_PLUGINS"]
+    },
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", "out/**"]
+    },
+    "@convax/desktop#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "out/**"],
+      "env": ["CONVAX_FEATURE_SERVICES", "CONVAX_FEATURE_SKILLS_AND_PLUGINS"]
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],
