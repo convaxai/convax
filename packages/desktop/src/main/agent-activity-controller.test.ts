@@ -171,6 +171,112 @@ describe("AgentActivityController", () => {
     controller.stop()
   })
 
+  test("marks a blocked terminal activity seen", async () => {
+    const failed = {
+      completedAt: 500,
+      createdAt: 450,
+      error: "secret failure",
+      id: "message-a",
+      parts: [],
+      role: "assistant" as const,
+      sessionId: "session-a",
+    }
+    const states = { "session-a": state("project-a", "session-a", "A", 500, { messages: [failed] }) }
+    const { controller } = fixture({ projects: [project("project-a", "Alpha", 100)], states })
+
+    await controller.start()
+    const blocked = controller.getSnapshot()
+    expect(blocked.activities[0]?.state).toBe("blocked")
+    await controller.markSeen(blocked.activities[0]!.id, blocked.revision)
+    expect(controller.getSnapshot().activities).toEqual([])
+    controller.stop()
+  })
+
+  test("rejects a slow refresh after a newer local mutation", async () => {
+    const running = state("project-a", "session-a", "A", 500, { status: { type: "busy" } })
+    const { controller, runtime } = fixture({
+      projects: [project("project-a", "Alpha", 100)],
+      states: { "session-a": running },
+    })
+    await controller.start()
+
+    let release!: (value: AgentSessionState) => void
+    let requestStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      requestStarted = resolve
+    })
+    ;(runtime.getSessionState as ReturnType<typeof mock>).mockImplementationOnce(
+      () =>
+        new Promise<AgentSessionState>((resolve) => {
+          release = resolve
+          requestStarted()
+        }),
+    )
+    const refresh = controller.refresh()
+    await started
+    await controller.promptStarted("project-a", "session-a")
+    release(state("project-a", "session-a", "A", 400))
+    await refresh
+
+    expect(controller.getSnapshot().activities[0]?.state).toBe("running")
+    controller.stop()
+  })
+
+  test("rejects an older poll response after a newer poll has completed", async () => {
+    const initial = state("project-a", "session-a", "A", 500, { status: { type: "busy" } })
+    const { controller, runtime } = fixture({
+      projects: [project("project-a", "Alpha", 100)],
+      states: { "session-a": initial },
+    })
+    await controller.start()
+
+    let releaseOlder!: (value: AgentSessionState) => void
+    let olderStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      olderStarted = resolve
+    })
+    const getSessionState = runtime.getSessionState as ReturnType<typeof mock>
+    getSessionState.mockImplementationOnce(
+      () =>
+        new Promise<AgentSessionState>((resolve) => {
+          releaseOlder = resolve
+          olderStarted()
+        }),
+    )
+    getSessionState.mockImplementationOnce(async () =>
+      state("project-a", "session-a", "A", 700, {
+        pendingQuestions: [{ id: "question", questions: [], sessionID: "session-a" }],
+      }),
+    )
+
+    const older = controller.refresh()
+    await started
+    await controller.refresh()
+    releaseOlder(state("project-a", "session-a", "A", 600))
+    await older
+
+    expect(controller.getSnapshot().activities[0]).toMatchObject({ state: "needs-input", updatedAt: 700 })
+    controller.stop()
+  })
+
+  test("bounds recurring recovery state requests after the initial scan", async () => {
+    const states = Object.fromEntries(
+      Array.from({ length: 24 }, (_, index) => {
+        const id = `session-${index}`
+        return [id, state("project-a", id, id, 1_000 - index)]
+      }),
+    )
+    const { controller, runtime } = fixture({ projects: [project("project-a", "Alpha", 100)], states })
+
+    await controller.start()
+    const getSessionState = runtime.getSessionState as ReturnType<typeof mock>
+    expect(getSessionState).toHaveBeenCalledTimes(24)
+    getSessionState.mockClear()
+    await controller.refresh()
+    expect(getSessionState.mock.calls.length).toBeLessThanOrEqual(16)
+    controller.stop()
+  })
+
   test("loads persisted read watermarks before the first activity projection", async () => {
     const complete = {
       completedAt: 500,

@@ -9,12 +9,7 @@ import {
   type PointerEvent,
 } from "react"
 
-import type {
-  PetActivitySummary,
-  PetDragInput,
-  PetOverlayClient,
-  PetRendererSnapshot,
-} from "../../pet-contracts"
+import type { PetActivitySummary, PetDragInput, PetOverlayClient, PetRendererSnapshot } from "../../pet-contracts"
 
 export const petAnimations = {
   idle: { durations: [280, 110, 110, 140, 140, 320], row: 0 },
@@ -43,14 +38,14 @@ export function frameFor(animation: PetAnimation, elapsed: number, reducedMotion
   return { column: 0, row: definition.row }
 }
 
-function animationForActivity(activity?: PetActivitySummary): PetAnimation {
+export function animationForActivity(activity?: PetActivitySummary): PetAnimation {
   switch (activity?.state) {
     case "needs-input":
-      return "waiting"
+      return activity.input === "permission" ? "review" : "waiting"
     case "blocked":
       return "failed"
     case "ready":
-      return "review"
+      return "waving"
     case "running":
       return "running"
     default:
@@ -72,7 +67,7 @@ export function petStatusText(activity: PetActivitySummary) {
 }
 
 export function visiblePetActivities(activities: readonly PetActivitySummary[]) {
-  return activities.slice(0, 4)
+  return [...activities]
 }
 
 export function petKeyAction(key: string, expanded: boolean): "activate" | "collapse" | "none" {
@@ -208,7 +203,7 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
       activating.current = true
       try {
         await activatePet(activity.id, {
-          navigate: () => client.navigate({ activityId: activity.id }),
+          navigate: () => client.navigate({ activityId: activity.id, revision: snapshot.activity.revision }),
           onJump: () => setJumping(true),
           wait: () => new Promise((resolve) => setTimeout(resolve, reducedMotion ? 0 : 280)),
         })
@@ -217,7 +212,7 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
         setJumping(false)
       }
     },
-    [client, reducedMotion],
+    [client, reducedMotion, snapshot.activity.revision],
   )
 
   const finishPointer = (event: PointerEvent<HTMLButtonElement>, navigateWhenClicked: boolean) => {
@@ -235,7 +230,10 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
   }
 
   return (
-    <main className={expanded ? "pet-shell pet-shell--expanded" : "pet-shell"} data-state={primaryActivity?.state ?? "idle"}>
+    <main
+      className={expanded ? "pet-shell pet-shell--expanded" : "pet-shell"}
+      data-state={primaryActivity?.state ?? "idle"}
+    >
       {expanded ? (
         <section aria-label="Agent activity" className="pet-tray">
           <header className="pet-tray__header">
@@ -255,7 +253,12 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
           <div className="pet-activity-list">
             {activities.length > 0 ? (
               activities.map((activity) => (
-                <button className="pet-activity" key={activity.id} onClick={() => void activate(activity)} type="button">
+                <button
+                  className="pet-activity"
+                  key={activity.id}
+                  onClick={() => void activate(activity)}
+                  type="button"
+                >
                   <span aria-hidden="true" className={`pet-activity__dot pet-activity__dot--${activity.state}`} />
                   <span className="pet-activity__copy">
                     <strong>{activity.sessionName}</strong>
@@ -265,7 +268,7 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
                 </button>
               ))
             ) : (
-              <p className="pet-empty">All caught up. Violet is keeping watch.</p>
+              <p className="pet-empty">All caught up. {snapshot.pet.name} is keeping watch.</p>
             )}
           </div>
         </section>
@@ -284,6 +287,7 @@ export function PetView({ client, expanded, reducedMotion, snapshot }: PetViewPr
           onPointerMove={(event) => gesture.move({ x: event.screenX, y: event.screenY })}
           onPointerUp={(event) => finishPointer(event, true)}
           title={primaryActivity ? petStatusText(primaryActivity) : snapshot.pet.description}
+          tabIndex={expanded ? 0 : -1}
           type="button"
         >
           <span

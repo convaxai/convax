@@ -45,10 +45,12 @@ export interface PetRendererSnapshot {
 
 export interface PetNavigationRequest {
   activityId: string
+  revision: number
 }
 
 export interface PetNavigationTarget extends PetActivityTarget {
   activityId: string
+  revision: number
 }
 
 export interface PetDragInput {

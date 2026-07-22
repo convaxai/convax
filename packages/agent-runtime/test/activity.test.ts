@@ -56,9 +56,7 @@ describe("content-free Agent activity projection", () => {
       input: "permission",
       state: "needs-input",
     })
-    expect(JSON.stringify(projectAgentActivity(sessionState({ pendingQuestions: [question] })))).not.toContain(
-      "secret",
-    )
+    expect(JSON.stringify(projectAgentActivity(sessionState({ pendingQuestions: [question] })))).not.toContain("secret")
   })
 
   test("maps busy and retry status to running without retry diagnostics", () => {
@@ -83,6 +81,17 @@ describe("content-free Agent activity projection", () => {
     expect(projectAgentActivity(sessionState({ messages: [assistantMessage()] }), { seenAfter: 300 })).toEqual({
       state: "idle",
     })
+    expect(
+      projectAgentActivity(sessionState({ messages: [assistantMessage({ error: "secret error" })] }), {
+        seenAfter: 300,
+      }),
+    ).toEqual({ state: "idle" })
+    expect(
+      projectAgentActivity(
+        sessionState({ messages: [assistantMessage({ completedAt: undefined, error: "secret error" })] }),
+        { seenAfter: 250 },
+      ),
+    ).toEqual({ state: "idle" })
   })
 
   test("lets explicit cancellation clear a recovered session", () => {

@@ -1230,7 +1230,7 @@ function App() {
             const panel = agentPanelRef.current
             if (!panel) throw new Error("The Agent panel is not ready")
             await panel.openSession(target.sessionId)
-            await window.convax.pets.markDisplayed({ activityId: target.activityId })
+            await window.convax.pets.markDisplayed({ activityId: target.activityId, revision: target.revision })
           } catch (error) {
             setNotification({
               description: error instanceof Error ? error.message : String(error),

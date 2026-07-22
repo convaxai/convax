@@ -62,6 +62,7 @@ interface PetDisplay {
 }
 
 interface PetScreenPort {
+  getAllDisplays(): PetDisplay[]
   getDisplayMatching(bounds: PetRectangle): PetDisplay
   getPrimaryDisplay(): PetDisplay
   on(event: "display-metrics-changed" | "display-removed", listener: () => void): unknown
@@ -168,7 +169,11 @@ export class PetWindow {
     if (!current || current.isDestroyed()) return
     if (!Number.isFinite(delta.x) || !Number.isFinite(delta.y)) throw new Error("Pet drag delta must be finite")
     const bounds = current.getBounds()
-    const display = this.#options.screen.getDisplayMatching(bounds)
+    const display = this.#options.screen.getDisplayMatching({
+      ...bounds,
+      x: bounds.x + delta.x,
+      y: bounds.y + delta.y,
+    })
     const position = clampPetBounds({ x: bounds.x + delta.x, y: bounds.y + delta.y }, display.workArea, bounds)
     current.setBounds(position)
     if (completed) await this.#options.onPositionChanged(String(display.id), position)
@@ -177,9 +182,14 @@ export class PetWindow {
   async #create(generation: number) {
     const snapshot = this.#snapshot
     if (!snapshot || generation !== this.#generation) return
-    const display = this.#options.screen.getPrimaryDisplay()
+    const primaryDisplay = this.#options.screen.getPrimaryDisplay()
+    const saved = this.#options.screen
+      .getAllDisplays()
+      .map((display) => ({ display, position: this.#options.resolvePosition?.(String(display.id)) }))
+      .find((candidate) => candidate.position !== undefined)
+    const display = saved?.display ?? primaryDisplay
     const size = this.#expanded ? petExpandedSize : petCollapsedSize
-    const restoredPosition = this.#options.resolvePosition?.(String(display.id))
+    const restoredPosition = saved?.position
     const position = clampPetBounds(
       restoredPosition ?? {
         x: display.workArea.x + display.workArea.width - size.width - 24,
@@ -204,6 +214,7 @@ export class PetWindow {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
+        partition: "convax-pet-overlay",
         preload: this.#options.preloadPath,
         sandbox: true,
       },

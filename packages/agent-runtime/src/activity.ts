@@ -1,9 +1,4 @@
-import type {
-  AgentActivityProjectionContext,
-  AgentActivityState,
-  AgentMessage,
-  AgentSessionState,
-} from "./contracts"
+import type { AgentActivityProjectionContext, AgentActivityState, AgentMessage, AgentSessionState } from "./contracts"
 
 export const agentActivityPriority = {
   "needs-input": 0,
@@ -35,7 +30,14 @@ export function projectAgentActivity(
   if (session.status.type === "busy" || session.status.type === "retry") return { state: "running" }
 
   const assistant = latestAssistantMessage(session.messages)
-  if (assistant?.error !== undefined) return { state: "blocked" }
+  const terminalAt = assistant?.completedAt ?? assistant?.createdAt
+  if (
+    assistant?.error !== undefined &&
+    terminalAt !== undefined &&
+    (context.seenAfter === undefined || terminalAt > context.seenAfter)
+  ) {
+    return { state: "blocked" }
+  }
   if (
     assistant?.completedAt !== undefined &&
     (context.seenAfter === undefined || assistant.completedAt > context.seenAfter)

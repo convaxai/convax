@@ -32,6 +32,7 @@ export interface AgentActivityControllerOptions {
   createId?: () => string
   maxActivities?: number
   pollMs?: number
+  recoveryPollLimit?: number
   projects: AgentActivityProjectProvider
   runtime: Pick<AgentRuntime, "getSessionState" | "listSessions">
   watermarks?: AgentActivityWatermarkStore
@@ -105,12 +106,15 @@ export class AgentActivityController {
   readonly #listeners = new Set<(snapshot: PetActivitySnapshot) => void>()
   readonly #maxActivities: number
   readonly #pollMs: number
+  readonly #recoveryPollLimit: number
   readonly #projects: AgentActivityProjectProvider
   readonly #records = new Map<string, ActivityRecord>()
   readonly #runtime: AgentActivityControllerOptions["runtime"]
   readonly #watermarks?: AgentActivityWatermarkStore
   readonly #seenAfter = new Map<string, number>()
+  readonly #sessionGenerations = new Map<string, number>()
   #failureCount = 0
+  #initialRecoveryComplete = false
   #snapshot: PetActivitySnapshot = { activities: [], revision: 0 }
   #started = false
   #timer: unknown
@@ -120,11 +124,15 @@ export class AgentActivityController {
     this.#createId = options.createId ?? randomUUID
     this.#maxActivities = options.maxActivities ?? 256
     this.#pollMs = options.pollMs ?? 1_000
+    this.#recoveryPollLimit = options.recoveryPollLimit ?? 16
     if (!Number.isSafeInteger(this.#maxActivities) || this.#maxActivities < 1 || this.#maxActivities > 256) {
       throw new Error("Agent activity maxActivities must be between 1 and 256")
     }
     if (!Number.isSafeInteger(this.#pollMs) || this.#pollMs < 100) {
       throw new Error("Agent activity pollMs must be at least 100 milliseconds")
+    }
+    if (!Number.isSafeInteger(this.#recoveryPollLimit) || this.#recoveryPollLimit < 1 || this.#recoveryPollLimit > 64) {
+      throw new Error("Agent activity recoveryPollLimit must be between 1 and 64")
     }
     this.#projects = options.projects
     this.#runtime = options.runtime
@@ -169,12 +177,15 @@ export class AgentActivityController {
 
   async refresh() {
     const failed = await this.#refreshAll()
+    if (!failed) this.#initialRecoveryComplete = true
     this.#failureCount = failed ? Math.min(this.#failureCount + 1, 6) : 0
   }
 
   async promptStarted(projectId: string, sessionId: string) {
-    const record = await this.#ensureRecord(projectId, sessionId)
-    if (!record) return
+    const key = activityKey(projectId, sessionId)
+    const generation = this.#nextSessionGeneration(key)
+    const record = await this.#ensureRecord(projectId, sessionId, generation)
+    if (!record || !this.#isCurrentGeneration(key, generation)) return
     record.canceled = false
     record.state = { state: "running" }
     record.updatedAt = this.#clock.now()
@@ -182,10 +193,13 @@ export class AgentActivityController {
   }
 
   async promptSettled(projectId: string, sessionId: string, options: { failed?: boolean } = {}) {
-    const refreshed = await this.#refreshOne(projectId, sessionId)
+    const key = activityKey(projectId, sessionId)
+    const generation = this.#nextSessionGeneration(key)
+    const refreshed = await this.#refreshOne(projectId, sessionId, generation)
+    if (!this.#isCurrentGeneration(key, generation)) return
     if (!refreshed) {
-      const record = await this.#ensureRecord(projectId, sessionId)
-      if (!record) return
+      const record = await this.#ensureRecord(projectId, sessionId, generation, false)
+      if (!record || !this.#isCurrentGeneration(key, generation)) return
       record.state = options.failed ? { state: "blocked" } : { state: "ready" }
       record.updatedAt = this.#clock.now()
       this.#publish()
@@ -196,7 +210,9 @@ export class AgentActivityController {
   }
 
   async aborted(projectId: string, sessionId: string) {
-    const record = this.#records.get(activityKey(projectId, sessionId))
+    const key = activityKey(projectId, sessionId)
+    this.#nextSessionGeneration(key)
+    const record = this.#records.get(key)
     if (!record) return
     record.canceled = true
     record.state = { state: "idle" }
@@ -221,9 +237,11 @@ export class AgentActivityController {
     const record = [...this.#records.values()].find((candidate) => candidate.id === activityId)
     if (!record) throw new Error("Agent activity is no longer available")
     const key = activityKey(record.projectId, record.sessionId)
+    const generation = this.#nextSessionGeneration(key)
     await this.#watermarks?.markSeen(key, record.updatedAt)
     this.#rememberSeen(key, record.updatedAt)
-    if (record.state.state === "ready") record.state = { state: "idle" }
+    if (!this.#isCurrentGeneration(key, generation)) return
+    if (record.state.state === "ready" || record.state.state === "blocked") record.state = { state: "idle" }
     this.#publish(true)
   }
 
@@ -250,7 +268,9 @@ export class AgentActivityController {
     }
 
     let runtimeFailed = false
-    let remaining = this.#maxActivities
+    let remaining = this.#initialRecoveryComplete
+      ? Math.min(this.#maxActivities, this.#recoveryPollLimit)
+      : this.#maxActivities
     const orderedProjects = [...projects].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
     for (const project of orderedProjects) {
       if (remaining <= 0) break
@@ -273,17 +293,26 @@ export class AgentActivityController {
       return { failed: false, sessionCount: 0 }
     }
     try {
-      const sessions = (await this.#runtime.listSessions({ directory, limit }))
+      const sessions = (await this.#runtime.listSessions({ directory, limit: this.#maxActivities }))
         .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, this.#maxActivities)
+      const seen = new Set(sessions.map((session) => activityKey(project.id, session.id)))
+      const selected = [...sessions]
+        .sort((left, right) => {
+          const leftState = this.#records.get(activityKey(project.id, left.id))?.state.state
+          const rightState = this.#records.get(activityKey(project.id, right.id))?.state.state
+          const leftActive = leftState === "running" || leftState === "needs-input" ? 0 : 1
+          const rightActive = rightState === "running" || rightState === "needs-input" ? 0 : 1
+          return leftActive - rightActive || right.updatedAt - left.updatedAt
+        })
         .slice(0, limit)
-      const seen = new Set<string>()
       let failed = false
-      for (const session of sessions) {
+      for (const session of selected) {
         const key = activityKey(project.id, session.id)
-        seen.add(key)
+        const generation = this.#nextSessionGeneration(key)
         try {
           const sessionState = await this.#runtime.getSessionState({ directory, limit: 1, sessionId: session.id })
-          this.#upsert(project, sessionState)
+          this.#upsert(project, sessionState, generation)
         } catch {
           failed = true
         }
@@ -295,29 +324,32 @@ export class AgentActivityController {
       }
       this.#trim()
       this.#publish()
-      return { failed, sessionCount: sessions.length }
+      return { failed, sessionCount: selected.length }
     } catch {
       return { failed: true, sessionCount: 0 }
     }
   }
 
-  async #refreshOne(projectId: string, sessionId: string) {
+  async #refreshOne(projectId: string, sessionId: string, expectedGeneration?: number) {
     const project = (await this.#projects.list()).find((candidate) => candidate.id === projectId && !candidate.missing)
     if (!project) return null
     try {
       const directory = await this.#projects.resolveEntryPath({ projectId })
+      const key = activityKey(projectId, sessionId)
+      const generation = expectedGeneration ?? this.#nextSessionGeneration(key)
       const sessionState = await this.#runtime.getSessionState({ directory, limit: 1, sessionId })
-      return this.#upsert(project, sessionState)
+      return this.#upsert(project, sessionState, generation)
     } catch {
       return null
     }
   }
 
-  async #ensureRecord(projectId: string, sessionId: string) {
+  async #ensureRecord(projectId: string, sessionId: string, generation: number, refresh = true) {
     const current = this.#records.get(activityKey(projectId, sessionId))
     if (current) return current
-    const refreshed = await this.#refreshOne(projectId, sessionId)
+    const refreshed = refresh ? await this.#refreshOne(projectId, sessionId, generation) : null
     if (refreshed) return refreshed
+    if (!this.#isCurrentGeneration(activityKey(projectId, sessionId), generation)) return null
     const project = (await this.#projects.list()).find((candidate) => candidate.id === projectId && !candidate.missing)
     if (!project) return null
     const record: ActivityRecord = {
@@ -335,8 +367,9 @@ export class AgentActivityController {
     return record
   }
 
-  #upsert(project: ProjectRecord, sessionState: AgentSessionState) {
+  #upsert(project: ProjectRecord, sessionState: AgentSessionState, generation: number) {
     const key = activityKey(project.id, sessionState.session.id)
+    if (!this.#isCurrentGeneration(key, generation)) return null
     const existing = this.#records.get(key)
     const state = projectAgentActivity(sessionState, {
       canceled: existing?.canceled,
@@ -358,6 +391,22 @@ export class AgentActivityController {
     record.updatedAt = sessionState.session.updatedAt
     this.#records.set(key, record)
     return record
+  }
+
+  #nextSessionGeneration(key: string) {
+    const generation = (this.#sessionGenerations.get(key) ?? 0) + 1
+    this.#sessionGenerations.delete(key)
+    this.#sessionGenerations.set(key, generation)
+    while (this.#sessionGenerations.size > 512) {
+      const oldest = this.#sessionGenerations.keys().next().value
+      if (oldest === undefined) break
+      this.#sessionGenerations.delete(oldest)
+    }
+    return generation
+  }
+
+  #isCurrentGeneration(key: string, generation: number) {
+    return this.#sessionGenerations.get(key) === generation
   }
 
   #rememberSeen(key: string, value: number) {

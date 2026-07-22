@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { PetActivitySummary, PetRendererSnapshot } from "../../pet-contracts"
 import {
   activatePet,
+  animationForActivity,
   createPetDragGesture,
   frameFor,
   PetView,
@@ -57,10 +58,13 @@ describe("pet sprite animation", () => {
 })
 
 describe("pet activity presentation", () => {
-  test("uses state text independent from color and limits the tray to four rows", () => {
+  test("uses the exact state animations and keeps additional tray rows scrollable", () => {
     expect(petStatusText(snapshot.activity.activities[0]!)).toBe("Needs permission")
     expect(petStatusText(snapshot.activity.activities[1]!)).toBe("Blocked")
-    expect(visiblePetActivities(snapshot.activity.activities)).toHaveLength(4)
+    expect(animationForActivity(snapshot.activity.activities[0])).toBe("review")
+    expect(animationForActivity({ ...snapshot.activity.activities[0]!, input: "question" })).toBe("waiting")
+    expect(animationForActivity(snapshot.activity.activities[2])).toBe("waving")
+    expect(visiblePetActivities(snapshot.activity.activities)).toHaveLength(5)
 
     const markup = renderToStaticMarkup(
       <PetView
@@ -77,7 +81,40 @@ describe("pet activity presentation", () => {
     )
     expect(markup).toContain("Needs permission")
     expect(markup).toContain("Blocked")
-    expect(markup).not.toContain("Session five")
+    expect(markup).toContain("Session five")
+  })
+
+  test("keeps the collapsed sprite out of tab order and uses the selected pet name", () => {
+    const empty = { ...snapshot, activity: { activities: [], revision: 4 }, pet: { ...snapshot.pet, name: "Comet" } }
+    const collapsedMarkup = renderToStaticMarkup(
+      <PetView
+        client={{
+          drag: () => undefined,
+          navigate: async () => undefined,
+          onSnapshot: () => () => undefined,
+          setExpanded: async () => undefined,
+        }}
+        expanded={false}
+        reducedMotion
+        snapshot={empty}
+      />,
+    )
+    const expandedMarkup = renderToStaticMarkup(
+      <PetView
+        client={{
+          drag: () => undefined,
+          navigate: async () => undefined,
+          onSnapshot: () => () => undefined,
+          setExpanded: async () => undefined,
+        }}
+        expanded
+        reducedMotion
+        snapshot={empty}
+      />,
+    )
+    expect(collapsedMarkup).toContain('tabindex="-1"')
+    expect(expandedMarkup).toContain("Comet is keeping watch")
+    expect(expandedMarkup).not.toContain("Violet is keeping watch")
   })
 })
 

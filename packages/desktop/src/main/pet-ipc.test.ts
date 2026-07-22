@@ -37,7 +37,14 @@ afterEach(() => {
 describe("registerPetIpc", () => {
   test("separates settings and overlay senders and resolves opaque navigation only in main", async () => {
     const activityId = "activity-1"
-    const mainWindow = { webContents: { send: mock(() => undefined) } }
+    const mainWindow = {
+      focus: mock(() => undefined),
+      isMinimized: mock(() => true),
+      restore: mock(() => undefined),
+      show: mock(() => undefined),
+      webContents: { send: mock(() => undefined) },
+    }
+    const openMainWindow = mock(async () => mainWindow)
     const activity = {
       getSnapshot: mock(() => ({ activities: [], revision: 4 })),
       markSeen: mock(async () => undefined),
@@ -60,6 +67,7 @@ describe("registerPetIpc", () => {
     const { registerPetIpc } = await import("./pet-ipc")
     const dispose = registerPetIpc(controller, activity, overlay, {
       getMainWindow: () => mainWindow,
+      openMainWindow,
       isTrustedMainSender: (event) => event === trustedMain,
       isTrustedPetSender: (event) => event === trustedPet,
       selectCustomPetFile: async () => null,
@@ -68,19 +76,24 @@ describe("registerPetIpc", () => {
     await expect(invokeHandlers.get(petIpcChannels.list)?.(untrusted)).rejects.toThrow("untrusted renderer")
     await expect(invokeHandlers.get(petIpcChannels.list)?.(trustedPet)).rejects.toThrow("untrusted renderer")
     await expect(
-      invokeHandlers.get(petIpcChannels.navigate)?.(trustedPet, { activityId: "unknown" }),
+      invokeHandlers.get(petIpcChannels.navigate)?.(trustedPet, { activityId: "unknown", revision: 3 }),
     ).rejects.toThrow("no longer available")
 
-    await invokeHandlers.get(petIpcChannels.navigate)?.(trustedPet, { activityId })
+    await invokeHandlers.get(petIpcChannels.navigate)?.(trustedPet, { activityId, revision: 3 })
+    expect(openMainWindow).toHaveBeenCalledTimes(1)
+    expect(mainWindow.restore).toHaveBeenCalledTimes(1)
+    expect(mainWindow.show).toHaveBeenCalledTimes(1)
+    expect(mainWindow.focus).toHaveBeenCalledTimes(1)
     expect(mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.navigate, {
       activityId,
       projectId: "project-a",
+      revision: 3,
       sessionId: "session-a",
     })
     expect(activity.markSeen).not.toHaveBeenCalled()
 
-    await invokeHandlers.get(petIpcChannels.markDisplayed)?.(trustedMain, { activityId })
-    expect(activity.markSeen).toHaveBeenCalledWith(activityId, 4)
+    await invokeHandlers.get(petIpcChannels.markDisplayed)?.(trustedMain, { activityId, revision: 3 })
+    expect(activity.markSeen).toHaveBeenCalledWith(activityId, 3)
     dispose()
   })
 
@@ -102,6 +115,13 @@ describe("registerPetIpc", () => {
     const { registerPetIpc } = await import("./pet-ipc")
     const dispose = registerPetIpc(controller, activity, overlay, {
       getMainWindow: () => null,
+      openMainWindow: async () => ({
+        focus: () => undefined,
+        isMinimized: () => false,
+        restore: () => undefined,
+        show: () => undefined,
+        webContents: { send: () => undefined },
+      }),
       isTrustedMainSender: (event) => event === trustedMain,
       isTrustedPetSender: (event) => event === trustedPet,
       selectCustomPetFile: async () => "/private/source.webp",

@@ -32,6 +32,10 @@ interface PetOverlayWindowPort {
 }
 
 interface PetMainWindow {
+  focus(): void
+  isMinimized(): boolean
+  restore(): void
+  show(): void
   webContents: { send(channel: string, target?: PetNavigationTarget): void }
 }
 
@@ -39,6 +43,7 @@ export interface RegisterPetIpcOptions {
   getMainWindow(): PetMainWindow | null
   isTrustedMainSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean
   isTrustedPetSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean
+  openMainWindow(): Promise<PetMainWindow>
   selectCustomPetFile(): Promise<string | null>
 }
 
@@ -56,11 +61,14 @@ function exactInput(value: unknown, keys: readonly string[], label: string) {
 }
 
 function activityRequest(value: unknown): PetNavigationRequest {
-  const input = exactInput(value, ["activityId"], "Pet activity request")
+  const input = exactInput(value, ["activityId", "revision"], "Pet activity request")
   if (typeof input.activityId !== "string" || input.activityId.length < 1 || input.activityId.length > 128) {
     throw new Error("Pet activity id is invalid")
   }
-  return { activityId: input.activityId }
+  if (!Number.isSafeInteger(input.revision) || (input.revision as number) < 0) {
+    throw new Error("Pet activity revision is invalid")
+  }
+  return { activityId: input.activityId, revision: input.revision as number }
 }
 
 function dragInput(value: unknown): PetDragInput {
@@ -121,17 +129,19 @@ export function registerPetIpc(
     await controller.deleteCustom(input.id)
   })
   handle<unknown, void>(petIpcChannels.markDisplayed, options.isTrustedMainSender, async (value) => {
-    const { activityId } = activityRequest(value)
+    const { activityId, revision } = activityRequest(value)
     if (!activity.resolveActivity(activityId)) throw new Error("Pet activity is no longer available")
-    await activity.markSeen(activityId, activity.getSnapshot().revision)
+    await activity.markSeen(activityId, revision)
   })
   handle<unknown, void>(petIpcChannels.navigate, options.isTrustedPetSender, async (value) => {
-    const { activityId } = activityRequest(value)
+    const { activityId, revision } = activityRequest(value)
     const target = activity.resolveActivity(activityId)
     if (!target) throw new Error("Pet activity is no longer available")
-    const mainWindow = options.getMainWindow()
-    if (!mainWindow) throw new Error("Convax main window is not available")
-    mainWindow.webContents.send(petIpcChannels.navigate, { activityId, ...target })
+    const mainWindow = await options.openMainWindow()
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send(petIpcChannels.navigate, { activityId, revision, ...target })
   })
   handle<unknown, void>(petIpcChannels.setExpanded, options.isTrustedPetSender, async (value) => {
     const input = exactInput(value, ["expanded"], "Pet tray request")
@@ -153,6 +163,9 @@ export function registerPetIpc(
   disposers.push(disposeChanged)
 
   return () => {
-    disposers.splice(0).reverse().forEach((dispose) => dispose())
+    disposers
+      .splice(0)
+      .reverse()
+      .forEach((dispose) => dispose())
   }
 }

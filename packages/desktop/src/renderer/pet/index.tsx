@@ -24,7 +24,6 @@ function PetApplication() {
     return () => media.removeEventListener("change", update)
   }, [])
 
-  if (!snapshot) return null
   const client = useMemo<PetOverlayClient>(
     () => ({
       drag: (input) => window.convaxPet.drag(input),
@@ -37,6 +36,7 @@ function PetApplication() {
     }),
     [],
   )
+  if (!snapshot) return null
   return <PetView client={client} expanded={expanded} reducedMotion={reducedMotion} snapshot={snapshot} />
 }
 

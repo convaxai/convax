@@ -850,6 +850,14 @@ function startApplication() {
       isTrustedPetSender: (event) =>
         petWindow.isTrustedWebContentsId(event.sender.id) &&
         Boolean(event.senderFrame && isTrustedPetRendererUrl(event.senderFrame.url)),
+      async openMainWindow() {
+        const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
+        if (window.webContents.isLoadingMainFrame()) {
+          await new Promise<void>((resolve) => window.webContents.once("did-finish-load", () => resolve()))
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+        return window
+      },
       async selectCustomPetFile() {
         const options: OpenDialogOptions = {
           buttonLabel: "Import pet",
