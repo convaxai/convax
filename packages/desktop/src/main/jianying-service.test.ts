@@ -5,12 +5,14 @@ import path from "node:path"
 
 import {
   createJianyingNativeAdapter,
+  jianyingCommandEnvironment,
   jianyingDraftLockValidationFailure,
   JianyingIntegrationService,
   MacOSJianyingNativeAdapter,
   UnsupportedJianyingNativeAdapter,
   combineObservations,
   parseJianyingProcessIds,
+  parseLockedPaths,
   runJianyingCommand,
   type JianyingActiveDraft,
   type JianyingCommandRunner,
@@ -109,6 +111,37 @@ describe("JianYing active draft detection", () => {
     const result = await runJianyingCommand("/bin/sleep", ["1"], 1)
     expect(result.exitCode).toBe(-1)
     expect(result.stderr).toContain("JIANYING_COMMAND_OUTCOME_UNKNOWN")
+  })
+
+  test("forces native inspection commands to emit UTF-8 paths without a terminal locale", async () => {
+    expect(jianyingCommandEnvironment({ PATH: "/usr/bin:/bin" })).toEqual({
+      LANG: "UTF-8",
+      LC_ALL: "UTF-8",
+      PATH: "/usr/bin:/bin",
+    })
+    if (process.platform !== "darwin") return
+
+    const root = await temporaryRoot()
+    const draft = await createDraftDirectory(root, "7月22日")
+    const holder = Bun.spawn(["/usr/bin/tail", "-f", draft.lockPath], {
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      stderr: "ignore",
+      stdout: "ignore",
+    })
+    try {
+      let lockedPaths: string[] = []
+      for (let attempt = 0; attempt < 20 && !lockedPaths.includes(draft.lockPath); attempt += 1) {
+        const result = await runJianyingCommand("/usr/sbin/lsof", ["-Fn", "-p", String(holder.pid)], 5_000)
+        expect(result.exitCode).toBe(0)
+        lockedPaths = parseLockedPaths(result.stdout)
+        if (!lockedPaths.includes(draft.lockPath)) await Bun.sleep(25)
+      }
+      expect(lockedPaths).toContain(draft.lockPath)
+      expect(lockedPaths.some((lockedPath) => lockedPath.includes("\\x"))).toBeFalse()
+    } finally {
+      holder.kill()
+      await holder.exited
+    }
   })
 
   test("explains macOS Movies-folder denial instead of hiding the packaged-app permission failure", () => {

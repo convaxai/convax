@@ -488,6 +488,18 @@ export function createJianyingNativeAdapter(options: {
     ? new MacOSJianyingNativeAdapter(options)
     : new UnsupportedJianyingNativeAdapter()
 }
+
+export function jianyingCommandEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...environment,
+    // Finder-launched macOS applications do not reliably inherit a UTF-8 locale.
+    // Without this, lsof renders non-ASCII path bytes as literal `\\xNN`
+    // sequences, which cannot be passed back to realpath as a native path.
+    LANG: "UTF-8",
+    LC_ALL: "UTF-8",
+  }
+}
+
 export async function runJianyingCommand(
   executable: string,
   args: readonly string[],
@@ -499,6 +511,7 @@ export async function runJianyingCommand(
       executable,
       [...args],
       {
+        env: jianyingCommandEnvironment(),
         maxBuffer: 8 * 1024 * 1024,
         signal,
         timeout: timeoutMs,
