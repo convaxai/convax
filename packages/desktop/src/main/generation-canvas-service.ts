@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import {
   CanvasCommandIdConflictError,
   createCanvasNodeContentGuard,
+  matchesCanvasNodeContentGuard,
   type CanvasAddResourceSourcesRequest,
   type CanvasApplicationCommandResult,
   type CanvasCommandActor,
@@ -1151,7 +1152,7 @@ export class GenerationCanvasService {
       !target ||
       target.type !== "file" ||
       target.data.kind === "group" ||
-      stableJson(createCanvasNodeContentGuard(target)) !== stableJson(expected)
+      !matchesCanvasNodeContentGuard(target, expected)
     ) {
       throw new Error("Generation replacement target changed while the tool was running")
     }

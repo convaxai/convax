@@ -10,6 +10,7 @@ import {
   createCanvasNodeContentGuard,
   executeCanvasBusinessCommand,
   findOpenCanvasPoint,
+  matchesCanvasNodeContentGuard,
 } from "./commands"
 import { queryCanvasNodes } from "./queries"
 
@@ -46,6 +47,32 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
 }
 
 describe("canvas application commands", () => {
+  test("keeps content guards stable when persistence omits undefined media fields", () => {
+    const pending = createMediaNode({
+      id: "pending",
+      position: { x: 0, y: 0 },
+      resource: { id: "pending", kind: "image", url: "" },
+    })
+    pending.data.status = "pending"
+    const guard = createCanvasNodeContentGuard(pending)
+    const persisted = {
+      ...pending,
+      data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
+    }
+
+    expect(matchesCanvasNodeContentGuard(persisted, guard)).toBeTrue()
+    const failed = applyCanvasBusinessCommand(createCanvasDocument({ id: "canvas", nodes: [persisted] }), {
+      expectedTarget: guard,
+      message: "Generation could not be completed",
+      targetNodeId: persisted.id,
+      type: "resources.pending.fail",
+    })
+    expect(failed.document.nodes[0]?.data).toMatchObject({
+      error: "Generation could not be completed",
+      status: "error",
+    })
+  })
+
   test("commits a renderer element patch without accepting a whole replacement document", () => {
     const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "Before" })
     const removed = createTextNode({ id: "removed", position: { x: 200, y: 0 }, text: "Remove" })

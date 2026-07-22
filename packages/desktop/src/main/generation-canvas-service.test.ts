@@ -229,6 +229,7 @@ function setupPendingGeneration(
   result: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>),
   options: {
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
+    roundTripPending?: boolean
   } = {},
 ) {
   const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
@@ -271,6 +272,19 @@ function setupPendingGeneration(
           ],
           nodes: [...currentDocument.nodes, node],
           revision: currentDocument.revision + 1,
+        }
+        if (options.roundTripPending) {
+          currentDocument = {
+            ...currentDocument,
+            nodes: currentDocument.nodes.map((current) =>
+              current.id === pendingNodeId
+                ? {
+                    ...current,
+                    data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
+                  }
+                : current,
+            ),
+          }
         }
         return persistedCommandResult(
           currentDocument,
@@ -618,6 +632,29 @@ describe("GenerationCanvasService", () => {
 
     expect(harness.calls).toHaveLength(1)
     expect(harness.createRequests).toHaveLength(1)
+    expect(harness.replacementRequests).toHaveLength(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
+  })
+
+  test("replaces a pending node after JSON persistence omits undefined media fields", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = setupPendingGeneration(
+      { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
+      { roundTripPending: true },
+    )
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 2 })
+
     expect(harness.replacementRequests).toHaveLength(1)
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
   })

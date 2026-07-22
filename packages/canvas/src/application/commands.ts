@@ -220,6 +220,11 @@ export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeConten
   return structuredClone({ data: node.data, type: node.type })
 }
 
+/** Matches the portable content semantics used by Canvas persistence. */
+export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
+  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
+}
+
 export function createCanvasDocumentPatchCommand(
   base: CanvasDocument,
   next: CanvasDocument,
@@ -564,7 +569,7 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
   if (target.type !== "file" || target.data.kind === "group") {
     throw new CanvasCommandValidationError(`Canvas resource replacement requires a file node: ${target.id}`)
   }
-  if (!sameNodeContent(target, command.expectedTarget)) {
+  if (!matchesCanvasNodeContentGuard(target, command.expectedTarget)) {
     throw new CanvasCommandValidationError(`Canvas node content changed before resource replacement: ${target.id}`)
   }
 
@@ -627,7 +632,7 @@ function failPendingResource(
   if (target.type !== "file" || !isPendingResourceNode(target)) {
     throw new CanvasCommandValidationError(`Canvas pending resource failure requires a pending file node: ${target.id}`)
   }
-  if (!sameNodeContent(target, command.expectedTarget)) {
+  if (!matchesCanvasNodeContentGuard(target, command.expectedTarget)) {
     throw new CanvasCommandValidationError(`Canvas node content changed before pending resource failure: ${target.id}`)
   }
 
@@ -689,10 +694,6 @@ function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position
   return createMediaNode({ id: nodeId, position, resource: item })
 }
 
-function sameNodeContent(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
-}
-
 function sameJson(left: unknown, right: unknown) {
   return stableJson(left) === stableJson(right)
 }
@@ -731,15 +732,18 @@ function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: read
 }
 
 function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (item === undefined ? "null" : stableJson(item))).join(",")}]`
+  }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>
     return `{${Object.keys(record)
       .sort()
+      .filter((key) => record[key] !== undefined)
       .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
       .join(",")}}`
   }
-  return value === undefined ? "undefined" : (JSON.stringify(value) ?? "null")
+  return JSON.stringify(value) ?? "null"
 }
 
 function result(
