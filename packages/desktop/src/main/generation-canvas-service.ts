@@ -734,13 +734,14 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
   const ownerNodeId = request.referenceConstraint?.ownerNodeId
   if (!ownerNodeId && !request.references.length && !request.relationAnchorNodeIds?.length) return undefined
   return {
-    anchorNodeIds: [
-      ...new Set([
-        ...(ownerNodeId ? [ownerNodeId] : []),
-        ...request.references.map((reference) => reference.nodeId),
-        ...(request.relationAnchorNodeIds ?? []),
-      ]),
-    ],
+    anchorNodeIds: ownerNodeId
+      ? [ownerNodeId]
+      : [
+          ...new Set([
+            ...request.references.map((reference) => reference.nodeId),
+            ...(request.relationAnchorNodeIds ?? []),
+          ]),
+        ],
     direction: "from-anchor",
     mode: "connect",
   }

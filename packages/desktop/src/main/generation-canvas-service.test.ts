@@ -557,16 +557,13 @@ describe("GenerationCanvasService", () => {
 
     await started
     expect(harness.createRequests[0]?.relation).toEqual({
-      anchorNodeIds: [harness.owner.id, harness.reference.id],
+      anchorNodeIds: [harness.owner.id],
       direction: "from-anchor",
       mode: "connect",
     })
-    expect(harness.getDocument().edges).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ source: harness.owner.id, target: harness.pendingNodeId }),
-        expect.objectContaining({ source: harness.reference.id, target: harness.pendingNodeId }),
-      ]),
-    )
+    expect(harness.getDocument().edges.filter((edge) => edge.target === harness.pendingNodeId)).toEqual([
+      expect.objectContaining({ source: harness.owner.id, target: harness.pendingNodeId }),
+    ])
 
     release()
     await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
@@ -1398,7 +1395,7 @@ describe("GenerationCanvasService", () => {
     expect(imported).toHaveLength(1)
     expect(resourceRequests[0]).toMatchObject({
       conflictPolicy: "retry",
-      relation: { anchorNodeIds: [owner.id, "image-one"], direction: "from-anchor", mode: "connect" },
+      relation: { anchorNodeIds: [owner.id], direction: "from-anchor", mode: "connect" },
       sources: [{ kind: "host-file" }],
     })
     expect(resourceRequests[0]!.sources[0]).toHaveProperty("path", expect.stringContaining(".convax/assets/"))
