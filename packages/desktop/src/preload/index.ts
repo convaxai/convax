@@ -18,7 +18,7 @@ import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
-import { petIpcChannels, type PetNavigationTarget, type PetSettingsClient } from "../pet-contracts"
+import type { PetIpcChannels, PetNavigationTarget, PetSettingsClient } from "../pet-contracts"
 import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
@@ -90,6 +90,22 @@ const agentSkillChannels = {
   openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
 } as const
+
+// Keep sandboxed preload entries self-contained. The shared type preserves exact
+// channel parity with Main without emitting a relative CommonJS require.
+const petIpcChannels = {
+  changed: "pet:changed",
+  deleteCustom: "pet:delete-custom",
+  importCustom: "pet:import-custom",
+  list: "pet:list",
+  markDisplayed: "pet:mark-displayed",
+  navigate: "pet:navigate",
+  select: "pet:select",
+  setAwake: "pet:set-awake",
+} as const satisfies Pick<
+  PetIpcChannels,
+  "changed" | "deleteCustom" | "importCustom" | "list" | "markDisplayed" | "navigate" | "select" | "setAwake"
+>
 
 const pluginChannels = {
   changed: "plugin:changed",

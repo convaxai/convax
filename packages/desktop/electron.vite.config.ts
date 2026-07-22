@@ -27,6 +27,36 @@ export function workspaceDistFullReloadPlugin(): Plugin {
   }
 }
 
+interface SandboxedPreloadOutput {
+  imports?: readonly string[]
+  isEntry?: boolean
+  type: "asset" | "chunk"
+}
+
+/** Sandboxed Electron preloads cannot require another emitted CommonJS file. */
+export function assertSandboxedPreloadBundle(bundle: Record<string, SandboxedPreloadOutput>) {
+  const emittedFiles = new Set(Object.keys(bundle))
+  for (const [fileName, output] of Object.entries(bundle)) {
+    if (output.type !== "chunk" || !output.isEntry) continue
+    const sharedChunks = (output.imports ?? []).filter((imported) => emittedFiles.has(imported))
+    if (sharedChunks.length) {
+      throw new Error(
+        `Sandboxed preload ${fileName} must be self-contained; emitted imports: ${sharedChunks.join(", ")}`,
+      )
+    }
+  }
+}
+
+export function sandboxedPreloadBoundaryPlugin(): Plugin {
+  return {
+    name: "convax-sandboxed-preload-boundary",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      assertSandboxedPreloadBundle(bundle)
+    },
+  }
+}
+
 export default defineConfig({
   main: {
     build: {
@@ -44,6 +74,7 @@ export default defineConfig({
     },
   },
   preload: {
+    plugins: [sandboxedPreloadBoundaryPlugin()],
     build: {
       rollupOptions: {
         input: {

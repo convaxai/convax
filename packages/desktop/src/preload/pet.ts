@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron"
 
-import { petIpcChannels, type PetOverlayClient, type PetRendererSnapshot } from "../pet-contracts"
+import type { PetIpcChannels, PetOverlayClient, PetRendererSnapshot } from "../pet-contracts"
+
+// Electron's sandboxed preload require cannot load emitted relative chunks.
+const petIpcChannels = {
+  drag: "pet:drag",
+  navigate: "pet:navigate",
+  setExpanded: "pet:set-expanded",
+  snapshot: "pet:snapshot",
+} as const satisfies Pick<PetIpcChannels, "drag" | "navigate" | "setExpanded" | "snapshot">
 
 const petOverlayClient = {
   drag: (input) => ipcRenderer.send(petIpcChannels.drag, input),

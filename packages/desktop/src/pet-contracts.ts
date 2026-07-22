@@ -71,6 +71,8 @@ export const petIpcChannels = {
   snapshot: "pet:snapshot",
 } as const
 
+export type PetIpcChannels = typeof petIpcChannels
+
 export interface PetSettingsClient {
   deleteCustom(input: { id: string }): Promise<void>
   importCustom(): Promise<PetInventoryItem | null>

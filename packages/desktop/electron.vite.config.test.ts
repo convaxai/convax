@@ -1,6 +1,10 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { DevEnvironment, HotUpdateOptions } from "vite"
-import { isWorkspaceDistPath, workspaceDistFullReloadPlugin } from "./electron.vite.config"
+import {
+  assertSandboxedPreloadBundle,
+  isWorkspaceDistPath,
+  workspaceDistFullReloadPlugin,
+} from "./electron.vite.config"
 
 describe("Desktop workspace dependency hot updates", () => {
   test("recognizes only built workspace package output across host path formats", () => {
@@ -38,5 +42,26 @@ describe("Desktop workspace dependency hot updates", () => {
 
     expect(result).toBeUndefined()
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe("sandboxed Desktop preload bundles", () => {
+  test("rejects an emitted shared chunk required by a preload entry", () => {
+    expect(() =>
+      assertSandboxedPreloadBundle({
+        "chunks/contracts.cjs": { imports: [], isEntry: false, type: "chunk" },
+        "index.js": { imports: ["electron", "chunks/contracts.cjs"], isEntry: true, type: "chunk" },
+      }),
+    ).toThrow("must be self-contained")
+  })
+
+  test("accepts self-contained preload entries and non-chunk assets", () => {
+    expect(() =>
+      assertSandboxedPreloadBundle({
+        "index.js": { imports: ["electron"], isEntry: true, type: "chunk" },
+        "pet.js": { imports: ["electron"], isEntry: true, type: "chunk" },
+        "pet.txt": { type: "asset" },
+      }),
+    ).not.toThrow()
   })
 })
