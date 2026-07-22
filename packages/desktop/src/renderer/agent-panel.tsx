@@ -2114,7 +2114,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     }}
                     onKeyUp={(event) => {
                       composerSelectionRef.current = captureAgentComposerSelection(event.currentTarget)
-                      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) updateComposerQuery()
+                      if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+                        compositionControllerRef.current.runWhenIdle(updateComposerQuery)
                     }}
                     onPaste={(event) => {
                       event.preventDefault()

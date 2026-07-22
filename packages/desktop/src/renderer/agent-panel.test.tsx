@@ -119,6 +119,9 @@ describe("Agent composer source contract", () => {
     expect(source).toContain("activeScopeRef.current === scope")
     expect(source).toContain("compositionControllerRef.current.start()")
     expect(source).toContain("compositionControllerRef.current.finish")
+    expect(source).toMatch(
+      /onKeyUp=\{\(event\) => \{[\s\S]*?compositionControllerRef\.current\.runWhenIdle\(updateComposerQuery\)/,
+    )
     expect(source).toContain("onOpenSkill={openSkill}")
     expect(source).toContain("referenceStatusById={referenceStatusById}")
     expect(source).toContain("event.nativeEvent.isComposing")
