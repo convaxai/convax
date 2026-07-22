@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import {
+  AgentComposerRequestTracker,
   agentComposerSkills,
   agentComposerText,
+  closeAgentComposerSuggestion,
   filterAgentSkills,
   filterAgentResourcePickerOptions,
+  findAgentComposerQuery,
   findAgentSkillSlashQuery,
   hasAgentComposerContent,
+  moveAgentComposerSuggestion,
   normalizeAgentComposerDraft,
+  openAgentComposerSuggestion,
+  reconcileAgentComposerSuggestionOptions,
   selectableAgentResourcePickerOptions,
+  setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
 } from "./agent-composer-state"
@@ -46,6 +53,49 @@ describe("Agent composer state", () => {
     expect(findAgentSkillSlashQuery("line one\n/review", 16)).toEqual({ end: 16, query: "review", start: 9 })
     expect(findAgentSkillSlashQuery("https://example.com/a", 21)).toBeUndefined()
     expect(findAgentSkillSlashQuery("value/total", 11)).toBeUndefined()
+  })
+
+  test("recognizes only @ and $ suggestion queries at a command boundary", () => {
+    expect(findAgentComposerQuery("@rea", 4)).toEqual({ end: 4, query: "rea", start: 0, trigger: "reference" })
+    expect(findAgentComposerQuery("请用 $飞书", 6)).toEqual({ end: 6, query: "飞书", start: 3, trigger: "skill" })
+    expect(findAgentComposerQuery("email@example.com", 17)).toBeUndefined()
+    expect(findAgentComposerQuery("/review", 7)).toBeUndefined()
+  })
+
+  test("reconciles suggestion rows by stable id and wraps keyboard movement", () => {
+    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }]
+    const opened = openAgentComposerSuggestion("reference", rows, { kind: "caret" })
+    const moved = moveAgentComposerSuggestion(opened, 1, rows)
+
+    expect(moved.activeId).toBe("b")
+    expect(moveAgentComposerSuggestion({ ...moved, activeId: "c" }, 1, rows).activeId).toBe("a")
+    expect(reconcileAgentComposerSuggestionOptions(moved, [{ id: "b" }]).activeId).toBe("b")
+    expect(closeAgentComposerSuggestion()).toEqual({ open: false })
+  })
+
+  test("keeps pointer hover separate from keyboard selection and opens tokens in edit mode", () => {
+    const opened = openAgentComposerSuggestion("skill", [{ id: "review" }], {
+      kind: "token",
+      tokenId: "token-1",
+    })
+    const hovered = setAgentComposerSuggestionHover(opened, "docs")
+
+    expect(opened.mode).toBe("edit")
+    expect(hovered).toMatchObject({ activeId: "review", hoveredId: "docs" })
+  })
+
+  test("rejects stale inventory requests independently by key and scope", () => {
+    const tracker = new AgentComposerRequestTracker()
+    const firstRoot = tracker.begin("project-a", "project:")
+    const canvas = tracker.begin("project-a", "canvas:one")
+    const secondRoot = tracker.begin("project-a", "project:")
+
+    expect(firstRoot()).toBeFalse()
+    expect(secondRoot()).toBeTrue()
+    expect(canvas()).toBeTrue()
+    tracker.invalidate()
+    expect(secondRoot()).toBeFalse()
+    expect(canvas()).toBeFalse()
   })
 
   test("filters Skill names and descriptions case-insensitively", () => {

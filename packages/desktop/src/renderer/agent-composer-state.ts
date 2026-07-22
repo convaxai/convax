@@ -12,6 +12,32 @@ export interface AgentSkillSlashQuery {
   start: number
 }
 
+export type AgentComposerQueryTrigger = "reference" | "skill"
+
+export interface AgentComposerQuery {
+  end: number
+  query: string
+  start: number
+  trigger: AgentComposerQueryTrigger
+}
+
+export interface AgentComposerSuggestionOptionLike {
+  id: string
+}
+
+export type AgentComposerSuggestionAnchor = { kind: "caret" } | { kind: "token"; tokenId: string }
+
+export interface OpenAgentComposerSuggestionState {
+  activeId?: string
+  anchor: AgentComposerSuggestionAnchor
+  hoveredId?: string
+  mode: "edit" | "query"
+  open: true
+  trigger: AgentComposerQueryTrigger
+}
+
+export type AgentComposerSuggestionState = { open: false } | OpenAgentComposerSuggestionState
+
 export type AgentResourcePickerSection = "skills" | "project" | "canvases"
 
 export interface AgentResourcePickerOption {
@@ -78,6 +104,81 @@ export function findAgentSkillSlashQuery(text: string, caret: number): AgentSkil
   const query = match[1] ?? ""
   const start = caret - query.length - 1
   return { end: caret, query, start }
+}
+
+export function findAgentComposerQuery(text: string, caret: number): AgentComposerQuery | undefined {
+  if (!Number.isSafeInteger(caret) || caret < 0 || caret > text.length) return undefined
+  const match = /(?:^|\s)([@$])([\p{L}\p{N}._-]*)$/u.exec(text.slice(0, caret))
+  if (!match) return undefined
+  const query = match[2] ?? ""
+  return {
+    end: caret,
+    query,
+    start: caret - query.length - 1,
+    trigger: match[1] === "@" ? "reference" : "skill",
+  }
+}
+
+export function openAgentComposerSuggestion(
+  trigger: AgentComposerQueryTrigger,
+  options: readonly AgentComposerSuggestionOptionLike[],
+  anchor: AgentComposerSuggestionAnchor,
+): OpenAgentComposerSuggestionState {
+  return {
+    activeId: options[0]?.id,
+    anchor,
+    mode: anchor.kind === "token" ? "edit" : "query",
+    open: true,
+    trigger,
+  }
+}
+
+export function moveAgentComposerSuggestion(
+  state: OpenAgentComposerSuggestionState,
+  direction: number,
+  options: readonly AgentComposerSuggestionOptionLike[],
+): OpenAgentComposerSuggestionState {
+  if (!direction) return state
+  if (!options.length) return state
+  const current = state.activeId ? options.findIndex((option) => option.id === state.activeId) : -1
+  const step = direction > 0 ? 1 : -1
+  const next = current < 0 ? (step > 0 ? 0 : options.length - 1) : (current + step + options.length) % options.length
+  return { ...state, activeId: options[next]?.id }
+}
+
+export function reconcileAgentComposerSuggestionOptions(
+  state: OpenAgentComposerSuggestionState,
+  options: readonly AgentComposerSuggestionOptionLike[],
+): OpenAgentComposerSuggestionState {
+  if (state.activeId && options.some((option) => option.id === state.activeId)) return state
+  return { ...state, activeId: options[0]?.id }
+}
+
+export function setAgentComposerSuggestionHover(
+  state: OpenAgentComposerSuggestionState,
+  hoveredId?: string,
+): OpenAgentComposerSuggestionState {
+  return { ...state, hoveredId }
+}
+
+export function closeAgentComposerSuggestion(): AgentComposerSuggestionState {
+  return { open: false }
+}
+
+export class AgentComposerRequestTracker {
+  readonly #requests = new Map<string, number>()
+  #generation = 0
+
+  begin(scope: string, key: string) {
+    const requestKey = JSON.stringify([scope, key])
+    const generation = ++this.#generation
+    this.#requests.set(requestKey, generation)
+    return () => this.#requests.get(requestKey) === generation
+  }
+
+  invalidate() {
+    this.#requests.clear()
+  }
 }
 
 export function filterAgentSkills(skills: readonly AgentSkill[], query: string) {
