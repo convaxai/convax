@@ -8,6 +8,7 @@ import { deflateRawSync } from "node:zlib"
 import type { WebPluginManifest } from "../plugin-contracts"
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
 import {
+  type RemoteArtifactCache,
   type RemoteCapabilityPackage,
   type RemoteCapabilityFetch,
   type RemoteRegistryCache,
@@ -297,6 +298,20 @@ function fetchMock(
 function memoryShowcaseMediaCache() {
   const entries = new Map<string, Uint8Array>()
   const cache: RemoteShowcaseMediaCache = {
+    async read({ sha256, size }) {
+      const bytes = entries.get(sha256)
+      return bytes?.byteLength === size ? Uint8Array.from(bytes) : null
+    },
+    async write({ bytes, sha256 }) {
+      entries.set(sha256, Uint8Array.from(bytes))
+    },
+  }
+  return { cache, entries }
+}
+
+function memoryArtifactCache() {
+  const entries = new Map<string, Uint8Array>()
+  const cache: RemoteArtifactCache = {
     async read({ sha256, size }) {
       const bytes = entries.get(sha256)
       return bytes?.byteLength === size ? Uint8Array.from(bytes) : null
@@ -1432,6 +1447,50 @@ describe("RemoteCapabilityRegistryClient", () => {
     })
 
     await expect(client.downloadCompanionArtifact(item, companionItem, target)).resolves.toEqual(bytes)
+  })
+
+  test("retries one transient companion transport failure", async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4])
+    const { companionItem, item, target } = packageWithCompanionBytes(bytes)
+    let calls = 0
+    const client = new RemoteCapabilityRegistryClient({
+      fetch: fetchMock(() => {
+        calls += 1
+        if (calls === 1) throw new Error("proxy connection reset")
+        return new Response(bytes)
+      }),
+    })
+
+    await expect(client.downloadCompanionArtifact(item, companionItem, target)).resolves.toEqual(bytes)
+    expect(calls).toBe(2)
+  })
+
+  test("reuses verified immutable artifact bytes across client restarts", async () => {
+    const manifest = pluginManifest()
+    const zip = createTestZip([{ content: JSON.stringify(manifest), name: "manifest.json" }])
+    const item = packageWithZip(zip)
+    const { cache, entries } = memoryArtifactCache()
+    let calls = 0
+    const first = new RemoteCapabilityRegistryClient({
+      artifactCache: cache,
+      fetch: fetchMock(() => {
+        calls += 1
+        return new Response(zip)
+      }),
+    })
+    await first.downloadBundle(item)
+    expect(entries.get(item.artifact.sha256)).toEqual(zip)
+
+    const restarted = new RemoteCapabilityRegistryClient({
+      artifactCache: cache,
+      fetch: fetchMock(() => {
+        throw new Error("must not fetch a verified cache hit")
+      }),
+    })
+    await expect(restarted.downloadBundle(item)).resolves.toMatchObject({
+      files: { "manifest.json": expect.any(Uint8Array) },
+    })
+    expect(calls).toBe(1)
   })
 
   test("cancels a companion transfer that stops making progress", async () => {

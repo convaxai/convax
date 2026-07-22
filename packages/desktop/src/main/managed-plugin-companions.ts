@@ -6,8 +6,10 @@ import path from "node:path"
 import { type InstalledWebPluginSummary, requireWebPluginId, validatePortablePluginSegment } from "../plugin-contracts"
 import type { GenerationPluginExecutableBinding } from "./generation-plugin-runtime"
 
-const receiptSchema = "convax.plugin-companion/1" as const
+const nativeReceiptSchema = "convax.plugin-companion/1" as const
+const interpretedReceiptSchema = "convax.plugin-companion/2" as const
 const receiptFileName = ".convax-companion.json"
+const bunCompanionHeader = "#!/usr/bin/env convax-bun\n"
 const semverPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
 const bareCommandPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -18,7 +20,8 @@ interface ManagedCompanionReceipt {
   command: string
   pluginId: string
   pluginVersion: string
-  schema: typeof receiptSchema
+  schema: typeof interpretedReceiptSchema | typeof nativeReceiptSchema
+  runtime?: "bun"
   sha256: string
   size: number
   platform: NodeJS.Platform
@@ -150,11 +153,28 @@ function parseReceipt(value: unknown): ManagedCompanionReceipt {
     throw new Error("Managed companion receipt must be an object")
   }
   const input = value as Record<string, unknown>
-  const expected = ["arch", "command", "platform", "pluginId", "pluginVersion", "schema", "sha256", "size", "version"]
+  const schema = input.schema
+  const expected = [
+    "arch",
+    "command",
+    "platform",
+    "pluginId",
+    "pluginVersion",
+    ...(schema === interpretedReceiptSchema ? ["runtime"] : []),
+    "schema",
+    "sha256",
+    "size",
+    "version",
+  ]
   const unknown = Object.keys(input).find((key) => !expected.includes(key))
   const missing = expected.find((key) => !Object.hasOwn(input, key))
   if (unknown || missing) throw new Error("Managed companion receipt has an invalid shape")
-  if (input.schema !== receiptSchema) throw new Error("Managed companion receipt schema is not supported")
+  if (schema !== nativeReceiptSchema && schema !== interpretedReceiptSchema) {
+    throw new Error("Managed companion receipt schema is not supported")
+  }
+  if (schema === interpretedReceiptSchema && input.runtime !== "bun") {
+    throw new Error("Managed companion receipt runtime is invalid")
+  }
   if (typeof input.pluginId !== "string" || typeof input.command !== "string") {
     throw new Error("Managed companion receipt identity is invalid")
   }
@@ -173,7 +193,8 @@ function parseReceipt(value: unknown): ManagedCompanionReceipt {
     platform: input.platform as NodeJS.Platform,
     pluginId: requireWebPluginId(input.pluginId),
     pluginVersion: requireVersion(input.pluginVersion, "Managed companion Plugin version"),
-    schema: receiptSchema,
+    ...(schema === interpretedReceiptSchema ? { runtime: "bun" as const } : {}),
+    schema,
     sha256: requireDigest(input.sha256),
     size: requirePositiveSize(input.size),
     version: requireVersion(input.version, "Managed companion version"),
@@ -236,13 +257,18 @@ export class ManagedPluginCompanionStore {
     const root = (await this.#root(true))!
     const commandRoot = await this.#directoryChain(root, [pluginId, pluginVersion, command])
     const target = path.join(commandRoot, version)
+    const runtime =
+      new TextDecoder().decode(input.bytes.subarray(0, bunCompanionHeader.length)) === bunCompanionHeader
+        ? ("bun" as const)
+        : undefined
     const receipt: ManagedCompanionReceipt = {
       arch: this.#arch,
       command,
       platform: this.#platform,
       pluginId,
       pluginVersion,
-      schema: receiptSchema,
+      ...(runtime === undefined ? {} : { runtime }),
+      schema: runtime === undefined ? nativeReceiptSchema : interpretedReceiptSchema,
       sha256: digest,
       size,
       version,
@@ -326,10 +352,7 @@ export class ManagedPluginCompanionStore {
     }
   }
 
-  async #resolveDirectory(
-    directory: string,
-    expected: Omit<ManagedCompanionReceipt, "schema"> & { schema?: typeof receiptSchema },
-  ) {
+  async #resolveDirectory(directory: string, expected: ManagedCompanionReceipt) {
     const realDirectory = await assertPlainDirectory(directory, "Managed companion installation")
     const entries = await fs.readdir(realDirectory, { withFileTypes: true })
     if (
@@ -350,8 +373,7 @@ export class ManagedPluginCompanionStore {
       throw new Error("Managed companion receipt must be a bounded regular file")
     }
     const receipt = parseReceipt(JSON.parse(await fs.readFile(receiptPath, "utf8")))
-    const normalizedExpected = { ...expected, schema: receiptSchema }
-    if (JSON.stringify(receipt) !== JSON.stringify(normalizedExpected)) {
+    if (JSON.stringify(receipt) !== JSON.stringify(expected)) {
       throw new Error("Managed companion receipt does not match its installed identity")
     }
     const executable = path.join(realDirectory, executableFileName(receipt.command, this.#platform))
@@ -367,7 +389,12 @@ export class ManagedPluginCompanionStore {
     if (digest !== receipt.sha256 || !sameFileIdentity(before, after)) {
       throw new Error("Managed companion executable changed while it was being inspected")
     }
-    return { path: executableRealPath, sha256: digest, size: after.size }
+    return {
+      path: executableRealPath,
+      ...(receipt.runtime === undefined ? {} : { runtime: receipt.runtime }),
+      sha256: digest,
+      size: after.size,
+    }
   }
 
   async resolve(

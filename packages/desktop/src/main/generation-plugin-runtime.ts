@@ -91,6 +91,12 @@ export type GenerationPluginExecutableBinding = ToolPluginExecutableBinding
 export interface GenerationPluginExecutableSnapshot {
   dispose(): void
   path: string
+  runtime?: "bun"
+}
+
+export interface GenerationPluginBunRuntime {
+  command: string
+  env?: Readonly<Record<string, string>>
 }
 
 export type GenerationPluginExecutableResolver = (
@@ -109,6 +115,8 @@ export type GenerationPluginExecutableMaterializer = (
 ) => Promise<GenerationPluginExecutableSnapshot>
 
 export interface GenerationPluginRuntimeOptions {
+  /** Trusted app-owned Bun CLI used only for companions carrying the exact convax-bun header. */
+  bunRuntime?: GenerationPluginBunRuntime
   /** Optional principal-bound reverse Canvas API for an already-running v5 Tool sidecar. */
   canvasCapabilities?: ToolPluginCanvasCapabilityHost
   createClient?: GenerationPluginMcpClientFactory
@@ -223,7 +231,7 @@ function requireBareCommand(value: string) {
 }
 
 function executableBindingFingerprint(binding: GenerationPluginExecutableBinding) {
-  return JSON.stringify([binding.path, binding.size, binding.sha256])
+  return JSON.stringify([binding.path, binding.size, binding.sha256, binding.runtime])
 }
 
 function sameFileIdentity(left: Awaited<ReturnType<typeof fs.stat>>, right: Awaited<ReturnType<typeof fs.stat>>) {
@@ -284,6 +292,7 @@ export async function materializeGenerationPluginExecutable(
         }
       },
       path: snapshotPath,
+      ...(binding.runtime === undefined ? {} : { runtime: binding.runtime }),
     }
   } catch (error) {
     rmSync(snapshotDirectory, { force: true, recursive: true })
@@ -495,6 +504,7 @@ function llmGatewayDescriptor(value: unknown) {
  * credential, account, or routing registry.
  */
 export class GenerationPluginRuntime {
+  readonly #bunRuntime?: GenerationPluginBunRuntime
   readonly #cache = new Map<string, CachedPluginRuntime>()
   readonly #canvasCapabilities?: ToolPluginCanvasCapabilityHost
   readonly #createClient: GenerationPluginMcpClientFactory
@@ -510,6 +520,15 @@ export class GenerationPluginRuntime {
   #disposed = false
 
   constructor(options: GenerationPluginRuntimeOptions) {
+    if (
+      options.bunRuntime &&
+      (!options.bunRuntime.command ||
+        options.bunRuntime.command.includes("\0") ||
+        (!path.isAbsolute(options.bunRuntime.command) && options.bunRuntime.command !== "bun"))
+    ) {
+      throw new Error("Generation Plugin Bun runtime command is invalid")
+    }
+    this.#bunRuntime = options.bunRuntime
     this.#plugins = options.plugins
     this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
@@ -946,11 +965,21 @@ export class GenerationPluginRuntime {
         canvasCapabilities?.close()
         throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
       }
+      if (executableSnapshot.runtime === "bun" && !this.#bunRuntime) {
+        throw new Error("Bundled Bun runtime is unavailable")
+      }
       const client = this.#createClient({
-        ...(declaredRuntime.args ? { args: [...declaredRuntime.args] } : {}),
-        command: executableSnapshot.path,
+        ...(executableSnapshot.runtime === "bun"
+          ? { args: [executableSnapshot.path, ...(declaredRuntime.args ?? [])] }
+          : declaredRuntime.args
+            ? { args: [...declaredRuntime.args] }
+            : {}),
+        command: executableSnapshot.runtime === "bun" ? this.#bunRuntime!.command : executableSnapshot.path,
         cwd: this.#workingDirectory,
-        env: { ...this.#environment },
+        env: {
+          ...this.#environment,
+          ...(executableSnapshot.runtime === "bun" ? this.#bunRuntime?.env : {}),
+        },
         ...(canvasCapabilities ? { serverRequestHandler: canvasCapabilities.handler } : {}),
       })
       if (this.#disposed || starting.canceled) {

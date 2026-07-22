@@ -17,6 +17,8 @@ const sha256Pattern = /^[a-f0-9]{64}$/
 
 export interface ToolPluginExecutableBinding {
   path: string
+  /** Host-owned interpreter selected from trusted companion bytes. */
+  runtime?: "bun"
   sha256: string
   size: number
 }
@@ -110,11 +112,17 @@ function requireBinding(binding: ToolPluginExecutableBinding) {
     !sha256Pattern.test(binding.sha256) ||
     !Number.isSafeInteger(binding.size) ||
     binding.size < 1 ||
-    binding.size > 512 * 1024 * 1024
+    binding.size > 512 * 1024 * 1024 ||
+    (binding.runtime !== undefined && binding.runtime !== "bun")
   ) {
     throw new Error("Tool Plugin executable binding is invalid")
   }
-  return { path: binding.path, sha256: binding.sha256, size: binding.size }
+  return {
+    path: binding.path,
+    ...(binding.runtime === undefined ? {} : { runtime: binding.runtime }),
+    sha256: binding.sha256,
+    size: binding.size,
+  }
 }
 
 function authorizationKey(
@@ -122,7 +130,11 @@ function authorizationKey(
   bindingKind: ToolPluginExecutableBindingKind,
   binding: ToolPluginExecutableBinding,
 ) {
-  return sha256(JSON.stringify([manifestSha256, bindingKind, binding.path, binding.size, binding.sha256]))
+  const identity = [manifestSha256, bindingKind, binding.path, binding.size, binding.sha256]
+  // Preserve every existing native receipt key while binding interpreted
+  // companions to their host-selected runtime mode.
+  if (binding.runtime !== undefined) identity.push(binding.runtime)
+  return sha256(JSON.stringify(identity))
 }
 
 /**
@@ -193,7 +205,10 @@ function parseReceipt(value: unknown): ToolPluginAuthorizationReceipt {
     !executable ||
     typeof executable !== "object" ||
     Array.isArray(executable) ||
-    !requireExactKeys(executable as Record<string, unknown>, ["path", "sha256", "size"])
+    !(
+      requireExactKeys(executable as Record<string, unknown>, ["path", "sha256", "size"]) ||
+      requireExactKeys(executable as Record<string, unknown>, ["path", "runtime", "sha256", "size"])
+    )
   ) {
     throw new Error("Tool Plugin authorization receipt is invalid")
   }

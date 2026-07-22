@@ -102,7 +102,9 @@ source, or ambient application state.
   decision.
 - Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
 - Electron `userData/plugin-companions/<plugin-id>/<plugin-version>/`: Registry-verified,
-  host-owned executable companions; never Plugin package assets or renderer paths.
+  host-owned native or `convax-bun` script companions; never Plugin package assets or renderer paths.
+- Electron `userData/capability-registry/artifact-v1/<sha256>`: bounded, verified,
+  non-authoritative cache of immutable Plugin ZIP, Skill ZIP, and companion bytes.
 - Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
   execution receipts bound to the normalized manifest and exact executable source/bytes.
 - Electron `userData/plugin-service-authorization-checkpoints/<plugin-id>.json`:
@@ -202,7 +204,10 @@ current schema.
   companion whose command exactly matches its manifest runtime. Desktop verifies
   the fixed Release URL, platform/architecture, size and SHA-256, publishes it to a
   private versioned host directory, and resolves it before an explicit `PATH`
-  fallback. Missing targets and immutable-identity byte changes fail closed.
+  fallback. A companion beginning with the exact `#!/usr/bin/env convax-bun` header
+  is a bundled Bun program run by Desktop's shared app-owned Bun runtime; all other
+  companions retain native execution. Missing targets, runtimes, and
+  immutable-identity byte changes fail closed.
 - Agent, Toolbar/UI, and Plugin callers use the same Desktop-main generation tool
   executor. OpenCode is only the Agent-side tool client, not the execution owner or
   a dependency of direct product actions.

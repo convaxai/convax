@@ -171,6 +171,12 @@ export interface RemoteShowcaseMediaCache {
   write(input: { bytes: Uint8Array; sha256: string }): Promise<void>
 }
 
+/** Non-authoritative content-addressed cache for immutable ZIP and companion bytes. */
+export interface RemoteArtifactCache {
+  read(input: { sha256: string; size: number }): Promise<Uint8Array | null>
+  write(input: { bytes: Uint8Array; sha256: string }): Promise<void>
+}
+
 export interface RemoteRegistryFetchResult {
   etag?: string
   registry: RemoteCapabilityRegistry
@@ -183,6 +189,7 @@ export interface RemoteCapabilityBundle {
 }
 
 export interface RemoteCapabilityRegistryClientOptions {
+  artifactCache?: RemoteArtifactCache
   cache?: RemoteRegistryCache
   fetch?: RemoteCapabilityFetch
   /** Main-owned test seam for the cache-first Registry revalidation clock. */
@@ -242,6 +249,13 @@ export class RemoteRegistryTimeoutError extends Error {
 
 class RemoteRegistryTransportError extends Error {
   override readonly name = "RemoteRegistryTransportError"
+
+  constructor(
+    message: string,
+    readonly retryable = false,
+  ) {
+    super(message)
+  }
 }
 
 function validationError(message: string): never {
@@ -1112,7 +1126,7 @@ async function fetchWithRedirects(
       response = await fetchImplementation(currentUrl, { headers, redirect: "manual", signal })
     } catch (error) {
       if (signal.aborted) throw error
-      throw new RemoteRegistryTransportError(error instanceof Error ? error.message : "Remote request failed")
+      throw new RemoteRegistryTransportError(error instanceof Error ? error.message : "Remote request failed", true)
     }
     onProgress?.()
     if (response.url) {
@@ -1220,6 +1234,7 @@ export class MemoryRemoteRegistryCache implements RemoteRegistryCache {
 
 /** Main-only client for the fixed official Registry and its immutable Release assets. */
 export class RemoteCapabilityRegistryClient {
+  readonly #artifactCache?: RemoteArtifactCache
   readonly #cache: RemoteRegistryCache
   readonly #fetch: RemoteCapabilityFetch
   #lastRegistryRefreshStartedAt = Number.NEGATIVE_INFINITY
@@ -1243,6 +1258,7 @@ export class RemoteCapabilityRegistryClient {
   readonly #transferTimeoutMs: number
 
   constructor(options: RemoteCapabilityRegistryClientOptions = {}) {
+    this.#artifactCache = options.artifactCache
     this.#cache = options.cache ?? new MemoryRemoteRegistryCache()
     this.#fetch = options.fetch ?? globalThis.fetch
     this.#now = options.now ?? Date.now
@@ -1659,7 +1675,12 @@ export class RemoteCapabilityRegistryClient {
         JSON.stringify(candidate) === JSON.stringify(targetValue),
     )
     if (!target) validationError("Remote companion target does not match its Plugin Registry entry")
-    const bytes = await withTransferTimeout(
+    return this.#downloadArtifactBytes(
+      target.artifact,
+      options,
+      "Remote companion artifact download",
+      "Remote companion artifact",
+      "Remote companion artifact SHA-256 does not match the Registry",
       async ({ progress, signal }) => {
         const response = await fetchWithRedirects(
           this.#fetch,
@@ -1675,22 +1696,7 @@ export class RemoteCapabilityRegistryClient {
         }
         return readBoundedBody(response, target.artifact.size, "Remote companion artifact", signal, progress)
       },
-      {
-        externalSignal: options.signal,
-        inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
-        label: "Remote companion artifact download",
-        timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
-      },
     )
-    if (bytes.byteLength !== target.artifact.size) {
-      validationError(
-        `Remote companion artifact size mismatch: expected ${target.artifact.size}, received ${bytes.byteLength}`,
-      )
-    }
-    if (sha256(bytes) !== target.artifact.sha256) {
-      validationError("Remote companion artifact SHA-256 does not match the Registry")
-    }
-    return bytes
   }
 
   async downloadBundle(
@@ -1704,7 +1710,12 @@ export class RemoteCapabilityRegistryClient {
       throw new Error(`Remote artifact maxBytes must be an integer between 1 and ${maxArtifactBytes}`)
     }
     if (item.artifact.size > downloadLimit) validationError("Remote artifact declared size exceeds the download limit")
-    const bytes = await withTransferTimeout(
+    const bytes = await this.#downloadArtifactBytes(
+      item.artifact,
+      options,
+      `Remote ${item.kind === "plugin" ? "Plugin" : "Skill"} package download`,
+      "Remote artifact",
+      "Remote artifact SHA-256 does not match the registry",
       async ({ progress, signal }) => {
         const response = await fetchWithRedirects(
           this.#fetch,
@@ -1719,18 +1730,7 @@ export class RemoteCapabilityRegistryClient {
           throw new RemoteRegistryTransportError(`Remote artifact returned HTTP ${response.status}`)
         return readBoundedBody(response, item.artifact.size, "Remote artifact", signal, progress)
       },
-      {
-        externalSignal: options.signal,
-        inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
-        label: `Remote ${item.kind === "plugin" ? "Plugin" : "Skill"} package download`,
-        timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
-      },
     )
-    if (bytes.byteLength !== item.artifact.size) {
-      validationError(`Remote artifact size mismatch: expected ${item.artifact.size}, received ${bytes.byteLength}`)
-    }
-    const digest = sha256(bytes)
-    if (digest !== item.artifact.sha256) validationError("Remote artifact SHA-256 does not match the registry")
     const files = unpackSafeZip(bytes, options.zipLimits)
     if (item.kind === "plugin") {
       const manifestBytes = files["manifest.json"]
@@ -1749,6 +1749,50 @@ export class RemoteCapabilityRegistryClient {
     }
     return { files }
   }
+
+  async #downloadArtifactBytes(
+    artifact: RemoteCapabilityArtifact,
+    options: { signal?: AbortSignal; timeoutMs?: number },
+    label: string,
+    validationLabel: string,
+    digestError: string,
+    download: (input: { progress: () => void; signal: AbortSignal }) => Promise<Uint8Array>,
+  ) {
+    if (options.signal?.aborted) throw abortError(options.signal)
+    const cached = await this.#artifactCache?.read({ sha256: artifact.sha256, size: artifact.size }).catch(() => null)
+    if (options.signal?.aborted) throw abortError(options.signal)
+    if (cached && cached.byteLength === artifact.size && sha256(cached) === artifact.sha256) {
+      return Uint8Array.from(cached)
+    }
+
+    let lastError: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const bytes = await withTransferTimeout(download, {
+          externalSignal: options.signal,
+          inactivityTimeoutMs: this.#transferInactivityTimeoutMs,
+          label,
+          timeoutMs: options.timeoutMs ?? this.#transferTimeoutMs,
+        })
+        if (bytes.byteLength !== artifact.size) {
+          validationError(`${validationLabel} size mismatch: expected ${artifact.size}, received ${bytes.byteLength}`)
+        }
+        if (sha256(bytes) !== artifact.sha256) validationError(digestError)
+        await this.#artifactCache?.write({ bytes, sha256: artifact.sha256 }).catch(() => undefined)
+        return bytes
+      } catch (error) {
+        if (options.signal?.aborted) throw abortError(options.signal)
+        lastError = error
+        const retryable =
+          (error instanceof RemoteRegistryTimeoutError && error.message.includes(" stalled ")) ||
+          (error instanceof RemoteRegistryTransportError
+            ? error.retryable
+            : !(error instanceof RemoteRegistryValidationError))
+        if (!retryable || attempt === 1) throw error
+      }
+    }
+    throw lastError
+  }
 }
 
 /** Convenience for callers that only need one verified bundle. */
@@ -1757,6 +1801,7 @@ export async function downloadBundle(
   options: RemoteCapabilityDownloadOptions & RemoteCapabilityRegistryClientOptions = {},
 ) {
   const {
+    artifactCache,
     cache,
     fetch,
     now,
@@ -1771,6 +1816,7 @@ export async function downloadBundle(
     ...downloadOptions
   } = options
   return new RemoteCapabilityRegistryClient({
+    artifactCache,
     cache,
     fetch,
     now,

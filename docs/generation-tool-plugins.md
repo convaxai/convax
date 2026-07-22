@@ -264,6 +264,13 @@ replacement of the install-verified entrypoint. It is not a same-account OS sand
 another process already running as the same user can inspect Convax memory, read the
 CLI's login state, or race user-writable directory entries. Stronger isolation still
 requires an OS sandbox, not another provider abstraction.
+An official companion may instead be a bundled Bun program whose first bytes are
+exactly `#!/usr/bin/env convax-bun\n`. Desktop records this byte-derived runtime mode,
+snapshots and authorizes the script itself, then launches that snapshot through the
+single app-owned Bun runtime already packaged for OpenCode. The header is the only
+selector: Plugin ids, filenames and manifests cannot opt into an interpreter. A
+missing shared runtime fails closed. Native companions and explicit `PATH`
+integrations keep their existing direct execution behavior.
 Arguments are static, bounded CLI tokens: whitespace, shell/code metacharacters,
 native paths and traversing paths are rejected. `shell` is disabled.
 Windows declarations still reject `.cmd`, `.bat` and PowerShell shims rather than
@@ -295,6 +302,11 @@ identity must match exactly; different bytes require a version bump. A missing
 target, download failure, digest change, symlink, or Plugin publication failure
 leaves the previous installed Plugin/companion pair usable. Startup, update and
 uninstall reconcile stale companion versions and orphan Plugin directories.
+Verified ZIP and companion bytes are also admitted to a bounded content-addressed
+cache. Install/update may reuse only an entry whose length and SHA-256 still match
+the current Registry declaration, and retries one transient transfer failure using
+a fresh validated Release request. Cache loss or corruption falls back to the normal
+verified download and never changes installed state.
 
 Choosing an explicit install or update is consent to execute only the exact Tool
 Plugin identity being published. Before publishing the package, Desktop resolves
@@ -677,7 +689,7 @@ Changes to this boundary must preserve all of the following:
   independent `plugin-capability/1` contract for v5;
 - explicit install/update authorization, no first-call prompt and no shell execution;
 - exact Registry companion target/URL/size/digest checks, atomic rollback and
-  explicit `PATH` fallback;
+  explicit `PATH` fallback, plus exact-header shared Bun execution;
 - cancellation, stale-scope, symlink, signature, size and process-disposal tests.
 
 Run the affected Desktop typecheck/tests and the repository boundary check after a

@@ -98,14 +98,14 @@ import { registerJianyingIpc } from "./jianying-ipc"
 import { createJianyingNativeAdapter, JianyingIntegrationService } from "./jianying-service"
 import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
-import { FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
+import { FileRemoteArtifactCache, FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
-import { desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
+import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
 import {
   composePluginPublicationTransactions,
@@ -451,6 +451,10 @@ function startApplication() {
       projects: projectManager,
     })
     const generationRuntime = new GenerationPluginRuntime({
+      bunRuntime: desktopBunRuntime({
+        isPackaged: app.isPackaged,
+        resourcesDirectory: process.resourcesPath,
+      }),
       canvasCapabilities: {
         broker: pluginCanvasCapabilities,
         principals: pluginPrincipals,
@@ -581,6 +585,7 @@ function startApplication() {
       })
     const remoteCapabilities = createRemoteCapabilityInstaller(
       new RemoteCapabilityRegistryClient({
+        artifactCache: new FileRemoteArtifactCache(join(userDataDirectory, "capability-registry", "artifact-v1")),
         cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
         fetch: createElectronRemoteCapabilityFetch(net),
         showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),

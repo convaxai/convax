@@ -89,6 +89,9 @@ it must not become the permanent home of reusable domain rules.
   inside the static Plugin ZIP. Select only an exact `process.platform`/`arch`
   target, verify its deterministic Release URL plus declared size/SHA-256, and
   publish immutable bytes below private versioned `userData/plugin-companions`.
+  Treat only the exact `#!/usr/bin/env convax-bun` header as an interpreted
+  companion and launch its verified snapshot through the app-owned shared Bun
+  runtime. Do not infer this mode from Plugin identity, filename, or manifest text.
   Preserve the previous Plugin/companion pair on failure, clean orphans on
   update/uninstall/startup, and keep explicit `PATH` commands as the fallback.
   Installation must resolve and fingerprint either the exact managed artifact or

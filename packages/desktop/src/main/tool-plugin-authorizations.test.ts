@@ -211,6 +211,21 @@ describe("ToolPluginAuthorizationStore", () => {
     await expect(authorization.verify(installedPlugin, "path", managed)).rejects.toThrow("reinstall Plugin")
   })
 
+  test("binds interpreted companion consent to its host runtime mode", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const interpreted = { ...binding("a"), runtime: "bun" as const }
+    const authorization = store(authorizationRoot, { managed: interpreted })
+    const installedPlugin = plugin()
+    await installAuthorization(authorization, installedPlugin)
+
+    await expect(authorization.verify(installedPlugin, "managed", interpreted)).resolves.toBeUndefined()
+    await expect(authorization.verify(installedPlugin, "managed", binding("a"))).rejects.toThrow("reinstall Plugin")
+    expect(toolPluginAuthorizationIdentity(installedPlugin, "managed", interpreted)).not.toBe(
+      toolPluginAuthorizationIdentity(installedPlugin, "managed", binding("a")),
+    )
+  })
+
   test("keeps the old receipt usable until an update commits and restores it on rollback", async () => {
     const root = await temporaryRoot()
     const authorizationRoot = path.join(root, "authorizations")

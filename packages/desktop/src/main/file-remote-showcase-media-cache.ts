@@ -3,7 +3,7 @@ import type { Stats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
-import type { RemoteShowcaseMediaCache } from "./remote-capability-registry"
+import type { RemoteArtifactCache, RemoteShowcaseMediaCache } from "./remote-capability-registry"
 
 const defaultMaxTotalBytes = 256 * 1024 * 1024
 const digestPattern = /^[a-f0-9]{64}$/
@@ -50,7 +50,7 @@ function sameFile(left: Pick<Stats, "dev" | "ino">, right: Pick<Stats, "dev" | "
  * Cache entries are non-authoritative: every hit is checked against the size and
  * SHA-256 supplied by the already-validated Showcase sidecar.
  */
-export class FileRemoteShowcaseMediaCache implements RemoteShowcaseMediaCache {
+export class FileRemoteShowcaseMediaCache implements RemoteArtifactCache, RemoteShowcaseMediaCache {
   readonly #maxTotalBytes: number
   readonly #rootDirectory: string
   #rootIdentity?: CacheDirectoryIdentity
@@ -282,3 +282,6 @@ export class FileRemoteShowcaseMediaCache implements RemoteShowcaseMediaCache {
     }
   }
 }
+
+/** Same verified LRU store, named for Registry ZIP and companion composition. */
+export class FileRemoteArtifactCache extends FileRemoteShowcaseMediaCache {}

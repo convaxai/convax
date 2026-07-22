@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { join } from "node:path"
-import { desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
+import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 
 describe("Desktop packaged runtime composition", () => {
   test("uses only the staged OpenCode binary directory in a packaged app", () => {
@@ -19,5 +19,21 @@ describe("Desktop packaged runtime composition", () => {
         resourcesDirectory: "unused",
       }),
     ).toBeUndefined()
+  })
+
+  test("reuses the packaged OpenCode executable as the app-owned Bun CLI", () => {
+    const resourcesDirectory = join("Applications", "Convax.app", "Contents", "Resources")
+    expect(desktopBunRuntime({ isPackaged: true, platform: "darwin", resourcesDirectory })).toEqual({
+      command: join(resourcesDirectory, "opencode", "bin", "opencode"),
+      env: { BUN_BE_BUN: "1" },
+    })
+    expect(desktopBunRuntime({ isPackaged: true, platform: "win32", resourcesDirectory })).toEqual({
+      command: join(resourcesDirectory, "opencode", "bin", "opencode.exe"),
+      env: { BUN_BE_BUN: "1" },
+    })
+    expect(desktopBunRuntime({ isPackaged: false, resourcesDirectory: "unused" })).toEqual({
+      command: "bun",
+      env: { BUN_BE_BUN: "1" },
+    })
   })
 })

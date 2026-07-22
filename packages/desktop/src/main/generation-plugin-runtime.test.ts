@@ -248,7 +248,7 @@ function setup(
   }),
   runtimeOptions: Pick<
     GenerationPluginRuntimeOptions,
-    "canvasCapabilities" | "materializeExecutable" | "platform" | "resolveManagedExecutable"
+    "bunRuntime" | "canvasCapabilities" | "materializeExecutable" | "platform" | "resolveManagedExecutable"
   > = {},
 ) {
   const plugins = new FakePluginSource()
@@ -287,14 +287,16 @@ function setup(
 describe("GenerationPluginRuntime", () => {
   test("connects declared v5 LLM providers through a validated Main-only gateway descriptor", async () => {
     const { clients, runtime } = setup([llmPlugin()], ["llm.gateway.start"])
-    expect(await runtime.connectLlmProviders()).toEqual([{
-      apiKey: "a".repeat(43),
-      baseUrl: "http://127.0.0.1:43123/v1",
-      models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
-      name: "Pippit GLM",
-      pluginId: "xiaoyunque-generation",
-      providerId: "plugin-xiaoyunque-generation-pippit-glm",
-    }])
+    expect(await runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
   })
 
@@ -900,6 +902,49 @@ describe("GenerationPluginRuntime", () => {
       bindingKind: "managed",
     })
     expect(setupResult.options[0]!.command).toBe("/managed/image-tool-cli")
+  })
+
+  test("runs an interpreted managed companion through the app-owned Bun runtime", async () => {
+    const setupResult = setup(
+      [generationPlugin({ version: "2.0.0" })],
+      ["generate.image"],
+      async () => undefined,
+      undefined,
+      {
+        bunRuntime: { command: "/app/resources/opencode/bin/opencode", env: { BUN_BE_BUN: "1" } },
+        materializeExecutable: async (binding) => ({
+          dispose() {},
+          path: "/private/snapshot/entrypoint",
+          runtime: binding.runtime,
+        }),
+        resolveManagedExecutable: async () => ({
+          path: "/managed/image-tool-cli",
+          runtime: "bun",
+          sha256: "b".repeat(64),
+          size: 20,
+        }),
+      },
+    )
+
+    await setupResult.runtime.callTool("image-tools/generate.image", {})
+
+    expect(setupResult.options[0]!.command).toBe("/app/resources/opencode/bin/opencode")
+    expect(setupResult.options[0]!.args).toEqual(["/private/snapshot/entrypoint", "serve", "--stdio"])
+    expect(setupResult.options[0]!.env).toMatchObject({ BUN_BE_BUN: "1" })
+  })
+
+  test("fails closed when an interpreted companion has no app-owned Bun runtime", async () => {
+    const { runtime } = setup([generationPlugin()], ["generate.image"], async () => undefined, undefined, {
+      materializeExecutable: async (binding) => ({ dispose() {}, path: binding.path, runtime: binding.runtime }),
+      resolveManagedExecutable: async () => ({
+        path: "/managed/image-tool-cli",
+        runtime: "bun",
+        sha256: "b".repeat(64),
+        size: 20,
+      }),
+    })
+
+    await expect(runtime.callTool("image-tools/generate.image", {})).rejects.toThrow("Bun runtime is unavailable")
   })
 
   test("retains the explicit PATH integration when no managed companion is installed", async () => {

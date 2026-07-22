@@ -86,6 +86,36 @@ describe("ManagedPluginCompanionStore", () => {
     }
   })
 
+  test("recognizes the exact convax-bun header without changing native companion handling", async () => {
+    const { root, store } = await setup()
+    const script = "#!/usr/bin/env convax-bun\nconsole.log('ready')\n"
+    const transaction = await store.install(installInput(script))
+    await transaction.commit()
+
+    expect(transaction.binding).toMatchObject({ runtime: "bun" })
+    await expect(store.resolve("example-plugin", "1.0.0", "example-tool")).resolves.toEqual(transaction.binding)
+    const receipt = JSON.parse(
+      await fs.readFile(path.join(path.dirname(transaction.binding.path), ".convax-companion.json"), "utf8"),
+    )
+    expect(receipt).toMatchObject({ runtime: "bun", schema: "convax.plugin-companion/2" })
+    expect(await fs.readFile(transaction.binding.path, "utf8")).toBe(script)
+
+    const native = await store.install(
+      installInput("#!/usr/bin/env bun\nconsole.log('not host selected')\n", {
+        pluginVersion: "2.0.0",
+        version: "2.0.1",
+      }),
+    )
+    await native.commit()
+    expect(native.binding).not.toHaveProperty("runtime")
+    const nativeReceipt = JSON.parse(
+      await fs.readFile(path.join(path.dirname(native.binding.path), ".convax-companion.json"), "utf8"),
+    )
+    expect(nativeReceipt).toMatchObject({ schema: "convax.plugin-companion/1" })
+    expect(nativeReceipt).not.toHaveProperty("runtime")
+    expect((await fs.stat(root)).isDirectory()).toBe(true)
+  })
+
   test("publishes a native executable filename for a Windows target", async () => {
     const { store } = await setup({ platform: "win32" })
     const transaction = await store.install(installInput("windows companion", { platform: "win32" }))

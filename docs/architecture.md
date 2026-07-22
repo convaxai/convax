@@ -182,6 +182,8 @@ Electron userData/
   capability-registry/showcase-v1.json  verified showcase index for the current catalog revision
   capability-registry/showcase-media-v1/<sha256>
                                         bounded content-addressed showcase media cache
+  capability-registry/artifact-v1/<sha256>
+                                        bounded verified Plugin/Skill/companion artifact cache
   opencode/skills/user/<skill>/         materialized standalone and Plugin-owned Skills
   plugin-skill-bindings/index-v1.json   Desktop-owned bindings plus one digest-bound recovery journal
   plugins/<plugin-id>/                  validated static Plugin packages
@@ -236,7 +238,10 @@ created, Main checks Registry metadata in the background and downloads artifacts
 when a newer version exists. Showcase
 indexes publish monotonically with their Registry identity. Media is cached across
 restarts by its verified SHA-256 in a bounded LRU and is rechecked for declared size,
-digest and MIME bytes on every admission. Losing any cache never removes installed
+digest and MIME bytes on every admission. Immutable Plugin, Skill, and companion
+artifacts use a separate bounded content-addressed cache and receive one fresh-URL
+retry after a transient transport failure; every hit is rechecked against the
+current Registry size and SHA-256 before use. Losing any cache never removes installed
 capabilities; an invalid or rolled-back network response never replaces it.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
@@ -352,6 +357,15 @@ boundaries, not an operating-system sandbox. The snapshot prevents normal
 replacement of the verified `PATH` entry; processes already running as the same OS
 user remain inside the same trust domain and require a future signed sidecar plus
 OS sandbox for stronger isolation.
+
+A managed companion whose bytes begin with the exact
+`#!/usr/bin/env convax-bun` header is an interpreted Bun program. Desktop records
+that mode with the immutable companion receipt, snapshots the script exactly like a
+native entrypoint, and invokes it through the app-owned Bun runtime already shipped
+for OpenCode. The Plugin authorization identity includes the interpreted mode while
+remaining bound to the downloaded script path, size, and SHA-256. No Plugin id or
+Registry schema branch selects this behavior, native companions remain unchanged,
+and a missing shared runtime fails before process start.
 
 Desktop copies validated Canvas inputs into a short-lived directory and gives the
 tool only those copies plus a dedicated output directory. It admits only bounded,
