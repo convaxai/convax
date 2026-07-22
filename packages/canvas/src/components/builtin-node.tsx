@@ -184,12 +184,15 @@ function NodeChrome(props: {
   }, [connectionInProgress])
   return (
     <div
-      className={cn("convax-node group relative size-full text-card-foreground", props.node.selected && "is-selected")}
+      className={cn(
+        "convax-node group relative size-full text-card-foreground",
+        ownsSingleNodeContext && "is-selected",
+      )}
     >
       <NodeResizer
         color="var(--ring)"
         handleClassName="convax-node-resizer__handle"
-        isVisible={props.node.selected && !editor.readOnly}
+        isVisible={ownsSingleNodeContext && !editor.readOnly}
         lineClassName="convax-node-resizer__line"
         minWidth={160}
         minHeight={96}
@@ -1022,7 +1025,7 @@ function AgentNode(props: NodeProps<CanvasNode>) {
 function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: NodeProps<CanvasNode> }) {
   const editor = useCanvasEditor()
   const source = editor.visibleSelectionDragSource
-  const armed = Boolean(editor.selectionDragArmed && props.node.selected && source)
+  const armed = Boolean(editor.selectionDragArmed && editor.selection.nodeIds.has(props.node.id) && source)
   const ready = armed && editor.selectionDragStatus === "ready"
   const preparing = armed && editor.selectionDragStatus === "preparing"
   const showsHint = armed && editor.selection.nodeIds.values().next().value === props.node.id
@@ -1088,10 +1091,14 @@ export function startCanvasSelectionDragFromNode(
 }
 
 export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
+  const editor = useCanvasEditor()
+  // React Flow keeps aggregate membership; card renderers receive only the sole-card activation state.
+  const activeSelected = isSingleNodeSelectionContext(editor.selectionContext, props.id)
+  const activeProps = props.selected === activeSelected ? props : { ...props, selected: activeSelected }
   let content: ReactNode
-  if (props.data.kind === "group") content = <GroupNode {...props} />
-  else if (props.data.kind === "agent" || props.type === "agent") content = <AgentNode {...props} />
-  else content = <RegisteredFileNode {...props} />
+  if (activeProps.data.kind === "group") content = <GroupNode {...activeProps} />
+  else if (activeProps.data.kind === "agent" || activeProps.type === "agent") content = <AgentNode {...activeProps} />
+  else content = <RegisteredFileNode {...activeProps} />
   return <CanvasSelectionDragNodeSurface node={props}>{content}</CanvasSelectionDragNodeSurface>
 }
 
