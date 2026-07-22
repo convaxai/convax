@@ -233,7 +233,13 @@ function setupPendingGeneration(
   } = {},
 ) {
   const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
-  let currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
+  const owner = createTextNode({ id: "plugin-owner", position: { x: 360, y: 0 }, text: "Plugin card" })
+  let currentDocument = createCanvasDocument({
+    edges: [{ id: "reference-to-owner", source: reference.id, target: owner.id }],
+    id: "canvas-one",
+    nodes: [reference, owner],
+    title: "Canvas",
+  })
   let liveRevision = currentDocument.revision
   const createRequests: Parameters<GenerationCanvasResourcePort["createPendingResource"]>[0][] = []
   const failureRequests: Parameters<GenerationCanvasResourcePort["failPendingResource"]>[0][] = []
@@ -361,6 +367,7 @@ function setupPendingGeneration(
     },
     pendingNodeId,
     reference,
+    owner,
     reloadRevisions,
     replacementRequests,
   }
@@ -520,6 +527,49 @@ describe("GenerationCanvasService", () => {
     })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
     expect(harness.reloadRevisions).toEqual([1, 2])
+  })
+
+  test("connects a constrained Plugin owner to its pending generation node", async () => {
+    let markStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = setupPendingGeneration(async () => {
+      markStarted()
+      await gate
+      return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+    })
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        referenceConstraint: { ownerNodeId: harness.owner.id, type: "direct-incoming" },
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    await started
+    expect(harness.createRequests[0]?.relation).toEqual({
+      anchorNodeIds: [harness.owner.id, harness.reference.id],
+      direction: "from-anchor",
+      mode: "connect",
+    })
+    expect(harness.getDocument().edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: harness.owner.id, target: harness.pendingNodeId }),
+        expect.objectContaining({ source: harness.reference.id, target: harness.pendingNodeId }),
+      ]),
+    )
+
+    release()
+    await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
   })
 
   test("does not create a pending node when cancellation wins during preflight", async () => {
@@ -1348,7 +1398,7 @@ describe("GenerationCanvasService", () => {
     expect(imported).toHaveLength(1)
     expect(resourceRequests[0]).toMatchObject({
       conflictPolicy: "retry",
-      relation: { anchorNodeIds: ["image-one"], direction: "from-anchor", mode: "connect" },
+      relation: { anchorNodeIds: [owner.id, "image-one"], direction: "from-anchor", mode: "connect" },
       sources: [{ kind: "host-file" }],
     })
     expect(resourceRequests[0]!.sources[0]).toHaveProperty("path", expect.stringContaining(".convax/assets/"))

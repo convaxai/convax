@@ -731,10 +731,12 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
 }
 
 function generationResultRelation(request: GenerationCanvasRequest): CanvasAddResourceSourcesRequest["relation"] {
-  if (!request.references.length && !request.relationAnchorNodeIds?.length) return undefined
+  const ownerNodeId = request.referenceConstraint?.ownerNodeId
+  if (!ownerNodeId && !request.references.length && !request.relationAnchorNodeIds?.length) return undefined
   return {
     anchorNodeIds: [
       ...new Set([
+        ...(ownerNodeId ? [ownerNodeId] : []),
         ...request.references.map((reference) => reference.nodeId),
         ...(request.relationAnchorNodeIds ?? []),
       ]),
