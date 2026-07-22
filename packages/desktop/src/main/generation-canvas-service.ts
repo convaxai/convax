@@ -83,7 +83,7 @@ export interface GenerationCanvasServiceOptions {
   maxOutputFileBytes?: number
   maxOutputFiles?: number
   projects: GenerationCanvasProjectPort
-  renderer: CanvasRendererBridge
+  renderer: Pick<CanvasRendererBridge, "executeView" | "reloadDocument">
   resources: GenerationCanvasResourcePort
   temporaryRoot?: string
   tools: GenerationToolExecutionPort
@@ -757,7 +757,7 @@ export class GenerationCanvasService {
   readonly #maxOutputFileBytes: number
   readonly #maxOutputFiles: number
   readonly #projects: GenerationCanvasProjectPort
-  readonly #renderer: CanvasRendererBridge
+  readonly #renderer: Pick<CanvasRendererBridge, "executeView" | "reloadDocument">
   readonly #resources: GenerationCanvasResourcePort
   readonly #temporaryRoot: string
   readonly #tools: GenerationToolExecutionPort
@@ -880,10 +880,8 @@ export class GenerationCanvasService {
     let referenceSnapshot = requiresStableRevision
       ? generationReferenceSnapshot(workingDocument, workingRequest)
       : undefined
-    await this.#assertLiveCanvas(request)
     assertNotAborted(signal)
     let pendingTarget: PendingGenerationTarget | undefined
-    let pendingViewWarning = false
     let temporaryDirectory: string | undefined
 
     try {
@@ -934,24 +932,7 @@ export class GenerationCanvasService {
           ? generationReferenceSnapshot(workingDocument, workingRequest)
           : undefined
 
-        try {
-          const reloaded = await this.#renderer.reloadDocument(request.ref)
-          if (!reloaded) throw new Error("Pending Canvas node could not be loaded into the live view")
-          await this.#renderer.executeView({
-            command: {
-              fit: "none",
-              nodeIds: [nodeId],
-              select: false,
-              type: "nodes.reveal",
-            },
-            expectedDocumentId: request.ref.canvasId,
-            expectedRevision: pendingResult.document.revision,
-            expectedScopeId: request.ref.scopeId,
-            viewId: "desktop-main",
-          })
-        } catch {
-          pendingViewWarning = true
-        }
+        this.#refreshRendererProjection(request.ref, pendingResult.document.revision, [nodeId])
       }
 
       const preparedTool = await this.#tools.prepareTool(tool, signal)
@@ -972,7 +953,6 @@ export class GenerationCanvasService {
       assertNotAborted(signal)
       await this.#assertStableReferences(workingRequest, referenceSnapshot, references, requiresStableRevision)
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
-      else await this.#assertLiveCanvas(workingRequest, requiresStableRevision)
       assertNotAborted(signal)
       const toolInput = preparedTool.validateInput(workingRequest.toolInput)
       const toolResult = await preparedTool.call(
@@ -1030,7 +1010,6 @@ export class GenerationCanvasService {
       }
       await this.#assertStableReferences(workingRequest, referenceSnapshot, references, requiresStableRevision)
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
-      else await this.#assertLiveCanvas(workingRequest, requiresStableRevision)
       assertNotAborted(signal)
 
       const importedOutputs = admitted.files.length
@@ -1040,7 +1019,6 @@ export class GenerationCanvasService {
       try {
         await this.#assertStableReferences(workingRequest, referenceSnapshot, references, requiresStableRevision)
         if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
-        else await this.#assertLiveCanvas(workingRequest, requiresStableRevision)
         const sources: CanvasAddResourceSourcesRequest["sources"] = [
           ...admitted.texts.map((text) => ({
             kind: "inline-text" as const,
@@ -1061,7 +1039,7 @@ export class GenerationCanvasService {
                 actor,
                 canvasId: workingRequest.ref.canvasId,
                 commandId: `generation:${workingRequest.operationId}`,
-                conflictPolicy: requiresStableRevision ? "reject" : undefined,
+                conflictPolicy: "retry",
                 expectedRevision: workingRequest.expectedRevision,
                 expectedTarget: replacementGuard!,
                 scopeId: workingRequest.ref.scopeId,
@@ -1073,7 +1051,7 @@ export class GenerationCanvasService {
                 anchor: workingRequest.anchor,
                 canvasId: workingRequest.ref.canvasId,
                 commandId: `generation:${workingRequest.operationId}`,
-                conflictPolicy: requiresStableRevision ? "reject" : undefined,
+                conflictPolicy: "retry",
                 expectedRevision: workingRequest.expectedRevision,
                 relation: generationResultRelation(workingRequest),
                 scopeId: workingRequest.ref.scopeId,
@@ -1092,33 +1070,8 @@ export class GenerationCanvasService {
         }
         throw error
       }
-      let warnings = normalizeGenerationWarnings([
-        ...admitted.warnings,
-        ...result.warnings,
-        ...(pendingViewWarning ? ["The pending generation node could not be shown immediately."] : []),
-      ])
-      try {
-        const reloaded = await this.#renderer.reloadDocument(request.ref)
-        if (reloaded && result.createdNodeIds.length) {
-          await this.#renderer.executeView({
-            command: {
-              fit: "none",
-              nodeIds: result.createdNodeIds,
-              select: false,
-              type: "nodes.reveal",
-            },
-            expectedDocumentId: request.ref.canvasId,
-            expectedRevision: result.document.revision,
-            expectedScopeId: request.ref.scopeId,
-            viewId: "desktop-main",
-          })
-        }
-      } catch {
-        warnings = normalizeGenerationWarnings([
-          ...warnings,
-          "Generation was saved, but the live view could not be updated.",
-        ])
-      }
+      const warnings = normalizeGenerationWarnings([...admitted.warnings, ...result.warnings])
+      this.#refreshRendererProjection(request.ref, result.document.revision, result.createdNodeIds)
       return {
         createdNodeIds: pendingTarget ? [pendingTarget.nodeId] : result.createdNodeIds,
         revision: result.document.revision,
@@ -1146,7 +1099,7 @@ export class GenerationCanvasService {
         ? "Generation was canceled"
         : "Generation could not be completed"
     try {
-      await this.#resources.failPendingResource({
+      const failed = await this.#resources.failPendingResource({
         actor,
         canvasId: request.ref.canvasId,
         commandId: `generation-pending-fail:${request.operationId}`,
@@ -1157,22 +1110,30 @@ export class GenerationCanvasService {
         scopeId: request.ref.scopeId,
         targetNodeId: target.nodeId,
       })
-      await this.#renderer.reloadDocument(request.ref).catch(() => false)
+      this.#refreshRendererProjection(request.ref, failed.document.revision, [target.nodeId])
     } catch {
       // The pending target is guard-bound. A user deletion or edit wins, and a
       // secondary status-update failure must never replace the generation error.
     }
   }
 
-  async #assertLiveCanvas(request: GenerationCanvasRequest, checkRevision = true) {
-    const snapshot = await this.#renderer.getViewSnapshot("desktop-main")
-    if (!snapshot) throw new Error("No live active Canvas is available for generation")
-    if (snapshot.scopeId !== request.ref.scopeId || snapshot.documentId !== request.ref.canvasId) {
-      throw new Error("Generation scope must match the live active Canvas")
-    }
-    if (checkRevision && snapshot.revision !== request.expectedRevision) {
-      throw new Error("Generation revision must match the live active Canvas")
-    }
+  #refreshRendererProjection(ref: GenerationCanvasRequest["ref"], revision: number, nodeIds: readonly string[]) {
+    void (async () => {
+      const reloaded = await this.#renderer.reloadDocument(ref)
+      if (!reloaded || nodeIds.length === 0) return
+      await this.#renderer.executeView({
+        command: {
+          fit: "none",
+          nodeIds: [...nodeIds],
+          select: false,
+          type: "nodes.reveal",
+        },
+        expectedDocumentId: ref.canvasId,
+        expectedRevision: revision,
+        expectedScopeId: ref.scopeId,
+        viewId: "desktop-main",
+      })
+    })().catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
   }
 
   async #assertStableReplacementTarget(request: GenerationCanvasRequest, expected: CanvasNodeContentGuard) {
@@ -1191,15 +1152,6 @@ export class GenerationCanvasService {
       target.type !== "file" ||
       target.data.kind === "group" ||
       stableJson(createCanvasNodeContentGuard(target)) !== stableJson(expected)
-    ) {
-      throw new Error("Generation replacement target changed while the tool was running")
-    }
-    const live = await this.#renderer.getViewSnapshot("desktop-main")
-    if (
-      !live ||
-      live.scopeId !== request.ref.scopeId ||
-      live.documentId !== request.ref.canvasId ||
-      live.revision !== document.revision
     ) {
       throw new Error("Generation replacement target changed while the tool was running")
     }
@@ -1225,12 +1177,6 @@ export class GenerationCanvasService {
           ? "Generation direct incoming references changed while the tool was running"
           : "Generation references changed while the tool was running",
       )
-    }
-    if (document.revision !== request.expectedRevision) {
-      if (request.referenceConstraint !== undefined) {
-        throw new Error("Generation direct incoming references changed while the tool was running")
-      }
-      throw new Error("Generation revision must match the current Canvas document")
     }
     let currentReferenceSnapshot: string
     try {

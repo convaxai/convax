@@ -30,4 +30,24 @@ describe("CanvasDocumentChangeBus", () => {
     expect(projectListener).toHaveBeenCalledTimes(2)
     expect(canvasListener).toHaveBeenCalledTimes(1)
   })
+
+  test("publishes every new Main revision to the unscoped Renderer projection listener", () => {
+    const bus = new CanvasDocumentChangeBus()
+    const listener = mock(() => undefined)
+    const subscription = bus.subscribeAll(listener)
+
+    bus.publish({ ref: { canvasId: "main", projectId: "one" }, revision: 1, source: "renderer" })
+    bus.publish({ ref: { canvasId: "other", projectId: "two" }, revision: 3, source: "host" })
+    bus.publish({ ref: { canvasId: "other", projectId: "two" }, revision: 2, source: "plugin" })
+
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(listener).toHaveBeenLastCalledWith({
+      ref: { canvasId: "other", projectId: "two" },
+      revision: 3,
+      source: "host",
+    })
+    subscription.close()
+    bus.publish({ ref: { canvasId: "third", projectId: "three" }, revision: 1, source: "host" })
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
 })

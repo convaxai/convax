@@ -4,183 +4,82 @@ import { createCanvasRendererRequestHandler, type CanvasRendererEditorHandle } f
 
 const ref: CanvasDocumentRef = { canvasId: "canvas-1", scopeId: "project-1" }
 
-function editor(): CanvasRendererEditorHandle {
-  return {
-    beginExternalMutation: mock(async () => undefined),
-    endExternalMutation: mock(async () => undefined),
-    reload: mock(async () => undefined),
+function handler(input: { active?: CanvasDocumentRef | null; editor?: CanvasRendererEditorHandle | null } = {}) {
+  const reloadAuthoritative = mock(async () => undefined)
+  const execute = mock(async (request) => ({
+    foundNodeIds: [],
+    missingNodeIds: [],
+    snapshot: {
+      documentId: "canvas-1",
+      revision: request.expectedRevision,
+      scopeId: "project-1",
+      selectedEdgeIds: [],
+      selectedNodeIds: [],
+      viewId: request.viewId,
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  }))
+  const snapshot = {
+    documentId: "canvas-1",
+    revision: 4,
+    scopeId: "project-1",
+    selectedEdgeIds: [],
+    selectedNodeIds: [],
+    viewId: "desktop-main",
+    viewport: { x: 0, y: 0, zoom: 1 },
   }
-}
-
-function handler(input: { active?: CanvasDocumentRef | null; editor?: CanvasRendererEditorHandle | null }) {
-  let active = input.active === undefined ? ref : input.active
-  let currentEditor = input.editor === undefined ? editor() : input.editor
-  let reserved: CanvasDocumentRef | null = null
   const request = createCanvasRendererRequestHandler({
-    getActiveRef: () => active,
-    getEditor: () => currentEditor,
-    onDocumentMutationChange: (value) => {
-      reserved = value
-    },
-    views: {
-      execute: mock(async () => {
-        throw new Error("Unexpected view request")
-      }),
-      list: mock(() => []),
-    },
+    getActiveRef: () => (input.active === undefined ? ref : input.active),
+    getEditor: () => (input.editor === undefined ? { reloadAuthoritative } : input.editor),
+    views: { execute, list: () => [snapshot] },
   })
-  return {
-    getReserved: () => reserved,
-    request,
-    setActive(value: CanvasDocumentRef | null) {
-      active = value
-    },
-    setEditor(value: CanvasRendererEditorHandle | null) {
-      currentEditor = value
-    },
-  }
+  return { execute, reloadAuthoritative, request, snapshot }
 }
 
 describe("Canvas renderer request handler", () => {
-  test("prepares and finishes the exact active Canvas mutation lease", async () => {
-    const currentEditor = editor()
-    const host = handler({ editor: currentEditor })
+  test("reloads the active editor from Main without saving its current projection", async () => {
+    const host = handler()
 
-    await expect(host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })).resolves.toEqual({
-      leaseId: "lease-1",
-      prepared: true,
-      ref,
-      type: "document.mutation.prepare",
+    await expect(host.request({ ref, type: "document.reload" })).resolves.toEqual({
+      reloaded: true,
+      type: "document.reload",
     })
-    expect(currentEditor.beginExternalMutation).toHaveBeenCalledTimes(1)
-
-    await expect(
-      host.request({ leaseId: "lease-1", outcome: "committed", ref, type: "document.mutation.finish" }),
-    ).resolves.toEqual({ finished: true, leaseId: "lease-1", ref, type: "document.mutation.finish" })
-    expect(currentEditor.endExternalMutation).toHaveBeenCalledWith("committed")
+    expect(host.reloadAuthoritative).toHaveBeenCalledTimes(1)
   })
 
-  test("reserves an inactive Canvas until Main finishes its direct access", async () => {
-    const currentEditor = editor()
-    const host = handler({ active: { canvasId: "canvas-2", scopeId: ref.scopeId }, editor: currentEditor })
+  test("does not reload an inactive or unmounted Canvas", async () => {
+    const inactive = handler({ active: { ...ref, canvasId: "canvas-2" } })
+    const unmounted = handler({ editor: null })
 
-    await expect(host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })).resolves.toEqual({
-      leaseId: "lease-1",
-      prepared: false,
-      ref,
-      type: "document.mutation.prepare",
+    await expect(inactive.request({ ref, type: "document.reload" })).resolves.toEqual({
+      reloaded: false,
+      type: "document.reload",
     })
-    expect(currentEditor.beginExternalMutation).not.toHaveBeenCalled()
-    expect(host.getReserved()).toEqual(ref)
-
-    await expect(
-      host.request({ leaseId: "lease-1", outcome: "committed", ref, type: "document.mutation.finish" }),
-    ).resolves.toMatchObject({ finished: true })
-    expect(host.getReserved()).toBeNull()
+    await expect(unmounted.request({ ref, type: "document.reload" })).resolves.toEqual({
+      reloaded: false,
+      type: "document.reload",
+    })
   })
 
-  test("fails closed when the active Canvas has no editor", async () => {
-    const host = handler({ editor: null })
+  test("serves view queries and commands as projection-only requests", async () => {
+    const host = handler()
 
-    await expect(host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })).rejects.toThrow(
-      "active Canvas editor is unavailable",
-    )
-  })
-
-  test("rejects a finish with a different lease or document ref", async () => {
-    const currentEditor = editor()
-    const host = handler({ editor: currentEditor })
-    await host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })
-
-    await expect(
-      host.request({ leaseId: "lease-2", outcome: "aborted", ref, type: "document.mutation.finish" }),
-    ).rejects.toThrow("did not match")
+    await expect(host.request({ type: "view.snapshot", viewId: "desktop-main" })).resolves.toEqual({
+      snapshot: host.snapshot,
+      type: "view.snapshot",
+    })
     await expect(
       host.request({
-        leaseId: "lease-1",
-        outcome: "aborted",
-        ref: { ...ref, canvasId: "canvas-2" },
-        type: "document.mutation.finish",
+        input: {
+          command: { type: "selection.clear" },
+          expectedDocumentId: "canvas-1",
+          expectedRevision: 4,
+          expectedScopeId: "project-1",
+          viewId: "desktop-main",
+        },
+        type: "view.execute",
       }),
-    ).rejects.toThrow("did not match")
-    expect(currentEditor.endExternalMutation).not.toHaveBeenCalled()
-  })
-
-  test("aborts and releases the prepared editor when the active Canvas changes before finish", async () => {
-    const currentEditor = editor()
-    const host = handler({ editor: currentEditor })
-    await host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })
-    host.setActive({ ...ref, canvasId: "canvas-2" })
-
-    await expect(
-      host.request({ leaseId: "lease-1", outcome: "committed", ref, type: "document.mutation.finish" }),
-    ).rejects.toThrow("changed before")
-    expect(currentEditor.endExternalMutation).toHaveBeenCalledWith("aborted")
-
-    host.setActive(ref)
-    await expect(host.request({ leaseId: "lease-2", ref, type: "document.mutation.prepare" })).resolves.toMatchObject({
-      leaseId: "lease-2",
-      prepared: true,
-    })
-  })
-
-  test("cancels and releases a preparation that finishes after Main timed out", async () => {
-    let releaseBegin!: () => void
-    const begin = new Promise<void>((resolve) => {
-      releaseBegin = resolve
-    })
-    const currentEditor = editor()
-    currentEditor.beginExternalMutation = mock(() => begin)
-    const host = handler({ editor: currentEditor })
-    const preparing = host.request({ leaseId: "lease-timeout", ref, type: "document.mutation.prepare" })
-
-    await Promise.resolve()
-    await expect(host.request({ leaseId: "lease-timeout", ref, type: "document.mutation.cancel" })).resolves.toEqual({
-      canceled: true,
-      leaseId: "lease-timeout",
-      ref,
-      type: "document.mutation.cancel",
-    })
-    releaseBegin()
-    await expect(preparing).rejects.toThrow("preparation was canceled")
-    expect(currentEditor.endExternalMutation).toHaveBeenCalledWith("aborted")
-    expect(host.getReserved()).toBeNull()
-  })
-
-  test("passes cancellation into a preparation that would otherwise never settle", async () => {
-    let receivedSignal: AbortSignal | undefined
-    const currentEditor = editor()
-    currentEditor.beginExternalMutation = mock(
-      (signal?: AbortSignal) =>
-        new Promise<void>((_resolve, reject) => {
-          receivedSignal = signal
-          signal?.addEventListener("abort", () => reject(signal.reason ?? new DOMException("Canceled", "AbortError")), {
-            once: true,
-          })
-        }),
-    )
-    const host = handler({ editor: currentEditor })
-    const preparing = host.request({ leaseId: "lease-never", ref, type: "document.mutation.prepare" })
-    await Promise.resolve()
-
-    await expect(
-      host.request({ leaseId: "lease-never", ref, type: "document.mutation.cancel" }),
-    ).resolves.toMatchObject({
-      canceled: true,
-    })
-    await expect(preparing).rejects.toThrow("preparation was canceled")
-    expect(receivedSignal?.aborted).toBeTrue()
-    expect(host.getReserved()).toBeNull()
-  })
-
-  test("fails closed if an inactive reserved Canvas becomes active before finish", async () => {
-    const host = handler({ active: { ...ref, canvasId: "other" } })
-    await host.request({ leaseId: "lease-1", ref, type: "document.mutation.prepare" })
-    host.setActive(ref)
-
-    await expect(
-      host.request({ leaseId: "lease-1", outcome: "committed", ref, type: "document.mutation.finish" }),
-    ).rejects.toThrow("became active")
-    expect(host.getReserved()).toBeNull()
+    ).resolves.toMatchObject({ type: "view.execute" })
+    expect(host.execute).toHaveBeenCalledTimes(1)
   })
 })

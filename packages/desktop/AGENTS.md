@@ -28,8 +28,9 @@ it must not become the permanent home of reusable domain rules.
 - Agent tools are thin adapters over Canvas application/business and view ports.
   Host Project scope is authoritative; document tools may select only a Canvas in
   that Project's live catalog, while view tools resolve the mounted active Canvas.
-  Reject stale revisions and pass every document read/write through the renderer
-  flush/lock/reload barrier so an active editor cannot overwrite external work.
+  Reject stale revisions against Main's authoritative document. Never ask renderer
+  to flush, lock, or approve a Main read/write; publish committed revisions and let
+  renderer reload as a fallible projection.
 - Renderer and Agent never edit private Canvas/Project JSON. Use typed clients and
   repository/application services. Only managed assets use the scoped file bridge.
 - Desktop may label and contribute the native media drag source, but Canvas owns the
@@ -115,11 +116,12 @@ it must not become the permanent home of reusable domain rules.
   vendor state until a terminal result or caller cancellation. Agent transport must
   relay content-free MCP progress so its timeout remains an inactivity guard rather
   than an absolute generation cutoff.
-- For immediate Plugin generation feedback, create and reload a host-owned pending
-  Canvas resource before `tools/call`, then replace or fail that exact guarded node.
+- For immediate Plugin generation feedback, create a host-owned pending Canvas
+  resource in Main before `tools/call`, then replace or fail that exact guarded node.
   The sandboxed caller may opt into the mode but cannot choose a node id or target;
   cancellation and sidecar failures keep a safe visible error and never revive a
-  removed or edited placeholder.
+  removed or edited placeholder. Renderer refresh/reveal runs asynchronously and
+  cannot delay the paid call, replacement, failure mark, or returned domain result.
 - Tool-custom generation controls come from only the explicitly selected MCP tool's
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before
@@ -162,11 +164,10 @@ it must not become the permanent home of reusable domain rules.
   portable Canvas ref and use bounded geometry/structure projections or atomic
   resource-free transactions. Resource bytes/admission require a separate Project
   business capability and never ride the document transaction escape hatch.
-- Main reserves inactive documents as well as mounted editors during an external
-  operation. Block Project/Canvas navigation while a reservation exists, cancel a
-  timed-out prepare explicitly, and propagate Agent/Tool cancellation to the final
-  durable checkpoint. Renderer reconciliation failure after commit must not report
-  the durable mutation as failed.
+- Main serializes document persistence through repository CAS and rechecks
+  Agent/Tool cancellation at the final durable checkpoint. Renderer reconciliation
+  is never a lease or commit prerequisite and its failure cannot report a durable
+  mutation as failed.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned managed-asset read, and reject stale or
   caller-selected paths.

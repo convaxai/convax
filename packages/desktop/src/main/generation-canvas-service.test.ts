@@ -200,12 +200,6 @@ function setup(options: {
     async reloadDocument() {
       return true
     },
-    async runDocumentMutation(_ref, mutate) {
-      return mutate()
-    },
-    async runDocumentRead(_ref, read) {
-      return read()
-    },
   }
   return {
     calls,
@@ -417,7 +411,7 @@ describe("GenerationCanvasService", () => {
       scopeId: "project-one",
       sources: [{ kind: "inline-text", name: "Generated", text: "A generated paragraph" }],
     })
-    expect(resourceRequests[0].conflictPolicy).toBeUndefined()
+    expect(resourceRequests[0].conflictPolicy).toBe("retry")
     expect(viewRequests).toHaveLength(1)
     expect(viewRequests[0]?.command).toEqual({
       fit: "none",
@@ -502,7 +496,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests).toHaveLength(1)
     expect(harness.replacementRequests[0]).toMatchObject({
       commandId: "generation:operation-one",
-      conflictPolicy: "reject",
+      conflictPolicy: "retry",
       expectedRevision: 1,
       expectedTarget: expect.objectContaining({
         data: expect.objectContaining({ kind: "image", status: "pending" }),
@@ -601,6 +595,55 @@ describe("GenerationCanvasService", () => {
       status: "error",
     })
     expect(harness.reloadRevisions).toEqual([1, 2])
+  })
+
+  test("does not let a delayed Renderer projection block pending creation or replacement", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = setupPendingGeneration({
+      content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }],
+    })
+    harness.renderer.reloadDocument = mock(() => new Promise<boolean>(() => undefined))
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 2 })
+
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.createRequests).toHaveLength(1)
+    expect(harness.replacementRequests).toHaveLength(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
+  })
+
+  test("marks a pending node error even when the Renderer never finishes synchronizing", async () => {
+    const harness = setupPendingGeneration({ content: [], isError: true })
+    harness.renderer.reloadDocument = mock(() => new Promise<boolean>(() => undefined))
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toMatchObject({ name: "GenerationToolReportedError" })
+
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
+      error: "Generation could not be completed",
+      status: "error",
+    })
   })
 
   test("does not create a second pending node when preparation fails after the first node commit", async () => {
@@ -709,7 +752,7 @@ describe("GenerationCanvasService", () => {
     }))
     release()
 
-    await expect(generation).rejects.toThrow("revision must match")
+    await expect(generation).rejects.toThrow("Generation replacement target changed while the tool was running")
     expect(harness.failureRequests).toHaveLength(1)
     expect(harness.getDocument().nodes.some((node) => node.id === harness.pendingNodeId)).toBe(false)
     expect(harness.replacementRequests).toEqual([])
@@ -755,7 +798,7 @@ describe("GenerationCanvasService", () => {
 
     expect(calls[0]?.references).toEqual([{ kind: "text", node_id: reference.id, role: "text", text: "Stable brief" }])
     expect(resourceRequests[0]).toMatchObject({
-      conflictPolicy: "reject",
+      conflictPolicy: "retry",
       relation: {
         anchorNodeIds: [reference.id, relationAnchor.id],
         direction: "from-anchor",
@@ -815,7 +858,7 @@ describe("GenerationCanvasService", () => {
       source: { kind: "inline-text", name: "Generated", text: "A generated paragraph" },
       targetNodeId: owner.id,
     })
-    expect(replacementRequests[0]?.conflictPolicy).toBeUndefined()
+    expect(replacementRequests[0]?.conflictPolicy).toBe("retry")
     expect(viewRequests).toEqual([])
   })
 
@@ -1267,7 +1310,7 @@ describe("GenerationCanvasService", () => {
     await expect(fs.stat(stagedReferencePath)).rejects.toThrow()
     expect(imported).toHaveLength(1)
     expect(resourceRequests[0]).toMatchObject({
-      conflictPolicy: "reject",
+      conflictPolicy: "retry",
       relation: { anchorNodeIds: ["image-one"], direction: "from-anchor", mode: "connect" },
       sources: [{ kind: "host-file" }],
     })
@@ -1298,7 +1341,7 @@ describe("GenerationCanvasService", () => {
     expect(calls).toHaveLength(0)
   })
 
-  test("rechecks reference revision after staging and before starting a paid tool", async () => {
+  test("allows an unrelated Main revision after staging while preserving the exact reference guard", async () => {
     const root = await temporaryDirectory()
     const referencePath = path.join(root, "reference.png")
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
@@ -1338,6 +1381,7 @@ describe("GenerationCanvasService", () => {
         output: "image",
         toolId: "draw",
       }),
+      result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
     })
     // Simulate a renderer that has not observed the repository mutation yet;
     // the paid-call guard must consult the persisted Canvas boundary as well.
@@ -1356,8 +1400,8 @@ describe("GenerationCanvasService", () => {
         request({ references: [{ nodeId: image.id, role: "reference_image" }], toolId: "creative-tools/draw" }),
         { id: "renderer:1", kind: "ui" },
       ),
-    ).rejects.toThrow("revision must match")
-    expect(calls).toHaveLength(0)
+    ).resolves.toMatchObject({ revision: 2, toolId: "creative-tools/draw" })
+    expect(calls).toHaveLength(1)
   })
 
   test.each([
@@ -1464,7 +1508,7 @@ describe("GenerationCanvasService", () => {
     expect(deleted[0]![0]).toStartWith(".convax/assets/")
   })
 
-  test("rejects a stale live revision before starting the external tool", async () => {
+  test("does not use a stale Renderer projection as a paid-call correctness guard", async () => {
     const { calls, renderer, service } = setup({})
     renderer.getViewSnapshot = mock(async () => ({
       documentId: "canvas-one",
@@ -1476,8 +1520,8 @@ describe("GenerationCanvasService", () => {
       viewport: { x: 0, y: 0, zoom: 1 },
     }))
 
-    await expect(service.generate(request(), { id: "renderer:1", kind: "ui" })).rejects.toThrow("revision must match")
-    expect(calls).toHaveLength(0)
+    await expect(service.generate(request(), { id: "renderer:1", kind: "ui" })).resolves.toMatchObject({ revision: 1 })
+    expect(calls).toHaveLength(1)
   })
 
   test("fails closed when a Toolbar or Agent reference changes during generation", async () => {
@@ -1519,7 +1563,7 @@ describe("GenerationCanvasService", () => {
     }))
     release()
 
-    await expect(pending).rejects.toThrow("revision must match")
+    await expect(pending).rejects.toThrow("Generation references changed while the tool was running")
     expect(resourceRequests).toHaveLength(0)
   })
 
@@ -1634,7 +1678,7 @@ describe("GenerationCanvasService", () => {
     expect(deleted).toHaveLength(1)
   })
 
-  test("commits referenced generation with reject-on-conflict semantics", async () => {
+  test("commits referenced generation with Main-side guarded retry semantics", async () => {
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const { resourceRequests, service } = setup({
@@ -1648,7 +1692,7 @@ describe("GenerationCanvasService", () => {
     })
 
     expect(resourceRequests[0]).toMatchObject({
-      conflictPolicy: "reject",
+      conflictPolicy: "retry",
       relation: { anchorNodeIds: [reference.id], direction: "from-anchor", mode: "connect" },
     })
   })
@@ -1712,18 +1756,23 @@ describe("GenerationCanvasService", () => {
         }),
       })
 
-      await expect(
-        service.generate(
-          request({
-            referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
-            references: [{ nodeId: image.id, role: "reference_image" }],
-            toolId: "creative-tools/draw",
-          }),
-          { id: "renderer:1", kind: "ui" },
-        ),
-      ).rejects.toThrow("direct incoming references changed")
-      expect(imported).toHaveLength(0)
-      expect(resourceRequests).toHaveLength(0)
+      const generation = service.generate(
+        request({
+          referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+          references: [{ nodeId: image.id, role: "reference_image" }],
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      )
+      if (change === "revision") {
+        await expect(generation).resolves.toMatchObject({ revision: 2 })
+        expect(imported).toHaveLength(1)
+        expect(resourceRequests).toHaveLength(1)
+      } else {
+        await expect(generation).rejects.toThrow("direct incoming references changed")
+        expect(imported).toHaveLength(0)
+        expect(resourceRequests).toHaveLength(0)
+      }
     },
   )
 

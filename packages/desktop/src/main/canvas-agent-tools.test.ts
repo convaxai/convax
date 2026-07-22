@@ -3,21 +3,10 @@ import {
   CanvasApplicationService,
   CanvasResourceBusinessService,
   CanvasRevisionConflictError,
-  type CanvasDocumentRef,
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
 import type { CanvasViewSnapshot } from "@convax/canvas/view"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
-import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
-
-const passthroughDocumentLease = {
-  async runDocumentMutation<Result>(_ref: CanvasDocumentRef, mutate: () => Result | PromiseLike<Result>) {
-    return mutate()
-  },
-  async runDocumentRead<Result>(_ref: CanvasDocumentRef, read: () => Result | PromiseLike<Result>) {
-    return read()
-  },
-} satisfies Pick<CanvasRendererBridge, "runDocumentMutation" | "runDocumentRead">
 
 const projectCanvases = {
   async getCanvasCatalog({ projectId }: { projectId: string }) {
@@ -76,7 +65,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(liveRevision)
         },
@@ -155,8 +143,6 @@ describe("Canvas Agent tools", () => {
 
   test("allows document tools on an inactive catalog Canvas while keeping view commands active-only", async () => {
     const calls = { execute: 0, query: 0, resources: 0, view: 0 }
-    const mutationRefs: CanvasDocumentRef[] = []
-    const readRefs: CanvasDocumentRef[] = []
     const snapshotViewIds: string[] = []
     const inactiveDocument = { ...createCanvasDocument({ id: "canvas-inactive" }), revision: 8 }
     const provider = createCanvasAgentToolProvider({
@@ -179,14 +165,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        async runDocumentMutation(ref, mutate) {
-          mutationRefs.push(ref)
-          return mutate()
-        },
-        async runDocumentRead(ref, read) {
-          readRefs.push(ref)
-          return read()
-        },
         async getViewSnapshot(viewId) {
           snapshotViewIds.push(viewId)
           return activeCanvasSnapshot(7)
@@ -238,11 +216,6 @@ describe("Canvas Agent tools", () => {
     ).rejects.toThrow("canvasId must match the live active Canvas")
 
     expect(calls).toEqual({ execute: 1, query: 1, resources: 1, view: 0 })
-    expect(readRefs).toEqual([{ canvasId: "canvas-inactive", scopeId: "project-a" }])
-    expect(mutationRefs).toEqual([
-      { canvasId: "canvas-inactive", scopeId: "project-a" },
-      { canvasId: "canvas-inactive", scopeId: "project-a" },
-    ])
     expect(snapshotViewIds).toEqual(["desktop-main", "desktop-main", "desktop-main"])
   })
 
@@ -267,7 +240,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           throw new Error("Document reads must not require the mounted view")
         },
@@ -319,7 +291,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(8)
         },
@@ -358,7 +329,6 @@ describe("Canvas Agent tools", () => {
 
   test("executes auto-layout as a business command for an inactive Canvas", async () => {
     const executed: unknown[] = []
-    const mutationRefs: CanvasDocumentRef[] = []
     const provider = createCanvasAgentToolProvider({
       canvases: projectCanvases,
       application: {
@@ -378,13 +348,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        async runDocumentMutation(ref, mutate) {
-          mutationRefs.push(ref)
-          return mutate()
-        },
-        async runDocumentRead(_ref, read) {
-          return read()
-        },
         async getViewSnapshot() {
           throw new Error("Auto-layout must not require the mounted view")
         },
@@ -415,7 +378,6 @@ describe("Canvas Agent tools", () => {
     })
 
     expect(result).toMatchObject({ changed: true, revision: 6, sync: { reloaded: false } })
-    expect(mutationRefs).toEqual([{ canvasId: "canvas-inactive", scopeId: "project-a" }])
     expect(executed).toMatchObject([
       {
         canvasId: "canvas-inactive",
@@ -450,7 +412,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -528,7 +489,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -594,7 +554,6 @@ describe("Canvas Agent tools", () => {
       application,
       canvases: projectCanvases,
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(document.revision)
         },
@@ -660,7 +619,6 @@ describe("Canvas Agent tools", () => {
       application,
       canvases: projectCanvases,
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(document.revision)
         },
@@ -707,7 +665,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return null
         },
@@ -773,7 +730,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(document.revision)
         },
@@ -837,7 +793,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async executeView() {
           throw new Error("Unexpected view")
         },

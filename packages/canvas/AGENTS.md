@@ -52,10 +52,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   packages, permissions, iframe transport, Project/Agent calls and package storage
   belong to the host. A Web Plugin renderer still produces a `file` node and must
   mutate the document through the same editor/application APIs as built-in UI.
-- Before a main-owned external read or mutation of a mounted document, the editor
-  lease synchronously blocks new local edits, aborts pending operations, finalizes
-  gestures and flushes. A committed mutation reloads authoritative persistence
-  without first saving the stale editor snapshot; abort always releases the lease.
+- Main's application/repository is the sole authoritative document writer. The
+  editor may keep gesture state and an optimistic projection, but persistence emits
+  revision-bound element commands and accepts Main's committed result. An
+  authoritative reload never saves the stale renderer projection first.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

@@ -6,6 +6,7 @@ import {
   applyCanvasBusinessCommand,
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
+  createCanvasDocumentPatchCommand,
   createCanvasNodeContentGuard,
   executeCanvasBusinessCommand,
   findOpenCanvasPoint,
@@ -45,6 +46,70 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
 }
 
 describe("canvas application commands", () => {
+  test("commits a renderer element patch without accepting a whole replacement document", () => {
+    const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "Before" })
+    const removed = createTextNode({ id: "removed", position: { x: 200, y: 0 }, text: "Remove" })
+    const base = createCanvasDocument({ id: "canvas-patch", nodes: [first, removed], title: "Before" })
+    const added = createTextNode({ id: "added", position: { x: 400, y: 0 }, text: "Added" })
+    const target = connectCanvasNodes(
+      {
+        ...base,
+        metadata: { ...base.metadata, title: "After" },
+        nodes: [{ ...first, data: { ...first.data, text: "After" } }, added],
+      },
+      { id: "edge-added", source: first.id, target: added.id },
+    )
+    const command = createCanvasDocumentPatchCommand(base, target)
+
+    expect(command).toMatchObject({
+      addedNodes: [{ id: added.id }],
+      metadata: { title: "After" },
+      removedNodeIds: [removed.id],
+      updatedNodes: [{ id: first.id }],
+    })
+    expect("document" in command).toBeFalse()
+
+    const committed = executeCanvasBusinessCommand(base, {
+      actor: { id: "renderer-one", kind: "renderer" },
+      command,
+      commandId: "renderer-patch-one",
+      expectedRevision: 0,
+    })
+    expect(committed.document).toMatchObject({
+      metadata: { title: "After" },
+      revision: 1,
+    })
+    expect(committed.document.nodes.map((node) => node.id)).toEqual([first.id, added.id])
+    expect(committed.document.nodes[0]?.data).toMatchObject({ text: "After" })
+    expect(committed.document.edges).toEqual([
+      expect.objectContaining({ id: "edge-added", source: first.id, target: added.id }),
+    ])
+  })
+
+  test("rejects malformed renderer patches and stale revisions", () => {
+    const node = createTextNode({ id: "node", position: { x: 0, y: 0 } })
+    const base = createCanvasDocument({ id: "canvas-patch-guard", nodes: [node] })
+    const command = createCanvasDocumentPatchCommand(base, {
+      ...base,
+      nodes: [{ ...node, position: { x: 20, y: 30 } }],
+    })
+    expect(() =>
+      executeCanvasBusinessCommand(base, {
+        actor: { id: "renderer-one", kind: "renderer" },
+        command,
+        commandId: "renderer-patch-stale",
+        expectedRevision: 1,
+      }),
+    ).toThrow(CanvasRevisionConflictError)
+    expect(() =>
+      applyCanvasBusinessCommand(base, {
+        ...command,
+        removedNodeIds: [node.id],
+        updatedNodes: [{ ...node, position: { x: 20, y: 30 } }],
+      }),
+    ).toThrow("cannot be removed and updated")
+  })
+
   test("adds prepared resources with product sizing, placement, and explicit relations", () => {
     const anchor = {
       ...createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Anchor" }),

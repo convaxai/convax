@@ -15,6 +15,12 @@ export interface CanvasCommandCapability {
  */
 export const canvasCommandCapabilities = [
   {
+    commandType: "document.patch",
+    defaultForAgent: false,
+    description: "Commit a revision-bound renderer element delta through the authoritative application service.",
+    layer: "primitive",
+  },
+  {
     commandType: "canvas.auto-layout",
     defaultForAgent: true,
     description: "Arrange related canvas nodes with a deterministic, size-aware directed layout.",

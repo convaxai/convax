@@ -132,6 +132,10 @@ current schema.
   the prior Project.
 - Canvas document mutation never means “write JSON.” UI and Agent callers use the
   same Canvas application services and revision/conflict handling.
+- Main's Canvas application service/repository is the only authoritative document
+  state and the only persistent writer. Renderer edits are optimistic projections
+  that submit element-level commands with `expectedRevision`; renderer never saves
+  a whole document or arbitrates Main mutations.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.
@@ -155,8 +159,9 @@ current schema.
   live in the same business services used by UI actions.
 - Every Agent call is scoped by the host's current Project. Document tools may name
   any Canvas in that Project's live catalog; they cannot select another Project.
-  View tools remain bound to the mounted active Canvas. External document access
-  must pass through the renderer flush/lock/reload barrier.
+  View tools remain bound to the mounted active Canvas. Document reads and writes
+  use Main's authoritative application services directly; renderer state is only a
+  fallible projection and is never a correctness or availability prerequisite.
 - Structured resources are validated and prepared by the host. Canvas snapshots are
   pathless/read-only; mutations use Canvas tools.
 - OpenCode Skills remain native instruction bundles. Project-local ambient Skills
@@ -239,10 +244,11 @@ current schema.
   the managed `.convax/assets/` flow before existing `file` nodes reference it;
   failed commits must roll back newly admitted assets.
 - A Plugin-requested immediate generation result is a host-owned pending Canvas
-  resource lifecycle. Canvas creates the node id; Desktop reloads it before the
+  resource lifecycle. Canvas creates and commits the node id in Main before the
   external call, replaces it only through an exact content guard, and retains a
-  bounded safe error on failure or cancellation. Plugins never choose the pending
-  node id or replacement target, and deleted or edited placeholders are not revived.
+  bounded safe error on failure or cancellation. Renderer refresh is asynchronous
+  and cannot delay this lifecycle. Plugins never choose the pending node id or
+  replacement target, and deleted or edited placeholders are not revived.
 - Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
   surface is a `file` node; do not add an extension bus, service locator, or node
   role to route Plugin behavior.
@@ -281,6 +287,9 @@ current schema.
 
 - Main owns native filesystem, Electron, Project Node adapters, and Agent runtime.
 - Preload exposes a narrow typed bridge. Renderer code must not import Node/Electron.
+- Renderer Canvas persistence exposes authoritative load plus command execution,
+  never a whole-document save. Every Main commit publishes a revision invalidation;
+  renderer reload/reveal is projection work whose failure cannot undo domain success.
 - Native file drag-out uses a short-lived sender-scoped opaque ticket: Main validates
   the live managed Canvas media selection, stages host-owned copies, and synchronously
   starts Electron's drag. Renderer/preload never receive native paths, and targets

@@ -1,9 +1,12 @@
 import type { AgentClient } from "@convax/agent-runtime"
-import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
+import {
+  canvasDocumentIpcChannels,
+  type CanvasRendererDocumentClient,
+} from "../canvas-document-contracts"
 import {
   canvasExternalMediaDragIpcChannels,
   type CanvasExternalMediaDragRendererClient,
@@ -81,11 +84,6 @@ const agentSkillChannels = {
   listSkills: "agent:skills-list",
   openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
-} as const
-
-const canvasDocumentChannels = {
-  load: "canvas:document-load",
-  save: "canvas:document-save",
 } as const
 
 const pluginChannels = {
@@ -228,9 +226,9 @@ const agentSkillClient = {
 } satisfies DesktopSkillClient
 
 const canvasDocumentClient = {
-  load: (input) => ipcRenderer.invoke(canvasDocumentChannels.load, input),
-  save: (input) => ipcRenderer.invoke(canvasDocumentChannels.save, input),
-} satisfies CanvasDocumentClient
+  execute: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.execute, input),
+  load: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.load, input),
+} satisfies CanvasRendererDocumentClient
 
 const canvasRendererClient = {
   onRequest(handler) {
