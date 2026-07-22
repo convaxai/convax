@@ -123,7 +123,15 @@ describe("desktop Project lifecycle IPC smoke", () => {
     const canvasApplication = new CanvasApplicationService(canvasDocuments)
     let listSessionsInput: AgentRuntimeListSessionsInput | undefined
     let listModelsInput: AgentRuntimeDirectoryInput | undefined
+    const activity = {
+      aborted: mock(async () => undefined),
+      permissionReplied: mock(async () => undefined),
+      promptSettled: mock(async () => undefined),
+      promptStarted: mock(async () => undefined),
+      questionReplied: mock(async () => undefined),
+    }
     const runtime = {
+      abort: async () => undefined,
       listModels: async (input: AgentRuntimeDirectoryInput) => {
         listModelsInput = input
         return {
@@ -142,6 +150,14 @@ describe("desktop Project lifecycle IPC smoke", () => {
         listSessionsInput = input
         return []
       },
+      prompt: async (input: { sessionId: string }) => ({
+        completedAt: 20,
+        createdAt: 10,
+        id: "assistant-message",
+        parts: [],
+        role: "assistant" as const,
+        sessionId: input.sessionId,
+      }),
     } as unknown as AgentRuntime
     const trusted = { isTrustedSender: () => true }
 
@@ -152,7 +168,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       }),
       registerProjectCanvasIpc(canvases, trusted),
       registerCanvasDocumentIpc(canvasDocuments, canvasApplication, trusted),
-      registerAgentIpc(runtime, projects, trusted),
+      registerAgentIpc(runtime, projects, { ...trusted, activity }),
     ]
     handlers.set("jianying:draft-status", () => ({
       draftName: "Current draft",
@@ -284,6 +300,11 @@ describe("desktop Project lifecycle IPC smoke", () => {
 
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })
     expect(listSessionsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), limit: 60 })
+    await exposedBridge.agent.prompt({ scopeId: projectId, sessionId: "session-main", text: "Hello" })
+    expect(activity.promptStarted).toHaveBeenCalledWith(projectId, "session-main")
+    expect(activity.promptSettled).toHaveBeenCalledWith(projectId, "session-main")
+    await exposedBridge.agent.abort({ scopeId: projectId, sessionId: "session-main" })
+    expect(activity.aborted).toHaveBeenCalledWith(projectId, "session-main")
     expect(await exposedBridge.agent.listModels({ scopeId: projectId })).toMatchObject({
       providers: [{ providerId: "opencode" }],
     })
