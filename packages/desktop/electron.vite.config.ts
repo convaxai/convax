@@ -48,6 +48,7 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: "src/preload/index.ts",
+          pet: "src/preload/pet.ts",
           "plugin-service-browser-authorization": "src/preload/plugin-service-browser-authorization.ts",
         },
         output: {
@@ -70,7 +71,10 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: "src/renderer/index.html",
+        input: {
+          index: "src/renderer/index.html",
+          pet: "src/renderer/pet/index.html",
+        },
       },
     },
   },
