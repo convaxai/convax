@@ -21,3 +21,24 @@ export interface PetActivityTarget {
   projectId: string
   sessionId: string
 }
+
+export interface PetInventoryItem {
+  alt: string
+  assetUrl: string
+  description: string
+  id: string
+  name: string
+  source: "custom" | "plugin"
+  spriteVersion: 2
+}
+
+export interface PetInventorySnapshot {
+  awake: boolean
+  pets: PetInventoryItem[]
+  selectedId?: string
+}
+
+export interface PetRendererSnapshot {
+  activity: PetActivitySnapshot
+  pet: PetInventoryItem
+}
