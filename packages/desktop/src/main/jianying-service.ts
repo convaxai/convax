@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
+import { TextDecoder, TextEncoder } from "node:util"
 
 import type {
   JianyingCanvasExportResult,
@@ -21,6 +22,8 @@ const maxDraftTokens = 1_000
 const draftContentFileNames = ["draft_info.json", "draft_content.json"] as const
 const activeToNewDraftWipMessage =
   "Creating a new JianYing draft while another draft is open is still WIP. Return JianYing to its home screen and retry."
+const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true })
+const utf8Encoder = new TextEncoder()
 export interface JianyingCommandResult {
   exitCode: number
   stderr: string
@@ -397,7 +400,7 @@ export class MacOSJianyingNativeAdapter implements JianyingNativeAdapter {
     }
     const candidates: JianyingActiveDraft[] = []
     for (const pid of processIds) {
-      const lsof = await this.runCommand("/usr/sbin/lsof", ["-Fn", "-p", String(pid)], 5_000, signal)
+      const lsof = await this.runCommand("/usr/sbin/lsof", ["-F0n", "-p", String(pid)], 5_000, signal)
       if (lsof.exitCode !== 0) {
         return unavailableObservation(
           `Could not inspect JianYing process ${pid} (exit code ${lsof.exitCode})`,
@@ -490,14 +493,17 @@ export function createJianyingNativeAdapter(options: {
 }
 
 export function jianyingCommandEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
+  const commandEnvironment: NodeJS.ProcessEnv = {
     ...environment,
     // Finder-launched macOS applications do not reliably inherit a UTF-8 locale.
-    // Without this, lsof renders non-ASCII path bytes as literal `\\xNN`
-    // sequences, which cannot be passed back to realpath as a native path.
-    LANG: "UTF-8",
-    LC_ALL: "UTF-8",
+    // Keep machine output stable while making pathname bytes printable as UTF-8.
+    LANG: "C",
+    LC_CTYPE: "UTF-8",
   }
+  // LC_ALL overrides LC_CTYPE, so an inherited shell value must not leak into
+  // this macOS-only machine protocol.
+  delete commandEnvironment.LC_ALL
+  return commandEnvironment
 }
 
 export async function runJianyingCommand(
@@ -511,12 +517,14 @@ export async function runJianyingCommand(
       executable,
       [...args],
       {
+        encoding: "buffer",
         env: jianyingCommandEnvironment(),
         maxBuffer: 8 * 1024 * 1024,
         signal,
         timeout: timeoutMs,
       },
       (error, stdout, stderr) => {
+        const diagnosticStderr = stderr.toString("utf8")
         if (signal?.aborted) {
           reject(signal.reason ?? new DOMException("Canceled", "AbortError"))
           return
@@ -524,8 +532,8 @@ export async function runJianyingCommand(
         if (error && (error.killed || error.signal || error.code === "ETIMEDOUT")) {
           resolve({
             exitCode: -1,
-            stderr: `${stderr}\nJIANYING_COMMAND_OUTCOME_UNKNOWN: command was terminated before its result was confirmed`,
-            stdout,
+            stderr: `${diagnosticStderr}\nJIANYING_COMMAND_OUTCOME_UNKNOWN: command was terminated before its result was confirmed`,
+            stdout: stdout.toString("utf8"),
           })
           return
         }
@@ -533,7 +541,20 @@ export async function runJianyingCommand(
           reject(error)
           return
         }
-        resolve({ exitCode: error && typeof error.code === "number" ? error.code : 0, stderr, stdout })
+        const exitCode = error && typeof error.code === "number" ? error.code : 0
+        if (exitCode !== 0) {
+          resolve({ exitCode, stderr: diagnosticStderr, stdout: stdout.toString("utf8") })
+          return
+        }
+        try {
+          resolve({
+            exitCode,
+            stderr: diagnosticStderr,
+            stdout: strictUtf8Decoder.decode(stdout),
+          })
+        } catch (cause) {
+          reject(new Error("JianYing command wrote invalid UTF-8 to stdout", { cause }))
+        }
       },
     )
   })
@@ -551,10 +572,86 @@ export function parseJianyingProcessIds(output: string) {
 }
 
 export function parseLockedPaths(output: string) {
-  return output
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("n") && path.basename(line.slice(1)) === ".locked")
-    .map((line) => line.slice(1))
+  return (
+    output
+      .split("\0")
+      .map((field) => field.replace(/^\r?\n/, ""))
+      .filter((field) => field.startsWith("n"))
+      .map((field) => field.slice(1))
+      // lsof uses POSIX paths on macOS. Narrow before decoding so an unrelated
+      // socket or file name cannot invalidate otherwise healthy draft detection.
+      .filter((name) => path.posix.basename(name) === ".locked")
+      .map(decodeLsofNameField)
+      .filter((name) => path.posix.basename(name) === ".locked")
+  )
+}
+
+function decodeLsofNameField(value: string) {
+  // lsof's machine format still applies printable, C, and hexadecimal escapes
+  // to pathname bytes. Decode only the reversible forms. Caret notation such as
+  // `^A` is intentionally left literal because lsof emits the same text for an
+  // actual control byte and for a filename containing the two characters.
+  const bytes: number[] = []
+  let literalStart = 0
+  const appendLiteral = (end: number) => {
+    for (const byte of utf8Encoder.encode(value.slice(literalStart, end))) bytes.push(byte)
+  }
+
+  for (let index = 0; index < value.length; ) {
+    if (value[index] !== "\\") {
+      index += 1
+      continue
+    }
+
+    appendLiteral(index)
+    const escape = value[index + 1]
+    let byte: number
+    let consumed = 2
+    switch (escape) {
+      case "\\":
+        byte = 0x5c
+        break
+      case "b":
+        byte = 0x08
+        break
+      case "f":
+        byte = 0x0c
+        break
+      case "n":
+        byte = 0x0a
+        break
+      case "r":
+        byte = 0x0d
+        break
+      case "t":
+        byte = 0x09
+        break
+      case "x": {
+        const hexadecimal = value.slice(index + 2, index + 4)
+        if (!/^[0-9a-fA-F]{2}$/.test(hexadecimal)) {
+          throw new Error("lsof returned a malformed hexadecimal pathname escape")
+        }
+        byte = Number.parseInt(hexadecimal, 16)
+        consumed = 4
+        break
+      }
+      default:
+        throw new Error("lsof returned an unsupported pathname escape")
+    }
+    bytes.push(byte)
+    index += consumed
+    literalStart = index
+  }
+  appendLiteral(value.length)
+
+  let decoded: string
+  try {
+    decoded = strictUtf8Decoder.decode(Uint8Array.from(bytes))
+  } catch (cause) {
+    throw new Error("lsof returned a pathname that is not valid UTF-8", { cause })
+  }
+  if (decoded.includes("\0")) throw new Error("lsof returned a pathname containing a null byte")
+  return decoded
 }
 
 export function combineObservations(

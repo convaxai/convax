@@ -109,7 +109,7 @@ describe("JianYing toolbar integration", () => {
         }
       }
       if (executable === "/usr/sbin/lsof") {
-        return { exitCode: 0, stderr: "", stdout: `p42\nn${lockPath}\n` }
+        return { exitCode: 0, stderr: "", stdout: `p42\0\nf1\0n${lockPath}\0\n` }
       }
       throw new Error(`Unexpected native command: ${executable}`)
     }

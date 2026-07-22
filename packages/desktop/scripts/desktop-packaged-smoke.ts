@@ -514,8 +514,8 @@ async function seedProject(userDataRoot: string, projectRoot: string) {
   return project
 }
 
-const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-user-data-"))
-const projectParent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-project-"))
+const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-用户数据 😀-"))
+const projectParent = await fs.mkdtemp(path.join(os.tmpdir(), "convax packaged 项目路径 😀-"))
 const projectRoot = path.join(projectParent, "packaged-smoke-project")
 let child: Bun.Subprocess | undefined
 let renderer: DevtoolsClient | undefined
@@ -539,6 +539,14 @@ try {
   }
   delete environment.CONVAX_USER_DATA_DIR
   delete environment.ELECTRON_RENDERER_URL
+  // Finder does not reliably provide shell locale variables. Exercise the final
+  // macOS artifact under that GUI-style environment instead of inheriting the
+  // terminal locale that launched this smoke harness.
+  if (process.platform === "darwin") {
+    for (const name of Object.keys(environment)) {
+      if (name === "LANG" || name === "LANGUAGE" || name.startsWith("LC_")) delete environment[name]
+    }
+  }
   // This smoke verifies the self-contained packaged runtime and provider catalog,
   // not a developer's external network. A stale local proxy can otherwise make
   // OpenCode provider discovery hang even though the packaged binary is healthy.

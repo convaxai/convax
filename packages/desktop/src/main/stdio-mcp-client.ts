@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process"
 import path from "node:path"
+import { TextDecoder } from "node:util"
 
 export interface McpToolDefinition {
   name: string
@@ -88,6 +89,7 @@ const maximumToolResultContentItems = 1_024
 const supportedMcpProtocolVersion = "2025-03-26"
 const maximumServerRequestMethods = 64
 const maximumServerErrorBytes = 512
+const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true })
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -399,8 +401,15 @@ export class StdioMcpClient {
     while (true) {
       const newline = this.#buffer.indexOf(0x0a)
       if (newline < 0) return
-      const line = this.#buffer.subarray(0, newline).toString("utf8").trim()
+      const lineBytes = this.#buffer.subarray(0, newline)
       this.#buffer = this.#buffer.subarray(newline + 1)
+      let line: string
+      try {
+        line = strictUtf8Decoder.decode(lineBytes).trim()
+      } catch (error) {
+        this.#fail(new Error("MCP command wrote invalid UTF-8 to stdout", { cause: error }))
+        return
+      }
       if (!line) continue
       let parsed: unknown
       try {

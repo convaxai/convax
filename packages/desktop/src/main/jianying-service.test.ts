@@ -113,30 +113,67 @@ describe("JianYing active draft detection", () => {
     expect(result.stderr).toContain("JIANYING_COMMAND_OUTCOME_UNKNOWN")
   })
 
+  test("rejects successful command output that is not valid UTF-8", async () => {
+    await expect(
+      runJianyingCommand(process.execPath, ["-e", "process.stdout.write(Buffer.from([0xff]))"], 5_000),
+    ).rejects.toThrow("invalid UTF-8")
+  })
+
+  test("decodes reversible lsof pathname escapes without confusing literal backslashes", () => {
+    const lockPath = "/drafts/7月\nliteral\\n-\tliteral\\t-\u007f-literal\\x7f-literal^A/.locked"
+    const output = "p42\0\nf3\0n/drafts/7月\\nliteral\\\\n-\\tliteral\\\\t-\\x7f-literal\\\\x7f-literal^A/.locked\0\n"
+
+    expect(parseLockedPaths(output)).toEqual([lockPath])
+  })
+
+  test("ignores malformed escapes in unrelated lsof name fields", () => {
+    expect(parseLockedPaths("p42\0\nf3\0n/unrelated\\q\0\nf4\0n/drafts/中文/.locked\0\n")).toEqual([
+      "/drafts/中文/.locked",
+    ])
+  })
+
+  test("reassembles UTF-8 bytes escaped by lsof", () => {
+    expect(parseLockedPaths("p42\0\nf3\0n/drafts/\\xe4\\xb8\\xad\\xe6\\x96\\x87/.locked\0\n")).toEqual([
+      "/drafts/中文/.locked",
+    ])
+  })
+
+  test("fails closed on malformed or invalid lsof pathname escapes", () => {
+    expect(() => parseLockedPaths("p42\0\nf3\0n/drafts/\\x0G/.locked\0\n")).toThrow("malformed hexadecimal")
+    expect(() => parseLockedPaths("p42\0\nf3\0n/drafts/\\q/.locked\0\n")).toThrow("unsupported pathname escape")
+    expect(() => parseLockedPaths("p42\0\nf3\0n/drafts/\\xff/.locked\0\n")).toThrow("not valid UTF-8")
+  })
+
   test("forces native inspection commands to emit UTF-8 paths without a terminal locale", async () => {
-    expect(jianyingCommandEnvironment({ PATH: "/usr/bin:/bin" })).toEqual({
-      LANG: "UTF-8",
-      LC_ALL: "UTF-8",
+    expect(jianyingCommandEnvironment({ LANG: "zh_CN.UTF-8", LC_ALL: "C", PATH: "/usr/bin:/bin" })).toEqual({
+      LANG: "C",
+      LC_CTYPE: "UTF-8",
       PATH: "/usr/bin:/bin",
     })
     if (process.platform !== "darwin") return
 
     const root = await temporaryRoot()
-    const draft = await createDraftDirectory(root, "7月22日")
-    const holder = Bun.spawn(["/usr/bin/tail", "-f", draft.lockPath], {
+    const draftPath = path.join(
+      await fs.realpath(root),
+      "7月22日 空格-é-é-😀-#-%\n真实换行-literal\\n-\t真实tab-literal\\t-\u007f",
+    )
+    const lockPath = path.join(draftPath, ".locked")
+    await fs.mkdir(draftPath)
+    await fs.writeFile(lockPath, "")
+    const holder = Bun.spawn(["/usr/bin/tail", "-f", lockPath], {
       env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
       stderr: "ignore",
       stdout: "ignore",
     })
     try {
       let lockedPaths: string[] = []
-      for (let attempt = 0; attempt < 20 && !lockedPaths.includes(draft.lockPath); attempt += 1) {
-        const result = await runJianyingCommand("/usr/sbin/lsof", ["-Fn", "-p", String(holder.pid)], 5_000)
+      for (let attempt = 0; attempt < 20 && !lockedPaths.includes(lockPath); attempt += 1) {
+        const result = await runJianyingCommand("/usr/sbin/lsof", ["-F0n", "-p", String(holder.pid)], 5_000)
         expect(result.exitCode).toBe(0)
         lockedPaths = parseLockedPaths(result.stdout)
-        if (!lockedPaths.includes(draft.lockPath)) await Bun.sleep(25)
+        if (!lockedPaths.includes(lockPath)) await Bun.sleep(25)
       }
-      expect(lockedPaths).toContain(draft.lockPath)
+      expect(lockedPaths).toContain(lockPath)
       expect(lockedPaths.some((lockedPath) => lockedPath.includes("\\x"))).toBeFalse()
     } finally {
       holder.kill()
@@ -175,7 +212,7 @@ describe("MacOSJianyingNativeAdapter", () => {
             stderr: "",
             stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
           }
-        : { exitCode: 0, stderr: "", stdout: `p4495\nn${lockPath}\n` }
+        : { exitCode: 0, stderr: "", stdout: `p4495\0\nf1\0n${lockPath}\0\n` }
     let recreated = false
     const adapter = new MacOSJianyingNativeAdapter({
       commandRunner,
@@ -215,7 +252,7 @@ describe("MacOSJianyingNativeAdapter", () => {
             stderr: "",
             stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
           }
-        : { exitCode: 0, stderr: "", stdout: `p4495\nn${staleLockPath}\nn${active.lockPath}\n` }
+        : { exitCode: 0, stderr: "", stdout: `p4495\0\nf1\0n${staleLockPath}\0\nf2\0n${active.lockPath}\0\n` }
     const adapter = new MacOSJianyingNativeAdapter({
       commandRunner,
       platform: "darwin",
@@ -243,7 +280,7 @@ describe("MacOSJianyingNativeAdapter", () => {
             stderr: "",
             stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
           }
-        : { exitCode: 0, stderr: "", stdout: `p4495\nn${missingLockPath}\n` }
+        : { exitCode: 0, stderr: "", stdout: `p4495\0\nf1\0n${missingLockPath}\0\n` }
     const adapter = new MacOSJianyingNativeAdapter({
       commandRunner,
       platform: "darwin",
@@ -271,7 +308,7 @@ describe("MacOSJianyingNativeAdapter", () => {
             stderr: "",
             stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
           }
-        : { exitCode: 0, stderr: "", stdout: `p4495\nn${missingLockPath}\n` }
+        : { exitCode: 0, stderr: "", stdout: `p4495\0\nf1\0n${missingLockPath}\0\n` }
     const adapter = new MacOSJianyingNativeAdapter({
       commandRunner,
       platform: "darwin",
@@ -306,7 +343,7 @@ describe("MacOSJianyingNativeAdapter", () => {
       return {
         exitCode: 0,
         stderr: "",
-        stdout: pid === "4495" ? `p4495\nn${active.lockPath}\n` : `p4496\nn${missingLockPath}\n`,
+        stdout: pid === "4495" ? `p4495\0\nf1\0n${active.lockPath}\0\n` : `p4496\0\nf1\0n${missingLockPath}\0\n`,
       }
     }
     const adapter = new MacOSJianyingNativeAdapter({

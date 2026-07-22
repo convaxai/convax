@@ -13,6 +13,7 @@ const invalidInitializeResponse = process.argv
   .find((argument) => argument.startsWith("--invalid-initialize-response="))
   ?.slice("--invalid-initialize-response=".length)
 const stderrSecretAndExit = process.argv.includes("--stderr-secret-and-exit")
+const invalidUtf8Initialize = process.argv.includes("--invalid-utf8-in-initialize")
 const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
   ?.slice("--fork-descendant=".length)
@@ -80,6 +81,18 @@ async function handle(request: JsonRpcRequest) {
         string: "not a JSON-RPC object",
       }
       send(invalidValues[invalidInitializeResponse])
+      return
+    }
+    if (invalidUtf8Initialize) {
+      process.stdout.write(
+        Buffer.concat([
+          Buffer.from(
+            `{"id":${JSON.stringify(request.id)},"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"${protocolVersion}","serverInfo":{"name":"`,
+          ),
+          Buffer.from([0xc3, 0x28]),
+          Buffer.from('","version":"1.0.0"}}}\n'),
+        ]),
+      )
       return
     }
     const respond = () =>

@@ -39,9 +39,9 @@ describe("StdioMcpClient", () => {
       { description: "Echo input", inputSchema: { type: "object" }, name: "echo" },
       { description: undefined, inputSchema: { type: "object" }, name: "wait" },
     ])
-    expect(await client.callTool("echo", { prompt: "hello" })).toEqual({
+    expect(await client.callTool("echo", { prompt: "你好 🙂" })).toEqual({
       content: [
-        { text: '{"prompt":"hello"}', type: "text" },
+        { text: '{"prompt":"你好 🙂"}', type: "text" },
         { data: "iVBORw0KGgo=", mimeType: "image/png", type: "image" },
       ],
       structuredContent: { artifacts: [] },
@@ -79,6 +79,11 @@ describe("StdioMcpClient", () => {
       await expect(client.listTools()).rejects.toThrow("non-object JSON-RPC message")
     })
   }
+
+  test("fails closed when the sidecar writes invalid UTF-8", async () => {
+    const client = createClient({ fixtureArgs: ["--invalid-utf8-in-initialize"] })
+    await expect(client.listTools()).rejects.toThrow("invalid UTF-8")
+  })
 
   test("does not expose sidecar stderr through a caller-visible exit error", async () => {
     const client = createClient({ fixtureArgs: ["--stderr-secret-and-exit"] })
