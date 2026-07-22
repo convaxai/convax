@@ -5,18 +5,6 @@ interface CanvasElementSelectionChange {
   selected: boolean
 }
 
-export function createReactFlowSelectionSnapshot(
-  nodeIds: readonly string[],
-  edgeIds: readonly string[],
-  options: { discardImplicitEdges?: boolean } = {},
-): CanvasSelection {
-  const nodeSelection = new Set(nodeIds)
-  return {
-    edgeIds: options.discardImplicitEdges && nodeSelection.size > 0 ? new Set() : new Set(edgeIds),
-    nodeIds: nodeSelection,
-  }
-}
-
 export function applyReactFlowNodeSelectionChanges(
   current: CanvasSelection,
   changes: readonly CanvasElementSelectionChange[],

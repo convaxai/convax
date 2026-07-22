@@ -11,9 +11,14 @@ import {
   applyNodeChanges,
   useReactFlow,
   useViewport,
+  type Connection,
+  type EdgeChange,
   type EdgeTypes,
   type NodeChange,
   type NodeTypes,
+  type OnConnectEnd,
+  type OnConnectStart,
+  type OnNodeDrag,
 } from "@xyflow/react"
 import {
   Button,
@@ -131,11 +136,7 @@ import {
   type CanvasExternalMutationLeaseCallbacks,
 } from "../external-mutation-lease"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
-import {
-  applyReactFlowEdgeSelectionChanges,
-  applyReactFlowNodeSelectionChanges,
-  createReactFlowSelectionSnapshot,
-} from "./canvas-selection-sync"
+import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
@@ -161,7 +162,7 @@ import {
   type CanvasServices,
   useCanvasService,
 } from "../services"
-import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
+import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
 import {
   createCanvasShortcutHandler,
   isCanvasEditableShortcutTarget,
@@ -197,6 +198,10 @@ const CANVAS_CENTER_FIT_MAX_ZOOM = 1.2
 const CANVAS_CENTER_FIT_PADDING = 0.08
 const CANVAS_MIN_ZOOM = CANVAS_VIEW_MIN_ZOOM
 const CANVAS_MAX_ZOOM = CANVAS_VIEW_MAX_ZOOM
+const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_FIT_PADDING }
+const CANVAS_PAN_ON_DRAG = [1]
+const CANVAS_SNAP_GRID: [number, number] = [8, 8]
+const CANVAS_ZOOM_ACTIVATION_KEYS = ["Meta", "Control"]
 type CanvasDirectedAutoLayoutStrategy = Extract<
   CanvasAutoLayoutStrategy,
   "horizontal-directed-cluster" | "vertical-directed-cluster"
@@ -402,7 +407,8 @@ function CanvasEditorContent(
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
-  const discardImplicitSelectionEdgesRef = useRef(false)
+  const boxSelectionActiveRef = useRef(false)
+  const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
   const selectionRef = useRef(selection)
   const selectionDragAutoSelectedNodeRef = useRef<string | null>(null)
   const selectionDragCandidateNodeRef = useRef<string | null>(null)
@@ -628,22 +634,6 @@ function CanvasEditorContent(
   const updateSelection = useCallback(
     (nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
       replaceSelection({ nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) })
-    },
-    [replaceSelection],
-  )
-  const synchronizeReactFlowSelection = useCallback(
-    ({ edges, nodes }: { edges: readonly { id: string }[]; nodes: readonly { id: string }[] }) => {
-      const discardImplicitEdges = discardImplicitSelectionEdgesRef.current
-      replaceSelection(
-        createReactFlowSelectionSnapshot(
-          nodes.map((node) => node.id),
-          edges.map((edge) => edge.id),
-          { discardImplicitEdges },
-        ),
-      )
-      if (discardImplicitEdges && (nodes.length === 0 || edges.length === 0)) {
-        discardImplicitSelectionEdgesRef.current = false
-      }
     },
     [replaceSelection],
   )
@@ -2027,6 +2017,162 @@ function CanvasEditorContent(
       visibleSelectionDragSource,
     ],
   )
+  const handleEdgesChange = useCallback(
+    (changes: EdgeChange<CanvasEdge>[]) => {
+      const selectionChanges = changes.filter((change) => change.type === "select")
+      if (selectionChanges.length > 0 && !boxSelectionActiveRef.current) {
+        replaceSelection(applyReactFlowEdgeSelectionChanges(selectionRef.current, selectionChanges))
+      }
+      const documentChanges = changes.filter((change) => change.type !== "select")
+      if (documentChanges.length === 0) return
+      commit((document) => ({ ...document, edges: applyEdgeChanges(documentChanges, document.edges) }))
+    },
+    [commit, replaceSelection],
+  )
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<CanvasNode>[]) => {
+      const effectiveChanges = altDragRef.current
+        ? remapCanvasDuplicateDragChanges(changes, altDragRef.current.duplicatedNodeIdBySourceId)
+        : changes
+      const selectionChanges = effectiveChanges.filter((change) => change.type === "select")
+      if (selectionChanges.length > 0) {
+        replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
+      }
+      const documentChanges = effectiveChanges.filter((change) => change.type !== "select" && change.type !== "remove")
+      if (documentChanges.length === 0) return
+      const measurementChanges = documentChanges.filter((change) => change.type === "dimensions")
+      const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
+      if (measurementChanges.length > 0) {
+        dispatch({
+          type: "replace-update",
+          update: (document) => {
+            const nextNodes = applyNodeChanges(measurementChanges, document.nodes)
+            return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
+          },
+        })
+      }
+      if (committedChanges.length > 0) {
+        dispatch({
+          type: "preview-or-commit-update",
+          update: (document) => {
+            const nextNodes = applyNodeChanges(committedChanges, document.nodes)
+            return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
+          },
+        })
+      }
+    },
+    [dispatch, replaceSelection],
+  )
+  const handleConnect = useCallback(
+    (connection: Connection) => commit((document) => connectCanvasNodes(document, connection)),
+    [commit],
+  )
+  const handleConnectStart = useCallback<OnConnectStart>(
+    (event, params) => {
+      setPendingConnection(null)
+      updateConnectionTargetNode(null)
+      const pointerScreen = getEventClientPoint(event)
+      if (!params.nodeId || !params.handleId || !pointerScreen) {
+        connectionStartRef.current = null
+        return
+      }
+      const handle = event.target instanceof Element ? event.target.closest(".react-flow__handle") : null
+      const bounds = handle?.getBoundingClientRect()
+      connectionStartRef.current = {
+        nodeId: params.nodeId,
+        pointerScreen,
+        side: params.handleId.includes("left") ? "left" : "right",
+        sourceScreen: bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : pointerScreen,
+      }
+    },
+    [updateConnectionTargetNode],
+  )
+  const handleConnectEnd = useCallback<OnConnectEnd>(
+    (event, connectionState) => {
+      const start = connectionStartRef.current
+      connectionStartRef.current = null
+      const targetScreen = getEventClientPoint(event)
+      const targetNodeId =
+        start && targetScreen
+          ? getCanvasCardAtScreenPoint(rootRef.current, documentRef.current, targetScreen, start.nodeId)
+          : null
+      updateConnectionTargetNode(null)
+      if (!start || !targetScreen) return
+      if (Math.hypot(targetScreen.x - start.pointerScreen.x, targetScreen.y - start.pointerScreen.y) <= 4) return
+      if (connectionState.isValid || !connectionState.fromNode) return
+      if (targetNodeId) {
+        if (targetNodeId !== start.nodeId) {
+          commit((document) =>
+            connectCanvasNodes(document, createCanvasCardConnection(start.nodeId, start.side, targetNodeId)),
+          )
+        }
+        ignoreConnectionPaneClickRef.current = true
+        window.setTimeout(() => {
+          ignoreConnectionPaneClickRef.current = false
+        }, 250)
+        return
+      }
+      const bounds = rootRef.current?.getBoundingClientRect()
+      if (
+        !bounds ||
+        targetScreen.x < bounds.left ||
+        targetScreen.x > bounds.right ||
+        targetScreen.y < bounds.top ||
+        targetScreen.y > bounds.bottom
+      )
+        return
+      ignoreConnectionPaneClickRef.current = true
+      window.setTimeout(() => {
+        ignoreConnectionPaneClickRef.current = false
+      }, 250)
+      setPendingConnection({
+        nodeId: start.nodeId,
+        side: start.side,
+        sourceScreen: start.sourceScreen,
+        targetPosition: reactFlow.screenToFlowPosition(targetScreen),
+        targetScreen,
+      })
+    },
+    [commit, reactFlow, updateConnectionTargetNode],
+  )
+  const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
+    (event, node) => {
+      dispatch({ type: "begin-gesture" })
+      altDragRef.current = null
+      if (!event.altKey) return
+      const currentSelection = selectionRef.current
+      const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
+      const plan = createCanvasDuplicateDragPlan(documentRef.current, nodeIds, event.metaKey || event.ctrlKey)
+      if (!plan) return
+      altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
+      dispatch({ type: "commit", document: plan.document })
+      selectNodes(plan.selectedNodeIds)
+    },
+    [dispatch, selectNodes],
+  )
+  const handleNodeDragStop = useCallback(() => {
+    altDragRef.current = null
+    dispatch({ type: "end-gesture" })
+  }, [dispatch])
+  const handleBoxSelectionStart = useCallback(() => {
+    boxSelectionActiveRef.current = true
+    // React Flow clears the controlled selection immediately before this
+    // callback, while its internal lookup still uses the pre-gesture selection
+    // as the first box-delta baseline. Restore the snapshot captured during the
+    // pane's pointer-down capture phase so this does not depend on React's event
+    // batching or a stale render closure.
+    const baseline = boxSelectionBaselineRef.current ?? {
+      edgeIds: new Set<string>(),
+      nodeIds: new Set(selectionRef.current.nodeIds),
+    }
+    boxSelectionBaselineRef.current = null
+    selectionRef.current = baseline
+    setSelection(baseline)
+  }, [])
+  const handleBoxSelectionEnd = useCallback(() => {
+    boxSelectionActiveRef.current = false
+    boxSelectionBaselineRef.current = null
+  }, [])
   const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
 
   return (
@@ -2067,6 +2213,22 @@ function CanvasEditorContent(
               }}
               onKeyDown={shortcutHandler}
               onPaste={onCanvasPaste}
+              onPointerCancelCapture={() => {
+                boxSelectionActiveRef.current = false
+                boxSelectionBaselineRef.current = null
+              }}
+              onPointerDownCapture={(event) => {
+                if (
+                  event.button === 0 &&
+                  event.target instanceof HTMLElement &&
+                  event.target.classList.contains("react-flow__pane")
+                ) {
+                  boxSelectionBaselineRef.current = {
+                    edgeIds: new Set<string>(),
+                    nodeIds: new Set(selectionRef.current.nodeIds),
+                  }
+                }
+              }}
               onPointerMove={(event) => {
                 const connectionStart = connectionStartRef.current
                 if (connectionStart) {
@@ -2098,7 +2260,7 @@ function CanvasEditorContent(
                 edges={edges}
                 elementsSelectable={!readOnly}
                 fitView
-                fitViewOptions={{ maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_FIT_PADDING }}
+                fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
                 maxZoom={CANVAS_MAX_ZOOM}
                 minZoom={CANVAS_MIN_ZOOM}
                 nodeTypes={nodeTypes}
@@ -2110,166 +2272,34 @@ function CanvasEditorContent(
                 onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                 autoPanOnNodeFocus={false}
                 panActivationKeyCode="Space"
-                panOnDrag={[1]}
+                panOnDrag={CANVAS_PAN_ON_DRAG}
                 panOnScroll
                 selectionKeyCode={null}
                 selectionOnDrag={!readOnly}
                 selectionMode={SelectionMode.Partial}
-                snapGrid={[8, 8]}
+                snapGrid={CANVAS_SNAP_GRID}
                 snapToGrid={snapToGrid}
-                zoomActivationKeyCode={["Meta", "Control"]}
+                zoomActivationKeyCode={CANVAS_ZOOM_ACTIVATION_KEYS}
                 zoomOnDoubleClick={false}
                 zoomOnPinch
                 zoomOnScroll={false}
-                onConnect={(connection) => commit((document) => connectCanvasNodes(document, connection))}
-                onConnectEnd={(event, connectionState) => {
-                  const start = connectionStartRef.current
-                  connectionStartRef.current = null
-                  const targetScreen = getEventClientPoint(event)
-                  const targetNodeId =
-                    start && targetScreen
-                      ? getCanvasCardAtScreenPoint(rootRef.current, documentRef.current, targetScreen, start.nodeId)
-                      : null
-                  updateConnectionTargetNode(null)
-                  if (!start || !targetScreen) return
-                  if (Math.hypot(targetScreen.x - start.pointerScreen.x, targetScreen.y - start.pointerScreen.y) <= 4)
-                    return
-                  if (connectionState.isValid || !connectionState.fromNode) return
-                  if (targetNodeId) {
-                    if (targetNodeId !== start.nodeId) {
-                      commit((document) =>
-                        connectCanvasNodes(
-                          document,
-                          createCanvasCardConnection(start.nodeId, start.side, targetNodeId),
-                        ),
-                      )
-                    }
-                    ignoreConnectionPaneClickRef.current = true
-                    window.setTimeout(() => {
-                      ignoreConnectionPaneClickRef.current = false
-                    }, 250)
-                    return
-                  }
-                  const bounds = rootRef.current?.getBoundingClientRect()
-                  if (
-                    !bounds ||
-                    targetScreen.x < bounds.left ||
-                    targetScreen.x > bounds.right ||
-                    targetScreen.y < bounds.top ||
-                    targetScreen.y > bounds.bottom
-                  )
-                    return
-                  ignoreConnectionPaneClickRef.current = true
-                  window.setTimeout(() => {
-                    ignoreConnectionPaneClickRef.current = false
-                  }, 250)
-                  setPendingConnection({
-                    nodeId: start.nodeId,
-                    side: start.side,
-                    sourceScreen: start.sourceScreen,
-                    targetPosition: reactFlow.screenToFlowPosition(targetScreen),
-                    targetScreen,
-                  })
-                }}
-                onConnectStart={(event, params) => {
-                  setPendingConnection(null)
-                  updateConnectionTargetNode(null)
-                  const pointerScreen = getEventClientPoint(event)
-                  if (!params.nodeId || !params.handleId || !pointerScreen) {
-                    connectionStartRef.current = null
-                    return
-                  }
-                  const handle = event.target instanceof Element ? event.target.closest(".react-flow__handle") : null
-                  const bounds = handle?.getBoundingClientRect()
-                  connectionStartRef.current = {
-                    nodeId: params.nodeId,
-                    pointerScreen,
-                    side: params.handleId.includes("left") ? "left" : "right",
-                    sourceScreen: bounds
-                      ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
-                      : pointerScreen,
-                  }
-                }}
-                onEdgesChange={(changes) => {
-                  const selectionChanges = changes.filter((change) => change.type === "select")
-                  if (selectionChanges.length > 0) {
-                    replaceSelection(applyReactFlowEdgeSelectionChanges(selectionRef.current, selectionChanges))
-                  }
-                  const documentChanges = changes.filter((change) => change.type !== "select")
-                  if (documentChanges.length === 0) return
-                  commit((document) => ({ ...document, edges: applyEdgeChanges(documentChanges, document.edges) }))
-                }}
+                onConnect={handleConnect}
+                onConnectEnd={handleConnectEnd}
+                onConnectStart={handleConnectStart}
+                onEdgesChange={handleEdgesChange}
                 onNodeContextMenu={(_, node) => {
                   if (!selection.nodeIds.has(node.id)) selectNodes([node.id])
                   setInsertPoint(node.position)
                 }}
                 onNodeDoubleClick={(_, node) => selectNodes([node.id])}
-                onNodeDragStart={(event, node) => {
-                  dispatch({ type: "begin-gesture" })
-                  altDragRef.current = null
-                  if (!event.altKey) return
-                  const nodeIds = selection.nodeIds.has(node.id) ? selectedNodeIds : [node.id]
-                  const plan = createCanvasDuplicateDragPlan(history.document, nodeIds, event.metaKey || event.ctrlKey)
-                  if (!plan) return
-                  altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
-                  dispatch({ type: "commit", document: plan.document })
-                  selectNodes(plan.selectedNodeIds)
-                }}
-                onNodeDragStop={() => {
-                  altDragRef.current = null
-                  dispatch({ type: "end-gesture" })
-                }}
-                onNodesChange={(changes) => {
-                  const effectiveChanges = altDragRef.current
-                    ? remapCanvasDuplicateDragChanges(
-                        changes as readonly NodeChange<CanvasNode>[],
-                        altDragRef.current.duplicatedNodeIdBySourceId,
-                      )
-                    : changes
-                  const selectionChanges = effectiveChanges.filter((change) => change.type === "select")
-                  if (selectionChanges.length > 0) {
-                    replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
-                  }
-                  const documentChanges = effectiveChanges.filter(
-                    (change) => change.type !== "select" && change.type !== "remove",
-                  )
-                  if (documentChanges.length === 0) return
-                  const measurementChanges = documentChanges.filter((change) => change.type === "dimensions")
-                  const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
-                  if (measurementChanges.length > 0) {
-                    dispatch({
-                      type: "replace-update",
-                      update: (document) => {
-                        const nextNodes = applyNodeChanges(measurementChanges, document.nodes)
-                        return equalCanvasNodes(document.nodes, nextNodes)
-                          ? document
-                          : { ...document, nodes: nextNodes }
-                      },
-                    })
-                  }
-                  if (committedChanges.length > 0) {
-                    dispatch({
-                      type: "preview-or-commit-update",
-                      update: (document) => {
-                        const nextNodes = applyNodeChanges(committedChanges, document.nodes)
-                        return equalCanvasNodes(document.nodes, nextNodes)
-                          ? document
-                          : { ...document, nodes: nextNodes }
-                      },
-                    })
-                  }
-                }}
-                // React Flow runs its selection-listener effect again whenever
-                // this callback's identity changes. Keep it memoized: an inline
-                // callback can oscillate controlled selection after a pane click.
-                onSelectionChange={synchronizeReactFlowSelection}
-                onSelectionStart={() => {
-                  // React Flow automatically selects every edge connected to a
-                  // box-selected node. Canvas keeps the gesture node-only while
-                  // preserving deliberate mixed selections from direct clicks.
-                  discardImplicitSelectionEdgesRef.current = true
-                }}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDragStop={handleNodeDragStop}
+                onNodesChange={handleNodesChange}
+                onSelectionEnd={handleBoxSelectionEnd}
+                onSelectionStart={handleBoxSelectionStart}
                 onPaneClick={() => {
+                  boxSelectionActiveRef.current = false
+                  boxSelectionBaselineRef.current = null
                   if (ignoreConnectionPaneClickRef.current) {
                     ignoreConnectionPaneClickRef.current = false
                     return
@@ -2897,7 +2927,7 @@ function SelectionToolbar(props: {
   canGroup: boolean
   canUngroup: boolean
   isActionPending: (actionId: string) => boolean
-  nodeIds: readonly string[]
+  nodeIds: string[]
   onAlign: (direction: CanvasAlign) => void
   onAction: (action: CanvasSelectionAction) => void
   onDelete: () => void
@@ -2934,7 +2964,7 @@ function SelectionToolbar(props: {
     <NodeToolbar
       className="convax-selection-toolbar nodrag nowheel"
       isVisible
-      nodeId={[...props.nodeIds]}
+      nodeId={props.nodeIds}
       offset={16}
       position={Position.Top}
     >
