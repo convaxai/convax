@@ -1494,6 +1494,7 @@ function App() {
           onLanguageChange={changeLanguage}
           onRefreshServices={() => void serviceCatalogController.refresh()}
           onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
+          petClient={window.convax.pets}
           pluginClient={window.convax.plugins}
           serviceSnapshot={serviceCatalogSnapshot}
           skillClient={window.convax.agent.skills}

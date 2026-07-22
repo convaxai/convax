@@ -1,15 +1,17 @@
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
-import { ArrowLeft, Cloud, Languages, Settings2, Sparkles } from "lucide-react"
+import { ArrowLeft, Cloud, Languages, PawPrint, Settings2, Sparkles } from "lucide-react"
 import { useState } from "react"
 import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
+import type { PetSettingsClient } from "../pet-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
+import { PetSettingsSurface } from "./pet-settings"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-export type SettingsSection = "general" | "services" | "capabilities"
+export type SettingsSection = "general" | "services" | "capabilities" | "pets"
 
 export interface SettingsViewProps {
   className?: string
@@ -21,6 +23,7 @@ export interface SettingsViewProps {
   onLanguageChange(preference: AppLanguagePreference): void
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
+  petClient: PetSettingsClient
   pluginClient: WebPluginClient
   serviceSnapshot: ServiceCatalogSnapshot
   skillClient: DesktopSkillClient
@@ -106,6 +109,7 @@ export function SettingsView({
   onLanguageChange,
   onRefreshServices,
   onServiceAction,
+  petClient,
   pluginClient,
   serviceSnapshot,
   skillClient,
@@ -119,7 +123,15 @@ export function SettingsView({
   const generalTitle = appMessage(locale, "settings.general")
   const servicesTitle = appMessage(locale, "settings.services")
   const capabilitiesTitle = appMessage(locale, "settings.capabilities")
-  const sectionTitle = section === "general" ? generalTitle : section === "services" ? servicesTitle : capabilitiesTitle
+  const petsTitle = appMessage(locale, "pets.title")
+  const sectionTitle =
+    section === "general"
+      ? generalTitle
+      : section === "services"
+        ? servicesTitle
+        : section === "capabilities"
+          ? capabilitiesTitle
+          : petsTitle
 
   return (
     <section
@@ -147,6 +159,9 @@ export function SettingsView({
             onClick={() => setSection("general")}
           >
             {generalTitle}
+          </SettingsNavigationItem>
+          <SettingsNavigationItem active={section === "pets"} icon={<PawPrint />} onClick={() => setSection("pets")}>
+            {petsTitle}
           </SettingsNavigationItem>
           {featureFlags.services ? (
             <SettingsNavigationItem
@@ -191,13 +206,15 @@ export function SettingsView({
               onRefresh={onRefreshServices}
               snapshot={serviceSnapshot}
             />
-          ) : (
+          ) : section === "capabilities" ? (
             <CapabilityManagementSurface
               className="min-h-[32rem]"
               locale={locale}
               pluginClient={pluginClient}
               skillClient={skillClient}
             />
+          ) : (
+            <PetSettingsSurface client={petClient} locale={locale} />
           )}
         </div>
       </main>

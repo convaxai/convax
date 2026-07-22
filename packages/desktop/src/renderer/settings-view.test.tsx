@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
+import type { PetSettingsClient } from "../pet-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
@@ -45,6 +46,17 @@ const pluginClient: WebPluginClient = {
   uninstallPlugin: mock(async () => true),
 }
 
+const petClient: PetSettingsClient = {
+  deleteCustom: mock(async () => undefined),
+  importCustom: mock(async () => null),
+  list: mock(async () => ({ awake: false, pets: [] })),
+  markDisplayed: mock(async () => undefined),
+  onDidChange: mock(() => noop),
+  onNavigate: mock(() => noop),
+  select: mock(async () => undefined),
+  setAwake: mock(async () => undefined),
+}
+
 const serviceSnapshot: ServiceCatalogSnapshot = {
   loading: false,
   services: [
@@ -73,6 +85,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -99,6 +112,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -120,6 +134,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -143,6 +158,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -167,6 +183,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -178,5 +195,26 @@ describe("SettingsView", () => {
     expect(markup).not.toContain(appMessage("en", "settings.services"))
     expect(markup).not.toContain(appMessage("en", "settings.capabilities").replace("&", "&amp;"))
     expect(markup).not.toContain("OpenCode")
+  })
+
+  test("exposes pet preferences as a host-rendered settings section", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        initialSection="pets"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+
+    expect(markup).toContain("Pets")
+    expect(markup).not.toContain("iframe")
   })
 })
