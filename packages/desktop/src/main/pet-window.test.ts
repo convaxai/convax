@@ -74,18 +74,30 @@ class FakeWindow extends EventEmitter {
   }
 }
 
-function fixture(savedPositions: Record<string, { x: number; y: number }> = {}) {
+function fixture(
+  savedPositions: Record<string, { scaleFactor?: number; x: number; y: number }> = {},
+  savedDisplayId?: string,
+) {
   const created: Array<{ options: Record<string, unknown>; window: FakeWindow }> = []
   const screen = new EventEmitter() as EventEmitter & {
     getDisplayMatching(bounds: { height: number; width: number; x: number; y: number }): {
       id: number
+      scaleFactor: number
       workArea: { height: number; width: number; x: number; y: number }
     }
-    getAllDisplays(): Array<{ id: number; workArea: { height: number; width: number; x: number; y: number } }>
-    getPrimaryDisplay(): { id: number; workArea: { height: number; width: number; x: number; y: number } }
+    getAllDisplays(): Array<{
+      id: number
+      scaleFactor: number
+      workArea: { height: number; width: number; x: number; y: number }
+    }>
+    getPrimaryDisplay(): {
+      id: number
+      scaleFactor: number
+      workArea: { height: number; width: number; x: number; y: number }
+    }
   }
-  const display = { id: 7, workArea: { height: 700, width: 900, x: 100, y: 50 } }
-  const secondary = { id: 8, workArea: { height: 760, width: 1_000, x: 1_000, y: 0 } }
+  const display = { id: 7, scaleFactor: 1, workArea: { height: 700, width: 900, x: 100, y: 50 } }
+  const secondary = { id: 8, scaleFactor: 2, workArea: { height: 760, width: 1_000, x: 1_000, y: 0 } }
   screen.getAllDisplays = () => [display, secondary]
   screen.getDisplayMatching = (bounds) => (bounds.x >= secondary.workArea.x ? secondary : display)
   screen.getPrimaryDisplay = () => display
@@ -103,6 +115,7 @@ function fixture(savedPositions: Record<string, { x: number; y: number }> = {}) 
     powerMonitor,
     preloadPath: "/app/preload/pet.js",
     rendererUrl: "file:///app/renderer/pet/index.html",
+    resolveDisplayId: () => savedDisplayId,
     resolvePosition: (displayId) => savedPositions[displayId],
     screen,
   })
@@ -159,7 +172,7 @@ describe("PetWindow", () => {
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_824, y: 0 })
     expect(value.onPositionChanged).not.toHaveBeenCalled()
     await value.pet.moveBy({ x: -10, y: 20 }, true)
-    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_814, y: 20 })
+    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_814, y: 20 }, 2)
 
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 5_000, y: -20 }
     value.screen.emit("display-metrics-changed")
@@ -173,14 +186,14 @@ describe("PetWindow", () => {
   })
 
   test("crosses displays while dragging and restores a saved secondary-display position", async () => {
-    const value = fixture({ "8": { x: 1_240, y: 120 } })
+    const value = fixture({ "7": { scaleFactor: 1, x: 400, y: 200 }, "8": { scaleFactor: 2, x: 1_240, y: 120 } }, "8")
     await value.pet.open(snapshot)
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_240, y: 120 })
 
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 824, y: 120 }
     await value.pet.moveBy({ x: 240, y: 0 }, true)
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_064, y: 120 })
-    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_064, y: 120 })
+    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_064, y: 120 }, 2)
   })
 
   test("recreates once after renderer crash and tucks after a second crash", async () => {

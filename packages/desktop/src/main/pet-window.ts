@@ -1,4 +1,5 @@
 import type { PetRendererSnapshot } from "../pet-contracts"
+import { petWindowPartition } from "./pet-session"
 
 export const petCollapsedSize = { height: 176, width: 176 } as const
 export const petExpandedSize = { height: 320, width: 356 } as const
@@ -7,6 +8,10 @@ export const petSnapshotChannel = "pet:snapshot"
 export interface PetPoint {
   x: number
   y: number
+}
+
+export interface PetSavedPosition extends PetPoint {
+  scaleFactor?: number
 }
 
 export interface PetRectangle extends PetPoint {
@@ -58,6 +63,7 @@ export interface PetNativeWindow {
 
 interface PetDisplay {
   id: number | string
+  scaleFactor: number
   workArea: PetRectangle
 }
 
@@ -77,11 +83,12 @@ interface PetPowerMonitorPort {
 export interface PetWindowOptions {
   createWindow(options: Record<string, unknown>): PetNativeWindow
   onFatal(): Promise<void> | void
-  onPositionChanged(displayId: string, position: PetPoint): Promise<void> | void
+  onPositionChanged(displayId: string, position: PetPoint, scaleFactor: number): Promise<void> | void
   powerMonitor: PetPowerMonitorPort
   preloadPath: string
   rendererUrl: string
-  resolvePosition?(displayId: string): PetPoint | undefined
+  resolveDisplayId?(): string | undefined
+  resolvePosition?(displayId: string): PetSavedPosition | undefined
   screen: PetScreenPort
 }
 
@@ -176,17 +183,23 @@ export class PetWindow {
     })
     const position = clampPetBounds({ x: bounds.x + delta.x, y: bounds.y + delta.y }, display.workArea, bounds)
     current.setBounds(position)
-    if (completed) await this.#options.onPositionChanged(String(display.id), position)
+    if (completed) await this.#options.onPositionChanged(String(display.id), position, display.scaleFactor)
   }
 
   async #create(generation: number) {
     const snapshot = this.#snapshot
     if (!snapshot || generation !== this.#generation) return
     const primaryDisplay = this.#options.screen.getPrimaryDisplay()
-    const saved = this.#options.screen
+    const savedDisplayId = this.#options.resolveDisplayId?.()
+    const savedCandidates = this.#options.screen
       .getAllDisplays()
       .map((display) => ({ display, position: this.#options.resolvePosition?.(String(display.id)) }))
-      .find((candidate) => candidate.position !== undefined)
+      .filter(
+        (candidate): candidate is { display: PetDisplay; position: PetSavedPosition } =>
+          candidate.position !== undefined,
+      )
+    const saved =
+      savedCandidates.find((candidate) => String(candidate.display.id) === savedDisplayId) ?? savedCandidates[0]
     const display = saved?.display ?? primaryDisplay
     const size = this.#expanded ? petExpandedSize : petCollapsedSize
     const restoredPosition = saved?.position
@@ -214,7 +227,7 @@ export class PetWindow {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
-        partition: "convax-pet-overlay",
+        partition: petWindowPartition,
         preload: this.#options.preloadPath,
         sandbox: true,
       },

@@ -14,7 +14,8 @@ export type PetSelection = { kind: "plugin"; pluginId: string } | { id: string; 
 
 export interface PetPersistedState {
   awake: boolean
-  positions: Record<string, { x: number; y: number }>
+  displayId?: string
+  positions: Record<string, { scaleFactor?: number; x: number; y: number }>
   schema: typeof petStateSchema
   seen: Record<string, number>
   selected?: PetSelection
@@ -58,14 +59,27 @@ function boundedKey(value: string, label: string, maximum = 256) {
 
 function parsePosition(value: unknown, label: string) {
   const input = asRecord(value, label)
-  exactKeys(input, ["x", "y"], ["x", "y"], label)
+  exactKeys(input, ["scaleFactor", "x", "y"], ["x", "y"], label)
   if (!Number.isSafeInteger(input.x) || !Number.isSafeInteger(input.y)) {
     throw new Error(`${label} position must use finite safe coordinates`)
   }
   if (Math.abs(input.x as number) > 1_000_000 || Math.abs(input.y as number) > 1_000_000) {
     throw new Error(`${label} position is outside the supported range`)
   }
-  return { x: input.x as number, y: input.y as number }
+  if (
+    input.scaleFactor !== undefined &&
+    (typeof input.scaleFactor !== "number" ||
+      !Number.isFinite(input.scaleFactor) ||
+      input.scaleFactor < 0.25 ||
+      input.scaleFactor > 8)
+  ) {
+    throw new Error(`${label} scale factor is invalid`)
+  }
+  return {
+    ...(input.scaleFactor === undefined ? {} : { scaleFactor: input.scaleFactor as number }),
+    x: input.x as number,
+    y: input.y as number,
+  }
 }
 
 function parseSelection(value: unknown): PetSelection | undefined {
@@ -87,7 +101,12 @@ function parseSelection(value: unknown): PetSelection | undefined {
 
 export function boundPetState(value: unknown): PetPersistedState {
   const input = asRecord(value, "Pet state")
-  exactKeys(input, ["awake", "positions", "schema", "seen", "selected"], ["awake", "positions", "seen"], "Pet state")
+  exactKeys(
+    input,
+    ["awake", "displayId", "positions", "schema", "seen", "selected"],
+    ["awake", "positions", "seen"],
+    "Pet state",
+  )
   if (input.schema !== undefined && input.schema !== petStateSchema) throw new Error("Pet state schema is unsupported")
   if (typeof input.awake !== "boolean") throw new Error("Pet awake state must be boolean")
 
@@ -113,8 +132,13 @@ export function boundPetState(value: unknown): PetPersistedState {
   watermarks.sort(([leftKey, left], [rightKey, right]) => right - left || leftKey.localeCompare(rightKey))
   const seen = Object.fromEntries(watermarks.slice(0, maximumWatermarks))
   const selected = parseSelection(input.selected)
+  if (input.displayId !== undefined && typeof input.displayId !== "string") {
+    throw new Error("Pet display id is invalid")
+  }
+  const displayId = input.displayId === undefined ? undefined : boundedKey(input.displayId, "Pet display id", 128)
   return {
     awake: input.awake,
+    ...(displayId === undefined ? {} : { displayId }),
     positions,
     schema: petStateSchema,
     seen,
@@ -125,6 +149,7 @@ export function boundPetState(value: unknown): PetPersistedState {
 function cloneState(state: PetPersistedState): PetPersistedState {
   return {
     awake: state.awake,
+    ...(state.displayId === undefined ? {} : { displayId: state.displayId }),
     positions: Object.fromEntries(Object.entries(state.positions).map(([key, value]) => [key, { ...value }])),
     schema: petStateSchema,
     seen: { ...state.seen },

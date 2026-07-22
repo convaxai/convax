@@ -23,14 +23,16 @@ describe("PetStateStore", () => {
     const { file, store } = await fixture()
     await store.write({
       awake: true,
-      positions: { displayA: { x: 40, y: 60 } },
+      displayId: "displayA",
+      positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
       seen: { "project-a\u0000session-a": 100 },
       selected: { kind: "plugin", pluginId: "convax-pet" },
     })
 
     expect(await store.read()).toEqual({
       awake: true,
-      positions: { displayA: { x: 40, y: 60 } },
+      displayId: "displayA",
+      positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
       schema: "convax.pet-state/1",
       seen: { "project-a\u0000session-a": 100 },
       selected: { kind: "plugin", pluginId: "convax-pet" },

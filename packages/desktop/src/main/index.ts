@@ -24,6 +24,7 @@ import {
   powerMonitor,
   protocol,
   screen,
+  session,
   shell,
   webFrameMain,
   type BrowserWindowConstructorOptions,
@@ -106,6 +107,7 @@ import { createPetAssetHandler, petAssetPrivileges, petAssetScheme } from "./pet
 import { PetController } from "./pet-controller"
 import { registerPetIpc } from "./pet-ipc"
 import { PetStateStore } from "./pet-state-store"
+import { registerPetAssetSessionProtocol } from "./pet-session"
 import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
@@ -606,10 +608,11 @@ function startApplication() {
     const petWindow = new PetWindow({
       createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
       onFatal: () => pets.setAwake(false),
-      onPositionChanged: (displayId, position) => pets.setPosition(displayId, position),
+      onPositionChanged: (displayId, position, scaleFactor) => pets.setPosition(displayId, position, scaleFactor),
       powerMonitor,
       preloadPath: join(import.meta.dirname, "../preload/pet.js"),
       rendererUrl: trustedPetRendererUrl,
+      resolveDisplayId: () => pets.getDisplayId(),
       resolvePosition: (displayId) => pets.getPosition(displayId),
       screen,
     })
@@ -728,8 +731,8 @@ function startApplication() {
         if (error instanceof WebPluginPublicationDeferredError) throw error
       },
     )
-    protocol.handle(
-      petAssetScheme,
+    const disposePetAssetProtocol = registerPetAssetSessionProtocol(
+      session,
       createPetAssetHandler(pets, (url, init) => net.fetch(url, init)),
     )
     await activity.start()
@@ -897,7 +900,7 @@ function startApplication() {
       app,
       [
         () => void disposePetApplication(),
-        () => protocol.unhandle(petAssetScheme),
+        disposePetAssetProtocol,
         () => protocol.unhandle("convax-asset"),
         () => protocol.unhandle(webPluginAssetScheme),
         disposeDesktopProtocolIpc,

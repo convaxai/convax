@@ -218,10 +218,15 @@ export class PetController {
     return position ? { ...position } : undefined
   }
 
-  async setPosition(displayId: string, position: { x: number; y: number }) {
+  getDisplayId() {
+    return this.#state.displayId
+  }
+
+  async setPosition(displayId: string, position: { x: number; y: number }, scaleFactor: number) {
     this.#state = {
       ...this.#state,
-      positions: { ...this.#state.positions, [displayId]: { ...position } },
+      displayId,
+      positions: { ...this.#state.positions, [displayId]: { ...position, scaleFactor } },
     }
     await this.#persist()
   }

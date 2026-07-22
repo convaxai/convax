@@ -277,6 +277,34 @@ describe("AgentActivityController", () => {
     controller.stop()
   })
 
+  test("selects recurring recovery candidates globally across projects", async () => {
+    const states = Object.fromEntries([
+      ...Array.from({ length: 20 }, (_, index) => {
+        const id = `session-a-${index}`
+        return [id, state("project-a", id, id, 2_000 - index, { status: { type: "busy" } })] as const
+      }),
+      [
+        "session-b",
+        state("project-b", "session-b", "B", 100, {
+          pendingQuestions: [{ id: "question-b", questions: [], sessionID: "session-b" }],
+        }),
+      ] as const,
+    ])
+    const { controller, runtime } = fixture({
+      projects: [project("project-a", "Alpha", 200), project("project-b", "Beta", 100)],
+      states,
+    })
+
+    await controller.start()
+    const getSessionState = runtime.getSessionState as ReturnType<typeof mock>
+    getSessionState.mockClear()
+    await controller.refresh()
+
+    expect(getSessionState.mock.calls.map(([input]) => input.sessionId)).toContain("session-b")
+    expect(getSessionState.mock.calls.length).toBeLessThanOrEqual(16)
+    controller.stop()
+  })
+
   test("loads persisted read watermarks before the first activity projection", async () => {
     const complete = {
       completedAt: 500,

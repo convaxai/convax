@@ -99,11 +99,13 @@ describe("PetController", () => {
   test("owns persisted display positions so later preference writes cannot discard them", async () => {
     const value = await fixture()
     await value.controller.initialize()
-    await value.controller.setPosition("display-7", { x: 42, y: 84 })
+    await value.controller.setPosition("display-7", { x: 42, y: 84 }, 2)
 
-    expect(value.controller.getPosition("display-7")).toEqual({ x: 42, y: 84 })
-    expect((await new PetStateStore(path.join(value.root, "state", "pet-state-v1.json")).read()).positions).toEqual({
-      "display-7": { x: 42, y: 84 },
+    expect(value.controller.getDisplayId()).toBe("display-7")
+    expect(value.controller.getPosition("display-7")).toEqual({ scaleFactor: 2, x: 42, y: 84 })
+    expect(await new PetStateStore(path.join(value.root, "state", "pet-state-v1.json")).read()).toMatchObject({
+      displayId: "display-7",
+      positions: { "display-7": { scaleFactor: 2, x: 42, y: 84 } },
     })
   })
 

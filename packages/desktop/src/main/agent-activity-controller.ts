@@ -60,6 +60,12 @@ interface ActivityRecord extends PetActivityTarget {
   updatedAt: number
 }
 
+interface ActivityRecoveryCandidate {
+  directory: string
+  project: ProjectRecord
+  session: AgentSessionState["session"]
+}
+
 const defaultClock: AgentActivityClock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   now: () => Date.now(),
@@ -113,6 +119,8 @@ export class AgentActivityController {
   readonly #watermarks?: AgentActivityWatermarkStore
   readonly #seenAfter = new Map<string, number>()
   readonly #sessionGenerations = new Map<string, number>()
+  #activeRecoveryCursor = 0
+  #discoveryRecoveryCursor = 0
   #failureCount = 0
   #initialRecoveryComplete = false
   #snapshot: PetActivitySnapshot = { activities: [], revision: 0 }
@@ -268,19 +276,94 @@ export class AgentActivityController {
     }
 
     let runtimeFailed = false
-    let remaining = this.#initialRecoveryComplete
-      ? Math.min(this.#maxActivities, this.#recoveryPollLimit)
-      : this.#maxActivities
+    const candidates: ActivityRecoveryCandidate[] = []
+    const listedSessions = new Map<string, Set<string>>()
     const orderedProjects = [...projects].sort((left, right) => right.lastOpenedAt - left.lastOpenedAt)
     for (const project of orderedProjects) {
-      if (remaining <= 0) break
-      const result = await this.#refreshProject(project.id, project, remaining)
-      runtimeFailed ||= result.failed
-      remaining -= result.sessionCount
+      let directory: string
+      try {
+        directory = await this.#projects.resolveEntryPath({ projectId: project.id })
+      } catch {
+        continue
+      }
+      try {
+        const sessions = (await this.#runtime.listSessions({ directory, limit: this.#maxActivities }))
+          .sort((left, right) => right.updatedAt - left.updatedAt)
+          .slice(0, this.#maxActivities)
+        listedSessions.set(project.id, new Set(sessions.map((session) => activityKey(project.id, session.id))))
+        for (const session of sessions) candidates.push({ directory, project, session })
+      } catch {
+        runtimeFailed = true
+      }
+    }
+
+    for (const [key, record] of this.#records) {
+      const seen = listedSessions.get(record.projectId)
+      if (seen && !seen.has(key)) this.#records.delete(key)
+    }
+
+    const budget = this.#initialRecoveryComplete
+      ? Math.min(this.#maxActivities, this.#recoveryPollLimit)
+      : this.#maxActivities
+    const orderedCandidates = candidates.sort(
+      (left, right) =>
+        right.session.updatedAt - left.session.updatedAt ||
+        left.project.id.localeCompare(right.project.id) ||
+        left.session.id.localeCompare(right.session.id),
+    )
+    const active = orderedCandidates.filter((candidate) => {
+      const state = this.#records.get(activityKey(candidate.project.id, candidate.session.id))?.state.state
+      return state === "running" || state === "needs-input"
+    })
+    active.sort((left, right) => {
+      const leftState = this.#records.get(activityKey(left.project.id, left.session.id))!.state
+      const rightState = this.#records.get(activityKey(right.project.id, right.session.id))!.state
+      return (
+        agentActivityPriority[leftState.state] - agentActivityPriority[rightState.state] ||
+        right.session.updatedAt - left.session.updatedAt
+      )
+    })
+    const activeKeys = new Set(active.map((candidate) => activityKey(candidate.project.id, candidate.session.id)))
+    const discovery = orderedCandidates.filter(
+      (candidate) => !activeKeys.has(activityKey(candidate.project.id, candidate.session.id)),
+    )
+    const selectedActive = this.#takeRecoveryCandidates(active, budget, true)
+    const selected = [
+      ...selectedActive,
+      ...this.#takeRecoveryCandidates(discovery, budget - selectedActive.length, false),
+    ].map((candidate) => ({
+      ...candidate,
+      generation: this.#nextSessionGeneration(activityKey(candidate.project.id, candidate.session.id)),
+    }))
+
+    for (const candidate of selected) {
+      try {
+        const sessionState = await this.#runtime.getSessionState({
+          directory: candidate.directory,
+          limit: 1,
+          sessionId: candidate.session.id,
+        })
+        this.#upsert(candidate.project, sessionState, candidate.generation)
+      } catch {
+        runtimeFailed = true
+      }
     }
     this.#trim()
     this.#publish()
     return runtimeFailed
+  }
+
+  #takeRecoveryCandidates(candidates: ActivityRecoveryCandidate[], count: number, active: boolean) {
+    if (count <= 0 || candidates.length === 0) return []
+    const cursor = (active ? this.#activeRecoveryCursor : this.#discoveryRecoveryCursor) % candidates.length
+    const selected = Array.from(
+      { length: Math.min(count, candidates.length) },
+      (_, index) => candidates[(cursor + index) % candidates.length]!,
+    )
+    const next = (cursor + selected.length) % candidates.length
+    if (active) this.#activeRecoveryCursor = next
+    else this.#discoveryRecoveryCursor = next
+    return selected
   }
 
   async #refreshProject(projectId: string, knownProject?: ProjectRecord, limit = this.#maxActivities) {
