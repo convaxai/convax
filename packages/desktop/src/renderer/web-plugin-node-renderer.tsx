@@ -599,7 +599,6 @@ function WebPluginCanvasNode(
         <div className="relative size-full">
           <iframe
             allow={webPluginIframeAllow(props.plugin)}
-            allowFullScreen={props.plugin.capabilities.includes("ui.fullscreen")}
             {...iframeInteraction}
             key={webPluginFrameKey(props.plugin)}
             onLoad={scheduleConnectFrame}

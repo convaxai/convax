@@ -43,10 +43,10 @@ import {
 } from "lucide-react"
 import {
   cloneElement,
-  Component,
   createContext,
   isValidElement,
   type DragEvent,
+  type ErrorInfo,
   type ReactNode,
   useCallback,
   useContext,
@@ -76,6 +76,7 @@ import type {
 } from "../types"
 import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
 import { ConnectionNodeMenu } from "./connection-node-menu"
+import { FileRendererBoundary } from "./file-renderer-boundary"
 
 function ToolbarButton(props: {
   destructive?: boolean
@@ -1104,6 +1105,7 @@ export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
 
 function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  const telemetry = useCanvasService("telemetry")
   const [generationOwner] = useState(() => new CanvasFileGenerationActivityOwner())
   const [generationActivity, setGenerationActivity] = useState<CanvasFileGenerationActivity>(generationOwner.activity)
   const [recoveryPrompt, setRecoveryPrompt] = useState<string>()
@@ -1124,9 +1126,28 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
   const ContributedToolbar = definition?.toolbar
+  const rendererId = definition?.id ?? props.data.kind
+  const reportRendererError = useCallback(
+    (surface: "content" | "toolbar", error: unknown, info: ErrorInfo) => {
+      telemetry?.track({
+        name: "canvas.file-renderer.failed",
+        properties: {
+          componentStack: info.componentStack?.slice(0, 4_096),
+          errorType: error instanceof Error ? error.name : typeof error,
+          rendererId,
+          surface,
+        },
+      })
+    },
+    [rendererId, telemetry],
+  )
   const selectionActions = showMutationToolbar ? editor.visibleSelectionActions : []
   const contributedToolbar = ContributedToolbar ? (
-    <FileRendererBoundary data={props.data} fallback={null} renderer={ContributedToolbar}>
+    <FileRendererBoundary
+      fallback={null}
+      onError={(error, info) => reportRendererError("toolbar", error, info)}
+      renderer={ContributedToolbar}
+    >
       <ContributedToolbar {...props} />
     </FileRendererBoundary>
   ) : null
@@ -1135,7 +1156,10 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       <ContributedToolbarSelectionActionContext.Provider
         value={Boolean(contributedToolbar && selectionActions.length > 0)}
       >
-        <FileRendererBoundary data={props.data} renderer={Renderer}>
+        <FileRendererBoundary
+          onError={(error, info) => reportRendererError("content", error, info)}
+          renderer={Renderer}
+        >
           {Renderer ? <Renderer {...props} /> : <UnknownFileRenderer {...props} />}
         </FileRendererBoundary>
       </ContributedToolbarSelectionActionContext.Provider>
@@ -1183,39 +1207,6 @@ function UnknownFileRenderer(props: NodeProps<CanvasNode>) {
       <div className="p-4 text-sm text-muted-foreground">No file renderer registered for {props.data.kind}.</div>
     </NodeChrome>
   )
-}
-
-class FileRendererBoundary extends Component<
-  {
-    children: ReactNode
-    data: CanvasNode["data"]
-    fallback?: ReactNode
-    renderer?: unknown
-  },
-  { failed: boolean }
-> {
-  state = { failed: false }
-
-  static getDerivedStateFromError() {
-    return { failed: true }
-  }
-
-  componentDidUpdate(previous: Readonly<{ data: CanvasNode["data"]; renderer?: unknown }>) {
-    if (this.state.failed && (previous.data !== this.props.data || previous.renderer !== this.props.renderer)) {
-      this.setState({ failed: false })
-    }
-  }
-
-  render() {
-    if (!this.state.failed) return this.props.children
-    return this.props.fallback !== undefined ? (
-      this.props.fallback
-    ) : (
-      <div className="grid size-full place-items-center rounded-lg border border-destructive/40 bg-card p-4 text-center text-sm text-destructive">
-        This file renderer failed. Update the file or plugin to retry.
-      </div>
-    )
-  }
 }
 
 export {

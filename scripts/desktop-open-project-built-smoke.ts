@@ -1175,7 +1175,7 @@ try {
   if (
     panoramaSummary.frameSandbox !== "allow-scripts" ||
     !panoramaSummary.frameAllow?.includes("fullscreen *") ||
-    panoramaSummary.frameAllowFullscreen !== true ||
+    panoramaSummary.frameAllowFullscreen !== false ||
     !panoramaSummary.frameUrl?.startsWith("convax-plugin://panorama-viewer/") ||
     panoramaSummary.panoramaNodeId !== seed.panoramaNodeId ||
     panoramaSummary.selectedSourceNodeId !== seed.sourceNodeId ||

@@ -36,6 +36,7 @@
     "@vitejs/plugin-react": "catalog:",
     "electron": "catalog:",
     "electron-vite": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "tailwindcss": "catalog:"
