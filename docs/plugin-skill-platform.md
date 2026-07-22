@@ -457,8 +457,9 @@ effects have installed their listener, while new surfaces register that listener
 before rendering.
 
 The optional `ui.fullscreen` capability does not add an RPC method. It only lets the
-host add `fullscreen *` to that Plugin iframe's feature policy and set
-`allowFullScreen`; frames without the capability retain `fullscreen 'none'`.
+host add `fullscreen *` to that Plugin iframe's feature policy; frames without the
+capability retain `fullscreen 'none'`. The host does not also emit the legacy
+`allowfullscreen` attribute because Chromium gives the `allow` policy precedence.
 Connected-image access recognizes incoming Canvas edges only, never accepts a
 Project path from Plugin code, and rechecks the exact edge plus source reference
 after the asynchronous read. While that capability is granted, the host may also
