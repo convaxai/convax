@@ -198,8 +198,9 @@ export function filterAgentSkills(skills: readonly AgentSkill[], query: string) 
 export function shouldDismissAgentResourcePicker<T>(
   surface: { contains(target: T): boolean } | null,
   target: T | null,
+  portal?: { contains(target: T): boolean } | null,
 ) {
-  return !surface || target === null || !surface.contains(target)
+  return target === null || ((!surface || !surface.contains(target)) && (!portal || !portal.contains(target)))
 }
 
 function normalizeAgentComposerResource(resource: AgentResource): AgentResource | undefined {

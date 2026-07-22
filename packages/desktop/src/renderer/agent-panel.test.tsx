@@ -124,6 +124,8 @@ describe("Agent composer source contract", () => {
     )
     expect(source).toContain("onOpenSkill={openSkill}")
     expect(source).toContain("referenceStatusById={referenceStatusById}")
+    expect(source).toContain("createAgentComposerPickerAnchor")
+    expect(source).not.toContain("target.top - 324")
     expect(source).toContain("event.nativeEvent.isComposing")
     expect(source).toContain('event.key === "Escape"')
     expect(source).toContain('event.key === "Tab"')

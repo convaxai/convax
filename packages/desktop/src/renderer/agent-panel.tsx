@@ -123,6 +123,7 @@ import {
 import {
   AgentComposerPicker,
   agentComposerPickerOptionId,
+  createAgentComposerPickerAnchor,
   type AgentComposerPickerAnchor,
   type AgentComposerPickerOption,
 } from "./agent-composer-picker"
@@ -179,11 +180,10 @@ function agentComposerPickerAnchor(
     rect = range.getBoundingClientRect()
   }
   const fallback = root.getBoundingClientRect()
-  const target = rect.width || rect.height ? rect : fallback
-  const width = Math.min(352, Math.max(240, window.innerWidth - 16))
-  const left = Math.max(8, Math.min(target.left, window.innerWidth - width - 8))
-  const top = target.top >= 240 ? Math.max(8, target.top - 324) : Math.min(target.bottom + 6, window.innerHeight - 328)
-  return { left, top: Math.max(8, top) }
+  return createAgentComposerPickerAnchor(rect, fallback, {
+    height: window.innerHeight,
+    width: window.innerWidth,
+  })
 }
 
 export interface AgentPanelLayout {
@@ -297,6 +297,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const composerRef = useRef<HTMLDivElement>(null)
   const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
+  const composerPickerRef = useRef<HTMLDivElement>(null)
   const composerDraftRef = useRef(composerDraft)
   const composerQueryRangeRef = useRef<AgentComposerQueryRange | undefined>(undefined)
   const composerSelectionRef = useRef<Range | undefined>(undefined)
@@ -310,6 +311,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const sessionListRequestRef = useRef(0)
   const activeProjectRef = useRef(props.projectId)
   const activeScopeRef = useRef(conversationScope)
+  const setComposerPickerElement = useCallback((element: HTMLDivElement | null) => {
+    composerPickerRef.current = element
+  }, [])
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
   const compositionControllerRef = useRef(new AgentComposerCompositionController())
   const requestTrackerRef = useRef(new AgentComposerRequestTracker())
@@ -1261,7 +1265,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   useEffect(() => {
     if (!suggestion.open) return
     const dismissForTarget = (target: EventTarget | null) => {
-      if (!(target instanceof Node) || shouldDismissAgentResourcePicker(composerSurfaceRef.current, target))
+      if (
+        !(target instanceof Node) ||
+        shouldDismissAgentResourcePicker(composerSurfaceRef.current, target, composerPickerRef.current)
+      )
         closeComposerSuggestion()
     }
     const onPointerDown = (event: PointerEvent) => dismissForTarget(event.target)
@@ -1902,6 +1909,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     error={suggestionError}
                     loading={suggestionLoading}
                     onClose={closeComposerSuggestion}
+                    onElementChange={setComposerPickerElement}
                     onHoverChange={(hoveredId) =>
                       setSuggestion((current) =>
                         current.open ? setAgentComposerSuggestionHover(current, hoveredId) : current,
@@ -2015,7 +2023,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       const target = event.relatedTarget
                       if (
                         !(target instanceof Node) ||
-                        shouldDismissAgentResourcePicker(composerSurfaceRef.current, target)
+                        shouldDismissAgentResourcePicker(composerSurfaceRef.current, target, composerPickerRef.current)
                       )
                         closeComposerSuggestion()
                     }}

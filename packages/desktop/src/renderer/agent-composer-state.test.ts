@@ -163,11 +163,12 @@ describe("Agent composer state", () => {
     const popup = { id: "popup" }
     const composer = { id: "composer" }
     const outside = { id: "outside" }
-    const surface = { contains: (target: { id: string }) => target === popup || target === composer }
+    const surface = { contains: (target: { id: string }) => target === composer }
+    const portal = { contains: (target: { id: string }) => target === popup }
 
-    expect(shouldDismissAgentResourcePicker(surface, popup)).toBeFalse()
+    expect(shouldDismissAgentResourcePicker(surface, popup, portal)).toBeFalse()
     expect(shouldDismissAgentResourcePicker(surface, composer)).toBeFalse()
-    expect(shouldDismissAgentResourcePicker(surface, outside)).toBeTrue()
+    expect(shouldDismissAgentResourcePicker(surface, outside, portal)).toBeTrue()
     expect(shouldDismissAgentResourcePicker(surface, null)).toBeTrue()
   })
 })

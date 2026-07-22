@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AgentComposerPicker, type AgentComposerPickerOption } from "./agent-composer-picker"
+import {
+  AgentComposerPicker,
+  type AgentComposerPickerOption,
+  createAgentComposerPickerAnchor,
+  positionAgentComposerPicker,
+} from "./agent-composer-picker"
 
 const noop = () => undefined
 
@@ -12,7 +17,7 @@ function renderPicker(
   return renderToStaticMarkup(
     <AgentComposerPicker
       activeId={options[0]?.id}
-      anchor={{ left: 40, top: 120 }}
+      anchor={{ aboveSpace: 112, aboveTop: 120, belowSpace: 40, belowTop: 140, left: 40 }}
       onClose={noop}
       onHoverChange={noop}
       onOpenSkill={noop}
@@ -29,6 +34,17 @@ function renderPicker(
 }
 
 describe("Agent composer picker", () => {
+  test("keeps a measured short picker above its anchor even when more total space exists below", () => {
+    const target = { bottom: 320, height: 20, left: 600, top: 300, width: 1 }
+    const anchor = createAgentComposerPickerAnchor(target, target, { height: 1_000, width: 1_200 })
+
+    expect(positionAgentComposerPicker(anchor, 120)).toEqual({
+      left: 600,
+      placement: "above",
+      top: 292,
+    })
+  })
+
   test("renders reference tabs and an accessible Convax tree", () => {
     const markup = renderPicker("reference", [
       {
@@ -55,7 +71,19 @@ describe("Agent composer picker", () => {
     expect(markup).toContain("Canvas")
     expect(markup).toContain("bg-popover")
     expect(markup).toContain("border-border")
+    expect(markup).toContain("transform:translateY(-100%)")
     expect(markup).not.toContain("--mpga")
+  })
+
+  test("places a measured picker below the caret only when it does not fit above", () => {
+    const target = { bottom: 100, height: 20, left: 40, top: 80, width: 1 }
+    const anchor = createAgentComposerPickerAnchor(target, target, { height: 1_000, width: 1_200 })
+
+    expect(positionAgentComposerPicker(anchor, 120)).toEqual({
+      left: 40,
+      placement: "below",
+      top: 108,
+    })
   })
 
   test("renders Skills as a listbox with dollar identities", () => {

@@ -114,6 +114,36 @@ async function evaluate(webSocketUrl: string, expression: string) {
   })
 }
 
+async function sendDebuggerCommand(webSocketUrl: string, method: string, params: Record<string, unknown>) {
+  return new Promise<unknown>((resolve, reject) => {
+    const socket = new WebSocket(webSocketUrl)
+    const timer = setTimeout(() => {
+      socket.close()
+      reject(new Error(`Timed out waiting for debugger command ${method}`))
+    }, evaluationTimeoutMs)
+
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ id: 1, method, params }))
+    })
+    socket.addEventListener("error", () => {
+      clearTimeout(timer)
+      reject(new Error(`Debugger command ${method} failed`))
+    })
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as {
+        error?: { message: string }
+        id?: number
+        result?: unknown
+      }
+      if (message.id !== 1) return
+      clearTimeout(timer)
+      socket.close()
+      if (message.error) return reject(new Error(message.error.message))
+      resolve(message.result)
+    })
+  })
+}
+
 async function evaluateStable(webSocketUrl: string, expression: string) {
   const deadline = Date.now() + timeoutMs
   while (true) {
@@ -576,6 +606,129 @@ try {
   ) {
     throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
   }
+
+  await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+      if (!composer) throw new Error("The Agent composer is missing")
+      composer.replaceChildren()
+      composer.focus()
+      const range = document.createRange()
+      range.selectNodeContents(composer)
+      range.collapse(false)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      window.__convaxSmokeComposerInputTrusted = undefined
+      composer.addEventListener("input", (event) => {
+        window.__convaxSmokeComposerInputTrusted = event.isTrusted
+      }, { once: true })
+    })()`,
+  )
+  await sendDebuggerCommand(rendererDebugger, "Input.insertText", { text: "@" })
+  const composerPickerGeometry = (await evaluateStable(
+    rendererDebugger,
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      let picker
+      while (Date.now() < deadline) {
+        picker = document.querySelector('[data-agent-composer-picker="true"]')
+        if (picker) break
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+      if (!composer || !picker) throw new Error("Real @ input did not open the Agent composer picker")
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      const composerBounds = composer.getBoundingClientRect()
+      const pickerBounds = picker.getBoundingClientRect()
+      const pickerStyle = getComputedStyle(picker)
+      const offsetParentBounds = picker.offsetParent?.getBoundingClientRect()
+      return {
+        composerBottom: composerBounds.bottom,
+        composerText: composer.textContent,
+        composerTop: composerBounds.top,
+        gap: composerBounds.top - pickerBounds.bottom,
+        pickerBottom: pickerBounds.bottom,
+        pickerComputedTop: pickerStyle.top,
+        pickerHeight: pickerBounds.height,
+        pickerOffsetParent: offsetParentBounds
+          ? { left: offsetParentBounds.left, top: offsetParentBounds.top }
+          : null,
+        pickerTop: pickerBounds.top,
+        pickerTransform: pickerStyle.transform,
+        trusted: window.__convaxSmokeComposerInputTrusted,
+      }
+    })()`,
+  )) as {
+    composerBottom?: number
+    composerText?: string | null
+    composerTop?: number
+    gap?: number
+    pickerBottom?: number
+    pickerComputedTop?: string
+    pickerHeight?: number
+    pickerOffsetParent?: { left: number; top: number } | null
+    pickerTop?: number
+    pickerTransform?: string
+    trusted?: boolean
+  }
+  if (
+    composerPickerGeometry.composerText !== "@" ||
+    composerPickerGeometry.trusted !== true ||
+    !Number.isFinite(composerPickerGeometry.gap) ||
+    composerPickerGeometry.gap! < 6 ||
+    composerPickerGeometry.gap! > 10
+  ) {
+    throw new Error(`Real Agent composer input produced invalid picker geometry: ${JSON.stringify(composerPickerGeometry)}`)
+  }
+  const composerPickerTabPoint = (await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const picker = document.querySelector('[data-agent-composer-picker="true"]')
+      const tab = picker && [...picker.querySelectorAll('[role="tab"]')]
+        .find((candidate) => candidate.textContent?.trim() === "Canvas")
+      if (!tab) throw new Error("The Agent composer Canvas tab is missing")
+      const bounds = tab.getBoundingClientRect()
+      return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+    })()`,
+  )) as { x: number; y: number }
+  await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
+    button: "left",
+    clickCount: 1,
+    type: "mousePressed",
+    x: composerPickerTabPoint.x,
+    y: composerPickerTabPoint.y,
+  })
+  await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
+    button: "left",
+    clickCount: 1,
+    type: "mouseReleased",
+    x: composerPickerTabPoint.x,
+    y: composerPickerTabPoint.y,
+  })
+  const composerPickerInteraction = (await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const picker = document.querySelector('[data-agent-composer-picker="true"]')
+      const tab = picker && [...picker.querySelectorAll('[role="tab"]')]
+        .find((candidate) => candidate.textContent?.trim() === "Canvas")
+      return { open: Boolean(picker), selected: tab?.getAttribute("aria-selected") === "true" }
+    })()`,
+  )) as { open?: boolean; selected?: boolean }
+  if (!composerPickerInteraction.open || !composerPickerInteraction.selected) {
+    throw new Error(`The portaled Agent composer picker dismissed its own interaction: ${JSON.stringify(composerPickerInteraction)}`)
+  }
+  await evaluateStable(
+    rendererDebugger,
+    `(() => {
+      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+      if (!composer) return
+      composer.replaceChildren()
+      composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }))
+      delete window.__convaxSmokeComposerInputTrusted
+    })()`,
+  )
 
   const directorFrameGeometry = (await evaluatePluginFrame(
     mainDebugger,

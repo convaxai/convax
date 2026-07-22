@@ -12,11 +12,62 @@ import {
   Square,
   X,
 } from "lucide-react"
+import { useCallback, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import type { AgentReferenceTreeRow, AgentReferenceTreeStatus } from "./agent-composer-tree"
 
 export interface AgentComposerPickerAnchor {
+  aboveSpace: number
+  aboveTop: number
+  belowSpace: number
+  belowTop: number
   left: number
+}
+
+interface AgentComposerPickerPosition {
+  left: number
+  placement: "above" | "below"
   top: number
+}
+
+export function createAgentComposerPickerAnchor(
+  anchor: Pick<DOMRect, "bottom" | "height" | "left" | "top" | "width">,
+  fallback: Pick<DOMRect, "bottom" | "height" | "left" | "top" | "width">,
+  viewport: { height: number; width: number },
+): AgentComposerPickerAnchor {
+  const target = anchor.width || anchor.height ? anchor : fallback
+  const gap = 8
+  const pickerWidth = Math.min(352, Math.max(0, viewport.width - gap * 2))
+  const left = Math.max(gap, Math.min(target.left, viewport.width - pickerWidth - gap))
+  const aboveSpace = Math.max(0, target.top - gap)
+  const belowSpace = Math.max(0, viewport.height - target.bottom - gap)
+  return {
+    aboveSpace,
+    aboveTop: Math.max(gap, Math.min(target.top - gap, viewport.height - gap)),
+    belowSpace,
+    belowTop: Math.max(gap, Math.min(target.bottom + gap, viewport.height - gap)),
+    left,
+  }
+}
+
+export function positionAgentComposerPicker(
+  anchor: AgentComposerPickerAnchor,
+  pickerHeight: number,
+): AgentComposerPickerPosition {
+  const aboveFits = pickerHeight <= anchor.aboveSpace
+  const belowFits = pickerHeight <= anchor.belowSpace
+  const placement = aboveFits
+    ? "above"
+    : belowFits
+      ? "below"
+      : anchor.aboveSpace >= anchor.belowSpace
+        ? "above"
+        : "below"
+  return {
+    left: anchor.left,
+    placement,
+    top: placement === "above" ? anchor.aboveTop : anchor.belowTop,
+  }
 }
 
 export type AgentComposerPickerOption =
@@ -35,6 +86,7 @@ export interface AgentComposerPickerProps {
   error?: string
   loading?: boolean
   onClose: () => void
+  onElementChange?: (element: HTMLDivElement | null) => void
   onHoverChange: (id: string | undefined) => void
   onOpenSkill: (name: string) => void | Promise<void>
   onReferenceTabChange: (tab: "canvas" | "project") => void
@@ -55,14 +107,40 @@ export function agentComposerPickerOptionId(optionId: string) {
 export function AgentComposerPicker(props: AgentComposerPickerProps) {
   const skill = props.trigger === "skill"
   const pickerId = `agent-composer-${props.trigger}-picker`
-  return (
+  const pickerRef = useRef<HTMLDivElement>(null)
+  const [pickerHeight, setPickerHeight] = useState(0)
+  const position = positionAgentComposerPicker(props.anchor, pickerHeight)
+  const setPickerRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      pickerRef.current = element
+      props.onElementChange?.(element)
+    },
+    [props.onElementChange],
+  )
+
+  useLayoutEffect(() => {
+    const picker = pickerRef.current
+    if (!picker) return
+    const updateHeight = () => setPickerHeight(picker.getBoundingClientRect().height)
+    updateHeight()
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(picker)
+    return () => observer.disconnect()
+  }, [])
+
+  const picker = (
     <div
       className="fixed z-50 max-h-80 w-[min(22rem,calc(100vw-1rem))] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
       data-agent-composer-picker
       id={pickerId}
       onPointerDown={(event) => event.preventDefault()}
       onPointerLeave={() => props.onHoverChange(undefined)}
-      style={{ left: props.anchor.left, top: props.anchor.top }}
+      ref={setPickerRef}
+      style={{
+        left: position.left,
+        top: position.top,
+        transform: position.placement === "above" ? "translateY(-100%)" : undefined,
+      }}
     >
       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
         {skill ? (
@@ -142,6 +220,7 @@ export function AgentComposerPicker(props: AgentComposerPickerProps) {
       </div>
     </div>
   )
+  return typeof document === "undefined" ? picker : createPortal(picker, document.body)
 }
 
 function SkillOption(props: {
