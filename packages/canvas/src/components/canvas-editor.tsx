@@ -835,7 +835,7 @@ function CanvasEditorContent(
     [notificationService],
   )
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
-  const selectionActionsMountedRef = useRef(true)
+  const selectionActionsMountedRef = useRef(false)
   const selectionActionErrorRef = useRef(notifyError)
   const selectionActionExecutorRef = useRef<CanvasSelectionActionExecutor | null>(null)
   selectionActionErrorRef.current = notifyError
@@ -892,7 +892,7 @@ function CanvasEditorContent(
   const selectionDragArmed = Boolean(
     selectionDragChordHeld && !selectionDragGesture.consumed && visibleSelectionDragSource,
   )
-  useEffect(() => {
+  useLayoutEffect(() => {
     selectionActionsMountedRef.current = true
     return () => {
       selectionActionsMountedRef.current = false
@@ -908,7 +908,6 @@ function CanvasEditorContent(
     }
   }, [selectionDragGesture])
   useLayoutEffect(() => {
-    refreshSelectionActionState()
     return () => {
       selectionActionController.abort()
       selectionActionExecutor.reset({ notify: false })
@@ -940,8 +939,8 @@ function CanvasEditorContent(
     [selectionActionContext, selectionActionExecutor],
   )
   const isSelectionActionPending = useCallback(
-    (actionId: string) => selectionActionExecutor.isPending(actionId),
-    [selectionActionExecutor],
+    (actionId: string) => selectionActionExecutor.isPending(actionId, selectionActionContext.signal),
+    [selectionActionContext.signal, selectionActionExecutor],
   )
   const selectionDragContextIsCurrent = useCallback(
     () =>

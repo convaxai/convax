@@ -86,6 +86,36 @@ describe("Canvas selection actions", () => {
     expect(pendingChanges).toEqual([true, false])
   })
 
+  test("does not expose pending work from a replaced selection snapshot", async () => {
+    const pendingChanges: boolean[] = []
+    const gate = deferred()
+    const action: CanvasSelectionAction = {
+      execute: () => gate.promise,
+      id: "export",
+      label: "Export",
+    }
+    const executor = new CanvasSelectionActionExecutor({
+      onPendingChange: () => pendingChanges.push(executor.isPending(action.id)),
+    })
+    const document = createCanvasDocument()
+    const firstController = new AbortController()
+    const first = createCanvasSelectionActionContext(document, [], [], firstController.signal)
+    const replacement = createCanvasSelectionActionContext(document, [], [], new AbortController().signal)
+
+    const execution = executor.execute(action, first)
+    expect(executor.isPending(action.id)).toBeTrue()
+    expect(executor.isPending(action.id, first.signal)).toBeTrue()
+    expect(executor.isPending(action.id, replacement.signal)).toBeFalse()
+
+    firstController.abort()
+    executor.reset({ notify: false })
+    gate.resolve()
+
+    expect(await execution).toBe("aborted")
+    expect(executor.isPending(action.id)).toBeFalse()
+    expect(pendingChanges).toEqual([true])
+  })
+
   test("reports execution failures but treats an aborted context as cancellation", async () => {
     const errors: unknown[] = []
     const executor = new CanvasSelectionActionExecutor({ onError: (_action, error) => errors.push(error) })
