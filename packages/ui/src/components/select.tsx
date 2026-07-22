@@ -46,8 +46,8 @@ export interface SelectProps {
   defaultValue?: string
   dir?: "ltr" | "rtl"
   disabled?: boolean
-  onOpenChange?(open: boolean): void
-  onValueChange?(value: string): void
+  onOpenChange?: (open: boolean) => void
+  onValueChange?: (value: string) => void
   open?: boolean
   value?: string
 }
@@ -69,19 +69,25 @@ export function Select({
   const contentId = useId()
   const open = controlledOpen ?? uncontrolledOpen
   const value = controlledValue ?? uncontrolledValue
-  const setOpen = useCallback((nextOpen: boolean) => {
-    if (disabled && nextOpen) return
-    if (controlledOpen === undefined) setUncontrolledOpen(nextOpen)
-    if (nextOpen !== open) onOpenChange?.(nextOpen)
-  }, [controlledOpen, disabled, onOpenChange, open])
-  const setValue = useCallback((nextValue: string) => {
-    if (disabled || nextValue === value) return
-    if (controlledValue === undefined) setUncontrolledValue(nextValue)
-    onValueChange?.(nextValue)
-  }, [controlledValue, disabled, onValueChange, value])
+  const setOpen = useCallback(
+    (nextOpen: boolean) => {
+      if (disabled && nextOpen) return
+      if (controlledOpen === undefined) setUncontrolledOpen(nextOpen)
+      if (nextOpen !== open) onOpenChange?.(nextOpen)
+    },
+    [controlledOpen, disabled, onOpenChange, open],
+  )
+  const setValue = useCallback(
+    (nextValue: string) => {
+      if (disabled || nextValue === value) return
+      if (controlledValue === undefined) setUncontrolledValue(nextValue)
+      onValueChange?.(nextValue)
+    },
+    [controlledValue, disabled, onValueChange, value],
+  )
 
   useEffect(() => {
-    if (!open) return
+    if (!open) return undefined
     const closeForEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
@@ -90,7 +96,9 @@ export function Select({
       triggerRef.current?.focus()
     }
     window.addEventListener("keydown", closeForEscape, true)
-    return () => window.removeEventListener("keydown", closeForEscape, true)
+    return () => {
+      window.removeEventListener("keydown", closeForEscape, true)
+    }
   }, [open, setOpen])
 
   return (
@@ -102,24 +110,23 @@ export function Select({
   )
 }
 
-export const SelectTrigger = forwardRef<HTMLButtonElement, ComponentProps<"button">>(function SelectTrigger({
-  children,
-  className,
-  disabled,
-  onClick,
-  onKeyDown,
-  type = "button",
-  ...props
-}, forwardedRef) {
+export const SelectTrigger = forwardRef<HTMLButtonElement, ComponentProps<"button">>(function SelectTrigger(
+  { children, className, disabled, onClick, onKeyDown, type = "button", ...props },
+  forwardedRef,
+) {
   const context = useSelectContext("SelectTrigger")
   const triggerDisabled = context.disabled || disabled
-  const setTriggerRef = useCallback((node: HTMLButtonElement | null) => {
-    context.triggerRef.current = node
-    setRef(forwardedRef, node)
-  }, [context.triggerRef, forwardedRef])
+  const setTriggerRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      context.triggerRef.current = node
+      setRef(forwardedRef, node)
+    },
+    [context.triggerRef, forwardedRef],
+  )
 
   return (
-    <MenuAnchor asChild>
+    <>
+      <MenuAnchor virtualRef={context.triggerRef} />
       <button
         aria-autocomplete="none"
         aria-controls={context.open ? context.contentId : undefined}
@@ -151,14 +158,22 @@ export const SelectTrigger = forwardRef<HTMLButtonElement, ComponentProps<"butto
         {children}
         <ChevronDown
           aria-hidden="true"
-          className={cn("size-4 shrink-0 text-muted-foreground opacity-70 transition-transform", context.open && "rotate-180")}
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground opacity-70 transition-transform",
+            context.open && "rotate-180",
+          )}
         />
       </button>
-    </MenuAnchor>
+    </>
   )
 })
 
-export function SelectValue({ children, className, placeholder, ...props }: ComponentProps<"span"> & { placeholder?: ReactNode }) {
+export function SelectValue({
+  children,
+  className,
+  placeholder,
+  ...props
+}: ComponentProps<"span"> & { placeholder?: ReactNode }) {
   const context = useSelectContext("SelectValue")
   return (
     <span
@@ -172,51 +187,46 @@ export function SelectValue({ children, className, placeholder, ...props }: Comp
   )
 }
 
-export const SelectContent = forwardRef<HTMLDivElement, Omit<ComponentProps<typeof MenuContent>, "onEscapeKeyDown">>(function SelectContent({
-  align = "start",
-  children,
-  className,
-  onCloseAutoFocus,
-  sideOffset = 4,
-  ...props
-}, forwardedRef) {
-  const context = useSelectContext("SelectContent")
-  return (
-    <MenuPortal>
-      <MenuContent
-        align={align}
-        aria-labelledby={context.triggerRef.current?.id}
-        className={cn(
-          "z-[110] max-h-[var(--radix-popper-available-height)] min-w-[var(--radix-popper-anchor-width)] overflow-y-auto overflow-x-hidden rounded-lg border border-border/90 bg-popover/95 p-1.5 text-popover-foreground shadow-xl backdrop-blur-xl",
-          className,
-        )}
-        data-slot="select-content"
-        id={context.contentId}
-        loop
-        onCloseAutoFocus={(event) => {
-          onCloseAutoFocus?.(event)
-          if (event.defaultPrevented) return
-          event.preventDefault()
-          context.triggerRef.current?.focus()
-        }}
-        ref={forwardedRef}
-        role="listbox"
-        sideOffset={sideOffset}
-        {...props}
-      >
-        {children}
-      </MenuContent>
-    </MenuPortal>
-  )
-})
+export const SelectContent = forwardRef<HTMLDivElement, Omit<ComponentProps<typeof MenuContent>, "onEscapeKeyDown">>(
+  function SelectContent(
+    { align = "start", children, className, onCloseAutoFocus, sideOffset = 4, ...props },
+    forwardedRef,
+  ) {
+    const context = useSelectContext("SelectContent")
+    return (
+      <MenuPortal>
+        <MenuContent
+          align={align}
+          aria-labelledby={context.triggerRef.current?.id}
+          className={cn(
+            "z-[110] max-h-[var(--radix-popper-available-height)] min-w-[var(--radix-popper-anchor-width)] overflow-y-auto overflow-x-hidden rounded-lg border border-border/90 bg-popover/95 p-1.5 text-popover-foreground shadow-xl backdrop-blur-xl",
+            className,
+          )}
+          data-slot="select-content"
+          id={context.contentId}
+          loop
+          onCloseAutoFocus={(event) => {
+            onCloseAutoFocus?.(event)
+            if (event.defaultPrevented) return
+            event.preventDefault()
+            context.triggerRef.current?.focus()
+          }}
+          ref={forwardedRef}
+          role="listbox"
+          sideOffset={sideOffset}
+          {...props}
+        >
+          {children}
+        </MenuContent>
+      </MenuPortal>
+    )
+  },
+)
 
-export const SelectItem = forwardRef<HTMLDivElement, Omit<ComponentProps<typeof MenuItem>, "value"> & { value: string }>(function SelectItem({
-  children,
-  className,
-  onSelect,
-  value,
-  ...props
-}, forwardedRef) {
+export const SelectItem = forwardRef<
+  HTMLDivElement,
+  Omit<ComponentProps<typeof MenuItem>, "value"> & { value: string }
+>(function SelectItem({ children, className, onSelect, value, ...props }, forwardedRef) {
   const context = useSelectContext("SelectItem")
   const selected = context.value === value
   return (
@@ -246,11 +256,7 @@ export const SelectItem = forwardRef<HTMLDivElement, Omit<ComponentProps<typeof 
 
 export function SelectSeparator({ className, ...props }: ComponentProps<typeof MenuSeparator>) {
   return (
-    <MenuSeparator
-      className={cn("-mx-1 my-1 h-px bg-border/70", className)}
-      data-slot="select-separator"
-      {...props}
-    />
+    <MenuSeparator className={cn("-mx-1 my-1 h-px bg-border/70", className)} data-slot="select-separator" {...props} />
   )
 }
 

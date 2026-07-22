@@ -22,9 +22,8 @@
       "packages/*"
     ],
     "catalog": {
-      "@radix-ui/react-context-menu": "2.3.3",
-      "@radix-ui/react-menu": "2.1.20",
-      "@radix-ui/react-tooltip": "1.2.12",
+      "@radix-ui/react-context-menu": "2.3.4",
+      "@radix-ui/react-menu": "2.1.21",
       "@tailwindcss/vite": "4.3.2",
       "@tiptap/core": "3.27.4",
       "@tiptap/extension-placeholder": "3.27.4",
@@ -44,6 +43,7 @@
       "clsx": "2.1.1",
       "electron": "42.3.3",
       "electron-vite": "5.0.0",
+      "happy-dom": "20.11.0",
       "lucide-react": "1.24.0",
       "react": "19.2.7",
       "react-dom": "19.2.7",
