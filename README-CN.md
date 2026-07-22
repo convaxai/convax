@@ -62,6 +62,36 @@ bun dev
 bun check
 ```
 
+编译工作区、构建当前平台的原生安装介质，或从最终打包可执行文件（而不是
+Electron SDK）启动自动化 smoke：
+
+```bash
+bun run build
+bun run package
+bun run smoke:packaged
+```
+
+`build` 只编译代码。`package` 在 `packages/desktop/dist/` 生成当前平台的
+DMG/ZIP、NSIS 或 Linux 安装介质。打包时会从固定的官方 Registry 下载当前
+`ffmpeg-tools` Plugin ZIP 和与宿主平台精确匹配的 companion，校验声明大小、
+SHA-256、目标平台和安全 ZIP 内容后，以“远程来源的首次安装 seed”随包内置；
+目标缺失或校验失败会直接让打包失败。`smoke:packaged` 为了缩短 CI 时间只生成
+解包后的应用，并临时开启一个仅回环地址可用的 DevTools Protocol 端口执行断言；
+该调试端口不会写入或改变产物。smoke 使用全新用户目录，并在 Registry 网络不可用时
+验证 FFmpeg 能从内置 seed 完成安装；macOS smoke 使用 Electron 的测试钥匙串，
+不会读取或修改开发机的登录钥匙串。结束后会打印保留的应用包和可执行文件绝对路径。
+
+本地和 PR 产物默认不签名。`CONVAX_CHANNEL` 可选择相互隔离的 `dev`、`beta`
+或 `prod` 身份。面向普通用户的正式版本应在各目标平台注入签名凭据并打开
+release gate：
+
+```bash
+CONVAX_CHANNEL=prod CONVAX_RELEASE=true bun run package
+```
+
+release gate 会在平台支持时强制代码签名，并在 macOS 启用公证；源码开发和
+packaged smoke 不需要签名证书。
+
 ### 编译期功能开关
 
 “服务”和“技能与插件”设置默认都会展示。产品构建可以通过以下编译期环境变量独立隐藏任一设置；关闭后，

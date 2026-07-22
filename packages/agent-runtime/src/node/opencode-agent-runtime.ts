@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { mkdtemp, open, realpath, rm, stat, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
-import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
@@ -47,6 +47,7 @@ import type {
   AgentToolProvider,
 } from "../contracts"
 import { AgentLocalToolServer } from "./local-tool-server"
+import { ensureOpenCodeBinaryOnPath, normalizeOpenCodeBinaryDirectory } from "./opencode-binary-path"
 import protectedPathPlugin from "./protected-path-plugin"
 
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>
@@ -249,21 +250,6 @@ export function withProtectedPathGuard(
     permission: guardedPermission,
     plugin: [...plugins, [pluginSpecifier, { marker, paths: protectedPaths }]],
   }
-}
-
-function ensurePackageBinaryOnPath(binaryDirectory?: string) {
-  const require = createRequire(import.meta.url)
-  const runtimeEntry = require.resolve("@convax/agent-runtime")
-  const packageJson = createRequire(runtimeEntry).resolve("opencode-ai/package.json")
-  const binaryDirectories = [
-    binaryDirectory,
-    resolve(dirname(runtimeEntry), "../node_modules/.bin"),
-    join(dirname(dirname(packageJson)), ".bin"),
-  ].filter((directory): directory is string => Boolean(directory))
-  const current = process.env.PATH ?? ""
-  const missing = binaryDirectories.filter((directory) => !current.split(delimiter).includes(directory))
-  if (missing.length === 0) return
-  process.env.PATH = [...missing, current].filter(Boolean).join(delimiter)
 }
 
 function restoreEnvironment(name: string, value: string | undefined) {
@@ -640,8 +626,10 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       throw new Error("OpenCode config directory is required")
     }
     const configDirectory = options.configDirectory === undefined ? undefined : resolve(options.configDirectory.trim())
+    const binaryDirectory = normalizeOpenCodeBinaryDirectory(options.binaryDirectory)
     this.options = {
       ...options,
+      binaryDirectory,
       config,
       configDirectory,
       protectedPaths: normalizeProtectedPaths(options.protectedPaths ?? []),
@@ -766,12 +754,13 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
 
   private async serverConfig() {
     const providers = await this.options.resolveProviders?.()
-    const baseConfig: OpenCodeConfig = providers === undefined
-      ? { ...this.options.config }
-      : {
-          ...this.options.config,
-          provider: { ...this.options.config?.provider, ...providers },
-        }
+    const baseConfig: OpenCodeConfig =
+      providers === undefined
+        ? { ...this.options.config }
+        : {
+            ...this.options.config,
+            provider: { ...this.options.config?.provider, ...providers },
+          }
     const paths = this.options.protectedPaths ?? []
     if (paths.length === 0) return baseConfig
     const plugin = await this.materializeProtectedPathPlugin()
@@ -784,7 +773,17 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     if (this.startup) return this.startup
 
     this.lifecycle = { state: "starting" }
-    ensurePackageBinaryOnPath(this.options.binaryDirectory)
+    try {
+      await ensureOpenCodeBinaryOnPath(this.options.binaryDirectory)
+    } catch (error) {
+      this.lifecycle = this.disposed ? { state: "stopped" } : { state: "error", error: errorText(error) }
+      throw error
+    }
+    // Explicit binary directory validation is asynchronous. Another caller may
+    // have completed startup (or disposal) while this caller was validating it.
+    if (this.disposed) throw new Error("OpenCode agent runtime has been disposed")
+    if (this.client) return this.client
+    if (this.startup) return this.startup
     const generation = ++this.connectionGeneration
     this.toolRegistrations.clear()
     this.protectedPathRegistrations.clear()

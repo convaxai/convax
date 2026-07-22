@@ -5,13 +5,17 @@ import path from "node:path"
 
 import {
   createJianyingNativeAdapter,
+  jianyingCommandEnvironment,
+  jianyingDraftLockValidationFailure,
   JianyingIntegrationService,
   MacOSJianyingNativeAdapter,
   UnsupportedJianyingNativeAdapter,
   combineObservations,
   parseJianyingProcessIds,
+  parseLockedPaths,
   runJianyingCommand,
   type JianyingActiveDraft,
+  type JianyingCommandRunner,
   type JianyingDraftObservation,
   type JianyingMaterialImportTransport,
   type JianyingNativeAdapter,
@@ -108,9 +112,219 @@ describe("JianYing active draft detection", () => {
     expect(result.exitCode).toBe(-1)
     expect(result.stderr).toContain("JIANYING_COMMAND_OUTCOME_UNKNOWN")
   })
+
+  test("forces native inspection commands to emit UTF-8 paths without a terminal locale", async () => {
+    expect(jianyingCommandEnvironment({ PATH: "/usr/bin:/bin" })).toEqual({
+      LANG: "UTF-8",
+      LC_ALL: "UTF-8",
+      PATH: "/usr/bin:/bin",
+    })
+    if (process.platform !== "darwin") return
+
+    const root = await temporaryRoot()
+    const draft = await createDraftDirectory(root, "7月22日")
+    const holder = Bun.spawn(["/usr/bin/tail", "-f", draft.lockPath], {
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      stderr: "ignore",
+      stdout: "ignore",
+    })
+    try {
+      let lockedPaths: string[] = []
+      for (let attempt = 0; attempt < 20 && !lockedPaths.includes(draft.lockPath); attempt += 1) {
+        const result = await runJianyingCommand("/usr/sbin/lsof", ["-Fn", "-p", String(holder.pid)], 5_000)
+        expect(result.exitCode).toBe(0)
+        lockedPaths = parseLockedPaths(result.stdout)
+        if (!lockedPaths.includes(draft.lockPath)) await Bun.sleep(25)
+      }
+      expect(lockedPaths).toContain(draft.lockPath)
+      expect(lockedPaths.some((lockedPath) => lockedPath.includes("\\x"))).toBeFalse()
+    } finally {
+      holder.kill()
+      await holder.exited
+    }
+  })
+
+  test("explains macOS Movies-folder denial instead of hiding the packaged-app permission failure", () => {
+    const error = Object.assign(new Error("operation not permitted"), { code: "EPERM" })
+
+    expect(jianyingDraftLockValidationFailure(4495, error)).toBe(
+      "Could not validate a JianYing draft lock held by process 4495: macOS denied Convax access to the Movies folder (EPERM). Allow Convax in System Settings > Privacy & Security > Media & Apple Music, then retry.",
+    )
+  })
+
+  test("keeps unexpected native validation error codes without exposing the draft path", () => {
+    const error = Object.assign(new Error("/private/draft/path"), { code: "EIO" })
+
+    expect(jianyingDraftLockValidationFailure(42, error)).toBe(
+      "Could not validate a JianYing draft lock held by process 42 (EIO)",
+    )
+  })
 })
 
 describe("MacOSJianyingNativeAdapter", () => {
+  test("retries a draft lock that is recreated during inspection", async () => {
+    const root = await temporaryRoot()
+    const draftPath = path.join(root, "Current")
+    const lockPath = path.join(draftPath, ".locked")
+    await fs.mkdir(draftPath)
+    await fs.writeFile(path.join(draftPath, "draft_info.json"), "{}")
+    const commandRunner: JianyingCommandRunner = async (executable) =>
+      executable === "/bin/ps"
+        ? {
+            exitCode: 0,
+            stderr: "",
+            stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
+          }
+        : { exitCode: 0, stderr: "", stdout: `p4495\nn${lockPath}\n` }
+    let recreated = false
+    const adapter = new MacOSJianyingNativeAdapter({
+      commandRunner,
+      platform: "darwin",
+      sleep: async (milliseconds) => {
+        if (milliseconds !== 50 || recreated) return
+        recreated = true
+        await fs.writeFile(lockPath, "")
+      },
+      transport: {
+        createDraft: async () => undefined,
+        dispatchMaterialImport: async () => ({ deepLinkDispatched: true }),
+      },
+    })
+
+    const observation = await adapter.inspect()
+    expect(observation).toEqual({
+      draft: {
+        draftName: "Current",
+        draftPath: await fs.realpath(draftPath),
+        lockPath: await fs.realpath(lockPath),
+        pid: 4495,
+      },
+      processIds: [4495],
+      status: "active",
+    })
+  })
+
+  test("ignores a vanished stale lock when the process also exposes a valid draft lock", async () => {
+    const root = await temporaryRoot()
+    const active = await createDraftDirectory(root, "Current")
+    const staleLockPath = path.join(root, "Previous", ".locked")
+    const commandRunner: JianyingCommandRunner = async (executable) =>
+      executable === "/bin/ps"
+        ? {
+            exitCode: 0,
+            stderr: "",
+            stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
+          }
+        : { exitCode: 0, stderr: "", stdout: `p4495\nn${staleLockPath}\nn${active.lockPath}\n` }
+    const adapter = new MacOSJianyingNativeAdapter({
+      commandRunner,
+      platform: "darwin",
+      sleep: async () => undefined,
+      transport: {
+        createDraft: async () => undefined,
+        dispatchMaterialImport: async () => ({ deepLinkDispatched: true }),
+      },
+    })
+
+    await expect(adapter.inspect()).resolves.toEqual({
+      draft: { ...active, pid: 4495 },
+      processIds: [4495],
+      status: "active",
+    })
+  })
+
+  test("keeps a vanished-only draft lock unavailable", async () => {
+    const root = await temporaryRoot()
+    const missingLockPath = path.join(root, "Current", ".locked")
+    const commandRunner: JianyingCommandRunner = async (executable) =>
+      executable === "/bin/ps"
+        ? {
+            exitCode: 0,
+            stderr: "",
+            stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
+          }
+        : { exitCode: 0, stderr: "", stdout: `p4495\nn${missingLockPath}\n` }
+    const adapter = new MacOSJianyingNativeAdapter({
+      commandRunner,
+      platform: "darwin",
+      sleep: async () => undefined,
+      transport: {
+        createDraft: async () => undefined,
+        dispatchMaterialImport: async () => ({ deepLinkDispatched: true }),
+      },
+    })
+
+    await expect(adapter.inspect()).resolves.toMatchObject({
+      reason: expect.stringContaining("changed its active draft lock"),
+      status: "unavailable",
+    })
+  })
+
+  test("propagates cancellation while a vanished draft lock is being retried", async () => {
+    const root = await temporaryRoot()
+    const missingLockPath = path.join(root, "Current", ".locked")
+    const controller = new AbortController()
+    const commandRunner: JianyingCommandRunner = async (executable) =>
+      executable === "/bin/ps"
+        ? {
+            exitCode: 0,
+            stderr: "",
+            stdout: "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS\n",
+          }
+        : { exitCode: 0, stderr: "", stdout: `p4495\nn${missingLockPath}\n` }
+    const adapter = new MacOSJianyingNativeAdapter({
+      commandRunner,
+      platform: "darwin",
+      sleep: async (milliseconds) => {
+        if (milliseconds === 50) controller.abort(new DOMException("Canceled", "AbortError"))
+      },
+      transport: {
+        createDraft: async () => undefined,
+        dispatchMaterialImport: async () => ({ deepLinkDispatched: true }),
+      },
+    })
+
+    await expect(adapter.inspect(controller.signal)).rejects.toMatchObject({ name: "AbortError" })
+  })
+
+  test("does not hide an uncertain process behind another process's valid draft lock", async () => {
+    const root = await temporaryRoot()
+    const active = await createDraftDirectory(root, "Current")
+    const missingLockPath = path.join(root, "Other", ".locked")
+    const commandRunner: JianyingCommandRunner = async (executable, args) => {
+      if (executable === "/bin/ps") {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: [
+            "4495 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS",
+            "4496 /Applications/VideoFusion-macOS.app/Contents/MacOS/VideoFusion-macOS",
+          ].join("\n"),
+        }
+      }
+      const pid = args.at(-1)
+      return {
+        exitCode: 0,
+        stderr: "",
+        stdout: pid === "4495" ? `p4495\nn${active.lockPath}\n` : `p4496\nn${missingLockPath}\n`,
+      }
+    }
+    const adapter = new MacOSJianyingNativeAdapter({
+      commandRunner,
+      platform: "darwin",
+      sleep: async () => undefined,
+      transport: {
+        createDraft: async () => undefined,
+        dispatchMaterialImport: async () => ({ deepLinkDispatched: true }),
+      },
+    })
+
+    await expect(adapter.inspect()).resolves.toMatchObject({
+      reason: expect.stringContaining("process 4496 changed its active draft lock"),
+      status: "unavailable",
+    })
+  })
+
   test("dispatches current-draft media with its MIME type and rechecks the same draft", async () => {
     const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(async () => ({
       deepLinkDispatched: true,
@@ -215,7 +429,9 @@ describe("MacOSJianyingNativeAdapter", () => {
 
   test("keeps active-to-new export as an explicit WIP without creating a blank draft", async () => {
     const createDraft = mock<JianyingMaterialImportTransport["createDraft"]>(async () => undefined)
-    const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(async () => undefined)
+    const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(
+      async () => undefined,
+    )
     const adapter = new MacOSJianyingNativeAdapter({
       platform: "darwin",
       transport: { createDraft, dispatchMaterialImport },
@@ -253,7 +469,9 @@ describe("MacOSJianyingNativeAdapter", () => {
   })
 
   test("keeps non-macOS support as an explicit WIP without touching transport", async () => {
-    const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(async () => undefined)
+    const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(
+      async () => undefined,
+    )
     const createDraft = mock<JianyingMaterialImportTransport["createDraft"]>(async () => undefined)
     const adapter = createJianyingNativeAdapter({
       platform: "win32",
@@ -348,10 +566,10 @@ describe("JianyingIntegrationService", () => {
     const status = await service.getDraftStatus()
 
     await expect(
-      service.exportMedia(
-        [{ mimeType: "video/mp4", path: path.join(root, "missing.mp4") }],
-        { draftToken: status.draftToken!, kind: "new" },
-      ),
+      service.exportMedia([{ mimeType: "video/mp4", path: path.join(root, "missing.mp4") }], {
+        draftToken: status.draftToken!,
+        kind: "new",
+      }),
     ).rejects.toThrow("still WIP")
     expect(inspect).toHaveBeenCalledTimes(1)
     expect(dispatchImport).not.toHaveBeenCalled()
@@ -372,10 +590,10 @@ describe("JianyingIntegrationService", () => {
     const status = await service.getDraftStatus()
 
     await expect(
-      service.exportMedia(
-        [{ mimeType: "image/png", path: source }],
-        { draftToken: status.draftToken!, kind: "current" },
-      ),
+      service.exportMedia([{ mimeType: "image/png", path: source }], {
+        draftToken: status.draftToken!,
+        kind: "current",
+      }),
     ).rejects.toThrow("changed before export")
     expect(dispatchImport).not.toHaveBeenCalled()
   })
@@ -434,11 +652,7 @@ describe("JianyingIntegrationService", () => {
     const service = new JianyingIntegrationService(native, path.join(root, "staging"))
 
     await expect(
-      service.exportMedia(
-        [{ mimeType: "image/png", path: source }],
-        { kind: "current-or-new" },
-        controller.signal,
-      ),
+      service.exportMedia([{ mimeType: "image/png", path: source }], { kind: "current-or-new" }, controller.signal),
     ).resolves.toMatchObject({ importStatus: "dispatched" })
   })
 

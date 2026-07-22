@@ -687,6 +687,75 @@ describe("RemoteCapabilityInstaller", () => {
     expect(setupResult.companionTransactions[0]!.rollback).not.toHaveBeenCalled()
   })
 
+  test("returns a current installed Plugin after a metadata-only update check", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: current,
+    })
+    const setupResult = setup([item], { "manifest.json": encoder.encode(JSON.stringify(current)) }, [current])
+
+    await expect(setupResult.installer.updatePlugin(item.id)).resolves.toEqual(current)
+
+    expect(setupResult.registry.fetchRegistry).toHaveBeenCalledWith({ cachePolicy: "network-first" })
+    expect(setupResult.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(setupResult.registry.downloadCompanionArtifact).not.toHaveBeenCalled()
+    expect(setupResult.pluginManager.installBundle).not.toHaveBeenCalled()
+    expect(setupResult.pluginManager.isBundleInstalled).not.toHaveBeenCalled()
+    expect(setupResult.companionStore.install).not.toHaveBeenCalled()
+    expect(setupResult.authorizationStore.prepareInstall).not.toHaveBeenCalled()
+  })
+
+  test("downloads and atomically publishes only a newer Plugin during an update check", async () => {
+    const current = generationManifest("generation-plugin", "1.0.0")
+    const next = generationManifest("generation-plugin", "2.0.0")
+    const companionItem = companion("generation-plugin", "2.0.0")
+    const item = pluginPackage("generation-plugin", "2.0.0", {
+      companions: [companionItem],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: next,
+    })
+    const files = { "manifest.json": encoder.encode(JSON.stringify(next)) }
+    const setupResult = setup([item], files, [current])
+
+    await expect(setupResult.installer.updatePlugin(item.id)).resolves.toEqual(next)
+
+    expect(setupResult.registry.downloadBundle).toHaveBeenCalledWith(item)
+    expect(setupResult.registry.downloadCompanionArtifact).toHaveBeenCalledWith(
+      item,
+      companionItem,
+      companionItem.targets[0],
+    )
+    expect(setupResult.pluginManager.installBundle).toHaveBeenCalledWith(
+      { files },
+      expect.objectContaining({ beforePublish: expect.any(Function), replaceExisting: true }),
+    )
+    expect(setupResult.companionTransactions[0]!.commit).toHaveBeenCalledTimes(1)
+  })
+
+  test("rejects update checks for a missing or newer local Plugin before downloading", async () => {
+    const registryManifest = generationManifest("generation-plugin", "1.0.0")
+    const item = pluginPackage("generation-plugin", "1.0.0", {
+      companions: [companion("generation-plugin")],
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: registryManifest,
+    })
+    const missing = setup([item], { "manifest.json": encoder.encode(JSON.stringify(registryManifest)) })
+    await expect(missing.installer.updatePlugin(item.id)).rejects.toThrow("requires an installed Plugin")
+    expect(missing.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(missing.registry.downloadCompanionArtifact).not.toHaveBeenCalled()
+
+    const localNewer = setup([item], { "manifest.json": encoder.encode(JSON.stringify(registryManifest)) }, [
+      generationManifest("generation-plugin", "2.0.0"),
+    ])
+    await expect(localNewer.installer.updatePlugin(item.id)).rejects.toThrow(
+      "Installed Plugin is newer than the remote Registry package",
+    )
+    expect(localNewer.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(localNewer.registry.downloadCompanionArtifact).not.toHaveBeenCalled()
+  })
+
   test("updates only to a newer Plugin version and uses the existing atomic replacement path", async () => {
     const current = generationManifest("generation-plugin", "1.0.0")
     const next = generationManifest("generation-plugin", "2.0.0")

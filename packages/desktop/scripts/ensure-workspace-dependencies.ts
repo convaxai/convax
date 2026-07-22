@@ -27,7 +27,10 @@ export async function ensureWorkspaceDependencies(options: WorkspaceDependencyBu
   const managedByTurbo = options.managedByTurbo ?? Boolean(process.env.TURBO_HASH)
   if (managedByTurbo) return false
 
-  const command = [process.execPath, "turbo", "build", `--filter=${dependencyFilter}`]
+  // A direct Desktop build has no parent Turbo scheduler to bound aggregate
+  // package memory. Keep dependency compilation serial so packaging is stable
+  // on contributor machines and hosted runners.
+  const command = [process.execPath, "turbo", "build", `--filter=${dependencyFilter}`, "--concurrency=1"]
   const exitCode = await (options.run ?? run)(command, options.repositoryRoot ?? repositoryRoot)
   if (exitCode !== 0) {
     throw new Error(`Workspace dependency build failed with exit code ${exitCode}`)

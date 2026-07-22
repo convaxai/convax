@@ -2,6 +2,7 @@ node_modules/
 .turbo/
 out/
 dist/
+packages/desktop/.packaging/
 *.log
 .DS_Store
 /.convax/

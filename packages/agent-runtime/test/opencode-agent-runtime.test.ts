@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
@@ -11,6 +11,7 @@ import {
   withProtectedPathGuard,
   withProtectedPathPermissions,
 } from "../src/node/opencode-agent-runtime"
+import { ensureOpenCodeBinaryOnPath } from "../src/node/opencode-binary-path"
 import protectedPathPlugin from "../src/node/protected-path-plugin"
 
 async function writeSkill(directory: string, name: string, description = `${name} description`) {
@@ -24,6 +25,12 @@ async function writeSkill(directory: string, name: string, description = `${name
 function restoreTestEnvironment(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name]
   else process.env[name] = value
+}
+
+async function writeOpenCodeStub(binaryDirectory: string) {
+  const executable = join(binaryDirectory, process.platform === "win32" ? "opencode.exe" : "opencode")
+  await writeFile(executable, "")
+  if (process.platform !== "win32") await chmod(executable, 0o755)
 }
 
 function completedAssistantMessage(sessionId: string) {
@@ -42,6 +49,74 @@ function completedAssistantMessage(sessionId: string) {
 }
 
 describe("OpenCode agent runtime boundaries", () => {
+  test("uses only the canonical host-provided OpenCode binary directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-runtime-binary-directory-"))
+    const binaryDirectory = join(root, "bin")
+    const binaryDirectoryLink = join(root, "bin-link")
+    const previousPath = process.env.PATH
+    try {
+      await mkdir(binaryDirectory)
+      await writeOpenCodeStub(binaryDirectory)
+      await symlink(binaryDirectory, binaryDirectoryLink, "dir")
+      const existing = join(root, "host-bin")
+      const trailing = join(root, "trailing-bin")
+      const canonical = await realpath(binaryDirectory)
+      process.env.PATH = [existing, canonical, trailing].join(delimiter)
+
+      const directories = await ensureOpenCodeBinaryOnPath(binaryDirectoryLink)
+
+      expect(directories).toEqual([canonical])
+      expect(process.env.PATH?.split(delimiter)).toEqual([canonical, existing, trailing])
+    } finally {
+      restoreTestEnvironment("PATH", previousPath)
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects a missing or non-directory explicit OpenCode binary directory without changing PATH", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-runtime-invalid-binary-directory-"))
+    const file = join(root, "not-a-directory")
+    const emptyDirectory = join(root, "empty-directory")
+    const previousPath = process.env.PATH
+    try {
+      await writeFile(file, "not a directory")
+      await mkdir(emptyDirectory)
+      process.env.PATH = "/host/existing/bin"
+
+      await expect(ensureOpenCodeBinaryOnPath(join(root, "missing"))).rejects.toThrow("does not exist")
+      await expect(ensureOpenCodeBinaryOnPath(file)).rejects.toThrow("is not a directory")
+      await expect(ensureOpenCodeBinaryOnPath(emptyDirectory)).rejects.toThrow("executable was not found")
+      expect(process.env.PATH).toBe("/host/existing/bin")
+    } finally {
+      restoreTestEnvironment("PATH", previousPath)
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("fails the runtime closed when its explicit OpenCode binary directory disappears", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-runtime-removed-binary-directory-"))
+    const binaryDirectory = join(root, "bin")
+    await mkdir(binaryDirectory)
+    const runtime = new OpenCodeAgentRuntime({ binaryDirectory })
+    await rm(binaryDirectory, { recursive: true })
+
+    try {
+      await expect(runtime.listSessions({ directory: root })).rejects.toThrow("does not exist")
+      expect(await runtime.getStatus()).toMatchObject({
+        state: "error",
+        error: expect.stringContaining("does not exist"),
+      })
+    } finally {
+      await runtime.dispose()
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects empty or PATH-injecting OpenCode binary directories", async () => {
+    expect(() => new OpenCodeAgentRuntime({ binaryDirectory: "  " })).toThrow("binary directory is required")
+    expect(() => new OpenCodeAgentRuntime({ binaryDirectory: `/safe${delimiter}/injected` })).toThrow("PATH delimiter")
+  })
+
   test("keeps session history scoped to the opened directory", () => {
     expect(isAgentSessionInDirectory("/workspace/a", "/workspace/a")).toBe(true)
     expect(isAgentSessionInDirectory("/workspace/other", "/workspace/a")).toBe(false)
@@ -205,9 +280,12 @@ describe("OpenCode agent runtime boundaries", () => {
       config: { model: "builtin/default" },
       resolveProviders,
     })
-    const serverConfig = () => (runtime as unknown as {
-      serverConfig(): Promise<Record<string, unknown>>
-    }).serverConfig()
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
     try {
       const first = await serverConfig()
       expect(first.model).toBe("builtin/default")

@@ -1,0 +1,1012 @@
+import { createHash } from "node:crypto"
+import { createReadStream } from "node:fs"
+import fs from "node:fs/promises"
+import { get as httpGet } from "node:http"
+import { createRequire } from "node:module"
+import os from "node:os"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
+
+import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
+
+const desktopRoot = path.resolve(import.meta.dirname, "..")
+const distRoot = path.join(desktopRoot, "dist")
+const startupTimeoutMs = 90_000
+const operationTimeoutMs = 120_000
+const pluginTimeoutMs = 45_000
+const pluginIds = ["storyai-3d-director-desk", "panorama-viewer", "jianying-editor"] as const
+const defaultRemotePluginId = "ffmpeg-tools"
+const jianyingDraftStatuses = new Set([
+  "active",
+  "ambiguous",
+  "no_active_draft",
+  "not_running",
+  "unavailable",
+  "unsupported",
+])
+const expectedJianyingStatus = process.env.CONVAX_PACKAGED_SMOKE_EXPECT_JIANYING_STATUS?.trim()
+if (expectedJianyingStatus && !jianyingDraftStatuses.has(expectedJianyingStatus)) {
+  throw new Error(`Invalid expected packaged JianYing status: ${expectedJianyingStatus}`)
+}
+
+function loopbackNoProxy(value: string | undefined) {
+  const entries = new Set(
+    (value ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  )
+  entries.add("127.0.0.1")
+  entries.add("localhost")
+  entries.add("::1")
+  return [...entries].join(",")
+}
+
+// The smoke harness uses loopback control planes. Keep its own debugger requests
+// away from a developer machine's HTTP(S)_PROXY endpoint.
+const configuredNoProxy = [process.env.NO_PROXY, process.env.no_proxy].filter(Boolean).join(",")
+const packagedSmokeNoProxy = loopbackNoProxy(configuredNoProxy)
+process.env.NO_PROXY = packagedSmokeNoProxy
+process.env.no_proxy = packagedSmokeNoProxy
+
+interface DebugTarget {
+  type: string
+  url?: string
+  webSocketDebuggerUrl?: string
+}
+
+interface FrameTree {
+  childFrames?: FrameTree[]
+  frame: {
+    id: string
+    url: string
+  }
+}
+
+interface RuntimeContext {
+  auxData?: {
+    frameId?: string
+    isDefault?: boolean
+  }
+  id: number
+}
+
+interface DevtoolsMessage {
+  error?: { code?: number; message: string }
+  id?: number
+  method?: string
+  params?: Record<string, unknown>
+  result?: unknown
+}
+
+function reservePort() {
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: { data() {} },
+  })
+}
+
+async function listDebugTargets(port: number) {
+  return new Promise<DebugTarget[]>((resolve, reject) => {
+    const request = httpGet(
+      {
+        hostname: "127.0.0.1",
+        path: "/json/list",
+        port,
+      },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on("data", (chunk: Buffer) => chunks.push(chunk))
+        response.on("end", () => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`Debugger target list returned HTTP ${response.statusCode ?? "unknown"}`))
+            return
+          }
+          try {
+            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as DebugTarget[])
+          } catch (error) {
+            reject(error)
+          }
+        })
+      },
+    )
+    request.setTimeout(1_000, () => request.destroy(new Error("Debugger target list timed out")))
+    request.on("error", reject)
+  })
+}
+
+async function waitForRendererTarget(port: number, child: Bun.Subprocess) {
+  const deadline = Date.now() + startupTimeoutMs
+  let lastError: unknown
+  const observedTargets = new Set<string>()
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Packaged Desktop exited before startup (code ${child.exitCode})`)
+    try {
+      const targets = await listDebugTargets(port)
+      targets.forEach((target) => observedTargets.add(`${target.type}:${target.url ?? "<no-url>"}`))
+      const target = targets.find(
+        (candidate) =>
+          candidate.type === "page" &&
+          candidate.url?.startsWith("file://") &&
+          candidate.url.includes("app.asar") &&
+          candidate.url.endsWith("/out/renderer/index.html"),
+      )
+      if (target?.webSocketDebuggerUrl) return target
+    } catch (error) {
+      lastError = error
+    }
+    await Bun.sleep(100)
+  }
+  throw new Error(
+    `Timed out waiting for the packaged app.asar renderer; observed ${JSON.stringify([...observedTargets])}${lastError ? `: ${String(lastError)}` : ""}`,
+  )
+}
+
+class DevtoolsClient {
+  private nextRequestId = 0
+  private readonly pending = new Map<
+    number,
+    {
+      reject(error: Error): void
+      resolve(value: unknown): void
+      timer: ReturnType<typeof setTimeout>
+    }
+  >()
+  private readonly contexts = new Map<number, RuntimeContext>()
+
+  private constructor(private readonly socket: WebSocket) {
+    socket.addEventListener("message", (event) => this.handleMessage(String(event.data)))
+    socket.addEventListener("close", () => {
+      this.rejectPending(new Error("Debugger WebSocket closed"))
+      this.contexts.clear()
+    })
+    socket.addEventListener("error", () => this.rejectPending(new Error("Debugger WebSocket failed")))
+  }
+
+  static async connect(webSocketUrl: string) {
+    const socket = new WebSocket(webSocketUrl)
+    const client = new DevtoolsClient(socket)
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Timed out connecting to the debugger WebSocket")), 10_000)
+        socket.addEventListener(
+          "open",
+          () => {
+            clearTimeout(timer)
+            resolve()
+          },
+          { once: true },
+        )
+        socket.addEventListener(
+          "error",
+          () => {
+            clearTimeout(timer)
+            reject(new Error("Debugger WebSocket failed before opening"))
+          },
+          { once: true },
+        )
+      })
+      await Promise.all([client.request("Page.enable"), client.request("Runtime.enable")])
+      return client
+    } catch (error) {
+      client.close()
+      throw error
+    }
+  }
+
+  close() {
+    this.socket.close()
+    this.rejectPending(new Error("Debugger client disposed"))
+    this.contexts.clear()
+  }
+
+  contextForFrame(frameId: string) {
+    return [...this.contexts.values()].find(
+      (context) => context.auxData?.frameId === frameId && context.auxData.isDefault !== false,
+    )?.id
+  }
+
+  async evaluate(expression: string, options: { contextId?: number; timeoutMs?: number } = {}) {
+    const response = (await this.request(
+      "Runtime.evaluate",
+      {
+        awaitPromise: true,
+        ...(options.contextId === undefined ? {} : { contextId: options.contextId }),
+        expression,
+        returnByValue: true,
+        userGesture: true,
+      },
+      options.timeoutMs ?? operationTimeoutMs,
+    )) as {
+      exceptionDetails?: {
+        exception?: { description?: string }
+        text?: string
+      }
+      result?: {
+        description?: string
+        value?: unknown
+      }
+    }
+    if (response.exceptionDetails) {
+      const message =
+        response.exceptionDetails.exception?.description ??
+        response.exceptionDetails.text ??
+        response.result?.description ??
+        "Debugger evaluation failed"
+      throw new Error(message)
+    }
+    return response.result?.value
+  }
+
+  async frameTree() {
+    const response = (await this.request("Page.getFrameTree")) as { frameTree?: FrameTree }
+    if (!response.frameTree) throw new Error("Debugger did not return a frame tree")
+    return response.frameTree
+  }
+
+  request(method: string, params: Record<string, unknown> = {}, timeoutMs = 15_000) {
+    const id = ++this.nextRequestId
+    return new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Timed out waiting for ${method}`))
+      }, timeoutMs)
+      this.pending.set(id, { reject, resolve, timer })
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }))
+      } catch (error) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  }
+
+  private handleMessage(value: string) {
+    let message: DevtoolsMessage
+    try {
+      message = JSON.parse(value) as DevtoolsMessage
+    } catch {
+      return
+    }
+    if (message.id !== undefined) {
+      const pending = this.pending.get(message.id)
+      if (!pending) return
+      this.pending.delete(message.id)
+      clearTimeout(pending.timer)
+      if (message.error) pending.reject(new Error(`${message.error.message} (${message.error.code ?? "unknown"})`))
+      else pending.resolve(message.result)
+      return
+    }
+    if (message.method === "Runtime.executionContextCreated") {
+      const context = message.params?.context as RuntimeContext | undefined
+      if (context && typeof context.id === "number") this.contexts.set(context.id, context)
+      return
+    }
+    if (message.method === "Runtime.executionContextDestroyed") {
+      const id = message.params?.executionContextId
+      if (typeof id === "number") this.contexts.delete(id)
+      return
+    }
+    if (message.method === "Runtime.executionContextsCleared") this.contexts.clear()
+  }
+
+  private rejectPending(error: Error) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pending.clear()
+  }
+}
+
+function findFrame(tree: FrameTree, urlPrefix: string): FrameTree["frame"] | undefined {
+  if (tree.frame.url.startsWith(urlPrefix)) return tree.frame
+  for (const child of tree.childFrames ?? []) {
+    const found = findFrame(child, urlPrefix)
+    if (found) return found
+  }
+  return undefined
+}
+
+function isTransientContextError(error: unknown) {
+  const message = String(error)
+  return (
+    message.includes("Cannot find context") ||
+    message.includes("Execution context was destroyed") ||
+    message.includes("Inspected target navigated or closed")
+  )
+}
+
+async function evaluatePluginFrame(
+  port: number,
+  renderer: DevtoolsClient,
+  pluginId: (typeof pluginIds)[number],
+  expression: string,
+) {
+  const urlPrefix = `convax-plugin://${pluginId}/`
+  const deadline = Date.now() + pluginTimeoutMs
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      const target = (await listDebugTargets(port)).find(
+        (candidate) => candidate.url?.startsWith(urlPrefix) && candidate.webSocketDebuggerUrl,
+      )
+      if (target?.webSocketDebuggerUrl) {
+        const frameClient = await DevtoolsClient.connect(target.webSocketDebuggerUrl)
+        try {
+          return await frameClient.evaluate(expression, { timeoutMs: pluginTimeoutMs })
+        } finally {
+          frameClient.close()
+        }
+      }
+
+      const frame = findFrame(await renderer.frameTree(), urlPrefix)
+      const contextId = frame ? renderer.contextForFrame(frame.id) : undefined
+      if (contextId !== undefined) {
+        return await renderer.evaluate(expression, { contextId, timeoutMs: pluginTimeoutMs })
+      }
+    } catch (error) {
+      lastError = error
+      if (!isTransientContextError(error)) throw error
+    }
+    await Bun.sleep(100)
+  }
+  throw new Error(`Timed out waiting for the running ${pluginId} frame${lastError ? `: ${String(lastError)}` : ""}`)
+}
+
+async function walkDirectories(root: string, depth: number): Promise<string[]> {
+  if (depth < 0) return []
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+  const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(root, entry.name))
+  if (depth === 0) return directories
+  return [
+    ...directories,
+    ...(await Promise.all(directories.map((directory) => walkDirectories(directory, depth - 1)))).flat(),
+  ]
+}
+
+async function regularFile(filePath: string) {
+  return fs.stat(filePath).then(
+    (stat) => stat.isFile(),
+    () => false,
+  )
+}
+
+async function sha256(filePath: string) {
+  const hash = createHash("sha256")
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk)
+  return hash.digest("hex")
+}
+
+async function packagedExecutableCandidates() {
+  const directories = await walkDirectories(distRoot, 3)
+  if (process.platform === "darwin") {
+    const applications = directories.filter((directory) => directory.endsWith(".app"))
+    return (
+      await Promise.all(
+        applications.map(async (application) => {
+          const executableDirectory = path.join(application, "Contents", "MacOS")
+          const entries = await fs.readdir(executableDirectory, { withFileTypes: true }).catch(() => [])
+          return entries.filter((entry) => entry.isFile()).map((entry) => path.join(executableDirectory, entry.name))
+        }),
+      )
+    ).flat()
+  }
+  const unpacked = directories.filter((directory) => directory.endsWith("-unpacked"))
+  const names =
+    process.platform === "win32"
+      ? ["Convax Dev.exe", "Convax Beta.exe", "Convax.exe"]
+      : ["com.microvoid.convax.dev", "com.microvoid.convax.beta", "com.microvoid.convax"]
+  return (
+    await Promise.all(
+      unpacked
+        .flatMap((directory) => names.map((name) => path.join(directory, name)))
+        .map(async (candidate) => ((await regularFile(candidate)) ? [candidate] : [])),
+    )
+  ).flat()
+}
+
+async function resolvePackagedExecutable() {
+  const requested = process.env.CONVAX_PACKAGED_EXECUTABLE
+  if (requested) {
+    const resolved = path.resolve(requested)
+    if (!(await regularFile(resolved))) throw new Error(`Packaged executable was not found: ${resolved}`)
+    return resolved
+  }
+  const candidates = await packagedExecutableCandidates()
+  if (candidates.length === 0) {
+    throw new Error(`No electron-builder --dir executable was found below ${distRoot}`)
+  }
+  const architectureMatches = candidates.filter((candidate) =>
+    candidate.split(path.sep).some((segment) => segment.includes(process.arch)),
+  )
+  const preferred = architectureMatches.length > 0 ? architectureMatches : candidates
+  if (preferred.length !== 1) {
+    throw new Error(
+      `Multiple packaged executables were found; set CONVAX_PACKAGED_EXECUTABLE explicitly: ${preferred.join(", ")}`,
+    )
+  }
+  return preferred[0]!
+}
+
+async function verifyPackagedLayout(executable: string) {
+  if (executable.includes(`${path.sep}node_modules${path.sep}electron${path.sep}`)) {
+    throw new Error(`Packaged smoke must not launch the Electron SDK: ${executable}`)
+  }
+  const resourcesDirectory =
+    process.platform === "darwin"
+      ? path.resolve(path.dirname(executable), "..", "Resources")
+      : path.join(path.dirname(executable), "resources")
+  const appArchive = path.join(resourcesDirectory, "app.asar")
+  if (!(await regularFile(appArchive))) throw new Error(`Packaged app.asar was not found: ${appArchive}`)
+
+  const runtimeRoot = path.join(resourcesDirectory, "opencode")
+  const runtimeMetadataPath = path.join(runtimeRoot, "runtime.json")
+  const runtime = JSON.parse(await fs.readFile(runtimeMetadataPath, "utf8")) as {
+    arch?: string
+    executable?: string
+    package?: string
+    platform?: string
+    schema?: string
+    sha256?: string
+    version?: string
+  }
+  const packagePlatform = process.platform === "win32" ? "windows" : process.platform
+  const expectedPackagePrefix = `opencode-${packagePlatform}-${process.arch}`
+  if (
+    runtime.schema !== "convax.packaged-runtime/1" ||
+    runtime.platform !== process.platform ||
+    runtime.arch !== process.arch ||
+    (runtime.package !== expectedPackagePrefix && !runtime.package?.startsWith(`${expectedPackagePrefix}-`)) ||
+    !/^[0-9a-f]{64}$/.test(runtime.sha256 ?? "") ||
+    typeof runtime.version !== "string" ||
+    !runtime.version ||
+    typeof runtime.executable !== "string" ||
+    !runtime.executable
+  ) {
+    throw new Error(`Packaged OpenCode metadata is invalid: ${JSON.stringify(runtime)}`)
+  }
+  const runtimeExecutable = path.resolve(runtimeRoot, ...runtime.executable.split("/"))
+  if (
+    !runtimeExecutable.startsWith(`${path.resolve(runtimeRoot)}${path.sep}`) ||
+    !(await regularFile(runtimeExecutable))
+  ) {
+    throw new Error(`Packaged OpenCode executable was not found: ${runtimeExecutable}`)
+  }
+  const executableDigest = await sha256(runtimeExecutable)
+  if (executableDigest !== runtime.sha256) {
+    throw new Error(`Packaged OpenCode executable digest does not match runtime.json: ${executableDigest}`)
+  }
+  return runtime
+}
+
+async function terminate(child: Bun.Subprocess) {
+  if (child.exitCode !== null) return child.exited
+  try {
+    child.kill("SIGTERM")
+  } catch {
+    // Fall through to the bounded exit wait and hard termination.
+  }
+  await Promise.race([child.exited, Bun.sleep(5_000)])
+  if (child.exitCode === null) {
+    try {
+      child.kill("SIGKILL")
+    } catch {
+      // The process may have exited between the state check and the signal.
+    }
+  }
+  return child.exited
+}
+
+async function seedProject(userDataRoot: string, projectRoot: string) {
+  const require = createRequire(path.join(desktopRoot, "package.json"))
+  const entry = require.resolve("@convax/project/node")
+  const projectNode = (await import(pathToFileURL(entry).href)) as typeof import("@convax/project/node")
+  const projects = new projectNode.NodeProjectManager({ registryFile: path.join(userDataRoot, "projects.json") })
+  const project = await projects.addProject(projectRoot)
+  const canvases = new projectNode.NodeProjectCanvasManager(projects, projects)
+  const catalog = await canvases.getCanvasCatalog({ projectId: project.id })
+  if (catalog.canvases[0]?.id !== "canvas-main") {
+    throw new Error(`Packaged smoke could not seed canvas-main: ${JSON.stringify(catalog)}`)
+  }
+  return project
+}
+
+const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-user-data-"))
+const projectParent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-project-"))
+const projectRoot = path.join(projectParent, "packaged-smoke-project")
+let child: Bun.Subprocess | undefined
+let renderer: DevtoolsClient | undefined
+
+try {
+  await fs.mkdir(projectRoot)
+  const seededProject = await seedProject(userDataRoot, projectRoot)
+  const executable = await resolvePackagedExecutable()
+  const packagedRuntime = await verifyPackagedLayout(executable)
+  const portReservation = reservePort()
+  const debuggerPort = portReservation.port
+  portReservation.stop(true)
+  console.log(`Packaged Desktop smoke target: ${executable}`)
+  console.log(
+    "Smoke automation is enabling a temporary loopback DevTools Protocol endpoint; the artifact itself does not enable it.",
+  )
+  const environment: Record<string, string | undefined> = {
+    ...process.env,
+    CONVAX_PACKAGED_SMOKE: "1",
+    CONVAX_PACKAGED_SMOKE_USER_DATA_DIR: userDataRoot,
+  }
+  delete environment.CONVAX_USER_DATA_DIR
+  delete environment.ELECTRON_RENDERER_URL
+  // This smoke verifies the self-contained packaged runtime and provider catalog,
+  // not a developer's external network. A stale local proxy can otherwise make
+  // OpenCode provider discovery hang even though the packaged binary is healthy.
+  for (const name of ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "all_proxy", "https_proxy", "http_proxy"]) {
+    delete environment[name]
+  }
+  const spawned = Bun.spawn(
+    desktopPackagedSmokeLaunchArguments({
+      debuggerPort,
+      executable,
+      platform: process.platform,
+    }),
+    {
+      cwd: path.dirname(executable),
+      env: environment,
+      stderr: "inherit",
+      stdout: "inherit",
+    },
+  )
+  child = spawned
+
+  const target = await waitForRendererTarget(debuggerPort, child)
+  renderer = await DevtoolsClient.connect(target.webSocketDebuggerUrl!)
+  const seeded = (await renderer.evaluate(
+    `(async () => {
+      const timeoutMs = ${pluginTimeoutMs}
+      const waitFor = async (read, label) => {
+        const deadline = Date.now() + timeoutMs
+        while (Date.now() < deadline) {
+          const value = await read()
+          if (value) return value
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        throw new Error("Timed out waiting for " + label)
+      }
+      await waitFor(() => window.convax, "the packaged preload bridge")
+      const mainProtocol = await window.convax.protocol.getVersion()
+      if (mainProtocol !== window.convax.protocol.version) {
+        throw new Error("Packaged main/preload protocol mismatch: " + mainProtocol + " / " + window.convax.protocol.version)
+      }
+      const projects = await window.convax.projects.listProjects()
+      const project = projects.projects.find((candidate) => candidate.name === "packaged-smoke-project")
+      if (!project || project.id !== ${JSON.stringify(seededProject.id)}) {
+        throw new Error(
+          "Packaged Desktop did not open the isolated smoke userData; expected project "
+          + ${JSON.stringify(seededProject.id)} + ", got " + JSON.stringify(projects.projects),
+        )
+      }
+      const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
+      const canvasId = catalog.canvases[0]?.id
+      if (canvasId !== "canvas-main") throw new Error("The packaged Project did not expose canvas-main")
+      await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")
+      const jianyingStatus = await window.convax.jianying.getDraftStatus()
+      if (![
+        "active",
+        "ambiguous",
+        "no_active_draft",
+        "not_running",
+        "unavailable",
+        "unsupported",
+      ].includes(jianyingStatus.status)) {
+        throw new Error("Packaged JianYing inspection returned an invalid status: " + JSON.stringify(jianyingStatus))
+      }
+
+      let inventory = await window.convax.plugins.listPlugins()
+      const requiredIds = ${JSON.stringify(pluginIds)}
+      const defaultRemotePluginId = ${JSON.stringify(defaultRemotePluginId)}
+      const packagedDefault = inventory.installed.find((plugin) => plugin.id === defaultRemotePluginId)
+      if (!packagedDefault) {
+        throw new Error("Packaged default Plugin did not install from the offline seed: " + defaultRemotePluginId)
+      }
+      for (const id of requiredIds) {
+        if (!inventory.catalog.some((plugin) => plugin.id === id)) {
+          throw new Error("Built-in Plugin is missing from the packaged catalog: " + id)
+        }
+        if (!inventory.installed.some((plugin) => plugin.id === id)) {
+          await window.convax.plugins.installCatalogPlugin({ id })
+          inventory = await window.convax.plugins.listPlugins()
+        }
+      }
+      const installed = new Map(inventory.installed.map((plugin) => [plugin.id, plugin]))
+      for (const id of requiredIds) {
+        if (!installed.has(id)) throw new Error("Built-in Plugin did not install from the packaged catalog: " + id)
+      }
+      const identity = (id) => {
+        const plugin = installed.get(id)
+        if (!plugin || typeof plugin.entry !== "string") throw new Error("Plugin has no Web entry: " + id)
+        return { entry: plugin.entry, id, version: plugin.version }
+      }
+      const loaded = await window.convax.canvas.documents.load({ canvasId, scopeId: project.id })
+      if (!loaded.document) throw new Error("The packaged Canvas document did not load")
+      if (loaded.document.nodes.length !== 0) {
+        throw new Error("The isolated packaged Canvas was not empty: " + JSON.stringify(loaded.document.nodes))
+      }
+      await window.convax.canvas.documents.save({
+        document: {
+          ...loaded.document,
+          revision: loaded.document.revision + 1,
+          nodes: [
+            {
+              data: {
+                kind: "plugin.storyai-3d-director-desk",
+                label: "3D Director Desk",
+                metadata: {
+                  convaxPlugin: identity("storyai-3d-director-desk"),
+                  convaxPluginState: {},
+                },
+              },
+              id: "packaged-smoke-storyai",
+              position: { x: 0, y: 0 },
+              style: { height: 460, width: 700 },
+              type: "file",
+            },
+            {
+              data: {
+                kind: "plugin.panorama-viewer",
+                label: "Panorama Viewer",
+                metadata: {
+                  convaxPlugin: identity("panorama-viewer"),
+                  convaxPluginState: {},
+                },
+              },
+              id: "packaged-smoke-panorama",
+              position: { x: 740, y: 0 },
+              style: { height: 460, width: 700 },
+              type: "file",
+            },
+            {
+              data: {
+                kind: "integration.jianying",
+                label: "JianYing Export",
+                metadata: {
+                  convaxPlugin: identity("jianying-editor"),
+                  convaxPluginState: {},
+                },
+              },
+              id: "packaged-smoke-jianying",
+              position: { x: 0, y: 500 },
+              style: { height: 260, width: 520 },
+              type: "file",
+            },
+          ],
+        },
+        expectedStorageVersion: loaded.storageVersion,
+        ref: { canvasId, scopeId: project.id },
+      })
+      return {
+        canvasId,
+        defaultRemote: { id: packagedDefault.id, version: packagedDefault.version },
+        installed: requiredIds.map((id) => ({ id, version: installed.get(id)?.version })),
+        jianyingStatus,
+        projectId: project.id,
+        protocol: mainProtocol,
+      }
+    })()`,
+  )) as {
+    canvasId?: string
+    defaultRemote?: { id?: string; version?: string }
+    installed?: Array<{ id?: string; version?: string }>
+    jianyingStatus?: { draftName?: string; reason?: string; status?: string }
+    projectId?: string
+    protocol?: string
+  }
+  if (
+    seeded.canvasId !== "canvas-main" ||
+    seeded.defaultRemote?.id !== defaultRemotePluginId ||
+    !seeded.defaultRemote.version ||
+    seeded.projectId !== seededProject.id ||
+    seeded.installed?.length !== pluginIds.length ||
+    typeof seeded.jianyingStatus?.status !== "string" ||
+    typeof seeded.protocol !== "string"
+  ) {
+    throw new Error(`Unexpected packaged seed result: ${JSON.stringify(seeded)}`)
+  }
+  if (expectedJianyingStatus && seeded.jianyingStatus?.status !== expectedJianyingStatus) {
+    throw new Error(
+      `Packaged JianYing inspection expected ${expectedJianyingStatus}, received ${JSON.stringify(seeded.jianyingStatus)}`,
+    )
+  }
+
+  await renderer.evaluate(`(() => { setTimeout(() => window.location.reload(), 0); return true })()`)
+  await Bun.sleep(250)
+  const outerFrames = (await renderer.evaluate(
+    `(async () => {
+      const deadline = Date.now() + ${pluginTimeoutMs}
+      while (Date.now() < deadline) {
+        if (window.convax) {
+          const expected = [
+            ["storyai-3d-director-desk", "3D Director Desk plugin"],
+            ["panorama-viewer", "Panorama Viewer plugin"],
+            ["jianying-editor", "JianYing Export plugin"],
+          ]
+          const frames = expected.map(([id, title]) => {
+            const frame = document.querySelector('iframe[title="' + title + '"]')
+            return frame ? {
+              allow: frame.getAttribute("allow"),
+              allowFullscreen: frame.hasAttribute("allowfullscreen"),
+              id,
+              sandbox: frame.getAttribute("sandbox"),
+              src: frame.getAttribute("src"),
+            } : null
+          })
+          if (frames.every(Boolean)) return frames
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Timed out waiting for all packaged Plugin iframes")
+    })()`,
+  )) as Array<{
+    allow?: string | null
+    allowFullscreen?: boolean
+    id?: string
+    sandbox?: string | null
+    src?: string | null
+  }>
+  for (const pluginId of pluginIds) {
+    const frame = outerFrames.find((candidate) => candidate.id === pluginId)
+    if (frame?.sandbox !== "allow-scripts" || !frame.src?.startsWith(`convax-plugin://${pluginId}/`)) {
+      throw new Error(`Unexpected packaged ${pluginId} iframe: ${JSON.stringify(frame)}`)
+    }
+    if (pluginId === "panorama-viewer" && (!frame.allow?.includes("fullscreen *") || frame.allowFullscreen !== false)) {
+      throw new Error(`Panorama Viewer lost its packaged fullscreen grant: ${JSON.stringify(frame)}`)
+    }
+  }
+
+  const director = (await evaluatePluginFrame(
+    debuggerPort,
+    renderer,
+    "storyai-3d-director-desk",
+    `(async () => {
+      const deadline = Date.now() + ${pluginTimeoutMs - 5_000}
+      while (Date.now() < deadline) {
+        const canvas = document.querySelector("canvas")
+        const controls = document.querySelectorAll(".viewport-gizmo-hit-button")
+        const bounds = canvas?.getBoundingClientRect()
+        const webgl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"))
+        if (canvas && webgl && bounds.width > 0 && bounds.height > 0 && controls.length >= 6) {
+          return {
+            canvasHeight: bounds.height,
+            canvasWidth: bounds.width,
+            controlCount: controls.length,
+            title: document.title,
+            webgl: true,
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("3D Director Desk did not initialize its WebGL scene")
+    })()`,
+  )) as {
+    canvasHeight?: number
+    canvasWidth?: number
+    controlCount?: number
+    title?: string
+    webgl?: boolean
+  }
+  if (
+    director.title !== "3D Director Desk" ||
+    director.webgl !== true ||
+    !director.canvasWidth ||
+    !director.canvasHeight ||
+    (director.controlCount ?? 0) < 6
+  ) {
+    throw new Error(`Unexpected packaged 3D Director runtime: ${JSON.stringify(director)}`)
+  }
+
+  const panorama = (await evaluatePluginFrame(
+    debuggerPort,
+    renderer,
+    "panorama-viewer",
+    `(async () => {
+      const deadline = Date.now() + ${pluginTimeoutMs - 5_000}
+      while (Date.now() < deadline) {
+        const canvas = document.querySelector("#panoramaCanvas")
+        const bounds = canvas?.getBoundingClientRect()
+        const webgl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"))
+        const connection = document.querySelector("#connectionText")?.textContent?.trim()
+        if (canvas && webgl && bounds.width > 0 && bounds.height > 0 && connection === "画布已连接") {
+          return {
+            canvasHeight: bounds.height,
+            canvasWidth: bounds.width,
+            connection,
+            title: document.title,
+            webgl: true,
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      throw new Error("Panorama Viewer did not initialize WebGL and connect to the host")
+    })()`,
+  )) as {
+    canvasHeight?: number
+    canvasWidth?: number
+    connection?: string
+    title?: string
+    webgl?: boolean
+  }
+  if (
+    panorama.title !== "Panorama Viewer" ||
+    panorama.connection !== "画布已连接" ||
+    panorama.webgl !== true ||
+    !panorama.canvasWidth ||
+    !panorama.canvasHeight
+  ) {
+    throw new Error(`Unexpected packaged Panorama Viewer runtime: ${JSON.stringify(panorama)}`)
+  }
+
+  const jianying = (await evaluatePluginFrame(
+    debuggerPort,
+    renderer,
+    "jianying-editor",
+    `(() => ({
+      body: document.body.innerText,
+      heading: document.querySelector("h1")?.textContent?.trim(),
+      title: document.title,
+    }))()`,
+  )) as { body?: string; heading?: string; title?: string }
+  if (
+    jianying.title !== "JianYing Export" ||
+    jianying.heading !== "JianYing Export" ||
+    !jianying.body?.includes("原生导入由 Convax Desktop")
+  ) {
+    throw new Error(`Unexpected packaged JianYing frame: ${JSON.stringify(jianying)}`)
+  }
+
+  const agent = (await renderer.evaluate(
+    `(async () => {
+      const projects = await window.convax.projects.listProjects()
+      const project = projects.projects.find((candidate) => candidate.id === ${JSON.stringify(seededProject.id)})
+      if (!project) throw new Error("The isolated Project disappeared before the Agent check")
+      const catalog = await window.convax.agent.listModels({ scopeId: project.id })
+      const status = await window.convax.agent.getStatus()
+      return {
+        connectedProviders: catalog.providers.filter((provider) => provider.connected).length,
+        modelCount: catalog.providers.reduce((count, provider) => count + provider.models.length, 0),
+        providerCount: catalog.providers.length,
+        state: status.state,
+      }
+    })()`,
+    { timeoutMs: operationTimeoutMs },
+  )) as {
+    connectedProviders?: number
+    modelCount?: number
+    providerCount?: number
+    state?: string
+  }
+  if (agent.state !== "ready" || !agent.providerCount || !agent.modelCount) {
+    throw new Error(`Packaged OpenCode runtime did not become ready: ${JSON.stringify(agent)}`)
+  }
+
+  const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
+  type PersistedDocument = {
+    nodes?: Array<{
+      data?: { kind?: string; metadata?: { convaxPluginState?: { schemaVersion?: number } } }
+      id?: string
+    }>
+  }
+  let persisted: PersistedDocument = {}
+  const persistenceDeadline = Date.now() + pluginTimeoutMs
+  while (Date.now() < persistenceDeadline) {
+    persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as PersistedDocument
+    const state = persisted.nodes?.find((node) => node.id === "packaged-smoke-storyai")?.data?.metadata
+      ?.convaxPluginState
+    if (state?.schemaVersion === 2) break
+    await Bun.sleep(100)
+  }
+  const directorNode = persisted.nodes?.find((node) => node.id === "packaged-smoke-storyai")
+  if (
+    persisted.nodes?.length !== 3 ||
+    directorNode?.data?.kind !== "plugin.storyai-3d-director-desk" ||
+    directorNode.data.metadata?.convaxPluginState?.schemaVersion !== 2
+  ) {
+    throw new Error(`Packaged Plugin host did not persist 3D Director state: ${JSON.stringify(persisted)}`)
+  }
+  for (const pluginId of pluginIds) {
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(userDataRoot, "plugins", pluginId, "manifest.json"), "utf8"),
+    ) as { id?: string }
+    if (manifest.id !== pluginId) throw new Error(`Packaged Plugin installation is invalid: ${pluginId}`)
+  }
+  const ffmpegManifest = JSON.parse(
+    await fs.readFile(path.join(userDataRoot, "plugins", defaultRemotePluginId, "manifest.json"), "utf8"),
+  ) as { id?: string; runtime?: { command?: string }; version?: string }
+  if (
+    ffmpegManifest.id !== defaultRemotePluginId ||
+    ffmpegManifest.version !== seeded.defaultRemote.version ||
+    ffmpegManifest.runtime?.command !== "convax-ffmpeg-mcp"
+  ) {
+    throw new Error(`Packaged default Plugin installation is invalid: ${JSON.stringify(ffmpegManifest)}`)
+  }
+  const companionCommandRoot = path.join(
+    userDataRoot,
+    "plugin-companions",
+    defaultRemotePluginId,
+    ffmpegManifest.version,
+    ffmpegManifest.runtime.command,
+  )
+  const companionVersions = await fs.readdir(companionCommandRoot, { withFileTypes: true })
+  const companionVersion = companionVersions.find((entry) => entry.isDirectory() && !entry.isSymbolicLink())?.name
+  if (!companionVersion || companionVersions.filter((entry) => entry.isDirectory()).length !== 1) {
+    throw new Error(`Packaged FFmpeg companion installation is invalid: ${companionCommandRoot}`)
+  }
+  const companionRoot = path.join(companionCommandRoot, companionVersion)
+  const companionReceipt = JSON.parse(
+    await fs.readFile(path.join(companionRoot, ".convax-companion.json"), "utf8"),
+  ) as { command?: string; pluginId?: string; pluginVersion?: string; schema?: string; sha256?: string; size?: number }
+  const companionExecutable = path.join(companionRoot, ffmpegManifest.runtime.command)
+  if (
+    companionReceipt.schema !== "convax.plugin-companion/1" ||
+    companionReceipt.pluginId !== defaultRemotePluginId ||
+    companionReceipt.pluginVersion !== ffmpegManifest.version ||
+    companionReceipt.command !== ffmpegManifest.runtime.command ||
+    !(await regularFile(companionExecutable)) ||
+    (await sha256(companionExecutable)) !== companionReceipt.sha256 ||
+    (await fs.stat(companionExecutable)).size !== companionReceipt.size
+  ) {
+    throw new Error(`Packaged FFmpeg companion receipt is invalid: ${JSON.stringify(companionReceipt)}`)
+  }
+  const authorizationFiles = await fs.readdir(path.join(userDataRoot, "plugin-authorizations", defaultRemotePluginId))
+  const authorizationReceipts = (await Promise.all(
+    authorizationFiles
+      .filter((file) => file.endsWith(".json"))
+      .map(async (file) =>
+        JSON.parse(
+          await fs.readFile(path.join(userDataRoot, "plugin-authorizations", defaultRemotePluginId, file), "utf8"),
+        ),
+      ),
+  )) as Array<{ bindingKind?: string; pluginId?: string; pluginVersion?: string; schema?: string }>
+  if (
+    !authorizationReceipts.some(
+      (receipt) =>
+        receipt.schema === "convax.tool-plugin-authorization/1" &&
+        receipt.bindingKind === "managed" &&
+        receipt.pluginId === defaultRemotePluginId &&
+        receipt.pluginVersion === ffmpegManifest.version,
+    )
+  ) {
+    throw new Error("Packaged FFmpeg authorization receipt was not published")
+  }
+  const defaultReceipt = JSON.parse(
+    await fs.readFile(path.join(userDataRoot, "default-capabilities.json"), "utf8"),
+  ) as { plugins?: string[]; schema?: string }
+  if (
+    defaultReceipt.schema !== "convax.default-capabilities/1" ||
+    !defaultReceipt.plugins?.includes(defaultRemotePluginId)
+  ) {
+    throw new Error(`Packaged default capability receipt is invalid: ${JSON.stringify(defaultReceipt)}`)
+  }
+
+  console.log(
+    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${[...pluginIds, defaultRemotePluginId].join(", ")}, ${agent.providerCount} OpenCode providers)`,
+  )
+  console.log(`Packaged JianYing inspection: ${JSON.stringify(seeded.jianyingStatus)}`)
+  const application =
+    process.platform === "darwin" ? path.resolve(path.dirname(executable), "..", "..") : path.dirname(executable)
+  console.log(`Unpacked packaged application retained at: ${application}`)
+  console.log(`Packaged executable retained at: ${executable}`)
+} finally {
+  if (renderer && child?.exitCode === null) {
+    await renderer
+      .evaluate(`(() => { setTimeout(() => window.close(), 0); return true })()`, { timeoutMs: 2_000 })
+      .catch(() => undefined)
+    await Promise.race([child.exited, Bun.sleep(5_000)])
+  }
+  renderer?.close()
+  if (child) await terminate(child)
+  await Promise.all([
+    fs.rm(userDataRoot, { force: true, recursive: true }),
+    fs.rm(projectParent, { force: true, recursive: true }),
+  ])
+}

@@ -194,6 +194,10 @@ Electron userData/
                                         private crash-recovery Cookie handoff; never a browser profile
   canvas-external-drags/                short-lived host-owned native drag copies
 
+Packaged app Resources/
+  default-capabilities/                 build-verified remote first-install seed;
+                                        never built-in provenance or executable-in-place
+
 ~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
 
 browser localStorage                    per-user Workbench/renderer preferences
@@ -221,8 +225,15 @@ remains hidden and protected.
 
 The remote capability catalog and showcase caches are Desktop-owned, user-global,
 and non-authoritative. Catalog reads may return the validated local snapshot
-immediately while Main single-flights a bounded background ETag revalidation;
-install/update operations still request a network-first Registry view. Showcase
+immediately while Main single-flights a bounded background ETag revalidation.
+Ordinary install/update operations request a network-first Registry view. A packaged
+build may carry a target-specific first-install seed downloaded and verified from
+that same fixed Registry during packaging. Startup reads it only through a local
+Registry port and publishes it with the normal remote installer transaction, so its
+Plugin package, companion, authorization and owned Skills enter `userData` exactly
+like an online install and never gain built-in provenance. Once the first window is
+created, Main checks Registry metadata in the background and downloads artifacts only
+when a newer version exists. Showcase
 indexes publish monotonically with their Registry identity. Media is cached across
 restarts by its verified SHA-256 in a bounded LRU and is rechecked for declared size,
 digest and MIME bytes on every admission. Losing any cache never removes installed
@@ -567,6 +578,12 @@ Neither Project nor Workbench imports the other to implement this flow.
   Desktop verifies catalog sequence, compatibility, immutable artifact metadata,
   bounded download size, SHA-256 and a safe ZIP inventory before calling the same
   local Plugin and managed-Skill installers used by checked-in bundles.
+- The packaging script may use the same verifier to retain the exact Registry,
+  Plugin ZIP and current-target companion bytes as a packaged first-install seed.
+  Runtime revalidates that self-describing seed and still routes it through
+  `RemoteCapabilityInstaller`; it is not a checked-in bundle, built-in identity,
+  executable search path or second publication mechanism. Missing/corrupt seed data
+  fails closed and the post-window network phase may recover it.
 
 ## 8. Plugin host boundary
 
@@ -696,6 +713,10 @@ URL, and the import payload contains only those loopback URLs. Unknown routes an
 unscoped files remain inaccessible. Main keeps the server alive while the bounded
 operation awaits every requested transfer, then closes it after all items complete
 or when the bounded operation fails.
+On macOS the packaged app declares its bounded JianYing draft access with
+`NSAppleMusicUsageDescription`; access to the user's Movies media area remains under
+the operating system's **Media & Apple Music** consent. A denial is reported with
+that settings location and never downgraded to “no active draft.”
 The currently supported JianYing Deep Link imports each item into both the material
 panel and the timeline; it exposes no verified panel-only parameter, so Convax must
 not promise panel-only behavior.

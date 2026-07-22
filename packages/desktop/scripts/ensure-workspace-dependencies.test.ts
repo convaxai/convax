@@ -22,7 +22,7 @@ describe("Desktop workspace dependency build", () => {
     expect(built).toBe(true)
     expect(calls).toEqual([
       {
-        command: [process.execPath, "turbo", "build", "--filter=@convax/desktop^..."],
+        command: [process.execPath, "turbo", "build", "--filter=@convax/desktop^...", "--concurrency=1"],
         cwd: "/repo",
       },
     ])

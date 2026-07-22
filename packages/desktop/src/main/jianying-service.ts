@@ -15,6 +15,7 @@ import type {
 
 const jianyingExecutableName = "VideoFusion-macOS"
 const activeDraftSampleIntervalMs = 100
+const activeDraftLockRetryDelayMs = 50
 const draftTokenLifetimeMs = 5 * 60_000
 const maxDraftTokens = 1_000
 const draftContentFileNames = ["draft_info.json", "draft_content.json"] as const
@@ -361,11 +362,7 @@ export class MacOSJianyingNativeAdapter implements JianyingNativeAdapter {
         await this.sleep(250)
         continue
       }
-      if (
-        observation.status === "active" &&
-        observation.draft &&
-        observation.draft.lockPath !== previousLockPath
-      ) {
+      if (observation.status === "active" && observation.draft && observation.draft.lockPath !== previousLockPath) {
         let provenNew = false
         try {
           provenNew = await proveNewDraftDirectory(observation.draft, snapshots, dispatchStartedAt)
@@ -407,9 +404,11 @@ export class MacOSJianyingNativeAdapter implements JianyingNativeAdapter {
           processIds,
         )
       }
+      const candidateCountBeforeProcess = candidates.length
+      let vanishedLockCount = 0
       for (const lockPath of parseLockedPaths(lsof.stdout)) {
         try {
-          const canonicalLock = await fs.realpath(lockPath)
+          const canonicalLock = await this.realpathDraftLock(lockPath, signal)
           if (path.basename(canonicalLock) !== ".locked") continue
           const draftPath = path.dirname(canonicalLock)
           if (!(await containsDraftContent(draftPath))) continue
@@ -419,9 +418,20 @@ export class MacOSJianyingNativeAdapter implements JianyingNativeAdapter {
             lockPath: canonicalLock,
             pid,
           })
-        } catch {
-          return unavailableObservation(`Could not validate a JianYing draft lock held by process ${pid}`, processIds)
+        } catch (error) {
+          throwIfAborted(signal)
+          if (isNodeError(error, "ENOENT")) {
+            vanishedLockCount += 1
+            continue
+          }
+          return unavailableObservation(jianyingDraftLockValidationFailure(pid, error), processIds)
         }
+      }
+      if (vanishedLockCount > 0 && candidates.length === candidateCountBeforeProcess) {
+        return unavailableObservation(
+          `JianYing process ${pid} changed its active draft lock while Convax was inspecting it; retry the export`,
+          processIds,
+        )
       }
     }
     const unique = [...new Map(candidates.map((draft) => [`${draft.pid}\0${draft.lockPath}`, draft])).values()]
@@ -436,6 +446,17 @@ export class MacOSJianyingNativeAdapter implements JianyingNativeAdapter {
       return { processIds, reason: "JianYing is running without an active draft", status: "no_active_draft" }
     }
     return { draft: unique[0], processIds, status: "active" }
+  }
+
+  private async realpathDraftLock(lockPath: string, signal?: AbortSignal) {
+    try {
+      return await fs.realpath(lockPath)
+    } catch (error) {
+      if (!isNodeError(error, "ENOENT")) throw error
+      await this.sleep(activeDraftLockRetryDelayMs)
+      throwIfAborted(signal)
+      return fs.realpath(lockPath)
+    }
   }
 
   private runCommand(executable: string, args: readonly string[], timeoutMs: number, signal?: AbortSignal) {
@@ -467,6 +488,18 @@ export function createJianyingNativeAdapter(options: {
     ? new MacOSJianyingNativeAdapter(options)
     : new UnsupportedJianyingNativeAdapter()
 }
+
+export function jianyingCommandEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...environment,
+    // Finder-launched macOS applications do not reliably inherit a UTF-8 locale.
+    // Without this, lsof renders non-ASCII path bytes as literal `\\xNN`
+    // sequences, which cannot be passed back to realpath as a native path.
+    LANG: "UTF-8",
+    LC_ALL: "UTF-8",
+  }
+}
+
 export async function runJianyingCommand(
   executable: string,
   args: readonly string[],
@@ -478,6 +511,7 @@ export async function runJianyingCommand(
       executable,
       [...args],
       {
+        env: jianyingCommandEnvironment(),
         maxBuffer: 8 * 1024 * 1024,
         signal,
         timeout: timeoutMs,
@@ -939,6 +973,20 @@ async function containsDraftContent(draftPath: string) {
 
 function unavailableObservation(reason: string, processIds: readonly number[] = []): JianyingDraftObservation {
   return { processIds, reason, status: "unavailable" }
+}
+
+export function jianyingDraftLockValidationFailure(pid: number, error: unknown) {
+  const prefix = `Could not validate a JianYing draft lock held by process ${pid}`
+  if (isNodeError(error, "EPERM")) {
+    return `${prefix}: macOS denied Convax access to the Movies folder (EPERM). Allow Convax in System Settings > Privacy & Security > Media & Apple Music, then retry.`
+  }
+  if (isNodeError(error, "EACCES")) {
+    return `${prefix}: Convax does not have read access to the JianYing draft files (EACCES). Check their permissions, then retry.`
+  }
+  if (error instanceof Error && "code" in error && typeof error.code === "string") {
+    return `${prefix} (${error.code})`
+  }
+  return prefix
 }
 
 function unsupportedObservation(): JianyingDraftObservation {
