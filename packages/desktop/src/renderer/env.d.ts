@@ -13,6 +13,7 @@ import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
 import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import type { PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
+import type { PetSettingsClient } from "../pet-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -29,6 +30,7 @@ declare global {
       }
       generation: GenerationClient
       jianying: JianyingRendererClient
+      pets: PetSettingsClient
       platform: NodeJS.Platform
       pluginCapabilities: PluginCapabilityRendererClient
       plugins: WebPluginClient

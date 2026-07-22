@@ -162,6 +162,7 @@ export class PetController {
   readonly #activity: PetActivitySource
   readonly #createId: () => string
   readonly #inspector: PetAssetInspector
+  readonly #listeners = new Set<() => void>()
   readonly #petsRoot: string
   readonly #pluginManager: PetPluginManager
   readonly #stateStore: PetStateStore
@@ -217,6 +218,11 @@ export class PetController {
     }
   }
 
+  subscribe(listener: () => void) {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
   async select(id: string) {
     const selection = selectionFromId(id)
     const pets = await this.#inventory()
@@ -224,6 +230,7 @@ export class PetController {
     this.#state = { ...this.#state, selected: selection }
     await this.#persist()
     if (this.#state.awake) await this.#openWindow()
+    this.#emitChange()
   }
 
   async setAwake(awake: boolean) {
@@ -235,11 +242,13 @@ export class PetController {
       this.#state = { ...this.#state, awake: true }
       await this.#persist()
       await this.#openWindow()
+      this.#emitChange()
       return
     }
     await this.#window.close()
     this.#state = { ...this.#state, awake: false }
     await this.#persist()
+    this.#emitChange()
   }
 
   async beforePluginChange(pluginId: string) {
@@ -255,9 +264,11 @@ export class PetController {
       this.#state = { ...this.#state, awake: false, selected: undefined }
       await this.#persist()
       await this.#window.close()
+      this.#emitChange()
       return
     }
     if (this.#state.awake) await this.#openWindow()
+    this.#emitChange()
   }
 
   async importCustom(sourcePath: string) {
@@ -299,6 +310,7 @@ export class PetController {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error
       }
       await fs.rename(staging, target)
+      this.#emitChange()
       return itemFromCustom(metadata)
     } finally {
       await fs.rm(staging, { force: true, recursive: true }).catch(() => undefined)
@@ -320,6 +332,7 @@ export class PetController {
       await this.#persist()
     }
     await fs.rm(realDirectory, { recursive: true })
+    this.#emitChange()
   }
 
   async resolveSelectedAsset() {
@@ -418,6 +431,10 @@ export class PetController {
 
   async #persist() {
     await this.#stateStore.write(this.#state)
+  }
+
+  #emitChange() {
+    for (const listener of this.#listeners) listener()
   }
 
   async #selectedSnapshot() {

@@ -42,3 +42,49 @@ export interface PetRendererSnapshot {
   activity: PetActivitySnapshot
   pet: PetInventoryItem
 }
+
+export interface PetNavigationRequest {
+  activityId: string
+}
+
+export interface PetNavigationTarget extends PetActivityTarget {
+  activityId: string
+}
+
+export interface PetDragInput {
+  dx: number
+  dy: number
+  phase: "end" | "move"
+}
+
+export const petIpcChannels = {
+  changed: "pet:changed",
+  deleteCustom: "pet:delete-custom",
+  drag: "pet:drag",
+  importCustom: "pet:import-custom",
+  list: "pet:list",
+  markDisplayed: "pet:mark-displayed",
+  navigate: "pet:navigate",
+  select: "pet:select",
+  setAwake: "pet:set-awake",
+  setExpanded: "pet:set-expanded",
+  snapshot: "pet:snapshot",
+} as const
+
+export interface PetSettingsClient {
+  deleteCustom(input: { id: string }): Promise<void>
+  importCustom(): Promise<PetInventoryItem | null>
+  list(): Promise<PetInventorySnapshot>
+  markDisplayed(input: PetNavigationRequest): Promise<void>
+  onDidChange(listener: () => void): () => void
+  onNavigate(listener: (target: PetNavigationTarget) => void): () => void
+  select(input: { id: string }): Promise<void>
+  setAwake(input: { awake: boolean }): Promise<void>
+}
+
+export interface PetOverlayClient {
+  drag(input: PetDragInput): void
+  navigate(input: PetNavigationRequest): Promise<void>
+  onSnapshot(listener: (snapshot: PetRendererSnapshot) => void): () => void
+  setExpanded(input: { expanded: boolean }): Promise<void>
+}

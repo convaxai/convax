@@ -216,6 +216,7 @@ export interface AgentPanelProps {
 
 export interface AgentPanelHandle {
   addResources(resources: readonly AgentResource[]): void
+  openSession(sessionId: string): Promise<void>
 }
 
 export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(props, ref) {
@@ -1189,8 +1190,29 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         props.layout?.onOpenChange(true)
         setComposerFocusRequest((request) => request + 1)
       },
+      async openSession(targetSessionId) {
+        if (embedded || !props.projectId) throw new Error("The Agent panel cannot open this conversation")
+        props.layout?.onOpenChange(true)
+        const available = await refreshSessions(targetSessionId)
+        if (!available.some((session) => session.id === targetSessionId)) {
+          throw new Error("The Agent conversation is no longer available")
+        }
+        selectSession(targetSessionId)
+        setHistoryVisible(false)
+        stickToBottomRef.current = true
+        setFollowingLatest(true)
+        await refreshSessionState(targetSessionId)
+      },
     }),
-    [addResources, props.layout?.onOpenChange, props.projectId],
+    [
+      addResources,
+      embedded,
+      props.layout?.onOpenChange,
+      props.projectId,
+      refreshSessions,
+      refreshSessionState,
+      selectSession,
+    ],
   )
 
   useLayoutEffect(() => {

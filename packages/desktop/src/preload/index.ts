@@ -18,6 +18,7 @@ import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
+import { petIpcChannels, type PetNavigationTarget, type PetSettingsClient } from "../pet-contracts"
 import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
@@ -321,6 +322,25 @@ const generationClient = {
   listTools: (input) => ipcRenderer.invoke(generationIpcChannels.listTools, input),
 } satisfies GenerationClient
 
+const petSettingsClient = {
+  deleteCustom: (input) => ipcRenderer.invoke(petIpcChannels.deleteCustom, input),
+  importCustom: () => ipcRenderer.invoke(petIpcChannels.importCustom),
+  list: () => ipcRenderer.invoke(petIpcChannels.list),
+  markDisplayed: (input) => ipcRenderer.invoke(petIpcChannels.markDisplayed, input),
+  onDidChange(listener) {
+    const handleChange = () => listener()
+    ipcRenderer.on(petIpcChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(petIpcChannels.changed, handleChange)
+  },
+  onNavigate(listener) {
+    const handleNavigate = (_event: Electron.IpcRendererEvent, target: PetNavigationTarget) => listener(target)
+    ipcRenderer.on(petIpcChannels.navigate, handleNavigate)
+    return () => ipcRenderer.removeListener(petIpcChannels.navigate, handleNavigate)
+  },
+  select: (input) => ipcRenderer.invoke(petIpcChannels.select, input),
+  setAwake: (input) => ipcRenderer.invoke(petIpcChannels.setAwake, input),
+} satisfies PetSettingsClient
+
 contextBridge.exposeInMainWorld("convax", {
   agent: { ...agentClient, skills: agentSkillClient },
   canvas: {
@@ -331,6 +351,7 @@ contextBridge.exposeInMainWorld("convax", {
   },
   generation: generationClient,
   jianying: jianyingClient,
+  pets: petSettingsClient,
   platform: process.platform,
   pluginCapabilities: pluginCapabilityClient,
   plugins: pluginClient,
