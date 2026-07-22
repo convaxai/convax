@@ -2,6 +2,9 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "electron-vite"
 import type { Plugin } from "vite"
+import { resolveDesktopBuildFeatureFlags } from "./build-feature-flags"
+
+const desktopBuildFeatureFlags = resolveDesktopBuildFeatureFlags(process.env)
 
 const dependencyPathPattern = /[\\/]node_modules[\\/]/
 const workspaceDistPathPattern = /[\\/]packages[\\/][^\\/]+[\\/]dist(?:[\\/]|$)/
@@ -61,6 +64,10 @@ export default defineConfig({
       react({ exclude: [dependencyPathPattern, workspaceDistPathPattern] }),
       tailwindcss(),
     ],
+    define: {
+      __CONVAX_FEATURE_SERVICES__: JSON.stringify(desktopBuildFeatureFlags.services),
+      __CONVAX_FEATURE_SKILLS_AND_PLUGINS__: JSON.stringify(desktopBuildFeatureFlags.skillsAndPlugins),
+    },
     build: {
       rollupOptions: {
         input: "src/renderer/index.html",

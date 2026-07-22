@@ -62,6 +62,23 @@ Run the full validation suite with:
 bun check
 ```
 
+### Build-time feature switches
+
+The Services and Skill & Plugin settings are included by default. Product builds can hide either setting in both
+global Settings and the lower-left application menu by setting these compile-time environment variables to `false`
+or `0`:
+
+- `CONVAX_FEATURE_SERVICES`
+- `CONVAX_FEATURE_SKILLS_AND_PLUGINS`
+
+For example, to hide both settings in a Desktop build:
+
+```bash
+CONVAX_FEATURE_SERVICES=0 CONVAX_FEATURE_SKILLS_AND_PLUGINS=0 bun --cwd packages/desktop build
+```
+
+Only `true`, `false`, `1`, and `0` are accepted so a misspelled value fails the build.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)

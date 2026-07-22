@@ -154,4 +154,28 @@ describe("SettingsView", () => {
     expect(markup).toContain(appMessage("en", "services.free"))
     expect(markup).not.toContain("iframe")
   })
+
+  test("hides disabled build-time sections and falls back to General", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        featureFlags={{ services: false, skillsAndPlugins: false }}
+        initialSection="services"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+
+    expect(markup).toContain(appMessage("en", "settings.general"))
+    expect(markup).toContain('id="settings-language"')
+    expect(markup).not.toContain(appMessage("en", "settings.services"))
+    expect(markup).not.toContain(appMessage("en", "settings.capabilities").replace("&", "&amp;"))
+    expect(markup).not.toContain("OpenCode")
+  })
 })

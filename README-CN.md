@@ -62,6 +62,22 @@ bun dev
 bun check
 ```
 
+### 编译期功能开关
+
+“服务”和“技能与插件”设置默认都会展示。产品构建可以通过以下编译期环境变量独立隐藏任一设置；关闭后，
+全局设置页和左下角应用菜单中的对应入口会同时隐藏：
+
+- `CONVAX_FEATURE_SERVICES`
+- `CONVAX_FEATURE_SKILLS_AND_PLUGINS`
+
+例如，在 Desktop 构建中同时隐藏两项设置：
+
+```bash
+CONVAX_FEATURE_SERVICES=0 CONVAX_FEATURE_SKILLS_AND_PLUGINS=0 bun --cwd packages/desktop build
+```
+
+开关只接受 `true`、`false`、`1` 和 `0`，拼写错误会直接让编译失败。
+
 ## 项目文档
 
 - [架构说明](docs/architecture.md)

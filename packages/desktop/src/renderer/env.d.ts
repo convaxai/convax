@@ -14,6 +14,9 @@ import type { PluginServiceClient } from "../plugin-service-contracts"
 import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 
 declare global {
+  const __CONVAX_FEATURE_SERVICES__: boolean
+  const __CONVAX_FEATURE_SKILLS_AND_PLUGINS__: boolean
+
   interface Window {
     convax: {
       agent: AgentClient & { skills: DesktopSkillClient }
