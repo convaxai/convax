@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import type { NodeProps } from "@xyflow/react"
 import type { ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { createCanvasDocument } from "../document"
+import { createCanvasDocument, createGroupNode } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
@@ -14,7 +14,7 @@ import type { CanvasDocument, CanvasNode, CanvasSelection } from "../types"
 
 mock.module("@xyflow/react", () => ({
   Handle: (props: { children?: ReactNode }) => <div>{props.children}</div>,
-  NodeResizer: () => null,
+  NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
   NodeToolbar: (props: { children?: ReactNode; isVisible?: boolean }) => (
     <div data-node-toolbar data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}>
       {props.children}
@@ -90,7 +90,7 @@ function renderWithEditor(
               <div data-file-renderer />
             </CanvasNodeChrome>
           )
-        : () => <div data-file-renderer />,
+        : (props) => <div data-file-renderer data-selected={String(props.selected)} />,
       id: "test-file",
       label: "Test file",
       matches: (data) => data.kind === "test-file",
@@ -176,6 +176,54 @@ describe("built-in node toolbar visibility", () => {
     expect(toolbarCount(render(selection(["node-a", "node-b"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"], ["edge-a"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"]), true))).toBe(0)
+  })
+
+  test("shows node-local focus chrome only for the sole selected card", () => {
+    const render = (currentSelection: CanvasSelection, readOnly = false) =>
+      renderWithEditor(currentSelection, readOnly, (props) => (
+        <CanvasNodeChrome icon={null} label="Test" node={props}>
+          <div />
+        </CanvasNodeChrome>
+      ))
+
+    const single = render(selection(["node-a"]))
+    expect(single).toContain("is-selected")
+    expect(single).toContain("data-node-resizer")
+
+    for (const aggregate of [selection(["node-a", "node-b"]), selection(["node-a"], ["edge-a"])]) {
+      const markup = render(aggregate)
+      expect(markup).not.toContain("is-selected")
+      expect(markup).not.toContain("data-node-resizer")
+    }
+    expect(render(selection(["node-a"]), true)).not.toContain("data-node-resizer")
+  })
+
+  test("passes single-card activation instead of aggregate membership to registered renderers", () => {
+    const render = (currentSelection: CanvasSelection) =>
+      renderWithEditor(currentSelection, false, (props) => <BuiltinCanvasNode {...props} />)
+
+    expect(render(selection(["node-a"]))).toContain('data-selected="true"')
+    expect(render(selection(["node-a", "node-b"]))).toContain('data-selected="false"')
+    expect(render(selection(["node-a"], ["edge-a"]))).toContain('data-selected="false"')
+  })
+
+  test("suppresses per-card group focus and resize chrome in aggregate selection", () => {
+    const group = createGroupNode({
+      height: 240,
+      id: "group-a",
+      position: { x: 0, y: 0 },
+      width: 360,
+    })
+    const render = (currentSelection: CanvasSelection) =>
+      renderWithEditor(currentSelection, false, (props) => <BuiltinCanvasNode {...props} />, false, { node: group })
+
+    const single = render(selection([group.id]))
+    expect(single).toContain("ring-2")
+    expect(single).toContain("data-node-resizer")
+
+    const multi = render(selection([group.id, "node-b"]))
+    expect(multi).not.toContain("ring-2")
+    expect(multi).not.toContain("data-node-resizer")
   })
 
   test("adds host selection actions to every eligible node toolbar", () => {
@@ -275,7 +323,8 @@ describe("built-in node toolbar visibility", () => {
     expect(multi.match(/draggable="true"/g)).toHaveLength(2)
     expect(multi.match(/data-canvas-selection-drag-hint/g)).toHaveLength(1)
     expect(render(selection(["node-a"]), "ready", true)).toContain('draggable="true"')
-    expect(render(selection(["node-a"]), "ready", false, false)).not.toContain("data-canvas-selection-drag-state")
+    expect(render(selection(["node-a"]), "ready", false, false)).toContain('draggable="true"')
+    expect(render(selection(["node-b"]), "ready", false, false)).not.toContain("data-canvas-selection-drag-state")
   })
 
   test("starts the whole prepared selection only while the exact drag chord remains held", () => {

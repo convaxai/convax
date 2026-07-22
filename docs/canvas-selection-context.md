@@ -1,6 +1,6 @@
 # Canvas 选择上下文与上下文操作面
 
-状态：已采纳，2026-07-17。
+状态：已采纳，2026-07-17；2026-07-22 补充 aggregate selection 的单卡激活规则。
 
 本文定义 Convax 如何根据 Canvas 选择派生上下文 UI，解决多选时每个已选节点都显示一套
 节点工具栏的问题，并明确选择、编辑模式、DOM 焦点与命令执行之间的边界。
@@ -119,8 +119,8 @@ Command execution                       显式的用户/Agent 意图与 revision
    下允许的 inspect/copy surface 也应按自身 capability 判定。
 3. `multi-node` 与 `mixed` 最多只能呈现一份 aggregate contextual action surface，并且只包含
    适用于整个 selection 的操作。未来若增加共同属性面板，应显式表达 common value 与
-   mixed value。Resize handle 属于 transform affordance，不在这条 action surface 规则内；
-   本次仍保持现状，后续单独设计 aggregate transform box。
+   mixed value。集合成员不能因此获得单卡激活态：每节点高亮边框、resize handle、连接点、
+   内部编辑或交互 surface 都必须关闭，只保留 aggregate selection 的联合包围盒。
 4. selection change 可以结束不再兼容的 editing mode，但不能因此自动执行一次业务操作。
 5. DOM focus 永远不能充当 Canvas selection 或 editing ownership 的同义词。
 6. 临时 multi-selection 不是持久化的 Canvas group。
@@ -133,6 +133,11 @@ Command execution                       显式的用户/Agent 意图与 revision
   `isVisible`，因为此时可见性不再只由 selection 推导。
 - Convax 继续拥有 selection。不能引入 `useOnSelectionChange` 作为第二份事实源，也不能
   将 React Flow selection 镜像到另一个 controller。
+- React Flow node 的 `selected` 仍用于受控 selection、整体拖拽和
+  `.react-flow__nodesselection-rect` 联合包围盒。进入 Canvas 卡片 renderer 前，标准节点外壳
+  必须把它投影成单卡激活态：仅对应 `single-node` 的节点收到 `selected=true`；`multi-node`
+  或 `mixed` 中的 renderer 均收到 `false`。需要集合 membership 的宿主行为直接读取
+  `CanvasSelection`，不能再从 renderer 的 `selected` 反推。
 - `SelectionToolbar` 继续作为 selection-level surface：它用于 multi-node aggregate，也在
   单选 group 时承载 Ungroup。Canvas 只渲染一份
   `NodeToolbar nodeId={selectedNodeIds} isVisible position={Position.Top}`，由 React Flow 按
@@ -148,13 +153,16 @@ Command execution                       显式的用户/Agent 意图与 revision
 - 通过 `CanvasEditorController` 暴露派生上下文；
 - 将内置 node toolbar、renderer contribution toolbar 与 file assistant accessory 限定在
   对应节点的 `single-node` 上下文；
+- 在标准节点外壳中分离 React Flow selection membership 与 renderer 单卡激活态，使内置
+  卡片、group、媒体控件和 Plugin renderer 在 aggregate selection 中都不显示 per-card
+  focus chrome 或 resize handle；
 - selection 离开对应节点的 `single-node` 上下文时，结束文本编辑并关闭 node-local
   connection UI；
 - `SelectionToolbar` 只在 `multi-node` 或单选 group 上下文显示；`mixed` 下隐藏 node-only
   aggregate actions，右键菜单也只保留真正作用于整个 selection 的操作。
 
-multi-selection resize geometry 属于独立的产品决策。本次不把每节点 resize handles 改造
-成 aggregate transform box。
+本次不实现 aggregate resize。多选只显示联合包围盒，不显示任何成员节点自己的 resize
+handle。
 
 ## 验收标准
 
@@ -162,7 +170,8 @@ multi-selection resize geometry 属于独立的产品决策。本次不把每节
 - 恰好选择一个节点且未选边：只允许该节点的内置、contributed 与 assistant contextual
   surfaces 显示；若该节点是 group，可同时显示承载 Ungroup 的 selection-level surface。
 - 选择两个及以上节点：不显示任何 per-node contextual toolbar；最多显示一份
-  锚定在选区最小联合包围盒顶部的 selection-level action surface。
+  锚定在选区最小联合包围盒顶部的 selection-level action surface；成员节点不显示单卡
+  高亮边框、resize handle、连接点或内部激活态。
 - 同时选择节点和任意边：上下文为 `mixed`，不显示 node-local contextual toolbar。
 - 只选择一条或多条边：只允许未来的 edge actions 或 selection actions 显示。
 - read-only：mutation toolbar 保持隐藏。
