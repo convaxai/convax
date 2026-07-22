@@ -641,7 +641,6 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
         result = await context.executeCanvasGeneration({
           ...context.frame,
           anchor: generationAnchorForPluginNode(current.node),
-          expectedRevision: document.revision,
           ...(output === undefined ? {} : { output }),
           prompt: requireGenerationPrompt(params.prompt),
           references,

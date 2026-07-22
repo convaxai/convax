@@ -945,7 +945,7 @@ describe("Canvas Web Plugin host requests", () => {
     })
   })
 
-  test("derives generation scope, revision, placement, and explicit references from the live Canvas", async () => {
+  test("derives generation scope, placement, and explicit references without trusting the renderer revision", async () => {
     const owner = canvasNode({ style: { height: 460, width: 720 } })
     const image = connectedImageNode()
     const video = generationInputNode("video", "video-1")
@@ -1001,7 +1001,6 @@ describe("Canvas Web Plugin host requests", () => {
     expect(executeCanvasGeneration).toHaveBeenCalledWith({
       anchor: { x: 794, y: 20 },
       canvasId: "canvas-1",
-      expectedRevision: 7,
       nodeId: "node-1",
       output: "image",
       pluginId: "director-stage",

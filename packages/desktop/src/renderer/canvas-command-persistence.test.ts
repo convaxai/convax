@@ -94,4 +94,30 @@ describe("Renderer Canvas command persistence", () => {
     await expect(persistence.load("canvas-one", new AbortController().signal)).resolves.toMatchObject({ revision: 4 })
     expect(execute).not.toHaveBeenCalled()
   })
+
+  test("collapses a renderer-only revision when the semantic patch is empty", async () => {
+    const authoritative = { ...createCanvasDocument({ id: "canvas-one" }), revision: 4 }
+    const execute = mock(async () => {
+      throw new Error("An empty patch must not reach Main")
+    })
+    const persistence = createRendererCanvasPersistence({
+      client: {
+        execute,
+        async load() {
+          return { document: authoritative, storageVersion: "storage-4" }
+        },
+      },
+      commandId: () => "renderer-command",
+      dehydrate: structuredClone,
+      hydrate: structuredClone,
+      ref: { canvasId: "canvas-one", scopeId: "project-one" },
+    })
+    const signal = new AbortController().signal
+    await persistence.load("canvas-one", signal)
+
+    const optimisticProjection = { ...structuredClone(authoritative), revision: 5 }
+
+    await expect(persistence.save(optimisticProjection, signal)).resolves.toEqual(authoritative)
+    expect(execute).not.toHaveBeenCalled()
+  })
 })

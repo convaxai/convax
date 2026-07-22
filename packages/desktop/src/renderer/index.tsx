@@ -223,24 +223,28 @@ function App() {
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
   }>({})
-  const latestCanvasSaveRef = useRef<Promise<unknown> | null>(null)
-  const drainCanvasSaves = useCallback(async () => {
+  const latestCanvasSaveRef = useRef<Promise<CanvasDocument> | null>(null)
+  const drainCanvasSaves = useCallback(async (): Promise<CanvasDocument | undefined> => {
+    let authoritativeDocument: CanvasDocument | undefined
     while (true) {
       const pending = latestCanvasSaveRef.current
-      if (!pending) return
+      if (!pending) return authoritativeDocument
       try {
-        await pending
+        authoritativeDocument = await pending
       } catch (error) {
         if (latestCanvasSaveRef.current !== pending) continue
         throw error
       }
-      if (latestCanvasSaveRef.current === pending) return
+      if (latestCanvasSaveRef.current === pending) return authoritativeDocument
     }
   }, [])
-  const flushCanvasForAgent = useCallback(async () => {
-    await canvasEditorRef.current?.flush()
-    await drainCanvasSaves()
+  const flushAuthoritativeCanvas = useCallback(async () => {
+    const flushedDocument = await canvasEditorRef.current?.flush()
+    return (await drainCanvasSaves()) ?? flushedDocument
   }, [drainCanvasSaves])
+  const flushCanvasForAgent = useCallback(async () => {
+    await flushAuthoritativeCanvas()
+  }, [flushAuthoritativeCanvas])
   const projectController = useMemo(
     () =>
       new ProjectController(window.convax.projects, {
@@ -419,16 +423,19 @@ function App() {
       async executeCanvasGeneration(input) {
         throwIfAborted(input.signal)
         currentScope(input.projectId, input.canvasId)
-        await flushCanvasForAgent()
+        const authoritativeDocument = await flushAuthoritativeCanvas()
         throwIfAborted(input.signal)
         currentScope(input.projectId, input.canvasId)
+        if (!authoritativeDocument || authoritativeDocument.id !== input.canvasId) {
+          throw new Error("Canvas generation could not resolve Main's authoritative document")
+        }
         const operationId = globalThis.crypto.randomUUID()
         const cancel = () => window.convax.generation.cancel({ operationId })
         input.signal.addEventListener("abort", cancel, { once: true })
         try {
           const result = await window.convax.generation.generate({
             anchor: input.anchor,
-            expectedRevision: input.expectedRevision,
+            expectedRevision: authoritativeDocument.revision,
             operationId,
             ...(input.output ? { output: input.output } : {}),
             prompt: input.prompt,
@@ -558,7 +565,7 @@ function App() {
         return result
       },
     }
-  }, [flushCanvasForAgent])
+  }, [flushAuthoritativeCanvas])
 
   useEffect(() => {
     let active = true
@@ -704,11 +711,14 @@ function App() {
           throw new Error("Generation must target the active Canvas")
         }
         if (request.signal.aborted) throw request.signal.reason
-        await flushCanvasForAgent()
+        const authoritativeDocument = await flushAuthoritativeCanvas()
         if (request.signal.aborted) throw request.signal.reason
         const live = pluginHostContextRef.current
         if (live.activeProject?.id !== activeProjectId || live.activeCanvas?.id !== activeCanvasId) {
           throw new Error("Generation must target the live active Canvas")
+        }
+        if (!authoritativeDocument || authoritativeDocument.id !== activeCanvasId) {
+          throw new Error("Generation could not resolve Main's authoritative Canvas document")
         }
         const operationId = globalThis.crypto.randomUUID()
         const cancel = () => window.convax.generation.cancel({ operationId })
@@ -717,7 +727,7 @@ function App() {
           const result = await window.convax.generation.generate({
             anchor: request.anchor,
             ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-            expectedRevision: request.expectedRevision,
+            expectedRevision: authoritativeDocument.revision,
             operationId,
             ...(request.output ? { output: request.output } : {}),
             prompt: request.prompt,
@@ -833,7 +843,7 @@ function App() {
         },
       },
     })
-  }, [activeCanvasId, activeProjectId, flushCanvasForAgent])
+  }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas])
 
   const runMediaOperation = useCallback(
     async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {

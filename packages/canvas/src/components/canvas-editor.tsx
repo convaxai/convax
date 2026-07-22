@@ -325,7 +325,8 @@ export interface CanvasEditorProps {
 }
 
 export interface CanvasEditorHandle {
-  flush: () => Promise<void>
+  /** Persists pending commands and returns Main's authoritative document projection. */
+  flush: () => Promise<CanvasDocument>
   prepareToLeave: () => Promise<void>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection without persisting the current renderer snapshot. */
@@ -1265,7 +1266,7 @@ function CanvasEditorContent(
     () => ({
       async flush() {
         await waitForStableLoad()
-        await startSave(historyRef.current.document)
+        return startSave(historyRef.current.document)
       },
       async prepareToLeave() {
         await waitForStableLoad()

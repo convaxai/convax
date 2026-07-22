@@ -63,7 +63,6 @@ export interface PluginCanvasHost {
   executeCanvasGeneration(
     input: PluginNodeInvocationRef & {
       anchor: { x: number; y: number }
-      expectedRevision: number
       output?: WebPluginGenerationModality
       prompt: string
       references: readonly PluginGenerationReference[]
@@ -120,7 +119,6 @@ export interface PluginHostRequestContext {
   executeCanvasGeneration(
     input: PluginNodeInvocationRef & {
       anchor: { x: number; y: number }
-      expectedRevision: number
       output?: WebPluginGenerationModality
       prompt: string
       references: readonly PluginGenerationReference[]
