@@ -7,6 +7,11 @@ import { canvasAgentResource } from "./agent-panel-state"
 
 export type AgentReferenceTreeSection = "canvas" | "project"
 
+export interface AgentReferenceTreeStatus {
+  error?: string
+  loading?: boolean
+}
+
 export interface AgentReferenceTreeRow {
   active?: boolean
   depth: number
@@ -133,6 +138,24 @@ export function moveAgentReferenceTreeActive(
   if (direction === "parent") return current?.parentId ?? current?.id
   const child = current ? rows.find((row) => row.parentId === current.id) : undefined
   return child?.id ?? current?.id ?? rows[0]?.id
+}
+
+export function buildAgentReferenceStatusById(loadingKeys: ReadonlySet<string>, errors: ReadonlyMap<string, string>) {
+  const result = new Map<string, AgentReferenceTreeStatus>()
+  const optionIdForKey = (key: string) => {
+    if (key.startsWith("project:") && key !== "project:") return `project:directory:${key.slice("project:".length)}`
+    if (key.startsWith("canvas:")) return key
+    return undefined
+  }
+  for (const key of loadingKeys) {
+    const optionId = optionIdForKey(key)
+    if (optionId) result.set(optionId, { ...result.get(optionId), loading: true })
+  }
+  for (const [key, error] of errors) {
+    const optionId = optionIdForKey(key)
+    if (optionId) result.set(optionId, { ...result.get(optionId), error })
+  }
+  return result
 }
 
 function agentReferenceSearchText(row: AgentReferenceTreeRow) {

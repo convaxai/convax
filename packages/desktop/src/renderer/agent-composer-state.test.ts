@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  AgentComposerCompositionController,
   AgentComposerRequestTracker,
   agentComposerResources,
   agentComposerText,
@@ -112,6 +113,33 @@ describe("Agent composer state", () => {
     expect(assets()).toBeFalse()
     expect(canvas()).toBeFalse()
     expect(otherProject()).toBeFalse()
+  })
+
+  test("suppresses query refreshes throughout IME composition and refreshes once after commit", () => {
+    const controller = new AgentComposerCompositionController()
+    const scheduled: Array<() => void> = []
+    let refreshes = 0
+    const refresh = () => {
+      refreshes += 1
+    }
+    const schedule = (callback: () => void) => {
+      scheduled.push(callback)
+      return () => {
+        const index = scheduled.indexOf(callback)
+        if (index >= 0) scheduled.splice(index, 1)
+      }
+    }
+
+    controller.start()
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    controller.finish(refresh, schedule)
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    expect(refreshes).toBe(0)
+    scheduled.shift()?.()
+    expect(refreshes).toBe(1)
+    expect(controller.runWhenIdle(refresh)).toBeTrue()
+    expect(refreshes).toBe(2)
   })
 
   test("filters Skill names and descriptions case-insensitively", () => {

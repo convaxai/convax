@@ -138,6 +138,41 @@ export function closeAgentComposerSuggestion(): AgentComposerSuggestionState {
   return { open: false }
 }
 
+export class AgentComposerCompositionController {
+  #composing = false
+  #cancelScheduledRefresh?: () => void
+
+  start() {
+    this.#composing = true
+    this.#cancelScheduledRefresh?.()
+    this.#cancelScheduledRefresh = undefined
+  }
+
+  runWhenIdle(refresh: () => void) {
+    if (this.#composing || this.#cancelScheduledRefresh) return false
+    refresh()
+    return true
+  }
+
+  finish(refresh: () => void, schedule: (callback: () => void) => () => void) {
+    if (!this.#composing) return
+    this.#composing = false
+    let completed = false
+    const cancel = schedule(() => {
+      completed = true
+      this.#cancelScheduledRefresh = undefined
+      if (!this.#composing) refresh()
+    })
+    if (!completed) this.#cancelScheduledRefresh = cancel
+  }
+
+  dispose() {
+    this.#composing = false
+    this.#cancelScheduledRefresh?.()
+    this.#cancelScheduledRefresh = undefined
+  }
+}
+
 export class AgentComposerRequestTracker {
   readonly #requests = new Map<string, number>()
   #generation = 0

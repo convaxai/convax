@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test"
 import {
   buildAgentCanvasReferenceTree,
   buildAgentProjectReferenceTree,
+  buildAgentReferenceStatusById,
   filterAgentReferenceTree,
   moveAgentReferenceTreeActive,
 } from "./agent-composer-tree"
@@ -86,13 +87,29 @@ describe("Agent composer reference trees", () => {
   test("search keeps loaded ancestors and keyboard movement uses visible rows", () => {
     const filtered = filterAgentReferenceTree(projectRows(), "cover")
 
-    expect(filtered.map((row) => row.id)).toEqual([
-      "project:directory:Assets",
-      "project:file:Assets/cover.png",
-    ])
+    expect(filtered.map((row) => row.id)).toEqual(["project:directory:Assets", "project:file:Assets/cover.png"])
     expect(moveAgentReferenceTreeActive(filtered, filtered[0]!.id, "down")).toBe(filtered[1]!.id)
     expect(moveAgentReferenceTreeActive(filtered, filtered[1]!.id, "down")).toBe(filtered[0]!.id)
     expect(moveAgentReferenceTreeActive(filtered, filtered[1]!.id, "parent")).toBe(filtered[0]!.id)
     expect(moveAgentReferenceTreeActive(filtered, filtered[0]!.id, "child")).toBe(filtered[1]!.id)
+  })
+
+  test("maps branch-scoped inventory state without treating root loading as a tree row", () => {
+    expect(
+      buildAgentReferenceStatusById(
+        new Set(["project:", "project:Assets", "canvas:canvas-a"]),
+        new Map([
+          ["project:Notes", "Notes unavailable"],
+          ["canvas:canvas-b", "Canvas unavailable"],
+        ]),
+      ),
+    ).toEqual(
+      new Map([
+        ["project:directory:Assets", { loading: true }],
+        ["canvas:canvas-a", { loading: true }],
+        ["project:directory:Notes", { error: "Notes unavailable" }],
+        ["canvas:canvas-b", { error: "Canvas unavailable" }],
+      ]),
+    )
   })
 })

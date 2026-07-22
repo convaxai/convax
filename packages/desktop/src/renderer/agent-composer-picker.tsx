@@ -1,6 +1,7 @@
 import type { AgentResource } from "@convax/agent-runtime"
 import {
   ChevronRight,
+  ExternalLink,
   FileText,
   Folder,
   Layers3,
@@ -11,7 +12,7 @@ import {
   Square,
   X,
 } from "lucide-react"
-import type { AgentReferenceTreeRow } from "./agent-composer-tree"
+import type { AgentReferenceTreeRow, AgentReferenceTreeStatus } from "./agent-composer-tree"
 
 export interface AgentComposerPickerAnchor {
   left: number
@@ -35,12 +36,15 @@ export interface AgentComposerPickerProps {
   loading?: boolean
   onClose: () => void
   onHoverChange: (id: string | undefined) => void
+  onOpenSkill: (name: string) => void | Promise<void>
   onReferenceTabChange: (tab: "canvas" | "project") => void
+  onReferenceRetry: (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => void
   onRetry?: () => void
   onSelect: (option: AgentComposerPickerOption) => void
   onToggle: (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => void
   options: readonly AgentComposerPickerOption[]
   referenceTab: "canvas" | "project"
+  referenceStatusById?: ReadonlyMap<string, AgentReferenceTreeStatus>
   trigger: "reference" | "skill"
 }
 
@@ -115,6 +119,7 @@ export function AgentComposerPicker(props: AgentComposerPickerProps) {
                 active={props.activeId === option.id}
                 key={option.id}
                 onHoverChange={props.onHoverChange}
+                onOpenSkill={props.onOpenSkill}
                 onSelect={props.onSelect}
                 option={option}
               />
@@ -126,6 +131,8 @@ export function AgentComposerPicker(props: AgentComposerPickerProps) {
                 onSelect={props.onSelect}
                 onToggle={props.onToggle}
                 option={option}
+                onRetry={props.onReferenceRetry}
+                status={props.referenceStatusById?.get(option.id)}
               />
             ),
           )
@@ -140,30 +147,40 @@ export function AgentComposerPicker(props: AgentComposerPickerProps) {
 function SkillOption(props: {
   active: boolean
   onHoverChange: (id: string | undefined) => void
+  onOpenSkill: (name: string) => void | Promise<void>
   onSelect: (option: AgentComposerPickerOption) => void
   option: Extract<AgentComposerPickerOption, { optionType: "skill" }>
 }) {
   return (
-    <button
+    <div
       aria-selected={props.active}
-      className={rowClassName(props.active)}
+      className={`flex items-center rounded-md ${props.active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
       data-agent-composer-option={props.option.id}
       id={agentComposerPickerOptionId(props.option.id)}
-      onClick={() => props.onSelect(props.option)}
       onPointerEnter={() => props.onHoverChange(props.option.id)}
       role="option"
-      type="button"
     >
-      <Sparkles aria-hidden="true" className="size-4 shrink-0 text-primary" />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">${props.option.label}</span>
-        {props.option.description ? (
-          <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
-            {props.option.description}
-          </span>
-        ) : null}
-      </span>
-    </button>
+      <button className={rowClassName(false)} onClick={() => props.onSelect(props.option)} type="button">
+        <Sparkles aria-hidden="true" className="size-4 shrink-0 text-primary" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">${props.option.label}</span>
+          {props.option.description ? (
+            <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-muted-foreground">
+              {props.option.description}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      <button
+        aria-label={`Open Skill ${props.option.label}`}
+        className="mr-1 grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-background/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+        onClick={() => void props.onOpenSkill(props.option.label)}
+        title={`Open ${props.option.label} Skill`}
+        type="button"
+      >
+        <ExternalLink aria-hidden="true" className="size-3.5" />
+      </button>
+    </div>
   )
 }
 
@@ -172,45 +189,75 @@ function ReferenceOption(props: {
   onHoverChange: (id: string | undefined) => void
   onSelect: (option: AgentComposerPickerOption) => void
   onToggle: (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => void
+  onRetry: (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => void
   option: Extract<AgentComposerPickerOption, { optionType: "reference" }>
+  status?: AgentReferenceTreeStatus
 }) {
   const option = props.option
   return (
-    <div
-      aria-expanded={option.expandable ? option.expanded : undefined}
-      aria-level={option.depth + 1}
-      aria-selected={props.active}
-      className={`flex items-center rounded-md ${props.active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
-      data-agent-composer-option={option.id}
-      id={agentComposerPickerOptionId(option.id)}
-      onPointerEnter={() => props.onHoverChange(option.id)}
-      role="treeitem"
-      style={{ paddingLeft: `${option.depth * 14}px` }}
-    >
-      {option.expandable ? (
-        <button
-          aria-label={`${option.expanded ? "Collapse" : "Expand"} ${option.label}`}
-          className="grid size-6 shrink-0 place-items-center rounded outline-none hover:bg-background/70 focus-visible:ring-2 focus-visible:ring-ring/40"
-          onClick={() => props.onToggle(option)}
-          type="button"
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={`size-3.5 transition-transform ${option.expanded ? "rotate-90" : ""}`}
-          />
+    <div role="none">
+      <div
+        aria-expanded={option.expandable ? option.expanded : undefined}
+        aria-level={option.depth + 1}
+        aria-selected={props.active}
+        className={`flex items-center rounded-md ${props.active ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
+        data-agent-composer-option={option.id}
+        id={agentComposerPickerOptionId(option.id)}
+        onPointerEnter={() => props.onHoverChange(option.id)}
+        role="treeitem"
+        style={{ paddingLeft: `${option.depth * 14}px` }}
+      >
+        {option.expandable ? (
+          <button
+            aria-label={`${option.expanded ? "Collapse" : "Expand"} ${option.label}`}
+            className="grid size-6 shrink-0 place-items-center rounded outline-none hover:bg-background/70 focus-visible:ring-2 focus-visible:ring-ring/40"
+            onClick={() => props.onToggle(option)}
+            type="button"
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={`size-3.5 transition-transform ${option.expanded ? "rotate-90" : ""}`}
+            />
+          </button>
+        ) : (
+          <span className="size-6 shrink-0" />
+        )}
+        <button className={rowClassName(false)} onClick={() => props.onSelect(option)} type="button">
+          <ReferenceIcon option={option} />
+          <span className="min-w-0 flex-1 text-left">
+            <span className="block truncate font-medium">{option.label}</span>
+            {option.description ? (
+              <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{option.description}</span>
+            ) : null}
+          </span>
         </button>
-      ) : (
-        <span className="size-6 shrink-0" />
-      )}
-      <button className={rowClassName(false)} onClick={() => props.onSelect(option)} type="button">
-        <ReferenceIcon option={option} />
-        <span className="min-w-0 flex-1 text-left">
-          <span className="block truncate font-medium">{option.label}</span>
-          {option.description ? (
-            <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{option.description}</span>
-          ) : null}
-        </span>
-      </button>
+      </div>
+      {option.expanded && props.status?.loading ? (
+        <div
+          className="flex items-center gap-2 px-2 py-1.5 text-[10px] text-muted-foreground"
+          role="status"
+          style={{ paddingLeft: `${(option.depth + 1) * 14 + 24}px` }}
+        >
+          <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />
+          <span>Loading {option.label}…</span>
+        </div>
+      ) : option.expanded && props.status?.error ? (
+        <div
+          className="flex items-center gap-2 px-2 py-1.5 text-[10px] text-destructive"
+          role="alert"
+          style={{ paddingLeft: `${(option.depth + 1) * 14 + 24}px` }}
+        >
+          <span className="min-w-0 flex-1">{props.status.error}</span>
+          <button
+            aria-label={`Retry loading ${option.label}`}
+            className="grid size-6 shrink-0 place-items-center rounded-md text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40"
+            onClick={() => props.onRetry(option)}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -76,6 +76,7 @@ import {
   selectAgentSessionAfterRefresh,
 } from "./agent-panel-state"
 import {
+  AgentComposerCompositionController,
   AgentComposerRequestTracker,
   agentComposerResources,
   agentComposerText,
@@ -97,6 +98,7 @@ import {
 import {
   buildAgentCanvasReferenceTree,
   buildAgentProjectReferenceTree,
+  buildAgentReferenceStatusById,
   filterAgentReferenceTree,
   moveAgentReferenceTreeActive,
 } from "./agent-composer-tree"
@@ -283,6 +285,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [sessionId, setSessionId] = useState<string>()
   const [sessionState, setSessionState] = useState<AgentSessionState>()
   const [capabilities, setCapabilities] = useState<AgentCapabilities>()
+  const [capabilitiesError, setCapabilitiesError] = useState<string>()
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [promptingSessionIds, setPromptingSessionIds] = useState<Set<string>>(() => new Set())
@@ -308,6 +311,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const activeProjectRef = useRef(props.projectId)
   const activeScopeRef = useRef(conversationScope)
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
+  const compositionControllerRef = useRef(new AgentComposerCompositionController())
   const requestTrackerRef = useRef(new AgentComposerRequestTracker())
   const generationCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const generationDescriptionRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
@@ -393,6 +397,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       sessionStateRequestRef.current.clear()
       sessionListRequestRef.current += 1
       requestTrackerRef.current.invalidate()
+      compositionControllerRef.current.dispose()
     }
   }, [])
 
@@ -581,6 +586,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     selectSession(cachedSessionId)
     setSessionState(undefined)
     setCapabilities(undefined)
+    setCapabilitiesError(undefined)
     capabilitiesRequestRef.current = undefined
     requestTrackerRef.current.invalidate()
     setProjectListings(new Map())
@@ -769,24 +775,45 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     if (capabilities) return Promise.resolve(capabilities)
     if (capabilitiesRequestRef.current) return capabilitiesRequestRef.current
     const scopeId = props.projectId
+    const scope = conversationScope
+    const isLatest = requestTrackerRef.current.begin(scope, "capabilities")
+    setCapabilitiesError(undefined)
     setCapabilitiesLoading(true)
     const request = window.convax.agent
       .listCapabilities({ scopeId })
       .then((result) => {
-        if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilities(result)
+        if (
+          mountedRef.current &&
+          activeProjectRef.current === scopeId &&
+          activeScopeRef.current === scope &&
+          isLatest()
+        )
+          setCapabilities(result)
         return result
       })
       .catch((cause) => {
-        if (mountedRef.current && activeProjectRef.current === scopeId) setError(errorMessage(cause))
+        if (
+          mountedRef.current &&
+          activeProjectRef.current === scopeId &&
+          activeScopeRef.current === scope &&
+          isLatest()
+        )
+          setCapabilitiesError(errorMessage(cause))
         throw cause
       })
       .finally(() => {
         if (capabilitiesRequestRef.current === request) capabilitiesRequestRef.current = undefined
-        if (mountedRef.current && activeProjectRef.current === scopeId) setCapabilitiesLoading(false)
+        if (
+          mountedRef.current &&
+          activeProjectRef.current === scopeId &&
+          activeScopeRef.current === scope &&
+          isLatest()
+        )
+          setCapabilitiesLoading(false)
       })
     capabilitiesRequestRef.current = request
     return request
-  }, [capabilities, props.projectId])
+  }, [capabilities, conversationScope, props.projectId])
 
   const setInventoryLoading = useCallback((key: string, loading: boolean) => {
     setInventoryLoadingKeys((current) => {
@@ -948,22 +975,23 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     visibleReferenceRows,
   ])
 
-  const inventoryErrorEntry = useMemo(
-    () =>
-      [...inventoryErrors].find(([key]) =>
-        referenceTab === "project" ? key.startsWith("project:") : key.startsWith("canvas:"),
-      ),
-    [inventoryErrors, referenceTab],
+  const referenceStatusById = useMemo(
+    () => buildAgentReferenceStatusById(inventoryLoadingKeys, inventoryErrors),
+    [inventoryErrors, inventoryLoadingKeys],
   )
-  const referenceInventoryLoading = [...inventoryLoadingKeys].some((key) =>
-    referenceTab === "project" ? key.startsWith("project:") : key.startsWith("canvas:"),
-  )
+  const projectRootUnavailable = !projectListings.has("")
   const suggestionLoading = suggestion.open
     ? suggestion.trigger === "skill"
       ? capabilitiesLoading
-      : referenceInventoryLoading
+      : referenceTab === "project" && projectRootUnavailable && inventoryLoadingKeys.has("project:")
     : false
-  const suggestionError = suggestion.open && suggestion.trigger === "reference" ? inventoryErrorEntry?.[1] : undefined
+  const suggestionError = suggestion.open
+    ? suggestion.trigger === "skill"
+      ? capabilitiesError
+      : referenceTab === "project" && projectRootUnavailable
+        ? inventoryErrors.get("project:")
+        : undefined
+    : undefined
   const selectableSuggestionOptions = useMemo(
     () => (suggestionLoading || suggestionError ? [] : suggestionOptions),
     [suggestionError, suggestionLoading, suggestionOptions],
@@ -1033,11 +1061,19 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   )
 
   const retryReferenceInventory = useCallback(() => {
-    if (!inventoryErrorEntry) return
-    const [key] = inventoryErrorEntry
-    if (key.startsWith("project:")) void loadProjectDirectory(key.slice("project:".length))
-    else if (key.startsWith("canvas:")) void loadCanvasDocument(key.slice("canvas:".length))
-  }, [inventoryErrorEntry, loadCanvasDocument, loadProjectDirectory])
+    if (referenceTab === "project") void loadProjectDirectory("")
+  }, [loadProjectDirectory, referenceTab])
+
+  const retryReferenceOption = useCallback(
+    (option: Extract<AgentComposerPickerOption, { optionType: "reference" }>) => {
+      if (option.section === "project" && option.resource.kind === "directory") {
+        void loadProjectDirectory(option.resource.path)
+      } else if (option.section === "canvas" && option.kind === "canvas") {
+        void loadCanvasDocument(option.id.slice("canvas:".length))
+      }
+    },
+    [loadCanvasDocument, loadProjectDirectory],
+  )
 
   const updateComposerQuery = useCallback(() => {
     const root = composerRef.current
@@ -1247,7 +1283,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 
   useEffect(() => {
     if (!composerFocused || (suggestion.open && suggestion.mode === "edit")) return
-    const update = () => window.requestAnimationFrame(updateComposerQuery)
+    const update = () =>
+      compositionControllerRef.current.runWhenIdle(() => window.requestAnimationFrame(updateComposerQuery))
     document.addEventListener("selectionchange", update)
     return () => document.removeEventListener("selectionchange", update)
   }, [composerFocused, suggestion, updateComposerQuery])
@@ -1870,7 +1907,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         current.open ? setAgentComposerSuggestionHover(current, hoveredId) : current,
                       )
                     }
+                    onOpenSkill={openSkill}
                     onReferenceTabChange={changeReferenceTab}
+                    onReferenceRetry={retryReferenceOption}
                     onRetry={() => {
                       if (suggestion.trigger === "skill") void loadCapabilities().catch(() => undefined)
                       else retryReferenceInventory()
@@ -1879,6 +1918,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     onToggle={toggleReferenceOption}
                     options={selectableSuggestionOptions}
                     referenceTab={referenceTab}
+                    referenceStatusById={referenceStatusById}
                     trigger={suggestion.trigger}
                   />
                 ) : null}
@@ -1983,9 +2023,22 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       setComposerFocused(true)
                       composerSelectionRef.current = captureAgentComposerSelection(event.currentTarget)
                     }}
+                    onCompositionEnd={() => {
+                      compositionControllerRef.current.finish(
+                        () => {
+                          syncComposerDraft()
+                          updateComposerQuery()
+                        },
+                        (callback) => {
+                          const frame = window.requestAnimationFrame(callback)
+                          return () => window.cancelAnimationFrame(frame)
+                        },
+                      )
+                    }}
+                    onCompositionStart={() => compositionControllerRef.current.start()}
                     onInput={() => {
                       syncComposerDraft()
-                      updateComposerQuery()
+                      compositionControllerRef.current.runWhenIdle(updateComposerQuery)
                     }}
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
