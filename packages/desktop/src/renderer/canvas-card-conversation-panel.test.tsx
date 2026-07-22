@@ -53,11 +53,13 @@ function assistantRequest(
   nodes: CanvasNode[] = [node],
   mentionedNodeIds: readonly string[] = [],
 ): CanvasAssistantRequest {
+  const output = node.data.kind === "image" || node.data.kind === "video" ? node.data.kind : undefined
   return {
     document: {
       ...createCanvasDocument({ id: "canvas-one", nodes }),
       revision: 7,
     },
+    ...(output ? { generation: { output } } : {}),
     mentionedNodeIds,
     mode: "file",
     ownerNodeId: node.id,
@@ -197,40 +199,43 @@ describe("Canvas card generation request", () => {
     })
   })
 
-  test("uses the selected model output for generic cards and omits empty tool input", () => {
-    const node = createFolderNode({
+  test("rejects direct generation for generic and non-visual media cards", () => {
+    const folder = createFolderNode({
       id: "folder",
       position: { x: 3, y: 4 },
       resource: { id: "folder-resource", kind: "folder", name: "Folder" },
     })
+    const audio = createMediaNode({
+      id: "audio",
+      position: { x: 3, y: 4 },
+      resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+    })
     const selected = tool({ acceptedInputs: [], id: "sound/audio.generate", output: "audio" })
     const emptyDescription = { fields: [], toolId: selected.id } satisfies CanvasGenerationToolDescription
 
-    expect(
+    for (const node of [folder, audio]) {
+      expect(() =>
+        createCanvasCardGenerationRequest({
+          description: emptyDescription,
+          prompt: "A soft opening",
+          request: assistantRequest(node),
+          signal: new AbortController().signal,
+          tool: selected,
+          toolInput: {},
+        }),
+      ).toThrow("only for image and video cards")
+    }
+
+    expect(() =>
       createCanvasCardGenerationRequest({
-        description: emptyDescription,
-        prompt: "A soft opening",
-        request: assistantRequest(node, [node], [node.id]),
+        description: { fields: [], toolId: tool().id },
+        prompt: "A forged visual replacement",
+        request: { ...assistantRequest(folder), generation: { output: "image" } },
         signal: new AbortController().signal,
-        tool: selected,
+        tool: tool(),
         toolInput: {},
       }),
-    ).toMatchObject({
-      output: "audio",
-      prompt: "A soft opening",
-      resultMode: { nodeId: "folder", type: "replace-node" },
-      toolId: selected.id,
-    })
-    expect(
-      createCanvasCardGenerationRequest({
-        description: emptyDescription,
-        prompt: "A soft opening",
-        request: assistantRequest(node),
-        signal: new AbortController().signal,
-        tool: selected,
-        toolInput: {},
-      }),
-    ).not.toHaveProperty("toolInput")
+    ).toThrow("only for image and video cards")
   })
 
   test("generates from an empty image card as prompt-only output instead of treating the placeholder as input", () => {
@@ -470,8 +475,7 @@ describe("Canvas card generation lifecycle", () => {
       }),
     ).rejects.toBe(wrapped)
     expect(activities.at(-1)).toEqual({
-      message:
-        "Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
+      message: "Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
       prompt: "A small rabbit",
       status: "error",
     })
@@ -540,10 +544,14 @@ describe("Canvas card generation lifecycle", () => {
 
   test("restores the failed generation prompt into the explicit retry composer", () => {
     const owner = imageNode()
+    const request = assistantRequest(owner)
     const markup = renderToStaticMarkup(
       <CanvasCardConversationPanel
         agent={<div data-agent-panel>Agent conversation</div>}
-        request={{ ...assistantRequest(owner), initialGenerationPrompt: "A small rabbit" }}
+        request={{
+          ...request,
+          generation: { ...request.generation!, initialPrompt: "A small rabbit" },
+        }}
         service={{
           describeTool: async (toolId) => ({ fields: [], toolId }),
           generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
@@ -555,7 +563,7 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain(">A small rabbit</textarea>")
   })
 
-  test("keeps both panels mounted with compact top-level tabs and one composer toolbar", () => {
+  test("keeps image generation and Agent modes inside one large unfocused composer surface", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
       generate: async () => ({ createdNodeIds: ["generated"], revision: 8, toolId: "tools/image", warnings: [] }),
@@ -573,19 +581,72 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain('data-canvas-card-conversation-panel="true"')
     expect(markup).toContain('aria-label="卡片对话模式"')
     expect(markup).toContain("inline-grid w-fit")
+    expect(markup).toContain("rounded-[28px]")
     expect(markup).toContain(">生成<")
     expect(markup).toContain(">Agent<")
     expect(markup.match(/role="tab"/g)).toHaveLength(2)
     expect(markup).not.toContain('aria-label="生成类型"')
     expect(markup).toContain('aria-label="Generation prompt"')
-    expect(markup).toContain("min-h-16 max-h-24")
-    expect(markup).not.toContain("min-h-28 flex-1 resize-none")
+    expect(markup).not.toContain('autofocus=""')
+    expect(markup).toContain('data-canvas-card-generation-surface="single"')
+    expect(markup).toContain("min-h-28 max-h-48 flex-1 resize-none")
+    expect(markup).not.toContain("rounded-2xl border border-border/60 bg-card shadow-sm")
     expect(markup).toContain('aria-label="Model"')
+    expect(markup).toContain(">Models</span>")
+    expect(markup).toContain("justify-start gap-1 border-0 bg-transparent")
+    expect(markup).not.toContain("rounded-full border-border/60 bg-muted/60")
+    expect(markup).toContain("items-center gap-1 pt-1")
     expect(markup).toContain('aria-label="Generate"')
+    const generateButton = markup.match(/<button[^>]*aria-label="Generate"[^>]*>/)?.[0] ?? ""
+    expect(generateButton).toContain("size-8")
+    expect(generateButton).toContain("rounded-md")
+    expect(generateButton).not.toContain("rounded-full")
     expect(markup).toContain("@ reference.png")
     expect(markup).not.toContain("reference_image 参考输入")
     expect(markup).toContain("data-agent-panel")
     expect(markup.match(/hidden=""/g)).toHaveLength(1)
     expect(markup).not.toContain("h-[380px]")
+  })
+
+  test("renders only Agent for text, audio, folder, and plugin cards", () => {
+    const service: CanvasGenerateService = {
+      describeTool: async (toolId) => ({ fields: [], toolId }),
+      generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+      listTools: async () => [],
+    }
+    const nodes: CanvasNode[] = [
+      createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "notes" }),
+      createMediaNode({
+        id: "audio",
+        position: { x: 0, y: 0 },
+        resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+      }),
+      createFolderNode({
+        id: "folder",
+        position: { x: 0, y: 0 },
+        resource: { id: "folder-resource", kind: "folder", name: "Folder" },
+      }),
+      {
+        data: { kind: "plugin.example", label: "Plugin" },
+        id: "plugin",
+        position: { x: 0, y: 0 },
+        type: "file",
+      },
+    ]
+
+    for (const owner of nodes) {
+      const markup = renderToStaticMarkup(
+        <CanvasCardConversationPanel
+          agent={<div data-agent-panel>Agent conversation</div>}
+          request={assistantRequest(owner)}
+          service={service}
+        />,
+      )
+      expect(markup).toContain('data-canvas-card-agent-only="true"')
+      expect(markup).toContain("data-agent-panel")
+      expect(markup).not.toContain('aria-label="卡片对话模式"')
+      expect(markup).not.toContain('aria-label="Generation prompt"')
+      expect(markup).not.toContain('aria-label="Model"')
+    }
   })
 })

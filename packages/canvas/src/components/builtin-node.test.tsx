@@ -40,13 +40,13 @@ function selection(nodeIds: readonly string[], edgeIds: readonly string[] = []):
   return { edgeIds: new Set(edgeIds), nodeIds: new Set(nodeIds) }
 }
 
-function nodeProps(selected = true): NodeProps<CanvasNode> {
+function nodeProps(selected = true, target = node): NodeProps<CanvasNode> {
   return {
-    data: node.data,
+    data: target.data,
     deletable: true,
     draggable: true,
     dragging: false,
-    id: node.id,
+    id: target.id,
     isConnectable: true,
     positionAbsoluteX: 0,
     positionAbsoluteY: 0,
@@ -68,6 +68,7 @@ function renderWithEditor(
     document?: CanvasDocument
     executeSelectionAction?: CanvasEditorController["executeSelectionAction"]
     rendererUsesChrome?: boolean
+    node?: CanvasNode
     selectionDragArmed?: boolean
     selectionDragSource?: CanvasSelectionDragSource | null
     selectionDragStatus?: CanvasSelectionDragPreparationStatus
@@ -75,6 +76,7 @@ function renderWithEditor(
     visibleSelectionActions?: readonly CanvasSelectionAction[]
   } = {},
 ) {
+  const targetNode = options.node ?? node
   const fileRenderers = createCanvasFileRendererRegistry([
     {
       component: options.rendererUsesChrome
@@ -101,7 +103,7 @@ function renderWithEditor(
     canUpload: false,
     commit: options.commit ?? (() => {}),
     connectionNodeTypes: [],
-    document: options.document ?? createCanvasDocument({ id: "canvas-test", nodes: [node] }),
+    document: options.document ?? createCanvasDocument({ id: "canvas-test", nodes: [targetNode] }),
     duplicateNode: () => {},
     endGesture: () => {},
     executeSelectionAction: options.executeSelectionAction ?? (() => {}),
@@ -131,7 +133,7 @@ function renderWithEditor(
 
   return renderToStaticMarkup(
     <CanvasServicesProvider services={services}>
-      <CanvasEditorProvider controller={controller}>{child(nodeProps())}</CanvasEditorProvider>
+      <CanvasEditorProvider controller={controller}>{child(nodeProps(true, targetNode))}</CanvasEditorProvider>
     </CanvasServicesProvider>,
   )
 }
@@ -339,15 +341,53 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain("data-assistant-toolbar")
   })
 
-  test("gives the file assistant only its owner's persisted generation-model setter", () => {
+  test("gives only image and video assistants a direct-generation capability", () => {
+    for (const output of ["image", "video"] as const) {
+      const mediaNode: CanvasNode = {
+        data: { kind: output, label: output === "image" ? "Image" : "Video", url: "" },
+        id: `node-${output}`,
+        position: { x: 0, y: 0 },
+        type: "file",
+      }
+      let request: CanvasAssistantRequest | undefined
+      renderWithEditor(selection([mediaNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+        assistantRender: (next) => {
+          request = next
+          return <div data-assistant-toolbar />
+        },
+        node: mediaNode,
+      })
+
+      expect(request?.generation?.output).toBe(output)
+      expect(request?.generation?.onActivityChange).toBeFunction()
+    }
+
+    let genericRequest: CanvasAssistantRequest | undefined
+    renderWithEditor(selection([node.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      assistantRender: (next) => {
+        genericRequest = next
+        return <div data-assistant-toolbar />
+      },
+    })
+    expect(genericRequest?.mode).toBe("file")
+    expect(genericRequest?.generation).toBeUndefined()
+  })
+
+  test("gives a visual-media assistant only its owner's persisted generation-model setter", () => {
+    const imageNode: CanvasNode = {
+      data: { kind: "image", label: "Image", url: "" },
+      id: "node-image",
+      position: { x: 0, y: 0 },
+      type: "file",
+    }
     const stored = setCanvasNodeGenerationToolId(
-      createCanvasDocument({ id: "canvas-test", nodes: [node] }),
-      node.id,
+      createCanvasDocument({ id: "canvas-test", nodes: [imageNode] }),
+      imageNode.id,
       "plugin.example:image.generate",
     )
     let request: CanvasAssistantRequest | undefined
     let committed: CanvasDocument | undefined
-    renderWithEditor(selection([node.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+    renderWithEditor(selection([imageNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
       assistantRender: (next) => {
         request = next
         return <div data-assistant-toolbar />
@@ -356,12 +396,13 @@ describe("built-in node toolbar visibility", () => {
         committed = update(stored)
       },
       document: stored,
+      node: imageNode,
     })
 
-    expect(request?.ownerGenerationToolId).toBe("plugin.example:image.generate")
+    expect(request?.generation?.ownerToolId).toBe("plugin.example:image.generate")
     expect(request?.mentionedNodeIds).toEqual([])
-    expect(request?.onGenerationActivityChange).toBeFunction()
-    request?.onOwnerGenerationToolIdChange?.("plugin.example:image.alternate")
+    expect(request?.generation?.onActivityChange).toBeFunction()
+    request?.generation?.onOwnerToolIdChange?.("plugin.example:image.alternate")
     expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
   })
 })

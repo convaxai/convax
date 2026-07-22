@@ -1626,7 +1626,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               </span>
             </div>
 
-            <div className={cn("relative shrink-0 bg-card", embedded ? "p-2 pt-0" : "p-3 pt-0")}>
+            <div
+              className={cn(
+                "relative shrink-0 bg-card",
+                compactEmbeddedChrome ? "px-3 pb-3 pt-0" : embedded ? "p-2 pt-0" : "p-3 pt-0",
+              )}
+            >
               {failedSubmission ? (
                 <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-800 dark:text-amber-300">
                   <span className="min-w-0 flex-1">
@@ -1721,9 +1726,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 ) : null}
                 <div
                   className={cn(
-                    "rounded-2xl border border-border/60 bg-card p-2.5 shadow-lg shadow-black/5 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-xl focus-within:shadow-black/[0.07]",
-                    dropActive && "border-primary bg-primary/5 ring-2 ring-primary/15",
+                    compactEmbeddedChrome
+                      ? "bg-transparent py-2.5"
+                      : "rounded-2xl border border-border/60 bg-card p-2.5 shadow-lg shadow-black/5 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-xl focus-within:shadow-black/[0.07]",
+                    dropActive && "rounded-2xl border border-primary bg-primary/5 ring-2 ring-primary/15",
                   )}
+                  data-agent-composer-surface={compactEmbeddedChrome ? "flat" : "framed"}
                   onDragEnter={(event) => {
                     if (!supportsResourceDrop(event.dataTransfer)) return
                     containEmbeddedResourceDrag(embedded, event)
@@ -1778,7 +1786,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     }
                     className={cn(
                       "max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-1 text-sm leading-5 outline-none before:pointer-events-none before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)] focus:data-[empty=true]:before:hidden",
-                      embedded ? "min-h-12" : "min-h-16",
+                      compactEmbeddedChrome ? "min-h-24" : embedded ? "min-h-12" : "min-h-16",
                       interactionDisabled && "cursor-not-allowed opacity-60",
                     )}
                     contentEditable={Boolean(props.projectId) && !interactionDisabled}

@@ -1,6 +1,7 @@
 import {
   getCompatibleCanvasGenerationTools,
   inferCanvasGenerationReferences,
+  type CanvasAssistantGenerationCapability,
   type CanvasAssistantRequest,
   type CanvasAssistantGenerationActivity,
   type CanvasGenerateRequest,
@@ -26,7 +27,7 @@ import {
   validateToolInputValues,
   type ToolInputValue,
 } from "@convax/ui"
-import { ArrowUp, LoaderCircle } from "lucide-react"
+import { ArrowUp, LoaderCircle, Sparkles } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { useAgentGenerationDefault } from "./agent-generation-preference"
 import type { AgentGenerationToolSelection } from "./agent-generation-models"
@@ -42,10 +43,9 @@ const outputLabels: Record<CanvasGenerationOutput, string> = {
 }
 
 export function canvasCardGenerationOutput(
-  request: Pick<CanvasAssistantRequest, "document" | "ownerNodeId">,
+  request: Pick<CanvasAssistantRequest, "generation">,
 ): CanvasGenerationOutput | undefined {
-  const kind = request.document.nodes.find((node) => node.id === request.ownerNodeId)?.data.kind
-  return kind === "text" || kind === "image" || kind === "video" || kind === "audio" ? kind : undefined
+  return request.generation?.output
 }
 
 export function canvasCardGenerationReferences(
@@ -139,7 +139,10 @@ export function createCanvasCardGenerationRequest(input: {
     throw new Error("The selected generation model configuration is stale")
   }
   const ownerOutput = canvasCardGenerationOutput(input.request)
-  if (ownerOutput && input.tool.output !== ownerOutput) {
+  if (!ownerOutput || node.data.kind !== ownerOutput) {
+    throw new Error("Direct card generation is available only for image and video cards")
+  }
+  if (input.tool.output !== ownerOutput) {
     throw new Error(`The selected generation model cannot replace this ${ownerOutput} card`)
   }
   const prompt = input.prompt.trim()
@@ -153,7 +156,7 @@ export function createCanvasCardGenerationRequest(input: {
       source: "canvas-card",
     },
     expectedRevision: input.request.document.revision,
-    output: ownerOutput ?? input.tool.output,
+    output: ownerOutput,
     prompt,
     references: canvasCardGenerationReferences(input.request),
     resultMode: { nodeId: node.id, type: "replace-node" },
@@ -226,13 +229,14 @@ type ScopedLoad<T> =
 
 export interface CanvasCardGenerationPanelProps {
   catalogVersion?: string | number
+  generation: CanvasAssistantGenerationCapability
   request: CanvasAssistantRequest
   service: CanvasGenerateService
 }
 
 export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps) {
   const agentDefault = useAgentGenerationDefault()
-  const [prompt, setPrompt] = useState(props.request.initialGenerationPrompt ?? "")
+  const [prompt, setPrompt] = useState(props.generation.initialPrompt ?? "")
   const [catalog, setCatalog] = useState<ScopedLoad<readonly CanvasGenerationToolSummary[]>>({
     scope: "",
     status: "loading",
@@ -255,7 +259,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   )
   const referencesRef = useRef(references)
   referencesRef.current = references
-  const ownerOutput = canvasCardGenerationOutput(props.request)
+  const ownerOutput = props.generation.output
   const referenceFingerprint = JSON.stringify(references)
   const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
   const catalogScope = JSON.stringify([
@@ -268,7 +272,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
   const currentCatalog = catalog.scope === catalogScope ? catalog : undefined
   const currentTools = currentCatalog?.status === "ready" ? currentCatalog.value : []
-  const ownerToolId = props.request.ownerGenerationToolId
+  const ownerToolId = props.generation.ownerToolId
   const selectedOwnerTool = ownerToolId
     ? currentTools.find((tool) => tool.id === ownerToolId && (!ownerOutput || tool.output === ownerOutput))
     : undefined
@@ -301,10 +305,10 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   }, [])
 
   useEffect(() => {
-    if (props.request.initialGenerationPrompt !== undefined) {
-      props.request.onInitialGenerationPromptConsumed?.()
+    if (props.generation.initialPrompt !== undefined) {
+      props.generation.onInitialPromptConsumed?.()
     }
-  }, [props.request.initialGenerationPrompt, props.request.onInitialGenerationPromptConsumed])
+  }, [props.generation.initialPrompt, props.generation.onInitialPromptConsumed])
 
   useEffect(() => {
     setToolInput({})
@@ -396,7 +400,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     void executeCanvasCardGeneration({
       cancel: () => controller.abort(abortError("The card generation owner was disposed")),
       generate: props.service.generate,
-      onActivityChange: props.request.onGenerationActivityChange,
+      onActivityChange: props.generation.onActivityChange,
       request,
     })
       .then(
@@ -441,12 +445,15 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const modelHintIsError = currentCatalog?.status === "error" || currentDescription?.status === "error"
 
   return (
-    <form className="min-h-0 p-2" data-canvas-card-generation-panel onSubmit={runGeneration}>
-      <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm focus-within:border-ring/60 focus-within:ring-2 focus-within:ring-ring/15">
+    <form
+      className="flex min-h-[196px] flex-col px-3 pb-3 pt-1"
+      data-canvas-card-generation-panel
+      onSubmit={runGeneration}
+    >
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-canvas-card-generation-surface="single">
         <textarea
           aria-label="Generation prompt"
-          autoFocus
-          className="min-h-16 max-h-24 resize-none bg-transparent px-3 pb-1 pt-2.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
+          className="min-h-28 max-h-48 flex-1 resize-none bg-transparent px-1 pb-2 pt-2 text-[15px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
           data-canvas-shortcuts="ignore"
           disabled={generating}
           onChange={(event) => setPrompt(event.currentTarget.value)}
@@ -458,8 +465,8 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           <div
             className={
               modelHintIsError
-                ? "px-3 pb-1 text-[10px] text-destructive"
-                : "px-3 pb-1 text-[10px] text-muted-foreground"
+                ? "px-1 pb-1 text-[10px] text-destructive"
+                : "px-1 pb-1 text-[10px] text-muted-foreground"
             }
             role="status"
           >
@@ -467,21 +474,21 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           </div>
         ) : null}
         {operationError ? (
-          <div className="px-3 pb-1 text-[10px] text-destructive" role="alert">
+          <div className="px-1 pb-1 text-[10px] text-destructive" role="alert">
             {operationError}
           </div>
         ) : null}
         {operationMessage ? (
-          <div className="px-3 pb-1 text-[10px] text-emerald-600" role="status">
+          <div className="px-1 pb-1 text-[10px] text-emerald-600" role="status">
             {operationMessage}
           </div>
         ) : null}
-        <div className="flex min-w-0 shrink-0 items-center gap-2 px-2 pb-2 pt-1">
+        <div className="flex min-w-0 shrink-0 items-center gap-1 pt-1">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <ModelSelect
               disabled={generating || currentCatalog?.status !== "ready"}
               onValueChange={(toolId) => {
-                props.request.onOwnerGenerationToolIdChange?.(toolId)
+                props.generation.onOwnerToolIdChange?.(toolId)
                 setToolInput({})
                 setOperationError(undefined)
                 setOperationMessage(undefined)
@@ -516,7 +523,6 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           </div>
           <Button
             aria-label={generating ? "Generating" : "Generate"}
-            className="size-8 shrink-0 rounded-full"
             disabled={!canGenerate || generating}
             size="icon-sm"
             type="submit"
@@ -554,15 +560,19 @@ function ModelSelect(props: {
     >
       <SelectTrigger
         aria-label="Model"
-        className="h-8 w-auto min-w-24 max-w-44 shrink-0 rounded-full border-border/60 bg-muted/60 px-2 shadow-none"
+        className="h-auto w-auto min-w-0 max-w-[70%] shrink-0 justify-start gap-1 border-0 bg-transparent px-1.5 py-1 text-[11px] text-muted-foreground shadow-none hover:bg-accent hover:text-accent-foreground focus-visible:border-transparent focus-visible:ring-ring/40 [&>svg]:size-3 [&>svg]:opacity-100"
         data-canvas-shortcuts="ignore"
       >
-        <SelectValue>
-          {unavailable
-            ? "Model · 不可用"
-            : displayed
-              ? `${props.showOutput ? `${outputLabels[displayed.output]} · ` : ""}${displayed.title}`
-              : "Model · Auto"}
+        <SelectValue className="flex items-center gap-1 text-muted-foreground">
+          <Sparkles className="size-3.5 shrink-0" />
+          <span className="shrink-0 font-medium text-foreground">Models</span>
+          <span className="truncate">
+            {unavailable
+              ? "不可用"
+              : displayed
+                ? `${props.showOutput ? `${outputLabels[displayed.output]} · ` : ""}${displayed.title}`
+                : "Auto"}
+          </span>
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
@@ -592,13 +602,24 @@ function ModelSelect(props: {
 const toolToken = (index: number) => `tool:${index}`
 const toolTokenIndex = (value: string) => Number.parseInt(value.slice("tool:".length), 10)
 
-export interface CanvasCardConversationPanelProps extends CanvasCardGenerationPanelProps {
+export interface CanvasCardConversationPanelProps extends Omit<CanvasCardGenerationPanelProps, "generation"> {
   agent: ReactNode
 }
 
 export function CanvasCardConversationPanel(props: CanvasCardConversationPanelProps) {
   const [tab, setTab] = useState<"generate" | "agent">("generate")
   const id = useId()
+  const generation = props.request.generation
+  if (!generation) {
+    return (
+      <div
+        className="relative flex h-[340px] max-h-[calc(100vh-96px)] min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[28px] border border-border/70 bg-card text-card-foreground shadow-xl shadow-black/10"
+        data-canvas-card-agent-only
+      >
+        {props.agent}
+      </div>
+    )
+  }
   const tabs = [
     {
       id: `${id}-generate-tab`,
@@ -616,18 +637,18 @@ export function CanvasCardConversationPanel(props: CanvasCardConversationPanelPr
 
   return (
     <div
-      className={`relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card text-card-foreground${tab === "agent" ? " h-[320px] max-h-[calc(100vh-96px)]" : ""}`}
+      className={`relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[28px] border border-border/70 bg-card text-card-foreground shadow-xl shadow-black/10 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-2xl focus-within:shadow-black/15${tab === "agent" ? " h-[340px] max-h-[calc(100vh-96px)]" : ""}`}
       data-canvas-card-conversation-panel
     >
-      <div className="shrink-0 px-3 pt-2">
+      <div className="shrink-0 px-3 pt-3">
         <SegmentedTabs
           aria-label="卡片对话模式"
-          className="inline-grid w-fit rounded-lg bg-muted/50"
+          className="inline-grid w-fit rounded-full bg-muted/60"
           items={tabs}
           onValueChange={(value) => {
             if (value === "generate" || value === "agent") setTab(value)
           }}
-          tabClassName="px-3 py-1"
+          tabClassName="rounded-full px-3 py-1"
           value={tab}
         />
       </div>
@@ -640,6 +661,7 @@ export function CanvasCardConversationPanel(props: CanvasCardConversationPanelPr
       >
         <CanvasCardGenerationPanel
           catalogVersion={props.catalogVersion}
+          generation={generation}
           request={props.request}
           service={props.service}
         />

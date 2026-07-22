@@ -223,22 +223,29 @@ export class CanvasFileGenerationActivityOwner {
   }
 }
 
+export interface CanvasAssistantGenerationCapability {
+  /** Direct card generation is intentionally limited to visual media replacement. */
+  output: "image" | "video"
+  /** One-shot in-memory draft restored after an explicit card-generation recovery action. */
+  initialPrompt?: string
+  /** Persisted owner-node override. Missing means inherit the host's current default. */
+  ownerToolId?: string
+  /** File-card-only activity notification; this never mutates or persists the Canvas document. */
+  onActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
+  /** Acknowledges that the one-shot recovery draft was copied into the mounted composer. */
+  onInitialPromptConsumed?: () => void
+  /** File-card-only mutation; clearing the id restores host-default inheritance. */
+  onOwnerToolIdChange?: (toolId?: string) => void
+}
+
 export interface CanvasAssistantRequest {
   document: CanvasDocument
-  /** One-shot in-memory draft restored after an explicit card-generation recovery action. */
-  initialGenerationPrompt?: string
+  /** Present only when this owner supports direct image/video generation. */
+  generation?: CanvasAssistantGenerationCapability
   /** Host-selected context nodes. A file-card owner is carried separately and is not an implicit mention. */
   mentionedNodeIds: readonly string[]
   mode: "agent" | "file"
-  /** Persisted owner-node override. Missing means inherit the host's current default. */
-  ownerGenerationToolId?: string
   ownerNodeId: string
-  /** File-card-only activity notification; this never mutates or persists the Canvas document. */
-  onGenerationActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
-  /** Acknowledges that the one-shot recovery draft was copied into the mounted composer. */
-  onInitialGenerationPromptConsumed?: () => void
-  /** File-card-only mutation; clearing the id restores host-default inheritance. */
-  onOwnerGenerationToolIdChange?: (toolId?: string) => void
 }
 
 /** Host-rendered conversation surface. Canvas never imports an Agent implementation. */
