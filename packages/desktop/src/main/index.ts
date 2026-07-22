@@ -27,7 +27,7 @@ import {
 } from "electron"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
-import { registerWillQuitCleanup } from "./application-lifecycle"
+import { registerMainWindowActivation, registerWillQuitCleanup } from "./application-lifecycle"
 import {
   desktopApplicationName,
   desktopProjectWorkspaceDirectory,
@@ -121,6 +121,7 @@ const agentHostToolInactivityTimeout = 60 * 60_000
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
+let mainWindow: BrowserWindow | null = null
 const rendererUrl = desktopRendererUrl({
   isPackaged: app.isPackaged,
   requestedUrl: process.env.ELECTRON_RENDERER_URL,
@@ -178,12 +179,14 @@ function createWindow(projectManager: NodeProjectManager) {
       v8CacheOptions: developmentCachePolicy.v8CacheOptions,
     },
   })
+  mainWindow = window
   const webContentsId = window.webContents.id
   const pluginFrameBindings = new Map<number, string>()
   trustedWebContents.add(webContentsId)
   window.once("closed", () => {
     pluginFrameBindings.clear()
     trustedWebContents.delete(webContentsId)
+    if (mainWindow === window) mainWindow = null
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   window.webContents.on("will-navigate", (event, url) => {
@@ -241,10 +244,11 @@ function createWindow(projectManager: NodeProjectManager) {
 
   if (rendererUrl) {
     void window.loadURL(rendererUrl)
-    return
+    return window
   }
 
   void window.loadURL(trustedRendererUrl)
+  return window
 }
 
 function startApplication() {
@@ -265,7 +269,7 @@ function startApplication() {
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
   ])
   app.on("second-instance", () => {
-    const window = BrowserWindow.getAllWindows()[0]
+    const window = mainWindow
     if (!window) return
     if (window.isMinimized()) window.restore()
     window.show()
@@ -873,8 +877,7 @@ function startApplication() {
       }, 30_000).unref()
     }
 
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length > 0) return
+    registerMainWindowActivation(app, () => mainWindow, () => {
       createWindow(projectManager)
     })
   })

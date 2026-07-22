@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
-import { registerWillQuitCleanup } from "./application-lifecycle"
+import { registerMainWindowActivation, registerWillQuitCleanup } from "./application-lifecycle"
 
 describe("registerWillQuitCleanup", () => {
   test("uses one listener to run every cleanup once in registration order", () => {
@@ -22,5 +22,27 @@ describe("registerWillQuitCleanup", () => {
     application.emit("will-quit")
     expect(calls).toEqual(Array.from({ length: 11 }, (_, index) => index))
     expect(errors).toEqual([{ error: new Error("cleanup failed"), index: 5 }])
+  })
+})
+
+describe("registerMainWindowActivation", () => {
+  test("recreates a missing main window even when another pet window exists", () => {
+    const application = new EventEmitter()
+    const createMainWindow = mock(() => ({ isDestroyed: () => false }))
+    let mainWindow: { isDestroyed(): boolean } | null = null
+    const petWindow = { isDestroyed: () => false }
+    expect(petWindow.isDestroyed()).toBe(false)
+
+    registerMainWindowActivation(application, () => mainWindow, () => {
+      mainWindow = createMainWindow()
+    })
+    application.emit("activate")
+    expect(createMainWindow).toHaveBeenCalledTimes(1)
+    application.emit("activate")
+    expect(createMainWindow).toHaveBeenCalledTimes(1)
+
+    mainWindow = null
+    application.emit("activate")
+    expect(createMainWindow).toHaveBeenCalledTimes(2)
   })
 })
