@@ -79,6 +79,7 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController } from "./service-catalog-controller"
 import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
@@ -1171,6 +1172,23 @@ function App() {
     setLanguagePreference(preference)
     writeAppLanguagePreference(localStorage, preference)
   }, [])
+  const rendererScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
+  const rendererFailureCopy =
+    locale === "zh-CN"
+      ? {
+          agentDescription: "其他区域仍可继续使用。你可以单独重试智能助手面板。",
+          agentTitle: "智能助手面板暂时无法显示",
+          canvasDescription: "项目和智能助手仍可继续使用。你可以单独重试当前画布。",
+          canvasTitle: "当前画布暂时无法显示",
+          retry: "重试",
+        }
+      : {
+          agentDescription: "The rest of Convax is still available. You can retry only the Agent panel.",
+          agentTitle: "The Agent panel could not render",
+          canvasDescription: "The project and Agent remain available. You can retry only this Canvas.",
+          canvasTitle: "This Canvas could not render",
+          retry: "Retry",
+        }
 
   useEffect(() => {
     if (!activeProject || workbenchLayoutSnapshot.resize || !secondarySidebar.visible) return
@@ -1289,53 +1307,119 @@ function App() {
           ) : workbenchSnapshot.surface.kind === "empty" || !activeProject || !activeCanvas || !initialDocument ? (
             <ProjectLoadingState projectName={activeProject?.name ?? "Project"} />
           ) : (
-            <CanvasEditor
-              key={`${activeProject.id}:${activeCanvas.id}`}
-              clipboardScope={activeProject.id}
-              fileRendererRegistry={canvasFileRendererRegistry}
-              initialDocument={initialDocument}
-              nodeRegistry={canvasNodeRegistry}
-              readOnly={
-                workbenchSnapshot.changingInput || projectCanvasSnapshot.busy || projectSnapshot.changingActiveProject
-              }
-              ref={canvasEditorRef}
-              selectionActions={selectionActions}
-              selectionDragSource={selectionDragSource}
-              services={services}
-              title={activeCanvas.name}
-              viewId="desktop-main"
-              viewRegistry={canvasViewRegistry}
-              viewScopeId={activeProject.id}
-            />
+            <RendererErrorBoundary
+              name="Canvas surface"
+              renderFallback={({ retry }) => (
+                <div className="grid size-full place-items-center bg-background p-8" role="alert">
+                  <div className="max-w-md rounded-lg border border-destructive/30 bg-card p-5 text-center shadow-sm">
+                    <h2 className="text-base font-semibold text-card-foreground">{rendererFailureCopy.canvasTitle}</h2>
+                    <p className="mt-2 text-sm text-muted-foreground">{rendererFailureCopy.canvasDescription}</p>
+                    <button
+                      className="mt-4 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      onClick={retry}
+                      type="button"
+                    >
+                      {rendererFailureCopy.retry}
+                    </button>
+                  </div>
+                </div>
+              )}
+              resetKey={rendererScopeKey}
+            >
+              <CanvasEditor
+                key={`${activeProject.id}:${activeCanvas.id}`}
+                clipboardScope={activeProject.id}
+                fileRendererRegistry={canvasFileRendererRegistry}
+                initialDocument={initialDocument}
+                nodeRegistry={canvasNodeRegistry}
+                readOnly={
+                  workbenchSnapshot.changingInput ||
+                  projectCanvasSnapshot.busy ||
+                  projectSnapshot.changingActiveProject
+                }
+                ref={canvasEditorRef}
+                selectionActions={selectionActions}
+                selectionDragSource={selectionDragSource}
+                services={services}
+                title={activeCanvas.name}
+                viewId="desktop-main"
+                viewRegistry={canvasViewRegistry}
+                viewScopeId={activeProject.id}
+              />
+            </RendererErrorBoundary>
           )}
         </section>
-        <AgentPanel
-          activeCanvas={activeCanvas}
-          beforePrompt={flushCanvasForAgent}
-          canvases={projectCanvasSnapshot.canvases}
-          generationCatalogVersion={generationToolCatalogVersionRef.current}
-          layout={{
-            collapsedWidth: collapsedSecondarySidebarSize,
-            maxWidth: secondarySidebarAvailableSize,
-            maxWidthStyle: secondarySidebarMaxWidthStyle,
-            minWidth: secondarySidebarBounds.minSize,
-            onOpenChange: (open) =>
-              workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, open),
-            onResizeKeyDown: (keyEvent) => {
-              if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-              keyEvent.preventDefault()
-              resizeWorkbenchPartBy(WorkbenchLayoutParts.SecondarySidebar, keyEvent.key === "ArrowLeft" ? 24 : -24)
-            },
-            onResizeStart: (pointerEvent) =>
-              startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent),
-            open: secondarySidebar.visible,
-            resizing: resizingSecondarySidebar,
-            width: secondarySidebar.size,
-          }}
-          projectId={activeProjectId}
-          projectName={activeProject?.name}
-          ref={agentPanelRef}
-        />
+        <RendererErrorBoundary
+          name="Agent panel"
+          renderFallback={({ retry }) => (
+            <aside
+              className="relative z-40 grid shrink-0 place-items-center overflow-hidden border-l border-border bg-card p-4 text-center text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0"
+              role="alert"
+              style={{
+                maxWidth: secondarySidebarMaxWidthStyle,
+                width: secondarySidebar.visible ? secondarySidebar.size : collapsedSecondarySidebarSize,
+              }}
+            >
+              {secondarySidebar.visible ? (
+                <div>
+                  <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    {rendererFailureCopy.agentDescription}
+                  </p>
+                  <button
+                    className="mt-4 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    onClick={retry}
+                    type="button"
+                  >
+                    {rendererFailureCopy.retry}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  aria-label={rendererFailureCopy.agentTitle}
+                  className="grid size-8 place-items-center rounded-md text-lg text-muted-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
+                  onClick={retry}
+                  title={rendererFailureCopy.retry}
+                  type="button"
+                >
+                  ↻
+                </button>
+              )}
+            </aside>
+          )}
+          resetKey={rendererScopeKey}
+        >
+          <AgentPanel
+            activeCanvas={activeCanvas}
+            beforePrompt={flushCanvasForAgent}
+            canvases={projectCanvasSnapshot.canvases}
+            generationCatalogVersion={generationToolCatalogVersionRef.current}
+            layout={{
+              collapsedWidth: collapsedSecondarySidebarSize,
+              maxWidth: secondarySidebarAvailableSize,
+              maxWidthStyle: secondarySidebarMaxWidthStyle,
+              minWidth: secondarySidebarBounds.minSize,
+              onOpenChange: (open) =>
+                workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, open),
+              onResizeKeyDown: (keyEvent) => {
+                if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
+                keyEvent.preventDefault()
+                resizeWorkbenchPartBy(
+                  WorkbenchLayoutParts.SecondarySidebar,
+                  keyEvent.key === "ArrowLeft" ? 24 : -24,
+                )
+              },
+              onResizeStart: (pointerEvent) =>
+                startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent),
+              open: secondarySidebar.visible,
+              resizing: resizingSecondarySidebar,
+              width: secondarySidebar.size,
+            }}
+            projectId={activeProjectId}
+            projectName={activeProject?.name}
+            ref={agentPanelRef}
+          />
+        </RendererErrorBoundary>
         {notification ? <Toast notification={notification} /> : null}
       </main>
       {activeMediaOperationDialog && !settingsSection ? (
@@ -1395,7 +1479,36 @@ if (!(root instanceof HTMLElement)) throw new Error("App root was not found")
 const reactRoot = import.meta.hot?.data.root ?? createRoot(root)
 if (import.meta.hot) import.meta.hot.data.root = reactRoot
 reactRoot.render(
-  <DesktopProtocolGate>
-    <App />
-  </DesktopProtocolGate>,
+  <RendererErrorBoundary
+    name="Desktop root"
+    renderFallback={({ error }) => (
+      <main
+        className="grid size-full place-items-center bg-background p-8 text-foreground"
+        data-testid="desktop-fatal-renderer-error"
+        role="alert"
+      >
+        <div className="w-full max-w-lg rounded-lg border border-destructive/30 bg-card p-6 shadow-sm">
+          <h1 className="text-lg font-semibold">Convax 遇到渲染错误 / could not render</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            当前窗口已被安全保留。请重新加载应用；如果问题持续发生，可在开发者工具中查看已记录的错误。
+          </p>
+          <details className="mt-3 text-xs text-muted-foreground">
+            <summary className="cursor-pointer">Error details</summary>
+            <code className="mt-2 block whitespace-pre-wrap break-words">{error.message}</code>
+          </details>
+          <button
+            className="mt-5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            onClick={() => window.location.reload()}
+            type="button"
+          >
+            重新加载 Convax / Reload
+          </button>
+        </div>
+      </main>
+    )}
+  >
+    <DesktopProtocolGate>
+      <App />
+    </DesktopProtocolGate>
+  </RendererErrorBoundary>,
 )
