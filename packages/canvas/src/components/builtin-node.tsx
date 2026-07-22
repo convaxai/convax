@@ -950,6 +950,7 @@ function FileAssistantAccessory(
   const assistant = useCanvasService("assistant")
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
+  const generationOutput = props.data.kind === "image" || props.data.kind === "video" ? props.data.kind : undefined
   if (!assistant || !ownsSingleNodeContext || (editor.readOnly && !editor.hydrating)) return null
   return (
     <NodeToolbar className="convax-node-assistant nodrag nowheel" offset={28} position={Position.Bottom}>
@@ -962,17 +963,24 @@ function FileAssistantAccessory(
         >
           {assistant.render({
             document: editor.document,
-            ...(props.initialGenerationPrompt === undefined
-              ? {}
-              : { initialGenerationPrompt: props.initialGenerationPrompt }),
+            ...(generationOutput
+              ? {
+                  generation: {
+                    ...(props.initialGenerationPrompt === undefined
+                      ? {}
+                      : { initialPrompt: props.initialGenerationPrompt }),
+                    onActivityChange: props.onGenerationActivityChange,
+                    onInitialPromptConsumed: props.onInitialGenerationPromptConsumed,
+                    onOwnerToolIdChange: (toolId?: string) => {
+                      editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
+                    },
+                    output: generationOutput,
+                    ownerToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
+                  },
+                }
+              : {}),
             mentionedNodeIds: [],
             mode: "file",
-            onGenerationActivityChange: props.onGenerationActivityChange,
-            onInitialGenerationPromptConsumed: props.onInitialGenerationPromptConsumed,
-            onOwnerGenerationToolIdChange: (toolId) => {
-              editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
-            },
-            ownerGenerationToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
             ownerNodeId: props.id,
           })}
         </fieldset>
