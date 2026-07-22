@@ -746,7 +746,7 @@ describe("CanvasEditor resource mutation", () => {
 
     expect(buttonActions.get("Text")).toBeFunction()
     buttonActions.get("Text")?.()
-    await Promise.resolve()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
     expect(additions).toHaveLength(1)
     expect(additions[0]).toMatchObject({
@@ -783,9 +783,7 @@ describe("CanvasEditor resource mutation", () => {
       },
       preventDefault: () => undefined,
     })
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
     expect(additions).toHaveLength(1)
     expect(additions[0]).toMatchObject({
@@ -803,8 +801,13 @@ describe("CanvasEditor resource mutation", () => {
         edges: [{ id: "edge", source: "first", target: "second" }],
         id: "canvas-layout",
         nodes: [
-          createTextNode({ id: "first", position: { x: 400, y: 200 } }),
-          createTextNode({ id: "second", position: { x: 0, y: 0 } }),
+          createTextNode({
+            id: "first",
+            metadata: {},
+            position: { x: 400, y: 200 },
+            resourceState: { status: "ready" },
+          }),
+          createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
         ],
       }),
     })
@@ -818,7 +821,9 @@ describe("CanvasEditor resource mutation", () => {
   test("lets the explicit Fit view use the Canvas zoom ceiling", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
-        nodes: [createTextNode({ id: "small", position: { x: 0, y: 0 } })],
+        nodes: [
+          createTextNode({ id: "small", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+        ],
       }),
     })
 
@@ -831,8 +836,13 @@ describe("CanvasEditor resource mutation", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
         nodes: [
-          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
-          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+          createTextNode({ id: "first", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+          createTextNode({
+            id: "second",
+            metadata: {},
+            position: { x: 400, y: 0 },
+            resourceState: { status: "ready" },
+          }),
         ],
       }),
     })
@@ -850,8 +860,13 @@ describe("CanvasEditor resource mutation", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
         nodes: [
-          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
-          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+          createTextNode({ id: "first", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+          createTextNode({
+            id: "second",
+            metadata: {},
+            position: { x: 400, y: 0 },
+            resourceState: { status: "ready" },
+          }),
         ],
       }),
       readOnly: true,
@@ -870,7 +885,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(pasteOnCanvas).toBeFunction()
   })
 
-  test("offers concrete built-in cards and plugin cards without generic file or agent roles", () => {
+  test("offers plugin cards without source-less built-in file or agent roles", () => {
     const fileRenderers = createDefaultCanvasFileRendererRegistry()
     const nodes = createDefaultCanvasNodeRegistry()
     fileRenderers.register({
@@ -886,16 +901,10 @@ describe("CanvasEditor insertion surfaces", () => {
       matches: (data) => data.kind === "diagram",
     })
 
-    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual([
-      "audio",
-      "diagram",
-      "image",
-      "text",
-      "video",
-    ])
+    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual(["diagram"])
   })
 
-  test("shows concrete media actions in the top bar without Agent or Generate", () => {
+  test("shows file-backed text and host generation actions without source-less media or Agent", () => {
     renderEditor(
       createCanvasServices({
         generate: {
@@ -907,11 +916,11 @@ describe("CanvasEditor insertion surfaces", () => {
     )
 
     expect(buttonActions.get("Text")).toBeFunction()
-    expect(buttonActions.get("Image")).toBeFunction()
-    expect(buttonActions.get("Video")).toBeFunction()
-    expect(buttonActions.get("Audio")).toBeFunction()
+    expect(buttonActions.get("Image")).toBeUndefined()
+    expect(buttonActions.get("Video")).toBeUndefined()
+    expect(buttonActions.get("Audio")).toBeUndefined()
     expect(buttonActions.get("Agent")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeUndefined()
+    expect(buttonActions.get("Generate")).toBeFunction()
   })
 })
 

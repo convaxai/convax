@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import type { DesktopSkillInventory, DesktopSkillShowcase } from "../skill-management-contracts"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { WebPluginManager } from "./plugin-manager"
 import type { DesktopSkillManager } from "./skill-manager"
 import type { RemoteSkillCatalogPort } from "./remote-capability-installer"
@@ -24,28 +25,30 @@ interface TestWindow {
   }
 }
 
-mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => dialogOwner,
-    getAllWindows: () => windows,
-  },
-  dialog: {
-    showOpenDialog: async () => dialogResult,
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => {
-      removedHandlers.push(channel)
-      handlers.delete(channel)
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => dialogOwner,
+      getAllWindows: () => windows,
     },
-  },
-  shell: {
-    openPath: async (path: string) => {
-      openedPaths.push(path)
-      return openPathError
+    dialog: {
+      showOpenDialog: async () => dialogResult,
     },
-  },
-}))
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => {
+        removedHandlers.push(channel)
+        handlers.delete(channel)
+      },
+    },
+    shell: {
+      openPath: async (path: string) => {
+        openedPaths.push(path)
+        return openPathError
+      },
+    },
+  })
+})
 
 afterEach(() => {
   handlers.clear()
@@ -55,6 +58,7 @@ afterEach(() => {
   dialogOwner = undefined
   openPathError = ""
   openedPaths.splice(0)
+  resetElectronMock()
 })
 
 function createManager(inventory: DesktopSkillInventory = { catalog: [], skills: [] }) {

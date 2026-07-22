@@ -193,7 +193,12 @@ describe("canvas application commands", () => {
       [-340, -240],
     ] as const
     const nodes = occupiedPoints.map(([x, y], index) => ({
-      ...createTextNode({ id: `occupied-${index}`, position: { x, y } }),
+      ...createTextNode({
+        id: `occupied-${index}`,
+        metadata: {},
+        position: { x, y },
+        resourceState: { status: "ready" },
+      }),
       style: { height: 200, width: 320 },
     }))
 
@@ -391,12 +396,23 @@ describe("canvas application commands", () => {
 
   test("replaces only a guarded file node's type and data while preserving its identity, layout, and edges", () => {
     const parent = createGroupNode({ id: "group", height: 600, position: { x: 100, y: 200 }, width: 800 })
-    const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Keep the edge" })
+    const anchor = createTextNode({
+      id: "anchor",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "Keep the edge" },
+    })
     const owner = {
       ...createMediaNode({
         id: "owner",
         position: { x: 25, y: 35 },
-        resource: { id: "old", kind: "image" as const, name: "old.png", url: "asset://old" },
+        resource: {
+          id: "old",
+          kind: "image" as const,
+          metadata: { source: "old.png" },
+          name: "old.png",
+          state: { status: "ready", url: "asset://old" },
+        },
       }),
       extent: "parent" as const,
       measured: { height: 210, width: 330 },
@@ -417,9 +433,10 @@ describe("canvas application commands", () => {
         durationMs: 4_000,
         id: "generated-video",
         kind: "video",
+        metadata: { source: "generated.mp4" },
         mimeType: "video/mp4",
         name: "generated.mp4",
-        url: "asset://generated",
+        state: { status: "ready", url: "asset://generated" },
       },
       targetNodeId: owner.id,
     })
@@ -434,7 +451,7 @@ describe("canvas application commands", () => {
         kind: "video",
         mimeType: "video/mp4",
         name: "generated.mp4",
-        url: "asset://generated",
+        resourceState: { status: "ready", url: "asset://generated" },
       }),
       type: "file",
     })
@@ -443,11 +460,24 @@ describe("canvas application commands", () => {
     const asText = applyCanvasBusinessCommand(replaced.document, {
       type: "resources.replace",
       expectedTarget: createCanvasNodeContentGuard(video),
-      item: { format: "markdown", id: "generated-text", kind: "text", text: "# Generated" },
+      item: {
+        id: "generated-text",
+        kind: "text",
+        metadata: { source: "generated.md" },
+        mimeType: "text/markdown",
+        name: "generated.md",
+        state: { status: "ready", text: "# Generated" },
+      },
       targetNodeId: owner.id,
     })
     expect(asText.document.nodes.find((node) => node.id === owner.id)).toMatchObject({
-      data: { format: "markdown", kind: "text", text: "# Generated" },
+      data: {
+        kind: "text",
+        metadata: { source: "generated.md" },
+        mimeType: "text/markdown",
+        name: "generated.md",
+        resourceState: { status: "ready", text: "# Generated" },
+      },
       id: owner.id,
       measured: owner.measured,
       parentId: owner.parentId,
@@ -458,26 +488,38 @@ describe("canvas application commands", () => {
   })
 
   test("lets layout change around a replacement guard but rejects changed target content and non-file targets", () => {
-    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Original" })
+    const owner = createTextNode({
+      id: "owner",
+      metadata: { source: "owner.md" },
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "Original" },
+    })
     const guard = createCanvasNodeContentGuard(owner)
     const moved = { ...owner, position: { x: 300, y: 180 }, style: { height: 500, width: 600 } }
     const command = {
       type: "resources.replace" as const,
       expectedTarget: guard,
-      item: { id: "replacement", kind: "image" as const, url: "asset://replacement" },
+      item: {
+        id: "replacement",
+        kind: "image" as const,
+        metadata: { source: "replacement.png" },
+        state: { status: "ready" as const, url: "asset://replacement" },
+      },
       targetNodeId: owner.id,
     }
 
     expect(
       applyCanvasBusinessCommand(createCanvasDocument({ nodes: [moved] }), command).document.nodes[0],
     ).toMatchObject({
-      data: { kind: "image", url: "asset://replacement" },
+      data: { kind: "image", resourceState: { status: "ready", url: "asset://replacement" } },
       position: moved.position,
       style: moved.style,
     })
     expect(() =>
       applyCanvasBusinessCommand(
-        createCanvasDocument({ nodes: [{ ...moved, data: { ...moved.data, text: "Edited" } }] }),
+        createCanvasDocument({
+          nodes: [{ ...moved, data: { ...moved.data, resourceState: { status: "ready", text: "Edited" } } }],
+        }),
         command,
       ),
     ).toThrow("content changed")

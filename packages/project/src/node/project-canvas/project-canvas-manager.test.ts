@@ -26,9 +26,9 @@ describe("NodeProjectCanvasManager", () => {
   test("strict maintenance rejects a missing catalog without creating or migrating state", async () => {
     const manager = new NodeProjectCanvasManager(projects, projects)
 
-    await expect(
-      manager.runCurrentCatalogMaintenance({ projectId }, async () => undefined),
-    ).rejects.toThrow(/catalog.*missing|missing.*catalog/i)
+    await expect(manager.runCurrentCatalogMaintenance({ projectId }, async () => undefined)).rejects.toThrow(
+      /catalog.*missing|missing.*catalog/i,
+    )
 
     await expect(fs.access(path.join(projectRoot, ".convax", "canvases"))).rejects.toThrow()
     expect(JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))).toEqual({
@@ -41,11 +41,15 @@ describe("NodeProjectCanvasManager", () => {
     await new NodeProjectCanvasManager(projects, projects).getCanvasCatalog({ projectId })
     const catalogPath = path.join(projectRoot, ".convax", "canvases", "catalog.json")
     const current = JSON.parse(await fs.readFile(catalogPath, "utf8"))
-    const legacy = `${JSON.stringify({
-      activeCanvasId: "canvas-main",
-      canvases: current.canvases,
-      schemaVersion: "convax.canvas-workspace/1",
-    }, null, 2)}\n`
+    const legacy = `${JSON.stringify(
+      {
+        activeCanvasId: "canvas-main",
+        canvases: current.canvases,
+        schemaVersion: "convax.canvas-workspace/1",
+      },
+      null,
+      2,
+    )}\n`
     await fs.writeFile(catalogPath, legacy)
     const before = await fs.stat(catalogPath)
 
@@ -83,7 +87,9 @@ describe("NodeProjectCanvasManager", () => {
     const maintenance = manager.runCurrentCatalogMaintenance({ projectId }, async (catalog) => {
       maintenanceEntered = true
       expect(catalog.canvases.some((canvas) => canvas.id === created.canvas.id)).toBe(true)
-      expect((await fs.lstat(path.join(projectRoot, ".convax", "canvases", created.canvas.id))).isDirectory()).toBe(true)
+      expect((await fs.lstat(path.join(projectRoot, ".convax", "canvases", created.canvas.id))).isDirectory()).toBe(
+        true,
+      )
     })
     await Promise.resolve()
     expect(maintenanceEntered).toBe(false)
@@ -108,36 +114,72 @@ describe("NodeProjectCanvasManager", () => {
       projectId,
       schemaVersion: "convax.project/1",
     })
-    const storedCatalog = JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8"))
+    const storedCatalog = JSON.parse(
+      await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8"),
+    )
     expect(storedCatalog).toMatchObject({ schemaVersion: "convax.project-canvases/2" })
     expect(storedCatalog).not.toHaveProperty("activeCanvasId")
 
     await reloaded.deleteCanvas({ canvasId: created.canvas.id, projectId })
-    expect((await reloaded.getCanvasCatalog({ projectId })).canvases.map((canvas) => canvas.id)).toEqual(["canvas-main"])
+    expect((await reloaded.getCanvasCatalog({ projectId })).canvases.map((canvas) => canvas.id)).toEqual([
+      "canvas-main",
+    ])
     await expect(fs.access(path.join(projectRoot, ".convax", "canvases", created.canvas.id))).rejects.toThrow()
   })
 
-  test("reads a legacy catalog and writes the selection-free schema on the next mutation", async () => {
+  test.each([
+    [
+      "legacy schema",
+      (canvases: unknown) => ({
+        activeCanvasId: "canvas-main",
+        canvases,
+        schemaVersion: "convax.canvas-workspace/1",
+      }),
+    ],
+    [
+      "extra root field",
+      (canvases: unknown) => ({
+        activeCanvasId: "canvas-main",
+        canvases,
+        schemaVersion: "convax.project-canvases/2",
+      }),
+    ],
+    [
+      "extra Canvas field",
+      (canvases: Array<Record<string, unknown>>) => ({
+        canvases: canvases.map((canvas) => ({ ...canvas, selected: false })),
+        schemaVersion: "convax.project-canvases/2",
+      }),
+    ],
+  ])("rejects a non-exact current catalog (%s) without changing any legacy bytes", async (_label, legacyCatalog) => {
     await new NodeProjectCanvasManager(projects, projects).getCanvasCatalog({ projectId })
     const catalogPath = path.join(projectRoot, ".convax", "canvases", "catalog.json")
-    const legacy = JSON.parse(await fs.readFile(catalogPath, "utf8"))
-    await fs.writeFile(catalogPath, `${JSON.stringify({
-      activeCanvasId: "canvas-main",
-      canvases: legacy.canvases,
-      schemaVersion: "convax.canvas-workspace/1",
-    }, null, 2)}\n`)
+    const current = JSON.parse(await fs.readFile(catalogPath, "utf8"))
+    const catalogBytes = `${JSON.stringify(legacyCatalog(current.canvases), null, 2)}\n`
+    const projectPath = path.join(projectRoot, ".convax", "project.json")
+    const projectBytes = `${JSON.stringify(
+      {
+        activeCanvasId: "canvas-main",
+        canvases: current.canvases,
+        projectId,
+        schemaVersion: "convax.project/1",
+      },
+      null,
+      2,
+    )}\n`
+    const legacyDocumentPath = path.join(projectRoot, ".convax", "canvas.json")
+    const legacyDocumentBytes = "legacy Canvas bytes\n"
+    await Promise.all([
+      fs.writeFile(catalogPath, catalogBytes),
+      fs.writeFile(projectPath, projectBytes),
+      fs.writeFile(legacyDocumentPath, legacyDocumentBytes),
+    ])
 
     const manager = new NodeProjectCanvasManager(projects, projects)
-    const migratedCatalog = await manager.getCanvasCatalog({ projectId })
-    expect(migratedCatalog).not.toHaveProperty("activeCanvasId")
-    expect(migratedCatalog.workbenchPreferenceMigration).toEqual({ canvasId: "canvas-main" })
-    await manager.createCanvas({ projectId })
-
-    const migrated = JSON.parse(await fs.readFile(catalogPath, "utf8"))
-    expect(migrated.schemaVersion).toBe("convax.project-canvases/2")
-    expect(migrated).not.toHaveProperty("activeCanvasId")
-    expect(await new NodeProjectCanvasManager(projects, projects).getCanvasCatalog({ projectId }))
-      .not.toHaveProperty("workbenchPreferenceMigration")
+    await expect(manager.getCanvasCatalog({ projectId })).rejects.toThrow(/catalog.*supported|unsupported.*catalog/i)
+    expect(await fs.readFile(catalogPath, "utf8")).toBe(catalogBytes)
+    expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes)
+    expect(await fs.readFile(legacyDocumentPath, "utf8")).toBe(legacyDocumentBytes)
   })
 
   test("rejects a canvases directory replaced by a symlink between catalog read and create", async () => {
@@ -156,11 +198,13 @@ describe("NodeProjectCanvasManager", () => {
         }
         return snapshot
       },
-      writePrivateTextFile: (input: Parameters<typeof projects.writePrivateTextFile>[0]) => projects.writePrivateTextFile(input),
+      writePrivateTextFile: (input: Parameters<typeof projects.writePrivateTextFile>[0]) =>
+        projects.writePrivateTextFile(input),
     }
 
-    await expect(new NodeProjectCanvasManager(attackingStorage, projects).createCanvas({ projectId }))
-      .rejects.toThrow("Symbolic links")
+    await expect(new NodeProjectCanvasManager(attackingStorage, projects).createCanvas({ projectId })).rejects.toThrow(
+      "Symbolic links",
+    )
     expect(await fs.readdir(outsideRoot)).toEqual([])
   })
 
@@ -173,54 +217,32 @@ describe("NodeProjectCanvasManager", () => {
     await fs.symlink(outsideRoot, path.join(projectRoot, ".convax", "deleted-canvases"))
 
     await expect(manager.deleteCanvas({ canvasId: created.canvas.id, projectId })).rejects.toThrow("Symbolic links")
-    expect(await fs.stat(path.join(projectRoot, ".convax", "canvases", created.canvas.id)).then((stat) => stat.isDirectory())).toBe(true)
+    expect(
+      await fs
+        .stat(path.join(projectRoot, ".convax", "canvases", created.canvas.id))
+        .then((stat) => stat.isDirectory()),
+    ).toBe(true)
     expect(await fs.readdir(outsideRoot)).toEqual([])
   })
 
-  test("rejects a symlinked legacy manifest during Canvas migration", async () => {
-    const outsideRoot = path.join(temporaryRoot, "outside-migration")
-    const outsideManifest = path.join(outsideRoot, "project.json")
-    await fs.mkdir(outsideRoot)
-    await fs.writeFile(outsideManifest, JSON.stringify({
-      canvases: [{ createdAt: 1, id: "canvas-main", name: "External", updatedAt: 2 }],
+  test("creates only a new current catalog and default Canvas when legacy Project state exists", async () => {
+    const projectPath = path.join(projectRoot, ".convax", "project.json")
+    const legacyDocumentPath = path.join(projectRoot, ".convax", "canvas.json")
+    const projectBytes = "unsupported legacy Project manifest bytes\n"
+    const legacyDocumentBytes = "legacy Canvas document bytes\n"
+    await fs.writeFile(projectPath, projectBytes)
+    await fs.writeFile(legacyDocumentPath, legacyDocumentBytes)
+    const manager = new NodeProjectCanvasManager(projects, projects, { now: () => 10 })
+
+    expect(await manager.getCanvasCatalog({ projectId })).toEqual({
+      canvases: [{ createdAt: 10, id: "canvas-main", name: "Canvas 1", updatedAt: 10 }],
       projectId,
-      schemaVersion: "convax.project/1",
-    }))
-    const projectManifest = path.join(projectRoot, ".convax", "project.json")
-    await fs.rm(projectManifest)
-    await fs.symlink(outsideManifest, projectManifest)
-
-    await expect(new NodeProjectCanvasManager(projects, projects).getCanvasCatalog({ projectId }))
-      .rejects.toThrow("Symbolic links")
-    expect(await fs.readFile(outsideManifest, "utf8")).toContain('"External"')
-    await expect(fs.access(path.join(projectRoot, ".convax", "canvases"))).rejects.toThrow()
-  })
-
-  test("migrates legacy Canvas catalog and document as a Project Canvas concern", async () => {
-    const legacyRoot = path.join(temporaryRoot, "legacy")
-    await fs.mkdir(path.join(legacyRoot, ".convax"), { recursive: true })
-    const legacyId = "project_legacy"
-    await fs.writeFile(path.join(legacyRoot, ".convax", "project.json"), JSON.stringify({
-      activeCanvasId: "canvas-secondary",
-      canvases: [
-        { createdAt: 1, id: "canvas-main", name: "Legacy", updatedAt: 2 },
-        { createdAt: 2, id: "canvas-secondary", name: "Secondary", updatedAt: 3 },
-      ],
-      projectId: legacyId,
-      schemaVersion: "convax.project/1",
-    }))
-    await fs.writeFile(path.join(legacyRoot, ".convax", "canvas.json"), "legacy bytes")
-    const project = await projects.addProject(legacyRoot)
-    const manager = new NodeProjectCanvasManager(projects, projects)
-
-    const catalog = await manager.getCanvasCatalog({ projectId: project.id })
-    expect(catalog.canvases[0]?.name).toBe("Legacy")
-    expect(catalog.workbenchPreferenceMigration).toEqual({ canvasId: "canvas-secondary" })
-    expect(await fs.readFile(path.join(legacyRoot, ".convax", "canvases", "canvas-main", "document.json"), "utf8")).toBe("legacy bytes")
-    expect(JSON.parse(await fs.readFile(path.join(legacyRoot, ".convax", "project.json"), "utf8"))).toEqual({
-      projectId: legacyId,
-      schemaVersion: "convax.project/1",
     })
+    expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes)
+    expect(await fs.readFile(legacyDocumentPath, "utf8")).toBe(legacyDocumentBytes)
+    await expect(
+      fs.access(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")),
+    ).rejects.toThrow()
   })
 })
 

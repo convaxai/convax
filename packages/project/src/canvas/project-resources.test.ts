@@ -391,6 +391,18 @@ describe("Project Canvas document dehydration", () => {
     expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow("legacy")
   })
 
+  test.each([
+    ["body", "INLINE-BYTES"],
+    ["dataUrl", "data:image/png;base64,AAAA"],
+    ["source", { nativePath: "/Users/example/private.png" }],
+  ] as const)("rejects unknown durable resource field %s", (key, value) => {
+    const node = legacyResourceNode("resourceState")
+    node.data = { ...node.data, [key]: value }
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [node] }))).toThrow(
+      `unsupported durable ${key}`,
+    )
+  })
+
   test("rejects legacy reference metadata while preserving opaque Plugin state", () => {
     const metadata = metadataFor({ kind: "project-file", path: "Notes/brief.md" })
     const text = createTextNode({
@@ -670,17 +682,17 @@ describe("Project Canvas document hydration", () => {
       ...createCanvasDocument({
         id: "canvas-media-hydration",
         nodes: [
-        createMediaNode({
-          id: "hero",
-          position: { x: 0, y: 0 },
-          resource: {
-            id: "hero-resource",
-            kind: "image",
-            metadata: { [projectResourceReferenceKey]: reference },
-            name: reference.name,
-            state: { status: "stale" },
-          },
-        }),
+          createMediaNode({
+            id: "hero",
+            position: { x: 0, y: 0 },
+            resource: {
+              id: "hero-resource",
+              kind: "image",
+              metadata: { [projectResourceReferenceKey]: reference },
+              name: reference.name,
+              state: { status: "stale" },
+            },
+          }),
         ],
       }),
       revision: 3,
@@ -782,11 +794,7 @@ describe("Project Canvas document hydration", () => {
       staleDirectory: { kind: "project-directory", path: "media" } as const,
       staleFile: { kind: "project-file", path: "Notes/stale.md" } as const,
     }
-    const resourceNode = (
-      id: string,
-      reference: ProjectResourceReference,
-      status: "ready" | "stale",
-    ) =>
+    const resourceNode = (id: string, reference: ProjectResourceReference, status: "ready" | "stale") =>
       reference.kind === "project-directory"
         ? createFolderNode({
             id,

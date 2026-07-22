@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { CanvasApplicationService, CanvasStorageConflictError } from "@convax/canvas/application"
 import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
 
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type {
   PluginCanvasChangeEvent,
   PluginCanvasEventSubscription,
@@ -59,13 +59,20 @@ function fixture(
         resource: {
           id: "image-resource",
           kind: "image",
-          metadata: { [projectFileReferenceKey]: { path: "Assets/reference.png" } },
+          metadata: {
+            [projectResourceReferenceKey]: { kind: "project-file", path: "Assets/reference.png" },
+          },
           mimeType: "image/png",
           name: "reference.png",
-          url: "data:image/png;base64,SECRET_BYTES",
+          state: { status: "ready", url: "data:image/png;base64,SECRET_BYTES" },
         },
       }),
-      createTextNode({ id: "note", position: { x: 400, y: 20 }, text: "Arrange these cards" }),
+      createTextNode({
+        id: "note",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/note.md" } },
+        position: { x: 400, y: 20 },
+        resourceState: { status: "ready", text: "Arrange these cards" },
+      }),
     ],
   })
   const repository = {

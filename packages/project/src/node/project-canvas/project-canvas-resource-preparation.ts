@@ -133,7 +133,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
   }
 
-  withAdmittedExternalFiles<T>(
+  withAdmittedLocalFiles<T>(
     input: {
       files: readonly {
         mediaType?: string
@@ -156,7 +156,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       sourceIds.add(file.sourceId)
     }
 
-    return this.assets.withAdmittedExternalFiles(
+    return this.assets.withAdmittedLocalFiles(
       {
         files: input.files.map(({ mediaType, name, sourcePath }) => ({ mediaType, name, sourcePath })),
         projectId: input.projectId,
@@ -166,7 +166,12 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           throw new Error("Managed asset admission returned an unexpected reference count")
         }
         return commit({
-          items: references.map((reference, index) => managedPreparedItem(input.files[index]!.sourceId, reference)),
+          items: references.map((reference, index) => {
+            if (reference.kind === "project-directory") {
+              throw new Error("Local Canvas file admission returned a directory reference")
+            }
+            return localPreparedItem(input.files[index]!.sourceId, input.files[index]!, reference)
+          }),
         })
       },
     )
@@ -281,19 +286,21 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   }
 }
 
-function managedPreparedItem(
+function localPreparedItem(
   sourceId: string,
-  reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>,
+  source: { mediaType?: string; name: string },
+  reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
 ): CanvasUploadItem {
-  const mimeType = normalizeMimeType(reference.mediaType)
-  const textFormat = getCanvasTextFileFormat({ mimeType, name: reference.name })
+  const name = reference.kind === "managed-asset" ? reference.name : source.name
+  const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : source.mediaType)
+  const textFormat = getCanvasTextFileFormat({ mimeType, name })
   if (textFormat) {
     return {
       id: sourceId,
       kind: "text",
       metadata: metadataFor(reference),
       mimeType: mimeType || textMimeTypeFor(textFormat),
-      name: reference.name,
+      name,
       state: { status: "stale" },
     }
   }
@@ -302,7 +309,7 @@ function managedPreparedItem(
     kind: mediaKindForMimeType(mimeType),
     metadata: metadataFor(reference),
     mimeType: mimeType || undefined,
-    name: reference.name,
+    name,
     state: { status: "stale" },
   }
 }

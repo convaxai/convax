@@ -47,10 +47,11 @@ function projectFileReference(path: string): Extract<ProjectResourceReference, {
   return { kind: "project-file", path }
 }
 
-function createTextNode(input: { id: string; position: { x: number; y: number }; text?: string }) {
+function createTextNode(input: { id: string; label?: string; position: { x: number; y: number }; text?: string }) {
   const text = input.text ?? ""
   return createCanvasTextNode({
     id: input.id,
+    label: input.label,
     metadata: {
       [projectResourceReferenceKey]: projectFileReference(`References/${input.id}.md`),
     },
@@ -1345,11 +1346,14 @@ describe("GenerationCanvasService", () => {
   })
 
   test("connects host-only relation anchors without exposing them to the generation tool", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Stable brief", "silent-video": "Pair anchor" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const relationAnchor = createTextNode({ id: "silent-video", position: { x: 360, y: 0 }, text: "Pair anchor" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference, relationAnchor], title: "Canvas" })
     const { calls, resourceRequests, service } = setup({
       document,
+      project: projectPortFor(root),
       selectedTool: tool({ acceptedInputs: ["text"] }),
     })
 

@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  migrateLastCanvasPreference,
-  readLastCanvasPreference,
-  writeLastCanvasPreference,
-} from "./workbench-preferences"
+import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 
 function storage(initial: string | null = null, failWrites = false) {
   let value = initial
@@ -30,23 +26,5 @@ describe("Workbench Canvas preferences", () => {
     expect(readLastCanvasPreference(malformed, "project-one")).toBeUndefined()
     expect(writeLastCanvasPreference(malformed, "project-one", "canvas-one")).toBe(true)
     expect(writeLastCanvasPreference(storage(null, true), "project-one", "canvas-one")).toBe(false)
-  })
-
-  test("moves a legacy project selection into user-side Workbench preferences", () => {
-    const target = storage()
-    expect(migrateLastCanvasPreference(target, "project-one", "canvas-legacy")).toBe("canvas-legacy")
-    expect(readLastCanvasPreference(target, "project-one")).toBe("canvas-legacy")
-  })
-
-  test("keeps an existing user preference ahead of a legacy shared selection", () => {
-    const target = storage()
-    writeLastCanvasPreference(target, "project-one", "canvas-user")
-    expect(migrateLastCanvasPreference(target, "project-one", "canvas-legacy")).toBe("canvas-user")
-    expect(readLastCanvasPreference(target, "project-one")).toBe("canvas-user")
-  })
-
-  test("uses the legacy preference for this session when user storage cannot be written", () => {
-    expect(migrateLastCanvasPreference(storage(null, true), "project-one", "canvas-legacy"))
-      .toBe("canvas-legacy")
   })
 })

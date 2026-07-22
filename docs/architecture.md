@@ -73,8 +73,8 @@ Project or Canvas data and has no DOM, React, Electron, or localStorage dependen
 ### Workspace
 
 There is no current Workspace aggregate. The term is reserved for a future feature
-where one window/session genuinely coordinates multiple Projects. The legacy schema
-name `convax.canvas-workspace/1` exists only as a migration input.
+where one window/session genuinely coordinates multiple Projects. Legacy Workspace
+catalog schemas are unsupported and are never migrated or rewritten.
 
 ### Skill and Plugin
 
@@ -821,15 +821,16 @@ rechecked before durable Canvas saves.
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas
 edge. Desktop derives the typed Project-file or managed-asset reference from that
-node and delegates one bounded read to Main. Main
-opens one no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling, performs
-a fixed-length read and rejects identity changes before returning bytes. Desktop
-then rechecks scope, connectivity and the exact source reference. This legacy
-connected-image method never accepts a Plugin-supplied Project path and does not
-return a document projection; separately granted v5 document reads use the bounded
-broker projections described above. Browser
-features such as fullscreen are likewise enabled per manifest; all other iframe
-feature-policy denials remain in force.
+node and delegates one scoped request to Main. Main performs two bounded physical
+reads; each opens a no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling,
+performs a fixed-length read and rejects identity changes. Main rechecks the active
+scope, direct edge and exact typed reference after each read, then requires matching
+content digests and metadata before returning bytes. The Plugin never supplies a
+Project path. This legacy connected-image method does not return a document
+projection; separately granted v5 document reads use the bounded broker projections
+described above. Browser features such as
+fullscreen are likewise enabled per manifest; all other iframe feature-policy
+denials remain in force.
 
 V6 Web nodes may separately request `canvas.connectedInputs.read`. Its fixed
 `canvas.connectedInputs.list` method returns pathless, bounded metadata for direct

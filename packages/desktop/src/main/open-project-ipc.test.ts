@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -16,6 +16,7 @@ import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { CanvasResourceClient } from "../desktop-protocol"
 import type { JianyingCanvasExportIpcEnvelope, JianyingRendererClient } from "../jianying-contracts"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
 type InvokeHandler = (event: unknown, input?: unknown) => unknown
 type DesktopBridge = {
@@ -38,47 +39,49 @@ let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""
 let selectedLocalFilePath = ""
 
-mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => undefined,
-    getAllWindows: () => [],
-  },
-  contextBridge: {
-    exposeInMainWorld: (name: string, value: DesktopBridge) => {
-      if (name === "convax") exposedBridge = value
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => undefined,
+      getAllWindows: () => [],
     },
-  },
-  dialog: {
-    showOpenDialog: async () => ({ canceled: false, filePaths: [selectedProjectPath] }),
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => handlers.delete(channel),
-  },
-  ipcRenderer: {
-    invoke: (channel: string, input?: unknown) => {
-      const handler = handlers.get(channel)
-      if (!handler) throw new Error(`No main-process handler registered for ${channel}`)
-      return handler(trustedEvent, input)
+    contextBridge: {
+      exposeInMainWorld: (name: string, value: DesktopBridge) => {
+        if (name === "convax") exposedBridge = value
+      },
     },
-    on: (channel: string, listener: (...args: unknown[]) => void) => {
-      const listeners = rendererListeners.get(channel) ?? new Set()
-      listeners.add(listener)
-      rendererListeners.set(channel, listeners)
+    dialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: [selectedProjectPath] }),
     },
-    removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
-      rendererListeners.get(channel)?.delete(listener)
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => handlers.delete(channel),
     },
-    send: (channel: string, input: unknown) => rendererSends.push({ channel, input }),
-  },
-  shell: {
-    openPath: async () => "",
-    showItemInFolder: () => undefined,
-  },
-  webUtils: {
-    getPathForFile: () => selectedLocalFilePath,
-  },
-}))
+    ipcRenderer: {
+      invoke: (channel: string, input?: unknown) => {
+        const handler = handlers.get(channel)
+        if (!handler) throw new Error(`No main-process handler registered for ${channel}`)
+        return handler(trustedEvent, input)
+      },
+      on: (channel: string, listener: (...args: unknown[]) => void) => {
+        const listeners = rendererListeners.get(channel) ?? new Set()
+        listeners.add(listener)
+        rendererListeners.set(channel, listeners)
+      },
+      removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
+        rendererListeners.get(channel)?.delete(listener)
+      },
+      send: (channel: string, input: unknown) => rendererSends.push({ channel, input }),
+    },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder: () => undefined,
+    },
+    webUtils: {
+      getPathForFile: () => selectedLocalFilePath,
+    },
+  })
+})
 
 let temporaryRoot = ""
 let disposeIpc: Array<() => void> = []
@@ -94,6 +97,7 @@ afterEach(async () => {
   exposedBridge = undefined
   selectedProjectPath = ""
   selectedLocalFilePath = ""
+  resetElectronMock()
   if (temporaryRoot) await fs.rm(temporaryRoot, { force: true, recursive: true })
   temporaryRoot = ""
 })

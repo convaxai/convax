@@ -12,7 +12,7 @@ import {
 
 function text(id: string, x: number, y: number, width = 100, height = 80): CanvasNode {
   return {
-    ...createTextNode({ id, position: { x, y }, text: id }),
+    ...createTextNode({ id, metadata: {}, position: { x, y }, resourceState: { status: "ready", text: id } }),
     style: { height, width },
   }
 }

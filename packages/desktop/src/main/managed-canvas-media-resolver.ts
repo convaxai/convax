@@ -2,11 +2,8 @@ import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
 import type { CanvasDocumentClient, CanvasDocumentRef } from "@convax/canvas/application"
 import type { ProjectFileInfo } from "@convax/project-files/contracts"
-import {
-  getProjectFileReference,
-  isProjectCanvasManagedAssetPath,
-  requireProjectCanvasResourcePath,
-} from "@convax/project/canvas"
+import { getProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
+import type { ProjectManagedAssetStore } from "@convax/project/node"
 
 export type ManagedCanvasMediaKind = "audio" | "image" | "video"
 
@@ -60,6 +57,7 @@ export interface ManagedCanvasMediaProjectPathResolver {
 export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionPort {
   constructor(
     private readonly input: {
+      assets: Pick<ProjectManagedAssetStore, "resolve">
       documents: Pick<CanvasDocumentClient, "load">
       projects: ManagedCanvasMediaProjectPathResolver
     },
@@ -97,45 +95,48 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
           `Only Canvas ${options.allowedKindsDescription} can be used for ${options.operationLabel}: ${nodeId}`,
         )
       }
-      const reference = getProjectFileReference(node.data.metadata)
-      if (!reference?.path) {
+      const reference = getProjectResourceReference(node.data.metadata)
+      if (!reference || reference.kind === "project-directory") {
         throw new Error(
           `Canvas media must be stored in the active Project before ${options.operationLabel}: ${node.data.label}`,
         )
       }
-      const resourcePath = requireProjectCanvasResourcePath(reference.path)
-      if (!isProjectCanvasManagedAssetPath(resourcePath)) {
-        throw new Error(`Canvas media must be stored in the managed Project asset directory: ${node.data.label}`)
-      }
-      return { kind, resourcePath }
+      return { kind, reference }
     })
 
     const resolved: ResolvedManagedCanvasMedia[] = []
-    for (const reference of references) {
+    for (const { kind, reference } of references) {
       throwIfAborted(signal)
-      const info = await safeProjectMediaCall(reference.resourcePath, () =>
-        this.input.projects.readFileInfo({
-          path: reference.resourcePath,
-          projectId: request.scopeId,
-        }),
-      )
-      const mimeType = normalizeMimeType(info.mimeType)
-      if (!mimeType.startsWith(`${reference.kind}/`)) {
-        throw new Error(`Canvas ${reference.kind} does not reference a matching media file: ${reference.resourcePath}`)
+      const resourcePath = projectResourceLabel(reference)
+      let mimeType: string
+      let name: string
+      let source: string
+      if (reference.kind === "managed-asset") {
+        mimeType = normalizeMimeType(reference.mediaType ?? "")
+        name = reference.name
+        source = await safeProjectMediaCall(resourcePath, () =>
+          this.input.assets.resolve({ projectId: request.scopeId, reference }),
+        )
+      } else {
+        const info = await safeProjectMediaCall(resourcePath, () =>
+          this.input.projects.readFileInfo({ path: reference.path, projectId: request.scopeId }),
+        )
+        mimeType = normalizeMimeType(info.mimeType)
+        name = info.name
+        source = await safeProjectMediaCall(resourcePath, () =>
+          this.input.projects.resolveEntryPath({ path: reference.path, projectId: request.scopeId }),
+        )
       }
-      const source = await safeProjectMediaCall(reference.resourcePath, () =>
-        this.input.projects.resolveEntryPath({
-          path: reference.resourcePath,
-          projectId: request.scopeId,
-        }),
-      )
+      if (!mimeType.startsWith(`${kind}/`)) {
+        throw new Error(`Canvas ${kind} does not reference a matching media file: ${resourcePath}`)
+      }
       resolved.push(
         await inspectMatchingMediaFile(
           {
-            kind: reference.kind,
+            kind,
             mimeType,
-            name: info.name,
-            resourcePath: reference.resourcePath,
+            name,
+            resourcePath,
             source,
           },
           signal,
@@ -144,6 +145,10 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
     }
     return resolved
   }
+}
+
+function projectResourceLabel(reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>) {
+  return reference.kind === "project-file" ? reference.path : `managed-asset:${reference.sha256}`
 }
 
 function isManagedCanvasMediaKind(value: unknown): value is ManagedCanvasMediaKind {

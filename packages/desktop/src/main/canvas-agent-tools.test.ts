@@ -744,6 +744,7 @@ describe("Canvas Agent tools", () => {
       [{ label: "Notes/Brief-a1.md" }],
     )
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -753,6 +754,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(0)
         },
@@ -816,6 +818,7 @@ describe("Canvas Agent tools", () => {
   test("does not include renderer reload errors in Agent-visible sync warnings", async () => {
     const document = { ...createCanvasDocument({ id: "canvas-main" }), revision: 1 }
     const provider = createCanvasAgentToolProvider({
+      canvases: projectCanvases,
       application: {
         async execute() {
           throw new Error("Unexpected execute")
@@ -825,6 +828,7 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
+        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(0)
         },
@@ -857,12 +861,8 @@ describe("Canvas Agent tools", () => {
       sources: [{ kind: "new-text", sourceId: "source", text: "Saved" }],
     })
 
-    expect(result).toMatchObject({
-      sync: {
-        reloaded: false,
-        warning: "Canvas was updated, but the live editor could not be refreshed",
-      },
-    })
+    expect(result).toMatchObject({ sync: { reloaded: false } })
+    expect(result).not.toMatchObject({ sync: { warning: expect.anything() } })
     expect(JSON.stringify(result)).not.toContain("/native/")
   })
 

@@ -5,7 +5,6 @@ export interface ProjectCanvasControllerSnapshot {
   canvases: ProjectCanvas[]
   error: string | null
   projectId: string | null
-  workbenchPreferenceMigration: ProjectCanvasCatalog["workbenchPreferenceMigration"] | null
 }
 
 const initialSnapshot: ProjectCanvasControllerSnapshot = {
@@ -13,7 +12,6 @@ const initialSnapshot: ProjectCanvasControllerSnapshot = {
   canvases: [],
   error: null,
   projectId: null,
-  workbenchPreferenceMigration: null,
 }
 
 export class ProjectCanvasController {
@@ -53,7 +51,6 @@ export class ProjectCanvasController {
       canvases: [],
       error: null,
       projectId,
-      workbenchPreferenceMigration: null,
     })
     if (!projectId) return
     try {
@@ -191,14 +188,7 @@ export class ProjectCanvasController {
     if (!this.isActive(projectId, generation) || catalog.projectId !== projectId) {
       throw new Error("Project Canvas catalog response did not match the active project.")
     }
-    const migration = catalog.workbenchPreferenceMigration ?? this.snapshot.workbenchPreferenceMigration
-    this.update({
-      canvases: catalog.canvases,
-      workbenchPreferenceMigration: migration
-        && catalog.canvases.some((canvas) => canvas.id === migration.canvasId)
-        ? migration
-        : null,
-    })
+    this.update({ canvases: catalog.canvases })
   }
 
   private scheduleRefresh() {

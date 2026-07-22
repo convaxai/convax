@@ -1,4 +1,5 @@
 import {
+  CanvasCommandIdConflictError,
   CanvasResourcePartialFailureError,
   type CanvasApplicationService,
   type CanvasDocumentClient,
@@ -6,8 +7,7 @@ import {
   type CanvasResourcePreparationResult,
   type CanvasResourceSource,
 } from "@convax/canvas/application"
-import type { CanvasPoint } from "@convax/canvas/core"
-import type { CanvasNode } from "@convax/canvas/core"
+import { getIncomingConnectedCanvasFileNodeIds, type CanvasNode, type CanvasPoint } from "@convax/canvas/core"
 import {
   getProjectResourceReference,
   markProjectCanvasResourcesStale,
@@ -27,6 +27,7 @@ import {
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
   canvasResourceLocalFileRegisterIpcChannel,
+  canvasResourceReadConnectedImageIpcChannel,
   canvasResourceRelinkIpcChannel,
   canvasResourceSaveEditableCopyIpcChannel,
   canvasTextResourceIpcChannel,
@@ -283,9 +284,56 @@ function sameActiveCanvasScope(left: ActiveCanvasScope, right: ActiveCanvasScope
   )
 }
 
+interface CanvasResourceMutationExecution {
+  fingerprint: string
+  result: Promise<unknown>
+}
+
+function executeCanvasResourceMutation<Result>(
+  executions: Map<string, CanvasResourceMutationExecution>,
+  active: ActiveCanvasScope,
+  commandId: string,
+  fingerprintValue: unknown,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  const key = JSON.stringify([active.projectId, active.canvasId, "desktop:renderer", commandId])
+  const fingerprint = JSON.stringify(fingerprintValue)
+  const existing = executions.get(key)
+  if (existing) {
+    if (existing.fingerprint !== fingerprint) {
+      return Promise.reject(new CanvasCommandIdConflictError(commandId))
+    }
+    return existing.result as Promise<Result>
+  }
+  const result = operation()
+  const execution = { fingerprint, result }
+  executions.set(key, execution)
+  if (executions.size > 1_000) executions.delete(executions.keys().next().value ?? "")
+  void result.catch(() => {
+    if (executions.get(key) === execution) executions.delete(key)
+  })
+  return result
+}
+
+function mergeCanvasResourcePreparation(
+  first: CanvasResourcePreparationResult | undefined,
+  second: CanvasResourcePreparationResult,
+): CanvasResourcePreparationResult {
+  if (!first) return second
+  const retained = new Map<string, { label: string }>()
+  for (const item of [...(first.retainedOnFailure ?? []), ...(second.retainedOnFailure ?? [])]) {
+    if (!retained.has(item.label)) retained.set(item.label, item)
+  }
+  return {
+    items: [...first.items, ...second.items],
+    ...(retained.size === 0 ? {} : { retainedOnFailure: [...retained.values()] }),
+    warnings: [...(first.warnings ?? []), ...(second.warnings ?? [])],
+  }
+}
+
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addPreparedResources" | "addResources"> &
   Partial<Pick<CanvasResourceBusinessService, "relinkPreparedResource">>
-type CanvasExternalPreparationPort = Pick<ProjectCanvasResourcePreparation, "withAdmittedExternalFiles"> &
+type CanvasLocalFilePreparationPort = Pick<ProjectCanvasResourcePreparation, "withAdmittedLocalFiles"> &
   Partial<Pick<ProjectCanvasResourcePreparation, "prepare" | "prepareManagedTextEditableCopy">>
 
 interface CanvasResourceMainRequest {
@@ -310,9 +358,10 @@ interface CanvasResourceMainRequest {
 
 export function registerCanvasResourceIpc(
   resources: CanvasResourcePort,
-  preparation: CanvasExternalPreparationPort,
+  preparation: CanvasLocalFilePreparationPort,
   options: {
     documents?: Pick<CanvasDocumentClient, "load">
+    images?: Pick<ProjectCanvasResourceHydrator, "readImage">
     isTrustedSender(event: IpcMainInvokeEvent): boolean
     resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<{
       canvasId: string
@@ -322,6 +371,7 @@ export function registerCanvasResourceIpc(
   },
 ) {
   const localFileTokens = new Map<string, { expiresAt: number; sourcePath: string }>()
+  const mutationExecutions = new Map<string, CanvasResourceMutationExecution>()
   const localFileTokenKey = (event: IpcMainInvokeEvent, token: string) => `${event.sender.id}:${token}`
   const pruneLocalFileTokens = () => {
     const now = Date.now()
@@ -351,42 +401,67 @@ export function registerCanvasResourceIpc(
     if (!active || active.projectId !== input.projectId || active.canvasId !== input.canvasId) {
       throw new Error("Canvas resource request does not match the invoking window's live Workbench scope")
     }
-    const request = {
-      actor: { id: "desktop:renderer", kind: "ui" as const },
-      anchor: input.anchor,
-      canvasId: active.canvasId,
-      commandId: input.commandId,
-      expectedRevision: input.expectedRevision,
-      relation: input.relation,
-      scopeId: active.projectId,
-      sources: input.sources,
-    }
-    let result
-    try {
-      result = input.externalFiles.length
-        ? await preparation.withAdmittedExternalFiles(
-            { files: input.externalFiles, projectId: active.projectId },
-            (prepared: CanvasResourcePreparationResult) => resources.addPreparedResources(request, prepared),
-          )
-        : await resources.addResources(request)
-    } catch (error) {
-      if (error instanceof CanvasResourcePartialFailureError) {
-        const response = canvasResourcePartialFailureResponse(error)
-        if (response) return response
-        // oxlint-disable-next-line eslint/preserve-caught-error -- Native error details must not cross IPC.
-        throw new Error("Could not add the selected resources to the Canvas")
-      }
-      if (input.externalFiles.length > 0) {
-        // oxlint-disable-next-line eslint/preserve-caught-error -- Native error details must not cross IPC.
-        throw new Error("Could not add the selected local files to the Canvas")
-      }
-      throw error
-    }
-    return {
-      createdNodeIds: result.createdNodeIds,
-      revision: result.document.revision,
-      warnings: result.warnings,
-    }
+    return executeCanvasResourceMutation(
+      mutationExecutions,
+      active,
+      input.commandId,
+      { input, kind: "add" },
+      async () => {
+        const request = {
+          actor: { id: "desktop:renderer", kind: "ui" as const },
+          anchor: input.anchor,
+          canvasId: active.canvasId,
+          commandId: input.commandId,
+          expectedRevision: input.expectedRevision,
+          relation: input.relation,
+          scopeId: active.projectId,
+          sources: input.sources,
+        }
+        let sourcePrepared: CanvasResourcePreparationResult | undefined
+        let result
+        try {
+          if (input.externalFiles.length > 0 && input.sources.length > 0) {
+            if (!preparation.prepare) throw new Error("Canvas resource source preparation is unavailable")
+            sourcePrepared = await preparation.prepare({
+              canvasId: active.canvasId,
+              scopeId: active.projectId,
+              sources: input.sources,
+            })
+          }
+          result = input.externalFiles.length
+            ? await preparation.withAdmittedLocalFiles(
+                { files: input.externalFiles, projectId: active.projectId },
+                (localPrepared: CanvasResourcePreparationResult) =>
+                  resources.addPreparedResources(
+                    sourcePrepared ? { ...request, sources: [] } : request,
+                    mergeCanvasResourcePreparation(sourcePrepared, localPrepared),
+                  ),
+              )
+            : await resources.addResources(request)
+        } catch (error) {
+          const failure =
+            error instanceof CanvasResourcePartialFailureError || !sourcePrepared?.retainedOnFailure
+              ? error
+              : new CanvasResourcePartialFailureError(error, sourcePrepared.retainedOnFailure)
+          if (failure instanceof CanvasResourcePartialFailureError) {
+            const response = canvasResourcePartialFailureResponse(failure)
+            if (response) return response
+            // oxlint-disable-next-line eslint/preserve-caught-error -- Native error details must not cross IPC.
+            throw new Error("Could not add the selected resources to the Canvas")
+          }
+          if (input.externalFiles.length > 0) {
+            // oxlint-disable-next-line eslint/preserve-caught-error -- Native error details must not cross IPC.
+            throw new Error("Could not add the selected local files to the Canvas")
+          }
+          throw error
+        }
+        return {
+          createdNodeIds: result.createdNodeIds,
+          revision: result.document.revision,
+          warnings: result.warnings,
+        }
+      },
+    )
   })
 
   ipcMain.handle(canvasResourceRelinkIpcChannel, async (event, value: unknown) => {
@@ -395,58 +470,67 @@ export function registerCanvasResourceIpc(
     const relinkPreparedResource = resources.relinkPreparedResource
     if (!relinkPreparedResource) throw new Error("Canvas resource relink service is unavailable")
     const active = await requireActiveRelinkScope(event, input, options)
-    const live = await loadLiveRelinkNode(active, input.nodeId, options.documents)
-    const request = canvasRelinkBusinessRequest(active, input)
-    try {
-      let result
-      if (input.source.kind === "local-file") {
-        const key = localFileTokenKey(event, input.source.sourceToken)
-        pruneLocalFileTokens()
-        const token = localFileTokens.get(key)
-        if (!token || token.expiresAt < Date.now()) {
-          throw new Error("Local file authorization has expired or is invalid")
-        }
-        localFileTokens.delete(key)
-        result = await preparation.withAdmittedExternalFiles(
-          {
-            files: [
+    return executeCanvasResourceMutation(
+      mutationExecutions,
+      active,
+      input.commandId,
+      { input, kind: "relink" },
+      async () => {
+        requireRelinkRevision(active, input)
+        const live = await loadLiveRelinkNode(active, input.nodeId, options.documents)
+        const request = canvasRelinkBusinessRequest(active, input)
+        try {
+          let result
+          if (input.source.kind === "local-file") {
+            const key = localFileTokenKey(event, input.source.sourceToken)
+            pruneLocalFileTokens()
+            const token = localFileTokens.get(key)
+            if (!token || token.expiresAt < Date.now()) {
+              throw new Error("Local file authorization has expired or is invalid")
+            }
+            localFileTokens.delete(key)
+            result = await preparation.withAdmittedLocalFiles(
               {
-                ...(input.source.mediaType === undefined ? {} : { mediaType: input.source.mediaType }),
-                name: input.source.name,
-                sourceId: "relink",
-                sourcePath: token.sourcePath,
+                files: [
+                  {
+                    ...(input.source.mediaType === undefined ? {} : { mediaType: input.source.mediaType }),
+                    name: input.source.name,
+                    sourceId: "relink",
+                    sourcePath: token.sourcePath,
+                  },
+                ],
+                projectId: active.projectId,
               },
-            ],
-            projectId: active.projectId,
-          },
-          async (prepared) => {
+              async (prepared) => {
+                requireCompatibleRelinkPreparation(live.node, prepared)
+                await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
+                return relinkPreparedResource(request, prepared)
+              },
+            )
+          } else {
+            if (!preparation.prepare) throw new Error("Canvas resource relink preparation is unavailable")
+            const prepared = await preparation.prepare({
+              canvasId: active.canvasId,
+              scopeId: active.projectId,
+              sources: [{ ...input.source, sourceId: "relink" }],
+            })
             requireCompatibleRelinkPreparation(live.node, prepared)
             await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
-            return relinkPreparedResource(request, prepared)
-          },
-        )
-      } else {
-        if (!preparation.prepare) throw new Error("Canvas resource relink preparation is unavailable")
-        const prepared = await preparation.prepare({
-          canvasId: active.canvasId,
-          scopeId: active.projectId,
-          sources: [{ ...input.source, sourceId: "relink" }],
-        })
-        requireCompatibleRelinkPreparation(live.node, prepared)
-        await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
-        result = await relinkPreparedResource(request, prepared)
-      }
-      return { revision: result.document.revision, warnings: result.warnings }
-    } catch (error) {
-      if (error instanceof CanvasResourcePartialFailureError) {
-        const response = canvasResourcePartialFailureResponse(error)
-        if (response) return response
-      }
-      if (input.source.kind === "local-file") {
-        throw new Error("Could not relink the selected local file", { cause: error })
-      }
-      throw error
-    }
+            result = await relinkPreparedResource(request, prepared)
+          }
+          return { revision: result.document.revision, warnings: result.warnings }
+        } catch (error) {
+          if (error instanceof CanvasResourcePartialFailureError) {
+            const response = canvasResourcePartialFailureResponse(error)
+            if (response) return response
+          }
+          if (input.source.kind === "local-file") {
+            throw new Error("Could not relink the selected local file", { cause: error })
+          }
+          throw error
+        }
+      },
+    )
   })
 
   ipcMain.handle(canvasResourceSaveEditableCopyIpcChannel, async (event, value: unknown) => {
@@ -458,45 +542,210 @@ export function registerCanvasResourceIpc(
       throw new Error("Canvas editable-copy service is unavailable")
     }
     const active = await requireActiveRelinkScope(event, input, options)
-    const live = await loadLiveRelinkNode(active, input.nodeId, options.documents)
-    if (
-      live.node.data.kind !== "text" ||
-      live.reference.kind !== "managed-asset" ||
-      !managedTextExtension(live.reference.name)
-    ) {
-      throw new Error("Canvas resource does not support an editable copy")
-    }
-    let prepared: CanvasResourcePreparationResult | undefined
+    return executeCanvasResourceMutation(
+      mutationExecutions,
+      active,
+      input.commandId,
+      { input, kind: "editable-copy" },
+      async () => {
+        requireRelinkRevision(active, input)
+        const live = await loadLiveRelinkNode(active, input.nodeId, options.documents)
+        if (
+          live.node.data.kind !== "text" ||
+          live.reference.kind !== "managed-asset" ||
+          !managedTextExtension(live.reference.name)
+        ) {
+          throw new Error("Canvas resource does not support an editable copy")
+        }
+        let prepared: CanvasResourcePreparationResult | undefined
+        try {
+          prepared = await prepareManagedTextEditableCopy({
+            projectId: active.projectId,
+            reference: live.reference,
+            sourceId: "editable-copy",
+          })
+          requireCompatibleRelinkPreparation(live.node, prepared)
+          await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
+          const result = await relinkPreparedResource(canvasRelinkBusinessRequest(active, input), prepared)
+          return { revision: result.document.revision, warnings: result.warnings }
+        } catch (error) {
+          const failure =
+            error instanceof CanvasResourcePartialFailureError || !prepared?.retainedOnFailure
+              ? error
+              : new CanvasResourcePartialFailureError(error, prepared.retainedOnFailure)
+          if (failure instanceof CanvasResourcePartialFailureError) {
+            const response = canvasResourcePartialFailureResponse(failure)
+            if (response) return response
+          }
+          throw new Error("Could not save an editable copy of the Canvas text resource", { cause: error })
+        }
+      },
+    )
+  })
+
+  ipcMain.handle(canvasResourceReadConnectedImageIpcChannel, async (event, value: unknown) => {
+    if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     try {
-      prepared = await prepareManagedTextEditableCopy({
-        projectId: active.projectId,
-        reference: live.reference,
-        sourceId: "editable-copy",
-      })
-      requireCompatibleRelinkPreparation(live.node, prepared)
-      await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
-      const result = await relinkPreparedResource(canvasRelinkBusinessRequest(active, input), prepared)
-      return { revision: result.document.revision, warnings: result.warnings }
-    } catch (error) {
-      const failure =
-        error instanceof CanvasResourcePartialFailureError || !prepared?.retainedOnFailure
-          ? error
-          : new CanvasResourcePartialFailureError(error, prepared.retainedOnFailure)
-      if (failure instanceof CanvasResourcePartialFailureError) {
-        const response = canvasResourcePartialFailureResponse(failure)
-        if (response) return response
+      const input = requireConnectedImageReadRequest(value)
+      const active = await options.resolveActiveCanvas(event)
+      if (!active || active.canvasId !== input.canvasId || active.revision !== input.expectedRevision) {
+        throw new CanvasConnectedImageRequestError(
+          "Connected Canvas image request does not match the invoking window's live Workbench scope",
+        )
       }
-      throw new Error("Could not save an editable copy of the Canvas text resource", { cause: error })
+      if (!options.images) throw new Error("Connected Canvas image reader is unavailable")
+      const authority = await loadConnectedImageAuthority(active, input, options.documents)
+      const first = requireConnectedImageRead(
+        await options.images.readImage({
+          maximumBytes: maximumConnectedImageBytes,
+          projectId: active.projectId,
+          reference: authority.reference,
+        }),
+      )
+      await recheckConnectedImageAuthority(event, active, input, authority.reference, options)
+      const second = requireConnectedImageRead(
+        await options.images.readImage({
+          maximumBytes: maximumConnectedImageBytes,
+          projectId: active.projectId,
+          reference: authority.reference,
+        }),
+      )
+      await recheckConnectedImageAuthority(event, active, input, authority.reference, options)
+      if (
+        first.contentDigest !== second.contentDigest ||
+        first.mimeType !== second.mimeType ||
+        first.name !== second.name ||
+        first.size !== second.size
+      ) {
+        throw new CanvasConnectedImageRequestError("Connected Canvas image changed while it was being read")
+      }
+      return {
+        dataUrl: `data:${first.mimeType};base64,${Buffer.from(first.bytes).toString("base64")}`,
+        mimeType: first.mimeType,
+        name: first.name,
+        size: first.size,
+      }
+    } catch (error) {
+      if (error instanceof CanvasConnectedImageRequestError) throw error
+      throw new Error("Could not read the connected Canvas image")
     }
   })
 
   return () => {
     localFileTokens.clear()
+    mutationExecutions.clear()
     ipcMain.removeHandler(canvasResourceIpcChannel)
     ipcMain.removeHandler(canvasResourceLocalFileRegisterIpcChannel)
+    ipcMain.removeHandler(canvasResourceReadConnectedImageIpcChannel)
     ipcMain.removeHandler(canvasResourceRelinkIpcChannel)
     ipcMain.removeHandler(canvasResourceSaveEditableCopyIpcChannel)
   }
+}
+
+const maximumConnectedImageBytes = 16 * 1024 * 1024
+const connectedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
+
+interface CanvasConnectedImageReadRequest {
+  canvasId: string
+  expectedRevision: number
+  nodeId: string
+  ownerNodeId: string
+}
+
+class CanvasConnectedImageRequestError extends Error {}
+
+function requireConnectedImageReadRequest(value: unknown): CanvasConnectedImageReadRequest {
+  if (!isRecord(value)) throw new CanvasConnectedImageRequestError("Connected Canvas image request must be an object")
+  for (const key of Object.keys(value)) {
+    if (key !== "canvasId" && key !== "expectedRevision" && key !== "nodeId" && key !== "ownerNodeId") {
+      throw new CanvasConnectedImageRequestError(`Connected Canvas image request contains unsupported field: ${key}`)
+    }
+  }
+  const canvasId = requireBoundedNodeId(value.canvasId, "Connected Canvas image canvas id")
+  const nodeId = requireBoundedNodeId(value.nodeId, "Connected Canvas image node id")
+  const ownerNodeId = requireBoundedNodeId(value.ownerNodeId, "Connected Canvas image owner node id")
+  if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+    throw new CanvasConnectedImageRequestError("Connected Canvas image revision must be a non-negative integer")
+  }
+  return { canvasId, expectedRevision: value.expectedRevision as number, nodeId, ownerNodeId }
+}
+
+function requireBoundedNodeId(value: unknown, label: string) {
+  const id = requireNonEmptyString(value, label)
+  if (id.length > 2_048 || /[\u0000-\u001f\u007f]/.test(id)) {
+    throw new CanvasConnectedImageRequestError(`${label} is invalid`)
+  }
+  return id
+}
+
+async function loadConnectedImageAuthority(
+  active: ActiveCanvasScope,
+  input: CanvasConnectedImageReadRequest,
+  documents: Pick<CanvasDocumentClient, "load"> | undefined,
+) {
+  if (!documents) throw new Error("Connected Canvas image document service is unavailable")
+  const loaded = await documents.load({ canvasId: active.canvasId, scopeId: active.projectId })
+  const document = loaded.document
+  if (!document || document.revision !== active.revision) {
+    throw new CanvasConnectedImageRequestError(
+      "Connected Canvas image request does not match the invoking window's live Workbench scope",
+    )
+  }
+  const ownerMatches = document.nodes.filter((node) => node.id === input.ownerNodeId)
+  if (ownerMatches.length !== 1) throw new CanvasConnectedImageRequestError("Canvas Plugin owner node was not found")
+  if (!getIncomingConnectedCanvasFileNodeIds(document, input.ownerNodeId).includes(input.nodeId)) {
+    throw new CanvasConnectedImageRequestError("Canvas image is not directly connected to the Plugin node")
+  }
+  const imageMatches = document.nodes.filter((node) => node.id === input.nodeId)
+  const image = imageMatches.length === 1 ? imageMatches[0] : undefined
+  if (!image || image.type !== "file" || image.data.kind !== "image") {
+    throw new CanvasConnectedImageRequestError("Connected Canvas node is not an image")
+  }
+  const reference = getProjectResourceReference(image.data.metadata)
+  if (!reference || reference.kind === "project-directory") {
+    throw new CanvasConnectedImageRequestError("Connected Canvas image requires a typed Project file reference")
+  }
+  return { reference }
+}
+
+async function recheckConnectedImageAuthority(
+  event: IpcMainInvokeEvent,
+  active: ActiveCanvasScope,
+  input: CanvasConnectedImageReadRequest,
+  reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
+  options: Parameters<typeof registerCanvasResourceIpc>[2],
+) {
+  const current = await options.resolveActiveCanvas(event)
+  if (!sameActiveCanvasScope(active, current)) {
+    throw new CanvasConnectedImageRequestError(
+      "Connected Canvas image request does not match the invoking window's live Workbench scope",
+    )
+  }
+  const live = await loadConnectedImageAuthority(active, input, options.documents)
+  if (JSON.stringify(live.reference) !== JSON.stringify(reference)) {
+    throw new CanvasConnectedImageRequestError("Connected Canvas image source changed while it was being read")
+  }
+}
+
+function requireConnectedImageRead(value: Awaited<ReturnType<ProjectCanvasResourceHydrator["readImage"]>>) {
+  if (
+    !value ||
+    !(value.bytes instanceof Uint8Array) ||
+    !Number.isSafeInteger(value.size) ||
+    value.size < 0 ||
+    value.size > maximumConnectedImageBytes ||
+    value.bytes.byteLength !== value.size ||
+    typeof value.contentDigest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.contentDigest) ||
+    typeof value.mimeType !== "string" ||
+    !connectedImageMimeTypes.has(value.mimeType) ||
+    typeof value.name !== "string" ||
+    !value.name ||
+    value.name.length > 255
+  ) {
+    throw new Error("Connected Canvas image reader returned an invalid result")
+  }
+  return value
 }
 
 interface CanvasResourceRelinkGuard {
@@ -588,10 +837,16 @@ async function requireActiveRelinkScope(
   options: Parameters<typeof registerCanvasResourceIpc>[2],
 ): Promise<ActiveCanvasScope> {
   const active = await options.resolveActiveCanvas(event)
-  if (!active || active.canvasId !== input.canvasId || active.revision !== input.expectedRevision) {
+  if (!active || active.canvasId !== input.canvasId) {
     throw new Error("Canvas resource relink does not match the invoking window's live Workbench scope")
   }
   return active
+}
+
+function requireRelinkRevision(active: ActiveCanvasScope, input: CanvasResourceRelinkGuard) {
+  if (active.revision !== input.expectedRevision) {
+    throw new Error("Canvas resource relink does not match the invoking window's live Workbench scope")
+  }
 }
 
 async function loadLiveRelinkNode(

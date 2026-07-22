@@ -1,9 +1,10 @@
-import { CanvasTextResourceConflictError } from "@convax/canvas"
+import { CanvasTextResourceConflictError } from "@convax/canvas/application"
 import { parseCanvasDocument } from "@convax/canvas/core"
 import {
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceIpcChannel,
   canvasResourceLocalFileRegisterIpcChannel,
+  canvasResourceReadConnectedImageIpcChannel,
   canvasResourceRelinkIpcChannel,
   canvasResourceSaveEditableCopyIpcChannel,
   canvasTextResourceIpcChannel,
@@ -198,6 +199,15 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
         source,
       })
     },
+    async readConnectedImage(input) {
+      let result: unknown
+      try {
+        result = await options.invoke(canvasResourceReadConnectedImageIpcChannel, input)
+      } catch {
+        throw new Error("Could not read the connected Canvas image")
+      }
+      return requireConnectedImageReadResult(result)
+    },
     saveEditableCopy(input) {
       return invokeCanvasResourceRelink(options, canvasResourceSaveEditableCopyIpcChannel, {
         canvasId: input.canvasId,
@@ -206,6 +216,52 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
         nodeId: input.nodeId,
       })
     },
+  }
+}
+
+const connectedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
+const maximumConnectedImageBytes = 16 * 1024 * 1024
+
+function requireConnectedImageReadResult(value: unknown) {
+  if (!isRecord(value)) throw new Error("Connected Canvas image response is invalid")
+  const keys = Object.keys(value)
+  if (
+    keys.length !== 4 ||
+    keys.some((key) => key !== "dataUrl" && key !== "mimeType" && key !== "name" && key !== "size")
+  ) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  if (typeof value.mimeType !== "string" || !connectedImageMimeTypes.has(value.mimeType)) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  if (typeof value.name !== "string" || !value.name || value.name.length > 255) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  if (
+    !Number.isSafeInteger(value.size) ||
+    (value.size as number) < 0 ||
+    (value.size as number) > maximumConnectedImageBytes
+  ) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  if (typeof value.dataUrl !== "string") throw new Error("Connected Canvas image response is invalid")
+  const prefix = `data:${value.mimeType};base64,`
+  if (value.dataUrl.slice(0, prefix.length).toLowerCase() !== prefix) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  const encoded = value.dataUrl.slice(prefix.length)
+  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
+  if ((encoded.length / 4) * 3 - padding !== value.size) {
+    throw new Error("Connected Canvas image response is invalid")
+  }
+  return {
+    dataUrl: value.dataUrl,
+    mimeType: value.mimeType as "image/jpeg" | "image/png" | "image/webp",
+    name: value.name,
+    size: value.size as number,
   }
 }
 

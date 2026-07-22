@@ -13,7 +13,7 @@ import {
   type CanvasGenerationToolSummary,
   type CanvasNode,
 } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
@@ -37,10 +37,10 @@ function imageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
       resource: {
         id: "image-resource",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/reference.png" } },
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/reference.png" } },
         mimeType: "image/png",
         name: "reference.png",
-        url: "convax-asset://project/image",
+        state: { status: "ready", url: "convax-project://Media/reference.png" },
       },
     }),
     style: { height: 320, width: 480 },
@@ -103,6 +103,65 @@ const description: CanvasGenerationToolDescription = {
 }
 
 describe("Canvas card generation output", () => {
+  test("uses the request's supported direct-generation output without rendering modality tabs", () => {
+    const nodes = [
+      createTextNode({
+        id: "text",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/notes.md" } },
+        name: "notes.md",
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "Reference notes" },
+      }),
+      imageNode({ id: "image" }),
+      createMediaNode({
+        id: "video",
+        position: { x: 0, y: 0 },
+        resource: {
+          id: "video-resource",
+          kind: "video",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/video.mp4" } },
+          state: { status: "ready", url: "convax-project://Media/video.mp4" },
+        },
+      }),
+      createMediaNode({
+        id: "audio",
+        position: { x: 0, y: 0 },
+        resource: {
+          id: "audio-resource",
+          kind: "audio",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/audio.mp3" } },
+          state: { status: "ready", url: "convax-project://Media/audio.mp3" },
+        },
+      }),
+      createFolderNode({
+        id: "folder",
+        position: { x: 0, y: 0 },
+        resource: {
+          id: "folder-resource",
+          kind: "folder",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "Media" } },
+          name: "Folder",
+          state: { status: "ready" },
+        },
+      }),
+      {
+        data: { kind: "plugin.example", label: "Plugin" },
+        id: "plugin",
+        position: { x: 0, y: 0 },
+        type: "file" as const,
+      },
+    ]
+
+    expect(nodes.map((node) => canvasCardGenerationOutput(assistantRequest(node, nodes)))).toEqual([
+      undefined,
+      "image",
+      "video",
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
   test("inherits the Agent model until this node stores its own override", () => {
     const first = tool()
     const second = tool({ id: "tools/other", title: "Other image" })
@@ -203,12 +262,23 @@ describe("Canvas card generation request", () => {
     const folder = createFolderNode({
       id: "folder",
       position: { x: 3, y: 4 },
-      resource: { id: "folder-resource", kind: "folder", name: "Folder" },
+      resource: {
+        id: "folder-resource",
+        kind: "folder",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "Media" } },
+        name: "Folder",
+        state: { status: "ready" },
+      },
     })
     const audio = createMediaNode({
       id: "audio",
       position: { x: 3, y: 4 },
-      resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+      resource: {
+        id: "audio-resource",
+        kind: "audio",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/audio.mp3" } },
+        state: { status: "ready", url: "asset://audio" },
+      },
     })
     const selected = tool({ acceptedInputs: [], id: "sound/audio.generate", output: "audio" })
     const emptyDescription = { fields: [], toolId: selected.id } satisfies CanvasGenerationToolDescription
@@ -321,22 +391,44 @@ describe("Canvas card generation request", () => {
 
   test("infers explicitly mentioned text, image, video, and audio references but leaves other cards prompt-only", () => {
     const nodes = [
-      createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "notes" }),
+      createTextNode({
+        id: "text",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/notes.md" } },
+        name: "notes.md",
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "Reference notes" },
+      }),
       imageNode({ id: "image" }),
       createMediaNode({
         id: "video",
         position: { x: 0, y: 0 },
-        resource: { id: "video-resource", kind: "video", url: "asset://video" },
+        resource: {
+          id: "video-resource",
+          kind: "video",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/video.mp4" } },
+          state: { status: "ready", url: "convax-project://Media/video.mp4" },
+        },
       }),
       createMediaNode({
         id: "audio",
         position: { x: 0, y: 0 },
-        resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+        resource: {
+          id: "audio-resource",
+          kind: "audio",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/audio.mp3" } },
+          state: { status: "ready", url: "convax-project://Media/audio.mp3" },
+        },
       }),
       createFolderNode({
         id: "folder",
         position: { x: 0, y: 0 },
-        resource: { id: "folder-resource", kind: "folder", name: "Folder" },
+        resource: {
+          id: "folder-resource",
+          kind: "folder",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "Media" } },
+          name: "Folder",
+          state: { status: "ready" },
+        },
       }),
       {
         data: { kind: "plugin.example", label: "Plugin" },
@@ -615,16 +707,32 @@ describe("Canvas card generation lifecycle", () => {
       listTools: async () => [],
     }
     const nodes: CanvasNode[] = [
-      createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "notes" }),
+      createTextNode({
+        id: "text",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/notes.md" } },
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "notes" },
+      }),
       createMediaNode({
         id: "audio",
         position: { x: 0, y: 0 },
-        resource: { id: "audio-resource", kind: "audio", url: "asset://audio" },
+        resource: {
+          id: "audio-resource",
+          kind: "audio",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/audio.mp3" } },
+          state: { status: "ready", url: "asset://audio" },
+        },
       }),
       createFolderNode({
         id: "folder",
         position: { x: 0, y: 0 },
-        resource: { id: "folder-resource", kind: "folder", name: "Folder" },
+        resource: {
+          id: "folder-resource",
+          kind: "folder",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "Media" } },
+          name: "Folder",
+          state: { status: "ready" },
+        },
       }),
       {
         data: { kind: "plugin.example", label: "Plugin" },

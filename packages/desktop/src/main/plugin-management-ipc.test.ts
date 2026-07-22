@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test"
 import type { InstalledWebPluginSummary, WebPluginManifest } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { WebPluginManager } from "./plugin-manager"
 import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
@@ -23,30 +24,32 @@ interface TestWindow {
   }
 }
 
-mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => dialogOwner,
-    getAllWindows: () => windows,
-  },
-  dialog: {
-    showOpenDialog: async (...args: unknown[]) => {
-      dialogCalls.push(args)
-      return dialogResult
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => dialogOwner,
+      getAllWindows: () => windows,
     },
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => {
-      removedHandlers.push(channel)
-      handlers.delete(channel)
+    dialog: {
+      showOpenDialog: async (...args: unknown[]) => {
+        dialogCalls.push(args)
+        return dialogResult
+      },
     },
-  },
-  shell: {
-    openExternal: async (url: string) => {
-      openedExternalUrls.push(url)
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => {
+        removedHandlers.push(channel)
+        handlers.delete(channel)
+      },
     },
-  },
-}))
+    shell: {
+      openExternal: async (url: string) => {
+        openedExternalUrls.push(url)
+      },
+    },
+  })
+})
 
 afterEach(() => {
   handlers.clear()
@@ -56,6 +59,7 @@ afterEach(() => {
   openedExternalUrls.splice(0)
   dialogResult = { canceled: true, filePaths: [] }
   dialogOwner = undefined
+  resetElectronMock()
 })
 
 const manifest = (id: string): WebPluginManifest => ({

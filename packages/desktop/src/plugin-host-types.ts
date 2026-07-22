@@ -23,11 +23,10 @@ export interface PluginProjectTextResult {
   path: string
 }
 
-export interface PluginProjectFileResult {
+export interface PluginConnectedImageResult {
   dataUrl: string
   mimeType: string
   name: string
-  path: string
   size: number
 }
 
@@ -113,12 +112,14 @@ export interface PluginCanvasHost {
     },
   ): Promise<PluginAgentPromptResult>
   readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<PluginProjectTextResult>
-  readManagedProjectImage(input: {
-    path: string
+  readConnectedImage(input: {
+    canvasId: string
+    expectedRevision: number
+    nodeId: string
+    ownerNodeId: string
     projectId: string
     signal: AbortSignal
-  }): Promise<PluginProjectFileResult>
-  waitForGenerationProjection(input: PluginNodeInvocationRef & { signal: AbortSignal }): Promise<void>
+  }): Promise<PluginConnectedImageResult>
 }
 
 export interface PluginHostLimits {
@@ -182,11 +183,14 @@ export interface PluginHostRequestContext {
     },
   ): Promise<PluginAgentPromptResult>
   readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<PluginProjectTextResult>
-  readManagedProjectImage(input: {
-    path: string
+  readConnectedImage(input: {
+    canvasId: string
+    expectedRevision: number
+    nodeId: string
+    ownerNodeId: string
     projectId: string
     signal: AbortSignal
-  }): Promise<PluginProjectFileResult>
+  }): Promise<PluginConnectedImageResult>
   signal: AbortSignal
   updateNodeState(state: Record<string, unknown>): Promise<void>
 }
@@ -194,7 +198,7 @@ export interface PluginHostRequestContext {
 // Compatibility aliases retained while callers migrate away from Web-specific names.
 export type WebPluginCanvasActiveContext = PluginCanvasActiveContext
 export type WebPluginProjectTextResult = PluginProjectTextResult
-export type WebPluginProjectFileResult = PluginProjectFileResult
+export type WebPluginConnectedImageResult = PluginConnectedImageResult
 export type WebPluginAgentPromptResult = PluginAgentPromptResult
 export type WebPluginGenerationToolSummary = PluginGenerationToolSummary
 export type WebPluginGenerationReference = PluginGenerationReference

@@ -162,6 +162,13 @@ Main 收到 host-owned 文件或目录 token 后解析真实路径，并与 Proj
 
 调用方不能通过传入 `kind` 或伪造 Project 相对路径选择分支。
 
+Main 在任何文件复制或 `Notes/` 发布之前，以 Project、Canvas、actor 和
+`commandId` 建立同载荷幂等边界。同一命令因响应丢失而重试时复用第一次
+物理操作的结果，不重复复制 managed blob，也不重复发布可编辑副本或新建
+文本；相同 `commandId` 的不同载荷明确冲突。混合本地文件与 `new-text` 的
+批次先完成 Project 文件发布，再进入 managed asset mutex；Canvas 提交仍在
+该 mutex 内完成，因此不会锁重入，也不会在引用提交前被 GC 删除。
+
 ### 5.2 Project 内文件
 
 Project 内文件不复制。拖入两次的结果是两个 Canvas 节点引用同一个 Project 相对路径，`.convax/assets` 增加 0 个文件。

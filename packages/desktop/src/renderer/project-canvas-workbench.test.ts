@@ -20,7 +20,6 @@ function catalogHarness(initial = [canvas("canvas-one"), canvas("canvas-two")]) 
     canvases: initial,
     error: null,
     projectId: "project-one",
-    workbenchPreferenceMigration: null,
   }
   const events: string[] = []
   const controller: ProjectCanvasCatalogControllerPort = {

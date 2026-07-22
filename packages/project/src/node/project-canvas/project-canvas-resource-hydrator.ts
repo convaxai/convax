@@ -33,6 +33,14 @@ export interface ProjectCanvasResourceHydratorOptions {
   maximumTextBytes?: number
 }
 
+export interface ProjectCanvasImageRead {
+  bytes: Uint8Array
+  contentDigest: string
+  mimeType: "image/jpeg" | "image/png" | "image/webp"
+  name: string
+  size: number
+}
+
 const defaultMaximumMediaBytes = 64 * 1024 * 1024
 const defaultMaximumTextBytes = 16 * 1024 * 1024
 
@@ -68,6 +76,47 @@ export class ProjectCanvasResourceHydrator {
     return hydrateStaleProjectCanvasResources(input.document, (reference) =>
       this.resolve({ projectId: input.projectId, reference }),
     )
+  }
+
+  async readImage(input: {
+    maximumBytes: number
+    projectId: string
+    reference: ProjectResourceReference
+  }): Promise<ProjectCanvasImageRead> {
+    if (
+      !Number.isSafeInteger(input.maximumBytes) ||
+      input.maximumBytes < 1 ||
+      input.maximumBytes > this.#maximumMediaBytes
+    ) {
+      throw new Error("Project Canvas image read limit exceeds the configured media limit")
+    }
+    const reference = requireProjectResourceReference(input.reference)
+    if (reference.kind === "project-directory") throw new Error("Project directories cannot be read as images")
+
+    let absolutePath: string
+    let declaredMediaType: string
+    let name: string
+    if (reference.kind === "project-file") {
+      const info = await this.files.readFileInfo({ path: reference.path, projectId: input.projectId })
+      absolutePath = await this.files.resolveEntryPath({ path: reference.path, projectId: input.projectId })
+      declaredMediaType = info.mimeType.toLowerCase()
+      name = info.name
+    } else {
+      absolutePath = await this.assets.resolve({ projectId: input.projectId, reference })
+      declaredMediaType = (reference.mediaType ?? mimeTypeForPath(reference.name)).toLowerCase()
+      name = reference.name
+    }
+
+    const { bytes } = await readStableProjectFile(absolutePath, imageReadLabel(reference), input.maximumBytes)
+    const mimeType = imageMimeTypeForBytes(bytes)
+    if (!mimeType || mimeType !== declaredMediaType) {
+      throw new Error("Project image MIME type does not match its byte signature")
+    }
+    const contentDigest = createHash("sha256").update(bytes).digest("hex")
+    if (reference.kind === "managed-asset" && contentDigest !== reference.sha256) {
+      throw new Error("Managed image digest does not match its typed reference")
+    }
+    return { bytes, contentDigest, mimeType, name, size: bytes.byteLength }
   }
 
   async resolve(input: { projectId: string; reference: ProjectResourceReference }): Promise<ProjectResourceSnapshot> {
@@ -188,6 +237,20 @@ export class ProjectCanvasResourceHydrator {
 function isEditableTextPath(value: string) {
   const extension = path.posix.extname(value).toLowerCase()
   return extension === ".md" || extension === ".txt"
+}
+
+function imageReadLabel(reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>) {
+  return reference.kind === "project-file" ? reference.path : `managed:${reference.sha256}`
+}
+
+function imageMimeTypeForBytes(bytes: Uint8Array): ProjectCanvasImageRead["mimeType"] | null {
+  const header = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (header.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png"
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return "image/jpeg"
+  if (header.subarray(0, 4).toString("ascii") === "RIFF" && header.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp"
+  }
+  return null
 }
 
 function isUrlResourceMediaType(mediaType: string) {

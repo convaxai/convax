@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import type {
   CanvasRendererRequestEnvelope,
   CanvasRendererRequestResult,
   CanvasRendererResponseEnvelope,
 } from "../canvas-renderer-contracts"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
 interface TestWebContents {
   id: number
+  isDestroyed(): boolean
   send(channel: string, envelope: CanvasRendererRequestEnvelope): void
 }
 
@@ -19,6 +21,7 @@ let responseListener: ResponseListener | null = null
 
 const webContents: TestWebContents = {
   id: 41,
+  isDestroyed: () => false,
   send(_channel, envelope) {
     const waiter = requestWaiters.shift()
     if (waiter) waiter(envelope)
@@ -28,6 +31,7 @@ const webContents: TestWebContents = {
 
 const secondaryWebContents: TestWebContents = {
   id: 42,
+  isDestroyed: () => false,
   send(_channel, envelope) {
     secondaryRequestQueue.push(envelope)
   },
@@ -43,25 +47,26 @@ const secondaryWindow = {
   webContents: secondaryWebContents,
 }
 
-void mock.module("electron", () => ({
-  BrowserWindow: {
-    getAllWindows: () => [window, secondaryWindow],
-  },
-  ipcMain: {
-    on: (_channel: string, listener: ResponseListener) => {
-      responseListener = listener
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: { getAllWindows: () => [window, secondaryWindow] },
+    ipcMain: {
+      on: (_channel: string, listener: ResponseListener) => {
+        responseListener = listener
+      },
+      removeListener: (_channel: string, listener: ResponseListener) => {
+        if (responseListener === listener) responseListener = null
+      },
     },
-    removeListener: (_channel: string, listener: ResponseListener) => {
-      if (responseListener === listener) responseListener = null
-    },
-  },
-}))
+  })
+})
 
 afterEach(() => {
   requestQueue.splice(0)
   secondaryRequestQueue.splice(0)
   requestWaiters.splice(0)
   responseListener = null
+  resetElectronMock()
 })
 
 function nextRequest() {

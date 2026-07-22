@@ -1121,7 +1121,7 @@ describe("canvas resource business service", () => {
     expect(result.document.nodes.map((node) => node.id)).toContain("concurrent")
     expect(result.createdNodeIds).toHaveLength(1)
     expect(result.document.nodes.find((node) => node.id === result.createdNodeIds[0])?.position).toEqual({
-      x: 304,
+      x: 384,
       y: 0,
     })
     expect(result.warnings).toContain(
@@ -1328,7 +1328,12 @@ describe("canvas resource business service", () => {
       ...createMediaNode({
         id: "owner",
         position: { x: 80, y: 120 },
-        resource: { id: "old", kind: "image" as const, url: "asset://old" },
+        resource: {
+          id: "old",
+          kind: "image" as const,
+          metadata: { source: "old" },
+          state: { status: "ready", url: "asset://old" },
+        },
       }),
       style: { height: 280, width: 440 },
     }
@@ -1349,7 +1354,7 @@ describe("canvas resource business service", () => {
                 id: "prepared-video",
                 kind: "video" as const,
                 metadata: { source: "generated" },
-                url: "asset://video",
+                state: { status: "ready", url: "asset://video" },
               },
             ],
           }
@@ -1399,7 +1404,11 @@ describe("canvas resource business service", () => {
     expect(result.affectedNodeIds).toEqual([owner.id])
     expect(result.document.nodes.map((node) => node.id)).toEqual([owner.id, "concurrent"])
     expect(result.document.nodes[0]).toMatchObject({
-      data: { kind: "video", metadata: { source: "generated" }, url: "asset://video" },
+      data: {
+        kind: "video",
+        metadata: { source: "generated" },
+        resourceState: { status: "ready", url: "asset://video" },
+      },
       id: owner.id,
       position: { x: 300, y: 220 },
       style: { height: 320, width: 520 },
@@ -1428,7 +1437,7 @@ describe("canvas resource business service", () => {
       expectedRevision: 0,
       expectedTarget: createCanvasNodeContentGuard(owner),
       scopeId: "project",
-      source: { kind: "inline-text" as const, sourceId: "generated", text: "Generated" },
+      source: { kind: "new-text" as const, sourceId: "generated", text: "Generated" },
       targetNodeId: owner.id,
     }
     const neverExecute = {
@@ -1442,8 +1451,8 @@ describe("canvas resource business service", () => {
     for (const items of [
       [],
       [
-        { id: "one", kind: "text" as const, text: "One" },
-        { id: "two", kind: "text" as const, text: "Two" },
+        { id: "one", kind: "text" as const, metadata: {}, state: { status: "ready" as const, text: "One" } },
+        { id: "two", kind: "text" as const, metadata: {}, state: { status: "ready" as const, text: "Two" } },
       ],
     ]) {
       const business = new CanvasResourceBusinessService(
@@ -1465,7 +1474,9 @@ describe("canvas resource business service", () => {
     const changedTarget = new CanvasResourceBusinessService(
       {
         async prepare() {
-          return { items: [{ id: "generated", kind: "text", text: "Generated" }] }
+          return {
+            items: [{ id: "generated", kind: "text", metadata: {}, state: { status: "ready", text: "Generated" } }],
+          }
         },
       },
       new CanvasApplicationService({
@@ -1477,7 +1488,12 @@ describe("canvas resource business service", () => {
           snapshot = {
             document: {
               ...snapshot.document!,
-              nodes: [{ ...owner, data: { ...owner.data, text: "User edit" } }],
+              nodes: [
+                {
+                  ...owner,
+                  data: { ...owner.data, resourceState: { status: "ready", text: "User edit" } },
+                },
+              ],
               revision: 1,
             },
             storageVersion: "v1",

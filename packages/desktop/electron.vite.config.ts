@@ -89,6 +89,9 @@ export default defineConfig({
   preload: {
     plugins: [sandboxedPreloadBoundaryPlugin()],
     build: {
+      externalizeDeps: {
+        exclude: ["@convax/canvas"],
+      },
       rollupOptions: {
         input: desktopPreloadInputs,
         output: {

@@ -306,6 +306,71 @@ describe("project canvas document repository", () => {
     expect(getCounts()).toEqual({ removes: 0, touched: 0, writes: 0 })
   })
 
+  test.each([
+    [
+      "inline text",
+      {
+        kind: "text",
+        label: "Legacy text",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/legacy.md" } },
+        text: "legacy",
+      },
+    ],
+    [
+      "remote URL",
+      {
+        kind: "image",
+        label: "Legacy image",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Images/legacy.png" } },
+        url: "https://example.com/legacy.png",
+      },
+    ],
+    [
+      "path-only managed reference",
+      {
+        kind: "image",
+        label: "Legacy managed image",
+        metadata: { convaxProjectFile: { path: ".convax/assets/legacy.png" } },
+      },
+    ],
+    [
+      "folder path",
+      {
+        kind: "folder",
+        label: "Legacy folder",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "legacy-folder" } },
+        path: "legacy-folder",
+      },
+    ],
+  ])("rejects removed %s persistence without mutating its bytes", async (_label, data) => {
+    const document = createCanvasDocument({ id: "canvas-main" })
+    const original = `${JSON.stringify(
+      {
+        document: {
+          ...document,
+          nodes: [
+            {
+              data,
+              id: "legacy-node",
+              position: { x: 0, y: 0 },
+              type: "file",
+            },
+          ],
+        },
+        schemaVersion: "convax.canvas/2",
+      },
+      null,
+      2,
+    )}\n`
+    const { getCounts, getStored, repository } = harness({
+      stored: { content: original, exists: true, version: "v2" },
+    })
+
+    await expect(repository.load({ canvasId: "canvas-main", scopeId: "project_one" })).rejects.toThrow()
+    expect(getStored().content).toBe(original)
+    expect(getCounts()).toEqual({ removes: 0, touched: 0, writes: 0 })
+  })
+
   test("strictly rejects a malformed typed primary slot on a non-resource node", async () => {
     const plugin = {
       id: "plugin",
@@ -381,17 +446,19 @@ describe("project canvas document repository", () => {
     const barrier = { entered: deferred(), release: deferred() }
     const { repository } = harness({ assets, writeBarrier: barrier })
 
-    const admission = assets.withAdmittedExternalFiles(
+    const admission = assets.withAdmittedLocalFiles(
       {
         files: [{ mediaType: "image/png", name: "outside.png", sourcePath: source }],
         projectId: "project_one",
       },
-      async ([reference]) =>
-        repository.save({
+      async ([reference]) => {
+        if (reference?.kind !== "managed-asset") throw new Error("Expected an external managed asset")
+        return repository.save({
           document: documentWith(reference!),
           expectedStorageVersion: null,
           ref: { canvasId: "canvas-main", scopeId: "project_one" },
-        }),
+        })
+      },
     )
     await barrier.entered.promise
     let queuedEntered = false

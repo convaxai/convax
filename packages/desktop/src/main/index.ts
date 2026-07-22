@@ -476,6 +476,7 @@ function startApplication() {
     )
     const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
     const managedCanvasMedia = new ManagedCanvasMediaResolver({
+      assets: projectAssets,
       documents: canvasDocuments,
       projects: projectManager,
     })
@@ -505,6 +506,7 @@ function startApplication() {
     }
     const isJianyingEnabled = () => pluginManager.isBuiltinBundleInstalled(jianyingBuiltin.bundle)
     const jianying = new JianyingCanvasService({
+      assets: projectAssets,
       documents: canvasDocuments,
       integration: jianyingIntegration,
       isEnabled: isJianyingEnabled,
@@ -948,6 +950,7 @@ function startApplication() {
     const disposeCanvasResourceIpc = registerCanvasResourceIpc(canvasResources, canvasResourcePreparation, {
       ...ipcSecurity,
       documents: canvasDocuments,
+      images: canvasResourceHydrator,
       resolveActiveCanvas,
     })
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasDocuments, {

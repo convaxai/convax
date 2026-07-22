@@ -78,20 +78,15 @@ export class ProjectManagedAssetStore {
     })
   }
 
-  withAdmittedExternalFiles<T>(
+  withAdmittedLocalFiles<T>(
     input: { files: readonly ExternalManagedAssetInput[]; projectId: string },
-    commit: (references: readonly ManagedAssetReference[]) => Promise<T>,
+    commit: (references: readonly ProjectResourceReference[]) => Promise<T>,
   ) {
     return this.runExclusive(input.projectId, async () => {
       const layout = await this.#resolveLayout(input.projectId)
-      const references: ManagedAssetReference[] = []
+      const references: ProjectResourceReference[] = []
       for (const file of input.files) {
-        references.push(
-          await this.#admitExternalFileUnlocked(layout, {
-            ...file,
-            projectId: input.projectId,
-          }),
-        )
+        references.push(await this.#classifyLocalFileUnlocked(layout, { ...file, projectId: input.projectId }))
       }
       return commit(references)
     })
@@ -258,6 +253,35 @@ export class ProjectManagedAssetStore {
       }
       if (ownedStaging) await unlinkOwnedFile(ownedStaging)
     }
+  }
+
+  async #classifyLocalFileUnlocked(
+    layout: ManagedAssetLayout,
+    input: ExternalManagedAssetInput & { projectId: string },
+  ): Promise<ProjectResourceReference> {
+    if (typeof input.sourcePath !== "string" || !input.sourcePath.trim()) {
+      throw new Error("Local Canvas file source path is required")
+    }
+    const sourcePath = path.resolve(input.sourcePath)
+    const before = await fs.lstat(sourcePath, { bigint: true })
+    assertRegularNonSymlink(before, sourcePath, "Local Canvas file source")
+    const realSource = await fs.realpath(sourcePath)
+    const realSnapshot = await fs.lstat(realSource, { bigint: true })
+    assertRegularNonSymlink(realSnapshot, realSource, "Local Canvas file source")
+    if (!sameFileIdentity(before, realSnapshot)) {
+      throw new Error("Local Canvas file source changed while it was classified")
+    }
+
+    if (!isInsidePath(realSource, layout.projectRoot)) {
+      return this.#admitExternalFileUnlocked(layout, input)
+    }
+
+    const relativePath = path.relative(layout.projectRoot, realSource).split(path.sep).join("/")
+    const reference = requireProjectResourceReference({ kind: "project-file", path: relativePath })
+    const after = await fs.lstat(realSource, { bigint: true })
+    assertRegularNonSymlink(after, realSource, "Local Canvas file source")
+    assertSameContentSnapshot(before, after, "Local Canvas file source changed while it was classified")
+    return reference
   }
 
   async #copySourceToStaging(input: {

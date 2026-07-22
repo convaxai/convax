@@ -172,6 +172,100 @@ describe("ProjectCanvasResourceHydrator", () => {
     expect(JSON.stringify(result)).not.toContain(projectRoot)
   })
 
+  test("reads Project and managed images through one bounded typed byte capability", async () => {
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
+    await fs.writeFile(path.join(projectRoot, "hero.png"), pngBytes)
+    const outside = path.join(temporaryRoot, "outside.webp")
+    const webpBytes = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBPVP8 ")])
+    await fs.writeFile(outside, webpBytes)
+    const managed = await assets.admitExternalFile({
+      mediaType: "image/webp",
+      name: "outside.webp",
+      projectId,
+      sourcePath: outside,
+    })
+
+    const projectImage = await hydrator.readImage({
+      maximumBytes: 1024,
+      projectId,
+      reference: { kind: "project-file", path: "hero.png" },
+    })
+    const managedImage = await hydrator.readImage({ maximumBytes: 1024, projectId, reference: managed })
+
+    expect(projectImage).toEqual({
+      bytes: pngBytes,
+      contentDigest: createHash("sha256").update(pngBytes).digest("hex"),
+      mimeType: "image/png",
+      name: "hero.png",
+      size: pngBytes.byteLength,
+    })
+    expect(managedImage).toEqual({
+      bytes: webpBytes,
+      contentDigest: managed.sha256,
+      mimeType: "image/webp",
+      name: "outside.webp",
+      size: webpBytes.byteLength,
+    })
+    expect(JSON.stringify([projectImage, managedImage])).not.toContain(projectRoot)
+    expect(JSON.stringify([projectImage, managedImage])).not.toContain("convaxProjectResource")
+
+    await fs.writeFile(path.join(projectRoot, ".convax", "assets", "blobs", managed.sha256), webpBytes.subarray(0, 12))
+    await expect(hydrator.readImage({ maximumBytes: 1024, projectId, reference: managed })).rejects.toThrow(/digest/i)
+  })
+
+  test("accepts an image at the exact configured byte ceiling", async () => {
+    const exact = Buffer.alloc(16 * 1024 * 1024, 1)
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(exact)
+    await fs.writeFile(path.join(projectRoot, "exact.png"), exact)
+    const bounded = new ProjectCanvasResourceHydrator(manager, assets, () => "convax-asset://bounded", {
+      maximumMediaBytes: exact.byteLength,
+    })
+
+    const result = await bounded.readImage({
+      maximumBytes: exact.byteLength,
+      projectId,
+      reference: { kind: "project-file", path: "exact.png" },
+    })
+
+    expect(result.size).toBe(exact.byteLength)
+    expect(result.contentDigest).toBe(createHash("sha256").update(exact).digest("hex"))
+  })
+
+  test("rejects image bytes that exceed the bound or disagree with declared metadata", async () => {
+    await fs.writeFile(path.join(projectRoot, "fake.jpg"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    await fs.writeFile(path.join(projectRoot, "large.png"), Buffer.alloc(17, 1))
+    await fs.writeFile(path.join(projectRoot, "bounded.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]))
+
+    await expect(
+      hydrator.readImage({
+        maximumBytes: 1024,
+        projectId,
+        reference: { kind: "project-file", path: "fake.jpg" },
+      }),
+    ).rejects.toThrow(/MIME|signature/i)
+    await expect(
+      hydrator.readImage({
+        maximumBytes: 16,
+        projectId,
+        reference: { kind: "project-file", path: "large.png" },
+      }),
+    ).rejects.toThrow(/large/i)
+    await expect(
+      hydrator.readImage({
+        maximumBytes: 1025,
+        projectId,
+        reference: { kind: "project-file", path: "bounded.png" },
+      }),
+    ).rejects.toThrow(/limit/i)
+    await expect(
+      hydrator.readImage({
+        maximumBytes: 1024,
+        projectId,
+        reference: { kind: "project-directory", path: "images" },
+      }),
+    ).rejects.toThrow(/directories/i)
+  })
+
   test("hydrates a full document while preserving the typed reference and revision", async () => {
     await fs.writeFile(path.join(projectRoot, "brief.txt"), "hello")
     const reference = { kind: "project-file", path: "brief.txt" } as const

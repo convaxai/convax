@@ -56,7 +56,7 @@
 - Test: `packages/canvas/src/application/persistence.test.ts`
 - Modify: `packages/canvas/src/application/index.ts`
 
-- [ ] **Step 1: Write failing v2 envelope and rejection tests**
+- [x] **Step 1: Write failing v2 envelope and rejection tests**
 
 Add these cases to `packages/canvas/src/application/persistence.test.ts`:
 
@@ -98,7 +98,7 @@ test("distinguishes unsupported versions from malformed v2 documents", () => {
 })
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -108,7 +108,7 @@ bun test packages/canvas/src/application/persistence.test.ts
 
 Expected: failure because serialization still writes a naked document and `UnsupportedCanvasDocumentVersionError` does not exist.
 
-- [ ] **Step 3: Implement the exact v2 envelope**
+- [x] **Step 3: Implement the exact v2 envelope**
 
 Replace the persistence parsing/serialization boundary with:
 
@@ -159,7 +159,7 @@ export function serializeCanvasDocument(document: CanvasDocument) {
 
 Export the version and error from `packages/canvas/src/application/index.ts`.
 
-- [ ] **Step 4: Run Canvas persistence and package tests**
+- [x] **Step 4: Run Canvas persistence and package tests**
 
 Run:
 
@@ -171,7 +171,7 @@ bun --cwd packages/canvas test
 
 Expected: all commands exit 0.
 
-- [ ] **Step 5: Commit the envelope cutover**
+- [x] **Step 5: Commit the envelope cutover**
 
 ```bash
 git add packages/canvas/src/application/persistence.ts packages/canvas/src/application/persistence.test.ts packages/canvas/src/application/index.ts
@@ -191,7 +191,7 @@ git commit -m "feat(canvas): require v2 document envelope"
 - Modify: `packages/canvas/src/application/commands.ts`
 - Test: `packages/canvas/src/application/application.test.ts`
 
-- [ ] **Step 1: Write failing Project reference tests**
+- [x] **Step 1: Write failing Project reference tests**
 
 Replace the path-only tests in `packages/project/src/canvas/project-resources.test.ts` with cases shaped like:
 
@@ -233,7 +233,7 @@ describe("Project resource references", () => {
 })
 ```
 
-- [ ] **Step 2: Write failing transient-state/dehydrate tests**
+- [x] **Step 2: Write failing transient-state/dehydrate tests**
 
 Add a test that creates one text and one image node with transient state and verifies dehydrate strips every runtime byte while retaining the concrete references:
 
@@ -278,7 +278,7 @@ test("dehydrates resource nodes to references and view state only", () => {
 })
 ```
 
-- [ ] **Step 3: Run both tests and verify RED**
+- [x] **Step 3: Run both tests and verify RED**
 
 Run:
 
@@ -288,7 +288,7 @@ bun test packages/project/src/canvas/project-resources.test.ts packages/canvas/s
 
 Expected: failures because the typed union, metadata key, and `resourceState` do not exist.
 
-- [ ] **Step 4: Define Canvas transient resource state**
+- [x] **Step 4: Define Canvas transient resource state**
 
 In `packages/canvas/src/types.ts`, replace durable `text`, `richText`, `url`, `posterUrl`, and folder `path` fields with a transient state union:
 
@@ -334,7 +334,7 @@ export interface CanvasFolderNodeData extends CanvasBaseNodeData {
 
 `resourceState` is optional only because a durable document intentionally omits it; every mounted resource node receives it from preparation or hydration. Make `CanvasTextResource`, `CanvasResource`, and `CanvasFolderResource` carry required `state: CanvasResourceRuntimeState` plus `metadata`, and update the three node factories to copy `state` into `resourceState`. Text nodes and text resources persist `name` plus `mimeType`, never `format`; the UI derives Markdown/plain behavior with `getCanvasTextFileFormat`. Do not add aliases for the removed durable fields, and reject persisted `format` as a legacy content shape during dehydration/load.
 
-- [ ] **Step 5: Implement the Project reference owner**
+- [x] **Step 5: Implement the Project reference owner**
 
 In `packages/project/src/canvas/project-resources.ts`, define and export:
 
@@ -363,7 +363,7 @@ export function managedAssetPath(sha256: string) {
 4. reject legacy `convaxProjectFile`, `text`, `richText`, `url`, `posterUrl`, and `path` keys;
 5. leave agent, group, and Plugin-specific node state unchanged except for recursively rejecting native absolute paths and runtime URL schemes inside host-owned resource slots.
 
-- [ ] **Step 6: Update Canvas node creation and business commands**
+- [x] **Step 6: Update Canvas node creation and business commands**
 
 Change the factories in `packages/canvas/src/document.ts` and `resources.add` application command to accept the new prepared shape. A text node creation must look like:
 
@@ -394,7 +394,7 @@ export function createTextNode(input: {
 
 Update test fixtures to provide explicit `{ metadata: {}, resourceState: { status: "ready", text: "..." } }`; do not keep a `text` compatibility parameter.
 
-- [ ] **Step 7: Run Canvas and Project package gates**
+- [x] **Step 7: Run Canvas and Project package gates**
 
 Run:
 
@@ -408,7 +408,7 @@ bun run pack:check
 
 Expected: all commands exit 0 and no persisted-document test contains inline resource bytes.
 
-- [ ] **Step 8: Commit the resource model**
+- [x] **Step 8: Commit the resource model**
 
 ```bash
 git add packages/canvas packages/project/src/canvas
@@ -426,7 +426,7 @@ git commit -m "feat(project): add typed canvas resource references"
 - Modify: `packages/project/src/node/project-manager-helpers.ts`
 - Test: `packages/project/src/node/project-manager.test.ts`
 
-- [ ] **Step 1: Write failing deduplication and immutable-copy tests**
+- [x] **Step 1: Write failing deduplication and immutable-copy tests**
 
 Create `project-managed-asset-store.test.ts` with a temp Project root and these assertions:
 
@@ -459,7 +459,7 @@ test("deduplicates equal external bytes and never retains the source path", asyn
 
 Add separate tests for concurrent equal imports, a symlink input, a directory input, an existing digest whose bytes do not hash to its filename, and a source located inside the Project.
 
-- [ ] **Step 2: Run the store test and verify RED**
+- [x] **Step 2: Run the store test and verify RED**
 
 Run:
 
@@ -469,7 +469,7 @@ bun test packages/project/src/node/project-canvas/project-managed-asset-store.te
 
 Expected: module-not-found failure for the new store.
 
-- [ ] **Step 3: Implement one mutex per Project**
+- [x] **Step 3: Implement one mutex per Project**
 
 Implement this internal primitive in the store file:
 
@@ -498,7 +498,7 @@ class ProjectAssetMutex {
 
 Use a queue implementation whose cleanup comparison refers to the exact queued promise; add a focused concurrency test proving operations for one Project serialize and different Projects may overlap.
 
-- [ ] **Step 4: Implement streamed content-addressed admission**
+- [x] **Step 4: Implement streamed content-addressed admission**
 
 Expose this narrow class API:
 
@@ -541,9 +541,9 @@ export class ProjectManagedAssetStore {
 }
 ```
 
-Admission must run inside `runExclusive`, open the source without following a final symlink, stream into `.convax/assets/.staging/<operation-id>` with `wx`, hash actual bytes, enforce a configurable size ceiling whose v1 default is 8 GiB, fsync/close, re-hash staging, and publish to `blobs/<sha256>` with a no-replace operation. If a concurrent winner exists, verify its digest before deleting staging. Every error removes only the operation's staging file and must identify that file by the inode created by this operation rather than pathname alone. Revalidate the real staging/blob directory identities around create and publish so parent-directory replacement fails closed. Also provide `withAdmittedExternalFiles(input, commit)`; it admits all input files and invokes the supplied async `commit(references)` callback before releasing the Project mutex, so a due orphan cannot be deleted between reuse and Canvas commit. `withVerifiedReferences` similarly verifies every supplied blob and invokes `commit()` under one lock. It is the sole locking operation allowed to reuse the still-active same-store/same-Project async lock context, so an admission callback can reach repository save without self-deadlocking; all other nested locking calls remain forbidden, and an expired/escaped context must enqueue normally.
+Admission must run inside `runExclusive`, open the source without following a final symlink, stream into `.convax/assets/.staging/<operation-id>` with `wx`, hash actual bytes, enforce a configurable size ceiling whose v1 default is 8 GiB, fsync/close, re-hash staging, and publish to `blobs/<sha256>` with a no-replace operation. If a concurrent winner exists, verify its digest before deleting staging. Every error removes only the operation's staging file and must identify that file by the inode created by this operation rather than pathname alone. Revalidate the real staging/blob directory identities around create and publish so parent-directory replacement fails closed. Also provide `withAdmittedLocalFiles(input, commit)`; it admits all input files and invokes the supplied async `commit(references)` callback before releasing the Project mutex, so a due orphan cannot be deleted between reuse and Canvas commit. `withVerifiedReferences` similarly verifies every supplied blob and invokes `commit()` under one lock. It is the sole locking operation allowed to reuse the still-active same-store/same-Project async lock context, so an admission callback can reach repository save without self-deadlocking; all other nested locking calls remain forbidden, and an expired/escaped context must enqueue normally.
 
-- [ ] **Step 5: Close general Project Files access to private assets**
+- [x] **Step 5: Close general Project Files access to private assets**
 
 Delete `managedAssetDirectory`, `assertCopyOrImportTarget(..., true)`, `deleteManagedAssets`, and managed branches from `copyEntries`, `importEntries`, and `writeTextFile`. Add regression tests:
 
@@ -557,7 +557,7 @@ for (const operation of ["copyEntries", "importEntries", "writeTextFile"] as con
 
 Keep `resolveProjectRoot`, typed private storage, and `resolvePrivatePath` available only to their dedicated Node callers. Every general renderer-safe Project Files read, listing, path-resolution, and mutation method must reject every `.convax` case variant.
 
-- [ ] **Step 6: Run Project tests and pack check**
+- [x] **Step 6: Run Project tests and pack check**
 
 Run:
 
@@ -571,7 +571,7 @@ bun run pack:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 7: Commit managed storage**
+- [x] **Step 7: Commit managed storage**
 
 ```bash
 git add packages/project/src/node
@@ -596,7 +596,7 @@ git commit -m "feat(project): add content-addressed managed assets"
 - Modify: `packages/desktop/src/main/index.ts`
 - Test: `packages/desktop/src/main/open-project-ipc.test.ts`
 
-- [ ] **Step 1: Write failing business-source validation tests**
+- [x] **Step 1: Write failing business-source validation tests**
 
 Change Canvas resource sources to these host-neutral inputs:
 
@@ -654,7 +654,7 @@ test("passes new text to host preparation without putting text into the command 
 })
 ```
 
-- [ ] **Step 2: Write failing Project preparation tests**
+- [x] **Step 2: Write failing Project preparation tests**
 
 Replace the old copying and remote URL tests with:
 
@@ -703,7 +703,7 @@ test("accepts only Project directories", async () => {
 
 Add a native-only test for `admitExternalFiles` that passes absolute source paths and verifies returned items contain `managed-asset` references and no source path.
 
-- [ ] **Step 3: Run the focused tests and verify RED**
+- [x] **Step 3: Run the focused tests and verify RED**
 
 Run:
 
@@ -715,7 +715,7 @@ bun test packages/project/src/node/project-canvas/project-canvas-document-reposi
 
 Expected: failures from removed-source expectations and missing file-first Project ports.
 
-- [ ] **Step 4: Implement a narrow Project publication port**
+- [x] **Step 4: Implement a narrow Project publication port**
 
 Create these internal contracts beside `ProjectCanvasResourcePreparation`:
 
@@ -735,7 +735,7 @@ export type ProjectCanvasResourceHost = Pick<ProjectFilesClient, "listDirectory"
 
 Implement `publishText` in a focused Node file `packages/project/src/node/project-canvas/project-file-publisher.ts`. It must normalize the display stem, create `.convax/staging/<operation-id>` on the Project filesystem, write UTF-8 bytes with `wx`, atomically publish with no replace to `Notes/<stem>-<short-id>.md`, return a SHA-256 `contentRevision`, and retain the published file after return. It must never overwrite a file, directory, or symlink, and it must never pathname-unlink successful or failed Project-publication staging aliases; Task 9 reclaims them after 24 hours. Repeated directory-identity checks still fail closed on ordinary symlinks and replacements completed before a check, but portable Node cannot make parent-directory validation and `link` one atomic operation, so the publisher does not claim to resist a same-UID actor replacing current-Project directory entries—including `.convax/` or `Notes/`—between validation and the syscall; §2.2 explicitly excludes that direct-tampering case from the threat model.
 
-- [ ] **Step 5: Implement direct preparation and external admission**
+- [x] **Step 5: Implement direct preparation and external admission**
 
 Give `ProjectCanvasResourcePreparation` this constructor and native-only method:
 
@@ -747,15 +747,15 @@ constructor(
   private readonly mediaInspector?: ProjectCanvasMediaInspector,
 ) {}
 
-withAdmittedExternalFiles<T>(input: {
+withAdmittedLocalFiles<T>(input: {
   files: readonly { mediaType?: string; name: string; sourcePath: string; sourceId: string }[]
   projectId: string
 }, commit: (prepared: CanvasResourcePreparationResult) => Promise<T>): Promise<T>
 ```
 
-`host-file` must read metadata/content directly from its existing Project path and never invoke `copyEntries`. `host-directory` must call `listDirectory` and return `project-directory`. `new-text` must publish first, then return a `project-file` text item. `withAdmittedExternalFiles` must reject directories, call the managed store for regular external files only, map the returned typed references to prepared items, and invoke `commit` before releasing the Project asset mutex. Do not expose a second external-admission API that returns prepared items after releasing the lock. The old path-based media inspector must not receive a private managed-asset path; external items may remain `stale` until hydration.
+`host-file` must read metadata/content directly from its existing Project path and never invoke `copyEntries`. `host-directory` must call `listDirectory` and return `project-directory`. `new-text` must publish first, then return a `project-file` text item. `withAdmittedLocalFiles` must reject directories, call the managed store for regular external files only, map the returned typed references to prepared items, and invoke `commit` before releasing the Project asset mutex. Do not expose a second external-admission API that returns prepared items after releasing the lock. The old path-based media inspector must not receive a private managed-asset path; external items may remain `stale` until hydration.
 
-- [ ] **Step 6: Make repository save validate and dehydrate atomically**
+- [x] **Step 6: Make repository save validate and dehydrate atomically**
 
 In `ProjectCanvasDocumentRepository.load`, parse the v2 envelope and then run the same strict Project-owned reference validation used for save before returning a live document. A syntactically valid Canvas document with missing, malformed, or kind-incompatible Project references must fail without touching the catalog or mutating the original bytes. Let `UnsupportedCanvasDocumentVersionError` propagate unchanged.
 
@@ -775,11 +775,11 @@ const result = await this.storage.writePrivateTextFile({
 
 Wrap the private write and catalog touch in `assets.withVerifiedReferences({ projectId: request.ref.scopeId, references }, commit)`, where `references` is the exact validated list collected from `durableDocument`. This makes every managed-reference admission—including clipboard paste and duplication—serialize with GC. Add tests that capture the original stored bytes and assert every load failure leaves them byte-for-byte unchanged, plus a barrier test proving GC cannot pass the repository save between digest verification and the committed document write. Also cover the real external-admission callback → Canvas application → repository save chain to prove the same active lock context does not self-deadlock and is not released before the document write.
 
-- [ ] **Step 7: Hard-cut Desktop composition to one store instance**
+- [x] **Step 7: Hard-cut Desktop composition to one store instance**
 
 At the Desktop composition root, construct exactly one `ProjectManagedAssetStore` for the Project manager/root resolver and inject that same instance into resource preparation and every `ProjectCanvasDocumentRepository`; retain it for the later GC scheduler. Construct and inject the concrete `ProjectFilePublisher` there as well. Update every repository/preparation test harness and Desktop constructor call in this task. Do not add optional constructor parameters, fallback stores, or old preparation signatures.
 
-- [ ] **Step 8: Run package gates**
+- [x] **Step 8: Run package gates**
 
 Run:
 
@@ -793,7 +793,7 @@ bun run pack:check
 
 Expected: all commands exit 0.
 
-- [ ] **Step 9: Commit Project resource preparation**
+- [x] **Step 9: Commit Project resource preparation**
 
 ```bash
 git add packages/canvas/src/application packages/project/src/canvas packages/project/src/node/project-canvas packages/desktop/src/main
@@ -898,11 +898,17 @@ const canvasResourceChannels = {
 The Main `add` handler must validate the trusted sender and resolve the active Project/Canvas for that exact
 `event.sender`; it must not select the first mounted Renderer. Renderer-supplied Project/Canvas ids are stale
 guards only, and Main injects the fixed UI actor. Convert consumed native source paths into
-`ProjectCanvasResourcePreparation.withAdmittedExternalFiles` and execute the same
+`ProjectCanvasResourcePreparation.withAdmittedLocalFiles` and execute the same
 `CanvasResourceBusinessService` used by Agent and generation. Keep revision retry semantics in the business
 service; do not duplicate placement or relation logic in IPC.
 
-For local files, call `ProjectManagedAssetStore.withAdmittedExternalFiles` and keep its Project mutex through the resulting Canvas application commit. Refactor `CanvasResourceBusinessService` to expose a host-only `addPreparedResources(request, prepared)` method that reuses the same validation, placement, relation, conflict, and command-id logic as `addResources`. Project-path and `new-text` sources continue through `addResources`; pre-admitted external items use `addPreparedResources` inside the mutex callback.
+For local files, call `ProjectManagedAssetStore.withAdmittedLocalFiles`, classify the real path as a direct
+`project-file` or an external `managed-asset`, and keep its Project mutex through the resulting Canvas
+application commit. Refactor `CanvasResourceBusinessService` to expose a host-only
+`addPreparedResources(request, prepared)` method that reuses the same validation, placement, relation,
+conflict, and command-id logic as `addResources`. Main places a command-id cache before physical preparation.
+For a mixed local-file/`new-text` batch, it publishes the Project sources before entering the asset mutex, then
+commits the combined prepared set with `request.sources` emptied so preparation cannot re-enter the lock.
 
 Extend the real admission -> `addPreparedResources` -> repository-save integration test to prove the Project
 mutex remains held through the commit. The seven-day orphan/GC race is tested with the real GC in Task 9,
@@ -1710,7 +1716,7 @@ git commit -m "feat(project): garbage collect unreferenced assets"
 - Modify: `docs/architecture.md`
 - Modify: `packages/project/AGENTS.md`
 
-- [ ] **Step 1: Add a forbidden-legacy repository test**
+- [x] **Step 1: Add a forbidden-legacy repository test**
 
 Add a table-driven test that stores v2 envelopes containing each removed shape and expects rejection without writes:
 
@@ -1728,7 +1734,7 @@ test.each([
 })
 ```
 
-- [ ] **Step 2: Run the rejection test and verify RED**
+- [x] **Step 2: Run the rejection test**
 
 Run:
 
@@ -1736,9 +1742,10 @@ Run:
 bun test packages/project/src/node/project-canvas/project-canvas-document-repository.test.ts
 ```
 
-Expected: at least one legacy shape is still accepted.
+Observed: the new table was already green because the v2 dehydration validator added
+earlier in the cutover rejected all four shapes. No compatibility path was added.
 
-- [ ] **Step 3: Delete every legacy production symbol**
+- [x] **Step 3: Delete every legacy production symbol**
 
 Remove these exports and code paths rather than aliasing them:
 
@@ -1756,7 +1763,7 @@ convaxProjectFile
 
 Update JianYing, FFmpeg, Web Plugin connected-image reads, generation staging, and Agent snapshots to branch on `ProjectResourceReference.kind`. `project-file` resolves with Project containment; `managed-asset` resolves by digest; `project-directory` is never eligible as file/media input.
 
-- [ ] **Step 4: Search for forbidden persisted forms**
+- [x] **Step 4: Search for forbidden persisted forms**
 
 Run:
 
@@ -1767,7 +1774,7 @@ rg -n "\.convax/assets/|data:|blob:" packages docs scripts --glob '!**/dist/**'
 
 Expected: the first command has no production hit outside explicit rejection fixtures and historical design prose. Review every second-command hit: managed storage paths must be only `blobs`, `.staging`, or `gc.json`; `data:`/`blob:` hits must be transient renderer tests, CSS, or non-Canvas protocols and must not enter Canvas persistence.
 
-- [ ] **Step 5: Update end-to-end smoke assertions**
+- [x] **Step 5: Update end-to-end smoke assertions**
 
 Extend `scripts/desktop-open-project-built-smoke.ts` to:
 
@@ -1779,12 +1786,16 @@ Extend `scripts/desktop-open-project-built-smoke.ts` to:
 6. seed an old document and assert the app reports unsupported schema without changing bytes.
 
 The smoke may use Main-owned fixture setup, but renderer-visible results must never contain native paths.
+The built smoke covers every renderer-reachable item above. The generation
+publication failure case remains in the real `GenerationCanvasService` integration
+suite because the built application intentionally has no test-only authorized Tool
+Plugin executable; the smoke does not forge a Main handler or weaken that boundary.
 
-- [ ] **Step 6: Synchronize canonical documentation**
+- [x] **Step 6: Synchronize canonical documentation**
 
 Re-read the final implementation and update only concrete names that differ from the design. Keep the following decisions unchanged: no Resource Catalog, no migration/dual read, no automatic move tracking, no URL importer, one seven-day GC grace, `gc.json` below assets, and partial success that retains user-visible files.
 
-- [ ] **Step 7: Run the complete repository gate**
+- [x] **Step 7: Run the complete repository gate**
 
 Run:
 
@@ -1795,7 +1806,7 @@ bun check
 
 Expected: `git diff --check` exits 0; `bun check` completes lint, typecheck, all tests, package boundaries, pack smoke, Desktop build, and open-project smoke with exit 0.
 
-- [ ] **Step 8: Request final two-stage review**
+- [x] **Step 8: Request final two-stage review**
 
 Use `superpowers:requesting-code-review` for:
 
@@ -1804,7 +1815,13 @@ Use `superpowers:requesting-code-review` for:
 
 Resolve every P1/P2 finding and rerun `bun check` after the final change.
 
-- [ ] **Step 9: Commit the completed cutover**
+Observed: two independent read-only reviewers found five P2 issues covering local-file
+classification, mixed-batch lock re-entry, durable resource field validation, legacy
+Canvas migration, and physical-publication replay. All five were fixed at their
+ownership boundaries, both reviewers returned `APPROVED`, and the final `bun check`
+completed with exit 0 after the last review fix.
+
+- [x] **Step 9: Commit the completed cutover**
 
 ```bash
 git add AGENTS.md docs packages scripts
@@ -1813,14 +1830,14 @@ git commit -m "feat(canvas): complete project asset cutover"
 
 ## Final acceptance checklist
 
-- [ ] Project files and directories persist only normalized typed references.
-- [ ] Project files are never copied merely because they enter Canvas.
-- [ ] Equal external bytes share one immutable `blobs/<sha256>` file.
-- [ ] Original external paths are absent from Canvas and Project metadata.
-- [ ] Text and generation outputs publish under `Notes/` and `Generated/` before Canvas commit.
-- [ ] Canvas JSON contains no text body, binary, runtime URL, or native path.
-- [ ] File edits invalidate runtime state; delete/recreate transitions through missing without rewriting references.
-- [ ] Managed asset GC performs a fresh all-Canvas scan, saves timing state, then deletes only seven-day orphans.
-- [ ] Unsupported old documents remain byte-for-byte unchanged and outside GC roots.
-- [ ] No Resource Catalog, asset rollback WAL, move WAL, automatic rename inference, or URL importer exists.
-- [ ] `bun check` exits 0 on the final tree.
+- [x] Project files and directories persist only normalized typed references.
+- [x] Project files are never copied merely because they enter Canvas.
+- [x] Equal external bytes share one immutable `blobs/<sha256>` file.
+- [x] Original external paths are absent from Canvas and Project metadata.
+- [x] Text and generation outputs publish under `Notes/` and `Generated/` before Canvas commit.
+- [x] Canvas JSON contains no text body, binary, runtime URL, or native path.
+- [x] File edits invalidate runtime state; delete/recreate transitions through missing without rewriting references.
+- [x] Managed asset GC performs a fresh all-Canvas scan, saves timing state, then deletes only seven-day orphans.
+- [x] Unsupported old documents remain byte-for-byte unchanged and outside GC roots.
+- [x] No Resource Catalog, asset rollback WAL, move WAL, automatic rename inference, or URL importer exists.
+- [x] `bun check` exits 0 on the final tree.

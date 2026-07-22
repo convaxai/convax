@@ -1,6 +1,7 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
 import type { ProjectRecord } from "@convax/project"
 import type { ProjectChangeEvent } from "@convax/project-files"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { DesktopProjectManager } from "./project-ipc"
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
@@ -19,28 +20,31 @@ const windows: TestWindow[] = []
 const projectCreationDirectory = "/Documents/Convax"
 const showOpenDialog = mock(async () => ({ canceled: true, filePaths: [] as string[] }))
 
-void mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => undefined,
-    getAllWindows: () => windows,
-  },
-  dialog: {
-    showOpenDialog,
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => handlers.delete(channel),
-  },
-  shell: {
-    openPath: async () => "",
-    showItemInFolder: () => undefined,
-  },
-}))
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => undefined,
+      getAllWindows: () => windows,
+    },
+    dialog: {
+      showOpenDialog,
+    },
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => handlers.delete(channel),
+    },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder: () => undefined,
+    },
+  })
+})
 
 afterEach(() => {
   handlers.clear()
   windows.splice(0)
   showOpenDialog.mockClear()
+  resetElectronMock()
 })
 
 function project(id: string, missing = false): ProjectRecord {
@@ -236,7 +240,6 @@ test("creates a named project in the injected user workspace without opening a d
     moveEntries: unsupported,
     readFile: unsupported,
     readFileInfo: unsupported,
-    readManagedImageFile: unsupported,
     readTextFile: unsupported,
     readTextPreview: unsupported,
     rename: unsupported,

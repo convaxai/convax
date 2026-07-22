@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { managedAssetPath } from "../../canvas/project-resources"
+import { managedAssetPath, type ProjectResourceReference } from "../../canvas/project-resources"
 import { ProjectManagedAssetStore, type ProjectRootResolver } from "./project-managed-asset-store"
 
 const projectId = "project-a"
@@ -90,6 +90,35 @@ describe("ProjectManagedAssetStore admission", () => {
 
     await fs.writeFile(firstSource, "changed after admission")
     expect(await fs.readFile(path.join(projectRoot, managedAssetPath(first.sha256)))).toEqual(pngBytes)
+  })
+
+  test("classifies Project-local files as direct references and copies only external files", async () => {
+    const localPath = path.join(projectRoot, "Images", "local.png")
+    const externalPath = await writeExternal("outside.png", "outside")
+    await fs.mkdir(path.dirname(localPath), { recursive: true })
+    await fs.writeFile(localPath, "local")
+    const store = new ProjectManagedAssetStore(roots)
+
+    const references = await store.withAdmittedLocalFiles(
+      {
+        files: [
+          { mediaType: "image/png", name: "local.png", sourcePath: localPath },
+          { mediaType: "image/png", name: "outside.png", sourcePath: externalPath },
+        ],
+        projectId,
+      },
+      async (value) => value,
+    )
+
+    expect(references[0]).toEqual({ kind: "project-file", path: "Images/local.png" })
+    expect(references[1]).toEqual({
+      kind: "managed-asset",
+      mediaType: "image/png",
+      name: "outside.png",
+      sha256: digest("outside"),
+    })
+    expect(await fs.readdir(path.join(projectRoot, ".convax", "assets", "blobs"))).toEqual([digest("outside")])
+    expect(JSON.stringify(references)).not.toContain(temporaryRoot)
   })
 
   test("publishes concurrent equal imports once without clobbering either reference", async () => {
@@ -299,13 +328,15 @@ describe("ProjectManagedAssetStore verification", () => {
     const queuedEntered = deferred()
     let admissionSettled = false
 
-    const admission = store.withAdmittedExternalFiles(
+    const admission = store.withAdmittedLocalFiles(
       {
         files: [{ name: "nested.txt", sourcePath }],
         projectId,
       },
       async (references) => {
-        void store.withVerifiedReferences({ projectId, references }, async () => {
+        const managed = references.filter((reference) => reference.kind === "managed-asset")
+        if (managed.length !== references.length) throw new Error("Expected only external managed assets")
+        void store.withVerifiedReferences({ projectId, references: managed }, async () => {
           nestedEntered.resolve()
           await releaseNested.promise
         })
@@ -488,7 +519,7 @@ describe("ProjectManagedAssetStore verification", () => {
     const releaseCallback = deferred()
     const queuedEntered = deferred()
 
-    const admitted = store.withAdmittedExternalFiles(
+    const admitted = store.withAdmittedLocalFiles(
       {
         files: [
           { mediaType: "text/plain", name: "first.txt", sourcePath: firstSource },
@@ -497,7 +528,11 @@ describe("ProjectManagedAssetStore verification", () => {
         projectId,
       },
       async (references) => {
-        expect(references.map((reference) => reference.name)).toEqual(["first.txt", "second.txt"])
+        if (references.some((reference) => reference.kind !== "managed-asset")) {
+          throw new Error("Expected only external managed assets")
+        }
+        const managed = references as Array<Extract<ProjectResourceReference, { kind: "managed-asset" }>>
+        expect(managed.map((reference) => reference.name)).toEqual(["first.txt", "second.txt"])
         expect(references[0]).toHaveProperty("mediaType", "text/plain")
         expect(JSON.stringify(references)).not.toContain(externalRoot)
         callbackEntered.resolve()

@@ -1,4 +1,5 @@
 import type { CanvasDocumentClient } from "@convax/canvas/application"
+import type { ProjectManagedAssetStore } from "@convax/project/node"
 
 import type { JianyingCanvasExportRequest, JianyingClient, JianyingDraftStatusResult } from "../jianying-contracts"
 import type { JianyingIntegrationService } from "./jianying-service"
@@ -15,6 +16,7 @@ export class JianyingCanvasService implements JianyingClient {
 
   constructor(
     private readonly input: {
+      assets: Pick<ProjectManagedAssetStore, "resolve">
       documents: Pick<CanvasDocumentClient, "load">
       integration: Pick<JianyingIntegrationService, "exportMedia" | "getDraftStatus">
       isEnabled: () => Promise<boolean>
@@ -22,7 +24,9 @@ export class JianyingCanvasService implements JianyingClient {
       projects: JianyingProjectPathResolver
     },
   ) {
-    this.media = input.media ?? new ManagedCanvasMediaResolver({ documents: input.documents, projects: input.projects })
+    this.media =
+      input.media ??
+      new ManagedCanvasMediaResolver({ assets: input.assets, documents: input.documents, projects: input.projects })
   }
 
   async getDraftStatus(): Promise<JianyingDraftStatusResult> {

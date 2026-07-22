@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createCanvasSelectionActionContext, createMediaNode } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { renderToStaticMarkup } from "react-dom/server"
 import { MediaOperationDialog, shouldCloseMediaDialogAfterFailure } from "./media-operation-dialog"
 import type {
@@ -19,9 +19,16 @@ function request(editor: MediaOperationEditor): MediaOperationDialogRequest {
       height: 720,
       id: "resource",
       kind: "video",
-      metadata: { [projectFileReferenceKey]: { path: ".convax/assets/video/source.mp4" } },
+      metadata: {
+        [projectResourceReferenceKey]: {
+          kind: "managed-asset",
+          mediaType: "video/mp4",
+          name: "source.mp4",
+          sha256: "a".repeat(64),
+        },
+      },
       mimeType: "video/mp4",
-      url: "convax-asset://project/source.mp4",
+      state: { status: "ready", url: "convax-asset://project/source.mp4" },
       width: 1_280,
     },
   })

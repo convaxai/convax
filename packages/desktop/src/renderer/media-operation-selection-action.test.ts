@@ -6,7 +6,7 @@ import {
   createMediaNode,
   createTextNode,
 } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
   canResumeMediaOperation,
@@ -28,23 +28,52 @@ const managedVideo = createMediaNode({
     height: 720,
     id: "managed-video-resource",
     kind: "video",
-    metadata: { [projectFileReferenceKey]: { path: ".convax/assets/source.mp4" } },
+    metadata: {
+      [projectResourceReferenceKey]: {
+        kind: "managed-asset",
+        mediaType: "video/mp4",
+        name: "source.mp4",
+        sha256: "a".repeat(64),
+      },
+    },
     mimeType: "video/mp4",
-    url: "convax-asset://project/source.mp4",
+    state: { status: "ready", url: "convax-asset://project/source.mp4" },
     width: 1_280,
+  },
+})
+const projectFileVideo = createMediaNode({
+  id: "project-file-video",
+  position: { x: 40, y: 60 },
+  resource: {
+    id: "project-file-video-resource",
+    kind: "video",
+    metadata: {
+      [projectResourceReferenceKey]: { kind: "project-file", path: "Media/project-file-video.mp4" },
+    },
+    state: { status: "ready", url: "convax-project://Media/project-file-video.mp4" },
   },
 })
 const remoteVideo = createMediaNode({
   id: "remote-video",
   position: { x: 0, y: 0 },
-  resource: { id: "remote-video-resource", kind: "video", url: "https://example.com/source.mp4" },
+  resource: {
+    id: "remote-video-resource",
+    kind: "video",
+    metadata: {},
+    state: { status: "ready", url: "https://example.com/source.mp4" },
+  },
 })
-const text = createTextNode({ id: "text", position: { x: 0, y: 0 }, text: "no" })
+const text = createTextNode({
+  id: "text",
+  metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/no.md" } },
+  position: { x: 0, y: 0 },
+  resourceState: { status: "ready", text: "no" },
+})
 
 function selection(nodeIds: string[], edgeIds: string[] = []) {
   const document = createCanvasDocument({ id: "canvas", title: "Canvas" })
   return createCanvasSelectionActionContext(
-    { ...document, nodes: [managedVideo, remoteVideo, text], revision: 7 },
+    { ...document, nodes: [managedVideo, projectFileVideo, remoteVideo, text], revision: 7 },
     nodeIds,
     edgeIds,
     signal,
@@ -154,9 +183,10 @@ describe("manifest-driven media operation visibility", () => {
     )
   })
 
-  test("accepts exactly one managed Project video without a selected edge", () => {
+  test("accepts exactly one Project-backed video without a selected edge", () => {
     const action = listInstalledMediaOperationActions([operationPlugin()])[0]!
     expect(canRunMediaOperation(selection([managedVideo.id]), action)).toBe(true)
+    expect(canRunMediaOperation(selection([projectFileVideo.id]), action)).toBe(true)
     expect(isManagedProjectVideoSelection(selection([]))).toBe(false)
     expect(isManagedProjectVideoSelection(selection([managedVideo.id, text.id]))).toBe(false)
     expect(isManagedProjectVideoSelection(selection([managedVideo.id], ["edge"]))).toBe(false)
@@ -240,9 +270,11 @@ describe("manifest-driven media operation requests", () => {
       resource: {
         id: "silent-video-resource",
         kind: "video",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/silent-video.mp4" } },
+        metadata: {
+          [projectResourceReferenceKey]: { kind: "project-file", path: "Generated/silent-video.mp4" },
+        },
         mimeType: "video/mp4",
-        url: "convax-asset://project/silent-video.mp4",
+        state: { status: "ready", url: "convax-asset://project/silent-video.mp4" },
       },
     })
     const current = {

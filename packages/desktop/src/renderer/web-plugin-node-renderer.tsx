@@ -613,11 +613,10 @@ function WebPluginCanvasNode(
               ownsNode: (candidate) => matchesWebPluginCanvasNode(props.plugin, candidate.data),
               plugin: props.plugin,
               promptAgent: (input) => props.options.host.promptAgent(input),
-              readManagedProjectImage: (input) => props.options.host.readManagedProjectImage(input),
+              readConnectedImage: (input) => props.options.host.readConnectedImage(input),
               readProjectText: (input) => props.options.host.readProjectText(input),
               signal: controller.signal,
               updateNodeState: async (state) => {
-                await props.options.host.waitForGenerationProjection({ ...frame, signal: controller.signal })
                 const latest = await waitForWebPluginCanvasStateWrite({
                   frame,
                   getActiveContext: () => props.options.host.getActiveContext(),

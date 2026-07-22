@@ -1,7 +1,11 @@
 import { describe, expect, mock, test } from "bun:test"
 import { canvasResourcePartialFailureKind } from "../canvas-resource-private-contract"
-import { CanvasTextResourceConflictError } from "@convax/canvas"
-import { canvasResourceHydrateStaleIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
+import { CanvasTextResourceConflictError } from "@convax/canvas/application"
+import {
+  canvasResourceHydrateStaleIpcChannel,
+  canvasResourceReadConnectedImageIpcChannel,
+  canvasTextResourceIpcChannel,
+} from "../desktop-protocol"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
@@ -155,6 +159,66 @@ describe("preload Canvas resource client", () => {
       canvasId: "canvas-main",
       revision: document.revision,
     })
+  })
+
+  test("reads a connected image using only Canvas guards and node ids", async () => {
+    const invoke = mock(async () => ({
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      mimeType: "image/png",
+      name: "hero.png",
+      size: 8,
+    }))
+    const { client } = setup(invoke)
+
+    const result = await client.readConnectedImage({
+      canvasId: "canvas-main",
+      expectedRevision: 3,
+      nodeId: "image-node",
+      ownerNodeId: "plugin-node",
+    })
+
+    expect(invoke).toHaveBeenCalledWith(canvasResourceReadConnectedImageIpcChannel, {
+      canvasId: "canvas-main",
+      expectedRevision: 3,
+      nodeId: "image-node",
+      ownerNodeId: "plugin-node",
+    })
+    expect(result).toEqual({
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      mimeType: "image/png",
+      name: "hero.png",
+      size: 8,
+    })
+    const serialized = JSON.stringify(invoke.mock.calls)
+    expect(serialized).not.toContain("projectId")
+    expect(serialized).not.toContain("path")
+    expect(serialized).not.toContain("reference")
+    expect(serialized).not.toContain("body")
+  })
+
+  test("rejects non-canonical connected-image responses", async () => {
+    const valid = {
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      mimeType: "image/png",
+      name: "hero.png",
+      size: 8,
+    }
+    for (const response of [
+      { ...valid, path: "/native/hero.png" },
+      { ...valid, mimeType: "image/svg+xml", dataUrl: "data:image/svg+xml;base64,iVBORw0KGgo=" },
+      { ...valid, dataUrl: "data:image/png;base64,not canonical" },
+      { ...valid, size: 7 },
+    ]) {
+      const { client } = setup(mock(async () => response))
+      await expect(
+        client.readConnectedImage({
+          canvasId: "canvas-main",
+          expectedRevision: 3,
+          nodeId: "image-node",
+          ownerNodeId: "plugin-node",
+        }),
+      ).rejects.toThrow("Connected Canvas image response is invalid")
+    }
   })
 
   test("consumes a local File token into a Main-private path without exposing it in the result", async () => {

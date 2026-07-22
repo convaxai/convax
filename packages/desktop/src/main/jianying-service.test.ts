@@ -85,6 +85,13 @@ async function createDraftDirectory(root: string, name: string): Promise<Jianyin
   }
 }
 
+async function waitUntilDirectoryPredatesNow(directory: string) {
+  const { birthtimeMs } = await fs.lstat(directory)
+  while (Date.now() <= birthtimeMs) {
+    await new Promise((resolve) => setTimeout(resolve, 1))
+  }
+}
+
 describe("JianYing active draft detection", () => {
   test("selects only the outer application process", () => {
     expect(
@@ -443,14 +450,16 @@ describe("MacOSJianyingNativeAdapter", () => {
     const root = await temporaryRoot()
     const drafts = path.join(root, "drafts")
     const preExisting = await createDraftDirectory(drafts, "Old")
+    await waitUntilDirectoryPredatesNow(preExisting.draftPath)
+    const dispatchMaterialImport = mock<JianyingMaterialImportTransport["dispatchMaterialImport"]>(async () => ({
+      deepLinkDispatched: true,
+    }))
     const adapter = new MacOSJianyingNativeAdapter({
       platform: "darwin",
       sleep: async () => undefined,
       transport: {
         createDraft: async () => undefined,
-        dispatchMaterialImport: async () => {
-          throw new Error("media must not be sent to an unproven draft")
-        },
+        dispatchMaterialImport,
       },
     })
     adapter.inspect = async () => ({ draft: preExisting, processIds: [42], status: "active" })
@@ -461,7 +470,8 @@ describe("MacOSJianyingNativeAdapter", () => {
         expected: { processIds: [42], status: "no_active_draft" },
         target: "new",
       }),
-    ).rejects.toThrow("not proven to be newly created")
+    ).rejects.toThrow("outcome is unknown or partial")
+    expect(dispatchMaterialImport).not.toHaveBeenCalled()
   })
 
   test("keeps active-to-new export as an explicit WIP without creating a blank draft", async () => {

@@ -315,21 +315,26 @@ describe("Canvas generation services", () => {
 
   test("keeps empty text and media cards prompt-only instead of inventing unusable references", () => {
     const nodes = [
-      createTextNode({ id: "empty-text", position: { x: 0, y: 0 }, text: "   " }),
+      createTextNode({
+        id: "empty-text",
+        metadata: {},
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "   " },
+      }),
       createMediaNode({
         id: "empty-image",
         position: { x: 0, y: 0 },
-        resource: { id: "empty-image-resource", kind: "image", url: "" },
+        resource: { id: "empty-image-resource", kind: "image", metadata: {}, state: { status: "ready" } },
       }),
       createMediaNode({
         id: "empty-video",
         position: { x: 0, y: 0 },
-        resource: { id: "empty-video-resource", kind: "video", url: "" },
+        resource: { id: "empty-video-resource", kind: "video", metadata: {}, state: { status: "ready" } },
       }),
       createMediaNode({
         id: "empty-audio",
         position: { x: 0, y: 0 },
-        resource: { id: "empty-audio-resource", kind: "audio", url: "" },
+        resource: { id: "empty-audio-resource", kind: "audio", metadata: {}, state: { status: "ready" } },
       }),
     ]
 

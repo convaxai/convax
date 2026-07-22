@@ -1,9 +1,5 @@
 import type { CanvasSelectionActionContext } from "@convax/canvas"
-import {
-  getProjectFileReference,
-  isProjectCanvasManagedAssetPath,
-  requireProjectCanvasResourcePath,
-} from "@convax/project/canvas"
+import { getProjectResourceReference } from "@convax/project/canvas"
 import type {
   JianyingCanvasExportRequest,
   JianyingCanvasExportResult,
@@ -17,13 +13,8 @@ export function canExportSelectionToJianying(context: CanvasSelectionActionConte
     context.selectedNodes.length === context.selectedNodeIds.length &&
     context.selectedNodes.every((node) => {
       if (node.type !== "file" || (node.data.kind !== "image" && node.data.kind !== "video")) return false
-      const reference = getProjectFileReference(node.data.metadata)
-      if (!reference) return false
-      try {
-        return isProjectCanvasManagedAssetPath(requireProjectCanvasResourcePath(reference.path))
-      } catch {
-        return false
-      }
+      const reference = getProjectResourceReference(node.data.metadata)
+      return reference?.kind === "project-file" || reference?.kind === "managed-asset"
     })
   )
 }

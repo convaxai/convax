@@ -27,6 +27,23 @@ export interface ProjectResourceSnapshot {
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
 const legacyResourceKeys = ["format", "text", "richText", "url", "posterUrl", "path"] as const
+const baseDurableResourceDataKeys = ["kind", "label", "description", "status", "error", "metadata", "name"] as const
+const durableMediaDataKeys = new Set([
+  ...baseDurableResourceDataKeys,
+  "mimeType",
+  "fit",
+  "width",
+  "height",
+  "durationMs",
+])
+const durableResourceDataKeys = {
+  audio: durableMediaDataKeys,
+  file: durableMediaDataKeys,
+  folder: new Set(baseDurableResourceDataKeys),
+  image: durableMediaDataKeys,
+  text: new Set([...baseDurableResourceDataKeys, "mimeType"]),
+  video: durableMediaDataKeys,
+} as const
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 const mediaTypePattern = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const sha256Pattern = /^[a-f0-9]{64}$/
@@ -173,6 +190,14 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
       for (const key of legacyResourceKeys) {
         if (Object.hasOwn(node.data, key)) {
           throw new Error(`Canvas resource node ${node.id} contains legacy ${key} data`)
+        }
+      }
+      const allowedDataKeys = durableResourceDataKeys[
+        node.data.kind as keyof typeof durableResourceDataKeys
+      ] as ReadonlySet<string>
+      for (const key of Object.keys(node.data)) {
+        if (key !== "resourceState" && !allowedDataKeys.has(key)) {
+          throw new Error(`Canvas resource node ${node.id} contains unsupported durable ${key} data`)
         }
       }
 

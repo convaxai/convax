@@ -388,7 +388,7 @@ describe("project canvas resource preparation", () => {
       },
     ]
     const assets = {
-      async withAdmittedExternalFiles(
+      async withAdmittedLocalFiles(
         _input: unknown,
         commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
       ) {
@@ -400,7 +400,7 @@ describe("project canvas resource preparation", () => {
     } as unknown as ProjectManagedAssetStore
     const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
 
-    const result = await preparation.withAdmittedExternalFiles(
+    const result = await preparation.withAdmittedLocalFiles(
       {
         files: [
           {
@@ -429,6 +429,44 @@ describe("project canvas resource preparation", () => {
     expect(events).toEqual(["store:enter", "commit", "store:leave"])
   })
 
+  test("maps a Project-local File token to a direct project-file item without a managed copy", async () => {
+    const reference = { kind: "project-file" as const, path: "Images/local.png" }
+    const assets = {
+      async withAdmittedLocalFiles(
+        _input: unknown,
+        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+      ) {
+        return commit([reference])
+      },
+    } as unknown as ProjectManagedAssetStore
+    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
+
+    await preparation.withAdmittedLocalFiles(
+      {
+        files: [
+          {
+            mediaType: "image/png",
+            name: "local.png",
+            sourceId: "local",
+            sourcePath: "/native/project/Images/local.png",
+          },
+        ],
+        projectId: "project_one",
+      },
+      async ({ items }) => {
+        expect(getProjectResourceReference(items[0]!.metadata)).toEqual(reference)
+        expect(items[0]).toMatchObject({
+          id: "local",
+          kind: "image",
+          mimeType: "image/png",
+          name: "local.png",
+          state: { status: "stale" },
+        })
+        expect(JSON.stringify(items[0])).not.toContain("/native/project")
+      },
+    )
+  })
+
   test("classifies admitted managed Markdown and plain text without reading source bytes", async () => {
     for (const [name, mediaType] of [
       ["brief.md", "text/markdown"],
@@ -441,7 +479,7 @@ describe("project canvas resource preparation", () => {
         sha256: "b".repeat(64),
       }
       const assets = {
-        async withAdmittedExternalFiles(
+        async withAdmittedLocalFiles(
           _input: unknown,
           commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
         ) {
@@ -450,7 +488,7 @@ describe("project canvas resource preparation", () => {
       } as unknown as ProjectManagedAssetStore
       const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
 
-      await preparation.withAdmittedExternalFiles(
+      await preparation.withAdmittedLocalFiles(
         {
           files: [
             {
@@ -504,7 +542,7 @@ function unusedPublisher(): ProjectCanvasFilePublisher {
 
 function unusedAssets() {
   return {
-    async withAdmittedExternalFiles() {
+    async withAdmittedLocalFiles() {
       throw new Error("Managed assets must not be used")
     },
   } as unknown as ProjectManagedAssetStore

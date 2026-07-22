@@ -91,7 +91,7 @@ import { ServiceCatalogController } from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
-import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
+import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import { createWebPluginCanvasContribution, type WebPluginCanvasHost } from "./web-plugin-canvas"
 import { WebPluginGenerationProjectionCoordinator } from "./web-plugin-generation-projection"
 import { webPluginCanvasRendererId } from "../plugin-canvas-node"
@@ -547,9 +547,18 @@ function App() {
         }
         return result
       },
-      async readManagedProjectImage(input) {
+      async readConnectedImage(input) {
         throwIfAborted(input.signal)
-        throw new Error("Legacy managed-image path reads are not supported")
+        currentScope(input.projectId, input.canvasId)
+        const result = await window.convax.canvas.resources.readConnectedImage({
+          canvasId: input.canvasId,
+          expectedRevision: input.expectedRevision,
+          nodeId: input.nodeId,
+          ownerNodeId: input.ownerNodeId,
+        })
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        return result
       },
       async waitForGenerationProjection(input) {
         await webPluginGenerationProjection.wait(input, input.signal)
@@ -599,20 +608,12 @@ function App() {
   }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, webPluginHost])
   useEffect(() => {
     if (!activeProjectId || projectCanvasSnapshot.projectId !== activeProjectId) return
-    void projectCanvasWorkbench.reconcile(
-      activeProjectId,
-      migrateLastCanvasPreference(
-        localStorage,
-        activeProjectId,
-        projectCanvasSnapshot.workbenchPreferenceMigration?.canvasId,
-      ),
-    )
+    void projectCanvasWorkbench.reconcile(activeProjectId, readLastCanvasPreference(localStorage, activeProjectId))
   }, [
     activeProjectId,
     projectCanvasSnapshot.busy,
     projectCanvasSnapshot.canvases,
     projectCanvasSnapshot.projectId,
-    projectCanvasSnapshot.workbenchPreferenceMigration,
     projectCanvasWorkbench,
     workbenchSnapshot.activeInput,
     workbenchSnapshot.changingInput,
@@ -813,8 +814,6 @@ function App() {
           if (!activeProjectId || !activeCanvasId) {
             throw new Error("Open a Project Canvas before adding resources")
           }
-          await flushCanvasForAgent()
-          if (request.signal.aborted) throw request.signal.reason
           const transport = resolveCanvasUploadItems(
             {
               files: request.files ?? [],

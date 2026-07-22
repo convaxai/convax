@@ -3,6 +3,8 @@ import type { ToolInputField, ToolInputValue } from "@convax/ui"
 import type { CanvasResourceSource } from "./application"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
+export { CanvasTextResourceConflictError } from "./application/errors"
+
 export interface CanvasServiceContext {
   documentId: string
   selectedNodeIds: readonly string[]
@@ -51,16 +53,6 @@ export interface CanvasResourceMutationService {
 export interface CanvasResourceHydrationService {
   markStale(document: CanvasDocument): CanvasDocument
   hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
-}
-
-export class CanvasTextResourceConflictError extends Error {
-  constructor(
-    readonly expectedRevision: string,
-    readonly actualRevision: string | null,
-  ) {
-    super("Canvas text resource changed outside Convax")
-    this.name = "CanvasTextResourceConflictError"
-  }
 }
 
 export interface CanvasTextResourceService {
@@ -251,11 +243,15 @@ export function getCanvasGenerationReferenceError(
 }
 
 function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInputRole | undefined {
+  const resourceState = node.data.resourceState
+  if (!resourceState || typeof resourceState !== "object") return undefined
   if (node.data.kind === "text") {
-    return "text" in node.data && typeof node.data.text === "string" && node.data.text.trim() ? "text" : undefined
+    return "text" in resourceState && typeof resourceState.text === "string" && resourceState.text.trim()
+      ? "text"
+      : undefined
   }
   if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
-  if (!("url" in node.data) || typeof node.data.url !== "string" || !node.data.url.trim()) return undefined
+  if (!("url" in resourceState) || typeof resourceState.url !== "string" || !resourceState.url.trim()) return undefined
   if (node.data.kind === "image") return "reference_image"
   if (node.data.kind === "video") return "reference_video"
   if (node.data.kind === "audio") return "audio"

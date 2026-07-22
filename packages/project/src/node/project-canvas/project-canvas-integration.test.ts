@@ -158,7 +158,7 @@ describe("project canvas persistence integration", () => {
     )
     const resources = new CanvasResourceBusinessService(preparation, application)
 
-    const admission = preparation.withAdmittedExternalFiles(
+    const admission = preparation.withAdmittedLocalFiles(
       {
         files: [
           {

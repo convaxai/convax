@@ -6,9 +6,24 @@ import type { CanvasNode } from "../types"
 import { createCanvasDuplicateDragPlan, remapCanvasDuplicateDragChanges } from "./duplicate-drag"
 
 function connectedDocument() {
-  const source = createTextNode({ id: "source", position: { x: -320, y: 0 } })
-  const original = createTextNode({ id: "original", position: { x: 0, y: 0 } })
-  const target = createTextNode({ id: "target", position: { x: 320, y: 0 } })
+  const source = createTextNode({
+    id: "source",
+    metadata: {},
+    position: { x: -320, y: 0 },
+    resourceState: { status: "ready" },
+  })
+  const original = createTextNode({
+    id: "original",
+    metadata: {},
+    position: { x: 0, y: 0 },
+    resourceState: { status: "ready" },
+  })
+  const target = createTextNode({
+    id: "target",
+    metadata: {},
+    position: { x: 320, y: 0 },
+    resourceState: { status: "ready" },
+  })
   let document = createCanvasDocument({ nodes: [source, original, target] })
   document = connectCanvasNodes(document, { id: "incoming", source: source.id, target: original.id })
   document = connectCanvasNodes(document, { id: "outgoing", source: original.id, target: target.id })
