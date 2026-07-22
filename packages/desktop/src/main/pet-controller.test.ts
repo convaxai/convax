@@ -96,6 +96,17 @@ describe("PetController", () => {
     expect(await value.controller.resolveSelectedAsset()).toBe(value.asset)
   })
 
+  test("owns persisted display positions so later preference writes cannot discard them", async () => {
+    const value = await fixture()
+    await value.controller.initialize()
+    await value.controller.setPosition("display-7", { x: 42, y: 84 })
+
+    expect(value.controller.getPosition("display-7")).toEqual({ x: 42, y: 84 })
+    expect((await new PetStateStore(path.join(value.root, "state", "pet-state-v1.json")).read()).positions).toEqual({
+      "display-7": { x: 42, y: 84 },
+    })
+  })
+
   test("closes before a selected Plugin changes and clears selection after uninstall", async () => {
     const value = await fixture()
     await value.controller.initialize()
@@ -121,9 +132,7 @@ describe("PetController", () => {
     expect(imported).toMatchObject({ id: "custom:custom-1", name: "personal", source: "custom" })
     const metadata = await fs.readFile(path.join(value.root, "pets", "custom-1", "metadata.json"), "utf8")
     expect(metadata).not.toContain(source)
-    expect((await fs.readdir(path.join(value.root, "pets"))).filter((name) => name.startsWith(".staging-"))).toEqual(
-      [],
-    )
+    expect((await fs.readdir(path.join(value.root, "pets"))).filter((name) => name.startsWith(".staging-"))).toEqual([])
     expect(await value.controller.resolvePetAsset(imported.id)).toBe(
       await fs.realpath(path.join(value.root, "pets", "custom-1", "spritesheet.webp")),
     )

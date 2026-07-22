@@ -34,6 +34,12 @@ export interface AgentActivityControllerOptions {
   pollMs?: number
   projects: AgentActivityProjectProvider
   runtime: Pick<AgentRuntime, "getSessionState" | "listSessions">
+  watermarks?: AgentActivityWatermarkStore
+}
+
+export interface AgentActivityWatermarkStore {
+  loadSeen(): Promise<Record<string, number>>
+  markSeen(key: string, timestamp: number): Promise<void>
 }
 
 export interface AgentActivityMutationSink {
@@ -102,6 +108,7 @@ export class AgentActivityController {
   readonly #projects: AgentActivityProjectProvider
   readonly #records = new Map<string, ActivityRecord>()
   readonly #runtime: AgentActivityControllerOptions["runtime"]
+  readonly #watermarks?: AgentActivityWatermarkStore
   readonly #seenAfter = new Map<string, number>()
   #failureCount = 0
   #snapshot: PetActivitySnapshot = { activities: [], revision: 0 }
@@ -121,6 +128,7 @@ export class AgentActivityController {
     }
     this.#projects = options.projects
     this.#runtime = options.runtime
+    this.#watermarks = options.watermarks
   }
 
   getSnapshot(): PetActivitySnapshot {
@@ -144,6 +152,12 @@ export class AgentActivityController {
   async start() {
     if (this.#started) return
     this.#started = true
+    try {
+      const seen = await this.#watermarks?.loadSeen()
+      for (const [key, timestamp] of Object.entries(seen ?? {})) this.#rememberSeen(key, timestamp)
+    } catch {
+      // Activity remains available when local watermark persistence is temporarily unavailable.
+    }
     await this.#poll()
   }
 
@@ -206,7 +220,9 @@ export class AgentActivityController {
     if (expectedRevision !== this.#snapshot.revision) throw new Error("Agent activity revision is stale")
     const record = [...this.#records.values()].find((candidate) => candidate.id === activityId)
     if (!record) throw new Error("Agent activity is no longer available")
-    this.#rememberSeen(activityKey(record.projectId, record.sessionId), record.updatedAt)
+    const key = activityKey(record.projectId, record.sessionId)
+    await this.#watermarks?.markSeen(key, record.updatedAt)
+    this.#rememberSeen(key, record.updatedAt)
     if (record.state.state === "ready") record.state = { state: "idle" }
     this.#publish(true)
   }
@@ -356,7 +372,9 @@ export class AgentActivityController {
 
   #trim() {
     const ordered = [...this.#records.values()].sort(compareRecords)
-    const retained = new Set(ordered.slice(0, this.#maxActivities).map((record) => activityKey(record.projectId, record.sessionId)))
+    const retained = new Set(
+      ordered.slice(0, this.#maxActivities).map((record) => activityKey(record.projectId, record.sessionId)),
+    )
     for (const key of this.#records.keys()) {
       if (!retained.has(key)) this.#records.delete(key)
     }

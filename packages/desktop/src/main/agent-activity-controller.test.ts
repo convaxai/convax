@@ -71,6 +71,10 @@ function fixture(input: {
   maxActivities?: number
   projects?: ProjectRecord[]
   states?: Record<string, AgentSessionState>
+  watermarks?: {
+    loadSeen(): Promise<Record<string, number>>
+    markSeen(key: string, timestamp: number): Promise<void>
+  }
 }) {
   const clock = input.clock ?? new FakeClock()
   const projects = input.projects ?? [project("project-a", "Alpha", 100), project("project-b", "Beta", 200)]
@@ -93,6 +97,7 @@ function fixture(input: {
     pollMs: 700,
     projects: { list, resolveEntryPath },
     runtime,
+    ...(input.watermarks ? { watermarks: input.watermarks } : {}),
   })
   return { clock, controller, list, projects, resolveEntryPath, runtime, states }
 }
@@ -146,12 +151,17 @@ describe("AgentActivityController", () => {
       sessionId: "session-a",
     }
     const states = { "session-a": state("project-a", "session-a", "A", 500, { messages: [complete] }) }
-    const { controller } = fixture({ projects: [project("project-a", "Alpha", 100)], states })
+    const watermarks = {
+      loadSeen: mock(async () => ({})),
+      markSeen: mock(async () => undefined),
+    }
+    const { controller } = fixture({ projects: [project("project-a", "Alpha", 100)], states, watermarks })
 
     await controller.start()
     const ready = controller.getSnapshot()
     await expect(controller.markSeen(ready.activities[0]!.id, ready.revision - 1)).rejects.toThrow("stale")
     await controller.markSeen(ready.activities[0]!.id, ready.revision)
+    expect(watermarks.markSeen).toHaveBeenCalledWith("project-a\u0000session-a", 500)
     expect(controller.getSnapshot().activities).toEqual([])
 
     await controller.promptStarted("project-a", "session-a")
@@ -161,9 +171,37 @@ describe("AgentActivityController", () => {
     controller.stop()
   })
 
+  test("loads persisted read watermarks before the first activity projection", async () => {
+    const complete = {
+      completedAt: 500,
+      createdAt: 450,
+      id: "message-a",
+      parts: [{ id: "part-a", text: "done", type: "text" as const }],
+      role: "assistant" as const,
+      sessionId: "session-a",
+    }
+    const states = { "session-a": state("project-a", "session-a", "A", 500, { messages: [complete] }) }
+    const { controller } = fixture({
+      projects: [project("project-a", "Alpha", 100)],
+      states,
+      watermarks: {
+        loadSeen: mock(async () => ({ "project-a\u0000session-a": 500 })),
+        markSeen: mock(async () => undefined),
+      },
+    })
+
+    await controller.start()
+    expect(controller.getSnapshot().activities).toEqual([])
+    controller.stop()
+  })
+
   test("skips missing projects and backs off after a runtime failure", async () => {
     const clock = new FakeClock()
-    const states = { "session-a": state("project-a", "session-a", "A", 100, { status: { type: "retry", attempt: 1, message: "secret", next: 1 } }) }
+    const states = {
+      "session-a": state("project-a", "session-a", "A", 100, {
+        status: { type: "retry", attempt: 1, message: "secret", next: 1 },
+      }),
+    }
     const fixtureValue = fixture({
       clock,
       projects: [project("project-a", "Alpha", 100), project("project-missing", "Missing", 200, true)],

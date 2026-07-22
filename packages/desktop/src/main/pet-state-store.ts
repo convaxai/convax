@@ -38,7 +38,12 @@ function asRecord(value: unknown, label: string) {
   return value as Record<string, unknown>
 }
 
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], required: readonly string[], label: string) {
+function exactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  required: readonly string[],
+  label: string,
+) {
   const allowedSet = new Set(allowed)
   const unknown = Object.keys(value).find((key) => !allowedSet.has(key))
   if (unknown) throw new Error(`${label} contains an unsupported field: ${unknown}`)
@@ -91,7 +96,10 @@ export function boundPetState(value: unknown): PetPersistedState {
     Object.entries(positionInput)
       .sort(([left], [right]) => left.localeCompare(right))
       .slice(0, maximumPositions)
-      .map(([displayId, position]) => [boundedKey(displayId, "Pet display id", 128), parsePosition(position, displayId)]),
+      .map(([displayId, position]) => [
+        boundedKey(displayId, "Pet display id", 128),
+        parsePosition(position, displayId),
+      ]),
   )
 
   const seenInput = asRecord(input.seen, "Pet seen watermarks")
@@ -126,6 +134,7 @@ function cloneState(state: PetPersistedState): PetPersistedState {
 
 export class PetStateStore {
   readonly #file: string
+  #mutationTail: Promise<void> = Promise.resolve()
 
   constructor(file: string) {
     if (!path.isAbsolute(file)) throw new Error("Pet state path must be absolute")
@@ -150,6 +159,35 @@ export class PetStateStore {
   }
 
   async write(value: PetStateWrite | PetPersistedState) {
+    await this.#exclusive(() => this.#write(value))
+  }
+
+  async update(update: (state: PetPersistedState) => PetStateWrite | PetPersistedState) {
+    return this.#exclusive(async () => {
+      const next = boundPetState(update(await this.read()))
+      await this.#write(next)
+      return cloneState(next)
+    })
+  }
+
+  async loadSeen() {
+    return { ...(await this.read()).seen }
+  }
+
+  async markSeen(key: string, timestamp: number) {
+    await this.update((state) => ({ ...state, seen: { ...state.seen, [key]: timestamp } }))
+  }
+
+  #exclusive<Result>(operation: () => Promise<Result>) {
+    const result = this.#mutationTail.then(operation, operation)
+    this.#mutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  async #write(value: PetStateWrite | PetPersistedState) {
     const state = boundPetState(value)
     const serialized = `${JSON.stringify(state, null, 2)}\n`
     if (Buffer.byteLength(serialized) > maximumStateBytes) throw new Error("Pet state exceeds its size limit")

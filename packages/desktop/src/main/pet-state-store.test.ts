@@ -55,12 +55,28 @@ describe("PetStateStore", () => {
 
   test("bounds watermarks and display positions deterministically", () => {
     const seen = Object.fromEntries(Array.from({ length: 300 }, (_, index) => [`activity-${index}`, index]))
-    const positions = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`display-${index}`, { x: index, y: index }]))
+    const positions = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`display-${index}`, { x: index, y: index }]),
+    )
     const state = boundPetState({ awake: false, positions, seen })
 
     expect(Object.keys(state.seen)).toHaveLength(256)
     expect(Object.values(state.seen)).not.toContain(0)
     expect(Object.keys(state.positions)).toHaveLength(64)
+  })
+
+  test("serializes independent preference and watermark updates without lost writes", async () => {
+    const { store } = await fixture()
+    await Promise.all([
+      store.update((state) => ({ ...state, awake: true, selected: { kind: "plugin", pluginId: "convax-pet" } })),
+      store.markSeen("project-a\u0000session-a", 900),
+    ])
+
+    expect(await store.read()).toMatchObject({
+      awake: true,
+      seen: { "project-a\u0000session-a": 900 },
+      selected: { kind: "plugin", pluginId: "convax-pet" },
+    })
   })
 
   test("rejects unsafe selection, coordinates, timestamps, and unknown fields on write", async () => {

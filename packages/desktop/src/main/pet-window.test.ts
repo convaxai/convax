@@ -23,11 +23,15 @@ class FakeWebContents extends EventEmitter {
   send = mock(() => undefined)
   session = Object.assign(new EventEmitter(), {
     permissionCheckHandler: undefined as undefined | (() => boolean),
-    permissionRequestHandler: undefined as undefined | ((_contents: unknown, permission: string, callback: (allowed: boolean) => void) => void),
+    permissionRequestHandler: undefined as
+      | undefined
+      | ((_contents: unknown, permission: string, callback: (allowed: boolean) => void) => void),
     setPermissionCheckHandler: (handler: () => boolean) => {
       this.session.permissionCheckHandler = handler
     },
-    setPermissionRequestHandler: (handler: (_contents: unknown, permission: string, callback: (allowed: boolean) => void) => void) => {
+    setPermissionRequestHandler: (
+      handler: (_contents: unknown, permission: string, callback: (allowed: boolean) => void) => void,
+    ) => {
       this.session.permissionRequestHandler = handler
     },
   })
@@ -70,7 +74,7 @@ class FakeWindow extends EventEmitter {
   }
 }
 
-function fixture() {
+function fixture(savedPosition?: { x: number; y: number }) {
   const created: Array<{ options: Record<string, unknown>; window: FakeWindow }> = []
   const screen = new EventEmitter() as EventEmitter & {
     getDisplayMatching(bounds: { height: number; width: number; x: number; y: number }): {
@@ -96,6 +100,7 @@ function fixture() {
     powerMonitor,
     preloadPath: "/app/preload/pet.js",
     rendererUrl: "file:///app/renderer/pet/index.html",
+    resolvePosition: () => savedPosition,
     screen,
   })
   return { created, display, onFatal, onPositionChanged, pet, powerMonitor, screen }
@@ -124,6 +129,7 @@ describe("PetWindow", () => {
     })
     expect(created.window.webContents.openHandler?.()).toEqual({ action: "deny" })
     expect(created.window.loadedUrl).toBe("file:///app/renderer/pet/index.html")
+    expect(value.pet.isTrustedWebContentsId(created.window.webContents.id)).toBe(true)
 
     const navigate = { preventDefault: mock(() => undefined) }
     created.window.webContents.emit("will-navigate", navigate, "https://example.invalid")
@@ -156,6 +162,12 @@ describe("PetWindow", () => {
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 824, y: 50 })
   })
 
+  test("restores and clamps the saved position for the selected display", async () => {
+    const value = fixture({ x: 920, y: 100 })
+    await value.pet.open(snapshot)
+    expect(value.created[0]!.window.bounds).toMatchObject({ x: 824, y: 100 })
+  })
+
   test("recreates once after renderer crash and tucks after a second crash", async () => {
     const value = fixture()
     await value.pet.open(snapshot)
@@ -171,10 +183,6 @@ describe("PetWindow", () => {
 
 test("clampPetBounds keeps the complete surface in one display work area", () => {
   expect(
-    clampPetBounds(
-      { x: 5_000, y: -20 },
-      { height: 700, width: 900, x: 100, y: 50 },
-      { height: 176, width: 176 },
-    ),
+    clampPetBounds({ x: 5_000, y: -20 }, { height: 700, width: 900, x: 100, y: 50 }, { height: 176, width: 176 }),
   ).toEqual({ x: 824, y: 50 })
 })

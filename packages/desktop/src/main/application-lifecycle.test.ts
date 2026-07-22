@@ -1,6 +1,29 @@
 import { describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
-import { registerMainWindowActivation, registerWillQuitCleanup } from "./application-lifecycle"
+import {
+  createIdempotentAsyncCleanup,
+  registerMainWindowActivation,
+  registerWillQuitCleanup,
+} from "./application-lifecycle"
+
+describe("createIdempotentAsyncCleanup", () => {
+  test("runs ownership cleanup sequentially once across shutdown paths", async () => {
+    const order: string[] = []
+    const cleanup = createIdempotentAsyncCleanup([
+      () => order.push("activity.stop"),
+      async () => {
+        await Promise.resolve()
+        order.push("ipc.dispose")
+      },
+      () => order.push("window.dispose"),
+    ])
+
+    await Promise.all([cleanup(), cleanup()])
+    expect(order).toEqual(["activity.stop", "ipc.dispose", "window.dispose"])
+    await cleanup()
+    expect(order).toHaveLength(3)
+  })
+})
 
 describe("registerWillQuitCleanup", () => {
   test("uses one listener to run every cleanup once in registration order", () => {
@@ -33,9 +56,13 @@ describe("registerMainWindowActivation", () => {
     const petWindow = { isDestroyed: () => false }
     expect(petWindow.isDestroyed()).toBe(false)
 
-    registerMainWindowActivation(application, () => mainWindow, () => {
-      mainWindow = createMainWindow()
-    })
+    registerMainWindowActivation(
+      application,
+      () => mainWindow,
+      () => {
+        mainWindow = createMainWindow()
+      },
+    )
     application.emit("activate")
     expect(createMainWindow).toHaveBeenCalledTimes(1)
     application.emit("activate")

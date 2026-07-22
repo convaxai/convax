@@ -3,24 +3,14 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
-import type {
-  PetActivitySnapshot,
-  PetInventoryItem,
-  PetInventorySnapshot,
-  PetRendererSnapshot,
-} from "../pet-contracts"
+import type { PetActivitySnapshot, PetInventoryItem, PetInventorySnapshot, PetRendererSnapshot } from "../pet-contracts"
 import {
   assertValidPetAssetInspection,
   petAssetMaxBytes,
   type PetAssetInspector,
   type PetAssetInspection,
 } from "./pet-asset-inspector"
-import {
-  defaultPetState,
-  type PetPersistedState,
-  type PetSelection,
-  type PetStateStore,
-} from "./pet-state-store"
+import { defaultPetState, type PetPersistedState, type PetSelection, type PetStateStore } from "./pet-state-store"
 
 const customPetSchema = "convax.custom-pet/1" as const
 const customPetMetadataFile = "metadata.json"
@@ -223,6 +213,19 @@ export class PetController {
     return () => this.#listeners.delete(listener)
   }
 
+  getPosition(displayId: string) {
+    const position = this.#state.positions[displayId]
+    return position ? { ...position } : undefined
+  }
+
+  async setPosition(displayId: string, position: { x: number; y: number }) {
+    this.#state = {
+      ...this.#state,
+      positions: { ...this.#state.positions, [displayId]: { ...position } },
+    }
+    await this.#persist()
+  }
+
   async select(id: string) {
     const selection = selectionFromId(id)
     const pets = await this.#inventory()
@@ -354,9 +357,13 @@ export class PetController {
   }
 
   async #inventory() {
-    const plugins = (await this.#pluginManager.list()).map(pluginPet).filter((pet): pet is PetInventoryItem => pet !== null)
+    const plugins = (await this.#pluginManager.list())
+      .map(pluginPet)
+      .filter((pet): pet is PetInventoryItem => pet !== null)
     const custom = await this.#listCustom()
-    return [...plugins, ...custom].sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+    return [...plugins, ...custom].sort(
+      (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    )
   }
 
   async #listCustom() {
@@ -371,7 +378,12 @@ export class PetController {
     const entries = await readEntries()
     const pets: PetInventoryItem[] = []
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith(".") || !customPetIdPattern.test(entry.name)) {
+      if (
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        entry.name.startsWith(".") ||
+        !customPetIdPattern.test(entry.name)
+      ) {
         continue
       }
       try {
@@ -430,7 +442,7 @@ export class PetController {
   }
 
   async #persist() {
-    await this.#stateStore.write(this.#state)
+    this.#state = await this.#stateStore.update((current) => ({ ...this.#state, seen: current.seen }))
   }
 
   #emitChange() {

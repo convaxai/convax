@@ -80,6 +80,7 @@ export interface PetWindowOptions {
   powerMonitor: PetPowerMonitorPort
   preloadPath: string
   rendererUrl: string
+  resolvePosition?(displayId: string): PetPoint | undefined
   screen: PetScreenPort
 }
 
@@ -87,7 +88,9 @@ function sameNavigationUrl(left: string, right: string) {
   try {
     const actual = new URL(left)
     const expected = new URL(right)
-    return actual.protocol === expected.protocol && actual.host === expected.host && actual.pathname === expected.pathname
+    return (
+      actual.protocol === expected.protocol && actual.host === expected.host && actual.pathname === expected.pathname
+    )
   } catch {
     return false
   }
@@ -137,6 +140,11 @@ export class PetWindow {
     if (current && !current.isDestroyed()) current.close()
   }
 
+  isTrustedWebContentsId(id: number) {
+    const current = this.#window
+    return Boolean(current && !current.isDestroyed() && current.webContents.id === id)
+  }
+
   async dispose() {
     this.#options.screen.removeListener?.("display-removed", this.#reclampListener)
     this.#options.screen.removeListener?.("display-metrics-changed", this.#reclampListener)
@@ -171,8 +179,9 @@ export class PetWindow {
     if (!snapshot || generation !== this.#generation) return
     const display = this.#options.screen.getPrimaryDisplay()
     const size = this.#expanded ? petExpandedSize : petCollapsedSize
+    const restoredPosition = this.#options.resolvePosition?.(String(display.id))
     const position = clampPetBounds(
-      {
+      restoredPosition ?? {
         x: display.workArea.x + display.workArea.width - size.width - 24,
         y: display.workArea.y + display.workArea.height - size.height - 24,
       },
@@ -205,9 +214,12 @@ export class PetWindow {
     window.webContents.on("will-navigate", (event: { preventDefault(): void }, url: string) => {
       if (!sameNavigationUrl(url, this.#options.rendererUrl)) event.preventDefault()
     })
-    window.webContents.on("will-frame-navigate", (event: { isMainFrame: boolean; preventDefault(): void; url: string }) => {
-      if (!event.isMainFrame || !sameNavigationUrl(event.url, this.#options.rendererUrl)) event.preventDefault()
-    })
+    window.webContents.on(
+      "will-frame-navigate",
+      (event: { isMainFrame: boolean; preventDefault(): void; url: string }) => {
+        if (!event.isMainFrame || !sameNavigationUrl(event.url, this.#options.rendererUrl)) event.preventDefault()
+      },
+    )
     window.webContents.on("will-attach-webview", (event: { preventDefault(): void }) => event.preventDefault())
     window.webContents.session.on("will-download", (event) => event.preventDefault())
     window.webContents.session.setPermissionCheckHandler(() => false)

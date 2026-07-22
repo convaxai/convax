@@ -10,6 +10,16 @@ export interface ApplicationActivateLifecycle {
   on(event: "activate", listener: () => void): unknown
 }
 
+export function createIdempotentAsyncCleanup(cleanups: readonly (() => Promise<unknown> | unknown)[]) {
+  let cleanupPromise: Promise<void> | undefined
+  return () => {
+    cleanupPromise ??= (async () => {
+      for (const cleanup of cleanups) await cleanup()
+    })()
+    return cleanupPromise
+  }
+}
+
 export function registerMainWindowActivation(
   application: ApplicationActivateLifecycle,
   getMainWindow: () => MainWindowReference | null,
