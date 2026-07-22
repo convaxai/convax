@@ -17,6 +17,7 @@ import {
 } from "./plugin-host-protocol"
 import type {
   PluginGenerationCanvasResult,
+  PluginGenerationResultMode,
   PluginGenerationReference,
   PluginGenerationToolSummary,
   PluginHostRequestContext,
@@ -178,6 +179,12 @@ function optionalGenerationOutput(value: unknown) {
   return value === undefined ? undefined : requireGenerationOutput(value)
 }
 
+function optionalPluginGenerationResultMode(value: unknown): PluginGenerationResultMode | undefined {
+  if (value === undefined) return undefined
+  if (value !== "create-pending-node") throw new Error("Generation result mode is not supported")
+  return value
+}
+
 function requireGenerationIdentifier(value: unknown, label: string, maximum = 2_048) {
   if (
     typeof value !== "string" ||
@@ -279,6 +286,9 @@ function sanitizeGenerationTools(value: readonly PluginGenerationToolSummary[], 
     ids.add(id)
     const toolOutput = requireGenerationOutput(candidate.output, `Generation tool ${index} output`)
     if (output && output !== toolOutput) throw new Error("Generation tool catalog returned an unexpected output")
+    if (candidate.kind !== "model" && candidate.kind !== "operation") {
+      throw new Error("Generation tool catalog returned an invalid kind")
+    }
     if (!Array.isArray(candidate.acceptedInputs) || candidate.acceptedInputs.length > generationInputRoles.size) {
       throw new Error("Generation tool catalog returned invalid accepted inputs")
     }
@@ -295,6 +305,7 @@ function sanitizeGenerationTools(value: readonly PluginGenerationToolSummary[], 
       acceptedInputs,
       description: requireGenerationIdentifier(candidate.description, `Generation tool ${index} description`, 2_000),
       id,
+      kind: candidate.kind,
       output: toolOutput,
       title: requireGenerationIdentifier(candidate.title, `Generation tool ${index} title`, 120),
     }
@@ -613,7 +624,7 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
       if (!context.isCanvasWritable()) throw new Error("Canvas is not writable in the current scope")
       const params = exactRecord(
         request.params,
-        ["output", "prompt", "references", "toolId"],
+        ["output", "prompt", "references", "resultMode", "toolId"],
         "Canvas generation request",
       )
       const document = context.getDocument()
@@ -621,6 +632,7 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
         throw new Error("Plugin frame is no longer attached to its Canvas document")
       }
       const output = optionalGenerationOutput(params.output)
+      const resultMode = optionalPluginGenerationResultMode(params.resultMode)
       const toolId =
         params.toolId === undefined ? undefined : requireGenerationIdentifier(params.toolId, "Generation tool id", 256)
       const references = requireGenerationReferences(params.references, document, context.frame.nodeId)
@@ -629,10 +641,10 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
         result = await context.executeCanvasGeneration({
           ...context.frame,
           anchor: generationAnchorForPluginNode(current.node),
-          expectedRevision: document.revision,
           ...(output === undefined ? {} : { output }),
           prompt: requireGenerationPrompt(params.prompt),
           references,
+          ...(resultMode === undefined ? {} : { resultMode }),
           signal: context.signal,
           ...(toolId === undefined ? {} : { toolId }),
         })

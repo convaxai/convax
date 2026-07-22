@@ -319,6 +319,135 @@ describe("canvas resource business service", () => {
     expect(saveCalls).toBe(2)
   })
 
+  test("creates a pending resource without preparation and marks the exact target failed after unrelated edits", async () => {
+    const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Source" })
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main", nodes: [anchor] }),
+      storageVersion: "v0",
+    }
+    let preparationCalls = 0
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          preparationCalls += 1
+          throw new Error("Pending lifecycle must not prepare a fake resource")
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          saveCalls += 1
+          snapshot = { document: request.document, storageVersion: `v${saveCalls}` }
+          return { storageVersion: `v${saveCalls}` }
+        },
+      }),
+    )
+    const createRequest = {
+      actor: { id: "plugin-host", kind: "host" },
+      anchor: { x: 0, y: 0 },
+      canvasId: "canvas-main",
+      commandId: "create-pending",
+      expectedRevision: 0,
+      kind: "image" as const,
+      label: "Relit image",
+      relation: { anchorNodeIds: [anchor.id], mode: "connect" as const },
+      scopeId: "project",
+    }
+
+    const created = await business.createPendingResource(createRequest)
+    const [pendingNodeId] = created.createdNodeIds
+    if (!pendingNodeId) throw new Error("Pending resource node id was not returned")
+    const pending = created.document.nodes.find((node) => node.id === pendingNodeId)
+    if (!pending) throw new Error("Pending resource node was not created")
+    expect(preparationCalls).toBe(0)
+    expect(created.document.revision).toBe(1)
+    expect(pending).toMatchObject({
+      data: { kind: "image", label: "Relit image", status: "pending", url: "" },
+      type: "file",
+    })
+    expect(created.document.edges).toEqual([expect.objectContaining({ source: anchor.id, target: pendingNodeId })])
+    expect(await business.createPendingResource(createRequest)).toBe(created)
+
+    snapshot = {
+      document: {
+        ...created.document,
+        nodes: [
+          ...created.document.nodes,
+          createTextNode({ id: "concurrent", position: { x: 0, y: 400 }, text: "Keep me" }),
+        ],
+        revision: 2,
+      },
+      storageVersion: "concurrent-v2",
+    }
+    const failed = await business.failPendingResource({
+      actor: createRequest.actor,
+      canvasId: createRequest.canvasId,
+      commandId: "fail-pending",
+      expectedRevision: created.document.revision,
+      expectedTarget: createCanvasNodeContentGuard(pending),
+      message: "Generation could not be completed",
+      scopeId: createRequest.scopeId,
+      targetNodeId: pendingNodeId,
+    })
+
+    expect(failed.document.revision).toBe(3)
+    expect(failed.document.nodes.map((node) => node.id)).toContain("concurrent")
+    expect(failed.document.nodes.find((node) => node.id === pendingNodeId)?.data).toMatchObject({
+      error: "Generation could not be completed",
+      status: "error",
+    })
+    expect(failed.warnings[0]).toContain("replayed from revision 1 on revision 2")
+    expect(preparationCalls).toBe(0)
+  })
+
+  test("does not recreate a pending node removed before a guarded failure replay", async () => {
+    const pending = {
+      ...createMediaNode({
+        id: "pending",
+        position: { x: 0, y: 0 },
+        resource: { id: "pending", kind: "image" as const, url: "" },
+      }),
+      data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
+    }
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [] }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return {
+            document: { ...createCanvasDocument({ id: "canvas-main" }), revision: 2 },
+            storageVersion: "v2",
+          }
+        },
+        async save() {
+          saveCalls += 1
+          throw new Error("A deleted pending node must not be recreated")
+        },
+      }),
+    )
+
+    await expect(
+      business.failPendingResource({
+        actor: { id: "plugin-host", kind: "host" },
+        canvasId: "canvas-main",
+        commandId: "fail-deleted",
+        expectedRevision: 1,
+        expectedTarget: createCanvasNodeContentGuard(pending),
+        message: "Generation could not be completed",
+        scopeId: "project",
+        targetNodeId: pending.id,
+      }),
+    ).rejects.toThrow("Canvas node was not found: pending")
+    expect(saveCalls).toBe(0)
+  })
+
   test("replaces one guarded resource after an unrelated storage conflict without moving the target", async () => {
     const owner = {
       ...createMediaNode({

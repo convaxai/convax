@@ -154,6 +154,28 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).not.toContain("convax-media-empty__action")
   })
 
+  test("renders persisted pending and error resource lifecycle overlays", () => {
+    const pending = renderWithEditor(selection([]), false, (props) => (
+      <BuiltinCanvasNode {...props} data={{ ...props.data, status: "pending" }} />
+    ))
+    expect(pending).toContain('data-canvas-persisted-resource-status="pending"')
+    expect(pending).toContain('aria-busy="true"')
+    expect(pending).toContain("正在生成…")
+    expect(pending).not.toContain("data-assistant-toolbar")
+
+    const failed = renderWithEditor(selection([]), false, (props) => (
+      <BuiltinCanvasNode
+        {...props}
+        data={{ ...props.data, error: "Generation could not be completed", status: "error" }}
+      />
+    ))
+    expect(failed).toContain('data-canvas-persisted-resource-status="error"')
+    expect(failed).toContain('role="alert"')
+    expect(failed).toContain("Generation could not be completed")
+    expect(failed).not.toContain("修改并重试")
+    expect(failed).not.toContain("data-assistant-toolbar")
+  })
+
   test("uses React Flow default visibility for the editable sole selected node", () => {
     const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
       <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={<div data-built-in-toolbar />}>

@@ -87,8 +87,16 @@ function fixture(
     },
   }
   const application = new CanvasApplicationService(repository)
-  const applicationTransactions = mock((request: Parameters<CanvasApplicationService["executeTransaction"]>[0]) =>
-    application.executeTransaction(request),
+  const mutationRun = mock((_ref: unknown) => undefined)
+  const mutationSignal = mock((_signal: AbortSignal | undefined) => undefined)
+  const documentRead = mock((_ref: unknown) => undefined)
+  const applicationTransactions = mock(
+    async (request: Parameters<CanvasApplicationService["executeTransaction"]>[0]) => {
+      mutationRun({ canvasId: request.canvasId, projectId: request.scopeId })
+      mutationSignal(request.signal)
+      await beforeMutation?.()
+      return application.executeTransaction(request)
+    },
   )
   const listeners = new Set<(event: PluginCanvasChangeEvent) => void>()
   const published: PluginCanvasChangeEvent[] = []
@@ -108,9 +116,6 @@ function fixture(
       return { close: () => listeners.delete(filtered) }
     },
   }
-  const mutationRun = mock((_ref: unknown) => undefined)
-  const mutationSignal = mock((_signal: AbortSignal | undefined) => undefined)
-  const documentRead = mock((_ref: unknown) => undefined)
   const service = new PluginCanvasCapabilityService({
     application: {
       executeTransaction: applicationTransactions,
@@ -126,21 +131,15 @@ function fixture(
       },
     },
     changes,
-    documents: repository,
-    ...(limits.maximumDocumentBytes === undefined ? {} : { maximumDocumentBytes: limits.maximumDocumentBytes }),
-    mutations: {
-      async read<Result>(ref: PluginCanvasRef, read: () => Promise<Result>) {
+    documents: {
+      async load(ref) {
         documentRead(ref)
         beforeRead?.()
-        return read()
+        return repository.load(ref)
       },
-      async run<Result>(ref: PluginCanvasRef, mutate: () => Promise<Result>, signal?: AbortSignal) {
-        mutationRun(ref)
-        mutationSignal(signal)
-        await beforeMutation?.()
-        return mutate()
-      },
+      save: (request) => repository.save(request),
     },
+    ...(limits.maximumDocumentBytes === undefined ? {} : { maximumDocumentBytes: limits.maximumDocumentBytes }),
     plugins: {
       async resolve(input) {
         if (input.pluginId !== principal.pluginId) return null
@@ -190,6 +189,9 @@ function fixture(
       beforeRead = () => {
         projectBound = false
       }
+    },
+    unbindProject: () => {
+      projectBound = false
     },
     invalidate: () => {
       currentPrincipal = null
@@ -255,7 +257,7 @@ describe("PluginCanvasCapabilityService", () => {
     )
   })
 
-  test("injects the Plugin actor and commits an atomic document transaction through the mutation coordinator", async () => {
+  test("injects the Plugin actor and commits an atomic document transaction through Main", async () => {
     const { document, mutationRun, published, service } = fixture()
     const client = await service.connect({ principal, scope: { kind: "project", projectId: "project-one" } })
     const result = await client.transact({
@@ -341,13 +343,13 @@ describe("PluginCanvasCapabilityService", () => {
     )
   })
 
-  test("rechecks Project and Canvas authority after queued renderer coordination", async () => {
+  test("checks Project and Canvas authority directly in Main", async () => {
     const mutation = fixture()
     const mutationClient = await mutation.service.connect({
       principal,
       scope: { kind: "project", projectId: "project-one" },
     })
-    mutation.evictCanvasWhileQueued()
+    mutation.removeCanvas()
     await expect(
       mutationClient.transact({
         commands: [{ type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] }],
@@ -363,7 +365,7 @@ describe("PluginCanvasCapabilityService", () => {
       principal,
       scope: { kind: "project", projectId: "project-one" },
     })
-    read.evictProjectWhileReadQueued()
+    read.unbindProject()
     await expect(
       readClient.getDocument({
         canvasId: "canvas-main",
@@ -372,14 +374,14 @@ describe("PluginCanvasCapabilityService", () => {
     ).rejects.toBeInstanceOf(PluginProjectScopeError)
   })
 
-  test("passes Tool cancellation through the coordinator and stops before the Canvas application executes", async () => {
+  test("rejects canceled Tool work before the Canvas application executes", async () => {
     const current = fixture()
     const client = await current.service.connect({
       principal,
       scope: { kind: "project", projectId: "project-one" },
     })
     const controller = new AbortController()
-    current.abortMutationWhileQueued(controller)
+    controller.abort("stopped")
 
     await expect(
       client.transact(
@@ -391,9 +393,8 @@ describe("PluginCanvasCapabilityService", () => {
         },
         controller.signal,
       ),
-    ).rejects.toThrow("canceled")
+    ).rejects.toThrow("Plugin Canvas capability request was canceled")
 
-    expect(current.mutationSignal).toHaveBeenCalledWith(controller.signal)
     expect(current.applicationTransactions).not.toHaveBeenCalled()
     expect(current.document().revision).toBe(0)
     expect(current.published).toEqual([])

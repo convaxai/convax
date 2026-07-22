@@ -382,7 +382,8 @@ function startApplication() {
         canvasDocumentChanges.publish({
           ref: { canvasId: event.canvasId, projectId: event.scopeId },
           revision: event.revision,
-          source: event.actor.kind === "plugin" ? "plugin" : "host",
+          source:
+            event.actor.kind === "plugin" ? "plugin" : event.actor.kind === "renderer" ? "renderer" : "host",
         })
       },
     })
@@ -435,18 +436,18 @@ function startApplication() {
       isTrustedSender: ipcSecurity.isTrustedSender,
       isTrustedWebContentsId: (id) => trustedWebContents.has(id),
     })
+    const canvasProjectionSubscription = canvasDocumentChanges.subscribeAll((event) => {
+      if (event.source === "renderer") return
+      void canvasRenderer
+        .reloadDocument({ canvasId: event.ref.canvasId, scopeId: event.ref.projectId })
+        .catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
+    })
     const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginManager)
     const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
       application: canvasApplication,
       canvases: projectCanvases,
       changes: canvasDocumentChanges,
       documents: canvasDocuments,
-      mutations: {
-        read: (ref, read, signal) =>
-          canvasRenderer.runDocumentRead({ canvasId: ref.canvasId, scopeId: ref.projectId }, read, signal),
-        run: (ref, mutate, signal) =>
-          canvasRenderer.runDocumentMutation({ canvasId: ref.canvasId, scopeId: ref.projectId }, mutate, signal),
-      },
       plugins: pluginPrincipals,
       projects: projectManager,
     })
@@ -656,16 +657,7 @@ function startApplication() {
       projectCreationDirectory,
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
-    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, {
-      ...ipcSecurity,
-      onDidSave(request) {
-        canvasDocumentChanges.publish({
-          ref: { canvasId: request.ref.canvasId, projectId: request.ref.scopeId },
-          revision: request.document.revision,
-          source: "renderer",
-        })
-      },
-    })
+    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, canvasApplication, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       onError: (error) => console.warn("Canvas native media drag failed", error),
@@ -805,6 +797,7 @@ function startApplication() {
         () => pluginServices.dispose(),
         () => pluginServiceBrowserAuthorization.dispose(),
         () => generationRuntime.dispose(),
+        () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
       ],
       (error, index) => console.warn(`Convax will-quit cleanup ${index + 1} failed`, error),

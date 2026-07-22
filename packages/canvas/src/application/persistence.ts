@@ -27,7 +27,7 @@ export interface CanvasDocumentRepository {
   save(request: CanvasDocumentSaveRequest): Promise<CanvasDocumentSaveResult>
 }
 
-/** Renderer-safe transport with the same semantics as the repository port. */
+/** Main-owned document storage port; renderer callers use application commands instead. */
 export interface CanvasDocumentClient extends CanvasDocumentRepository {}
 
 export class InvalidCanvasDocumentError extends Error {

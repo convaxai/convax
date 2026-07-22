@@ -131,10 +131,6 @@ import {
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { createMediaNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
-import {
-  CanvasExternalMutationLeaseController,
-  type CanvasExternalMutationLeaseCallbacks,
-} from "../external-mutation-lease"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
@@ -334,13 +330,12 @@ export interface CanvasEditorProps {
 }
 
 export interface CanvasEditorHandle {
-  /** Quiesces local mutation and persists the exact document an external writer will build from. */
-  beginExternalMutation: (signal?: AbortSignal) => Promise<void>
-  /** Accepts the authoritative persisted result, or simply releases after an aborted external write. */
-  endExternalMutation: (outcome: "committed" | "aborted") => Promise<void>
-  flush: () => Promise<void>
+  /** Persists pending commands and returns Main's authoritative document projection. */
+  flush: () => Promise<CanvasDocument>
   prepareToLeave: () => Promise<void>
   reload: () => Promise<void>
+  /** Reloads Main's authoritative projection without persisting the current renderer snapshot. */
+  reloadAuthoritative: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
 }
 
@@ -398,7 +393,6 @@ function CanvasEditorContent(
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [leaving, setLeaving] = useState(false)
-  const [externalMutationReadOnly, setExternalMutationReadOnly] = useState(false)
   const [selectionDragModeActive, setSelectionDragModeActive] = useState(false)
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
@@ -423,13 +417,11 @@ function CanvasEditorContent(
   const saveErrorRef = useRef<string | null>(null)
   const leavingRef = useRef(false)
   const saveControllerRef = useRef<AbortController | undefined>(undefined)
-  const savePromiseRef = useRef<Promise<void> | undefined>(undefined)
+  const savePromiseRef = useRef<Promise<CanvasDocument> | undefined>(undefined)
   const saveRevisionRef = useRef<number | undefined>(undefined)
   const savedRevisionRef = useRef(history.document.revision)
   const reloadQueueRef = useRef(new CanvasReloadQueue())
   const operationControllersRef = useRef(new Set<AbortController>())
-  const externalMutationCallbacksRef = useRef<CanvasExternalMutationLeaseCallbacks | null>(null)
-  const externalMutationLeaseRef = useRef<CanvasExternalMutationLeaseController | null>(null)
   const authoritativeLoadRequestedRef = useRef(false)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
@@ -453,7 +445,7 @@ function CanvasEditorContent(
     setConnectionTargetNodeId(nodeId)
   }, [])
   const dispatch = useCallback((action: CanvasHistoryAction) => {
-    if (leavingRef.current || hydratingRef.current || externalMutationLeaseRef.current?.locked) return
+    if (leavingRef.current || hydratingRef.current) return
     if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
       hasLocalEditsRef.current = true
     }
@@ -473,7 +465,6 @@ function CanvasEditorContent(
   const readOnly =
     (props.readOnly ?? false) ||
     leaving ||
-    externalMutationReadOnly ||
     hydrating ||
     Boolean(loadError) ||
     Boolean(saveError)
@@ -918,7 +909,6 @@ function CanvasEditorContent(
       if (
         hydratingRef.current ||
         leavingRef.current ||
-        externalMutationLeaseRef.current?.locked ||
         selectionActionContext.document !== documentRef.current ||
         !equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) ||
         !equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds)
@@ -936,7 +926,6 @@ function CanvasEditorContent(
     () =>
       !hydratingRef.current &&
       !leavingRef.current &&
-      !externalMutationLeaseRef.current?.locked &&
       selectionActionContext.document === documentRef.current &&
       equalIds(new Set(selectionActionContext.selectedNodeIds), selectionRef.current.nodeIds) &&
       equalIds(new Set(selectionActionContext.selectedEdgeIds), selectionRef.current.edgeIds),
@@ -1116,9 +1105,9 @@ function CanvasEditorContent(
     (document: CanvasDocument) => {
       if (!persistenceService || loadError || document.revision === 0) {
         savedRevisionRef.current = document.revision
-        return Promise.resolve()
+        return Promise.resolve(document)
       }
-      if (!saveErrorRef.current && savedRevisionRef.current === document.revision) return Promise.resolve()
+      if (!saveErrorRef.current && savedRevisionRef.current === document.revision) return Promise.resolve(document)
       if (saveRevisionRef.current === document.revision && savePromiseRef.current) return savePromiseRef.current
 
       saveControllerRef.current?.abort()
@@ -1127,15 +1116,27 @@ function CanvasEditorContent(
       saveControllerRef.current = controller
       saveRevisionRef.current = document.revision
       const pending = persistenceService.save(document, controller.signal).then(
-        () => {
-          if (controller.signal.aborted) return
-          savedRevisionRef.current = document.revision
+        (persisted) => {
+          if (controller.signal.aborted) return document
+          if (documentRef.current.revision === document.revision) {
+            const action = {
+              document: persisted,
+              expectedRevision: document.revision,
+              type: "acknowledge" as const,
+            }
+            const acknowledged = canvasHistoryReducer(historyRef.current, action)
+            historyRef.current = acknowledged
+            documentRef.current = acknowledged.document
+            reduce(action)
+            savedRevisionRef.current = persisted.revision
+          }
           saveErrorRef.current = null
           setSaveError(null)
           setSaveState("saved")
+          return persisted
         },
         (error) => {
-          if (controller.signal.aborted) return
+          if (controller.signal.aborted) return document
           const message = error instanceof Error ? error.message : String(error)
           saveErrorRef.current = message
           setSaveError(message)
@@ -1213,9 +1214,9 @@ function CanvasEditorContent(
       }
     })
   }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad])
-  const reloadAfterExternalCommit = useCallback(() => {
+  const reloadAuthoritativeDocument = useCallback(() => {
     if (!persistenceService) {
-      return Promise.reject(new Error("Canvas persistence is required to accept an external mutation"))
+      return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
     }
     selectionActionControllerRef.current?.abort()
     return reloadQueueRef.current.request(async () => {
@@ -1227,21 +1228,18 @@ function CanvasEditorContent(
       operationControllersRef.current.add(controller)
       try {
         const documentId = documentRef.current.id
-        // The external commit is already authoritative. Saving here would overwrite it with the stale editor snapshot.
+        // Main has already committed the authoritative document. Never persist the stale renderer projection here.
         const document = await persistenceService.load(documentId, controller.signal)
         if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
         if (document.id !== documentId || documentRef.current.id !== documentId) {
-          throw new Error("Canvas changed while accepting an external mutation")
+          throw new Error("Canvas changed while loading the authoritative document")
         }
         acceptHydratedDocument(document)
         loadBarrier.resolve()
       } catch (error) {
         loadBarrier.reject(error)
-        // The external document is already authoritative. Release the lease so
-        // host recovery can continue, but keep this stale editor read-only until
-        // a successful load; allowing another save could overwrite the commit.
         setLoadError(error instanceof Error ? error.message : String(error))
-        notifyError("Could not accept external canvas mutation", error)
+        notifyError("Could not load authoritative canvas", error)
         throw error
       } finally {
         if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
@@ -1253,54 +1251,14 @@ function CanvasEditorContent(
       }
     })
   }, [acceptHydratedDocument, notifyError, persistenceService])
-  externalMutationCallbacksRef.current = {
-    enter() {
-      if (leavingRef.current) throw new Error("Canvas editor is preparing to leave")
-      setExternalMutationReadOnly(true)
-      selectionActionControllerRef.current?.abort()
-      selectionDragGesture.release()
-      abortPendingOperations()
-    },
-    async flush() {
-      await waitForStableLoad()
-      await finalizeGestureAndSave()
-    },
-    reloadCommitted: reloadAfterExternalCommit,
-    release() {
-      setExternalMutationReadOnly(false)
-    },
-  }
-  const getExternalMutationLease = useCallback(() => {
-    if (!externalMutationLeaseRef.current) {
-      externalMutationLeaseRef.current = new CanvasExternalMutationLeaseController({
-        enter: () => externalMutationCallbacksRef.current!.enter(),
-        flush: () => externalMutationCallbacksRef.current!.flush(),
-        reloadCommitted: () => externalMutationCallbacksRef.current!.reloadCommitted(),
-        release: () => externalMutationCallbacksRef.current!.release(),
-      })
-    }
-    return externalMutationLeaseRef.current
-  }, [])
   useImperativeHandle(
     props.editorRef,
     () => ({
-      beginExternalMutation(signal) {
-        return getExternalMutationLease().begin(signal)
-      },
-      endExternalMutation(outcome) {
-        return getExternalMutationLease().end(outcome)
-      },
       async flush() {
-        if (externalMutationLeaseRef.current?.locked) {
-          throw new Error("Canvas flush is unavailable during an external mutation")
-        }
         await waitForStableLoad()
-        await startSave(historyRef.current.document)
+        return startSave(historyRef.current.document)
       },
       async prepareToLeave() {
-        if (externalMutationLeaseRef.current?.locked) {
-          throw new Error("Canvas cannot leave during an external mutation")
-        }
         await waitForStableLoad()
         leavingRef.current = true
         setLeaving(true)
@@ -1308,13 +1266,12 @@ function CanvasEditorContent(
         await finalizeGestureAndSave()
       },
       async reload() {
-        if (externalMutationLeaseRef.current?.locked) {
-          throw new Error("Canvas reload is unavailable during an external mutation")
-        }
         await reloadDocument()
       },
+      async reloadAuthoritative() {
+        await reloadAuthoritativeDocument()
+      },
       resumeAfterLeaveCanceled() {
-        if (externalMutationLeaseRef.current?.locked) return
         leavingRef.current = false
         setLeaving(false)
       },
@@ -1322,9 +1279,9 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       finalizeGestureAndSave,
-      getExternalMutationLease,
       props.editorRef,
       reloadDocument,
+      reloadAuthoritativeDocument,
       startSave,
       waitForStableLoad,
     ],
@@ -1603,8 +1560,7 @@ function CanvasEditorContent(
   }, [arrangeNodeIds, autoLayoutStrategy, canArrangeSelection, commit])
   const runCanvasLayout = useCallback(
     (strategy: CanvasDirectedAutoLayoutStrategy) => {
-      if (!canLayoutCanvas || hydratingRef.current || leavingRef.current || externalMutationLeaseRef.current?.locked)
-        return
+      if (!canLayoutCanvas || hydratingRef.current || leavingRef.current) return
       const result = applyCanvasBusinessCommand(documentRef.current, {
         options: { strategy },
         type: "canvas.auto-layout",
@@ -1722,8 +1678,7 @@ function CanvasEditorContent(
       position?: CanvasPoint,
       transfer?: { data: Readonly<Record<string, string>>; types: readonly string[] },
     ) => {
-      if (!uploadService || (files.length === 0 && !transfer) || readOnly || externalMutationLeaseRef.current?.locked)
-        return
+      if (!uploadService || (files.length === 0 && !transfer) || readOnly) return
       const controller = new AbortController()
       operationControllersRef.current.add(controller)
       const documentId = documentRef.current.id
@@ -1765,7 +1720,7 @@ function CanvasEditorContent(
   )
   const replaceNodeMedia = useCallback(
     (nodeId: string, file: File) => {
-      if (!uploadService || readOnly || externalMutationLeaseRef.current?.locked) return
+      if (!uploadService || readOnly) return
       const sourceNode = documentRef.current.nodes.find((node) => node.id === nodeId)
       if (!sourceNode || !["image", "video", "audio", "file"].includes(sourceNode.data.kind)) return
       const expectedKind = sourceNode.data.kind
@@ -1819,7 +1774,7 @@ function CanvasEditorContent(
     [commit, notificationService, notifyError, readOnly, selectNodes, uploadService],
   )
   const runGenerate = useCallback(() => {
-    if (!generateService || readOnly || externalMutationLeaseRef.current?.locked) return
+    if (!generateService || readOnly) return
     if (!prompt.trim()) {
       setGenerateOpen(true)
       return

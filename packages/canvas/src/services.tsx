@@ -150,7 +150,8 @@ function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInput
 
 export interface CanvasPersistenceService {
   load: (documentId: string, signal: AbortSignal) => Promise<CanvasDocument | null>
-  save: (document: CanvasDocument, signal: AbortSignal) => Promise<void>
+  /** Commits the renderer's optimistic delta and returns Main's authoritative projection. */
+  save: (document: CanvasDocument, signal: AbortSignal) => Promise<CanvasDocument>
 }
 
 export interface CanvasExportRequest {

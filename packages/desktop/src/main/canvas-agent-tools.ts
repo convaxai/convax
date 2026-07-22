@@ -355,7 +355,7 @@ export function createCanvasAgentToolProvider(input: {
       throwIfAborted(signal)
       if (name === "canvas_list") return listCanvases(input.canvases, scope, value, signal)
       if (name === "canvas_query_nodes")
-        return queryNodes(input.application, input.canvases, input.renderer, scope, value, signal)
+        return queryNodes(input.application, input.canvases, scope, value, signal)
       if (name === "canvas_add_resources")
         return addResources(input.canvases, input.resources, input.renderer, scope, value, signal)
       if (name === "canvas_auto_layout")
@@ -387,7 +387,6 @@ async function listCanvases(
 async function queryNodes(
   application: CanvasApplicationPort,
   canvases: ProjectCanvasPort,
-  renderer: CanvasRendererBridge,
   scope: AgentToolScope,
   input: Record<string, unknown>,
   signal?: AbortSignal,
@@ -403,17 +402,11 @@ async function queryNodes(
     text: optionalString(input.text, "text"),
   }
   const documentRef = ref(scope, canvasId)
-  return renderer.runDocumentRead(
-    documentRef,
-    async () => {
-      await assertCanvasExists(canvases, scope, canvasId, signal)
-      throwIfAborted(signal)
-      const result = await application.query(documentRef, { ...query })
-      throwIfAborted(signal)
-      return result
-    },
-    signal,
-  )
+  await assertCanvasExists(canvases, scope, canvasId, signal)
+  throwIfAborted(signal)
+  const result = await application.query(documentRef, { ...query })
+  throwIfAborted(signal)
+  return result
 }
 
 async function addResources(
@@ -439,15 +432,9 @@ async function addResources(
     sources: resourceSources(input.sources),
   }
   const documentRef = ref(scope, canvasId)
-  const result = await renderer.runDocumentMutation(
-    documentRef,
-    async () => {
-      await assertCanvasExists(canvases, scope, canvasId, signal)
-      throwIfAborted(signal)
-      return resources.addResources(request)
-    },
-    signal,
-  )
+  await assertCanvasExists(canvases, scope, canvasId, signal)
+  throwIfAborted(signal)
+  const result = await resources.addResources(request)
   const sync = await documentMutationSync(renderer, documentRef, result.document.revision)
   const warnings = [...result.warnings]
   let view
@@ -498,15 +485,9 @@ async function autoLayout(
     ...(signal ? { signal } : {}),
     scopeId: scope.scopeId,
   }
-  const result = await renderer.runDocumentMutation(
-    documentRef,
-    async () => {
-      await assertCanvasExists(canvases, scope, canvasId, signal)
-      throwIfAborted(signal)
-      return application.execute(request)
-    },
-    signal,
-  )
+  await assertCanvasExists(canvases, scope, canvasId, signal)
+  throwIfAborted(signal)
+  const result = await application.execute(request)
   return {
     ...mutationSummary(result),
     sync: result.changed ? await documentMutationSync(renderer, documentRef, result.document.revision) : undefined,
@@ -546,15 +527,9 @@ async function applyPrimitive(
     scopeId: scope.scopeId,
   }
   const documentRef = ref(scope, canvasId)
-  const result = await renderer.runDocumentMutation(
-    documentRef,
-    async () => {
-      await assertCanvasExists(canvases, scope, canvasId, signal)
-      throwIfAborted(signal)
-      return application.execute(request)
-    },
-    signal,
-  )
+  await assertCanvasExists(canvases, scope, canvasId, signal)
+  throwIfAborted(signal)
+  const result = await application.execute(request)
   return {
     ...mutationSummary(result),
     sync: result.changed ? await documentMutationSync(renderer, documentRef, result.document.revision) : undefined,

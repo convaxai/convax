@@ -8,7 +8,8 @@ import type {
   AgentRuntimeDirectoryInput,
   AgentRuntimeListSessionsInput,
 } from "@convax/agent-runtime"
-import type { CanvasDocumentClient } from "@convax/canvas/application"
+import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
+import { createTextNode } from "@convax/canvas/core"
 import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
@@ -18,7 +19,7 @@ import type { JianyingCanvasExportIpcEnvelope, JianyingRendererClient } from "..
 type InvokeHandler = (event: unknown, input?: unknown) => unknown
 type DesktopBridge = {
   agent: AgentClient
-  canvas: { documents: CanvasDocumentClient; externalMediaDrag: CanvasExternalMediaDragRendererClient }
+  canvas: { documents: CanvasRendererDocumentClient; externalMediaDrag: CanvasExternalMediaDragRendererClient }
   jianying: JianyingRendererClient
   projectFiles: ProjectFilesClient
   projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
@@ -110,6 +111,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
         import("./project-canvas-ipc"),
       ])
 
+    const { CanvasApplicationService } = await import("@convax/canvas/application")
     const projects = new NodeProjectManager({
       registryFile: path.join(temporaryRoot, "user-data", "projects.json"),
     })
@@ -118,6 +120,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       new ProjectCanvasDocumentRepository(projects, canvases),
       canvases,
     )
+    const canvasApplication = new CanvasApplicationService(canvasDocuments)
     let listSessionsInput: AgentRuntimeListSessionsInput | undefined
     let listModelsInput: AgentRuntimeDirectoryInput | undefined
     const runtime = {
@@ -148,7 +151,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
         projectCreationDirectory: path.join(temporaryRoot, "Documents", "Convax"),
       }),
       registerProjectCanvasIpc(canvases, trusted),
-      registerCanvasDocumentIpc(canvasDocuments, trusted),
+      registerCanvasDocumentIpc(canvasDocuments, canvasApplication, trusted),
       registerAgentIpc(runtime, projects, trusted),
     ]
     handlers.set("jianying:draft-status", () => ({
@@ -258,6 +261,26 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     const loaded = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
     expect(loaded.document).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
+    const rendererNode = createTextNode({ id: "renderer-note", position: { x: 10, y: 20 }, text: "Command edit" })
+    const commandResult = await exposedBridge.canvas.documents.execute({
+      command: {
+        addedEdges: [],
+        addedNodes: [rendererNode],
+        removedEdgeIds: [],
+        removedNodeIds: [],
+        type: "document.patch",
+        updatedEdges: [],
+        updatedNodes: [],
+      },
+      commandId: "renderer-command-smoke",
+      expectedRevision: loaded.document?.revision ?? 0,
+      ref: { canvasId: "canvas-main", scopeId: projectId },
+    })
+    expect(commandResult).toMatchObject({
+      createdNodeIds: [rendererNode.id],
+      document: { nodes: [{ id: rendererNode.id }], revision: 1 },
+    })
+    expect(handlers.has("canvas:document-save")).toBeFalse()
 
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })
     expect(listSessionsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), limit: 60 })
@@ -277,7 +300,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
           "utf8",
         ),
       ),
-    ).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
+    ).toMatchObject({ edges: [], id: "canvas-main", nodes: [{ id: rendererNode.id }], revision: 1 })
 
     const createdSelection = await exposedBridge.projects.createProject({ name: "Created project" })
     const createdProjectId = createdSelection.project?.id

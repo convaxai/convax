@@ -18,6 +18,7 @@ const maximumTrackedCanvases = 10_000
  * services with fresh authorization checks.
  */
 export class CanvasDocumentChangeBus implements PluginCanvasChangeBus {
+  private readonly allListeners = new Set<(event: PluginCanvasChangeEvent) => void>()
   private readonly latestRevisionByCanvas = new Map<string, number>()
   private readonly listeners = new Set<Listener>()
 
@@ -35,6 +36,7 @@ export class CanvasDocumentChangeBus implements PluginCanvasChangeBus {
       if ("canvasId" in item.filter && item.filter.canvasId !== safeEvent.ref.canvasId) continue
       item.listener(structuredClone(safeEvent))
     }
+    for (const listener of [...this.allListeners]) listener(structuredClone(safeEvent))
   }
 
   subscribe(
@@ -44,5 +46,13 @@ export class CanvasDocumentChangeBus implements PluginCanvasChangeBus {
     const item = { filter: structuredClone(filter), listener }
     this.listeners.add(item)
     return { close: () => this.listeners.delete(item) }
+  }
+
+  subscribeAll(listener: (event: PluginCanvasChangeEvent) => void): PluginCanvasEventSubscription {
+    // All-listeners are stored separately from scoped Plugin subscribers so a
+    // renderer projection can observe every Main commit without widening a
+    // Plugin's Project scope.
+    this.allListeners.add(listener)
+    return { close: () => this.allListeners.delete(listener) }
   }
 }

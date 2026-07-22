@@ -44,17 +44,6 @@ export interface PluginCanvasChangeBus {
   ): PluginCanvasEventSubscription
 }
 
-/**
- * Serializes a main-owned mutation against a live renderer. The concrete
- * Desktop adapter flushes and temporarily locks an active editor, reloads it
- * after the mutation, and always releases the lock. Inactive Canvases pass
- * straight through the same port.
- */
-export interface PluginCanvasMutationCoordinator {
-  read<Result>(ref: PluginCanvasRef, read: () => Promise<Result>, signal?: AbortSignal): Promise<Result>
-  run<Result>(ref: PluginCanvasRef, mutate: () => Promise<Result>, signal?: AbortSignal): Promise<Result>
-}
-
 export interface PluginCanvasCapabilityServiceOptions {
   application: CanvasApplicationPort
   canvases: ProjectCanvasPort
@@ -63,7 +52,6 @@ export interface PluginCanvasCapabilityServiceOptions {
   maximumDocumentBytes?: number
   maximumRequestBytes?: number
   maximumTransactionCommands?: number
-  mutations: PluginCanvasMutationCoordinator
   plugins: PluginPrincipalResolver
   projects: PluginProjectCatalogPort
 }
@@ -181,14 +169,9 @@ export class PluginCanvasCapabilityService {
     if (projection !== "geometry" && projection !== "structure") {
       throw new Error("Unsupported Canvas document projection")
     }
-    return this.options.mutations.read(
-      inputRef,
-      async () => {
+    {
         throwIfAborted(signal)
         await this.requirePrincipal(principal, signal)
-        // The operation may have waited behind an active renderer lease. Recheck
-        // both the bound Project and the live Canvas catalog after that wait so a
-        // removed target cannot be read through a stale pre-queue decision.
         const currentRef = await this.requireCanvas(scope, inputRef, signal)
         throwIfAborted(signal)
         const snapshot = await this.options.documents.load(currentRef)
@@ -251,9 +234,7 @@ export class PluginCanvasCapabilityService {
         assertSerializedSize(result, this.maximumDocumentBytes, "Plugin Canvas document response")
         throwIfAborted(signal)
         return result
-      },
-      signal,
-    )
+    }
   }
 
   private async queryNodes(
@@ -267,9 +248,7 @@ export class PluginCanvasCapabilityService {
     requireCapability(installed, "canvas.document.read")
     assertSerializedSize(query, this.maximumRequestBytes, "Plugin Canvas node query")
     await this.requireCanvas(scope, inputRef, signal)
-    return this.options.mutations.read(
-      inputRef,
-      async () => {
+    {
         throwIfAborted(signal)
         await this.requirePrincipal(principal, signal)
         const currentRef = await this.requireCanvas(scope, inputRef, signal)
@@ -279,9 +258,7 @@ export class PluginCanvasCapabilityService {
         const response = { ...result, ref: { ...inputRef } }
         assertSerializedSize(response, this.maximumDocumentBytes, "Plugin Canvas node query response")
         return response
-      },
-      signal,
-    )
+    }
   }
 
   private async transact(
@@ -307,17 +284,18 @@ export class PluginCanvasCapabilityService {
     }
     for (const command of request.commands) {
       const commandType = (command as { type?: unknown }).type
-      if (commandType === "resources.add" || commandType === "resources.replace") {
+      if (
+        commandType === "document.patch" ||
+        commandType === "resources.add" ||
+        commandType === "resources.replace"
+      ) {
         throw new Error("Plugin Canvas document transactions cannot mutate resource references")
       }
     }
     await this.requireCanvas(scope, request.ref, signal)
-    return this.options.mutations.run(
-      request.ref,
-      async () => {
+    {
         throwIfAborted(signal)
-        // A queued mutation may outlive an update/uninstall; revalidate immediately
-        // before applying anything billable or durable.
+        // Revalidate immediately before applying anything durable.
         await this.requirePrincipal(principal, signal)
         const currentRef = await this.requireCanvas(scope, request.ref, signal)
         throwIfAborted(signal)
@@ -356,9 +334,7 @@ export class PluginCanvasCapabilityService {
           storageVersion: result.storageVersion,
           warnings: [...result.warnings],
         }
-      },
-      signal,
-    )
+    }
   }
 
   private async subscribe(

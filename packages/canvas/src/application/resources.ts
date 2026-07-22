@@ -1,11 +1,14 @@
-import type { CanvasPoint, CanvasTextFormat, CanvasUploadItem } from "../types"
+import type { CanvasPendingResourceKind, CanvasPoint, CanvasTextFormat, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
+  createCanvasPendingResourceCommand,
   type CanvasNodeContentGuard,
   type CanvasAddResourcesCommand,
+  type CanvasBusinessCommand,
   type CanvasCommandActor,
+  type CanvasFailPendingResourceCommand,
   type CanvasReplaceResourceCommand,
 } from "./commands"
 import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
@@ -92,6 +95,29 @@ export interface CanvasReplaceResourceSourceRequest extends CanvasDocumentRef {
   targetNodeId: string
 }
 
+export interface CanvasCreatePendingResourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  anchor: CanvasPoint
+  commandId: string
+  /** Defaults to retry and reuses the same generated node id across replays. */
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+  kind: CanvasPendingResourceKind
+  label?: string
+  relation?: CanvasAddResourcesCommand["relation"]
+}
+
+export interface CanvasFailPendingResourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  commandId: string
+  /** Defaults to retry, guarded by expectedTarget so a removed node is never recreated. */
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+  expectedTarget: CanvasNodeContentGuard
+  message: string
+  targetNodeId: string
+}
+
 type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
 
 const maxCanvasResourceConflictRetries = 2
@@ -113,6 +139,53 @@ export class CanvasResourceBusinessService {
     private readonly preparation: CanvasResourcePreparationPort,
     private readonly application: CanvasCommandExecutor,
   ) {}
+
+  createPendingResource(request: CanvasCreatePendingResourceRequest): Promise<CanvasApplicationCommandResult> {
+    const key = resourceExecutionKey(request)
+    const fingerprint = stableJson({
+      operation: "pending-create",
+      anchor: request.anchor,
+      conflictPolicy: request.conflictPolicy ?? "retry",
+      expectedRevision: request.expectedRevision,
+      kind: request.kind,
+      label: request.label,
+      relation: request.relation,
+    })
+    const existing = this.executions.get(key)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+      }
+      return existing.result
+    }
+
+    const result = this.createPendingResourceOnce(request)
+    this.rememberExecution(key, fingerprint, result)
+    return result
+  }
+
+  failPendingResource(request: CanvasFailPendingResourceRequest): Promise<CanvasApplicationCommandResult> {
+    const key = resourceExecutionKey(request)
+    const fingerprint = stableJson({
+      operation: "pending-fail",
+      conflictPolicy: request.conflictPolicy ?? "retry",
+      expectedRevision: request.expectedRevision,
+      expectedTarget: request.expectedTarget,
+      message: request.message,
+      targetNodeId: request.targetNodeId,
+    })
+    const existing = this.executions.get(key)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+      }
+      return existing.result
+    }
+
+    const result = this.failPendingResourceOnce(request)
+    this.rememberExecution(key, fingerprint, result)
+    return result
+  }
 
   addResources(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
     const key = JSON.stringify([
@@ -180,6 +253,51 @@ export class CanvasResourceBusinessService {
       if (this.executions.get(key) === execution) this.executions.delete(key)
     })
     return result
+  }
+
+  private rememberExecution(key: string, fingerprint: string, result: Promise<CanvasApplicationCommandResult>): void {
+    const execution = { fingerprint, result }
+    this.executions.set(key, execution)
+    if (this.executions.size > 1_000) this.executions.delete(this.executions.keys().next().value ?? "")
+    void result.catch(() => {
+      if (this.executions.get(key) === execution) this.executions.delete(key)
+    })
+  }
+
+  private async createPendingResourceOnce(
+    request: CanvasCreatePendingResourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    validateResourceOperation(request)
+    if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
+      throw new CanvasCommandValidationError("Placement anchor must contain finite coordinates")
+    }
+    validatePendingResourceKind(request.kind)
+    if (request.label !== undefined) requireBoundedString(request.label, "Pending resource label", 200)
+
+    const command = createCanvasPendingResourceCommand({
+      anchor: request.anchor,
+      kind: request.kind,
+      label: request.label ?? pendingResourceLabel(request.kind),
+      relation: request.relation,
+    })
+    return this.executeWithConflictPolicy(request, command, [])
+  }
+
+  private async failPendingResourceOnce(
+    request: CanvasFailPendingResourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    validateResourceOperation(request)
+    requireNonEmptyString(request.targetNodeId, "Canvas pending resource target node id")
+    validatePendingResourceContentGuard(request.expectedTarget)
+    validatePendingResourceErrorMessage(request.message)
+
+    const command: CanvasFailPendingResourceCommand = {
+      type: "resources.pending.fail",
+      expectedTarget: structuredClone(request.expectedTarget),
+      message: request.message,
+      targetNodeId: request.targetNodeId,
+    }
+    return this.executeWithConflictPolicy(request, command, [])
   }
 
   private async addResourcesOnce(request: CanvasAddResourceSourcesRequest): Promise<CanvasApplicationCommandResult> {
@@ -310,10 +428,10 @@ export class CanvasResourceBusinessService {
 
   private async executeWithConflictPolicy(
     request: Pick<
-      CanvasReplaceResourceSourceRequest,
+      CanvasReplaceResourceSourceRequest | CanvasCreatePendingResourceRequest | CanvasFailPendingResourceRequest,
       "actor" | "canvasId" | "commandId" | "conflictPolicy" | "expectedRevision" | "scopeId"
     > & { signal?: AbortSignal },
-    command: CanvasReplaceResourceCommand,
+    command: CanvasBusinessCommand,
     preparationWarnings: readonly string[],
   ): Promise<CanvasApplicationCommandResult> {
     let expectedRevision = request.expectedRevision
@@ -359,6 +477,15 @@ export class CanvasResourceBusinessService {
       }
     }
   }
+}
+
+function resourceExecutionKey(request: {
+  actor: CanvasCommandActor
+  canvasId: string
+  commandId: string
+  scopeId: string
+}) {
+  return JSON.stringify([request.scopeId, request.canvasId, request.actor.kind, request.actor.id, request.commandId])
 }
 
 function validateResourceOperation(request: {
@@ -453,6 +580,41 @@ function validatePreparedCanvasResources(prepared: CanvasResourcePreparationResu
 
 function requireNonEmptyString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !value.trim()) throw new CanvasCommandValidationError(`${label} is required`)
+}
+
+function requireBoundedString(value: unknown, label: string, maxLength: number): asserts value is string {
+  requireNonEmptyString(value, label)
+  if (value.length > maxLength) throw new CanvasCommandValidationError(`${label} exceeds ${maxLength} characters`)
+}
+
+function validatePendingResourceKind(kind: unknown): asserts kind is CanvasPendingResourceKind {
+  if (kind !== "text" && kind !== "image" && kind !== "video" && kind !== "audio") {
+    throw new CanvasCommandValidationError(`Unsupported pending resource kind: ${String(kind)}`)
+  }
+}
+
+function validatePendingResourceContentGuard(guard: CanvasNodeContentGuard) {
+  if (
+    !isRecord(guard) ||
+    guard.type !== "file" ||
+    !isRecord(guard.data) ||
+    guard.data.status !== "pending" ||
+    typeof guard.data.label !== "string"
+  ) {
+    throw new CanvasCommandValidationError("Canvas pending resource target guard is invalid")
+  }
+  validatePendingResourceKind(guard.data.kind)
+}
+
+function validatePendingResourceErrorMessage(message: unknown): asserts message is string {
+  requireBoundedString(message, "Pending resource error message", 500)
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(message)) {
+    throw new CanvasCommandValidationError("Pending resource error message contains unsupported control characters")
+  }
+}
+
+function pendingResourceLabel(kind: CanvasPendingResourceKind) {
+  return `${kind[0].toUpperCase()}${kind.slice(1)}`
 }
 
 function requirePositiveNumberIfPresent(value: unknown, label: string) {

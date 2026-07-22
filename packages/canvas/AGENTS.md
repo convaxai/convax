@@ -38,6 +38,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Ordinary document mutations such as adding, importing, duplicating, or generating
   nodes preserve the mounted viewport. Fit, center, zoom, and reveal movement require
   an explicit user action or view command.
+- Pending generated resources are a persisted resource business lifecycle, not
+  renderer-only state. Canvas owns node-id creation, pending/error validation and
+  guarded in-place replacement semantics; hosts own external execution and supply
+  only bounded user-safe failure text.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.
@@ -48,10 +52,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   packages, permissions, iframe transport, Project/Agent calls and package storage
   belong to the host. A Web Plugin renderer still produces a `file` node and must
   mutate the document through the same editor/application APIs as built-in UI.
-- Before a main-owned external read or mutation of a mounted document, the editor
-  lease synchronously blocks new local edits, aborts pending operations, finalizes
-  gestures and flushes. A committed mutation reloads authoritative persistence
-  without first saving the stale editor snapshot; abort always releases the lease.
+- Main's application/repository is the sole authoritative document writer. The
+  editor may keep gesture state and an optimistic projection, but persistence emits
+  revision-bound element commands and accepts Main's committed result. An
+  authoritative reload never saves the stale renderer projection first.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

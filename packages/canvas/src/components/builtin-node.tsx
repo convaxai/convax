@@ -943,6 +943,39 @@ function FileGenerationActivityOverlay(props: {
   )
 }
 
+function PersistedResourceStatusOverlay(props: { error?: string; status: "error" | "pending" }) {
+  if (props.status === "pending") {
+    return (
+      <div
+        aria-busy="true"
+        aria-live="polite"
+        className="nodrag nowheel pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
+        data-canvas-persisted-resource-status="pending"
+        role="status"
+      >
+        <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
+          <LoaderCircle className="size-6 animate-spin text-primary motion-reduce:animate-none" />
+          <span>正在生成…</span>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div
+      className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      data-canvas-persisted-resource-status="error"
+      role="alert"
+    >
+      <div className="flex max-w-full flex-col items-center gap-2">
+        <span className="text-sm font-medium text-destructive">生成失败</span>
+        <span className="line-clamp-3 max-w-full text-xs text-muted-foreground">
+          {props.error ?? "Resource could not be created"}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function FileAssistantAccessory(
   props: NodeProps<CanvasNode> & {
     initialGenerationPrompt?: string
@@ -1151,6 +1184,8 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       <ContributedToolbar {...props} />
     </FileRendererBoundary>
   ) : null
+  const persistedResourceStatus =
+    props.data.status === "pending" || props.data.status === "error" ? props.data.status : null
   return (
     <>
       <ContributedToolbarSelectionActionContext.Provider
@@ -1163,6 +1198,9 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           {Renderer ? <Renderer {...props} /> : <UnknownFileRenderer {...props} />}
         </FileRendererBoundary>
       </ContributedToolbarSelectionActionContext.Provider>
+      {persistedResourceStatus ? (
+        <PersistedResourceStatusOverlay error={props.data.error} status={persistedResourceStatus} />
+      ) : null}
       {ContributedToolbar && showMutationToolbar ? (
         <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={82} position={Position.Top}>
           {selectionActions.length > 0 ? (
@@ -1177,7 +1215,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           )}
         </NodeToolbar>
       ) : null}
-      {generationActivity.status === "idle" ? (
+      {generationActivity.status === "idle" && !persistedResourceStatus ? (
         <FileAssistantAccessory
           {...props}
           initialGenerationPrompt={recoveryPrompt}

@@ -14,8 +14,24 @@ import {
   type CanvasLayout,
   type CanvasNodeGeometryUpdate,
 } from "../commands"
-import { createCanvasId, createFolderNode, createMediaNode, createTextNode, getCanvasNodeSize } from "../document"
-import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
+import {
+  createCanvasId,
+  createFolderNode,
+  createMediaNode,
+  createTextNode,
+  getCanvasNodeSize,
+  parseCanvasDocument,
+} from "../document"
+import type {
+  CanvasDocument,
+  CanvasEdge,
+  CanvasMetadata,
+  CanvasNode,
+  CanvasPendingResourceKind,
+  CanvasPoint,
+  CanvasSize,
+  CanvasUploadItem,
+} from "../types"
 import {
   applyCanvasAutoLayoutPlan,
   CanvasLayoutValidationError,
@@ -71,14 +87,53 @@ export interface CanvasAutoLayoutCommand {
   options?: CanvasAutoLayoutOptions
 }
 
+export interface CanvasCreatePendingResourceCommand {
+  type: "resources.pending.create"
+  kind: CanvasPendingResourceKind
+  label: string
+  nodeId: string
+  placement: CanvasAddResourcesCommand["placement"]
+  relation?: CanvasAddResourcesCommand["relation"]
+}
+
+export interface CanvasFailPendingResourceCommand {
+  type: "resources.pending.fail"
+  expectedTarget: CanvasNodeContentGuard
+  message: string
+  targetNodeId: string
+}
+
+/**
+ * Revision-bound renderer delta. The renderer may optimistically project a
+ * complete document locally, but only this element-level command crosses the
+ * host boundary. Main applies and persists it through the same application
+ * service as every other Canvas mutation.
+ */
+export interface CanvasDocumentPatchCommand {
+  type: "document.patch"
+  addedEdges: readonly CanvasEdge[]
+  addedNodes: readonly CanvasNode[]
+  metadata?: CanvasMetadata
+  removedEdgeIds: readonly string[]
+  removedNodeIds: readonly string[]
+  updatedEdges: readonly CanvasEdge[]
+  updatedNodes: readonly CanvasNode[]
+}
+
 /**
  * Product-level operations that preserve the same behavior across UI and Agent
  * callers. Business commands may compose several primitive mutations.
  */
-export type CanvasBusinessCommand = CanvasAddResourcesCommand | CanvasReplaceResourceCommand | CanvasAutoLayoutCommand
+export type CanvasBusinessCommand =
+  | CanvasAddResourcesCommand
+  | CanvasReplaceResourceCommand
+  | CanvasCreatePendingResourceCommand
+  | CanvasFailPendingResourceCommand
+  | CanvasAutoLayoutCommand
 
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
+  | CanvasDocumentPatchCommand
   | { type: "elements.remove"; edgeIds?: readonly string[]; nodeIds?: readonly string[] }
   | { type: "nodes.align"; direction: CanvasAlign; nodeIds: readonly string[] }
   | { type: "nodes.connect"; connection: Pick<CanvasEdge, "source" | "target"> & Partial<CanvasEdge> }
@@ -145,8 +200,60 @@ export function createAddCanvasResourcesCommand(input: {
   }
 }
 
+export function createCanvasPendingResourceCommand(input: {
+  anchor: CanvasPoint
+  kind: CanvasPendingResourceKind
+  label: string
+  relation?: CanvasAddResourcesCommand["relation"]
+}): CanvasCreatePendingResourceCommand {
+  return {
+    type: "resources.pending.create",
+    kind: input.kind,
+    label: input.label,
+    nodeId: createCanvasId("node"),
+    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    relation: input.relation,
+  }
+}
+
 export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeContentGuard {
   return structuredClone({ data: node.data, type: node.type })
+}
+
+/** Matches the portable content semantics used by Canvas persistence. */
+export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
+  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
+}
+
+export function createCanvasDocumentPatchCommand(
+  base: CanvasDocument,
+  next: CanvasDocument,
+): CanvasDocumentPatchCommand {
+  if (base.id !== next.id) throw new CanvasCommandValidationError("Canvas patch cannot change the document id")
+  const baseNodes = new Map(base.nodes.map((node) => [node.id, node]))
+  const nextNodes = new Map(next.nodes.map((node) => [node.id, node]))
+  const baseEdges = new Map(base.edges.map((edge) => [edge.id, edge]))
+  const nextEdges = new Map(next.edges.map((edge) => [edge.id, edge]))
+  return {
+    type: "document.patch",
+    addedEdges: next.edges.filter((edge) => !baseEdges.has(edge.id)).map((edge) => structuredClone(edge)),
+    addedNodes: next.nodes.filter((node) => !baseNodes.has(node.id)).map((node) => structuredClone(node)),
+    ...(sameJson(base.metadata, next.metadata) ? {} : { metadata: structuredClone(next.metadata) }),
+    removedEdgeIds: base.edges.filter((edge) => !nextEdges.has(edge.id)).map((edge) => edge.id),
+    removedNodeIds: base.nodes.filter((node) => !nextNodes.has(node.id)).map((node) => node.id),
+    updatedEdges: next.edges
+      .filter((edge) => {
+        const current = baseEdges.get(edge.id)
+        return current !== undefined && !sameJson(current, edge)
+      })
+      .map((edge) => structuredClone(edge)),
+    updatedNodes: next.nodes
+      .filter((node) => {
+        const current = baseNodes.get(node.id)
+        return current !== undefined && !sameJson(current, node)
+      })
+      .map((node) => structuredClone(node)),
+  }
 }
 
 export function findOpenCanvasPoint(
@@ -200,6 +307,7 @@ export function applyCanvasApplicationCommand(
   document: CanvasDocument,
   command: CanvasApplicationCommand,
 ): CanvasBusinessCommandResult {
+  if (command.type === "document.patch") return applyDocumentPatch(document, command)
   if (command.type === "resources.add") return addResources(document, command)
   if (command.type === "resources.replace") return replaceResource(document, command)
   if (command.type === "canvas.auto-layout") {
@@ -218,6 +326,8 @@ export function applyCanvasApplicationCommand(
       throw error
     }
   }
+  if (command.type === "resources.pending.create") return createPendingResource(document, command)
+  if (command.type === "resources.pending.fail") return failPendingResource(document, command)
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -352,6 +462,68 @@ export function executeCanvasApplicationTransaction(
 export const applyCanvasBusinessCommand = applyCanvasApplicationCommand
 export const executeCanvasBusinessCommand = executeCanvasApplicationCommand
 
+function applyDocumentPatch(
+  document: CanvasDocument,
+  command: CanvasDocumentPatchCommand,
+): CanvasBusinessCommandResult {
+  const removedNodeIds = requireUniqueIds(command.removedNodeIds, "Canvas patch removed node ids")
+  const removedEdgeIds = requireUniqueIds(command.removedEdgeIds, "Canvas patch removed edge ids")
+  const addedNodeIds = requireUniqueElementIds(command.addedNodes, "Canvas patch added nodes")
+  const updatedNodeIds = requireUniqueElementIds(command.updatedNodes, "Canvas patch updated nodes")
+  const addedEdgeIds = requireUniqueElementIds(command.addedEdges, "Canvas patch added edges")
+  const updatedEdgeIds = requireUniqueElementIds(command.updatedEdges, "Canvas patch updated edges")
+  const existingNodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const existingEdges = new Map(document.edges.map((edge) => [edge.id, edge]))
+
+  requireExistingPatchIds(existingNodes, removedNodeIds, "Canvas node")
+  requireExistingPatchIds(existingNodes, updatedNodeIds, "Canvas node")
+  requireExistingPatchIds(existingEdges, removedEdgeIds, "Canvas edge")
+  requireExistingPatchIds(existingEdges, updatedEdgeIds, "Canvas edge")
+  requireNewPatchIds(existingNodes, addedNodeIds, "Canvas node")
+  requireNewPatchIds(existingEdges, addedEdgeIds, "Canvas edge")
+  requireDisjointPatchIds(removedNodeIds, updatedNodeIds, "Canvas node")
+  requireDisjointPatchIds(removedEdgeIds, updatedEdgeIds, "Canvas edge")
+
+  const removedNodes = new Set(removedNodeIds)
+  const removedEdges = new Set(removedEdgeIds)
+  const updatedNodes = new Map(command.updatedNodes.map((node) => [node.id, structuredClone(node)]))
+  const updatedEdges = new Map(command.updatedEdges.map((edge) => [edge.id, structuredClone(edge)]))
+  const candidate: CanvasDocument = {
+    id: document.id,
+    revision: document.revision,
+    metadata: structuredClone(command.metadata ?? document.metadata),
+    nodes: [
+      ...document.nodes
+        .filter((node) => !removedNodes.has(node.id))
+        .map((node) => updatedNodes.get(node.id) ?? structuredClone(node)),
+      ...command.addedNodes.map((node) => structuredClone(node)),
+    ],
+    edges: [
+      ...document.edges
+        .filter((edge) => !removedEdges.has(edge.id))
+        .map((edge) => updatedEdges.get(edge.id) ?? structuredClone(edge)),
+      ...command.addedEdges.map((edge) => structuredClone(edge)),
+    ],
+  }
+  const parsed = parseCanvasDocument(candidate, document.id)
+  if (!parsed) throw new CanvasCommandValidationError("Canvas patch produced an invalid document")
+  if (sameJson(document, parsed)) return result(document, document)
+
+  const affectedNodeIds = new Set([...removedNodeIds, ...addedNodeIds, ...updatedNodeIds])
+  for (const edgeId of [...removedEdgeIds, ...updatedEdgeIds]) {
+    const edge = existingEdges.get(edgeId)
+    if (edge) {
+      affectedNodeIds.add(edge.source)
+      affectedNodeIds.add(edge.target)
+    }
+  }
+  for (const edge of command.addedEdges) {
+    affectedNodeIds.add(edge.source)
+    affectedNodeIds.add(edge.target)
+  }
+  return result(document, parsed, [...affectedNodeIds], addedNodeIds)
+}
+
 function addResources(document: CanvasDocument, command: CanvasAddResourcesCommand): CanvasBusinessCommandResult {
   requireFinitePoint(command.placement.anchor, "Placement anchor")
   const nodeIds = command.items.map((entry) => entry.nodeId)
@@ -397,7 +569,7 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
   if (target.type !== "file" || target.data.kind === "group") {
     throw new CanvasCommandValidationError(`Canvas resource replacement requires a file node: ${target.id}`)
   }
-  if (!sameNodeContent(target, command.expectedTarget)) {
+  if (!matchesCanvasNodeContentGuard(target, command.expectedTarget)) {
     throw new CanvasCommandValidationError(`Canvas node content changed before resource replacement: ${target.id}`)
   }
 
@@ -417,6 +589,96 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
   return result(document, next, [target.id])
 }
 
+function createPendingResource(
+  document: CanvasDocument,
+  command: CanvasCreatePendingResourceCommand,
+): CanvasBusinessCommandResult {
+  requireFinitePoint(command.placement.anchor, "Placement anchor")
+  requirePendingResourceKind(command.kind)
+  requireNonEmptyBoundedString(command.nodeId, "Pending resource node id", 256)
+  requireNonEmptyBoundedString(command.label, "Pending resource label", 200)
+  if (document.nodes.some((node) => node.id === command.nodeId)) {
+    throw new CanvasCommandValidationError(`Canvas node already exists: ${command.nodeId}`)
+  }
+
+  const relation = command.relation
+  const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
+  requireNodeIds(document, anchorNodeIds)
+
+  const node = createPendingResourceNode(command)
+  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(node))
+  let next = addCanvasNodes(document, [{ ...node, position: openPoint }]).document
+  if (relation?.mode === "connect") {
+    const direction = relation.direction ?? "from-anchor"
+    for (const anchorNodeId of anchorNodeIds) {
+      next = connectCanvasNodes(
+        next,
+        direction === "from-anchor"
+          ? { source: anchorNodeId, target: command.nodeId }
+          : { source: command.nodeId, target: anchorNodeId },
+      )
+    }
+  }
+  return result(document, next, [...new Set([...anchorNodeIds, command.nodeId])], [command.nodeId])
+}
+
+function failPendingResource(
+  document: CanvasDocument,
+  command: CanvasFailPendingResourceCommand,
+): CanvasBusinessCommandResult {
+  requireSafePendingResourceErrorMessage(command.message)
+  const target = document.nodes.find((node) => node.id === command.targetNodeId)
+  if (!target) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.targetNodeId}`)
+  if (target.type !== "file" || !isPendingResourceNode(target)) {
+    throw new CanvasCommandValidationError(`Canvas pending resource failure requires a pending file node: ${target.id}`)
+  }
+  if (!matchesCanvasNodeContentGuard(target, command.expectedTarget)) {
+    throw new CanvasCommandValidationError(`Canvas node content changed before pending resource failure: ${target.id}`)
+  }
+
+  const next = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === target.id
+        ? {
+            ...node,
+            data: { ...node.data, error: command.message, status: "error" as const },
+          }
+        : node,
+    ),
+  }
+  return result(document, next, [target.id])
+}
+
+function createPendingResourceNode(command: CanvasCreatePendingResourceCommand): CanvasNode {
+  if (command.kind === "text") {
+    const node = createTextNode({
+      id: command.nodeId,
+      label: command.label,
+      position: command.placement.anchor,
+      text: "",
+    })
+    return { ...node, data: { ...node.data, status: "pending" } }
+  }
+  const node = createMediaNode({
+    id: command.nodeId,
+    label: command.label,
+    position: command.placement.anchor,
+    resource: { id: command.nodeId, kind: command.kind, url: "" },
+  })
+  return { ...node, data: { ...node.data, status: "pending" } }
+}
+
+function isPendingResourceNode(node: CanvasNode) {
+  return (
+    node.data.status === "pending" &&
+    (node.data.kind === "text" ||
+      node.data.kind === "image" ||
+      node.data.kind === "video" ||
+      node.data.kind === "audio")
+  )
+}
+
 function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position: CanvasPoint): CanvasNode {
   if (item.kind === "text") {
     return createTextNode({
@@ -432,20 +694,56 @@ function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position
   return createMediaNode({ id: nodeId, position, resource: item })
 }
 
-function sameNodeContent(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
+function sameJson(left: unknown, right: unknown) {
+  return stableJson(left) === stableJson(right)
+}
+
+function requireUniqueIds(ids: readonly string[], label: string) {
+  const unique = new Set<string>()
+  for (const id of ids) {
+    requireNonEmptyBoundedString(id, label, 256)
+    if (unique.has(id)) throw new CanvasCommandValidationError(`${label} must be unique`)
+    unique.add(id)
+  }
+  return [...unique]
+}
+
+function requireUniqueElementIds(elements: readonly { id: string }[], label: string) {
+  return requireUniqueIds(
+    elements.map((element) => element.id),
+    label,
+  )
+}
+
+function requireExistingPatchIds<T>(existing: ReadonlyMap<string, T>, ids: readonly string[], label: string) {
+  const missing = ids.find((id) => !existing.has(id))
+  if (missing) throw new CanvasCommandValidationError(`${label} was not found: ${missing}`)
+}
+
+function requireNewPatchIds<T>(existing: ReadonlyMap<string, T>, ids: readonly string[], label: string) {
+  const duplicate = ids.find((id) => existing.has(id))
+  if (duplicate) throw new CanvasCommandValidationError(`${label} already exists: ${duplicate}`)
+}
+
+function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: readonly string[], label: string) {
+  const removed = new Set(removedIds)
+  const overlap = updatedIds.find((id) => removed.has(id))
+  if (overlap) throw new CanvasCommandValidationError(`${label} cannot be removed and updated: ${overlap}`)
 }
 
 function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => (item === undefined ? "null" : stableJson(item))).join(",")}]`
+  }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>
     return `{${Object.keys(record)
       .sort()
+      .filter((key) => record[key] !== undefined)
       .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
       .join(",")}}`
   }
-  return value === undefined ? "undefined" : (JSON.stringify(value) ?? "null")
+  return JSON.stringify(value) ?? "null"
 }
 
 function result(
@@ -482,4 +780,22 @@ function requireFinitePoint(point: CanvasPoint, label: string) {
 
 function validActor(actor: CanvasCommandActor) {
   return Boolean(actor.id.trim() && actor.kind.trim())
+}
+
+function requirePendingResourceKind(kind: unknown): asserts kind is CanvasPendingResourceKind {
+  if (kind !== "text" && kind !== "image" && kind !== "video" && kind !== "audio") {
+    throw new CanvasCommandValidationError(`Unsupported pending resource kind: ${String(kind)}`)
+  }
+}
+
+function requireNonEmptyBoundedString(value: unknown, label: string, maxLength: number): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) throw new CanvasCommandValidationError(`${label} is required`)
+  if (value.length > maxLength) throw new CanvasCommandValidationError(`${label} exceeds ${maxLength} characters`)
+}
+
+function requireSafePendingResourceErrorMessage(message: unknown): asserts message is string {
+  requireNonEmptyBoundedString(message, "Pending resource error message", 500)
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(message)) {
+    throw new CanvasCommandValidationError("Pending resource error message contains unsupported control characters")
+  }
 }

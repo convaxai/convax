@@ -6,9 +6,11 @@ import {
   applyCanvasBusinessCommand,
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
+  createCanvasDocumentPatchCommand,
   createCanvasNodeContentGuard,
   executeCanvasBusinessCommand,
   findOpenCanvasPoint,
+  matchesCanvasNodeContentGuard,
 } from "./commands"
 import { queryCanvasNodes } from "./queries"
 
@@ -45,6 +47,96 @@ function addResourcesCommand(): CanvasAddResourcesCommand {
 }
 
 describe("canvas application commands", () => {
+  test("keeps content guards stable when persistence omits undefined media fields", () => {
+    const pending = createMediaNode({
+      id: "pending",
+      position: { x: 0, y: 0 },
+      resource: { id: "pending", kind: "image", url: "" },
+    })
+    pending.data.status = "pending"
+    const guard = createCanvasNodeContentGuard(pending)
+    const persisted = {
+      ...pending,
+      data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
+    }
+
+    expect(matchesCanvasNodeContentGuard(persisted, guard)).toBeTrue()
+    const failed = applyCanvasBusinessCommand(createCanvasDocument({ id: "canvas", nodes: [persisted] }), {
+      expectedTarget: guard,
+      message: "Generation could not be completed",
+      targetNodeId: persisted.id,
+      type: "resources.pending.fail",
+    })
+    expect(failed.document.nodes[0]?.data).toMatchObject({
+      error: "Generation could not be completed",
+      status: "error",
+    })
+  })
+
+  test("commits a renderer element patch without accepting a whole replacement document", () => {
+    const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "Before" })
+    const removed = createTextNode({ id: "removed", position: { x: 200, y: 0 }, text: "Remove" })
+    const base = createCanvasDocument({ id: "canvas-patch", nodes: [first, removed], title: "Before" })
+    const added = createTextNode({ id: "added", position: { x: 400, y: 0 }, text: "Added" })
+    const target = connectCanvasNodes(
+      {
+        ...base,
+        metadata: { ...base.metadata, title: "After" },
+        nodes: [{ ...first, data: { ...first.data, text: "After" } }, added],
+      },
+      { id: "edge-added", source: first.id, target: added.id },
+    )
+    const command = createCanvasDocumentPatchCommand(base, target)
+
+    expect(command).toMatchObject({
+      addedNodes: [{ id: added.id }],
+      metadata: { title: "After" },
+      removedNodeIds: [removed.id],
+      updatedNodes: [{ id: first.id }],
+    })
+    expect("document" in command).toBeFalse()
+
+    const committed = executeCanvasBusinessCommand(base, {
+      actor: { id: "renderer-one", kind: "renderer" },
+      command,
+      commandId: "renderer-patch-one",
+      expectedRevision: 0,
+    })
+    expect(committed.document).toMatchObject({
+      metadata: { title: "After" },
+      revision: 1,
+    })
+    expect(committed.document.nodes.map((node) => node.id)).toEqual([first.id, added.id])
+    expect(committed.document.nodes[0]?.data).toMatchObject({ text: "After" })
+    expect(committed.document.edges).toEqual([
+      expect.objectContaining({ id: "edge-added", source: first.id, target: added.id }),
+    ])
+  })
+
+  test("rejects malformed renderer patches and stale revisions", () => {
+    const node = createTextNode({ id: "node", position: { x: 0, y: 0 } })
+    const base = createCanvasDocument({ id: "canvas-patch-guard", nodes: [node] })
+    const command = createCanvasDocumentPatchCommand(base, {
+      ...base,
+      nodes: [{ ...node, position: { x: 20, y: 30 } }],
+    })
+    expect(() =>
+      executeCanvasBusinessCommand(base, {
+        actor: { id: "renderer-one", kind: "renderer" },
+        command,
+        commandId: "renderer-patch-stale",
+        expectedRevision: 1,
+      }),
+    ).toThrow(CanvasRevisionConflictError)
+    expect(() =>
+      applyCanvasBusinessCommand(base, {
+        ...command,
+        removedNodeIds: [node.id],
+        updatedNodes: [{ ...node, position: { x: 20, y: 30 } }],
+      }),
+    ).toThrow("cannot be removed and updated")
+  })
+
   test("adds prepared resources with product sizing, placement, and explicit relations", () => {
     const anchor = {
       ...createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Anchor" }),
@@ -166,6 +258,103 @@ describe("canvas application commands", () => {
       id: "folder-node",
       type: "file",
     })
+  })
+
+  test.each(["text", "image", "video", "audio"] as const)(
+    "creates a host-neutral pending %s file resource with placement and relations",
+    (kind) => {
+      const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Source" })
+      const document = createCanvasDocument({ id: "canvas-pending", nodes: [anchor] })
+      const applied = applyCanvasBusinessCommand(document, {
+        type: "resources.pending.create",
+        kind,
+        label: `Pending ${kind}`,
+        nodeId: `pending-${kind}`,
+        placement: { anchor: { x: 0, y: 0 }, strategy: "avoid-overlap-cascade" },
+        relation: { anchorNodeIds: [anchor.id], mode: "connect" },
+      })
+
+      expect(applied.createdNodeIds).toEqual([`pending-${kind}`])
+      expect(applied.document.nodes.find((node) => node.id === `pending-${kind}`)).toMatchObject({
+        data: {
+          kind,
+          label: `Pending ${kind}`,
+          status: "pending",
+          ...(kind === "text" ? { text: "" } : { url: "" }),
+        },
+        position: { x: 304, y: 0 },
+        type: "file",
+      })
+      expect(applied.document.edges).toEqual([
+        expect.objectContaining({ source: anchor.id, target: `pending-${kind}` }),
+      ])
+    },
+  )
+
+  test("fails an exact pending target and lets normal replacement clear persisted lifecycle state", () => {
+    const anchor = createTextNode({ id: "anchor", position: { x: 0, y: 0 }, text: "Source" })
+    const created = applyCanvasBusinessCommand(createCanvasDocument({ nodes: [anchor] }), {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Relit image",
+      nodeId: "pending-image",
+      placement: { anchor: { x: 0, y: 0 } },
+      relation: { anchorNodeIds: [anchor.id], mode: "connect" },
+    })
+    const pending = created.document.nodes.find((node) => node.id === "pending-image")!
+    const failed = applyCanvasBusinessCommand(created.document, {
+      type: "resources.pending.fail",
+      expectedTarget: createCanvasNodeContentGuard(pending),
+      message: "Generation could not be completed",
+      targetNodeId: pending.id,
+    })
+
+    expect(failed.document.edges).toEqual(created.document.edges)
+    expect(failed.document.nodes.find((node) => node.id === pending.id)).toMatchObject({
+      data: { error: "Generation could not be completed", kind: "image", status: "error", url: "" },
+      position: pending.position,
+    })
+
+    const replacementTarget = failed.document.nodes.find((node) => node.id === pending.id)!
+    const replaced = applyCanvasBusinessCommand(failed.document, {
+      type: "resources.replace",
+      expectedTarget: createCanvasNodeContentGuard(replacementTarget),
+      item: { id: "generated", kind: "image", url: "asset://generated" },
+      targetNodeId: replacementTarget.id,
+    })
+    const finalNode = replaced.document.nodes.find((node) => node.id === pending.id)!
+    expect(finalNode.id).toBe(pending.id)
+    expect(finalNode.position).toEqual(pending.position)
+    expect(replaced.document.edges).toEqual(failed.document.edges)
+    expect(finalNode.data).toMatchObject({ kind: "image", url: "asset://generated" })
+    expect(finalNode.data).not.toHaveProperty("status")
+    expect(finalNode.data).not.toHaveProperty("error")
+  })
+
+  test("rejects pending failure after deletion or any content change", () => {
+    const created = applyCanvasBusinessCommand(createCanvasDocument(), {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Generated image",
+      nodeId: "pending-image",
+      placement: { anchor: { x: 0, y: 0 } },
+    })
+    const pending = created.document.nodes[0]
+    if (!pending) throw new Error("Pending resource was not created")
+    const command = {
+      type: "resources.pending.fail" as const,
+      expectedTarget: createCanvasNodeContentGuard(pending),
+      message: "Generation could not be completed",
+      targetNodeId: pending.id,
+    }
+
+    expect(() => applyCanvasBusinessCommand(createCanvasDocument(), command)).toThrow("was not found")
+    expect(() =>
+      applyCanvasBusinessCommand(
+        createCanvasDocument({ nodes: [{ ...pending, data: { ...pending.data, label: "Changed" } }] }),
+        command,
+      ),
+    ).toThrow("content changed")
   })
 
   test("replaces only a guarded file node's type and data while preserving its identity, layout, and edges", () => {

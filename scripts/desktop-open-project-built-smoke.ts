@@ -1197,12 +1197,19 @@ try {
     }
     const current = snapshot.loaded.document
     if (!current) throw new Error("Canvas document disappeared before Panorama seeding")
-    await window.convax.canvas.documents.save({
-      document: {
-        ...current,
-        revision: current.revision + 1,
-        nodes: [
-          ...current.nodes,
+    await window.convax.canvas.documents.execute({
+      command: {
+        addedEdges: [
+          {
+            id: edgeId,
+            source: sourceNodeId,
+            sourceHandle: "source-right",
+            target: snapshot.pluginNode.id,
+            targetHandle: "target-left",
+            type: "canvas",
+          },
+        ],
+        addedNodes: [
           {
             data: {
               fit: "contain",
@@ -1223,19 +1230,14 @@ try {
             type: "file",
           },
         ],
-        edges: [
-          ...current.edges,
-          {
-            id: edgeId,
-            source: sourceNodeId,
-            sourceHandle: "source-right",
-            target: snapshot.pluginNode.id,
-            targetHandle: "target-left",
-            type: "canvas",
-          },
-        ],
+        removedEdgeIds: [],
+        removedNodeIds: [],
+        type: "document.patch",
+        updatedEdges: [],
+        updatedNodes: [],
       },
-      expectedStorageVersion: snapshot.loaded.storageVersion,
+      commandId: "renderer-smoke-panorama-seed",
+      expectedRevision: current.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     return {

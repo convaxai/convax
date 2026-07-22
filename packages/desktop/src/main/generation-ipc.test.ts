@@ -272,6 +272,21 @@ describe("generation IPC", () => {
     dispose()
   })
 
+  test("accepts the host-owned pending-node result mode without a caller-selected node id", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const pending = { ...request, resultMode: { type: "create-pending-node" as const } }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, pending))).resolves.toEqual(result)
+    expect(generate).toHaveBeenCalledWith(pending, expect.any(AbortSignal))
+
+    dispose()
+  })
+
   test("scopes duplicate ids and cancellation to the originating renderer", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const capturedSignals: AbortSignal[] = []
@@ -338,6 +353,10 @@ describe("generation IPC", () => {
       [{ ...request, resultMode: { type: "replace-node" } }, "result mode is invalid"],
       [{ ...request, resultMode: { nodeId: "/native/path", type: "replace-node" } }, "replacement node id is invalid"],
       [{ ...request, resultMode: { nodeId: "extra", type: "add" } }, "result mode is invalid"],
+      [
+        { ...request, resultMode: { nodeId: "caller-selected", type: "create-pending-node" } },
+        "result mode is invalid",
+      ],
       [{ ...request, resultMode: { type: "provider-result" } }, "result mode is invalid"],
       [
         { ...request, referenceConstraint: { ownerNodeId: "plugin-card", type: "arbitrary" } },

@@ -152,7 +152,7 @@ boundary checker fails closed until those admissions are complete.
 | Project Canvas catalog                                   | `ProjectCanvasController`                    | CRUD/relationships only; no active Canvas                                |
 | Active Canvas/file                                       | `WorkbenchController.activeInput/surface`    | Sole source for the displayed primary content                            |
 | Canvas node selection                                    | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view                            |
-| Canvas document and revision                             | Canvas application service/repository        | Mutations use commands and conflict checks                               |
+| Canvas document and revision                             | Main Canvas application service/repository   | Sole persistent writer; renderer is an optimistic projection             |
 | Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage |
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence               |
 | Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
@@ -375,6 +375,19 @@ generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
 
+A sandboxed Plugin may request the host-owned pending-result mode when the user
+expects immediate Canvas feedback. Canvas creates exactly one typed pending `file`
+node through its resource business service; the Plugin cannot choose its id or a
+replacement target. Desktop commits that node in Main before invoking the external
+generation tool, advances the guarded request to the committed revision, and
+rechecks the same Main-owned reference, asset and target snapshots before the
+potentially billable call. Renderer refresh/reveal is asynchronous projection work
+and cannot delay or veto the tool call. A successful admitted result replaces the
+pending resource in place, preserving its id, placement and edges. Failure or
+cancellation keeps the node and marks it with a bounded host-authored error. If the
+node is removed, edited or otherwise no longer matches its exact content guard,
+Desktop fails closed and never recreates or writes through it.
+
 Tool-custom generation controls come only from the selected sidecar's current MCP
 `tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
 registry. Main lazily describes one explicitly selected tool, projects only bounded
@@ -486,8 +499,8 @@ Canvas application transactions execute a non-empty ordered command list against
 one starting revision, advance the revision once, and use one repository CAS save. This is the
 atomic boundary used by Plugin and advanced Agent callers; transports do not compose
 atomicity from repeated saves. Resource admission/replacement is deliberately outside
-the generic document transaction because it has separate Project lifecycle, lease,
-and rollback semantics.
+the generic document transaction because it has separate Project lifecycle,
+managed-asset, guard, and rollback semantics.
 
 Whole-Canvas tidy is the `canvas.auto-layout` business operation. The built-in engine
 uses directed edges, heterogeneous node sizes, group ownership, cycle-tolerant
@@ -533,9 +546,9 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Tool arguments cannot select another Project or expand the host-provided scope.
   Document tools may explicitly select any Canvas from the current Project's live
   catalog and still require revision guards. View tools resolve the live mounted
-  Canvas and fail when their requested Canvas is not active. Reads and mutations of
-  a mounted document pass through the same renderer flush/lock/reload lease used by
-  Plugin calls; inactive Canvases access persistence directly under the shared queue.
+  Canvas and fail when their requested Canvas is not active. All document reads and
+  mutations use Main's authoritative application/repository boundary directly;
+  mounted and inactive Canvases have identical domain semantics.
 - Canvas attachments are validated read-only snapshots. Agents mutate through tools,
   never by shell/file edits under `.convax`.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
@@ -659,15 +672,15 @@ business capability so a document command cannot forge a file reference or bypas
 asset lifecycle rules. Change events are revision-only invalidations; consumers
 re-query the projection they need.
 
-Before a broker read or write touches a Canvas, Main serializes it with other
-external document operations and reserves that document in the renderer. A mounted
-editor additionally quiesces: it blocks local edits, aborts pending work, finishes
-gestures and flushes. A successful external write reloads authoritative persistence
-without saving the stale editor snapshot; reads and failed writes release the lease
-as aborted. An inactive Canvas remains unmounted, but its reservation prevents a
-Project/Canvas navigation race until the operation finishes. Prepare timeout and
-caller cancellation use an explicit cancel handshake so a late flush cannot leave
-the editor locked. Agent and Tool signals are rechecked before durable Canvas saves.
+Broker reads and writes go directly through Main's Canvas application/repository
+boundary. Revision and storage CAS serialize persistence; exact content/reference
+guards protect long-running work. A mounted editor keeps only gesture state and an
+optimistic projection, submits element-level commands with `expectedRevision`, and
+never persists a whole document. Every Main commit publishes a revision-only
+invalidation through `CanvasDocumentChangeBus`; renderer reloads the authoritative
+document without first saving its stale projection. Delayed or failed renderer
+synchronization cannot block or reverse a Main commit. Agent and Tool signals are
+rechecked before durable Canvas saves.
 
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas
@@ -827,6 +840,14 @@ Main also cancels pre-dispatch work on renderer destruction or IPC disposal and
 re-resolves the live active Canvas before starting.
 Incompatible bridge changes must bump the Desktop protocol version so stale
 main/preload/renderer combinations fail visibly instead of hanging.
+
+The Canvas document bridge exposes authoritative `load` and application-command
+`execute` only. Renderer translates local optimistic edits into an element-level
+`document.patch` command and supplies the last acknowledged Main revision. Main
+derives the renderer actor identity, applies the command through
+`CanvasApplicationService`, persists through repository CAS, and returns the
+authoritative document. Main-originated commits publish invalidations; renderer
+projection refresh and optional view effects are best-effort consumers.
 
 ## 11. Portable paths and trust boundaries
 

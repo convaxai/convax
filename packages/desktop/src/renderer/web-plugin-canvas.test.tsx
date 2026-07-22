@@ -212,6 +212,7 @@ function hostContext(
           acceptedInputs: ["text", "reference_image"],
           description: "Generate an image",
           id: "generation-tools/image.generate",
+          kind: "model",
           output: "image",
           title: "Generate image",
         },
@@ -865,6 +866,7 @@ describe("Canvas Web Plugin host requests", () => {
         acceptedInputs: ["reference_image"] as const,
         description: "Generate a still image",
         id: "image-tools/generate",
+        kind: "model" as const,
         output: "image" as const,
         title: "Generate image",
       },
@@ -895,6 +897,7 @@ describe("Canvas Web Plugin host requests", () => {
             acceptedInputs: ["reference_image"],
             description: "Generate a still image",
             id: "image-tools/generate",
+            kind: "model",
             output: "image",
             title: "Generate image",
           },
@@ -942,7 +945,7 @@ describe("Canvas Web Plugin host requests", () => {
     })
   })
 
-  test("derives generation scope, revision, placement, and explicit references from the live Canvas", async () => {
+  test("derives generation scope, placement, and explicit references without trusting the renderer revision", async () => {
     const owner = canvasNode({ style: { height: 460, width: 720 } })
     const image = connectedImageNode()
     const video = generationInputNode("video", "video-1")
@@ -981,6 +984,7 @@ describe("Canvas Web Plugin host requests", () => {
             { nodeId: image.id, role: "first_frame" },
             { nodeId: audio.id, role: "audio" },
           ],
+          resultMode: "create-pending-node",
           toolId: "image-tools/generate",
         },
         desktopPluginHostProtocolV2,
@@ -997,7 +1001,6 @@ describe("Canvas Web Plugin host requests", () => {
     expect(executeCanvasGeneration).toHaveBeenCalledWith({
       anchor: { x: 794, y: 20 },
       canvasId: "canvas-1",
-      expectedRevision: 7,
       nodeId: "node-1",
       output: "image",
       pluginId: "director-stage",
@@ -1007,6 +1010,7 @@ describe("Canvas Web Plugin host requests", () => {
         { nodeId: "image-1", role: "first_frame" },
         { nodeId: "audio-1", role: "audio" },
       ],
+      resultMode: "create-pending-node",
       signal: expect.any(AbortSignal),
       toolId: "image-tools/generate",
     })
@@ -1025,6 +1029,18 @@ describe("Canvas Web Plugin host requests", () => {
       context,
     )
     expect(authorityInjection).toMatchObject({ ok: false, error: expect.stringContaining("unsupported field") })
+    const unsupportedResultMode = await dispatchWebPluginHostRequest(
+      request(
+        "generation.canvas.execute",
+        { prompt: "escape", resultMode: "replace-node" },
+        desktopPluginHostProtocolV2,
+      ),
+      context,
+    )
+    expect(unsupportedResultMode).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("result mode is not supported"),
+    })
     expect(executeCanvasGeneration).toHaveBeenCalledTimes(1)
   })
 

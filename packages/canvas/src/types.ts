@@ -5,6 +5,7 @@ export type CanvasEdgeId = string
 export type CanvasDocumentId = string
 
 export type CanvasNodeStatus = "idle" | "pending" | "error"
+export type CanvasPendingResourceKind = "text" | "image" | "video" | "audio"
 export type CanvasMediaKind = "image" | "video" | "audio" | "file"
 export type CanvasFileKind = "text" | CanvasMediaKind | "folder"
 /** Public canvas node roles. Structural groups are persisted as file nodes with `data.kind = "group"`. */

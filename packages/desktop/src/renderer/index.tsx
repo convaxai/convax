@@ -1,5 +1,6 @@
 import {
   CanvasEditor,
+  type CanvasDocument,
   createDefaultCanvasFileRendererRegistry,
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
@@ -14,7 +15,12 @@ import {
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
-import { ProjectCanvasController, hydrateProjectCanvasDocument, projectFileReferenceKey } from "@convax/project/canvas"
+import {
+  dehydrateProjectCanvasDocument,
+  ProjectCanvasController,
+  hydrateProjectCanvasDocument,
+  projectFileReferenceKey,
+} from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
@@ -46,6 +52,7 @@ import {
   type AppLanguagePreference,
 } from "./app-language"
 import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
+import { createRendererCanvasPersistence } from "./canvas-command-persistence"
 import { createInitialCanvasDocument } from "./canvas-document"
 import { CanvasCardConversationPanel, canvasCardAgentContextNodeIds } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
@@ -161,6 +168,16 @@ async function copyCanvasProjectFiles(paths: string[], projectId: string, signal
   return projectFiles
 }
 
+function hydrateRendererCanvasDocument(document: CanvasDocument, projectId: string, title?: string) {
+  return hydrateProjectCanvasDocument(
+    {
+      ...document,
+      metadata: { ...document.metadata, title: title ?? document.metadata.title },
+    },
+    ({ path }) => projectAssetUrl(projectId, path),
+  )
+}
+
 function mediaOperationActionIcon(editor: MediaOperationEditor) {
   if (editor === "time-point") return <ImageDown />
   if (editor === "time-range") return <Scissors />
@@ -206,41 +223,38 @@ function App() {
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
   }>({})
-  const latestCanvasSaveRef = useRef<Promise<void> | null>(null)
-  const externalDocumentMutationRef = useRef<{ canvasId: string; scopeId: string } | null>(null)
-  const assertNoExternalDocumentMutation = useCallback(() => {
-    const mutation = externalDocumentMutationRef.current
-    if (mutation) throw new Error(`Canvas ${mutation.canvasId} is being updated by an external capability`)
-  }, [])
-  const drainCanvasSaves = useCallback(async () => {
+  const latestCanvasSaveRef = useRef<Promise<CanvasDocument> | null>(null)
+  const drainCanvasSaves = useCallback(async (): Promise<CanvasDocument | undefined> => {
+    let authoritativeDocument: CanvasDocument | undefined
     while (true) {
       const pending = latestCanvasSaveRef.current
-      if (!pending) return
+      if (!pending) return authoritativeDocument
       try {
-        await pending
+        authoritativeDocument = await pending
       } catch (error) {
         if (latestCanvasSaveRef.current !== pending) continue
         throw error
       }
-      if (latestCanvasSaveRef.current === pending) return
+      if (latestCanvasSaveRef.current === pending) return authoritativeDocument
     }
   }, [])
-  const flushCanvasForAgent = useCallback(async () => {
-    await canvasEditorRef.current?.flush()
-    await drainCanvasSaves()
+  const flushAuthoritativeCanvas = useCallback(async () => {
+    const flushedDocument = await canvasEditorRef.current?.flush()
+    return (await drainCanvasSaves()) ?? flushedDocument
   }, [drainCanvasSaves])
+  const flushCanvasForAgent = useCallback(async () => {
+    await flushAuthoritativeCanvas()
+  }, [flushAuthoritativeCanvas])
   const projectController = useMemo(
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
-          assertNoExternalDocumentMutation()
           await canvasEditorRef.current?.prepareToLeave()
           await drainCanvasSaves()
-          assertNoExternalDocumentMutation()
         },
         onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [assertNoExternalDocumentMutation, drainCanvasSaves],
+    [drainCanvasSaves],
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
@@ -276,16 +290,14 @@ function App() {
     () =>
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
-          assertNoExternalDocumentMutation()
           if (currentInput?.kind === "canvas") {
             await canvasEditorRef.current?.prepareToLeave()
             await drainCanvasSaves()
           }
-          assertNoExternalDocumentMutation()
         },
         onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [assertNoExternalDocumentMutation, drainCanvasSaves],
+    [drainCanvasSaves],
   )
   const projectCanvasWorkbench = useMemo(
     () => new ProjectCanvasWorkbenchCoordinator(projectCanvasController, workbenchController),
@@ -411,22 +423,26 @@ function App() {
       async executeCanvasGeneration(input) {
         throwIfAborted(input.signal)
         currentScope(input.projectId, input.canvasId)
-        await flushCanvasForAgent()
+        const authoritativeDocument = await flushAuthoritativeCanvas()
         throwIfAborted(input.signal)
         currentScope(input.projectId, input.canvasId)
+        if (!authoritativeDocument || authoritativeDocument.id !== input.canvasId) {
+          throw new Error("Canvas generation could not resolve Main's authoritative document")
+        }
         const operationId = globalThis.crypto.randomUUID()
         const cancel = () => window.convax.generation.cancel({ operationId })
         input.signal.addEventListener("abort", cancel, { once: true })
         try {
           const result = await window.convax.generation.generate({
             anchor: input.anchor,
-            expectedRevision: input.expectedRevision,
+            expectedRevision: authoritativeDocument.revision,
             operationId,
             ...(input.output ? { output: input.output } : {}),
             prompt: input.prompt,
             ref: { canvasId: input.canvasId, scopeId: input.projectId },
             referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
             references: input.references,
+            ...(input.resultMode ? { resultMode: { type: input.resultMode } } : {}),
             ...(input.toolId ? { toolId: input.toolId } : {}),
           })
           throwIfAborted(input.signal)
@@ -459,6 +475,7 @@ function App() {
           acceptedInputs: tool.acceptedInputs,
           description: tool.description,
           id: tool.id,
+          kind: tool.kind,
           output: tool.output,
           title: tool.title,
         }))
@@ -548,7 +565,7 @@ function App() {
         return result
       },
     }
-  }, [flushCanvasForAgent])
+  }, [flushAuthoritativeCanvas])
 
   useEffect(() => {
     let active = true
@@ -638,9 +655,6 @@ function App() {
             : null
         },
         getEditor: () => canvasEditorRef.current,
-        onDocumentMutationChange: (ref) => {
-          externalDocumentMutationRef.current = ref
-        },
         views: canvasViewRegistry,
       }),
     [canvasViewRegistry],
@@ -657,8 +671,6 @@ function App() {
     })
   }, [activeCanvas, activeProject])
   const services = useMemo(() => {
-    let storageVersion: string | null | undefined
-    let saveQueue = Promise.resolve()
     const generateService: CanvasGenerateService = {
       get catalogVersion() {
         return generationToolCatalogVersionRef.current
@@ -699,11 +711,14 @@ function App() {
           throw new Error("Generation must target the active Canvas")
         }
         if (request.signal.aborted) throw request.signal.reason
-        await flushCanvasForAgent()
+        const authoritativeDocument = await flushAuthoritativeCanvas()
         if (request.signal.aborted) throw request.signal.reason
         const live = pluginHostContextRef.current
         if (live.activeProject?.id !== activeProjectId || live.activeCanvas?.id !== activeCanvasId) {
           throw new Error("Generation must target the live active Canvas")
+        }
+        if (!authoritativeDocument || authoritativeDocument.id !== activeCanvasId) {
+          throw new Error("Generation could not resolve Main's authoritative Canvas document")
         }
         const operationId = globalThis.crypto.randomUUID()
         const cancel = () => window.convax.generation.cancel({ operationId })
@@ -712,7 +727,7 @@ function App() {
           const result = await window.convax.generation.generate({
             anchor: request.anchor,
             ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-            expectedRevision: request.expectedRevision,
+            expectedRevision: authoritativeDocument.revision,
             operationId,
             ...(request.output ? { output: request.output } : {}),
             prompt: request.prompt,
@@ -795,60 +810,20 @@ function App() {
         },
       },
       generate: generateService,
-      persistence: {
-        async load(documentId, signal) {
-          if (!activeProjectId || !activeCanvasId) {
-            throw new Error("An active project and canvas are required to load a canvas document")
-          }
-          if (signal.aborted) throw signal.reason
-          const result = await window.convax.canvas.documents.load({
-            canvasId: activeCanvasId,
-            scopeId: activeProjectId,
-          })
-          if (!result.document) {
-            if (signal.aborted) throw signal.reason
-            storageVersion = result.storageVersion
-            return null
-          }
-          if (result.document.id !== documentId) throw new Error("Loaded the wrong canvas document")
-          if (signal.aborted) throw signal.reason
-          const document = hydrateProjectCanvasDocument(
-            {
-              ...result.document,
-              metadata: {
-                ...result.document.metadata,
-                title: activeCanvasNameRef.current ?? result.document.metadata.title,
+      persistence:
+        activeProjectId && activeCanvasId
+          ? createRendererCanvasPersistence({
+              client: window.convax.canvas.documents,
+              commandId: () => `renderer-${globalThis.crypto.randomUUID()}`,
+              dehydrate: dehydrateProjectCanvasDocument,
+              hydrate: (document) =>
+                hydrateRendererCanvasDocument(document, activeProjectId, activeCanvasNameRef.current),
+              onSavePending: (pending) => {
+                latestCanvasSaveRef.current = pending
               },
-            },
-            ({ path }) => projectAssetUrl(activeProjectId, path),
-          )
-          if (signal.aborted) throw signal.reason
-          // A failed hydration must not grant a stale renderer snapshot the
-          // freshly loaded CAS token for a later overwrite.
-          storageVersion = result.storageVersion
-          return document
-        },
-        async save(document, signal) {
-          const save = saveQueue
-            .catch(() => undefined)
-            .then(async () => {
-              if (!activeProjectId || !activeCanvasId) {
-                throw new Error("An active project and canvas are required to save a canvas document")
-              }
-              if (signal.aborted) throw signal.reason
-              if (storageVersion === undefined) throw new Error("Canvas must be loaded before it can be saved")
-              const result = await window.convax.canvas.documents.save({
-                document,
-                expectedStorageVersion: storageVersion,
-                ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-              })
-              storageVersion = result.storageVersion
+              ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
             })
-          saveQueue = save
-          latestCanvasSaveRef.current = save
-          return save
-        },
-      },
+          : undefined,
       export: {
         async export(request, signal) {
           if (signal.aborted) throw signal.reason
@@ -868,7 +843,7 @@ function App() {
         },
       },
     })
-  }, [activeCanvasId, activeProjectId, flushCanvasForAgent])
+  }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas])
 
   const runMediaOperation = useCallback(
     async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {

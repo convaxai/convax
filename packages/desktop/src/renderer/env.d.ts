@@ -1,5 +1,5 @@
 import type { AgentClient } from "@convax/agent-runtime"
-import type { CanvasDocumentClient } from "@convax/canvas/application"
+import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import type { CanvasRendererClient } from "../canvas-renderer-contracts"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { ProjectLifecycleClient } from "@convax/project"
@@ -21,7 +21,7 @@ declare global {
     convax: {
       agent: AgentClient & { skills: DesktopSkillClient }
       canvas: {
-        documents: CanvasDocumentClient
+        documents: CanvasRendererDocumentClient
         externalMediaDrag?: CanvasExternalMediaDragRendererClient
         renderer: CanvasRendererClient
       }
