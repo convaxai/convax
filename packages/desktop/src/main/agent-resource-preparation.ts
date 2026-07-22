@@ -62,16 +62,16 @@ export function parseAgentCanvasResourceUri(value: string): AgentCanvasResourceR
   }
   const segments = url.pathname.split("/")
   if (
-    url.protocol !== "convax:"
-    || url.hostname !== "canvas"
-    || url.username
-    || url.password
-    || url.port
-    || url.search
-    || url.hash
-    || (segments.length !== 2 && segments.length !== 4)
-    || segments[0] !== ""
-    || (segments.length === 4 && segments[2] !== "node")
+    url.protocol !== "convax:" ||
+    url.hostname !== "canvas" ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash ||
+    (segments.length !== 2 && segments.length !== 4) ||
+    segments[0] !== "" ||
+    (segments.length === 4 && segments[2] !== "node")
   ) {
     throw new Error("Agent structured resource URI is invalid")
   }
@@ -118,11 +118,14 @@ async function prepareStructuredResource(
   }
   if (!document) throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
   const requestedName = resource.name?.trim()
-  const node = reference.nodeId
-    ? document.nodes.find((candidate) => candidate.id === reference.nodeId)
-    : undefined
+  const node = reference.nodeId ? document.nodes.find((candidate) => candidate.id === reference.nodeId) : undefined
   if (reference.nodeId && !node) throw new Error(`Canvas node was not found: ${reference.nodeId}`)
-  const edges = node ? document.edges.filter((edge) => edge.source === node.id || edge.target === node.id) : undefined
+  const children =
+    node?.data.kind === "group" ? document.nodes.filter((candidate) => candidate.parentId === node.id) : undefined
+  const includedNodeIds = new Set([node?.id, ...(children ?? []).map((child) => child.id)].filter(Boolean))
+  const edges = node
+    ? document.edges.filter((edge) => includedNodeIds.has(edge.source) || includedNodeIds.has(edge.target))
+    : undefined
   const nodeLabel = node?.data.label.trim()
   const content = node
     ? {
@@ -131,6 +134,7 @@ async function prepareStructuredResource(
           name: snapshot.name,
           revision: document.revision,
         },
+        ...(children ? { children } : {}),
         edges,
         node,
         type: "convax.canvas-node",
@@ -158,18 +162,20 @@ export async function prepareAgentResources(
   projectId: string,
   resources: AgentResource[] | undefined,
 ): Promise<AgentRuntimeResource[]> {
-  return Promise.all((resources ?? []).map(async (resource): Promise<AgentRuntimeResource> => {
-    if (resource.kind === "skill") return validateSkillResource(resource)
-    if (resource.kind === "resource") {
-      return prepareStructuredResource(resource, canvasSnapshots, projectId)
-    }
-    validateProjectPath(resource.path)
-    await manager.resolveEntryPath({ path: resource.path, projectId })
-    return {
-      kind: resource.kind,
-      mime: resource.mime,
-      name: resource.name,
-      path: resource.path,
-    }
-  }))
+  return Promise.all(
+    (resources ?? []).map(async (resource): Promise<AgentRuntimeResource> => {
+      if (resource.kind === "skill") return validateSkillResource(resource)
+      if (resource.kind === "resource") {
+        return prepareStructuredResource(resource, canvasSnapshots, projectId)
+      }
+      validateProjectPath(resource.path)
+      await manager.resolveEntryPath({ path: resource.path, projectId })
+      return {
+        kind: resource.kind,
+        mime: resource.mime,
+        name: resource.name,
+        path: resource.path,
+      }
+    }),
+  )
 }
