@@ -31,8 +31,8 @@ describe("Agent composer picker", () => {
     const markup = renderPicker("reference", [
       {
         depth: 0,
-        expandable: false,
-        expanded: false,
+        expandable: true,
+        expanded: true,
         id: "project:file:README.md",
         kind: "file",
         label: "README.md",
@@ -46,11 +46,14 @@ describe("Agent composer picker", () => {
     expect(markup).toContain('role="tree"')
     expect(markup).toContain('role="treeitem"')
     expect(markup).toContain('aria-selected="true"')
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('aria-level="1"')
     expect(markup).toContain('id="agent-composer-option-project:file:README.md"')
     expect(markup).toContain("Project")
     expect(markup).toContain("Canvas")
     expect(markup).toContain("bg-popover")
     expect(markup).toContain("border-border")
+    expect(markup).not.toContain("--mpga")
   })
 
   test("renders Skills as a listbox with dollar identities", () => {
@@ -73,6 +76,9 @@ describe("Agent composer picker", () => {
   test("renders retryable errors, loading state, and empty state without changing semantics", () => {
     expect(renderPicker("reference", [], { error: "Project files unavailable", onRetry: noop })).toContain(
       "Project files unavailable",
+    )
+    expect(renderPicker("reference", [], { error: "Project files unavailable", onRetry: noop })).toContain(
+      'aria-label="Retry loading suggestions"',
     )
     expect(renderPicker("skill", [], { loading: true })).toContain("Loading Skills")
     expect(renderPicker("reference", [])).toContain("No references found")

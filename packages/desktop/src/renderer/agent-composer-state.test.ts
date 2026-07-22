@@ -11,6 +11,7 @@ import {
   normalizeAgentComposerDraft,
   openAgentComposerSuggestion,
   reconcileAgentComposerSuggestionOptions,
+  resolveAgentComposerSuggestionOption,
   setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
@@ -77,6 +78,8 @@ describe("Agent composer state", () => {
     expect(reconcileAgentComposerSuggestionOptions(moved, [{ id: "b" }]).activeId).toBe("b")
     const empty = openAgentComposerSuggestion("reference", [], { kind: "caret" })
     expect(reconcileAgentComposerSuggestionOptions(empty, [])).toBe(empty)
+    expect(resolveAgentComposerSuggestionOption(empty, [])).toBeUndefined()
+    expect(reconcileAgentComposerSuggestionOptions({ ...moved, activeId: "missing" }, rows).activeId).toBe("a")
     expect(closeAgentComposerSuggestion()).toEqual({ open: false })
   })
 

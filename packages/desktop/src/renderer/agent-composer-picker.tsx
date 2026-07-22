@@ -230,6 +230,7 @@ function PickerError(props: { message: string; onRetry?: () => void }) {
       <span className="min-w-0 flex-1">{props.message}</span>
       {props.onRetry ? (
         <button
+          aria-label="Retry loading suggestions"
           className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={props.onRetry}
           type="button"

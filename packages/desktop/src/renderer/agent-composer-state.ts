@@ -120,6 +120,13 @@ export function reconcileAgentComposerSuggestionOptions(
   return state.activeId === activeId ? state : { ...state, activeId }
 }
 
+export function resolveAgentComposerSuggestionOption<T extends AgentComposerSuggestionOptionLike>(
+  state: OpenAgentComposerSuggestionState,
+  options: readonly T[],
+) {
+  return state.activeId ? options.find((option) => option.id === state.activeId) : undefined
+}
+
 export function setAgentComposerSuggestionHover(
   state: OpenAgentComposerSuggestionState,
   hoveredId?: string,

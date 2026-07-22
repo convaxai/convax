@@ -87,6 +87,7 @@ import {
   normalizeAgentComposerDraft,
   openAgentComposerSuggestion,
   reconcileAgentComposerSuggestionOptions,
+  resolveAgentComposerSuggestionOption,
   setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
@@ -709,6 +710,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     sessionState?.status.type === "retry"
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
   const interactionDisabled = runtimeBusy || loading || creatingSession
+  useEffect(() => {
+    const root = composerRef.current
+    if (!root) return
+    for (const button of root.querySelectorAll<HTMLButtonElement>(`button[${agentComposerTokenActionAttribute}]`)) {
+      button.disabled = interactionDisabled
+    }
+  }, [composerDraft, interactionDisabled])
   const displayedResources = contextResources
   const sessionContentKey = useMemo(() => agentSessionContentKey(sessionState), [sessionState])
   useEffect(() => {
@@ -960,6 +968,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     () => (suggestionLoading || suggestionError ? [] : suggestionOptions),
     [suggestionError, suggestionLoading, suggestionOptions],
   )
+  const activeSuggestionOption = suggestion.open
+    ? resolveAgentComposerSuggestionOption(suggestion, selectableSuggestionOptions)
+    : undefined
 
   useEffect(() => {
     setSuggestion((current) =>
@@ -1907,9 +1918,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   ) : null}
                   <div
                     aria-activedescendant={
-                      suggestion.open && suggestion.activeId
-                        ? agentComposerPickerOptionId(suggestion.activeId)
-                        : undefined
+                      activeSuggestionOption ? agentComposerPickerOptionId(activeSuggestionOption.id) : undefined
                     }
                     aria-autocomplete={suggestion.open ? "list" : undefined}
                     aria-controls={suggestion.open ? `agent-composer-${suggestion.trigger}-picker` : undefined}
@@ -2040,9 +2049,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         }
                         if (event.key === "Enter" && !event.shiftKey) {
                           event.preventDefault()
-                          const option = selectableSuggestionOptions.find(
-                            (candidate) => candidate.id === suggestion.activeId,
-                          )
+                          const option = resolveAgentComposerSuggestionOption(suggestion, selectableSuggestionOptions)
                           if (option) selectComposerSuggestion(option)
                           return
                         }
