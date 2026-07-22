@@ -62,6 +62,40 @@ Run the full validation suite with:
 bun check
 ```
 
+Compile the workspace, build native distribution media for the current platform,
+or run automation against the final packaged executable instead of the Electron SDK:
+
+```bash
+bun run build
+bun run package
+bun run smoke:packaged
+```
+
+`build` compiles code only. `package` writes the current platform's DMG/ZIP,
+NSIS, or Linux distribution media below `packages/desktop/dist/`.
+During packaging, Convax downloads the current `ffmpeg-tools` Plugin ZIP and the
+exact host companion from the fixed official Registry, verifies their declared
+size, SHA-256, target, and safe ZIP contents, and embeds them as a remote-provenance
+first-install seed. A missing target or failed verification fails the package build.
+`smoke:packaged` produces only the unpacked application to keep CI fast, then
+temporarily enables a loopback-only DevTools Protocol endpoint for assertions;
+that endpoint is not embedded in or enabled by the artifact. It uses a fresh
+profile and verifies that FFmpeg installs from the embedded seed while Registry
+network access is unavailable. On macOS, smoke uses Electron's test Keychain and
+never reads or mutates the developer's login Keychain. The smoke prints the retained
+application and executable paths when it finishes.
+
+Local and pull-request packages are intentionally unsigned. `CONVAX_CHANNEL`
+selects the side-by-side `dev`, `beta`, or `prod` identity. A public release is
+built on each target platform with signing credentials and the release gate enabled:
+
+```bash
+CONVAX_CHANNEL=prod CONVAX_RELEASE=true bun run package
+```
+
+The release gate requires code signing where the platform supports it and enables
+macOS notarization. It is not required for source development or packaged smoke.
+
 ### Build-time feature switches
 
 The Services and Skill & Plugin settings are included by default. Product builds can hide either setting in both

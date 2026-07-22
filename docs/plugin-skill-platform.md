@@ -215,6 +215,15 @@ application source repository may remain private. Desktop uses an Electron
 redirect. The adapter turns each native redirect event into a response that the
 Registry client validates against its CDN allowlist before issuing the next request.
 
+Packaging may retain the verified Registry response, one default Plugin ZIP, and
+the exact current-platform companion as a self-describing app resource. This is an
+offline transport seed, not trusted built-in provenance: first startup revalidates
+the resource and invokes the same `RemoteCapabilityInstaller` transaction that an
+online install uses. The executable is copied into the private versioned companion
+store and authorized there; it is never launched from the app bundle. Network update
+checks start after the first window and download immutable artifacts only for a newer
+Registry version.
+
 The renderer sees validated catalog summaries and submits only a stable item id.
 Desktop downloads the selected immutable asset with a byte limit, follows only the
 approved GitHub Release redirect hosts, verifies the declared size and SHA-256, and

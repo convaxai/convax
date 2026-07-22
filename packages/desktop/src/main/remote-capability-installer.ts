@@ -199,9 +199,13 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     }))
   }
 
-  async installPlugin(id: string, options: { allowCurrent?: boolean } = {}) {
+  async #pluginPackage(id: string) {
     const item = this.#plugins(await this.#packages()).find((candidate) => candidate.id === id)
     if (!item) throw new Error(`Remote Plugin catalog item was not found: ${id}`)
+    return item
+  }
+
+  async #downloadPlugin(item: RemotePluginPackage) {
     const companionTargets = (item.companions ?? []).map((companion) => {
       const target = companion.targets.find(
         (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
@@ -220,6 +224,12 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         target,
       })),
     )
+    return { bundle, companionArtifacts }
+  }
+
+  async installPlugin(id: string, options: { allowCurrent?: boolean } = {}) {
+    const item = await this.#pluginPackage(id)
+    const { bundle, companionArtifacts } = await this.#downloadPlugin(item)
 
     return this.#pluginManager.withPluginMutation(item.id, async (mutation) => {
       const current = (await this.#pluginManager.list()).find((plugin) => plugin.id === item.id)
@@ -233,6 +243,21 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
       if (current && comparison === 0 && !(await this.#pluginManager.isBundleInstalled(bundle, mutation))) {
         throw new Error(`Installed Plugin does not match the verified Registry package: ${item.id}`)
       }
+      return this.#publishPlugin(item, bundle, companionArtifacts, current, mutation)
+    })
+  }
+
+  async updatePlugin(id: string) {
+    const item = await this.#pluginPackage(id)
+    return this.#pluginManager.withPluginMutation(item.id, async (mutation) => {
+      const current = (await this.#pluginManager.list()).find((plugin) => plugin.id === item.id)
+      if (!current) throw new Error(`Remote Plugin update requires an installed Plugin: ${item.id}`)
+      const comparison = compareWebPluginVersions(item.version, current.version)
+      if (comparison < 0) {
+        throw new Error(`Installed Plugin is newer than the remote Registry package: ${item.id}`)
+      }
+      if (comparison === 0) return current
+      const { bundle, companionArtifacts } = await this.#downloadPlugin(item)
       return this.#publishPlugin(item, bundle, companionArtifacts, current, mutation)
     })
   }

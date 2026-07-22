@@ -35,8 +35,10 @@ export interface DefaultCapabilityProvisioningResult {
 }
 
 interface RemoteDefaultProvisioning {
+  bootstrapInstaller?: Pick<RemoteCapabilityInstaller, "installPlugin">
   catalog: readonly DefaultRemoteCapability[]
-  installer: Pick<RemoteCapabilityInstaller, "installPlugin">
+  installer: Pick<RemoteCapabilityInstaller, "installPlugin" | "updatePlugin">
+  mode?: "bootstrap" | "network"
 }
 
 interface DefaultCapabilityProvisioningInput {
@@ -108,17 +110,37 @@ async function provisionDefaultCapabilitiesOnce(
   }
 
   const failures: DefaultCapabilityProvisioningFailure[] = []
-  for (const item of input.remote?.catalog ?? []) {
+  const remote = input.remote
+  if (!remote) return { failures }
+  for (const item of remote.catalog) {
     let installed = (await input.pluginManager.list()).find((plugin) => plugin.id === item.pluginId)
+    if ((remote.mode ?? "network") === "bootstrap") {
+      // Bootstrap is an offline first-install path only. A receipt preserves an
+      // explicit later removal, while an unreceipted same-id package must wait
+      // for the network installer to verify and adopt it. Plugin-owned Skills
+      // are published by the bootstrap installer; legacy companion Skills wait
+      // for the ordinary network phase.
+      if (state.plugins.includes(item.pluginId) || installed || !remote.bootstrapInstaller) continue
+      try {
+        await remote.bootstrapInstaller.installPlugin(item.pluginId)
+      } catch (error) {
+        if (error instanceof WebPluginPublicationDeferredError) throw error
+        failures.push({ error, id: item.pluginId, kind: "plugin" })
+        continue
+      }
+      state.plugins.push(item.pluginId)
+      await writeState(input.stateFile, state)
+      continue
+    }
     if (state.plugins.includes(item.pluginId)) {
       // A receipt plus a missing package means the user removed this default.
       // Its companion must not be newly provisioned behind that choice.
       if (!installed) continue
       try {
-        // Defaults remain on the normal verified Registry path. The installer
-        // returns the current package without republishing when it is already
-        // current, and atomically upgrades it when the Registry is newer.
-        installed = await input.remote!.installer.installPlugin(item.pluginId, { allowCurrent: true })
+        // A receipted local package was verified by its original publication.
+        // Refresh only Registry metadata and download bytes when a newer version
+        // is available; the current package remains usable on update failure.
+        installed = await remote.installer.updatePlugin(item.pluginId)
       } catch (error) {
         if (error instanceof WebPluginPublicationDeferredError) throw error
         // Keep the already-installed version usable when an update check or
@@ -133,8 +155,8 @@ async function provisionDefaultCapabilitiesOnce(
         // package bytes and repairs companion/authorization/owned-Skill state
         // before this installation can be adopted as a managed default.
         installed = installed
-          ? await input.remote!.installer.installPlugin(item.pluginId, { allowCurrent: true })
-          : await input.remote!.installer.installPlugin(item.pluginId)
+          ? await remote.installer.installPlugin(item.pluginId, { allowCurrent: true })
+          : await remote.installer.installPlugin(item.pluginId)
       } catch (error) {
         if (error instanceof WebPluginPublicationDeferredError) throw error
         failures.push({ error, id: item.pluginId, kind: "plugin" })

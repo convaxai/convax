@@ -21,11 +21,13 @@ The first release provides:
   separating audio and video, and cropping a clip;
 - normal managed Canvas resources and nodes for every accepted output.
 
-Opening a Project never discovers or runs Project-local executables. The current
-internal distribution provisions this Plugin once from the official Registry on an
-eligible first startup. It still verifies and authorizes only the Registry-pinned
-companion bytes through the normal Tool Plugin transaction; it does not introduce a
-second executable trust path.
+Opening a Project never discovers or runs Project-local executables. Packaging
+downloads the current Plugin ZIP and exact host companion from the official Registry,
+validates them with the production Registry client, and embeds the original bytes as
+a target-specific first-install seed. An eligible first startup revalidates that seed
+and provisions it through the normal remote Tool Plugin transaction. It still
+authorizes only Registry-pinned companion bytes and does not introduce a second
+executable trust path or built-in Plugin identity.
 
 Its `ffmpeg-canvas` Skill is an owned `contributes.skills` directory, not a second
 standalone installation. Desktop publishes the Plugin package, executable
@@ -33,8 +35,10 @@ authorization, materialized Skill, and ownership binding as one coordinated
 transaction. A synchronous failure before the owned-Skill forward decision restores
 the previous Plugin, authorization, Skill bytes, and binding. Once that decision is
 durable, cleanup keeps the updated capability current and completes during startup
-recovery. Uninstall removes both. A failed remote attempt is diagnosed and retried on a later startup
-without preventing Convax from opening. Once the Plugin has been removed, its
+recovery. Uninstall removes both. A failed seed attempt is diagnosed without recording
+a receipt; the post-window network phase can recover it. Later startups fetch Registry
+metadata in the background and download only a newer immutable release, so update
+latency never holds the first window. Once the Plugin has been removed, its
 one-time default receipt prevents startup from restoring it. Before public
 open-source distribution, this temporary silent default should return to a prominent
 one-click Install action.
@@ -149,8 +153,12 @@ by the install authorization receipt or launch snapshot.
 
 Development and packaged Convax builds use the same managed companion resolver under
 their respective Electron `userData` directories. The Plugin ZIP does not contain
-the companion. A real immutable Registry Release must exist before the capability
-can be enabled in either environment.
+the companion. The packaged seed retains the two Registry artifacts separately, and
+the app never executes its resource copy in place: normal publication copies the
+companion into `userData/plugin-companions`, writes the exact authorization receipt,
+and atomically publishes the Plugin and owned Skill. A real immutable Registry
+Release must exist before either development installation or packaging can enable
+the capability.
 
 The first executable target is macOS 13 or newer on arm64. It is built from the pinned
 official FFmpeg 8.1.2 source release with autodetection, network protocols, devices,
@@ -190,8 +198,10 @@ literal path and URL rejection, output confinement, no-shell process execution,
 cancellation, bounded diagnostics, and result envelopes. Release smoke tests execute
 the embedded FFmpeg on every native target.
 
-Desktop tests cover manifest-driven action visibility, request construction, form
-validation, stale-scope recovery policy, and the generation request routed through
+Desktop tests cover packaged-seed staging, tamper/path/target rejection, offline
+fresh-profile installation and managed companion authorization. They also cover
+manifest-driven action visibility, request construction, form validation,
+stale-scope recovery policy, and the generation request routed through
 `CanvasGenerateService`. Existing generation service tests remain the owner of
 managed-input staging, output admission, rollback, revision, and Canvas commit
 behavior.

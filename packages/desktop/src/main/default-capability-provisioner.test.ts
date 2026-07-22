@@ -119,6 +119,7 @@ async function setupRemote() {
   }
   let installed = false
   let skillInstalled = false
+  let bootstrapInstallFailure: Error | undefined
   let installFailure: Error | undefined
   const events: string[] = []
   const pluginManager = {
@@ -131,6 +132,20 @@ async function setupRemote() {
     installPlugin: mock(async () => {
       events.push("plugin.install")
       if (installFailure) throw installFailure
+      installed = true
+      return manifest
+    }),
+    updatePlugin: mock(async () => {
+      events.push("plugin.update")
+      if (installFailure) throw installFailure
+      if (!installed) throw new Error("Remote Plugin update requires an installed Plugin: ffmpeg-tools")
+      return manifest
+    }),
+  }
+  const bootstrapInstaller = {
+    installPlugin: mock(async () => {
+      events.push("plugin.bootstrap")
+      if (bootstrapInstallFailure) throw bootstrapInstallFailure
       installed = true
       return manifest
     }),
@@ -164,8 +179,12 @@ async function setupRemote() {
     }),
   }
   return {
+    bootstrapInstaller,
     catalog: [],
     events,
+    failBootstrapInstall(error?: Error) {
+      bootstrapInstallFailure = error
+    },
     failInstall(error?: Error) {
       installFailure = error
     },
@@ -227,11 +246,113 @@ describe("provisionDefaultCapabilities", () => {
 
     expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
     expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(input.pluginManager.resolveAsset).not.toHaveBeenCalled()
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
     expect(input.skillManager.refresh).toHaveBeenCalledTimes(1)
     expect(input.events).toEqual(["plugin.install", "skills.refresh"])
     expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toEqual({
+      plugins: ["ffmpeg-tools"],
+      schema: "convax.default-capabilities/1",
+      skills: [],
+    })
+  })
+
+  test("installs a missing default from a verified bootstrap seed and records its receipt", async () => {
+    const input = await setupRemote()
+
+    expect(
+      await provisionDefaultCapabilities({
+        ...input,
+        remote: { ...input.remote, bootstrapInstaller: input.bootstrapInstaller, mode: "bootstrap" },
+      }),
+    ).toEqual({ failures: [] })
+
+    expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.remoteInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
+    expect(input.pluginManager.resolveAsset).not.toHaveBeenCalled()
+    expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
+    expect(input.events).toEqual(["plugin.bootstrap", "skills.refresh"])
+    expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toEqual({
+      plugins: ["ffmpeg-tools"],
+      schema: "convax.default-capabilities/1",
+      skills: [],
+    })
+  })
+
+  test("skips a missing default during bootstrap when no seed installer is available", async () => {
+    const input = await setupRemote()
+
+    expect(
+      await provisionDefaultCapabilities({
+        ...input,
+        remote: { ...input.remote, mode: "bootstrap" },
+      }),
+    ).toEqual({ failures: [] })
+
+    expect(input.bootstrapInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(input.remoteInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
+    expect(await fs.readFile(input.stateFile, "utf8").catch((error: unknown) => error)).toMatchObject({
+      code: "ENOENT",
+    })
+  })
+
+  test("reports a bootstrap seed failure without writing a default receipt or contacting the network", async () => {
+    const input = await setupRemote()
+    const failure = new Error("bootstrap seed is invalid")
+    input.failBootstrapInstall(failure)
+
+    expect(
+      await provisionDefaultCapabilities({
+        ...input,
+        remote: { ...input.remote, bootstrapInstaller: input.bootstrapInstaller, mode: "bootstrap" },
+      }),
+    ).toEqual({ failures: [{ error: failure, id: "ffmpeg-tools", kind: "plugin" }] })
+
+    expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
+    expect(await fs.readFile(input.stateFile, "utf8").catch((error: unknown) => error)).toMatchObject({
+      code: "ENOENT",
+    })
+  })
+
+  test("does not contact either installer or adopt existing state during bootstrap", async () => {
+    const installed = await setupRemote()
+    installed.markPluginInstalled()
+
+    expect(
+      await provisionDefaultCapabilities({
+        ...installed,
+        remote: { ...installed.remote, bootstrapInstaller: installed.bootstrapInstaller, mode: "bootstrap" },
+      }),
+    ).toEqual({ failures: [] })
+    expect(installed.bootstrapInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(installed.remoteInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(installed.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
+    expect(await fs.readFile(installed.stateFile, "utf8").catch((error: unknown) => error)).toMatchObject({
+      code: "ENOENT",
+    })
+
+    const receipted = await setupRemote()
+    await fs.writeFile(
+      receipted.stateFile,
+      `${JSON.stringify({ plugins: ["ffmpeg-tools"], schema: "convax.default-capabilities/1", skills: [] })}\n`,
+    )
+
+    expect(
+      await provisionDefaultCapabilities({
+        ...receipted,
+        remote: { ...receipted.remote, bootstrapInstaller: receipted.bootstrapInstaller, mode: "bootstrap" },
+      }),
+    ).toEqual({ failures: [] })
+    expect(receipted.bootstrapInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(receipted.remoteInstaller.installPlugin).not.toHaveBeenCalled()
+    expect(receipted.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
+    expect(JSON.parse(await fs.readFile(receipted.stateFile, "utf8"))).toEqual({
       plugins: ["ffmpeg-tools"],
       schema: "convax.default-capabilities/1",
       skills: [],
@@ -244,8 +365,9 @@ describe("provisionDefaultCapabilities", () => {
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
 
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
-    expect(input.remoteInstaller.installPlugin).toHaveBeenLastCalledWith("ffmpeg-tools", { allowCurrent: true })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledWith("ffmpeg-tools")
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
   })
 
@@ -256,6 +378,7 @@ describe("provisionDefaultCapabilities", () => {
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
 
     expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools", { allowCurrent: true })
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toMatchObject({ plugins: ["ffmpeg-tools"] })
   })
 
@@ -264,12 +387,14 @@ describe("provisionDefaultCapabilities", () => {
     await provisionDefaultCapabilities(input)
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledTimes(1)
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
 
     input.removeInstalledPlugin()
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(2)
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledTimes(1)
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
   })
 
@@ -282,6 +407,8 @@ describe("provisionDefaultCapabilities", () => {
     expect(await provisionDefaultCapabilities(input)).toEqual({
       failures: [{ error: failure, id: "ffmpeg-tools", kind: "plugin" }],
     })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledTimes(1)
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
   })
 
@@ -293,6 +420,7 @@ describe("provisionDefaultCapabilities", () => {
     expect(await provisionDefaultCapabilities(input)).toEqual({
       failures: [{ error: failure, id: "ffmpeg-tools", kind: "plugin" }],
     })
+    expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
     expect(await fs.readFile(input.stateFile, "utf8").catch((error: unknown) => error)).toMatchObject({
       code: "ENOENT",

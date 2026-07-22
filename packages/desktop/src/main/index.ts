@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { ManagedAgentSkillStore, OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
@@ -27,7 +28,12 @@ import {
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import { registerWillQuitCleanup } from "./application-lifecycle"
-import { desktopProductName, desktopProjectWorkspaceDirectory, desktopUserDataDirectory } from "./app-branding"
+import {
+  desktopApplicationName,
+  desktopProjectWorkspaceDirectory,
+  desktopRendererUrl,
+  desktopUserDataDirectory,
+} from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
 import { createGenerationAgentToolProvider } from "./generation-agent-tools"
@@ -94,11 +100,13 @@ import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianyi
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
 import { FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
-import { RemoteCapabilityInstaller } from "./remote-capability-installer"
+import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import { desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
+import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
 import {
   composePluginPublicationTransactions,
   DesktopSkillMutationCoordinator,
@@ -111,7 +119,10 @@ const agentHostToolInactivityTimeout = 60 * 60_000
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
-const rendererUrl = process.env.ELECTRON_RENDERER_URL
+const rendererUrl = desktopRendererUrl({
+  isPackaged: app.isPackaged,
+  requestedUrl: process.env.ELECTRON_RENDERER_URL,
+})
 const trustedRendererUrl = rendererUrl ?? pathToFileURL(join(import.meta.dirname, "../renderer/index.html")).href
 const developmentCachePolicy = desktopDevelopmentCachePolicy({
   isPackaged: app.isPackaged,
@@ -122,12 +133,17 @@ for (const commandLineSwitch of developmentCachePolicy.switches) {
   app.commandLine.appendSwitch(commandLineSwitch.name, commandLineSwitch.value)
 }
 
-app.setName(desktopProductName)
+const applicationName = desktopApplicationName({ isPackaged: app.isPackaged, packagedName: app.getName() })
+app.setName(applicationName)
 
+const packagedSmoke = app.isPackaged && process.env.CONVAX_PACKAGED_SMOKE === "1"
 const userDataDirectoryOverride = desktopUserDataDirectory({
   appDataDirectory: app.getPath("appData"),
   isPackaged: app.isPackaged,
+  packagedSmoke,
+  packagedSmokeDirectory: process.env.CONVAX_PACKAGED_SMOKE_USER_DATA_DIR,
   requestedDirectory: process.env.CONVAX_USER_DATA_DIR,
+  temporaryDirectory: tmpdir(),
 })
 if (userDataDirectoryOverride) app.setPath("userData", resolve(userDataDirectoryOverride))
 
@@ -145,7 +161,7 @@ function isTrustedRendererUrl(value: string) {
 
 function createWindow(projectManager: NodeProjectManager) {
   const window = new BrowserWindow({
-    title: desktopProductName,
+    title: applicationName,
     icon: appIcon,
     width: 1280,
     height: 820,
@@ -458,19 +474,28 @@ function startApplication() {
       tools: generationRuntime,
     })
     const agentRuntime = new OpenCodeAgentRuntime({
+      binaryDirectory: desktopOpenCodeBinaryDirectory({
+        isPackaged: app.isPackaged,
+        resourcesDirectory: process.resourcesPath,
+      }),
       configDirectory: openCodeConfigDirectory,
       async resolveProviders() {
         try {
           const providers = await generationRuntime.connectLlmProviders()
-          return Object.fromEntries(providers.map((provider) => [provider.providerId, {
-            models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
-            name: provider.name,
-            npm: "@ai-sdk/openai-compatible",
-            options: {
-              apiKey: provider.apiKey,
-              baseURL: provider.baseUrl,
-            },
-          }]))
+          return Object.fromEntries(
+            providers.map((provider) => [
+              provider.providerId,
+              {
+                models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
+                name: provider.name,
+                npm: "@ai-sdk/openai-compatible",
+                options: {
+                  apiKey: provider.apiKey,
+                  baseURL: provider.baseUrl,
+                },
+              },
+            ]),
+          )
         } catch (error) {
           console.warn("Could not connect installed Plugin LLM providers", error)
           return {}
@@ -542,15 +567,20 @@ function startApplication() {
       pluginSkillOwnership,
       skillMutations,
     )
-    const remoteCapabilities = new RemoteCapabilityInstaller({
-      authorizationStore: toolPluginAuthorizations,
-      beforePluginPublish: (pluginId) => pluginServices.discardPlugin(pluginId),
-      builtinPlugins: desktopBuiltinPluginCatalog,
-      builtinSkills: desktopBuiltinSkillCatalog,
-      companionStore,
-      pluginManager,
-      pluginSkillLifecycle,
-      registry: new RemoteCapabilityRegistryClient({
+    const createRemoteCapabilityInstaller = (registry: RemoteCapabilityRegistryPort) =>
+      new RemoteCapabilityInstaller({
+        authorizationStore: toolPluginAuthorizations,
+        beforePluginPublish: (pluginId) => pluginServices.discardPlugin(pluginId),
+        builtinPlugins: desktopBuiltinPluginCatalog,
+        builtinSkills: desktopBuiltinSkillCatalog,
+        companionStore,
+        pluginManager,
+        pluginSkillLifecycle,
+        registry,
+        skillManager,
+      })
+    const remoteCapabilities = createRemoteCapabilityInstaller(
+      new RemoteCapabilityRegistryClient({
         cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
         fetch: createElectronRemoteCapabilityFetch(net),
         showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),
@@ -558,8 +588,25 @@ function startApplication() {
           join(userDataDirectory, "capability-registry", "showcase-media-v1"),
         ),
       }),
-      skillManager,
-    })
+    )
+    let packagedDefaultCapabilities: RemoteCapabilityInstaller | undefined
+    if (app.isPackaged) {
+      const packagedDefault = desktopDefaultRemoteCapabilityCatalog[0]
+      if (packagedDefault) {
+        try {
+          const registry = await createPackagedDefaultCapabilityRegistry({
+            pluginId: packagedDefault.pluginId,
+            root: join(process.resourcesPath, "default-capabilities"),
+          })
+          if (registry) packagedDefaultCapabilities = createRemoteCapabilityInstaller(registry)
+          else console.error("Packaged default capability seed is missing")
+        } catch (error) {
+          // A damaged packaged seed never weakens Registry verification. Convax
+          // still opens and the ordinary network phase can recover it later.
+          console.error("Could not load the packaged default capability seed", error)
+        }
+      }
+    }
     const prepareLocalPluginPublication = async (
       plugin: InstalledWebPluginSummary,
       candidate: WebPluginPublicationCandidate,
@@ -580,8 +627,10 @@ function startApplication() {
       pluginManager,
       preparePluginPublication: prepareLocalPluginPublication,
       remote: {
+        ...(packagedDefaultCapabilities ? { bootstrapInstaller: packagedDefaultCapabilities } : {}),
         catalog: desktopDefaultRemoteCapabilityCatalog,
         installer: remoteCapabilities,
+        mode: "bootstrap",
       },
       skillManager,
       stateFile: join(userDataDirectory, "default-capabilities.json"),
@@ -784,6 +833,29 @@ function startApplication() {
     })
 
     createWindow(projectManager)
+    // Registry updates are intentionally outside the first-window critical
+    // path. A packaged first install comes from the verified local seed above;
+    // dev and damaged/offline packages remain usable while network recovery or
+    // a newer immutable Registry release is checked in the background.
+    void provisionDefaultCapabilities({
+      catalog: desktopBuiltinPluginCatalog,
+      pluginManager,
+      preparePluginPublication: prepareLocalPluginPublication,
+      remote: {
+        catalog: desktopDefaultRemoteCapabilityCatalog,
+        installer: remoteCapabilities,
+        mode: "network",
+      },
+      skillManager,
+      stateFile: join(userDataDirectory, "default-capabilities.json"),
+    }).then(
+      ({ failures }) => {
+        for (const failure of failures) {
+          console.error(`Could not update default remote ${failure.kind} ${failure.id}`, failure.error)
+        }
+      },
+      (error) => console.error("Could not update default Convax capabilities", error),
+    )
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
         void removeQuarantinedDevelopmentCaches(userDataDirectory).catch((error) => {
@@ -803,7 +875,7 @@ function startApplication() {
   })
 }
 
-const allowMultipleInstances = !app.isPackaged && process.env.CONVAX_ALLOW_MULTIPLE_INSTANCES === "1"
+const allowMultipleInstances = (!app.isPackaged && process.env.CONVAX_ALLOW_MULTIPLE_INSTANCES === "1") || packagedSmoke
 
 if (allowMultipleInstances || app.requestSingleInstanceLock()) startApplication()
 else app.quit()
