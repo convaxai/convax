@@ -5,6 +5,7 @@ import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contract
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
+import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
@@ -12,6 +13,7 @@ export type SettingsSection = "general" | "services" | "capabilities"
 
 export interface SettingsViewProps {
   className?: string
+  featureFlags?: DesktopFeatureFlags
   initialSection?: SettingsSection
   languagePreference: AppLanguagePreference
   locale: AppLocale
@@ -96,6 +98,7 @@ function LanguageSettings({
 
 export function SettingsView({
   className,
+  featureFlags = desktopFeatureFlags,
   initialSection = "general",
   languagePreference,
   locale,
@@ -107,7 +110,12 @@ export function SettingsView({
   serviceSnapshot,
   skillClient,
 }: SettingsViewProps) {
-  const [section, setSection] = useState<SettingsSection>(initialSection)
+  const enabledInitialSection =
+    (initialSection === "services" && !featureFlags.services) ||
+    (initialSection === "capabilities" && !featureFlags.skillsAndPlugins)
+      ? "general"
+      : initialSection
+  const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
   const generalTitle = appMessage(locale, "settings.general")
   const servicesTitle = appMessage(locale, "settings.services")
   const capabilitiesTitle = appMessage(locale, "settings.capabilities")
@@ -140,20 +148,24 @@ export function SettingsView({
           >
             {generalTitle}
           </SettingsNavigationItem>
-          <SettingsNavigationItem
-            active={section === "services"}
-            icon={<Cloud />}
-            onClick={() => setSection("services")}
-          >
-            {servicesTitle}
-          </SettingsNavigationItem>
-          <SettingsNavigationItem
-            active={section === "capabilities"}
-            icon={<Sparkles />}
-            onClick={() => setSection("capabilities")}
-          >
-            {capabilitiesTitle}
-          </SettingsNavigationItem>
+          {featureFlags.services ? (
+            <SettingsNavigationItem
+              active={section === "services"}
+              icon={<Cloud />}
+              onClick={() => setSection("services")}
+            >
+              {servicesTitle}
+            </SettingsNavigationItem>
+          ) : null}
+          {featureFlags.skillsAndPlugins ? (
+            <SettingsNavigationItem
+              active={section === "capabilities"}
+              icon={<Sparkles />}
+              onClick={() => setSection("capabilities")}
+            >
+              {capabilitiesTitle}
+            </SettingsNavigationItem>
+          ) : null}
         </nav>
         <div className="mt-auto flex items-center gap-2 rounded-lg border border-border bg-background/70 px-3 py-2 text-xs text-muted-foreground">
           <Languages aria-hidden="true" className="size-4" />

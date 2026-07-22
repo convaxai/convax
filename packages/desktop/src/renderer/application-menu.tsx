@@ -3,12 +3,14 @@ import { Bot, ChevronUp, Cloud, LoaderCircle, Settings2, Sparkles } from "lucide
 import { useCallback, useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { appMessage, type AppLocale } from "./app-language"
+import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import type { ServiceCatalogEntry, ServiceCatalogSnapshot } from "./service-catalog-controller"
 
 export type ApplicationMenuTarget = "general" | "services" | "capabilities"
 
 interface ApplicationMenuProps {
   compact?: boolean
+  featureFlags?: DesktopFeatureFlags
   locale: AppLocale
   onOpenSettings(target: ApplicationMenuTarget): void
   services?: ServiceCatalogSnapshot
@@ -20,12 +22,14 @@ interface MenuPosition {
 }
 
 export function ApplicationMenuPanel({
+  featureFlags = desktopFeatureFlags,
   locale,
   onOpenSettings,
   panelRef,
   position,
   services,
 }: {
+  featureFlags?: DesktopFeatureFlags
   locale: AppLocale
   onOpenSettings(target: ApplicationMenuTarget): void
   panelRef?: React.Ref<HTMLDivElement>
@@ -52,50 +56,54 @@ export function ApplicationMenuPanel({
         </div>
       </div>
       <div className="my-1 h-px bg-border" />
-      <button
-        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-        onClick={() => onOpenSettings("services")}
-        role="menuitem"
-        type="button"
-      >
-        <Cloud className="size-4 text-muted-foreground" />
-        <span className="flex-1">{appMessage(locale, "appMenu.services")}</span>
-        {services ? (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-            {services.services.length}
-          </span>
-        ) : null}
-      </button>
-      {services?.services.length ? (
-        <div className="mb-1 max-h-52 space-y-0.5 overflow-y-auto px-1" data-application-services="true">
-          {services.services.map((service) => (
-            <button
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-              key={service.serviceId}
-              onClick={() => onOpenSettings("services")}
-              role="menuitem"
-              type="button"
-            >
-              <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                {service.kind === "builtin" ? <Bot className="size-3.5" /> : <Cloud className="size-3.5" />}
+      {featureFlags.services ? (
+        <>
+          <button
+            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+            onClick={() => onOpenSettings("services")}
+            role="menuitem"
+            type="button"
+          >
+            <Cloud className="size-4 text-muted-foreground" />
+            <span className="flex-1">{appMessage(locale, "appMenu.services")}</span>
+            {services ? (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                {services.services.length}
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-medium text-foreground">{service.name}</span>
-                <span className="block truncate text-[10px] text-muted-foreground">
-                  {service.capabilities
-                    .map((capability) => appMessage(locale, `services.capability.${capability}`))
-                    .join(" · ") || appMessage(locale, "services.unknown")}
-                </span>
-              </span>
-              <CompactServiceBadge locale={locale} service={service} />
-            </button>
-          ))}
-        </div>
-      ) : services?.loading ? (
-        <div className="mb-1 flex items-center gap-2 px-3 py-1.5 text-[11px] text-muted-foreground" role="status">
-          <LoaderCircle className="size-3 animate-spin" />
-          {appMessage(locale, "services.loading")}
-        </div>
+            ) : null}
+          </button>
+          {services?.services.length ? (
+            <div className="mb-1 max-h-52 space-y-0.5 overflow-y-auto px-1" data-application-services="true">
+              {services.services.map((service) => (
+                <button
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                  key={service.serviceId}
+                  onClick={() => onOpenSettings("services")}
+                  role="menuitem"
+                  type="button"
+                >
+                  <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                    {service.kind === "builtin" ? <Bot className="size-3.5" /> : <Cloud className="size-3.5" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-foreground">{service.name}</span>
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      {service.capabilities
+                        .map((capability) => appMessage(locale, `services.capability.${capability}`))
+                        .join(" · ") || appMessage(locale, "services.unknown")}
+                    </span>
+                  </span>
+                  <CompactServiceBadge locale={locale} service={service} />
+                </button>
+              ))}
+            </div>
+          ) : services?.loading ? (
+            <div className="mb-1 flex items-center gap-2 px-3 py-1.5 text-[11px] text-muted-foreground" role="status">
+              <LoaderCircle className="size-3 animate-spin" />
+              {appMessage(locale, "services.loading")}
+            </div>
+          ) : null}
+        </>
       ) : null}
       <button
         className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
@@ -107,15 +115,17 @@ export function ApplicationMenuPanel({
         <span className="flex-1">{appMessage(locale, "appMenu.settings")}</span>
         <kbd className="text-[10px] text-muted-foreground">⌘/Ctrl ,</kbd>
       </button>
-      <button
-        className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-        onClick={() => onOpenSettings("capabilities")}
-        role="menuitem"
-        type="button"
-      >
-        <Sparkles className="size-4 text-muted-foreground" />
-        <span>{appMessage(locale, "appMenu.capabilities")}</span>
-      </button>
+      {featureFlags.skillsAndPlugins ? (
+        <button
+          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+          onClick={() => onOpenSettings("capabilities")}
+          role="menuitem"
+          type="button"
+        >
+          <Sparkles className="size-4 text-muted-foreground" />
+          <span>{appMessage(locale, "appMenu.capabilities")}</span>
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -148,7 +158,13 @@ function CompactServiceBadge({ locale, service }: { locale: AppLocale; service: 
   )
 }
 
-export function ApplicationMenu({ compact = false, locale, onOpenSettings, services }: ApplicationMenuProps) {
+export function ApplicationMenu({
+  compact = false,
+  featureFlags = desktopFeatureFlags,
+  locale,
+  onOpenSettings,
+  services,
+}: ApplicationMenuProps) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<MenuPosition>({ bottom: 8, left: 8 })
   const triggerRef = useRef<HTMLButtonElement | null>(null)
@@ -233,6 +249,7 @@ export function ApplicationMenu({ compact = false, locale, onOpenSettings, servi
       {open && typeof document !== "undefined"
         ? createPortal(
             <ApplicationMenuPanel
+              featureFlags={featureFlags}
               locale={locale}
               onOpenSettings={openSettings}
               panelRef={panelRef}

@@ -56,6 +56,23 @@ describe("ApplicationMenu", () => {
     expect(markup).toContain("本地工作区")
   })
 
+  test("hides disabled build-time entries and their service summaries", () => {
+    const markup = renderToStaticMarkup(
+      <ApplicationMenuPanel
+        featureFlags={{ services: false, skillsAndPlugins: false }}
+        locale="en"
+        onOpenSettings={() => undefined}
+        services={services}
+      />,
+    )
+
+    expect(markup).toContain("Settings")
+    expect(markup).not.toContain("Services")
+    expect(markup).not.toContain("Skill &amp; Plugin")
+    expect(markup).not.toContain("OpenCode")
+    expect(markup).not.toContain("data-application-services")
+  })
+
   test("shows installed services with billing, auth, and capability summaries", () => {
     const markup = renderToStaticMarkup(
       <ApplicationMenuPanel locale="zh-CN" onOpenSettings={() => undefined} services={services} />,
