@@ -65,14 +65,15 @@ export interface CanvasSelectionActionExecutorOptions {
  */
 export class CanvasSelectionActionExecutor {
   readonly #options: CanvasSelectionActionExecutorOptions
-  readonly #pending = new Map<string, object>()
+  readonly #pending = new Map<string, { signal: AbortSignal; token: object }>()
 
   constructor(options: CanvasSelectionActionExecutorOptions = {}) {
     this.#options = options
   }
 
-  isPending(actionId: string) {
-    return this.#pending.has(actionId)
+  isPending(actionId: string, signal?: AbortSignal) {
+    const pending = this.#pending.get(actionId)
+    return Boolean(pending && (!signal || pending.signal === signal))
   }
 
   reset(options: { notify?: boolean } = {}) {
@@ -88,7 +89,7 @@ export class CanvasSelectionActionExecutor {
     if (context.signal.aborted || this.#pending.has(action.id)) return "ignored"
 
     const token = {}
-    this.#pending.set(action.id, token)
+    this.#pending.set(action.id, { signal: context.signal, token })
     this.#options.onPendingChange?.()
 
     let status: CanvasSelectionActionExecutionStatus = "completed"
@@ -107,7 +108,7 @@ export class CanvasSelectionActionExecutor {
         }
       }
     } finally {
-      if (this.#pending.get(action.id) === token) {
+      if (this.#pending.get(action.id)?.token === token) {
         this.#pending.delete(action.id)
         this.#options.onPendingChange?.()
       }
