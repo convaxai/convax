@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createCanvasDocument, createGroupNode, createTextNode } from "@convax/canvas/core"
 
 import {
   parseAgentCanvasResourceUri,
@@ -36,6 +37,46 @@ function canvasSnapshot() {
     ],
     revision: 4,
   })
+}
+
+function nestedGroupCanvasSnapshot() {
+  const group = createGroupNode({
+    height: 400,
+    id: "group-1",
+    label: "Research",
+    position: { x: 0, y: 0 },
+    width: 600,
+  })
+  const childA = {
+    ...createTextNode({ id: "child-a", label: "Child A", position: { x: 20, y: 20 } }),
+    parentId: group.id,
+  }
+  const childB = {
+    ...createGroupNode({
+      height: 180,
+      id: "child-b",
+      label: "Child B",
+      position: { x: 20, y: 160 },
+      width: 240,
+    }),
+    parentId: group.id,
+  }
+  const nestedChild = {
+    ...createTextNode({ id: "nested-child", label: "Nested", position: { x: 10, y: 10 } }),
+    parentId: childB.id,
+  }
+  const unrelated = createTextNode({ id: "unrelated", label: "Unrelated", position: { x: 800, y: 0 } })
+  return JSON.stringify(
+    createCanvasDocument({
+      edges: [
+        { id: "edge-child", source: "child-a", target: "child-b" },
+        { id: "edge-nested", source: "nested-child", target: "unrelated" },
+      ],
+      id: "canvas-1",
+      nodes: [group, childA, childB, nestedChild, unrelated],
+      title: "Nested groups",
+    }),
+  )
 }
 
 describe("prepareAgentResources", () => {
@@ -77,6 +118,24 @@ describe("prepareAgentResources", () => {
       version: 1,
     })
     expect(content.edges.map((edge: { id: string }) => edge.id)).toEqual(["edge-related"])
+    expect(content).not.toHaveProperty("children")
+  })
+
+  test("prepares a selected group with only its direct children", async () => {
+    const prepared = await prepareAgentResources(
+      { resolveEntryPath: async () => "unused" },
+      { resolveCanvasSnapshot: async () => ({ content: nestedGroupCanvasSnapshot() }) },
+      "project-1",
+      [{ kind: "resource", uri: "convax://canvas/canvas-1/node/group-1" }],
+    )
+
+    if (prepared[0]?.kind !== "resource") throw new Error("Expected a structured resource")
+    const content = JSON.parse(prepared[0].content)
+    expect(content.node.id).toBe("group-1")
+    expect(content.children.map((node: { id: string }) => node.id)).toEqual(["child-a", "child-b"])
+    expect(content.children.map((node: { id: string }) => node.id)).not.toContain("nested-child")
+    expect(content.children.map((node: { id: string }) => node.id)).not.toContain("unrelated")
+    expect(content.edges.map((edge: { id: string }) => edge.id)).toEqual(["edge-child"])
   })
 
   test("resolves a full Canvas as a generic structured resource", async () => {
@@ -143,37 +202,34 @@ describe("prepareAgentResources", () => {
   })
 
   test("rejects private storage disguised as a normal file attachment", async () => {
-    await expect(prepareAgentResources(
-      { resolveEntryPath: async () => "/project/.convax/canvases/x/document.json" },
-      undefined,
-      "project-1",
-      [{ kind: "file", path: ".convax/canvases/x/document.json" }],
-    )).rejects.toThrow("private storage")
+    await expect(
+      prepareAgentResources(
+        { resolveEntryPath: async () => "/project/.convax/canvases/x/document.json" },
+        undefined,
+        "project-1",
+        [{ kind: "file", path: ".convax/canvases/x/document.json" }],
+      ),
+    ).rejects.toThrow("private storage")
   })
 
   test("rejects Windows absolute paths and backslash private-storage paths", async () => {
     const manager = { resolveEntryPath: async () => "unused" }
-    await expect(prepareAgentResources(
-      manager,
-      undefined,
-      "project-1",
-      [{ kind: "file", path: "C:\\project\\src\\index.ts" }],
-    )).rejects.toThrow("project reference is invalid")
-    await expect(prepareAgentResources(
-      manager,
-      undefined,
-      "project-1",
-      [{ kind: "file", path: "nested\\.CONVAX\\document.json" }],
-    )).rejects.toThrow("private storage")
+    await expect(
+      prepareAgentResources(manager, undefined, "project-1", [{ kind: "file", path: "C:\\project\\src\\index.ts" }]),
+    ).rejects.toThrow("project reference is invalid")
+    await expect(
+      prepareAgentResources(manager, undefined, "project-1", [
+        { kind: "file", path: "nested\\.CONVAX\\document.json" },
+      ]),
+    ).rejects.toThrow("private storage")
   })
 
   test("fails closed when Canvas snapshots are not wired", async () => {
-    await expect(prepareAgentResources(
-      { resolveEntryPath: async () => "/project" },
-      undefined,
-      "project-1",
-      [{ kind: "resource", uri: "convax://canvas/canvas-1" }],
-    )).rejects.toThrow("resources are unavailable")
+    await expect(
+      prepareAgentResources({ resolveEntryPath: async () => "/project" }, undefined, "project-1", [
+        { kind: "resource", uri: "convax://canvas/canvas-1" },
+      ]),
+    ).rejects.toThrow("resources are unavailable")
   })
 
   test("rejects malformed or unsupported structured resource URIs", () => {
@@ -200,17 +256,21 @@ describe("prepareAgentResources", () => {
   test("rejects a missing Canvas node and an invalid snapshot", async () => {
     const manager = { resolveEntryPath: async () => "unused" }
     const resource = [{ kind: "resource" as const, uri: "convax://canvas/canvas-1/node/missing" }]
-    await expect(prepareAgentResources(
-      manager,
-      { resolveCanvasSnapshot: async () => ({ content: canvasSnapshot() }) },
-      "project-1",
-      resource,
-    )).rejects.toThrow("Canvas node was not found")
-    await expect(prepareAgentResources(
-      manager,
-      { resolveCanvasSnapshot: async () => ({ content: "{not-json" }) },
-      "project-1",
-      resource,
-    )).rejects.toThrow("Canvas snapshot is invalid")
+    await expect(
+      prepareAgentResources(
+        manager,
+        { resolveCanvasSnapshot: async () => ({ content: canvasSnapshot() }) },
+        "project-1",
+        resource,
+      ),
+    ).rejects.toThrow("Canvas node was not found")
+    await expect(
+      prepareAgentResources(
+        manager,
+        { resolveCanvasSnapshot: async () => ({ content: "{not-json" }) },
+        "project-1",
+        resource,
+      ),
+    ).rejects.toThrow("Canvas snapshot is invalid")
   })
 })

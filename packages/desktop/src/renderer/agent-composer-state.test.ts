@@ -1,51 +1,145 @@
 import { describe, expect, test } from "bun:test"
 import {
-  agentComposerSkills,
+  AgentComposerCompositionController,
+  AgentComposerRequestTracker,
+  agentComposerResources,
   agentComposerText,
+  closeAgentComposerSuggestion,
   filterAgentSkills,
-  filterAgentResourcePickerOptions,
-  findAgentSkillSlashQuery,
+  findAgentComposerQuery,
   hasAgentComposerContent,
+  moveAgentComposerSuggestion,
   normalizeAgentComposerDraft,
-  selectableAgentResourcePickerOptions,
+  openAgentComposerSuggestion,
+  reconcileAgentComposerSuggestionOptions,
+  resolveAgentComposerSuggestionOption,
+  setAgentComposerSuggestionHover,
   shouldDismissAgentResourcePicker,
   shouldShowAgentComposerPlaceholder,
 } from "./agent-composer-state"
 
 describe("Agent composer state", () => {
-  test("keeps Skill mentions semantic and out of the visible prompt text", () => {
+  test("keeps resources at their sentence position and projects prompt inputs", () => {
     const draft = {
       segments: [
-        { text: "Review this with ", type: "text" as const },
-        { name: "code-review", type: "skill" as const },
-        { text: " please", type: "text" as const },
-        { name: "code-review", type: "skill" as const },
+        { text: "Compare ", type: "text" as const },
+        { resource: { kind: "file" as const, name: "A", path: "a.md" }, type: "resource" as const },
+        { text: " with ", type: "text" as const },
+        { resource: { kind: "skill" as const, name: "review" }, type: "resource" as const },
       ],
     }
 
-    expect(agentComposerText(draft)).toBe("Review this with  please")
-    expect(agentComposerSkills(draft)).toEqual([{ kind: "skill", name: "code-review" }])
+    expect(agentComposerText(draft)).toBe("Compare  with ")
+    expect(agentComposerResources(draft)).toEqual([
+      { kind: "file", name: "A", path: "a.md" },
+      { kind: "skill", name: "review" },
+    ])
     expect(hasAgentComposerContent(draft)).toBeTrue()
   })
 
-  test("normalizes adjacent text and invalid Skill segments", () => {
+  test("normalizes adjacent text and invalid resource segments", () => {
     expect(
       normalizeAgentComposerDraft({
         segments: [
           { text: "one", type: "text" },
           { text: " two", type: "text" },
-          { name: " ", type: "skill" },
+          { resource: { kind: "skill", name: " " }, type: "resource" },
         ],
       }),
     ).toEqual({ segments: [{ text: "one two", type: "text" }] })
   })
 
-  test("recognizes slash queries only at a command boundary", () => {
-    expect(findAgentSkillSlashQuery("/la", 3)).toEqual({ end: 3, query: "la", start: 0 })
-    expect(findAgentSkillSlashQuery("请用 /飞书", 6)).toEqual({ end: 6, query: "飞书", start: 3 })
-    expect(findAgentSkillSlashQuery("line one\n/review", 16)).toEqual({ end: 16, query: "review", start: 9 })
-    expect(findAgentSkillSlashQuery("https://example.com/a", 21)).toBeUndefined()
-    expect(findAgentSkillSlashQuery("value/total", 11)).toBeUndefined()
+  test("keeps multiple Skills visible and lets submission deduplicate later", () => {
+    const draft = normalizeAgentComposerDraft({
+      segments: [
+        { resource: { kind: "skill", name: "review" }, type: "resource" },
+        { resource: { kind: "skill", name: "review" }, type: "resource" },
+        { resource: { kind: "skill", name: "docs" }, type: "resource" },
+      ],
+    })
+
+    expect(draft.segments).toHaveLength(3)
+    expect(agentComposerResources(draft)).toHaveLength(3)
+  })
+
+  test("recognizes only @ and $ suggestion queries at a command boundary", () => {
+    expect(findAgentComposerQuery("@rea", 4)).toEqual({ end: 4, query: "rea", start: 0, trigger: "reference" })
+    expect(findAgentComposerQuery("请用 $飞书", 6)).toEqual({ end: 6, query: "飞书", start: 3, trigger: "skill" })
+    expect(findAgentComposerQuery("email@example.com", 17)).toBeUndefined()
+    expect(findAgentComposerQuery("/review", 7)).toBeUndefined()
+  })
+
+  test("reconciles suggestion rows by stable id and wraps keyboard movement", () => {
+    const rows = [{ id: "a" }, { id: "b" }, { id: "c" }]
+    const opened = openAgentComposerSuggestion("reference", rows, { kind: "caret" })
+    const moved = moveAgentComposerSuggestion(opened, 1, rows)
+
+    expect(moved.activeId).toBe("b")
+    expect(moveAgentComposerSuggestion({ ...moved, activeId: "c" }, 1, rows).activeId).toBe("a")
+    expect(reconcileAgentComposerSuggestionOptions(moved, [{ id: "b" }]).activeId).toBe("b")
+    const empty = openAgentComposerSuggestion("reference", [], { kind: "caret" })
+    expect(reconcileAgentComposerSuggestionOptions(empty, [])).toBe(empty)
+    expect(resolveAgentComposerSuggestionOption(empty, [])).toBeUndefined()
+    expect(reconcileAgentComposerSuggestionOptions({ ...moved, activeId: "missing" }, rows).activeId).toBe("a")
+    expect(closeAgentComposerSuggestion()).toEqual({ open: false })
+  })
+
+  test("keeps pointer hover separate from keyboard selection and opens tokens in edit mode", () => {
+    const opened = openAgentComposerSuggestion("skill", [{ id: "review" }], {
+      kind: "token",
+      tokenId: "token-1",
+    })
+    const hovered = setAgentComposerSuggestionHover(opened, "docs")
+
+    expect(opened.mode).toBe("edit")
+    expect(hovered).toMatchObject({ activeId: "review", hoveredId: "docs" })
+  })
+
+  test("rejects stale inventory requests independently by key and scope", () => {
+    const tracker = new AgentComposerRequestTracker()
+    const firstRoot = tracker.begin("project-a", "project:")
+    const assets = tracker.begin("project-a", "project:Assets")
+    const canvas = tracker.begin("project-a", "canvas:one")
+    const secondRoot = tracker.begin("project-a", "project:")
+    const otherProject = tracker.begin("project-b", "project:")
+
+    expect(firstRoot()).toBeFalse()
+    expect(secondRoot()).toBeTrue()
+    expect(assets()).toBeTrue()
+    expect(canvas()).toBeTrue()
+    expect(otherProject()).toBeTrue()
+    tracker.invalidate()
+    expect(secondRoot()).toBeFalse()
+    expect(assets()).toBeFalse()
+    expect(canvas()).toBeFalse()
+    expect(otherProject()).toBeFalse()
+  })
+
+  test("suppresses query refreshes throughout IME composition and refreshes once after commit", () => {
+    const controller = new AgentComposerCompositionController()
+    const scheduled: Array<() => void> = []
+    let refreshes = 0
+    const refresh = () => {
+      refreshes += 1
+    }
+    const schedule = (callback: () => void) => {
+      scheduled.push(callback)
+      return () => {
+        const index = scheduled.indexOf(callback)
+        if (index >= 0) scheduled.splice(index, 1)
+      }
+    }
+
+    controller.start()
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    controller.finish(refresh, schedule)
+    expect(controller.runWhenIdle(refresh)).toBeFalse()
+    expect(refreshes).toBe(0)
+    scheduled.shift()?.()
+    expect(refreshes).toBe(1)
+    expect(controller.runWhenIdle(refresh)).toBeTrue()
+    expect(refreshes).toBe(2)
   })
 
   test("filters Skill names and descriptions case-insensitively", () => {
@@ -56,62 +150,6 @@ describe("Agent composer state", () => {
 
     expect(filterAgentSkills(skills, "REVIEW").map((skill) => skill.name)).toEqual(["code-review"])
     expect(filterAgentSkills(skills, "飞书").map((skill) => skill.name)).toEqual(["lark-doc"])
-  })
-
-  test("uses one query across Skills, project entries, and canvases", () => {
-    const options = [
-      {
-        description: "Review a pull request",
-        id: "skill:review",
-        label: "code-review",
-        resource: { kind: "skill", name: "code-review" } as const,
-        section: "skills" as const,
-      },
-      {
-        description: "src/components/picker.tsx",
-        id: "file:picker",
-        label: "picker.tsx",
-        resource: { kind: "file", path: "src/components/picker.tsx" } as const,
-        section: "project" as const,
-      },
-      {
-        id: "canvas:launch",
-        label: "Launch plan",
-        resource: { kind: "resource", uri: "convax://canvas/launch" } as const,
-        section: "canvases" as const,
-      },
-    ]
-
-    expect(filterAgentResourcePickerOptions(options, "pick").map((option) => option.id)).toEqual(["file:picker"])
-    expect(filterAgentResourcePickerOptions(options, "launch").map((option) => option.id)).toEqual(["canvas:launch"])
-    expect(filterAgentResourcePickerOptions(options, "review").map((option) => option.id)).toEqual(["skill:review"])
-  })
-
-  test("keeps keyboard selection aligned with rows hidden by loading sections", () => {
-    const options = [
-      {
-        id: "skill:review",
-        label: "review",
-        resource: { kind: "skill", name: "review" } as const,
-        section: "skills" as const,
-      },
-      {
-        id: "file:readme",
-        label: "README.md",
-        resource: { kind: "file", path: "README.md" } as const,
-        section: "project" as const,
-      },
-      {
-        id: "canvas:main",
-        label: "Main",
-        resource: { kind: "resource", uri: "convax://canvas/main" } as const,
-        section: "canvases" as const,
-      },
-    ]
-
-    expect(
-      selectableAgentResourcePickerOptions(options, { project: true, skills: false }).map((option) => option.id),
-    ).toEqual(["skill:review", "canvas:main"])
   })
 
   test("hides an empty placeholder only while the composer is focused", () => {
@@ -125,11 +163,12 @@ describe("Agent composer state", () => {
     const popup = { id: "popup" }
     const composer = { id: "composer" }
     const outside = { id: "outside" }
-    const surface = { contains: (target: { id: string }) => target === popup || target === composer }
+    const surface = { contains: (target: { id: string }) => target === composer }
+    const portal = { contains: (target: { id: string }) => target === popup }
 
-    expect(shouldDismissAgentResourcePicker(surface, popup)).toBeFalse()
+    expect(shouldDismissAgentResourcePicker(surface, popup, portal)).toBeFalse()
     expect(shouldDismissAgentResourcePicker(surface, composer)).toBeFalse()
-    expect(shouldDismissAgentResourcePicker(surface, outside)).toBeTrue()
+    expect(shouldDismissAgentResourcePicker(surface, outside, portal)).toBeTrue()
     expect(shouldDismissAgentResourcePicker(surface, null)).toBeTrue()
   })
 })

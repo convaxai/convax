@@ -1,5 +1,7 @@
 import type { AgentMessage, AgentMessagePart } from "@convax/agent-runtime"
 import { describe, expect, mock, test } from "bun:test"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 import { renderToStaticMarkup } from "react-dom/server"
 import { AgentActivityNotice, ConversationTurnView, MessagePartView } from "./agent-panel"
 import type { AgentConversationTurn } from "./agent-conversation-presentation"
@@ -96,5 +98,43 @@ describe("Agent conversation activity", () => {
     )
 
     expect(markup).not.toContain("Earlier run was interrupted")
+  })
+})
+
+describe("Agent composer source contract", () => {
+  test("uses dedicated @ and $ composer triggers and structured resources", () => {
+    const source = readFileSync(fileURLToPath(new URL("./agent-panel.tsx", import.meta.url)), "utf8")
+
+    expect(source).toContain('aria-label="Reference Project or Canvas content"')
+    expect(source).toContain('aria-label="Use a Skill"')
+    expect(source).toContain("agentComposerResources(submittedDraft)")
+    expect(source).toContain("window.convax.projectFiles.listDirectory")
+    expect(source).toContain("window.convax.canvas.documents.load")
+    expect(source).toContain("buildAgentProjectReferenceTree")
+    expect(source).toContain("buildAgentCanvasReferenceTree")
+    expect(source).toContain("await props.beforePrompt?.()")
+    expect(source).toContain("requestTrackerRef.current.begin")
+    expect(source).toContain("requestTrackerRef.current.invalidate()")
+    expect(source).toContain("setCapabilitiesError(undefined)")
+    expect(source).toContain("activeScopeRef.current === scope")
+    expect(source).toContain("compositionControllerRef.current.start()")
+    expect(source).toContain("compositionControllerRef.current.finish")
+    expect(source).toMatch(
+      /onKeyUp=\{\(event\) => \{[\s\S]*?compositionControllerRef\.current\.runWhenIdle\(updateComposerQuery\)/,
+    )
+    expect(source).toContain("onOpenSkill={openSkill}")
+    expect(source).toContain("referenceStatusById={referenceStatusById}")
+    expect(source).toContain("createAgentComposerPickerAnchor")
+    expect(source).not.toContain("target.top - 324")
+    expect(source).toContain("event.nativeEvent.isComposing")
+    expect(source).toContain('event.key === "Escape"')
+    expect(source).toContain('event.key === "Tab"')
+    expect(source).toContain("aria-autocomplete")
+    expect(source).toContain("aria-activedescendant")
+    expect(source).toContain("captureAgentComposerSelection")
+    expect(source).toContain("replaceComposerDraft(submittedDraft)")
+    expect(source).toContain("button.disabled = interactionDisabled")
+    expect(source).not.toContain("findAgentSkillSlashQuery")
+    expect(source).not.toContain('aria-label="Add context or Skill"')
   })
 })
