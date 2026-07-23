@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
-import type { PetSettingsHostClient, PetSettingsProvider } from "./pet-settings-host"
+import type { PetSettingsHostClient, PetSettingsProvider, PetSettingsProviderSnapshot } from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 import { SettingsView } from "./settings-view"
 
@@ -55,7 +55,7 @@ const petProvider: PetSettingsProvider = {
 const petClient: PetSettingsHostClient = {
   connectSettings: mock(async () => undefined),
   disconnectSettings: mock(() => undefined),
-  getProvider: mock(async () => petProvider),
+  getProvider: mock(async () => undefined),
   onProviderChanged: mock(() => noop),
 }
 
@@ -199,45 +199,27 @@ describe("SettingsView", () => {
     expect(markup).not.toContain("OpenCode")
   })
 
-  test("hides Pet settings navigation and content when no provider is installed", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsView
-        initialSection="pets"
-        languagePreference="en"
-        locale="en"
-        onClose={noop}
-        onLanguageChange={noop}
-        onRefreshServices={noop}
-        onServiceAction={noop}
-        petClient={petClient}
-        pluginClient={pluginClient}
-        serviceSnapshot={serviceSnapshot}
-        skillClient={skillClient}
-      />,
-    )
+  test("keeps the requested Pet section in a generic shell while provider discovery is loading", () => {
+    const markup = renderPetSettings({ status: "loading" })
 
-    expect(markup).not.toContain("Pets")
+    expect(markup).toContain('data-pet-provider-status="loading"')
+    expect(markup).toContain('aria-busy="true"')
     expect(markup).not.toContain("iframe")
-    expect(markup).toContain('id="settings-language"')
+    expect(markup).not.toContain('id="settings-language"')
+  })
+
+  test("hides Pet settings and falls back to General when the provider is absent or failed", () => {
+    for (const snapshot of [{ status: "absent" }, { status: "error" }] as const) {
+      const markup = renderPetSettings(snapshot)
+
+      expect(markup).not.toContain("Pets")
+      expect(markup).not.toContain("iframe")
+      expect(markup).toContain('id="settings-language"')
+    }
   })
 
   test("mounts only the installed Plugin-owned Pet settings surface", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsView
-        initialSection="pets"
-        languagePreference="en"
-        locale="en"
-        onClose={noop}
-        onLanguageChange={noop}
-        onRefreshServices={noop}
-        onServiceAction={noop}
-        petClient={petClient}
-        petProvider={petProvider}
-        pluginClient={pluginClient}
-        serviceSnapshot={serviceSnapshot}
-        skillClient={skillClient}
-      />,
-    )
+    const markup = renderPetSettings({ provider: petProvider, status: "ready" })
 
     expect(markup).toContain("Pets")
     expect(markup).toContain('src="convax-plugin://soft-companion/settings/index.html"')
@@ -249,4 +231,23 @@ describe("SettingsView", () => {
     expect(markup).not.toContain("Delete")
     expect(markup).not.toContain("Upload")
   })
+
+  function renderPetSettings(petProviderSnapshot: PetSettingsProviderSnapshot) {
+    return renderToStaticMarkup(
+      <SettingsView
+        initialSection="pets"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        petProviderSnapshot={petProviderSnapshot}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+  }
 })

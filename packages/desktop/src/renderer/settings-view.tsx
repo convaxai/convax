@@ -7,7 +7,12 @@ import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-la
 import { CapabilityManagementSurface } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
-import { PetSettingsHost, type PetSettingsHostClient, type PetSettingsProvider } from "./pet-settings-host"
+import {
+  PetSettingsHost,
+  type PetSettingsHostClient,
+  PetSettingsProviderLoader,
+  type PetSettingsProviderSnapshot,
+} from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
 export type SettingsSection = "general" | "services" | "capabilities" | "pets"
@@ -23,7 +28,7 @@ export interface SettingsViewProps {
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
   petClient: PetSettingsHostClient
-  petProvider?: PetSettingsProvider | null
+  petProviderSnapshot?: PetSettingsProviderSnapshot
   pluginClient: WebPluginClient
   serviceSnapshot: ServiceCatalogSnapshot
   skillClient: DesktopSkillClient
@@ -110,48 +115,40 @@ export function SettingsView({
   onRefreshServices,
   onServiceAction,
   petClient,
-  petProvider,
+  petProviderSnapshot: injectedPetProviderSnapshot,
   pluginClient,
   serviceSnapshot,
   skillClient,
 }: SettingsViewProps) {
-  const [resolvedPetProvider, setResolvedPetProvider] = useState<PetSettingsProvider | null | undefined>(petProvider)
-  const hasPetProvider = resolvedPetProvider !== undefined && resolvedPetProvider !== null
+  const [loadedPetProviderSnapshot, setLoadedPetProviderSnapshot] = useState<PetSettingsProviderSnapshot>({
+    status: "loading",
+  })
+  const petProviderSnapshot = injectedPetProviderSnapshot ?? loadedPetProviderSnapshot
+  const hasPetProvider = petProviderSnapshot.status === "ready"
+  const petProviderUnavailable = petProviderSnapshot.status === "absent" || petProviderSnapshot.status === "error"
   const enabledInitialSection =
     (initialSection === "services" && !featureFlags.services) ||
     (initialSection === "capabilities" && !featureFlags.skillsAndPlugins) ||
-    (initialSection === "pets" && !hasPetProvider)
+    (initialSection === "pets" && petProviderUnavailable)
       ? "general"
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
 
   useEffect(() => {
-    if (petProvider !== undefined) {
-      setResolvedPetProvider(petProvider)
-      return
-    }
-    let active = true
-    const refresh = () => {
-      void petClient.getProvider().then(
-        (provider) => {
-          if (active) setResolvedPetProvider(provider ?? null)
-        },
-        () => {
-          if (active) setResolvedPetProvider(null)
-        },
-      )
-    }
-    refresh()
-    const unsubscribe = petClient.onProviderChanged(refresh)
+    if (injectedPetProviderSnapshot !== undefined) return
+    const loader = new PetSettingsProviderLoader(petClient)
+    setLoadedPetProviderSnapshot(loader.getSnapshot())
+    const unsubscribe = loader.subscribe(setLoadedPetProviderSnapshot)
+    loader.start()
     return () => {
-      active = false
       unsubscribe()
+      loader.dispose()
     }
-  }, [petClient, petProvider])
+  }, [injectedPetProviderSnapshot, petClient])
 
   useEffect(() => {
-    if (!hasPetProvider && section === "pets") setSection("general")
-  }, [hasPetProvider, section])
+    if (petProviderUnavailable && section === "pets") setSection("general")
+  }, [petProviderUnavailable, section])
 
   const generalTitle = appMessage(locale, "settings.general")
   const servicesTitle = appMessage(locale, "settings.services")
@@ -248,10 +245,16 @@ export function SettingsView({
               pluginClient={pluginClient}
               skillClient={skillClient}
             />
-          ) : resolvedPetProvider ? (
-            <PetSettingsHost client={petClient} provider={resolvedPetProvider} />
+          ) : petProviderSnapshot.status === "ready" ? (
+            <PetSettingsHost client={petClient} provider={petProviderSnapshot.provider} />
+          ) : petProviderSnapshot.status === "loading" ? (
+            <div
+              aria-busy="true"
+              className="min-h-[36rem] rounded-xl border border-border bg-card"
+              data-pet-provider-status="loading"
+            />
           ) : (
-            <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+            <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground" role="status">
               Pet provider unavailable.
             </div>
           )}

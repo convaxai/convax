@@ -10,6 +10,7 @@ export interface PetSettingsProvider {
 
 export interface PetSettingsConnectionIdentity {
   generation: number
+  connectionId: string
   pluginId: string
 }
 
@@ -28,9 +29,7 @@ interface FrameWindowLike {
   postMessage(message: unknown, targetOrigin: string, transfer: Transferable[]): void
 }
 
-interface PetSettingsConnectEnvelope {
-  generation: number
-  pluginId: string
+interface PetSettingsConnectEnvelope extends PetSettingsConnectionIdentity {
   protocol: typeof petHostProtocol
   surface: "settings"
   type: "connect"
@@ -54,22 +53,22 @@ function isGeneration(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1
 }
 
-function connectionIdentity(provider: PetSettingsProvider): PetSettingsConnectionIdentity {
-  return { generation: provider.generation, pluginId: provider.pluginId }
-}
-
 function sameIdentity(left: PetSettingsProvider, right: PetSettingsProvider) {
   return left.pluginId === right.pluginId && left.generation === right.generation
 }
 
-function isSettingsEnvelope(value: unknown, provider: PetSettingsProvider): value is PetSettingsConnectEnvelope {
+function isSettingsEnvelope(
+  value: unknown,
+  identity: PetSettingsConnectionIdentity,
+): value is PetSettingsConnectEnvelope {
   if (!isRecord(value)) return false
   const keys = Object.keys(value)
   return (
-    keys.length === 5 &&
-    keys.every((key) => ["generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
-    value.generation === provider.generation &&
-    value.pluginId === provider.pluginId &&
+    keys.length === 6 &&
+    keys.every((key) => ["connectionId", "generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
+    value.connectionId === identity.connectionId &&
+    value.generation === identity.generation &&
+    value.pluginId === identity.pluginId &&
     value.protocol === petHostProtocol &&
     value.surface === "settings" &&
     value.type === "connect"
@@ -112,15 +111,102 @@ export function isPetSettingsProvider(value: unknown): value is PetSettingsProvi
   }
 }
 
+export type PetSettingsProviderSnapshot =
+  | { status: "loading" }
+  | { status: "absent" }
+  | { status: "error" }
+  | { provider: PetSettingsProvider; status: "ready" }
+
+function cloneProvider(provider: PetSettingsProvider): PetSettingsProvider {
+  return { ...provider }
+}
+
+function cloneProviderSnapshot(snapshot: PetSettingsProviderSnapshot): PetSettingsProviderSnapshot {
+  return snapshot.status === "ready" ? { provider: cloneProvider(snapshot.provider), status: "ready" } : { ...snapshot }
+}
+
+export class PetSettingsProviderLoader {
+  readonly #client: PetSettingsHostClient
+  readonly #listeners = new Set<(snapshot: PetSettingsProviderSnapshot) => void>()
+  #disposed = false
+  #request = 0
+  #snapshot: PetSettingsProviderSnapshot = { status: "loading" }
+  #started = false
+  #unsubscribe: (() => void) | undefined
+
+  constructor(client: PetSettingsHostClient) {
+    this.#client = client
+  }
+
+  getSnapshot() {
+    return cloneProviderSnapshot(this.#snapshot)
+  }
+
+  subscribe(listener: (snapshot: PetSettingsProviderSnapshot) => void) {
+    if (this.#disposed) return () => undefined
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  start() {
+    if (this.#disposed || this.#started) return
+    this.#started = true
+    this.#unsubscribe = this.#client.onProviderChanged(() => this.#refresh())
+    this.#refresh()
+  }
+
+  dispose() {
+    if (this.#disposed) return
+    this.#disposed = true
+    this.#request += 1
+    try {
+      this.#unsubscribe?.()
+    } catch {}
+    this.#unsubscribe = undefined
+    this.#listeners.clear()
+  }
+
+  #refresh() {
+    if (this.#disposed) return
+    const request = ++this.#request
+    this.#setSnapshot({ status: "loading" })
+    void this.#client.getProvider().then(
+      (provider) => {
+        if (this.#disposed || request !== this.#request) return
+        if (provider === undefined) {
+          this.#setSnapshot({ status: "absent" })
+        } else if (isPetSettingsProvider(provider)) {
+          this.#setSnapshot({ provider: cloneProvider(provider), status: "ready" })
+        } else {
+          this.#setSnapshot({ status: "error" })
+        }
+      },
+      () => {
+        if (!this.#disposed && request === this.#request) this.#setSnapshot({ status: "error" })
+      },
+    )
+  }
+
+  #setSnapshot(snapshot: PetSettingsProviderSnapshot) {
+    this.#snapshot = cloneProviderSnapshot(snapshot)
+    for (const listener of this.#listeners) listener(cloneProviderSnapshot(snapshot))
+  }
+}
+
+export type PetSettingsFrameStatus = "idle" | "loading" | "connected" | "unavailable"
+
 export class PetSettingsFrameRelay {
   readonly #client: PetSettingsHostClient
   readonly #frameWindow: FrameWindowLike
+  readonly #statusListeners = new Set<(status: PetSettingsFrameStatus) => void>()
   readonly hostWindow: unknown
-  #connectPromise: Promise<void> | undefined
-  #connectRequested = false
+  #activeIdentity: PetSettingsConnectionIdentity | undefined
+  #connectionSequence = 0
   #disposed = false
+  #loadEpoch = 0
   #portRelayed = false
   #provider: PetSettingsProvider
+  #status: PetSettingsFrameStatus = "idle"
 
   constructor(options: {
     client: PetSettingsHostClient
@@ -135,32 +221,54 @@ export class PetSettingsFrameRelay {
     this.#provider = { ...options.provider }
   }
 
+  getStatus() {
+    return this.#status
+  }
+
+  subscribeStatus(listener: (status: PetSettingsFrameStatus) => void) {
+    if (this.#disposed) return () => undefined
+    this.#statusListeners.add(listener)
+    return () => this.#statusListeners.delete(listener)
+  }
+
   async frameLoaded() {
-    if (this.#disposed || this.#connectRequested) return
-    this.#connectRequested = true
-    const identity = connectionIdentity(this.#provider)
-    const connect = Promise.resolve(this.#client.connectSettings(identity))
-    this.#connectPromise = connect
+    if (this.#disposed) return
+    const epoch = ++this.#loadEpoch
+    const previous = this.#activeIdentity
+    this.#activeIdentity = undefined
+    this.#portRelayed = false
+    this.#setStatus("loading")
+    if (previous) await this.#disconnect(previous)
+    if (this.#disposed || epoch !== this.#loadEpoch) return
+
+    const identity: PetSettingsConnectionIdentity = {
+      connectionId: `settings-${++this.#connectionSequence}`,
+      generation: this.#provider.generation,
+      pluginId: this.#provider.pluginId,
+    }
+    this.#activeIdentity = identity
     try {
-      await connect
-    } catch (error) {
-      if (!this.#disposed && sameIdentity(this.#provider, identity as PetSettingsProvider)) {
-        this.#connectRequested = false
+      await this.#client.connectSettings(identity)
+      if (!this.#disposed && epoch === this.#loadEpoch && this.#activeIdentity === identity) {
+        this.#setStatus(this.#portRelayed ? "connected" : "loading")
       }
-      throw error
-    } finally {
-      if (this.#connectPromise === connect) this.#connectPromise = undefined
+    } catch {
+      if (!this.#disposed && epoch === this.#loadEpoch && this.#activeIdentity === identity) {
+        this.#setStatus("unavailable")
+      }
     }
   }
 
   receive(event: PetSettingsRelayEvent) {
+    const identity = this.#activeIdentity
     if (
       this.#disposed ||
-      !this.#connectRequested ||
+      identity === undefined ||
+      this.#status === "unavailable" ||
       this.#portRelayed ||
       event.source !== this.hostWindow ||
       event.ports.length !== 1 ||
-      !isSettingsEnvelope(event.data, this.#provider)
+      !isSettingsEnvelope(event.data, identity)
     ) {
       closePorts(event.ports)
       return false
@@ -170,11 +278,12 @@ export class PetSettingsFrameRelay {
     try {
       this.#frameWindow.postMessage(event.data, "*", [port as Transferable])
       this.#portRelayed = true
+      this.#setStatus("connected")
       return true
     } catch {
       closePorts([port])
-      this.#connectRequested = false
-      void this.#disconnect(this.#provider)
+      this.#setStatus("unavailable")
+      void this.#disconnect(identity)
       return false
     }
   }
@@ -183,29 +292,38 @@ export class PetSettingsFrameRelay {
     if (this.#disposed) return
     if (!isPetSettingsProvider(provider)) throw new Error("Pet settings provider is invalid")
     if (sameIdentity(this.#provider, provider) && this.#provider.settingsUrl === provider.settingsUrl) return
-    const previous = this.#provider
-    await this.#connectPromise?.catch(() => undefined)
-    if (this.#connectRequested) await this.#disconnect(previous)
-    this.#provider = { ...provider }
-    this.#connectRequested = false
+    this.#loadEpoch += 1
+    const previous = this.#activeIdentity
+    this.#activeIdentity = undefined
     this.#portRelayed = false
+    this.#setStatus("idle")
+    this.#provider = { ...provider }
+    if (previous) await this.#disconnect(previous)
   }
 
   async dispose() {
     if (this.#disposed) return
     this.#disposed = true
-    await this.#connectPromise?.catch(() => undefined)
-    if (this.#connectRequested) await this.#disconnect(this.#provider)
-    this.#connectRequested = false
+    this.#loadEpoch += 1
+    const identity = this.#activeIdentity
+    this.#activeIdentity = undefined
     this.#portRelayed = false
+    if (identity) await this.#disconnect(identity)
+    this.#statusListeners.clear()
   }
 
-  async #disconnect(provider: PetSettingsProvider) {
+  async #disconnect(identity: PetSettingsConnectionIdentity) {
     try {
-      await this.#client.disconnectSettings(connectionIdentity(provider))
+      await this.#client.disconnectSettings(identity)
     } catch {
       // Main also closes sender-scoped ports when the trusted renderer disappears.
     }
+  }
+
+  #setStatus(status: PetSettingsFrameStatus) {
+    if (this.#status === status) return
+    this.#status = status
+    for (const listener of this.#statusListeners) listener(status)
   }
 }
 
@@ -244,9 +362,13 @@ export function PetSettingsHost({
     )
   }
 
+  const bindingKey = `${trustedProvider.pluginId}:${trustedProvider.generation}`
+
   return (
     <iframe
       className="min-h-[36rem] w-full rounded-xl border border-border bg-card"
+      data-pet-settings-binding={bindingKey}
+      key={`${bindingKey}:${trustedProvider.settingsUrl}`}
       onLoad={() => void relayRef.current?.frameLoaded()}
       ref={iframeRef}
       sandbox="allow-scripts"
