@@ -12,6 +12,7 @@ import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
 import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import type { PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -23,6 +24,7 @@ declare global {
       canvas: {
         documents: CanvasRendererDocumentClient
         externalMediaDrag?: CanvasExternalMediaDragRendererClient
+        pluginImages: PluginCanvasImageClient
         renderer: CanvasRendererClient
       }
       generation: GenerationClient

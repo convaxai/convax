@@ -22,6 +22,7 @@ const elements = {
   app: document.getElementById("app"),
   autoRotateButton: document.getElementById("autoRotateButton"),
   canvas: document.getElementById("panoramaCanvas"),
+  captureButton: document.getElementById("captureButton"),
   chooseButton: document.getElementById("chooseButton"),
   connectionPill: document.getElementById("connectionPill"),
   connectionText: document.getElementById("connectionText"),
@@ -77,6 +78,7 @@ let pointer = null
 let animationFrame = 0
 let lastFrameTime = 0
 let lastInteractionHintTimer = 0
+let captureInFlight = false
 
 const viewState = {
   autoRotate: false,
@@ -143,6 +145,11 @@ function updateViewControls() {
   elements.fovOutput.textContent = String(fov) + "°"
   elements.autoRotateButton.classList.toggle("is-active", viewState.autoRotate)
   elements.autoRotateButton.setAttribute("aria-pressed", String(viewState.autoRotate))
+}
+
+function updateCaptureControl() {
+  elements.captureButton.disabled = captureInFlight || !renderer.texture || renderer.contextState !== "ready"
+  elements.captureButton.setAttribute("aria-busy", String(captureInFlight))
 }
 
 function updateFullscreenControls() {
@@ -324,6 +331,7 @@ function handleHostPortMessage(event) {
   }
   if (message.command === "panorama.reset") resetView()
   if (message.command === "panorama.toggle-auto-rotate") toggleAutoRotate()
+  if (message.command === "panorama.capture-viewport") void captureViewport()
 }
 
 function rejectPendingRequests(reason) {
@@ -621,6 +629,7 @@ async function loadPanoramaSource(blob, source, sequence, dimensions) {
     decoded.bitmap.close()
   }
   renderer.contextState = "ready"
+  updateCaptureControl()
   currentSource = source
   updateCurrentSourceStatus()
   setEmptyMessage("连接或选择一张全景图", "将画布中的图片连到此节点，或从本地选择 2:1 等距柱状投影图片。")
@@ -641,6 +650,7 @@ async function loadPanoramaSource(blob, source, sequence, dimensions) {
 
 function setPersistentViewerError(title, description) {
   renderer.contextState = "failed"
+  updateCaptureControl()
   elements.viewer.classList.remove("has-image")
   setHidden(elements.interactionHint, true)
   clearImageMeta()
@@ -651,9 +661,50 @@ function setPersistentViewerError(title, description) {
 function clearPanorama() {
   loadSequence += 1
   renderer.clearTexture()
+  updateCaptureControl()
   elements.viewer.classList.remove("has-image")
   setHidden(elements.interactionHint, true)
   clearImageMeta()
+}
+
+function blobDataUrl(blob) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader()
+    reader.addEventListener("load", function () {
+      if (typeof reader.result === "string") resolve(reader.result)
+      else reject(new Error("截图数据读取失败"))
+    }, { once: true })
+    reader.addEventListener("error", function () {
+      reject(reader.error || new Error("截图数据读取失败"))
+    }, { once: true })
+    reader.readAsDataURL(blob)
+  })
+}
+
+async function captureViewport() {
+  if (captureInFlight) return
+  if (!renderer.texture || renderer.contextState !== "ready") {
+    showToast("请先载入全景图后再截取画面。", "warning")
+    return
+  }
+  captureInFlight = true
+  updateCaptureControl()
+  setLoading(true, "正在截取当前画面…")
+  try {
+    const blob = await renderer.capture(viewState)
+    const dataUrl = await blobDataUrl(blob)
+    await hostRequest("canvas.image.create", {
+      dataUrl: dataUrl,
+      name: "全景视口截图.png",
+    })
+    showToast("已在画布中创建当前视口截图。")
+  } catch (error) {
+    showToast(errorMessage(error, "当前画面截取失败"), "error")
+  } finally {
+    captureInFlight = false
+    updateCaptureControl()
+    setLoading(false)
+  }
 }
 
 function scheduleRender() {
@@ -880,6 +931,9 @@ function bindEvents() {
   elements.refreshButton.addEventListener("click", function () {
     void refreshConnectedImages(true)
   })
+  elements.captureButton.addEventListener("click", function () {
+    void captureViewport()
+  })
   elements.resetButton.addEventListener("click", resetView)
   elements.autoRotateButton.addEventListener("click", toggleAutoRotate)
   elements.fullscreenButton.addEventListener("click", function () {
@@ -923,6 +977,7 @@ function bindEvents() {
     renderer.contextState = "lost"
     renderer.ready = false
     renderer.texture = null
+    updateCaptureControl()
     elements.viewer.classList.remove("has-image")
     setHidden(elements.interactionHint, true)
     clearImageMeta()

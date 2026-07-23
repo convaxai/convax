@@ -287,7 +287,7 @@ surfaces:
   graph and director viewport camera are stored as separate fields in the owning
   Canvas node through `canvas.node.updateState`; its legacy independently managed
   companion Skill reviews the same snapshot through normal Canvas Agent resources.
-- **Panorama Viewer** is an original offline WebGL2 surface for equirectangular 360°
+- **全景图预览 (Panorama Viewer)** is an original offline WebGL2 surface for equirectangular 360°
   images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
   image nodes connected into its own Canvas node through a narrow host capability.
   The selected connected-node preference and view settings are portable; local file
@@ -448,10 +448,15 @@ The versioned direct-call surface is intentionally narrow:
 | `canvas.connectedImage.read`  | `canvas.connectedImages.read` | one listed embedded image or managed Project image, atomically type-checked and limited to 16 MiB in main |
 | `canvas.node.get`             | `canvas.node.read`            | own node only                                                                                             |
 | `canvas.node.updateState`     | `canvas.node.write`           | own namespaced state only                                                                                 |
+| `canvas.image.create`         | `canvas.image.write`          | one bounded PNG imported as a managed Project asset and added beside the own node                         |
 | `project.file.readText`       | `project.files.read`          | current Project relative path                                                                             |
 | `agent.prompt`                | `agent.prompt`                | current Project with own node resource                                                                    |
 | `generation.tools.list`       | `generation.execute`          | sanitized installed generation tools; optional output-modality filter                                     |
 | `generation.canvas.execute`   | `generation.execute`          | one scoped Canvas generation using only direct incoming typed references                                  |
+
+`canvas.image.create` accepts PNG bytes only, never a path or placement supplied by
+the frame. Main validates the image, places and connects the result beside the own
+node, and removes the imported managed asset if the Canvas commit fails.
 
 These are adapters over existing clients/controllers. They do not expose private
 Project JSON, absolute paths, arbitrary target-node mutation, Electron, or a generic

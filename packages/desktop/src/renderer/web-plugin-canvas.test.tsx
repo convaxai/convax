@@ -234,6 +234,8 @@ function hostContext(
     signal: controller.signal,
     updateNodeState: mock(async () => undefined),
     ...overrides,
+    createCanvasImage:
+      overrides.createCanvasImage ?? mock(async () => ({ createdNodeId: "captured-image-1", revision: 1 })),
   } satisfies WebPluginHostRequestContext
 }
 
@@ -343,6 +345,7 @@ describe("Canvas Web Plugin contribution", () => {
     const contribution = createWebPluginCanvasContribution(installedPlugin, {
       frameRegistry: new DesktopPluginFrameRegistry(),
       host: {
+        createCanvasImage: async () => ({ createdNodeId: "captured-image-1", revision: 1 }),
         executeCanvasGeneration: async () => ({
           createdNodeIds: [],
           revision: 0,
@@ -635,6 +638,35 @@ describe("Canvas Web Plugin host requests", () => {
       ),
     ).resolves.toMatchObject({ ok: true, result: { updated: true } })
     expect(updateNodeState).toHaveBeenCalledTimes(2)
+  })
+
+  test("creates a bounded PNG Canvas image only with the explicit write capability", async () => {
+    const dataUrl = `data:image/png;base64,${Buffer.alloc(24).toString("base64")}`
+    const createCanvasImage = mock(async () => ({ createdNodeId: "captured-image-1", revision: 2 }))
+    const context = hostContext(plugin(["canvas.image.write"]), { createCanvasImage })
+
+    const response = await dispatchWebPluginHostRequest(
+      request("canvas.image.create", { dataUrl, name: "全景视口截图.png" }),
+      context,
+    )
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { createdNodeId: "captured-image-1", revision: 2 },
+    })
+    expect(createCanvasImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataUrl,
+        name: "全景视口截图.png",
+        pluginVersion: "1.2.3",
+      }),
+    )
+
+    const denied = await dispatchWebPluginHostRequest(
+      request("canvas.image.create", { dataUrl, name: "全景视口截图.png" }),
+      hostContext(plugin()),
+    )
+    expect(denied).toMatchObject({ ok: false, error: "Plugin capability is not granted: canvas.image.write" })
   })
 
   test("lists and reads only directly connected browser images through the managed Project port", async () => {

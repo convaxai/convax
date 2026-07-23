@@ -25,9 +25,13 @@ mock.module("@xyflow/react", () => ({
   useConnection: (selector: (state: { inProgress: boolean }) => unknown) => selector({ inProgress: false }),
 }))
 
-const { BuiltinCanvasNode, BuiltinMediaFileNode, CanvasNodeChrome, startCanvasSelectionDragFromNode } = await import(
-  "./builtin-node"
-)
+const {
+  BuiltinCanvasNode,
+  BuiltinMediaFileNode,
+  CanvasNodeChrome,
+  CanvasNodeToolbarButton,
+  startCanvasSelectionDragFromNode,
+} = await import("./builtin-node")
 
 const node: CanvasNode = {
   id: "node-a",
@@ -143,6 +147,14 @@ function toolbarCount(markup: string) {
 }
 
 describe("built-in node toolbar visibility", () => {
+  test("can show a compact visible label for commands without a meaningful icon", () => {
+    const markup = renderToStaticMarkup(<CanvasNodeToolbarButton label="刷新图片" onClick={() => {}} visibleLabel />)
+
+    expect(markup).toContain("刷新图片")
+    expect(markup).toContain("convax-node-toolbar__button--labeled")
+    expect(markup).toContain('aria-label="刷新图片"')
+  })
+
   test("keeps an empty media body passive while upload remains in the node toolbar", () => {
     const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
       <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Image", url: "" }} />

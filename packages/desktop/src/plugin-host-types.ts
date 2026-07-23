@@ -56,10 +56,23 @@ export interface PluginGenerationCanvasResult {
   warnings: readonly string[]
 }
 
+export interface PluginCanvasImageResult {
+  createdNodeId: string
+  revision: number
+}
+
 export type PluginGenerationResultMode = "create-pending-node"
 
 /** Product ports supplied by Desktop composition, independent of Plugin transport. */
 export interface PluginCanvasHost {
+  createCanvasImage(
+    input: PluginNodeInvocationRef & {
+      dataUrl: string
+      name: string
+      pluginVersion: string
+      signal: AbortSignal
+    },
+  ): Promise<PluginCanvasImageResult>
   executeCanvasGeneration(
     input: PluginNodeInvocationRef & {
       anchor: { x: number; y: number }
@@ -95,6 +108,7 @@ export interface PluginCanvasHost {
 }
 
 export interface PluginHostLimits {
+  canvasImageRequestBytes?: number
   connectedImageResponseBytes?: number
   requestBytes?: number
   responseBytes?: number
@@ -118,6 +132,14 @@ export interface PluginHostRequestContext {
   limits?: PluginHostLimits
   ownsNode(node: CanvasNode): boolean
   plugin: InstalledPlugin
+  createCanvasImage(
+    input: PluginNodeInvocationRef & {
+      dataUrl: string
+      name: string
+      pluginVersion: string
+      signal: AbortSignal
+    },
+  ): Promise<PluginCanvasImageResult>
   executeCanvasGeneration(
     input: PluginNodeInvocationRef & {
       anchor: { x: number; y: number }

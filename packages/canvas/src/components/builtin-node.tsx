@@ -81,11 +81,12 @@ import { FileRendererBoundary } from "./file-renderer-boundary"
 function ToolbarButton(props: {
   destructive?: boolean
   disabled?: boolean
-  icon: ReactNode
+  icon?: ReactNode
   label: string
   onClick: () => void
   preserveFocus?: boolean
   pressed?: boolean
+  visibleLabel?: boolean
 }) {
   return (
     <Tooltip content={props.label} side="top">
@@ -95,6 +96,7 @@ function ToolbarButton(props: {
           aria-pressed={props.pressed}
           className={cn(
             "convax-node-toolbar__button",
+            props.visibleLabel && "convax-node-toolbar__button--labeled",
             props.pressed && "bg-accent text-accent-foreground",
             props.destructive && "text-destructive hover:text-destructive",
           )}
@@ -104,11 +106,12 @@ function ToolbarButton(props: {
             event.stopPropagation()
             if (props.preserveFocus) event.preventDefault()
           }}
-          size="icon-sm"
+          size={props.visibleLabel ? "sm" : "icon-sm"}
           type="button"
           variant="ghost"
         >
           {props.icon}
+          {props.visibleLabel ? <span className="convax-node-toolbar__button-label">{props.label}</span> : null}
         </Button>
       </span>
     </Tooltip>

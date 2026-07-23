@@ -28,6 +28,7 @@ export type DesktopPluginHostMethodV1 =
   | "canvas.connectedImage.read"
   | "canvas.node.get"
   | "canvas.node.updateState"
+  | "canvas.image.create"
   | "project.file.readText"
   | "agent.prompt"
 
@@ -93,6 +94,7 @@ const methodsV1 = new Set<DesktopPluginHostMethodV1>([
   "canvas.connectedImage.read",
   "canvas.node.get",
   "canvas.node.updateState",
+  "canvas.image.create",
   "project.file.readText",
   "agent.prompt",
 ])

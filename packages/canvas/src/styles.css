@@ -181,6 +181,19 @@
   flex: 0 0 30px;
 }
 
+.convax-canvas .convax-node-toolbar__button--labeled {
+  width: auto;
+  max-width: 160px;
+  flex-basis: auto;
+  padding-inline: 10px;
+}
+
+.convax-canvas .convax-node-toolbar__button-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .convax-canvas .convax-node-toolbar__button svg {
   width: 15px;
   height: 15px;

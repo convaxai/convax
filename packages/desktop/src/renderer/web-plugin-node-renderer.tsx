@@ -11,7 +11,7 @@ import {
   type CanvasNodeData,
 } from "@convax/canvas"
 import { getProjectFileReference } from "@convax/project/canvas"
-import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
+import { Copy, Puzzle, Trash2 } from "lucide-react"
 import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   requireWebPluginId,
@@ -546,6 +546,7 @@ function WebPluginCanvasNode(
           ? capabilityConnection.dispatch(event.data)
           : dispatchPluginHostRequest(event.data, {
               connectedImageReadGate,
+              createCanvasImage: (input) => props.options.host.createCanvasImage(input),
               executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
               frame,
               generationGate,
@@ -649,7 +650,7 @@ function WebPluginCanvasNode(
   )
   return (
     <div className="size-full" onPointerDownCapture={(event) => beginHostPointerGesture(event.pointerId)}>
-      <CanvasNodeChrome icon={<Puzzle />} label={props.data.label} node={props} toolbar={toolbar}>
+      <CanvasNodeChrome icon={<Puzzle />} label={props.plugin.name} node={props} toolbar={toolbar}>
         <div className="relative size-full">
           <iframe
             allow={webPluginIframeAllow(props.plugin)}
@@ -697,7 +698,6 @@ function WebPluginCanvasToolbar(
       {props.plugin.contributes.canvas.toolbar?.map((item) => (
         <CanvasNodeToolbarButton
           disabled={!mounted}
-          icon={<Play />}
           key={item.id}
           label={item.title}
           onClick={() => {
@@ -719,6 +719,7 @@ function WebPluginCanvasToolbar(
               // A failed sandbox command must not break the Canvas toolbar.
             }
           }}
+          visibleLabel
         />
       ))}
     </div>

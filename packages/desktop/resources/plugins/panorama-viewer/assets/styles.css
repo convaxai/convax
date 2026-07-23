@@ -505,6 +505,16 @@ svg {
   color: #9ae2c4;
 }
 
+.control-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.capture-button:not(:disabled) {
+  border-color: rgba(139, 177, 255, 0.2);
+  color: #dce7ff;
+}
+
 .select-shell {
   position: relative;
   min-width: 130px;
