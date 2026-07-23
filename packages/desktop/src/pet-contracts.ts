@@ -105,27 +105,6 @@ export interface PetActivityTarget {
   sessionId: string
 }
 
-export interface PetInventoryItem {
-  alt: string
-  assetUrl: string
-  description: string
-  id: string
-  name: string
-  source: "custom" | "plugin"
-  spriteVersion: 2
-}
-
-export interface PetInventorySnapshot {
-  awake: boolean
-  pets: PetInventoryItem[]
-  selectedId?: string
-}
-
-export interface PetRendererSnapshot {
-  activity: PetActivitySnapshot
-  pet: PetInventoryItem
-}
-
 export interface PetNavigationRequest {
   activityId: string
   revision: number
@@ -154,21 +133,3 @@ export const petIpcChannels = {
 } as const
 
 export type PetIpcChannels = typeof petIpcChannels
-
-export interface PetSettingsClient {
-  deleteCustom(input: { id: string }): Promise<void>
-  importCustom(): Promise<PetInventoryItem | null>
-  list(): Promise<PetInventorySnapshot>
-  markDisplayed(input: PetNavigationRequest): Promise<void>
-  onDidChange(listener: () => void): () => void
-  onNavigate(listener: (target: PetNavigationTarget) => void): () => void
-  select(input: { id: string }): Promise<void>
-  setAwake(input: { awake: boolean }): Promise<void>
-}
-
-export interface PetOverlayClient {
-  drag(input: PetDragInput): void
-  navigate(input: PetNavigationRequest): Promise<void>
-  onSnapshot(listener: (snapshot: PetRendererSnapshot) => void): () => void
-  setExpanded(input: { expanded: boolean }): Promise<void>
-}

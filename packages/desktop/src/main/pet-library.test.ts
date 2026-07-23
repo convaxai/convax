@@ -13,7 +13,7 @@ function pet(id: string, spritesheet = `assets/${id}.webp`) {
   }
 }
 
-function library(pets: unknown[] = [pet("violet"), pet("comet", "assets/comet.png")]) {
+function library(pets: unknown[] = [pet("aster"), pet("comet", "assets/comet.png")]) {
   return { pets, schema: "convax.pet-library/1" }
 }
 
@@ -35,12 +35,12 @@ describe("parseInstalledPetLibrary", () => {
     ["unknown root field", { ...library(), source: "legacy" }],
     ["empty library", library([])],
     ["too many pets", library(Array.from({ length: 65 }, (_, index) => pet(`pet-${index}`)))],
-    ["unknown pet field", library([{ ...pet("violet"), source: "legacy" }])],
-    ["missing pet field", library([{ ...pet("violet"), alt: undefined }])],
+    ["unknown pet field", library([{ ...pet("aster"), source: "legacy" }])],
+    ["missing pet field", library([{ ...pet("aster"), alt: undefined }])],
     ["invalid pet id", library([pet("Bad_Id")])],
-    ["unsafe spritesheet", library([pet("violet", "../violet.webp")])],
-    ["unsupported spritesheet", library([pet("violet", "assets/violet.gif")])],
-    ["unsupported sprite version", library([{ ...pet("violet"), spriteVersion: 3 }])],
+    ["unsafe spritesheet", library([pet("aster", "../aster.webp")])],
+    ["unsupported spritesheet", library([pet("aster", "assets/aster.gif")])],
+    ["unsupported sprite version", library([{ ...pet("aster"), spriteVersion: 3 }])],
     ["duplicate ids", library([pet("same"), pet("same", "assets/other.webp")])],
     ["duplicate spritesheets", library([pet("first", "assets/shared.webp"), pet("second", "assets/shared.webp")])],
     ["case-colliding spritesheets", library([pet("first", "assets/shared.webp"), pet("second", "assets/SHARED.WEBP")])],
@@ -49,7 +49,7 @@ describe("parseInstalledPetLibrary", () => {
   })
 
   test("rejects blank or overlong display metadata", () => {
-    expect(() => parseInstalledPetLibrary(library([{ ...pet("violet"), displayName: "   " }]))).toThrow()
-    expect(() => parseInstalledPetLibrary(library([{ ...pet("violet"), description: "x".repeat(2_001) }]))).toThrow()
+    expect(() => parseInstalledPetLibrary(library([{ ...pet("aster"), displayName: "   " }]))).toThrow()
+    expect(() => parseInstalledPetLibrary(library([{ ...pet("aster"), description: "x".repeat(2_001) }]))).toThrow()
   })
 })

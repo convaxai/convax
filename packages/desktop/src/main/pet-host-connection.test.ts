@@ -51,10 +51,10 @@ function fixture(
   const services = {
     getActivitySnapshot: mock(async () => snapshot),
     getBinding: mock(() => currentBinding),
-    getPreferences: mock(async () => ({ awake: true, selectedPetId: "violet" })),
+    getPreferences: mock(async () => ({ awake: true, selectedPetId: "aster" })),
     moveOverlay: mock(async (_input: unknown) => undefined),
     openActivity: mock(async (_input: unknown) => undefined),
-    setAwake: mock(async (input: { awake: boolean }) => ({ awake: input.awake, selectedPetId: "violet" })),
+    setAwake: mock(async (input: { awake: boolean }) => ({ awake: input.awake, selectedPetId: "aster" })),
     setExpanded: mock(async (_input: unknown) => undefined),
     subscribeActivity: mock((listener: (next: PetActivitySnapshot) => void) => {
       activityListener = listener
@@ -111,12 +111,12 @@ describe("PetHostConnection", () => {
 
     await host.connection.handle(request("open", "activity.open", { activityId: "activity-one", revision: 4 }))
     await host.connection.handle(request("get-preferences", "preferences.get"))
-    await host.connection.handle(request("set-preferences", "preferences.update", { selectedPetId: "violet" }))
+    await host.connection.handle(request("set-preferences", "preferences.update", { selectedPetId: "aster" }))
     await host.connection.handle(request("move", "overlay.move", { dx: 4, dy: -2, phase: "move" }))
     await host.connection.handle(request("expand", "overlay.setExpanded", { expanded: true }))
 
     expect(host.services.openActivity).toHaveBeenCalledWith({ activityId: "activity-one", revision: 4 })
-    expect(host.services.updatePreferences).toHaveBeenCalledWith({ selectedPetId: "violet" })
+    expect(host.services.updatePreferences).toHaveBeenCalledWith({ selectedPetId: "aster" })
     expect(host.services.moveOverlay).toHaveBeenCalledWith({ dx: 4, dy: -2, phase: "move" })
     expect(host.services.setExpanded).toHaveBeenCalledWith({ expanded: true })
     expect(host.messages.every((message) => (message as { ok?: boolean }).ok === true)).toBe(true)
@@ -126,7 +126,7 @@ describe("PetHostConnection", () => {
     const host = fixture("settings")
 
     await host.connection.handle(request("get", "preferences.get"))
-    await host.connection.handle(request("update", "preferences.update", { selectedPetId: "violet" }))
+    await host.connection.handle(request("update", "preferences.update", { selectedPetId: "aster" }))
     await host.connection.handle(request("wake", "lifecycle.setAwake", { awake: true }))
 
     expect(host.services.setAwake).toHaveBeenCalledWith({ awake: true })
@@ -276,7 +276,7 @@ describe("PetHostConnection", () => {
   test("delivers cloned activity and preference events only to eligible live surfaces", () => {
     const overlay = fixture()
     const activity = { activities: [], revision: 5 }
-    const preferences = { awake: false, selectedPetId: "violet" }
+    const preferences = { awake: false, selectedPetId: "aster" }
     overlay.activity(activity)
     overlay.preferences(preferences)
     activity.revision = 6
@@ -286,7 +286,7 @@ describe("PetHostConnection", () => {
       { event: "activity.changed", payload: { activities: [], revision: 5 }, protocol, type: "event" },
       {
         event: "preferences.changed",
-        payload: { awake: false, selectedPetId: "violet" },
+        payload: { awake: false, selectedPetId: "aster" },
         protocol,
         type: "event",
       },

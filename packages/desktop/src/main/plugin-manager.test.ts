@@ -147,11 +147,11 @@ function petBundle(
     schema: "convax.pet-library/1",
     pets: [
       {
-        alt: "Violet, the Convax pixel companion",
+        alt: "Aster, the Convax pixel companion",
         description: "A calm companion that reflects Agent activity.",
-        displayName: "Violet",
-        id: "violet",
-        spritesheet: "assets/violet.webp",
+        displayName: "Aster",
+        id: "aster",
+        spritesheet: "assets/aster.webp",
         spriteVersion: 2,
       },
       {
@@ -166,7 +166,7 @@ function petBundle(
   }
   const files: Record<string, string | Uint8Array> = {
     "assets/comet.png": Uint8Array.from([4, 5, 6]),
-    "assets/violet.webp": Uint8Array.from([1, 2, 3]),
+    "assets/aster.webp": Uint8Array.from([1, 2, 3]),
     "manifest.json": JSON.stringify(petManifest),
     "pet-library.json": JSON.stringify(library),
     "pet/index.html": "<!doctype html><title>Pet</title>",
@@ -901,7 +901,7 @@ describe("WebPluginManager", () => {
     })
     expect(inspector.inspect).toHaveBeenCalled()
     expect(new Set(inspector.inspect.mock.calls.map(([filePath]) => path.basename(String(filePath))))).toEqual(
-      new Set(["comet.png", "violet.webp"]),
+      new Set(["comet.png", "aster.webp"]),
     )
   })
 
@@ -919,7 +919,7 @@ describe("WebPluginManager", () => {
           description: "First packaged pet",
           displayName: "First",
           id: "same",
-          spritesheet: "assets/violet.webp",
+          spritesheet: "assets/aster.webp",
           spriteVersion: 2,
         },
         {

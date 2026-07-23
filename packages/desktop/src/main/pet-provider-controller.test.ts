@@ -298,14 +298,14 @@ describe("PetProviderController", () => {
   test("tucks and removes the provider on uninstall without discarding Plugin-owned preferences", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()
-    await value.controller.updatePreferences({ selectedPetId: "violet" })
+    await value.controller.updatePreferences({ selectedPetId: "aster" })
     await value.controller.setAwake({ awake: true })
 
     value.install()
     await value.controller.refresh()
 
     expect(value.controller.getProvider()).toBeUndefined()
-    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "violet" })
+    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "aster" })
     expect(value.stateStore.state.providerId).toBeUndefined()
     expect(value.stateStore.state.awake).toBe(false)
     expect(value.window.close).toHaveBeenCalledTimes(1)
@@ -315,7 +315,7 @@ describe("PetProviderController", () => {
   test("keeps an awake provider uninstall retryable when persistence rejects", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()
-    await value.controller.updatePreferences({ selectedPetId: "violet" })
+    await value.controller.updatePreferences({ selectedPetId: "aster" })
     await value.controller.setAwake({ awake: true })
     const persistError = new Error("pet state write failed")
     value.stateStore.rejectNextUpdate(persistError)
@@ -324,13 +324,13 @@ describe("PetProviderController", () => {
     await expect(value.controller.refresh()).rejects.toBe(persistError)
 
     expect(value.controller.getProvider()?.pluginId).toBe("convax-pet")
-    expect(value.controller.getPreferences()).toEqual({ awake: true, selectedPetId: "violet" })
+    expect(value.controller.getPreferences()).toEqual({ awake: true, selectedPetId: "aster" })
     expect(value.stateStore.state).toMatchObject({ awake: true, providerId: "convax-pet" })
     expect(value.window.close).not.toHaveBeenCalled()
 
     await value.controller.refresh()
     expect(value.controller.getProvider()).toBeUndefined()
-    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "violet" })
+    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "aster" })
     expect(value.window.close).toHaveBeenCalledTimes(1)
   })
 
@@ -360,7 +360,7 @@ describe("PetProviderController", () => {
   test("tucks a removed awake provider before reporting a replacement conflict", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()
-    await value.controller.updatePreferences({ selectedPetId: "violet" })
+    await value.controller.updatePreferences({ selectedPetId: "aster" })
     await value.controller.setAwake({ awake: true })
 
     value.install(provider("beta-pet"), provider("alpha-pet"))
@@ -373,19 +373,19 @@ describe("PetProviderController", () => {
     expect(value.controller.getProvider()).toBeUndefined()
     expect(value.stateStore.state).toMatchObject({
       awake: false,
-      preferences: { selectedPetId: "violet" },
+      preferences: { selectedPetId: "aster" },
     })
     expect(value.stateStore.state.providerId).toBeUndefined()
     expect(value.controller.getPreferences()).toEqual({
       awake: false,
-      selectedPetId: "violet",
+      selectedPetId: "aster",
     })
   })
 
   test("keeps removed-provider conflict cleanup retryable when persistence rejects", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()
-    await value.controller.updatePreferences({ selectedPetId: "violet" })
+    await value.controller.updatePreferences({ selectedPetId: "aster" })
     await value.controller.setAwake({ awake: true })
     value.install(provider("beta-pet"), provider("alpha-pet"))
     const persistError = new Error("pet state write failed")
@@ -394,7 +394,7 @@ describe("PetProviderController", () => {
     await expect(value.controller.refresh()).rejects.toBe(persistError)
 
     expect(value.controller.getProvider()?.pluginId).toBe("convax-pet")
-    expect(value.controller.getPreferences()).toEqual({ awake: true, selectedPetId: "violet" })
+    expect(value.controller.getPreferences()).toEqual({ awake: true, selectedPetId: "aster" })
     expect(value.stateStore.state).toMatchObject({ awake: true, providerId: "convax-pet" })
     expect(value.window.close).not.toHaveBeenCalled()
 
@@ -402,7 +402,7 @@ describe("PetProviderController", () => {
     await expect(retry).rejects.toBeInstanceOf(PetProviderConflictError)
     await expect(retry).rejects.toThrow("alpha-pet, beta-pet")
     expect(value.controller.getProvider()).toBeUndefined()
-    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "violet" })
+    expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "aster" })
     expect(value.stateStore.state.providerId).toBeUndefined()
     expect(value.window.close).toHaveBeenCalledTimes(1)
   })

@@ -1,4 +1,4 @@
-import { MessageChannelMain, ipcMain, type IpcMainInvokeEvent } from "electron"
+import type { IpcMainInvokeEvent } from "electron"
 
 import {
   petHostProtocol,
@@ -59,6 +59,11 @@ interface PetMessageChannelMain {
   port2: PetMessagePortMain
 }
 
+interface PetIpcMain {
+  handle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void
+  removeHandler(channel: string): void
+}
+
 export interface PetHostWebContents {
   id: number
   isDestroyed(): boolean
@@ -68,8 +73,9 @@ export interface PetHostWebContents {
 }
 
 export interface RegisterPetIpcOptions {
-  createMessageChannel?(): PetMessageChannelMain
+  createMessageChannel(): PetMessageChannelMain
   getMainWindow(): PetMainWindow | null
+  ipcMain: PetIpcMain
   isTrustedMainSender(event: IpcMainInvokeEvent): boolean
   openMainWindow(): Promise<PetMainWindow>
 }
@@ -165,7 +171,7 @@ export function registerPetIpc(
   const connections = new Set<LiveConnection>()
   const settingsConnections = new Map<string, LiveConnection>()
   const observedSenders = new Map<number, { listener: () => void; sender: PetHostWebContents }>()
-  const createMessageChannel = options.createMessageChannel ?? (() => new MessageChannelMain() as PetMessageChannelMain)
+  const { createMessageChannel, ipcMain } = options
   let disposed = false
 
   const closeConnection = (live: LiveConnection, reason = "Pet host connection closed") => {

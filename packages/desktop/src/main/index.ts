@@ -17,6 +17,8 @@ import {
 import {
   app,
   BrowserWindow,
+  ipcMain,
+  MessageChannelMain,
   nativeImage,
   net,
   powerMonitor,
@@ -643,7 +645,9 @@ function startApplication() {
       window: petWindow,
     })
     const petIpc = registerPetIpc(pets, activity, petWindow, {
+      createMessageChannel: () => new MessageChannelMain(),
       getMainWindow: () => mainWindow,
+      ipcMain,
       isTrustedMainSender: ipcSecurity.isTrustedSender,
       async openMainWindow() {
         const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)

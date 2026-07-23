@@ -8,7 +8,7 @@ import { assertValidPetAssetInspection, createElectronPetAssetInspector, petAsse
 const temporaryRoots: string[] = []
 
 async function temporaryFile(name: string, bytes: Uint8Array) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-pet-asset-"))
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pet-atlas-inspector-"))
   temporaryRoots.push(root)
   const file = path.join(root, name)
   await fs.writeFile(file, bytes)
@@ -37,7 +37,7 @@ function nativeImageFixture(input: { empty?: boolean; alpha?: number; height?: n
 
 describe("Electron pet asset inspection", () => {
   test("validates WebP magic and returns decoded dimensions and transparency", async () => {
-    const file = await temporaryFile("violet.webp", webpBytes())
+    const file = await temporaryFile("aster.webp", webpBytes())
     const fixture = nativeImageFixture()
     const inspector = createElectronPetAssetInspector(fixture.adapter)
 
@@ -51,7 +51,7 @@ describe("Electron pet asset inspection", () => {
   })
 
   test("matches uppercase portable image extensions to their signatures", async () => {
-    const file = await temporaryFile("violet.WEBP", webpBytes())
+    const file = await temporaryFile("aster.WEBP", webpBytes())
     const inspector = createElectronPetAssetInspector(nativeImageFixture().adapter)
 
     await expect(inspector.inspect(file)).resolves.toMatchObject({
@@ -62,7 +62,7 @@ describe("Electron pet asset inspection", () => {
   })
 
   test("rejects extension-signature mismatch, undecodable bytes, and oversized files", async () => {
-    const wrongMagic = await temporaryFile("violet.webp", Buffer.from("not-a-webp"))
+    const wrongMagic = await temporaryFile("aster.webp", Buffer.from("not-a-webp"))
     await expect(createElectronPetAssetInspector(nativeImageFixture().adapter).inspect(wrongMagic)).rejects.toThrow(
       "signature",
     )

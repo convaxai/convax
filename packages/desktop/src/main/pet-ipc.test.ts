@@ -41,13 +41,10 @@ class FakeMessageChannelMain {
   }
 }
 
-mock.module("electron", () => ({
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => invokeHandlers.set(channel, handler),
-    removeHandler: (channel: string) => invokeHandlers.delete(channel),
-  },
-  MessageChannelMain: FakeMessageChannelMain,
-}))
+const fakeIpcMain = {
+  handle: (channel: string, handler: InvokeHandler) => invokeHandlers.set(channel, handler),
+  removeHandler: (channel: string) => invokeHandlers.delete(channel),
+}
 
 class FakeWebContents extends EventEmitter {
   destroyed = false
@@ -109,7 +106,7 @@ function fixture() {
   const provider = {
     getActivitySnapshot: mock(() => structuredClone(activitySnapshot)),
     getBinding: mock(() => currentBinding && structuredClone(currentBinding)),
-    getPreferences: mock(() => ({ awake: true, selectedPetId: "violet" })),
+    getPreferences: mock(() => ({ awake: true, selectedPetId: "aster" })),
     getProvider: mock(() =>
       currentBinding
         ? {
@@ -127,7 +124,7 @@ function fixture() {
           }
         : undefined,
     ),
-    setAwake: mock(async ({ awake }: { awake: boolean }) => ({ awake, selectedPetId: "violet" })),
+    setAwake: mock(async ({ awake }: { awake: boolean }) => ({ awake, selectedPetId: "aster" })),
     subscribeActivity: mock((listener: (snapshot: typeof activitySnapshot) => void) => {
       activityListeners.add(listener)
       return () => activityListeners.delete(listener)
@@ -176,6 +173,19 @@ function fixture() {
   }
 }
 
+function registrationOptions(
+  value: ReturnType<typeof fixture>,
+  isTrustedMainSender = (event: unknown) => event === value.trustedEvent,
+) {
+  return {
+    createMessageChannel: () => new FakeMessageChannelMain(),
+    getMainWindow: () => value.mainWindow,
+    ipcMain: fakeIpcMain,
+    isTrustedMainSender,
+    openMainWindow: value.openMainWindow,
+  }
+}
+
 async function settlePort() {
   await Promise.resolve()
   await Promise.resolve()
@@ -190,11 +200,7 @@ describe("registerPetIpc", () => {
   test("exposes only scoped settings discovery and connection handlers", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
 
     expect([...invokeHandlers.keys()].sort()).toEqual(
       [
@@ -221,11 +227,7 @@ describe("registerPetIpc", () => {
   test("binds one settings MessagePort to the exact provider identity and relays requests", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
     const identity = { connectionId: "settings-one", generation: 4, pluginId: "soft-companion" }
 
     await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
@@ -243,7 +245,7 @@ describe("registerPetIpc", () => {
         id: "preferences",
         ok: true,
         protocol: petHostProtocol,
-        result: { awake: true, selectedPetId: "violet" },
+        result: { awake: true, selectedPetId: "aster" },
         type: "response",
       },
     ])
@@ -264,11 +266,12 @@ describe("registerPetIpc", () => {
     const fresh = new FakeWebContents(13)
     const freshEvent = { sender: fresh }
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent || event === freshEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(
+      value.provider,
+      value.activity,
+      value.overlay,
+      registrationOptions(value, (event: unknown) => event === value.trustedEvent || event === freshEvent),
+    )
     const identity = { connectionId: "settings-lifecycle", generation: 4, pluginId: "soft-companion" }
     await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
     const destroyed = FakeMessageChannelMain.created[0]!
@@ -286,11 +289,7 @@ describe("registerPetIpc", () => {
   test("releases a settings key when the host connection closes itself", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
     const identity = { connectionId: "settings-terminal", generation: 4, pluginId: "soft-companion" }
     await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
     const failed = FakeMessageChannelMain.created[0]!
@@ -308,11 +307,7 @@ describe("registerPetIpc", () => {
   test("closes both channel endpoints and permits retry after construction, start, or delivery failure", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
     const identity = { connectionId: "settings-failure", generation: 4, pluginId: "soft-companion" }
 
     value.provider.subscribePreferences.mockImplementationOnce(() => {
@@ -351,11 +346,7 @@ describe("registerPetIpc", () => {
   test("connects every loaded overlay to an exact generation and rejects stale activity navigation", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
     const overlaySender = new FakeWebContents(21)
     registration.connectOverlay(overlaySender, binding)
     const first = FakeMessageChannelMain.created[0]!
@@ -409,11 +400,7 @@ describe("registerPetIpc", () => {
   test("marks only the current visible activity as displayed from the trusted main renderer", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, {
-      getMainWindow: () => value.mainWindow,
-      isTrustedMainSender: (event: unknown) => event === value.trustedEvent,
-      openMainWindow: value.openMainWindow,
-    })
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
     const mark = invokeHandlers.get(petIpcChannels.markDisplayed)!
 
     await expect(mark(value.untrustedEvent, { activityId: "activity-one", revision: 7 })).rejects.toThrow("untrusted")

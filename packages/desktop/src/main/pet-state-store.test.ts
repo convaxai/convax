@@ -25,7 +25,7 @@ describe("PetStateStore", () => {
       awake: true,
       displayId: "displayA",
       positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
-      preferences: { selectedPetId: "violet" },
+      preferences: { selectedPetId: "aster" },
       providerId: "convax-pet",
       seen: { "project-a\u0000session-a": 100 },
     })
@@ -34,7 +34,7 @@ describe("PetStateStore", () => {
       awake: true,
       displayId: "displayA",
       positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
-      preferences: { selectedPetId: "violet" },
+      preferences: { selectedPetId: "aster" },
       providerId: "convax-pet",
       schema: "convax.pet-state/1",
       seen: { "project-a\u0000session-a": 100 },
@@ -125,8 +125,8 @@ describe("PetStateStore", () => {
         seen: {},
       }),
     ).toThrow()
-    expect(() =>
-      boundPetState({ ...defaultPetState, selected: { kind: "plugin", pluginId: "convax-pet" } }),
-    ).toThrow("unsupported field")
+    expect(() => boundPetState({ ...defaultPetState, selected: { kind: "plugin", pluginId: "convax-pet" } })).toThrow(
+      "unsupported field",
+    )
   })
 })
