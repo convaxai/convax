@@ -176,6 +176,15 @@ export class PetProviderController {
     return this.#exclusive(() => this.#refresh(mutation))
   }
 
+  restoreProviderRuntime(pluginId: string) {
+    return this.#exclusive(async () => {
+      this.#assertInitialized()
+      if (this.#provider?.pluginId !== pluginId || !this.#requireState().awake) return
+      await this.#closeRuntime()
+      await this.#openAwakeProvider()
+    })
+  }
+
   getProvider(): InstalledPetProvider | undefined {
     if (this.#disposed) return undefined
     return this.#provider === undefined ? undefined : cloneProvider(this.#provider)

@@ -650,13 +650,9 @@ function startApplication() {
       ipcMain,
       isTrustedMainSender: ipcSecurity.isTrustedSender,
       async openMainWindow() {
-        const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
-        if (window.webContents.isLoadingMainFrame()) {
-          await new Promise<void>((resolve) => window.webContents.once("did-finish-load", () => resolve()))
-          await new Promise<void>((resolve) => setTimeout(resolve, 0))
-        }
-        return window
+        return mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
       },
+      restoreProvider: (pluginId) => pets.restoreProviderRuntime(pluginId),
     })
     connectPetOverlay = petIpc.connectOverlay
     const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
@@ -694,6 +690,7 @@ function startApplication() {
         companionStore,
         pluginManager,
         pluginSkillLifecycle,
+        preparePluginPublication: async (pluginId) => petIpc.prepareProviderChange(pluginId),
         registry,
         skillManager,
       })
@@ -733,9 +730,14 @@ function startApplication() {
       const authorization = await toolPluginAuthorizations.prepareInstall(plugin)
       try {
         const ownedSkills = await pluginSkillLifecycle.prepareInstall(plugin, candidate)
-        // The owned-Skill transaction records the only fallible forward
-        // decision. Authorization cleanup is best-effort and follows it.
-        return composePluginPublicationTransactions([ownedSkills, authorization])
+        // Pet capability revocation shares the package rollback boundary. The
+        // owned-Skill transaction records the only fallible forward decision;
+        // authorization cleanup is best-effort and follows it.
+        return composePluginPublicationTransactions([
+          petIpc.prepareProviderChange(plugin.id),
+          ownedSkills,
+          authorization,
+        ])
       } catch (error) {
         await authorization.rollback().catch(() => undefined)
         throw error
@@ -836,7 +838,11 @@ function startApplication() {
           pluginServices.discardPlugin(pluginId)
         },
         prepareInstall: prepareLocalPluginPublication,
-        prepareRemove: (plugin) => pluginSkillLifecycle.prepareUninstall(plugin),
+        prepareRemove: async (plugin) =>
+          composePluginPublicationTransactions([
+            petIpc.prepareProviderChange(plugin.id),
+            await pluginSkillLifecycle.prepareUninstall(plugin),
+          ]),
         async onDidChange(pluginId, mutation) {
           generationRuntime.disposePlugin(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)

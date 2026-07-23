@@ -96,6 +96,7 @@ const petSettingsIpcChannels = {
   disconnect: "pet:settings-disconnect",
   markDisplayed: "pet:mark-displayed",
   navigate: "pet:navigate",
+  navigationReady: "pet:navigation-ready",
   port: "pet:settings-port",
   provider: "pet:provider",
   providerChanged: "pet:provider-changed",
@@ -515,6 +516,7 @@ const petSettingsClient = {
   onNavigate(listener: (target: PetNavigationTarget) => void) {
     const handleNavigate = (_event: Electron.IpcRendererEvent, target: PetNavigationTarget) => listener(target)
     ipcRenderer.on(petSettingsIpcChannels.navigate, handleNavigate)
+    void ipcRenderer.invoke(petSettingsIpcChannels.navigationReady).catch(() => undefined)
     return () => ipcRenderer.removeListener(petSettingsIpcChannels.navigate, handleNavigate)
   },
   onProviderChanged(listener: () => void) {

@@ -267,6 +267,32 @@ describe("PetProviderController", () => {
     expect(value.window.open).toHaveBeenCalledTimes(2)
   })
 
+  test("remounts the exact awake provider after a Plugin publication rollback", async () => {
+    const value = fixture({ installed: [provider("soft-companion")] })
+    await value.controller.initialize()
+    await value.controller.setAwake({ awake: true })
+
+    await value.controller.restoreProviderRuntime("soft-companion")
+
+    expect(value.window.close).toHaveBeenCalledTimes(1)
+    expect(value.window.open).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+  })
+
+  test("does not mount a dormant or different provider during Plugin publication rollback", async () => {
+    const value = fixture({ installed: [provider("soft-companion")] })
+    await value.controller.initialize()
+
+    await value.controller.restoreProviderRuntime("soft-companion")
+    await value.controller.restoreProviderRuntime("different-provider")
+
+    expect(value.window.close).not.toHaveBeenCalled()
+    expect(value.window.open).not.toHaveBeenCalled()
+    expect(value.activity.subscribe).not.toHaveBeenCalled()
+  })
+
   test("keeps an awake provider update retryable when persistence rejects", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()

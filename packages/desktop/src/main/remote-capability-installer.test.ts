@@ -7,6 +7,7 @@ import {
   WebPluginPublicationDeferredError,
   type WebPluginBundleInstallOptions,
   type WebPluginMutationContext,
+  type WebPluginPublicationTransaction,
 } from "./plugin-manager"
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import {
@@ -140,6 +141,7 @@ function setup(
     prepareInstall: ReturnType<typeof mock>
     reconcileInstalled: ReturnType<typeof mock>
   },
+  preparePluginPublication?: (pluginId: string) => Promise<WebPluginPublicationTransaction>,
 ) {
   let installedPlugins = [...installed]
   const registry = {
@@ -264,6 +266,7 @@ function setup(
     platform: target.platform,
     pluginManager,
     pluginSkillLifecycle: resolvedPluginSkillLifecycle,
+    preparePluginPublication,
     registry,
     skillManager,
   })
@@ -503,6 +506,40 @@ describe("RemoteCapabilityInstaller", () => {
     await setupResult.installer.installPlugin(item.id)
     expect(beforePluginPublish).toHaveBeenCalledWith(item.id)
     expect(beforePluginPublish).toHaveBeenCalledTimes(1)
+  })
+
+  test("restores a revoked Pet provider when remote Plugin package publication rolls back", async () => {
+    const item = pluginPackage("remote-plugin")
+    const files = { "manifest.json": encoder.encode(JSON.stringify(item.manifest)) }
+    const petPublication = {
+      commit: mock(async () => undefined),
+      publish: mock(async () => undefined),
+      rollback: mock(async () => undefined),
+    }
+    const preparePluginPublication = mock(async (_pluginId: string) => petPublication)
+    const setupResult = setup(
+      [item],
+      files,
+      [],
+      { arch: "arm64", platform: "darwin" },
+      undefined,
+      undefined,
+      preparePluginPublication,
+    )
+    setupResult.pluginManager.installBundle.mockImplementationOnce(async (bundle, options = {}) => {
+      const plugin = parseWebPluginManifest(JSON.parse(new TextDecoder().decode(bundle.files["manifest.json"])))
+      const publication = await options.beforePublish?.(plugin, { root: "/staging/plugin" })
+      await publication?.publish()
+      await publication?.rollback()
+      throw new Error("Plugin package publication failed")
+    })
+
+    await expect(setupResult.installer.installPlugin(item.id)).rejects.toThrow("package publication failed")
+
+    expect(preparePluginPublication).toHaveBeenCalledWith(item.id)
+    expect(petPublication.publish).toHaveBeenCalledTimes(1)
+    expect(petPublication.rollback).toHaveBeenCalledTimes(1)
+    expect(petPublication.commit).not.toHaveBeenCalled()
   })
 
   test("lists and installs generation Tool Plugins through the same verified bundle path", async () => {

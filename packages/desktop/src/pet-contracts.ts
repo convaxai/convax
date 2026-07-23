@@ -125,6 +125,7 @@ export const petIpcChannels = {
   connectOverlay: "pet:connect-host",
   markDisplayed: "pet:mark-displayed",
   navigate: "pet:navigate",
+  navigationReady: "pet:navigation-ready",
   provider: "pet:provider",
   providerChanged: "pet:provider-changed",
   settingsConnect: "pet:settings-connect",

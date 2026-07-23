@@ -155,6 +155,7 @@ function fixture() {
   const untrustedSender = new FakeWebContents(12)
   const trustedEvent = { sender: settingsSender }
   const untrustedEvent = { sender: untrustedSender }
+  const restoreProvider = mock(async (_pluginId: string) => undefined)
   return {
     activity,
     activityListeners,
@@ -167,6 +168,7 @@ function fixture() {
       currentBinding = next
       providerListener?.(undefined)
     },
+    restoreProvider,
     settingsSender,
     trustedEvent,
     untrustedEvent,
@@ -183,6 +185,7 @@ function registrationOptions(
     ipcMain: fakeIpcMain,
     isTrustedMainSender,
     openMainWindow: value.openMainWindow,
+    restoreProvider: value.restoreProvider,
   }
 }
 
@@ -205,6 +208,7 @@ describe("registerPetIpc", () => {
     expect([...invokeHandlers.keys()].sort()).toEqual(
       [
         petIpcChannels.markDisplayed,
+        petIpcChannels.navigationReady,
         petIpcChannels.provider,
         petIpcChannels.settingsConnect,
         petIpcChannels.settingsDisconnect,
@@ -286,6 +290,76 @@ describe("registerPetIpc", () => {
     registration.dispose()
   })
 
+  test("revokes a changing Plugin before local publication and keeps its host capabilities fail-closed", async () => {
+    const value = fixture()
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
+    const overlaySender = new FakeWebContents(14)
+    const identity = { connectionId: "settings-revoked", generation: 4, pluginId: "soft-companion" }
+
+    registration.connectOverlay(overlaySender, binding)
+    await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
+    const [overlayChannel, settingsChannel] = FakeMessageChannelMain.created
+
+    await registration.prepareProviderChange("soft-companion").publish()
+
+    expect(overlayChannel?.port1.closed).toBeTrue()
+    expect(settingsChannel?.port1.closed).toBeTrue()
+    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
+    expect(() => registration.connectOverlay(overlaySender, binding)).toThrow("changed")
+    expect(() => invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)).toThrow("changed")
+    expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.providerChanged)
+
+    const updatedBinding = { ...binding, digest: "sha256:provider-two", generation: 5 }
+    value.providerChanged(updatedBinding)
+    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toMatchObject({
+      generation: 5,
+      pluginId: "soft-companion",
+    })
+    expect(() => registration.connectOverlay(overlaySender, updatedBinding)).not.toThrow()
+    registration.dispose()
+  })
+
+  test("restores a revoked provider and its runtime when local Plugin publication rolls back", async () => {
+    const value = fixture()
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
+    const overlaySender = new FakeWebContents(15)
+    const identity = { connectionId: "settings-rollback", generation: 4, pluginId: "soft-companion" }
+
+    registration.connectOverlay(overlaySender, binding)
+    await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
+    const publication = registration.prepareProviderChange("soft-companion")
+    await publication.publish()
+
+    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
+    await publication.rollback()
+
+    expect(value.restoreProvider).toHaveBeenCalledWith("soft-companion")
+    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toMatchObject({
+      generation: 4,
+      pluginId: "soft-companion",
+    })
+    expect(() => registration.connectOverlay(overlaySender, binding)).not.toThrow()
+    registration.dispose()
+  })
+
+  test("keeps a revoked provider fail-closed when rollback runtime restoration fails", async () => {
+    const value = fixture()
+    value.restoreProvider.mockRejectedValueOnce(new Error("overlay remount failed"))
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
+    const overlaySender = new FakeWebContents(16)
+    const publication = registration.prepareProviderChange("soft-companion")
+
+    await publication.publish()
+    await expect(publication.rollback()).rejects.toThrow("overlay remount failed")
+
+    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
+    expect(() => registration.connectOverlay(overlaySender, binding)).toThrow("changed")
+    registration.dispose()
+  })
+
   test("releases a settings key when the host connection closes itself", async () => {
     const value = fixture()
     const { registerPetIpc } = await import("./pet-ipc")
@@ -345,8 +419,15 @@ describe("registerPetIpc", () => {
 
   test("connects every loaded overlay to an exact generation and rejects stale activity navigation", async () => {
     const value = fixture()
+    const mainEvent = { sender: value.mainWindow.webContents }
     const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
+    const registration = registerPetIpc(
+      value.provider,
+      value.activity,
+      value.overlay,
+      registrationOptions(value, (event: unknown) => event === value.trustedEvent || event === mainEvent),
+    )
+    await invokeHandlers.get(petIpcChannels.navigationReady)?.(mainEvent)
     const overlaySender = new FakeWebContents(21)
     registration.connectOverlay(overlaySender, binding)
     const first = FakeMessageChannelMain.created[0]!
@@ -394,6 +475,102 @@ describe("registerPetIpc", () => {
     expect(() =>
       registration.connectOverlay(overlaySender, { ...binding, digest: "sha256:stale", generation: 3 }),
     ).toThrow("changed")
+    registration.dispose()
+  })
+
+  test("holds activity navigation until the exact main renderer reports its listener ready", async () => {
+    const value = fixture()
+    const mainEvent = { sender: value.mainWindow.webContents }
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(
+      value.provider,
+      value.activity,
+      value.overlay,
+      registrationOptions(value, (event: unknown) => event === value.trustedEvent || event === mainEvent),
+    )
+    const overlaySender = new FakeWebContents(22)
+    registration.connectOverlay(overlaySender, binding)
+    const channel = FakeMessageChannelMain.created[0]!
+
+    channel.port1.emit("message", {
+      data: request("open-after-ready", "activity.open", { activityId: "activity-one", revision: 7 }),
+    })
+    await settlePort()
+
+    expect(value.openMainWindow).toHaveBeenCalledTimes(1)
+    expect(value.mainWindow.webContents.send).not.toHaveBeenCalledWith(petIpcChannels.navigate, expect.anything())
+
+    await invokeHandlers.get(petIpcChannels.navigationReady)?.(mainEvent)
+
+    expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.navigate, {
+      activityId: "activity-one",
+      projectId: "project-one",
+      revision: 7,
+      sessionId: "session-one",
+    })
+    registration.dispose()
+  })
+
+  test("requires a fresh navigation handshake after the main frame reloads", async () => {
+    const value = fixture()
+    const mainEvent = { sender: value.mainWindow.webContents }
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(
+      value.provider,
+      value.activity,
+      value.overlay,
+      registrationOptions(value, (event: unknown) => event === value.trustedEvent || event === mainEvent),
+    )
+    await invokeHandlers.get(petIpcChannels.navigationReady)?.(mainEvent)
+    value.mainWindow.webContents.send.mockClear()
+    value.mainWindow.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false })
+    const overlaySender = new FakeWebContents(23)
+    registration.connectOverlay(overlaySender, binding)
+
+    FakeMessageChannelMain.created[0]!.port1.emit("message", {
+      data: request("open-after-reload", "activity.open", { activityId: "activity-one", revision: 7 }),
+    })
+    await settlePort()
+
+    expect(value.mainWindow.webContents.send).not.toHaveBeenCalledWith(petIpcChannels.navigate, expect.anything())
+
+    await invokeHandlers.get(petIpcChannels.navigationReady)?.(mainEvent)
+    expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.navigate, {
+      activityId: "activity-one",
+      projectId: "project-one",
+      revision: 7,
+      sessionId: "session-one",
+    })
+    registration.dispose()
+  })
+
+  test("keeps navigation ready across a same-document main-frame navigation", async () => {
+    const value = fixture()
+    const mainEvent = { sender: value.mainWindow.webContents }
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(
+      value.provider,
+      value.activity,
+      value.overlay,
+      registrationOptions(value, (event: unknown) => event === value.trustedEvent || event === mainEvent),
+    )
+    await invokeHandlers.get(petIpcChannels.navigationReady)?.(mainEvent)
+    value.mainWindow.webContents.send.mockClear()
+    value.mainWindow.webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true })
+    const overlaySender = new FakeWebContents(24)
+    registration.connectOverlay(overlaySender, binding)
+
+    FakeMessageChannelMain.created[0]!.port1.emit("message", {
+      data: request("open-after-history", "activity.open", { activityId: "activity-one", revision: 7 }),
+    })
+    await settlePort()
+
+    expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.navigate, {
+      activityId: "activity-one",
+      projectId: "project-one",
+      revision: 7,
+      sessionId: "session-one",
+    })
     registration.dispose()
   })
 

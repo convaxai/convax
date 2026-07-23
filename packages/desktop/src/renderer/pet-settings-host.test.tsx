@@ -15,6 +15,7 @@ const preloadInvoke = mock(async (_channel: string, _input?: unknown) => undefin
 const preloadListeners = new Map<string, PreloadPortListener>()
 interface TestPreloadPetSettingsClient extends PetSettingsHostClient {
   disconnectSettings(input: TestConnectionIdentity): Promise<void>
+  onNavigate(listener: (target: unknown) => void): () => void
 }
 
 let exposedPreloadBridge: { pets: TestPreloadPetSettingsClient } | undefined
@@ -480,6 +481,37 @@ describe("PetSettingsHost", () => {
 })
 
 describe("Pet settings preload integration", () => {
+  test("registers the navigation listener before reporting the main renderer ready", async () => {
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation(async (channel: string) => {
+      if (channel === "pet:navigation-ready") {
+        expect(preloadListeners.has("pet:navigate")).toBeTrue()
+      }
+    })
+    const harness = await loadPreloadHarness()
+
+    try {
+      const targets: unknown[] = []
+      const dispose = harness.client.onNavigate((target) => targets.push(target))
+      await flushPreloadPromises()
+
+      expect(preloadInvoke).toHaveBeenCalledWith("pet:navigation-ready")
+      const target = {
+        activityId: "activity-ready",
+        projectId: "project-ready",
+        revision: 9,
+        sessionId: "session-ready",
+      }
+      preloadListeners.get("pet:navigate")?.({ ports: [] }, target)
+      expect(targets).toEqual([target])
+
+      dispose()
+      expect(preloadListeners.has("pet:navigate")).toBeFalse()
+    } finally {
+      harness.restoreWindow()
+    }
+  })
+
   test("waits for a matching relayed port before resolving a main-accepted connection", async () => {
     const identity: TestConnectionIdentity = {
       connectionId: "settings-preload-wait",

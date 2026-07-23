@@ -11,6 +11,7 @@ import {
   type PetPreferencesUpdate,
 } from "../pet-contracts"
 import { PetHostConnection, type PetHostServices } from "./pet-host-connection"
+import type { WebPluginPublicationTransaction } from "./plugin-manager"
 import type { InstalledPetProvider } from "./pet-provider-controller"
 
 type Unsubscribe = () => void
@@ -42,7 +43,21 @@ interface PetMainWindow {
   isMinimized(): boolean
   restore(): void
   show(): void
-  webContents: { send(channel: string, target?: PetNavigationTarget): void }
+  webContents: {
+    id: number
+    isDestroyed(): boolean
+    on(
+      event: "did-start-navigation",
+      listener: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void,
+    ): unknown
+    once(event: "destroyed", listener: () => void): unknown
+    removeListener(
+      event: "did-start-navigation",
+      listener: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void,
+    ): unknown
+    removeListener(event: "destroyed", listener: () => void): unknown
+    send(channel: string, target?: PetNavigationTarget): void
+  }
 }
 
 interface PetMessagePortMain {
@@ -78,11 +93,13 @@ export interface RegisterPetIpcOptions {
   ipcMain: PetIpcMain
   isTrustedMainSender(event: IpcMainInvokeEvent): boolean
   openMainWindow(): Promise<PetMainWindow>
+  restoreProvider(pluginId: string): Promise<void>
 }
 
 export interface PetIpcRegistration {
   connectOverlay(sender: PetHostWebContents, binding: PetHostProviderBinding): void
   dispose(): void
+  prepareProviderChange(pluginId: string): WebPluginPublicationTransaction
 }
 
 interface PetSettingsIdentity {
@@ -169,10 +186,21 @@ export function registerPetIpc(
   options: RegisterPetIpcOptions,
 ): PetIpcRegistration {
   const connections = new Set<LiveConnection>()
+  const mainRendererObservers = new Map<
+    number,
+    {
+      destroyed: () => void
+      navigation: (details: { isMainFrame: boolean; isSameDocument: boolean }) => void
+      sender: PetMainWindow["webContents"]
+    }
+  >()
   const settingsConnections = new Map<string, LiveConnection>()
   const observedSenders = new Map<number, { listener: () => void; sender: PetHostWebContents }>()
   const { createMessageChannel, ipcMain } = options
   let disposed = false
+  let invalidatedBinding: PetHostProviderBinding | undefined
+  let navigationReadySenderId: number | undefined
+  let pendingNavigation: { senderId: number; target: PetNavigationTarget } | undefined
 
   const closeConnection = (live: LiveConnection, reason = "Pet host connection closed") => {
     if (live.closed) return
@@ -188,6 +216,8 @@ export function registerPetIpc(
   }
   const closeSender = (senderId: number) => {
     observedSenders.delete(senderId)
+    if (navigationReadySenderId === senderId) navigationReadySenderId = undefined
+    if (pendingNavigation?.senderId === senderId) pendingNavigation = undefined
     for (const live of [...connections]) {
       if (live.senderId === senderId) closeConnection(live, "Pet host renderer was destroyed")
     }
@@ -216,17 +246,60 @@ export function registerPetIpc(
     if (!target) throw new Error("Pet activity is no longer available")
     return target
   }
+  const availableBinding = () => {
+    const binding = provider.getBinding()
+    return binding && !sameBinding(binding, invalidatedBinding) ? binding : undefined
+  }
+  const notifyProviderChanged = () => {
+    try {
+      options.getMainWindow()?.webContents.send(petIpcChannels.providerChanged)
+    } catch {}
+  }
+  const revokeBinding = (binding: PetHostProviderBinding) => {
+    invalidatedBinding = binding
+    for (const live of [...connections]) closeConnection(live, "Pet provider changed")
+    notifyProviderChanged()
+  }
+  const forgetMainRenderer = (senderId: number) => {
+    mainRendererObservers.delete(senderId)
+    if (navigationReadySenderId === senderId) navigationReadySenderId = undefined
+    if (pendingNavigation?.senderId === senderId) pendingNavigation = undefined
+  }
+  const observeMainRenderer = (mainWindow: PetMainWindow) => {
+    const sender = mainWindow.webContents
+    const current = mainRendererObservers.get(sender.id)
+    if (current?.sender === sender || sender.isDestroyed()) return
+    if (current) {
+      current.sender.removeListener("did-start-navigation", current.navigation)
+      current.sender.removeListener("destroyed", current.destroyed)
+    }
+    const navigation = (details: { isMainFrame: boolean; isSameDocument: boolean }) => {
+      if (details.isMainFrame && !details.isSameDocument && navigationReadySenderId === sender.id) {
+        navigationReadySenderId = undefined
+      }
+    }
+    const destroyed = () => forgetMainRenderer(sender.id)
+    mainRendererObservers.set(sender.id, { destroyed, navigation, sender })
+    sender.on("did-start-navigation", navigation)
+    sender.once("destroyed", destroyed)
+  }
   const openActivity = async (input: PetNavigationRequest) => {
     const target = requireActivityTarget(input)
     const mainWindow = await options.openMainWindow()
+    observeMainRenderer(mainWindow)
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
-    mainWindow.webContents.send(petIpcChannels.navigate, { ...input, ...target })
+    const navigationTarget = { ...input, ...target }
+    if (navigationReadySenderId === mainWindow.webContents.id) {
+      mainWindow.webContents.send(petIpcChannels.navigate, navigationTarget)
+      return
+    }
+    pendingNavigation = { senderId: mainWindow.webContents.id, target: navigationTarget }
   }
   const services: PetHostServices = {
     getActivitySnapshot: () => provider.getActivitySnapshot(),
-    getBinding: () => provider.getBinding(),
+    getBinding: () => availableBinding(),
     getPreferences: () => provider.getPreferences(),
     moveOverlay: (input) => overlay.moveBy({ x: input.dx, y: input.dy }, input.phase === "end"),
     openActivity,
@@ -247,7 +320,7 @@ export function registerPetIpc(
   ) => {
     if (disposed) throw new Error("Pet IPC is disposed")
     if (sender.isDestroyed()) throw new Error("Pet host renderer was destroyed")
-    if (!sameBinding(binding, provider.getBinding())) throw new Error("Pet provider changed before connecting")
+    if (!sameBinding(binding, availableBinding())) throw new Error("Pet provider changed before connecting")
     observeSender(sender)
     const { port1, port2 } = createMessageChannel()
     let live: LiveConnection | undefined
@@ -298,14 +371,14 @@ export function registerPetIpc(
   ipcMain.handle(petIpcChannels.provider, (event) => {
     requireTrusted(event)
     const installed = provider.getProvider()
-    return installed
+    return installed && availableBinding()
       ? { generation: installed.generation, pluginId: installed.pluginId, settingsUrl: installed.settingsUrl }
       : undefined
   })
   ipcMain.handle(petIpcChannels.settingsConnect, (event, value: unknown) => {
     const sender = requireTrusted(event)
     const identity = settingsIdentity(value)
-    const binding = provider.getBinding()
+    const binding = availableBinding()
     if (!binding || binding.pluginId !== identity.pluginId || binding.generation !== identity.generation) {
       throw new Error("Pet settings provider changed before connecting")
     }
@@ -344,13 +417,24 @@ export function registerPetIpc(
     requireActivityTarget(input)
     await activity.markSeen(input.activityId, input.revision)
   })
+  ipcMain.handle(petIpcChannels.navigationReady, (event) => {
+    const sender = requireTrusted(event)
+    const mainWindow = options.getMainWindow()
+    if (!mainWindow || mainWindow.webContents.id !== sender.id) {
+      throw new Error("Pet navigation readiness came from a stale renderer")
+    }
+    observeMainRenderer(mainWindow)
+    navigationReadySenderId = sender.id
+    if (pendingNavigation?.senderId !== sender.id) return
+    const { target } = pendingNavigation
+    pendingNavigation = undefined
+    mainWindow.webContents.send(petIpcChannels.navigate, target)
+  })
 
   const unsubscribeProvider = provider.subscribeProvider(() => {
     if (disposed) return
     for (const live of [...connections]) closeConnection(live, "Pet provider changed")
-    try {
-      options.getMainWindow()?.webContents.send(petIpcChannels.providerChanged)
-    } catch {}
+    notifyProviderChanged()
   })
 
   const dispose = () => {
@@ -360,18 +444,26 @@ export function registerPetIpc(
     ipcMain.removeHandler(petIpcChannels.settingsConnect)
     ipcMain.removeHandler(petIpcChannels.settingsDisconnect)
     ipcMain.removeHandler(petIpcChannels.markDisplayed)
+    ipcMain.removeHandler(petIpcChannels.navigationReady)
     try {
       unsubscribeProvider()
     } catch {}
     for (const live of [...connections]) closeConnection(live)
     for (const { listener, sender } of observedSenders.values()) sender.removeListener("destroyed", listener)
     observedSenders.clear()
+    for (const { destroyed, navigation, sender } of mainRendererObservers.values()) {
+      sender.removeListener("did-start-navigation", navigation)
+      sender.removeListener("destroyed", destroyed)
+    }
+    mainRendererObservers.clear()
   }
+
+  const initialMainWindow = options.getMainWindow()
+  if (initialMainWindow) observeMainRenderer(initialMainWindow)
 
   return {
     connectOverlay(sender, binding) {
-      if (!sameBinding(binding, provider.getBinding()))
-        throw new Error("Pet overlay provider changed before connecting")
+      if (!sameBinding(binding, availableBinding())) throw new Error("Pet overlay provider changed before connecting")
       for (const live of [...connections]) {
         if (live.senderId === sender.id && live.settingsKey === undefined) {
           closeConnection(live, "Pet overlay reconnected")
@@ -385,5 +477,32 @@ export function registerPetIpc(
       })
     },
     dispose,
+    prepareProviderChange(pluginId) {
+      let revoked: PetHostProviderBinding | undefined
+      return {
+        async publish() {
+          if (revoked) return
+          const binding = provider.getBinding()
+          if (!binding || binding.pluginId !== pluginId) return
+          revoked = binding
+          revokeBinding(binding)
+        },
+        async commit() {},
+        async rollback() {
+          if (!revoked || !sameBinding(revoked, invalidatedBinding)) return
+          invalidatedBinding = undefined
+          try {
+            await options.restoreProvider(pluginId)
+            notifyProviderChanged()
+            revoked = undefined
+          } catch (error) {
+            const current = provider.getBinding()
+            if (current?.pluginId === pluginId) revokeBinding(current)
+            throw error
+          }
+        },
+        async deferToRecovery() {},
+      }
+    },
   }
 }
