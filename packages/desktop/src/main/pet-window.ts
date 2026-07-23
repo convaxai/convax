@@ -112,6 +112,22 @@ type PetCreateOutcome =
   | { status: "recovered" }
   | { status: "recovery-failed"; error: unknown }
 
+type PetCrashOutcome = { status: "recovered" } | { status: "terminal"; error: PetTerminalRecoveryError }
+
+class PetTerminalRecoveryError extends Error {
+  readonly failure: unknown
+
+  constructor(failure?: unknown) {
+    super("Pet overlay recovery reached a terminal failure")
+    this.name = "PetTerminalRecoveryError"
+    this.failure = failure
+  }
+}
+
+function terminalRecoveryError(error?: unknown) {
+  return error instanceof PetTerminalRecoveryError ? error : new PetTerminalRecoveryError(error)
+}
+
 export class PetWindow {
   readonly #options: PetWindowOptions
   #crashes = 0
@@ -274,8 +290,13 @@ export class PetWindow {
       if (crashStarted) return
       crashStarted = true
       void this.#handleCrash(window, generation).then(
-        () => settleCrash({ status: "recovered" }),
-        (error: unknown) => settleCrash({ error, status: "recovery-failed" }),
+        (outcome) =>
+          settleCrash(
+            outcome.status === "recovered"
+              ? { status: "recovered" }
+              : { error: outcome.error, status: "recovery-failed" },
+          ),
+        (error: unknown) => settleCrash({ error: terminalRecoveryError(error), status: "recovery-failed" }),
       )
     })
     window.on("closed", () => {
@@ -299,31 +320,37 @@ export class PetWindow {
     throw outcome.error
   }
 
-  async #handleCrash(window: PetNativeWindow, generation: number) {
+  async #handleCrash(window: PetNativeWindow, generation: number): Promise<PetCrashOutcome> {
     const provider = this.#provider
-    if (window !== this.#window || generation !== this.#generation || !provider) return
+    if (window !== this.#window || generation !== this.#generation || !provider) {
+      return { status: "recovered" }
+    }
     this.#crashes += 1
     this.#window = undefined
     this.#destroyWindow(window)
     if (this.#crashes === 1) {
       try {
         await this.#create(generation)
+        return { status: "recovered" }
       } catch (error) {
+        if (error instanceof PetTerminalRecoveryError) {
+          return { error, status: "terminal" }
+        }
         const currentProvider = this.#provider
         if (generation !== this.#generation || !currentProvider || !sameProviderBinding(provider, currentProvider)) {
-          return
+          return { status: "recovered" }
         }
         const recovery = this.#window
         this.#window = undefined
         this.#provider = undefined
         this.#destroyWindow(recovery)
         await this.#options.onFatal()
-        throw error
+        return { error: terminalRecoveryError(error), status: "terminal" }
       }
-      return
     }
     this.#provider = undefined
     await this.#options.onFatal()
+    return { error: terminalRecoveryError(), status: "terminal" }
   }
 
   #isCurrentCreate(window: PetNativeWindow, generation: number, provider: InstalledPetProvider) {

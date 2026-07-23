@@ -362,6 +362,42 @@ describe("PetWindow", () => {
     expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)
   })
 
+  test("propagates a terminal second crash through nested pending create attempts", async () => {
+    let rejectFirst!: (error: Error) => void
+    let rejectRecovery!: (error: Error) => void
+    const firstLoad = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    const recoveryLoad = new Promise<void>((_resolve, reject) => {
+      rejectRecovery = reject
+    })
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 0) window.loadTask = firstLoad
+      if (index === 1) window.loadTask = recoveryLoad
+    })
+    const opening = value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(value.created).toHaveLength(2)
+
+    value.created[1]!.window.webContents.emit("render-process-gone")
+    expect((await settlementWithin(opening)).status).toBe("rejected")
+    expect(value.onFatal).toHaveBeenCalledTimes(1)
+    expect(value.created[0]!.window.destroyed).toBe(true)
+    expect(value.created[1]!.window.destroyed).toBe(true)
+    expect(value.pet.isTrustedWebContentsId(value.created[0]!.window.webContents.id)).toBe(false)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)
+
+    rejectFirst(new Error("stale first load failed"))
+    rejectRecovery(new Error("stale recovery load failed"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect((await settlementWithin(opening)).status).toBe("rejected")
+    expect(value.onFatal).toHaveBeenCalledTimes(1)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)
+  })
+
   test("ignores a stale recovery rejection after a new provider binding opens", async () => {
     let rejectRecovery!: (error: Error) => void
     const recoveryLoad = new Promise<void>((_resolve, reject) => {
