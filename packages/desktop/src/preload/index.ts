@@ -102,6 +102,7 @@ const petSettingsIpcChannels = {
 } as const
 
 interface PetSettingsIdentity {
+  connectionId: string
   generation: number
   pluginId: string
 }
@@ -126,8 +127,12 @@ function isPetSettingsIdentity(value: unknown): value is PetSettingsIdentity {
   const input = value as Record<string, unknown>
   const keys = Object.keys(input)
   return (
-    keys.length === 2 &&
-    keys.every((key) => ["generation", "pluginId"].includes(key)) &&
+    keys.length === 3 &&
+    keys.every((key) => ["connectionId", "generation", "pluginId"].includes(key)) &&
+    typeof input.connectionId === "string" &&
+    input.connectionId.length > 0 &&
+    input.connectionId.length <= 80 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.connectionId) &&
     Number.isSafeInteger(input.generation) &&
     (input.generation as number) >= 1 &&
     typeof input.pluginId === "string" &&
@@ -142,9 +147,13 @@ function isPetSettingsConnectEnvelope(value: unknown): value is PetSettingsConne
   const input = value as Record<string, unknown>
   const keys = Object.keys(input)
   return (
-    keys.length === 5 &&
-    keys.every((key) => ["generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
-    isPetSettingsIdentity({ generation: input.generation, pluginId: input.pluginId }) &&
+    keys.length === 6 &&
+    keys.every((key) => ["connectionId", "generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
+    isPetSettingsIdentity({
+      connectionId: input.connectionId,
+      generation: input.generation,
+      pluginId: input.pluginId,
+    }) &&
     input.protocol === "convax.pet-host/1" &&
     input.surface === "settings" &&
     input.type === "connect"
@@ -152,7 +161,7 @@ function isPetSettingsConnectEnvelope(value: unknown): value is PetSettingsConne
 }
 
 function petSettingsIdentityKey(identity: PetSettingsIdentity) {
-  return `${identity.pluginId}:${identity.generation}`
+  return `${identity.pluginId}:${identity.generation}:${identity.connectionId}`
 }
 
 function closePetSettingsPorts(ports: readonly MessagePort[]) {
@@ -192,6 +201,7 @@ ipcRenderer.on(petSettingsIpcChannels.port, (event, envelope: unknown) => {
     relayedPetSettingsConnections.delete(key)
     port.close()
     void ipcRenderer.invoke(petSettingsIpcChannels.disconnect, {
+      connectionId: settingsEnvelope.connectionId,
       generation: settingsEnvelope.generation,
       pluginId: settingsEnvelope.pluginId,
     })

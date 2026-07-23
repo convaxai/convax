@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const petHostProtocol = "convax.pet-host/1" as const
 
@@ -329,46 +329,70 @@ export class PetSettingsFrameRelay {
 
 export function PetSettingsHost({
   client,
+  frameStatus: injectedFrameStatus,
   provider,
 }: {
   client: PetSettingsHostClient
+  frameStatus?: PetSettingsFrameStatus
   provider: PetSettingsProvider
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const relayRef = useRef<PetSettingsFrameRelay | null>(null)
   const trustedProvider = isPetSettingsProvider(provider) ? provider : undefined
+  const bindingKey = trustedProvider ? `${trustedProvider.pluginId}:${trustedProvider.generation}` : "unavailable"
+  const frameKey = trustedProvider ? `${bindingKey}:${trustedProvider.settingsUrl}` : bindingKey
+  const [frameSnapshot, setFrameSnapshot] = useState<{ key: string; status: PetSettingsFrameStatus }>({
+    key: frameKey,
+    status: "loading",
+  })
+  const frameStatus = injectedFrameStatus ?? (frameSnapshot.key === frameKey ? frameSnapshot.status : "loading")
 
   useEffect(() => {
     const frameWindow = iframeRef.current?.contentWindow
     if (!frameWindow || !trustedProvider) return
+    setFrameSnapshot({ key: frameKey, status: "loading" })
     const relay = new PetSettingsFrameRelay({ client, frameWindow, hostWindow: window, provider: trustedProvider })
     relayRef.current = relay
     const receive = (event: MessageEvent) => {
       relay.receive({ data: event.data, ports: event.ports, source: event.source })
     }
-    window.addEventListener("message", receive)
-    return () => {
+    let active = true
+    let unsubscribeStatus: () => void = () => undefined
+    const teardown = () => {
+      if (!active) return
+      active = false
       window.removeEventListener("message", receive)
+      unsubscribeStatus()
       if (relayRef.current === relay) relayRef.current = null
       void relay.dispose()
     }
-  }, [client, trustedProvider?.generation, trustedProvider?.pluginId, trustedProvider?.settingsUrl])
+    unsubscribeStatus = relay.subscribeStatus((status) => {
+      if (!active) return
+      setFrameSnapshot({ key: frameKey, status })
+      if (status === "unavailable") teardown()
+    })
+    window.addEventListener("message", receive)
+    return teardown
+  }, [client, frameKey, trustedProvider])
 
-  if (!trustedProvider) {
+  if (!trustedProvider || frameStatus === "unavailable") {
     return (
-      <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+      <div
+        className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground"
+        data-pet-settings-status="unavailable"
+        role="status"
+      >
         Pet provider unavailable.
       </div>
     )
   }
 
-  const bindingKey = `${trustedProvider.pluginId}:${trustedProvider.generation}`
-
   return (
     <iframe
       className="min-h-[36rem] w-full rounded-xl border border-border bg-card"
       data-pet-settings-binding={bindingKey}
-      key={`${bindingKey}:${trustedProvider.settingsUrl}`}
+      data-pet-settings-status={frameStatus}
+      key={frameKey}
       onLoad={() => void relayRef.current?.frameLoaded()}
       ref={iframeRef}
       sandbox="allow-scripts"

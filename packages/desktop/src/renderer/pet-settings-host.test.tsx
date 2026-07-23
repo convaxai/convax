@@ -8,6 +8,33 @@ import {
   type PetSettingsProvider,
 } from "./pet-settings-host"
 
+type PreloadPortListener = (event: { ports?: Array<{ close(): void }> }, envelope: unknown) => void
+
+const preloadInvoke = mock(async (_channel: string, _input?: unknown) => undefined)
+const preloadListeners = new Map<string, PreloadPortListener>()
+let exposedPreloadBridge: { pets: PetSettingsHostClient } | undefined
+
+mock.module("electron", () => ({
+  contextBridge: {
+    exposeInMainWorld(name: string, value: { pets: PetSettingsHostClient }) {
+      if (name === "convax") exposedPreloadBridge = value
+    },
+  },
+  ipcRenderer: {
+    invoke: preloadInvoke,
+    on(channel: string, listener: PreloadPortListener) {
+      preloadListeners.set(channel, listener)
+    },
+    removeListener(channel: string, listener: PreloadPortListener) {
+      if (preloadListeners.get(channel) === listener) preloadListeners.delete(channel)
+    },
+    send: mock(() => undefined),
+  },
+  webUtils: {
+    getPathForFile: mock(() => ""),
+  },
+}))
+
 const provider: PetSettingsProvider = {
   generation: 7,
   pluginId: "soft-companion",
@@ -58,6 +85,16 @@ describe("PetSettingsHost", () => {
     expect(markup).not.toContain("Import")
     expect(markup).not.toContain("Delete")
     expect(markup).not.toContain("Upload")
+  })
+
+  test("renders a generic unavailable shell instead of a dead settings iframe", () => {
+    const markup = renderToStaticMarkup(
+      <PetSettingsHost client={createClient()} frameStatus="unavailable" provider={provider} />,
+    )
+
+    expect(markup).toContain('data-pet-settings-status="unavailable"')
+    expect(markup).toContain("Pet provider unavailable.")
+    expect(markup).not.toContain("iframe")
   })
 
   test("requests one fixed settings connection after frame load and forwards one exact port", async () => {
@@ -226,6 +263,67 @@ describe("PetSettingsHost", () => {
 
     expect(first).toContain('data-pet-settings-binding="soft-companion:7"')
     expect(next).toContain('data-pet-settings-binding="other-companion:8"')
+  })
+
+  test("keeps preload and renderer connection identities aligned across reloads", async () => {
+    const firstIdentity: TestConnectionIdentity = {
+      connectionId: "settings-1",
+      generation: provider.generation,
+      pluginId: provider.pluginId,
+    }
+    const secondIdentity: TestConnectionIdentity = { ...firstIdentity, connectionId: "settings-2" }
+    const postMessage = mock(() => undefined)
+    const preloadWindow = { postMessage } as unknown as Window & typeof globalThis
+    Object.defineProperty(preloadWindow, "top", { value: preloadWindow })
+    const previousWindow = globalThis.window
+    Object.defineProperty(globalThis, "window", { configurable: true, value: preloadWindow })
+
+    try {
+      await import("../preload/index")
+      const client = exposedPreloadBridge?.pets
+      const receivePort = preloadListeners.get("pet:settings-port")
+      if (!client || !receivePort) throw new Error("Pet settings preload bridge was not exposed")
+
+      preloadInvoke.mockClear()
+      await client.connectSettings(firstIdentity)
+      expect(preloadInvoke).toHaveBeenNthCalledWith(1, "pet:settings-connect", firstIdentity)
+
+      const wrongPort = createPort()
+      receivePort({ ports: [wrongPort] }, connectEnvelope(secondIdentity))
+      expect(wrongPort.close).toHaveBeenCalledTimes(1)
+      expect(postMessage).not.toHaveBeenCalled()
+
+      const firstPort = createPort()
+      const firstEnvelope = connectEnvelope(firstIdentity)
+      receivePort({ ports: [firstPort] }, firstEnvelope)
+      expect(postMessage).toHaveBeenNthCalledWith(1, firstEnvelope, "*", [firstPort])
+      expect(firstPort.close).not.toHaveBeenCalled()
+
+      await client.connectSettings(secondIdentity)
+      expect(preloadInvoke).toHaveBeenNthCalledWith(2, "pet:settings-connect", secondIdentity)
+      await client.disconnectSettings(firstIdentity)
+      expect(preloadInvoke).toHaveBeenNthCalledWith(3, "pet:settings-disconnect", firstIdentity)
+
+      const secondPort = createPort()
+      const secondEnvelope = connectEnvelope(secondIdentity)
+      receivePort({ ports: [secondPort] }, secondEnvelope)
+      expect(postMessage).toHaveBeenNthCalledWith(2, secondEnvelope, "*", [secondPort])
+      expect(secondPort.close).not.toHaveBeenCalled()
+
+      const stalePort = createPort()
+      receivePort({ ports: [stalePort] }, firstEnvelope)
+      expect(stalePort.close).toHaveBeenCalledTimes(1)
+      expect(postMessage).toHaveBeenCalledTimes(2)
+
+      await client.disconnectSettings(secondIdentity)
+      expect(preloadInvoke).toHaveBeenNthCalledWith(4, "pet:settings-disconnect", secondIdentity)
+    } finally {
+      if (previousWindow === undefined) {
+        Reflect.deleteProperty(globalThis, "window")
+      } else {
+        Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow })
+      }
+    }
   })
 })
 
