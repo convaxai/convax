@@ -311,7 +311,7 @@ describe("canvas agent context", () => {
     const incoming = createMediaNode({
       id: "incoming",
       position: { x: 0, y: 0 },
-      resource: { id: "image", kind: "image", url: "panorama.jpg" },
+      resource: { id: "image", kind: "image", url: "reference.jpg" },
     })
     const outgoing = createTextNode({ id: "outgoing", position: { x: 0, y: 0 } })
     const document = createCanvasDocument({

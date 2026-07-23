@@ -128,13 +128,13 @@ function connectedImageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
     data: {
       height: 1024,
       kind: "image",
-      label: "Panorama",
+      label: "Reference image",
       metadata: {
-        convaxProjectFile: { path: ".convax/assets/panorama.jpg" },
+        convaxProjectFile: { path: ".convax/assets/reference.jpg" },
       },
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
-      url: "convax-asset://project-1/file?path=panorama.jpg",
+      name: "reference.jpg",
+      url: "convax-asset://project-1/file?path=reference.jpg",
       width: 2048,
     },
     id: "image-1",
@@ -226,7 +226,7 @@ function hostContext(
     readManagedProjectImage: mock(async (input) => ({
       dataUrl: "data:image/jpeg;base64,eA==",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
+      name: "reference.jpg",
       path: input.path,
       size: 1,
     })),
@@ -646,7 +646,7 @@ describe("Canvas Web Plugin host requests", () => {
     const context = hostContext(plugin(["canvas.image.write"]), { createCanvasImage })
 
     const response = await dispatchWebPluginHostRequest(
-      request("canvas.image.create", { dataUrl, name: "全景视口截图.png" }),
+      request("canvas.image.create", { dataUrl, name: "viewport-capture.png" }),
       context,
     )
 
@@ -657,13 +657,13 @@ describe("Canvas Web Plugin host requests", () => {
     expect(createCanvasImage).toHaveBeenCalledWith(
       expect.objectContaining({
         dataUrl,
-        name: "全景视口截图.png",
+        name: "viewport-capture.png",
         pluginVersion: "1.2.3",
       }),
     )
 
     const denied = await dispatchWebPluginHostRequest(
-      request("canvas.image.create", { dataUrl, name: "全景视口截图.png" }),
+      request("canvas.image.create", { dataUrl, name: "viewport-capture.png" }),
       hostContext(plugin()),
     )
     expect(denied).toMatchObject({ ok: false, error: "Plugin capability is not granted: canvas.image.write" })
@@ -674,7 +674,7 @@ describe("Canvas Web Plugin host requests", () => {
     const readManagedProjectImage = mock(async (input: { path: string }) => ({
       dataUrl: "data:image/jpeg;base64,eHl6",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
+      name: "reference.jpg",
       path: input.path,
       size: 3,
     }))
@@ -692,7 +692,7 @@ describe("Canvas Web Plugin host requests", () => {
             height: 1024,
             id: "image-1",
             mimeType: "image/jpeg",
-            name: "panorama.jpg",
+            name: "reference.jpg",
             readable: true,
             width: 2048,
           },
@@ -711,12 +711,12 @@ describe("Canvas Web Plugin host requests", () => {
       result: {
         dataUrl: "data:image/jpeg;base64,eHl6",
         id: "image-1",
-        name: "panorama.jpg",
+        name: "reference.jpg",
       },
     })
     expect(readManagedProjectImage).toHaveBeenCalledWith(
       expect.objectContaining({
-        path: ".convax/assets/panorama.jpg",
+        path: ".convax/assets/reference.jpg",
         projectId: "project-1",
       }),
     )
@@ -727,8 +727,8 @@ describe("Canvas Web Plugin host requests", () => {
     const readManagedProjectImage = mock(async () => ({
       dataUrl: "data:image/jpeg;base64,",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
-      path: ".convax/assets/panorama.jpg",
+      name: "reference.jpg",
+      path: ".convax/assets/reference.jpg",
       size: 0,
     }))
     const denied = await dispatchWebPluginHostRequest(
@@ -758,8 +758,8 @@ describe("Canvas Web Plugin host requests", () => {
     const readManagedProjectImage = mock(async () => ({
       dataUrl: "data:image/jpeg;base64,",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
-      path: ".convax/assets/panorama.jpg",
+      name: "reference.jpg",
+      path: ".convax/assets/reference.jpg",
       size: 16 * 1024 * 1024 + 1,
     }))
     const context = hostContext(plugin(["canvas.connectedImages.read"]), {
@@ -782,8 +782,8 @@ describe("Canvas Web Plugin host requests", () => {
       readManagedProjectImage: mock(async () => ({
         dataUrl: `data:image/jpeg;base64,${encoded}`,
         mimeType: "image/jpeg",
-        name: "panorama.jpg",
-        path: ".convax/assets/panorama.jpg",
+        name: "reference.jpg",
+        path: ".convax/assets/reference.jpg",
         size: 16 * 1024 * 1024,
       })),
     })
@@ -796,8 +796,8 @@ describe("Canvas Web Plugin host requests", () => {
       readManagedProjectImage: mock(async () => ({
         dataUrl: "data:image/jpeg;base64,eA==",
         mimeType: "image/jpeg",
-        name: "panorama.jpg",
-        path: ".convax/assets/panorama.jpg",
+        name: "reference.jpg",
+        path: ".convax/assets/reference.jpg",
         size: 2,
       })),
     })
@@ -873,8 +873,8 @@ describe("Canvas Web Plugin host requests", () => {
     resolveImage({
       dataUrl: "data:image/jpeg;base64,eA==",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
-      path: ".convax/assets/panorama.jpg",
+      name: "reference.jpg",
+      path: ".convax/assets/reference.jpg",
       size: 1,
     })
 
@@ -907,8 +907,8 @@ describe("Canvas Web Plugin host requests", () => {
     resolveImage({
       dataUrl: "data:image/jpeg;base64,eA==",
       mimeType: "image/jpeg",
-      name: "panorama.jpg",
-      path: ".convax/assets/panorama.jpg",
+      name: "reference.jpg",
+      path: ".convax/assets/reference.jpg",
       size: 1,
     })
     expect(await first).toMatchObject({ ok: true })

@@ -244,6 +244,14 @@ retry after a transient transport failure; every hit is rechecked against the
 current Registry size and SHA-256 before use. Losing any cache never removes installed
 capabilities; an invalid or rolled-back network response never replaces it.
 
+A checked-in built-in that graduates to the official Registry has an explicit
+Desktop compatibility migration. Startup verifies its host-authored provenance
+against the complete installed package, removes only the trusted marker, and
+preserves the static package as an ordinary installation. This releases the id from
+the built-in collision set and lets a higher Registry version replace the preserved
+package through the normal verified transaction; missing, untrusted, or tampered
+installations are never silently rewritten.
+
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
 application services. A schema change needs a version, a migration path, and tests
 using real old data. Never “fix” an incompatibility by deleting or silently resetting

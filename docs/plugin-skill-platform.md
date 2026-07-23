@@ -144,6 +144,14 @@ fully validates a staging copy, switches same-root directories, and restores the
 directory if the second rename fails. Imported packages still cannot replace an
 installed id, and equal-version or downgrade catalog replacements are rejected.
 
+When a static built-in moves to the official Registry, Desktop carries an explicit
+retired-id compatibility migration rather than leaving the old identity reserved.
+The migration verifies the host marker against the complete installed package,
+removes only that marker, and keeps the Plugin bytes installed as an ordinary
+package. Missing or already-untrusted installations are unchanged; tampered
+provenance fails closed. A higher Registry SemVer can then replace the preserved
+package through the normal verified update transaction.
+
 An installed Plugin package is global to the user. A Canvas document stores only a
 stable plugin id/version reference and namespaced portable instance state. Removing
 a Plugin therefore does not destroy Canvas nodes; they fall back to the unknown-file
@@ -287,11 +295,6 @@ surfaces:
   graph and director viewport camera are stored as separate fields in the owning
   Canvas node through `canvas.node.updateState`; its legacy independently managed
   companion Skill reviews the same snapshot through normal Canvas Agent resources.
-- **全景图预览 (Panorama Viewer)** is an original offline WebGL2 surface for equirectangular 360°
-  images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
-  image nodes connected into its own Canvas node through a narrow host capability.
-  The selected connected-node preference and view settings are portable; local file
-  pixels remain session-local and are never stored in Plugin state.
 - **JianYing Editor** is default-provisioned as a trusted built-in Plugin plus a
   separately receipted legacy companion Skill. The package controls lifecycle and
   describes the workflow; its native implementation remains compiled into Desktop

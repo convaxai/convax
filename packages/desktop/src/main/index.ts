@@ -106,6 +106,7 @@ import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
+import { migrateRetiredBuiltinPlugins } from "./retired-builtin-plugin-migrations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
@@ -290,6 +291,9 @@ function startApplication() {
     // dependent authorization and owned-Skill journal. An ambiguous package
     // state must stop startup instead of letting later recovery guess.
     await pluginManager.reconcilePublicationState()
+    await migrateRetiredBuiltinPlugins(pluginManager, (pluginId, error) => {
+      console.warn(`Could not retire legacy built-in Plugin provenance ${pluginId}`, error)
+    })
     const companionStore = new ManagedPluginCompanionStore(join(userDataDirectory, "plugin-companions"))
     const generationEnvironment = generationPluginEnvironment(process.env)
     const toolPluginAuthorizations = new ToolPluginAuthorizationStore(

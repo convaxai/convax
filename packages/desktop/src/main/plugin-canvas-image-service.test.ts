@@ -30,13 +30,13 @@ function document(): CanvasDocument {
       nodes: [
         {
           data: {
-            kind: "plugin.panorama-viewer",
-            label: "全景图预览",
+            kind: "plugin.capture-surface",
+            label: "Capture Surface",
             metadata: {
               convaxPlugin: {
                 entry: "index.html",
-                id: "panorama-viewer",
-                version: "0.2.0",
+                id: "capture-surface",
+                version: "1.0.0",
               },
             },
           },
@@ -55,11 +55,11 @@ function request(): PluginCanvasImageCreateRequest {
   return {
     dataUrl: pngDataUrl(),
     expectedRevision: 3,
-    name: "全景视口截图.png",
+    name: "viewport-capture.png",
     operationId: "capture-1",
     ownerNodeId: "plugin-node-1",
-    pluginId: "panorama-viewer",
-    pluginVersion: "0.2.0",
+    pluginId: "capture-surface",
+    pluginVersion: "1.0.0",
     ref: { canvasId: "canvas-1", scopeId: "project-1" },
   }
 }
@@ -79,7 +79,7 @@ describe("Plugin Canvas image service", () => {
     }))
     const importEntries = mock(async (input: { sourcePaths: string[] }) => {
       expect(await fs.readFile(input.sourcePaths[0]!)).toEqual(Buffer.from(pngDataUrl().split(",")[1]!, "base64"))
-      return { targetPaths: [".convax/assets/全景视口截图.png"] }
+      return { targetPaths: [".convax/assets/viewport-capture.png"] }
     })
     const deleteManagedAssets = mock(async () => undefined)
     const service = new PluginCanvasImageService({
@@ -92,10 +92,10 @@ describe("Plugin Canvas image service", () => {
     await expect(service.create(request())).resolves.toEqual({ createdNodeId: "image-1", revision: 4 })
     expect(addResources).toHaveBeenCalledWith(
       expect.objectContaining({
-        actor: { id: "panorama-viewer", kind: "plugin" },
+        actor: { id: "capture-surface", kind: "plugin" },
         anchor: { x: 1144, y: 60 },
         relation: { anchorNodeIds: ["plugin-node-1"], direction: "from-anchor", mode: "connect" },
-        sources: [expect.objectContaining({ kind: "host-file", path: ".convax/assets/全景视口截图.png" })],
+        sources: [expect.objectContaining({ kind: "host-file", path: ".convax/assets/viewport-capture.png" })],
       }),
     )
     expect(deleteManagedAssets).not.toHaveBeenCalled()
@@ -112,7 +112,11 @@ describe("Plugin Canvas image service", () => {
         deleteManagedAssets,
         importEntries: async () => ({ targetPaths: [".convax/assets/capture.png"] }),
       },
-      resources: { addResources: async () => { throw new Error("Canvas changed") } },
+      resources: {
+        addResources: async () => {
+          throw new Error("Canvas changed")
+        },
+      },
       temporaryRoot,
     })
 
