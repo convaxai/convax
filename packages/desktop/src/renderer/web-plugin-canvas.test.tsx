@@ -188,6 +188,7 @@ function hostContext(
   const controller = new AbortController()
   const document = createCanvasDocument({ id: active.canvasId, nodes: [canvasNode()] })
   return {
+    canvasImageWriteGate: { active: false },
     connectedImageReadGate: { active: false },
     executeCanvasGeneration: mock(async () => ({
       createdNodeIds: ["generated-1"],
@@ -388,7 +389,7 @@ describe("Canvas Web Plugin contribution", () => {
       style: { height: 460, width: 720 },
       type: "file",
     })
-    expect(renderer.toolbar).toBeDefined()
+    expect(renderer.toolbar).toBeUndefined()
     expect(webPluginIframeSandbox).toBe("allow-scripts")
     expect(webPluginIframePermissions).toContain("camera 'none'")
     expect(webPluginIframePermissions).toContain("microphone 'none'")

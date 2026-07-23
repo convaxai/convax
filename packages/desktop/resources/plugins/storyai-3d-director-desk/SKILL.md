@@ -28,3 +28,7 @@ Imported panoramas and captured image pixels are session-local in this first
 integration. Local model import is intentionally unavailable until Convax exposes
 a scoped host asset capability. The portable scene graph, transforms, cameras, and
 settings are saved with the Canvas node.
+
+The selected stage exposes a Play toolbar button. It captures exactly the current
+viewport and adds one managed image frame connected from that stage on the active
+Canvas; it does not export the stage's session-only capture history.

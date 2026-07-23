@@ -352,8 +352,8 @@ try {
     const installedDirector = initialPlugins.installed.find((plugin) => plugin.id === "storyai-3d-director-desk")
     if (!catalogPlugin
       || !catalogPlugin.installed
-      || catalogPlugin.installedVersion !== "0.0.1-convax.2"
-      || catalogPlugin.version !== "0.0.1-convax.2"
+      || catalogPlugin.installedVersion !== "0.0.1-convax.3"
+      || catalogPlugin.version !== "0.0.1-convax.3"
       || catalogPlugin.updateAvailable
       || installedDirector?.trustedBuiltin !== true) {
       throw new Error("The exact legacy-marker-free built-in Plugin was not claimed at startup")
@@ -958,7 +958,7 @@ try {
     !Number.isFinite(savedDirectorState.rotationY) ||
     Math.abs(savedDirectorState.rotationY! - directorInteraction.rotationY!) > 0.000001 ||
     !savedDirectorState.directorView ||
-    savedDirectorState.identityVersion !== "0.0.1-convax.2"
+    savedDirectorState.identityVersion !== "0.0.1-convax.3"
   ) {
     throw new Error(`Unexpected saved 3D Director state: ${JSON.stringify(savedDirectorState)}`)
   }
@@ -1001,7 +1001,7 @@ try {
     Math.abs(persistedRotationY! - directorInteraction.rotationY!) > 0.000001 ||
     JSON.stringify(persistedDirectorState?.presentation?.viewport?.directorView) !==
       JSON.stringify(savedDirectorState.directorView) ||
-    persistedDocument.nodes[0]?.data?.metadata?.convaxPlugin?.version !== "0.0.1-convax.2" ||
+    persistedDocument.nodes[0]?.data?.metadata?.convaxPlugin?.version !== "0.0.1-convax.3" ||
     persistedDocument.edges?.length !== 0
   ) {
     throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
@@ -1098,7 +1098,10 @@ try {
   })()`,
   )
   await Bun.sleep(300)
-  await waitForTarget(rendererPort, (target) => target.type === "page" && target.url === builtRendererUrl)
+  const reloadedRendererDebugger = await waitForTarget(
+    rendererPort,
+    (target) => target.type === "page" && target.url === builtRendererUrl,
+  )
 
   const reloadedDirectors = (await evaluatePluginFrames(
     mainDebugger,
@@ -1153,8 +1156,141 @@ try {
     throw new Error(`Unexpected reloaded 3D Director UI: ${JSON.stringify(reloadedDirectors)}`)
   }
 
+  const currentFrameOwnerPoint = (await evaluateStable(
+    reloadedRendererDebugger,
+    `(() => {
+      const owner = document.querySelector(
+        '.react-flow__node[data-id="${summary.pluginNodeId}"]',
+      )
+      if (!owner) throw new Error("The original 3D Director Canvas node is missing")
+      const bounds = owner.getBoundingClientRect()
+      return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+    })()`,
+  )) as { x?: number; y?: number }
+  if (!Number.isFinite(currentFrameOwnerPoint.x) || !Number.isFinite(currentFrameOwnerPoint.y)) {
+    throw new Error(`Unexpected 3D Director Canvas node geometry: ${JSON.stringify(currentFrameOwnerPoint)}`)
+  }
+  await sendDebuggerCommand(reloadedRendererDebugger, "Input.dispatchMouseEvent", {
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    type: "mousePressed",
+    x: currentFrameOwnerPoint.x,
+    y: currentFrameOwnerPoint.y,
+  })
+  await sendDebuggerCommand(reloadedRendererDebugger, "Input.dispatchMouseEvent", {
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    type: "mouseReleased",
+    x: currentFrameOwnerPoint.x,
+    y: currentFrameOwnerPoint.y,
+  })
+  const currentFrame = (await evaluateStable(
+    reloadedRendererDebugger,
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      const waitForButton = async (...labels) => {
+        while (Date.now() < deadline) {
+          const button = labels
+            .flatMap((label) => [...document.querySelectorAll('button[aria-label="' + label + '"]')])
+            .find((candidate) => candidate.getBoundingClientRect().width > 0 && !candidate.disabled)
+          if (button) return button
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        throw new Error("Timed out waiting for the " + labels.join(" / ") + " toolbar action")
+      }
+      const play = await waitForButton("关联当前帧")
+      const addToConversation = await waitForButton("添加到对话", "Add to conversation")
+      const duplicate = await waitForButton("Duplicate")
+      const remove = await waitForButton("Delete")
+      const toolbarSurface = play.closest(".convax-node-toolbar__surface")
+      if (
+        !toolbarSurface
+        || [addToConversation, duplicate, remove].some(
+          (button) => button.closest(".convax-node-toolbar__surface") !== toolbarSurface,
+        )
+      ) {
+        throw new Error("The 3D Director actions are not composed into one toolbar surface")
+      }
+      const ownerNodeId = document.querySelector(".react-flow__node.selected[data-id]")
+        ?.getAttribute("data-id")
+      if (!ownerNodeId) throw new Error("The 3D Director toolbar has no selected owner node")
+      play.click()
+      let lastDocument = null
+      while (Date.now() < deadline) {
+        const loaded = await window.convax.canvas.documents.load({
+          canvasId: ${JSON.stringify(summary.activeCanvasId)},
+          scopeId: ${JSON.stringify(summary.projectId)},
+        })
+        lastDocument = loaded.document
+        const edge = loaded.document?.edges.find(
+          (candidate) => candidate.source === ownerNodeId
+            && loaded.document?.nodes.some(
+              (node) => node.id === candidate.target && node.data.kind === "image",
+            ),
+        )
+        const frame = edge
+          ? loaded.document?.nodes.find((candidate) => candidate.id === edge.target)
+          : null
+        const assetPath = frame?.data.metadata?.convaxProjectFile?.path
+        if (
+          edge
+          && frame?.data.kind === "image"
+          && frame.data.mimeType === "image/png"
+          && typeof assetPath === "string"
+        ) {
+          return {
+            assetPath,
+            edgeSource: edge.source,
+            edgeTarget: edge.target,
+            frameNodeId: frame.id,
+            ownerNodeId,
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return {
+        timedOut: true,
+        revision: lastDocument?.revision,
+      }
+    })()`,
+  )) as {
+    assetPath?: string
+    edgeSource?: string
+    edgeTarget?: string
+    frameNodeId?: string
+    ownerNodeId?: string
+    revision?: number
+    timedOut?: boolean
+  }
+  const currentFramePluginNotices = await evaluatePluginFrames(
+    mainDebugger,
+    "storyai-3d-director-desk",
+    `document.getElementById("convax-director-state-notice")?.textContent ?? ""`,
+    2,
+  )
+  if (
+    !currentFrame.assetPath?.startsWith(".convax/assets/") ||
+    currentFrame.edgeSource !== currentFrame.ownerNodeId ||
+    currentFrame.edgeTarget !== currentFrame.frameNodeId
+  ) {
+    throw new Error(
+      `Unexpected connected 3D Director current frame: ${JSON.stringify({
+        currentFrame,
+        pluginNotices: currentFramePluginNotices,
+      })}`,
+    )
+  }
+  const currentFrameBytes = await fs.readFile(path.join(projectRoot, ...currentFrame.assetPath.split("/")))
+  if (
+    currentFrameBytes.byteLength <= 8 ||
+    !Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).equals(currentFrameBytes.subarray(0, 8))
+  ) {
+    throw new Error("The connected 3D Director current frame is not a managed PNG")
+  }
   console.log(
-    `Desktop Settings, installed Skill showcase/detail, Open Project, and 3D Plugin smoke passed (${summary.projectId}, canvas-main)`,
+    `Desktop Settings, installed Skill showcase/detail, Open Project, and 3D Plugin current-frame smoke passed (${summary.projectId}, canvas-main)`,
   )
 } catch (error) {
   child.kill("SIGKILL")

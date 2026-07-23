@@ -695,6 +695,18 @@ broker projections described above. Browser
 features such as fullscreen are likewise enabled per manifest; all other iframe
 feature-policy denials remain in force.
 
+A node-scoped Plugin may add one current-frame PNG only when its manifest declares
+`canvas.image.write` and calls `canvas.image.create`. The iframe supplies bounded
+PNG data and a portable filename, never a Project path, Canvas node id, position,
+or relation target.
+Desktop revalidates the exact installed Plugin identity, owning node, current
+revision, writable scope, and one-in-flight frame gate, then forwards the bytes over
+a cancellable sender-scoped IPC operation. Main takes the external-document
+mutation lease, stages and imports the bytes into managed `.convax/assets`, and
+calls the shared Canvas resource business operation to place the image and connect
+it from the owning Plugin node. Any failed Canvas commit removes the newly admitted
+asset; renderer destruction, scope changes, and caller cancellation fail closed.
+
 ### JianYing trusted built-in
 
 JianYing is a concrete trusted built-in integration, not a new Plugin RPC capability.

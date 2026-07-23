@@ -455,8 +455,10 @@ function startApplication() {
     })
     const pluginCanvasImages = new PluginCanvasImageService({
       documents: canvasDocuments,
+      plugins: pluginManager,
       projects: projectManager,
       resources: canvasResources,
+      temporaryRoot: join(userDataDirectory, "plugin-canvas-image-staging"),
     })
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({

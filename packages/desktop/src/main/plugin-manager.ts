@@ -1282,8 +1282,9 @@ export class WebPluginManager {
   }
 
   /**
-   * Claims only an already-installed, byte-for-byte approved catalog bundle.
-   * A missing package stays missing so startup never reverses a user uninstall.
+   * Claims an already-installed provenance-verified built-in, or an exact
+   * approved marker-free catalog bundle. A missing package stays missing so
+   * startup never reverses a user uninstall.
    */
   async claimInstalledBuiltinBundle(
     bundle: WebPluginBundle,
@@ -1312,13 +1313,15 @@ export class WebPluginManager {
       throw new Error(`Installed built-in Plugin files do not match their provenance: ${manifest.id}`)
     }
 
+    const approvedProvenance =
+      installedManifest.id === manifest.id && provenance !== null && provenance.bundleDigest === actualDigest
     const approvedCurrent =
       installedManifest.id === manifest.id &&
       installedManifest.version === manifest.version &&
       actualDigest === expectedDigest
     const approvedLegacy =
       installedManifest.id === manifest.id && legacyBundleDigests.get(installedManifest.version) === actualDigest
-    if (!approvedCurrent && !approvedLegacy) {
+    if (!approvedProvenance && !approvedCurrent && !approvedLegacy) {
       throw new Error(`A non-built-in Plugin is using the reserved catalog id: ${manifest.id}`)
     }
     if (!provenance) {

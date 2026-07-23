@@ -120,6 +120,7 @@ export interface PluginHostLimits {
  * transports provide this context; capability handlers do not know the transport.
  */
 export interface PluginHostRequestContext {
+  canvasImageWriteGate: { active: boolean }
   connectedImageReadGate: { active: boolean }
   frame: PluginNodeInvocationRef
   generationGate: { active: boolean }
