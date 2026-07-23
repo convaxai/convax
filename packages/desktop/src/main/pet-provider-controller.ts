@@ -124,19 +124,12 @@ function sameProviderIdentity(left: InstalledPetProvider | undefined, right: Ins
 function preferencesFromState(state: PetPersistedState): PetPreferences {
   return {
     awake: state.awake,
-    ...(state.preferences.selectedPetId === undefined
-      ? {}
-      : { selectedPetId: state.preferences.selectedPetId }),
+    ...(state.preferences.selectedPetId === undefined ? {} : { selectedPetId: state.preferences.selectedPetId }),
   }
 }
 
 function requireSelectedPetId(value: unknown) {
-  if (
-    typeof value !== "string" ||
-    value.length < 1 ||
-    value.length > 80 ||
-    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)
-  ) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 80 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) {
     throw new Error("Pet selectedPetId is invalid")
   }
   return value
@@ -162,6 +155,7 @@ export class PetProviderController {
   #mutationTail: Promise<void> = Promise.resolve()
   #provider: InstalledPetProvider | undefined
   #state: PetPersistedState | undefined
+  #windowMayBeMounted = false
 
   constructor(options: PetProviderControllerOptions) {
     this.#activity = options.activity
@@ -179,10 +173,12 @@ export class PetProviderController {
   }
 
   getProvider(): InstalledPetProvider | undefined {
+    if (this.#disposed) return undefined
     return this.#provider === undefined ? undefined : cloneProvider(this.#provider)
   }
 
   getBinding(): PetHostProviderBinding | undefined {
+    if (this.#disposed) return undefined
     return this.#provider === undefined ? undefined : cloneBinding(this.#provider)
   }
 
@@ -233,11 +229,10 @@ export class PetProviderController {
       this.#assertInitialized()
       const awake = requireAwake(input?.awake)
       const current = this.#requireState()
-      if (current.awake === awake) return preferencesFromState(current)
-      if (awake && this.#provider === undefined) throw new Error("No Pet feature provider is installed")
-
-      this.#state = await this.#persistProviderState(awake, this.#provider?.pluginId)
       if (awake) {
+        if (current.awake) return preferencesFromState(current)
+        if (this.#provider === undefined) throw new Error("No Pet feature provider is installed")
+        this.#state = await this.#persistProviderState(true, this.#provider.pluginId)
         try {
           await this.#openAwakeProvider()
         } catch (error) {
@@ -245,26 +240,27 @@ export class PetProviderController {
           this.#emitPreferences()
           throw error
         }
-      } else {
-        this.#stopActivity()
-        await this.#window.close()
+        this.#emitPreferences()
+        return preferencesFromState(this.#state)
       }
-      this.#emitPreferences()
+
+      if (!current.awake && !this.#windowMayBeMounted) return preferencesFromState(current)
+      if (current.awake) {
+        this.#state = await this.#persistProviderState(false, this.#provider?.pluginId)
+        this.#emitPreferences()
+      }
+      await this.#closeRuntime()
       return preferencesFromState(this.#state)
     })
   }
 
   dispose(): Promise<void> {
-    return this.#exclusive(async () => {
-      if (this.#disposed) return
-      this.#disposed = true
-      const wasAwake = this.#state?.awake === true
-      this.#stopActivity()
-      if (wasAwake) await this.#window.close()
-      this.#activityListeners.clear()
-      this.#preferencesListeners.clear()
-      this.#providerListeners.clear()
-    }, true)
+    this.#disposed = true
+    this.#stopActivity()
+    this.#activityListeners.clear()
+    this.#preferencesListeners.clear()
+    this.#providerListeners.clear()
+    return this.#exclusive(() => this.#closeRuntime(), true)
   }
 
   async #initialize() {
@@ -279,6 +275,7 @@ export class PetProviderController {
 
     this.#state = state
     this.#provider = nextProvider
+    if (nextProvider !== undefined) this.#generation = Math.max(this.#generation, nextProvider.generation)
     if (nextProvider !== undefined || state.providerId !== undefined || state.awake !== awake) {
       this.#state = await this.#persistProviderState(awake, nextProvider?.pluginId)
     }
@@ -309,12 +306,10 @@ export class PetProviderController {
         currentProvider !== undefined &&
         !error.providerIds.includes(currentProvider.pluginId)
       ) {
-        if (currentState.awake) {
-          this.#stopActivity()
-          await this.#window.close()
-        }
+        const nextState = await this.#persistProviderState(false, undefined)
+        await this.#closeRuntimeForTransition(currentState, currentProvider)
         this.#provider = undefined
-        this.#state = await this.#persistProviderState(false, undefined)
+        this.#state = nextState
         this.#emitProvider()
         if (currentState.awake) this.#emitPreferences()
       }
@@ -324,16 +319,15 @@ export class PetProviderController {
     if (sameProviderIdentity(currentProvider, nextProvider)) return
 
     const wasAwake = currentState.awake
-    if (wasAwake) {
-      this.#stopActivity()
-      await this.#window.close()
-    }
-
-    this.#provider = nextProvider
     const sameProviderId =
       currentProvider !== undefined && nextProvider !== undefined && currentProvider.pluginId === nextProvider.pluginId
     const awake = wasAwake && sameProviderId
-    this.#state = await this.#persistProviderState(awake, nextProvider?.pluginId)
+    const nextState = await this.#persistProviderState(awake, nextProvider?.pluginId)
+    await this.#closeRuntimeForTransition(currentState, currentProvider)
+
+    this.#provider = nextProvider
+    this.#state = nextState
+    if (nextProvider !== undefined) this.#generation = Math.max(this.#generation, nextProvider.generation)
     this.#emitProvider()
     if (awake) {
       try {
@@ -376,7 +370,7 @@ export class PetProviderController {
     const generation =
       currentProvider?.pluginId === plugin.id && currentProvider.digest === identity.digest
         ? currentProvider.generation
-        : ++this.#generation
+        : this.#generation + 1
     return freezeProvider({
       capabilities: [...plugin.capabilities] as WebPluginCapability[],
       contribution,
@@ -404,16 +398,35 @@ export class PetProviderController {
   async #openAwakeProvider() {
     const provider = this.#provider
     if (provider === undefined) throw new Error("No Pet feature provider is installed")
-    await this.#window.open(cloneProvider(provider))
+    this.#windowMayBeMounted = true
     try {
+      await this.#window.open(cloneProvider(provider))
       this.#activityUnsubscribe = this.#activity.subscribe((snapshot) => {
         const cloned = cloneActivity(snapshot)
         this.#emit(this.#activityListeners, cloned, cloneActivity)
       })
     } catch (error) {
-      await Promise.resolve(this.#window.close()).catch(() => undefined)
+      await this.#closeRuntime().catch(() => undefined)
       throw error
     }
+  }
+
+  async #closeRuntimeForTransition(currentState: PetPersistedState, currentProvider: InstalledPetProvider | undefined) {
+    try {
+      await this.#closeRuntime()
+    } catch (error) {
+      try {
+        this.#state = await this.#persistProviderState(currentState.awake, currentProvider?.pluginId)
+      } catch {}
+      throw error
+    }
+  }
+
+  async #closeRuntime() {
+    this.#stopActivity()
+    if (!this.#windowMayBeMounted) return
+    await this.#window.close()
+    this.#windowMayBeMounted = false
   }
 
   #stopActivity() {
@@ -425,10 +438,8 @@ export class PetProviderController {
   }
 
   #emitProvider() {
-    this.#emit(
-      this.#providerListeners,
-      this.#provider,
-      (provider) => (provider === undefined ? undefined : cloneProvider(provider)),
+    this.#emit(this.#providerListeners, this.#provider, (provider) =>
+      provider === undefined ? undefined : cloneProvider(provider),
     )
   }
 
