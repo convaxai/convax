@@ -26,6 +26,7 @@ import {
   matchesWebPluginCanvasNode,
   scheduleWebPluginFrameConnect,
   updateWebPluginNodeState,
+  waitForWebPluginCanvasStateWrite,
   webPluginIframeAllow,
   WebPluginDragShield,
   WebPluginPointerReleaseGate,
@@ -201,6 +202,7 @@ function hostContext(
       projectId: active.projectId,
     },
     generationGate: { active: false },
+    nodeStateWriteGate: { active: false },
     getActiveContext: () => active,
     getConnectedImageNodes: () => [],
     getDocument: () => document,
@@ -230,12 +232,82 @@ function hostContext(
     })),
     readProjectText: mock(async (input) => ({ content: "hello", exists: true, path: input.path })),
     signal: controller.signal,
-    updateNodeState: mock(() => undefined),
+    updateNodeState: mock(async () => undefined),
     ...overrides,
   } satisfies WebPluginHostRequestContext
 }
 
 describe("Canvas Web Plugin contribution", () => {
+  test("waits for the hydrated renderer controller before allowing a Plugin state write", async () => {
+    const controller = new AbortController()
+    let editor = {
+      document: createCanvasDocument({ id: "canvas-1" }),
+      hydrating: true,
+      readOnly: true,
+    }
+    let releaseRender!: () => void
+    const render = new Promise<void>((resolve) => {
+      releaseRender = resolve
+    })
+    let settled = false
+
+    const waiting = waitForWebPluginCanvasStateWrite(
+      {
+        frame: {
+          canvasId: "canvas-1",
+          nodeId: "node-1",
+          pluginId: "multi-angle",
+          projectId: "project-1",
+        },
+        getActiveContext: () => ({ canvasId: "canvas-1", projectId: "project-1" }),
+        getEditor: () => editor,
+        signal: controller.signal,
+      },
+      async () => render,
+    ).then((result) => {
+      settled = true
+      return result
+    })
+    await Promise.resolve()
+    expect(settled).toBeFalse()
+
+    editor = { ...editor, hydrating: false, readOnly: false }
+    releaseRender()
+    await expect(waiting).resolves.toBe(editor)
+  })
+
+  test("rechecks Plugin scope after waiting for a hydrated renderer controller", async () => {
+    const controller = new AbortController()
+    let activeProjectId = "project-1"
+    let releaseRender!: () => void
+    const render = new Promise<void>((resolve) => {
+      releaseRender = resolve
+    })
+    const waiting = waitForWebPluginCanvasStateWrite(
+      {
+        frame: {
+          canvasId: "canvas-1",
+          nodeId: "node-1",
+          pluginId: "multi-angle",
+          projectId: "project-1",
+        },
+        getActiveContext: () => ({ canvasId: "canvas-1", projectId: activeProjectId }),
+        getEditor: () => ({
+          document: createCanvasDocument({ id: "canvas-1" }),
+          hydrating: true,
+          readOnly: true,
+        }),
+        signal: controller.signal,
+      },
+      async () => render,
+    )
+
+    activeProjectId = "project-2"
+    releaseRender()
+
+    await expect(waiting).rejects.toThrow("Plugin call is no longer in the active Project and Canvas")
+  })
+
   test("connects after a frame and task barrier, with one fallback and cancellation", () => {
     const normal = frameConnectClock()
     const onNormalConnect = mock(() => undefined)
@@ -288,6 +360,7 @@ describe("Canvas Web Plugin contribution", () => {
           size: 0,
         }),
         readProjectText: async (input) => ({ content: "", exists: false, path: input.path }),
+        waitForGenerationProjection: async () => undefined,
       },
     })
     const renderer = contribution.renderers[0]!
@@ -480,7 +553,7 @@ describe("Canvas Web Plugin host requests", () => {
   })
 
   test("writes only validated namespaced state and cannot target another node", async () => {
-    const updateNodeState = mock(() => undefined)
+    const updateNodeState = mock(async () => undefined)
     const installedPlugin = plugin(["canvas.node.write"])
     const context = hostContext(installedPlugin, { updateNodeState })
     const response = await dispatchWebPluginHostRequest(
@@ -496,6 +569,72 @@ describe("Canvas Web Plugin host requests", () => {
     )
     expect(targeted).toMatchObject({ ok: false, error: expect.stringContaining("unsupported field") })
     expect(updateNodeState).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not confirm a state write until its Canvas projection barrier settles", async () => {
+    let releaseStateWrite!: () => void
+    const stateWrite = new Promise<void>((resolve) => {
+      releaseStateWrite = resolve
+    })
+    const updateNodeState = mock(async () => stateWrite)
+    const context = hostContext(plugin(["canvas.node.write"]), { updateNodeState })
+    let settled = false
+
+    const response = dispatchWebPluginHostRequest(
+      request("canvas.node.updateState", { state: { status: "success" } }),
+      context,
+    ).then((result) => {
+      settled = true
+      return result
+    })
+    await Promise.resolve()
+
+    expect(updateNodeState).toHaveBeenCalledTimes(1)
+    expect(settled).toBeFalse()
+
+    releaseStateWrite()
+    await expect(response).resolves.toMatchObject({ ok: true, result: { updated: true } })
+  })
+
+  test("allows only one Canvas node state write in flight per Plugin frame", async () => {
+    let releaseStateWrite!: () => void
+    const stateWrite = new Promise<void>((resolve) => {
+      releaseStateWrite = resolve
+    })
+    const updateNodeState = mock(async () => stateWrite)
+    const context = hostContext(plugin(["canvas.node.write"]), { updateNodeState })
+
+    const first = dispatchWebPluginHostRequest(
+      request("canvas.node.updateState", { state: { status: "running" } }),
+      context,
+    )
+    await Promise.resolve()
+    expect(context.nodeStateWriteGate.active).toBeTrue()
+
+    const second = await dispatchWebPluginHostRequest(
+      {
+        ...request("canvas.node.updateState", { state: { status: "success" } }),
+        id: "request-2",
+      },
+      context,
+    )
+    expect(second).toMatchObject({ ok: false, error: expect.stringContaining("already in progress") })
+    expect(updateNodeState).toHaveBeenCalledTimes(1)
+
+    releaseStateWrite()
+    await expect(first).resolves.toMatchObject({ ok: true, result: { updated: true } })
+    expect(context.nodeStateWriteGate.active).toBeFalse()
+
+    await expect(
+      dispatchWebPluginHostRequest(
+        {
+          ...request("canvas.node.updateState", { state: { status: "success" } }),
+          id: "request-3",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ ok: true, result: { updated: true } })
+    expect(updateNodeState).toHaveBeenCalledTimes(2)
   })
 
   test("lists and reads only directly connected browser images through the managed Project port", async () => {

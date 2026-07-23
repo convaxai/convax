@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
+import type { CanvasNode } from "../types"
 
 const fitView = mock(async () => undefined)
 const setViewport = mock(async () => undefined)
@@ -36,6 +37,7 @@ let keyDownOnCanvas:
   | undefined
 let copyOnCanvas: ((event: unknown) => void) | undefined
 let pasteOnCanvas: ((event: unknown) => void) | undefined
+let renderedCanvasNodes: CanvasNode[] = []
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 Object.defineProperty(globalThis, "window", {
@@ -54,6 +56,11 @@ afterAll(() => {
 })
 
 function Passthrough(props: { children?: ReactNode }) {
+  return <>{props.children}</>
+}
+
+function MockReactFlow(props: { children?: ReactNode; nodes?: CanvasNode[] }) {
+  renderedCanvasNodes = props.nodes ?? []
   return <>{props.children}</>
 }
 
@@ -107,7 +114,7 @@ mock.module("@xyflow/react", () => ({
   NodeResizer: () => null,
   NodeToolbar: Passthrough,
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
-  ReactFlow: Passthrough,
+  ReactFlow: MockReactFlow,
   ReactFlowProvider: Passthrough,
   SelectionMode: { Partial: "partial" },
   applyEdgeChanges: (_changes: unknown, edges: unknown) => edges,
@@ -142,6 +149,7 @@ beforeEach(() => {
   dropOnCanvas = undefined
   keyDownOnCanvas = undefined
   pasteOnCanvas = undefined
+  renderedCanvasNodes = []
   fitView.mockClear()
   setCenter.mockClear()
   setViewport.mockClear()
@@ -176,6 +184,56 @@ function renderEditor(
     />,
   )
 }
+
+describe("CanvasEditor node dimension projection", () => {
+  test("projects persisted numeric style dimensions without mutating the Canvas document", () => {
+    const styleOnly = createTextNode({ id: "style-only", position: { x: 0, y: 0 } })
+    const measured = {
+      ...createTextNode({ id: "measured", position: { x: 300, y: 0 } }),
+      measured: { height: 222, width: 333 },
+      style: { height: 888, width: 999 },
+    }
+    const explicit = {
+      ...createTextNode({ id: "explicit", position: { x: 600, y: 0 } }),
+      height: 234,
+      width: 345,
+      style: { height: 876, width: 987 },
+    }
+    const initialized = {
+      ...createTextNode({ id: "initialized", position: { x: 900, y: 0 } }),
+      initialHeight: 456,
+      initialWidth: 567,
+      style: { height: 765, width: 876 },
+    }
+    const stringStyle = {
+      ...createTextNode({ id: "string-style", position: { x: 1_200, y: 0 } }),
+      style: { height: "auto", width: "50%" },
+    }
+    const initialDocument = createCanvasDocument({
+      id: "canvas-dimensions",
+      nodes: [styleOnly, measured, explicit, initialized, stringStyle],
+    })
+
+    renderEditor(createCanvasServices(), { initialDocument })
+
+    expect(renderedCanvasNodes.find((node) => node.id === "style-only")).toMatchObject({
+      initialHeight: 160,
+      initialWidth: 280,
+    })
+    expect(styleOnly).not.toHaveProperty("initialHeight")
+    expect(styleOnly).not.toHaveProperty("initialWidth")
+    expect(renderedCanvasNodes.find((node) => node.id === "measured")).not.toHaveProperty("initialWidth")
+    expect(renderedCanvasNodes.find((node) => node.id === "measured")).not.toHaveProperty("initialHeight")
+    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("initialWidth")
+    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("initialHeight")
+    expect(renderedCanvasNodes.find((node) => node.id === "initialized")).toMatchObject({
+      initialHeight: 456,
+      initialWidth: 567,
+    })
+    expect(renderedCanvasNodes.find((node) => node.id === "string-style")).not.toHaveProperty("initialWidth")
+    expect(renderedCanvasNodes.find((node) => node.id === "string-style")).not.toHaveProperty("initialHeight")
+  })
+})
 
 describe("CanvasEditor viewport ownership", () => {
   test("does not fit the viewport after adding a regular node", () => {

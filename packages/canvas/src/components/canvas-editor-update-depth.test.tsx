@@ -1,11 +1,22 @@
 import { expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
-import { Component, type ComponentType, type ErrorInfo, type ReactNode, act, useLayoutEffect, useRef } from "react"
+import {
+  Component,
+  type ComponentType,
+  type ErrorInfo,
+  type ReactNode,
+  act,
+  createRef,
+  useLayoutEffect,
+  useRef,
+} from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { CanvasEditorController } from "../editor-context"
+import type { CanvasEditorHandle } from "./canvas-editor"
 
 let EditorProbe: ComponentType | undefined
 let feedbackCommits = 0
+let observedEditor: CanvasEditorController | undefined
 
 function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
@@ -153,6 +164,11 @@ function IdentityFeedbackProbe() {
   return null
 }
 
+function EditorStateProbe() {
+  observedEditor = useCanvasEditor()
+  return null
+}
+
 test("does not feed a selection-action refresh back into Canvas document updates", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
@@ -182,6 +198,87 @@ test("does not feed a selection-action refresh back into Canvas document updates
     expect(document.querySelector('[data-testid="error"]')).toBeNull()
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("authoritative reload clears a prior load error and resolves after the writable controller renders", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const initialDocument = createCanvasDocument({ id: "authoritative-retry", title: "Initial" })
+    const authoritativeDocument = {
+      ...createCanvasDocument({ id: initialDocument.id, title: "Authoritative" }),
+      revision: 1,
+    }
+    const failure = new Error("First authoritative load failed")
+    let loadAttempt = 0
+    const load = mock(async () => {
+      loadAttempt += 1
+      if (loadAttempt === 1) return initialDocument
+      if (loadAttempt === 2) throw failure
+      return authoritativeDocument
+    })
+    const save = mock(async (document) => document)
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            initialDocument={initialDocument}
+            ref={editorRef}
+            services={createCanvasServices({ persistence: { load, save } })}
+          />
+        </TestErrorBoundary>,
+      )
+    })
+    expect(observedEditor).toMatchObject({ hydrating: false, readOnly: false })
+
+    let rejected: unknown
+    await act(async () => {
+      try {
+        await editorRef.current?.reloadAuthoritative()
+      } catch (error) {
+        rejected = error
+      }
+    })
+    expect(rejected).toBe(failure)
+    expect(observedEditor).toMatchObject({ hydrating: false, readOnly: true })
+    expect(container.textContent).toContain(failure.message)
+
+    let revisionAtResolution = -1
+    let retry: Promise<void> | undefined
+    await act(async () => {
+      retry = editorRef.current?.reloadAuthoritative()
+      await Promise.resolve()
+    })
+    await retry
+    revisionAtResolution = (observedEditor as CanvasEditorController | undefined)?.document.revision ?? -1
+
+    expect(revisionAtResolution).toBe(1)
+    expect(observedEditor).toMatchObject({
+      document: { metadata: { title: "Authoritative" }, revision: 1 },
+      hydrating: false,
+      readOnly: false,
+    })
+    expect(container.textContent).not.toContain(failure.message)
+    expect(save).not.toHaveBeenCalled()
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

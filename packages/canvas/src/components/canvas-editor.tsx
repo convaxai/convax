@@ -215,6 +215,13 @@ interface CanvasLoadBarrier {
   resolve(): void
 }
 
+interface CanvasAuthoritativeRenderWaiter {
+  documentId: string
+  reject(error: unknown): void
+  resolve(): void
+  revision: number
+}
+
 function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
   if (resolved) return { promise: Promise.resolve(), reject: () => undefined, resolve: () => undefined }
   let rejectPromise: (error: unknown) => void = () => undefined
@@ -258,6 +265,38 @@ function equalCanvasNodes(left: readonly CanvasNode[], right: readonly CanvasNod
       node.style === next.style
     )
   })
+}
+
+function isPositiveFiniteDimension(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+}
+
+/**
+ * React Flow does not treat CSS width and height as known node dimensions.
+ * Project persisted Canvas dimensions into its renderer-only initial fields so
+ * an authoritative reload does not hide a freshly generated node.
+ */
+function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
+  const initialWidth =
+    node.measured?.width === undefined &&
+    node.width === undefined &&
+    node.initialWidth === undefined &&
+    isPositiveFiniteDimension(node.style?.width)
+      ? node.style.width
+      : undefined
+  const initialHeight =
+    node.measured?.height === undefined &&
+    node.height === undefined &&
+    node.initialHeight === undefined &&
+    isPositiveFiniteDimension(node.style?.height)
+      ? node.style.height
+      : undefined
+  if (initialWidth === undefined && initialHeight === undefined) return node
+  return {
+    ...node,
+    ...(initialWidth === undefined ? {} : { initialWidth }),
+    ...(initialHeight === undefined ? {} : { initialHeight }),
+  }
 }
 
 interface PendingConnection {
@@ -334,7 +373,7 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   prepareToLeave: () => Promise<void>
   reload: () => Promise<void>
-  /** Reloads Main's authoritative projection without persisting the current renderer snapshot. */
+  /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
 }
@@ -421,6 +460,7 @@ function CanvasEditorContent(
   const saveRevisionRef = useRef<number | undefined>(undefined)
   const savedRevisionRef = useRef(history.document.revision)
   const reloadQueueRef = useRef(new CanvasReloadQueue())
+  const authoritativeRenderWaitersRef = useRef(new Set<CanvasAuthoritativeRenderWaiter>())
   const operationControllersRef = useRef(new Set<AbortController>())
   const authoritativeLoadRequestedRef = useRef(false)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
@@ -439,6 +479,34 @@ function CanvasEditorContent(
   historyRef.current = history
   saveErrorRef.current = saveError
   selectionRef.current = selection
+  const waitForAuthoritativeRender = useCallback(
+    (document: CanvasDocument) =>
+      new Promise<void>((resolve, reject) => {
+        authoritativeRenderWaitersRef.current.add({
+          documentId: document.id,
+          reject,
+          resolve,
+          revision: document.revision,
+        })
+      }),
+    [],
+  )
+  useLayoutEffect(() => {
+    if (hydrating || loadError) return
+    for (const waiter of authoritativeRenderWaitersRef.current) {
+      if (history.document.id !== waiter.documentId || history.document.revision < waiter.revision) continue
+      authoritativeRenderWaitersRef.current.delete(waiter)
+      waiter.resolve()
+    }
+  }, [history.document.id, history.document.revision, hydrating, loadError])
+  useEffect(
+    () => () => {
+      const error = new Error("Canvas editor was closed before the authoritative document rendered")
+      for (const waiter of authoritativeRenderWaitersRef.current) waiter.reject(error)
+      authoritativeRenderWaitersRef.current.clear()
+    },
+    [],
+  )
   const updateConnectionTargetNode = useCallback((nodeId: string | null) => {
     if (connectionTargetNodeIdRef.current === nodeId) return
     connectionTargetNodeIdRef.current = nodeId
@@ -531,11 +599,12 @@ function CanvasEditorContent(
     }
     return history.document.nodes
       .map((node) => {
+        const projected = projectCanvasNodeInitialDimensions(node)
         const selected = selection.nodeIds.has(node.id)
         const isConnectionTarget = node.id === connectionTargetNodeId
-        if (node.selected === selected && !isConnectionTarget) return node
+        if (node.selected === selected && !isConnectionTarget) return projected
         return {
-          ...node,
+          ...projected,
           className: cn(node.className, isConnectionTarget && "is-connection-target"),
           selected,
         }
@@ -1224,8 +1293,10 @@ function CanvasEditorContent(
       loadBarrierRef.current = loadBarrier
       hydratingRef.current = true
       setHydrating(true)
+      setLoadError(null)
       const controller = new AbortController()
       operationControllersRef.current.add(controller)
+      let rendered: Promise<void> | undefined
       try {
         const documentId = documentRef.current.id
         // Main has already committed the authoritative document. Never persist the stale renderer projection here.
@@ -1234,6 +1305,7 @@ function CanvasEditorContent(
         if (document.id !== documentId || documentRef.current.id !== documentId) {
           throw new Error("Canvas changed while loading the authoritative document")
         }
+        rendered = waitForAuthoritativeRender(document)
         acceptHydratedDocument(document)
         loadBarrier.resolve()
       } catch (error) {
@@ -1249,8 +1321,9 @@ function CanvasEditorContent(
         setHydrating(false)
         operationControllersRef.current.delete(controller)
       }
+      await rendered
     })
-  }, [acceptHydratedDocument, notifyError, persistenceService])
+  }, [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender])
   useImperativeHandle(
     props.editorRef,
     () => ({

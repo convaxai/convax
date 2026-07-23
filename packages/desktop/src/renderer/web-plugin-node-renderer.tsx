@@ -25,7 +25,7 @@ import {
   dispatchPluginHostRequest,
   getIncomingConnectedImageNodes,
 } from "../plugin-canvas-host"
-import type { PluginCanvasHost, PluginHostLimits } from "../plugin-host-types"
+import type { PluginCanvasHost, PluginHostLimits, PluginNodeInvocationRef } from "../plugin-host-types"
 import {
   desktopPluginConnectedImagesChangedCommand,
   desktopPluginHostProtocolForManifestSchema,
@@ -172,6 +172,54 @@ export function scheduleWebPluginFrameConnect(callback: () => void, clock = brow
   }
 }
 
+interface WebPluginCanvasStateWriteEditor {
+  document: CanvasDocument
+  hydrating: boolean
+  readOnly: boolean
+}
+
+function waitForRendererTask(signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Plugin frame was closed"))
+  return new Promise<void>((resolve, reject) => {
+    const delayId = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort)
+      resolve()
+    }, 0)
+    const onAbort = () => {
+      globalThis.clearTimeout(delayId)
+      reject(signal.reason ?? new Error("Plugin frame was closed"))
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+export async function waitForWebPluginCanvasStateWrite<Editor extends WebPluginCanvasStateWriteEditor>(
+  input: {
+    frame: PluginNodeInvocationRef
+    getActiveContext: PluginCanvasHost["getActiveContext"]
+    getEditor: () => Editor
+    signal: AbortSignal
+  },
+  waitForRender: (signal: AbortSignal) => Promise<void> = waitForRendererTask,
+): Promise<Editor> {
+  while (true) {
+    if (input.signal.aborted) throw input.signal.reason ?? new Error("Plugin frame was closed")
+    const active = input.getActiveContext()
+    if (active?.projectId !== input.frame.projectId || active.canvasId !== input.frame.canvasId) {
+      throw new Error("Plugin call is no longer in the active Project and Canvas")
+    }
+    const editor = input.getEditor()
+    if (editor.document.id !== input.frame.canvasId) {
+      throw new Error("Canvas is not writable in the current scope")
+    }
+    if (!editor.hydrating) {
+      if (editor.readOnly) throw new Error("Canvas is not writable in the current scope")
+      return editor
+    }
+    await waitForRender(input.signal)
+  }
+}
+
 type WebPluginNodeProps = ComponentProps<CanvasFileRendererDefinition["component"]>
 
 export interface WebPluginCanvasContributionOptions {
@@ -288,6 +336,7 @@ function WebPluginCanvasNode(
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
   const connectedImageReadGateRef = useRef({ active: false })
   const generationGateRef = useRef({ active: false })
+  const nodeStateWriteGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
   const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
   const pointerReleaseFrameRef = useRef<number | null>(null)
@@ -436,6 +485,7 @@ function WebPluginCanvasNode(
     const channel = new MessageChannel()
     const connectedImageReadGate = connectedImageReadGateRef.current
     const generationGate = generationGateRef.current
+    const nodeStateWriteGate = nodeStateWriteGateRef.current
     const frame: DesktopPluginFrameRef = {
       canvasId: active.canvasId,
       nodeId: props.id,
@@ -499,6 +549,7 @@ function WebPluginCanvasNode(
               executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
               frame,
               generationGate,
+              nodeStateWriteGate,
               getActiveContext: () => props.options.host.getActiveContext(),
               getConnectedImageNodes: () => {
                 const latest = editorRef.current
@@ -526,11 +577,14 @@ function WebPluginCanvasNode(
               readManagedProjectImage: (input) => props.options.host.readManagedProjectImage(input),
               readProjectText: (input) => props.options.host.readProjectText(input),
               signal: controller.signal,
-              updateNodeState: (state) => {
-                const latest = editorRef.current
-                if (latest.readOnly || latest.document.id !== frame.canvasId) {
-                  throw new Error("Canvas is not writable in the current scope")
-                }
+              updateNodeState: async (state) => {
+                await props.options.host.waitForGenerationProjection({ ...frame, signal: controller.signal })
+                const latest = await waitForWebPluginCanvasStateWrite({
+                  frame,
+                  getActiveContext: () => props.options.host.getActiveContext(),
+                  getEditor: () => editorRef.current,
+                  signal: controller.signal,
+                })
                 const latestNode = latest.document.nodes.find((candidate) => candidate.id === frame.nodeId)
                 if (!latestNode || !matchesWebPluginCanvasNode(props.plugin, latestNode.data)) {
                   throw new Error("Plugin frame no longer owns this Canvas node")

@@ -577,15 +577,23 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
   }
   if (request.method === "canvas.node.updateState") {
     requireCapability(context.plugin, "canvas.node.write")
-    const params = exactRecord(request.params, ["state"], "Canvas node state request")
-    if (!("state" in params)) throw new Error("Canvas node state request is missing state")
-    const state = requirePluginState(
-      params.state,
-      requireLimit(context.limits?.stateBytes, defaultStateBytes, "Plugin state byte limit"),
-    )
-    context.updateNodeState(state)
-    assertCurrentFrame(context)
-    return { updated: true }
+    if (context.nodeStateWriteGate.active) {
+      throw new Error("A Canvas node state write is already in progress for this Plugin frame")
+    }
+    context.nodeStateWriteGate.active = true
+    try {
+      const params = exactRecord(request.params, ["state"], "Canvas node state request")
+      if (!("state" in params)) throw new Error("Canvas node state request is missing state")
+      const state = requirePluginState(
+        params.state,
+        requireLimit(context.limits?.stateBytes, defaultStateBytes, "Plugin state byte limit"),
+      )
+      await context.updateNodeState(state)
+      assertCurrentFrame(context)
+      return { updated: true }
+    } finally {
+      context.nodeStateWriteGate.active = false
+    }
   }
   if (request.method === "project.file.readText") {
     requireCapability(context.plugin, "project.files.read")
