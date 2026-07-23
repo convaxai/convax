@@ -83,6 +83,7 @@ import {
   runMediaOperationSequence,
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
+import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
@@ -423,27 +424,33 @@ function App() {
     }
     return {
       async createCanvasImage(input) {
-        throwIfAborted(input.signal)
-        currentScope(input.projectId, input.canvasId)
-        const authoritativeDocument = await flushAuthoritativeCanvas()
-        throwIfAborted(input.signal)
-        currentScope(input.projectId, input.canvasId)
-        if (!authoritativeDocument || authoritativeDocument.id !== input.canvasId) {
-          throw new Error("Plugin Canvas image could not resolve Main's authoritative document")
-        }
-        const result = await window.convax.canvas.pluginImages.create({
-          dataUrl: input.dataUrl,
-          expectedRevision: authoritativeDocument.revision,
-          name: input.name,
-          operationId: globalThis.crypto.randomUUID(),
-          ownerNodeId: input.nodeId,
-          pluginId: input.pluginId,
-          pluginVersion: input.pluginVersion,
-          ref: { canvasId: input.canvasId, scopeId: input.projectId },
+        const operationId = globalThis.crypto.randomUUID()
+        return executePluginCanvasImageWrite(input, {
+          assertCurrentScope: (projectId, canvasId) => {
+            currentScope(projectId, canvasId)
+          },
+          cancel: () => window.convax.canvas.pluginImages.cancel({ operationId }),
+          flushAuthoritativeCanvas: async () => {
+            await flushAuthoritativeCanvas()
+            return (
+              await window.convax.canvas.documents.load({
+                canvasId: input.canvasId,
+                scopeId: input.projectId,
+              })
+            ).document ?? undefined
+          },
+          write: (authoritativeDocument) =>
+            window.convax.canvas.pluginImages.create({
+              dataUrl: input.dataUrl,
+              expectedRevision: authoritativeDocument.revision,
+              name: input.name,
+              operationId,
+              ownerNodeId: input.nodeId,
+              pluginId: input.pluginId,
+              pluginVersion: input.pluginVersion,
+              ref: { canvasId: input.canvasId, scopeId: input.projectId },
+            }),
         })
-        throwIfAborted(input.signal)
-        currentScope(input.projectId, input.canvasId)
-        return result
       },
       async executeCanvasGeneration(input) {
         throwIfAborted(input.signal)

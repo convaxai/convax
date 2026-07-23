@@ -1,0 +1,191 @@
+diff --git a/src/editor/io/hostBridge.convax.test.ts b/src/editor/io/hostBridge.convax.test.ts
+index fef3d50..b3c739a 100644
+--- a/src/editor/io/hostBridge.convax.test.ts
++++ b/src/editor/io/hostBridge.convax.test.ts
+@@ -1,6 +1,7 @@
+ import { afterEach, beforeEach, expect, it, vi } from "vitest";
+ import { DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT } from "../schema/cameraGeometry";
+ import { createInitialDirectorState, useDirectorStore } from "../store/directorStore";
++import { requestViewportCapture } from "./captureBridge";
+ import {
+   clearDirectorDeskHostBridge,
+   flushDirectorDeskHostState,
+@@ -10,10 +11,16 @@ import {
+ const HOST_PROTOCOL = "convax.plugin-host/1";
+ const PLUGIN_ID = "storyai-3d-director-desk";
+ 
++vi.mock("./captureBridge", () => ({
++  requestViewportCapture: vi.fn(),
++}));
++
+ interface HostRequest {
+   id: string;
+-  method: "canvas.node.updateState" | "host.context.get";
++  method: "canvas.node.updateState" | "canvas.image.create" | "host.context.get";
+   params?: {
++    dataUrl?: string;
++    name?: string;
+     state?: {
+       presentation?: {
+         viewport?: {
+@@ -68,6 +75,17 @@ async function connectHost(port: FakeHostPort) {
+ }
+ 
+ beforeEach(() => {
++  vi.mocked(requestViewportCapture).mockResolvedValue([{
++    dataUrl: "data:image/png;base64,eA==",
++    label: "当前视角",
++    meta: {
++      cameraId: null,
++      fov: 50,
++      mode: "director",
++      position: [5, 4, 7],
++      target: [0, 1, 0],
++    },
++  }]);
+   useDirectorStore.setState({
+     ...useDirectorStore.getState(),
+     ...createInitialDirectorState(),
+@@ -79,6 +97,25 @@ afterEach(() => {
+   vi.restoreAllMocks();
+ });
+ 
++it("turns the scoped play toolbar command into one current-frame Canvas image request", async () => {
++  const port = new FakeHostPort();
++  await connectHost(port);
++  port.requests.length = 0;
++
++  port.onmessage?.(new MessageEvent("message", {
++    data: { command: "scene.play", protocol: HOST_PROTOCOL, type: "command" },
++  }));
++
++  await vi.waitFor(() => {
++    expect(port.requests.filter((request) => request.method === "canvas.image.create")).toHaveLength(1);
++  });
++  expect(requestViewportCapture).toHaveBeenCalledWith({ preset: "current", source: "capture-panel" });
++  expect(port.requests.find((request) => request.method === "canvas.image.create")?.params).toEqual({
++    dataUrl: "data:image/png;base64,eA==",
++    name: "storyai-director-desk-director-当前视角-1.png",
++  });
++});
++
+ it("posts the final director view immediately while an intermediate save is in flight", async () => {
+   const port = new FakeHostPort();
+   await connectHost(port);
+diff --git a/src/editor/io/hostBridge.ts b/src/editor/io/hostBridge.ts
+index 1c2f1c6..21f4cae 100644
+--- a/src/editor/io/hostBridge.ts
++++ b/src/editor/io/hostBridge.ts
+@@ -1,6 +1,8 @@
+ import type { DirectorAssetRef, DirectorProject } from "../schema/directorProject";
+ import { DEFAULT_DIRECTOR_CAMERA_VIEW_SNAPSHOT } from "../schema/cameraGeometry";
+ import { useDirectorStore, type CameraShotSnapshot } from "../store/directorStore";
++import { requestViewportCapture } from "./captureBridge";
++import { buildCaptureFileName } from "./screenshotExport";
+ 
+ const HOST_PROTOCOL = "convax.plugin-host/1";
+ const PLUGIN_ID = "storyai-3d-director-desk";
+@@ -12,8 +14,15 @@ const SAVE_RETRY_LIMIT = 3;
+ const CONTEXT_RETRY_LIMIT = 3;
+ const REQUEST_TIMEOUT_MS = 15_000;
+ const STATE_NOTICE_ID = "convax-director-state-notice";
++const PLAY_COMMAND = "scene.play";
+ 
+-type HostMethod = "host.context.get" | "canvas.node.updateState";
++type HostMethod = "host.context.get" | "canvas.node.updateState" | "canvas.image.create";
++
++interface HostCommand {
++  command: string;
++  protocol: typeof HOST_PROTOCOL;
++  type: "command";
++}
+ 
+ interface HostResponse {
+   error?: string;
+@@ -78,7 +87,9 @@ let hostHydrated = false;
+ let writesEnabled = true;
+ let sessionEpoch = 0;
+ let persistenceError = "";
++let frameError = "";
+ let portabilityWarning = "";
++let frameWriteInFlight = false;
+ const pending = new Map<string, PendingRequest>();
+ 
+ function cloneJsonValue<T>(value: T): T {
+@@ -214,7 +225,7 @@ function readHostState(context: unknown): HostStateRead {
+ }
+ 
+ function renderPersistenceNotice() {
+-  const message = persistenceError || portabilityWarning;
++  const message = persistenceError || frameError || portabilityWarning;
+   const existing = document.getElementById(STATE_NOTICE_ID);
+   if (!message) {
+     existing?.remove();
+@@ -222,7 +233,7 @@ function renderPersistenceNotice() {
+   }
+   const notice = existing ?? document.createElement("div");
+   notice.id = STATE_NOTICE_ID;
+-  notice.className = `convax-state-notice${persistenceError ? "" : " is-warning"}`;
++  notice.className = `convax-state-notice${persistenceError || frameError ? "" : " is-warning"}`;
+   notice.setAttribute("role", "alert");
+   notice.textContent = message;
+   if (!existing) document.body.append(notice);
+@@ -233,6 +244,11 @@ function setPersistenceError(message: string | null) {
+   renderPersistenceNotice();
+ }
+ 
++function setFrameError(message: string | null) {
++  frameError = message ?? "";
++  renderPersistenceNotice();
++}
++
+ function updatePortabilityWarning(project: DirectorProject) {
+   const hasTemporaryAssets = project.assets.some(isEphemeralAsset);
+   const hasTemporaryCaptures = project.cameras.some((camera) =>
+@@ -270,7 +286,37 @@ function isHostResponse(value: unknown): value is HostResponse {
+     && typeof value.ok === "boolean";
+ }
+ 
++function isHostCommand(value: unknown): value is HostCommand {
++  return isPlainRecord(value)
++    && value.protocol === HOST_PROTOCOL
++    && value.type === "command"
++    && typeof value.command === "string";
++}
++
++async function createCurrentFrame() {
++  if (frameWriteInFlight) return;
++  frameWriteInFlight = true;
++  setFrameError(null);
++  try {
++    const captures = await requestViewportCapture({ preset: "current", source: "capture-panel" });
++    const capture = captures[0];
++    if (!capture || captures.length !== 1) throw new Error("当前视口没有返回唯一画面");
++    await call("canvas.image.create", {
++      dataUrl: capture.dataUrl,
++      name: buildCaptureFileName(capture),
++    });
++  } catch (error) {
++    setFrameError(`当前帧关联失败：${error instanceof Error ? error.message : String(error)}`);
++  } finally {
++    frameWriteInFlight = false;
++  }
++}
++
+ function handlePortMessage(event: MessageEvent) {
++  if (isHostCommand(event.data)) {
++    if (event.data.command === PLAY_COMMAND) void createCurrentFrame();
++    return;
++  }
+   if (!isHostResponse(event.data)) return;
+   const operation = pending.get(event.data.id);
+   if (!operation) return;
+@@ -575,6 +621,8 @@ export function clearDirectorDeskHostBridge() {
+   hostHydrated = false;
+   writesEnabled = true;
+   persistenceError = "";
++  frameError = "";
+   portabilityWarning = "";
++  frameWriteInFlight = false;
+   renderPersistenceNotice();
+ }

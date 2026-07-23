@@ -19,7 +19,7 @@ import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-se
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import {
-  pluginCanvasImageIpcChannel,
+  pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
 } from "../plugin-canvas-image-contracts"
 import {
@@ -279,7 +279,8 @@ const pluginClient = {
 } satisfies WebPluginClient
 
 const pluginCanvasImageClient = {
-  create: (input) => ipcRenderer.invoke(pluginCanvasImageIpcChannel, input),
+  cancel: (input) => ipcRenderer.send(pluginCanvasImageIpcChannels.cancel, input),
+  create: (input) => ipcRenderer.invoke(pluginCanvasImageIpcChannels.create, input),
 } satisfies PluginCanvasImageClient
 
 const pluginCapabilityClient = {

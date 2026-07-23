@@ -41,6 +41,7 @@ describe("built-in StoryAI 3D Director Desk", () => {
     expect(await relativeFiles(sourceRoot)).toEqual([
       "LICENSE",
       "SKILL.md",
+      "UPSTREAM.frame.patch",
       "UPSTREAM.md",
       "UPSTREAM.patch",
       "UPSTREAM.state.patch",
@@ -52,7 +53,7 @@ describe("built-in StoryAI 3D Director Desk", () => {
     ])
     expect((await relativeFiles(sourceRoot)).some((file) => file.endsWith(".glb"))).toBe(false)
     expect(await sha256(sourceRoot, "assets/app.js")).toBe(
-      "86be2a0c44a4c975ee5d63033ec8ffb764f9d80a66d7218b6534cb5d9dddfb37",
+      "a98fa137c6917ec77a1f957826cefcb70fccb749d8a46868cd4c2457d701eec4",
     )
     expect(await sha256(sourceRoot, "assets/styles.css")).toBe(
       "6cce301d037ab3483cda7a5d1587fcd6258e59e7baee4ed6d8b17fc080ac8620",
@@ -69,12 +70,16 @@ describe("built-in StoryAI 3D Director Desk", () => {
     expect(await sha256(sourceRoot, "UPSTREAM.view.patch")).toBe(
       "326188b1fd0d45f7cd9b59645a7bdbc5c0f60c0efd0d0b33623b762c055aa49e",
     )
+    expect(await sha256(sourceRoot, "UPSTREAM.frame.patch")).toBe(
+      "bda62e3d18a7d0718a9dd37dc30c8736990cae8ce6b2b621c7d552392d05735e",
+    )
     expect(await read(sourceRoot, "LICENSE")).toContain("MIT License")
     expect(await read(sourceRoot, "UPSTREAM.md")).toContain(upstreamCommit)
     const upstreamPatch = await Promise.all([
       read(sourceRoot, "UPSTREAM.patch"),
       read(sourceRoot, "UPSTREAM.state.patch"),
       read(sourceRoot, "UPSTREAM.view.patch"),
+      read(sourceRoot, "UPSTREAM.frame.patch"),
     ]).then((patches) => patches.join("\n"))
     expect(upstreamPatch).toContain("event.source !== window.parent")
     expect(upstreamPatch).toContain("blockedStateSerialized")
@@ -84,6 +89,8 @@ describe("built-in StoryAI 3D Director Desk", () => {
     expect(upstreamPatch).toContain("posts the final director view immediately")
     expect(upstreamPatch).toContain("initDirectorDeskHostBridge();")
     expect(upstreamPatch).toContain("原数据已保留且不会被覆盖")
+    expect(upstreamPatch).toContain("canvas.image.create")
+    expect(upstreamPatch).toContain('PLAY_COMMAND = "scene.play"')
   })
 
   test("uses only the existing sandboxed Plugin host protocol", async () => {
@@ -99,6 +106,7 @@ describe("built-in StoryAI 3D Director Desk", () => {
     expect(application).toContain("convax.plugin-host/1")
     expect(application).toContain("host.context.get")
     expect(application).toContain("canvas.node.updateState")
+    expect(application).toContain("canvas.image.create")
     expect(application).toContain("directorProject")
     expect(application).toContain("presentation")
     expect(application).toContain("directorView")
@@ -135,13 +143,17 @@ describe("built-in StoryAI 3D Director Desk", () => {
 
     expect(installed).toEqual({ ...catalogItem.manifest, trustedBuiltin: true })
     expect(installed.id).toBe("storyai-3d-director-desk")
-    expect(installed.version).toBe("0.0.1-convax.2")
-    expect(installed.capabilities).toEqual(["canvas.node.write"])
+    expect(installed.version).toBe("0.0.1-convax.3")
+    expect(installed.capabilities).toEqual(["canvas.node.write", "canvas.image.write"])
+    expect(installed.contributes.canvas?.toolbar).toEqual([
+      { command: "scene.play", icon: "play", id: "play", title: "关联当前帧" },
+    ])
     expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry!), "utf8")).toContain(
       "./assets/app.js",
     )
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/app.js"))).size).toBeGreaterThan(100_000)
     expect(await manager.resolveAsset(installed.id, "UPSTREAM.state.patch")).toContain("UPSTREAM.state.patch")
     expect(await manager.resolveAsset(installed.id, "UPSTREAM.view.patch")).toContain("UPSTREAM.view.patch")
+    expect(await manager.resolveAsset(installed.id, "UPSTREAM.frame.patch")).toContain("UPSTREAM.frame.patch")
   })
 })

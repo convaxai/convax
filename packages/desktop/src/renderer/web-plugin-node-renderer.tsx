@@ -1,6 +1,7 @@
 import {
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
+  CanvasNodeToolbarDivider,
   createCanvasId,
   updateCanvasNodeData,
   useCanvasEditor,
@@ -8,10 +9,8 @@ import {
   type CanvasFileRendererDefinition,
   type CanvasFileRendererPlugin,
   type CanvasNode,
-  type CanvasNodeData,
 } from "@convax/canvas"
-import { getProjectFileReference } from "@convax/project/canvas"
-import { Copy, Puzzle, Trash2 } from "lucide-react"
+import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
 import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
   requireWebPluginId,
@@ -25,6 +24,13 @@ import {
   dispatchPluginHostRequest,
   getIncomingConnectedImageNodes,
 } from "../plugin-canvas-host"
+import {
+  matchesWebPluginCanvasNode,
+  webPluginCanvasRendererId,
+  webPluginIdentityMetadataKey,
+  webPluginNodeMetadata,
+  webPluginStateMetadataKey,
+} from "../plugin-canvas-node"
 import type { PluginCanvasHost, PluginHostLimits, PluginNodeInvocationRef } from "../plugin-host-types"
 import {
   desktopPluginConnectedImagesChangedCommand,
@@ -46,8 +52,12 @@ export const webPluginIframePermissions = [
 export function webPluginIframeAllow(plugin: Pick<InstalledWebPluginSummary, "capabilities">) {
   return `${webPluginIframePermissions}; fullscreen ${plugin.capabilities.includes("ui.fullscreen") ? "*" : "'none'"}`
 }
-export const webPluginStateMetadataKey = "convaxPluginState" as const
-export const webPluginIdentityMetadataKey = "convaxPlugin" as const
+export {
+  matchesWebPluginCanvasNode,
+  webPluginCanvasRendererId,
+  webPluginIdentityMetadataKey,
+  webPluginStateMetadataKey,
+} from "../plugin-canvas-node"
 
 const webPluginIframeBaseClassName = "size-full border-0 bg-background"
 
@@ -228,35 +238,6 @@ export interface WebPluginCanvasContributionOptions {
   limits?: PluginHostLimits
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
-}
-
-export function webPluginCanvasRendererId(pluginId: string) {
-  return `plugin.${requireWebPluginId(pluginId)}`
-}
-
-function metadataOf(data: CanvasNodeData) {
-  return isRecord(data.metadata) ? data.metadata : undefined
-}
-
-export function matchesWebPluginCanvasNode(plugin: InstalledWebPluginCanvasSurface, data: CanvasNodeData) {
-  const renderer = plugin.contributes.canvas.renderer
-  const rendererId = webPluginCanvasRendererId(plugin.id)
-  if (data.kind === rendererId) return true
-  const metadata = metadataOf(data)
-  const identity = metadata?.[webPluginIdentityMetadataKey]
-  if (isRecord(identity) && identity.id === plugin.id) return true
-  if (renderer.nodeKinds?.includes(data.kind)) return true
-  const mimeType = typeof data.mimeType === "string" ? data.mimeType.toLowerCase() : undefined
-  if (mimeType && renderer.mimeTypes?.includes(mimeType)) return true
-  const projectPath = getProjectFileReference(metadata)?.path
-  const names = [data.name, data.path, data.label, projectPath].filter(
-    (value): value is string => typeof value === "string",
-  )
-  return Boolean(renderer.extensions?.some((extension) => names.some((name) => name.toLowerCase().endsWith(extension))))
-}
-
 export function updateWebPluginNodeState(
   document: CanvasDocument,
   input: { canvasId: string; nodeId: string; plugin: InstalledWebPluginCanvasSurface },
@@ -268,7 +249,7 @@ export function updateWebPluginNodeState(
   return updateCanvasNodeData(document, input.nodeId, (data) => ({
     ...data,
     metadata: {
-      ...metadataOf(data),
+      ...webPluginNodeMetadata(data),
       [webPluginIdentityMetadataKey]: {
         entry: input.plugin.entry,
         id: input.plugin.id,
@@ -297,7 +278,7 @@ function createPluginNode(
 ): CanvasNode {
   const renderer = plugin.contributes.canvas.renderer
   const inputData = input.data ?? {}
-  const inputMetadata = isRecord(inputData.metadata) ? inputData.metadata : {}
+  const inputMetadata = webPluginNodeMetadata(inputData) ?? {}
   return {
     data: {
       ...inputData,
@@ -334,6 +315,7 @@ function WebPluginCanvasNode(
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
+  const canvasImageWriteGateRef = useRef({ active: false })
   const connectedImageReadGateRef = useRef({ active: false })
   const generationGateRef = useRef({ active: false })
   const nodeStateWriteGateRef = useRef({ active: false })
@@ -484,6 +466,7 @@ function WebPluginCanvasNode(
     const controller = new AbortController()
     const channel = new MessageChannel()
     const connectedImageReadGate = connectedImageReadGateRef.current
+    const canvasImageWriteGate = canvasImageWriteGateRef.current
     const generationGate = generationGateRef.current
     const nodeStateWriteGate = nodeStateWriteGateRef.current
     const frame: DesktopPluginFrameRef = {
@@ -545,6 +528,7 @@ function WebPluginCanvasNode(
         capabilityConnection && isProjectCanvasCapabilityRequest(event.data)
           ? capabilityConnection.dispatch(event.data)
           : dispatchPluginHostRequest(event.data, {
+              canvasImageWriteGate,
               connectedImageReadGate,
               createCanvasImage: (input) => props.options.host.createCanvasImage(input),
               executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
@@ -637,8 +621,15 @@ function WebPluginCanvasNode(
     })
   }
 
+  const contributedToolbar = props.plugin.contributes.canvas.toolbar?.length ? (
+    <>
+      <WebPluginCanvasToolbarButtons {...props} />
+      <CanvasNodeToolbarDivider />
+    </>
+  ) : null
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      {contributedToolbar}
       <CanvasNodeToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
       <CanvasNodeToolbarButton
         destructive
@@ -669,7 +660,8 @@ function WebPluginCanvasNode(
     </div>
   )
 }
-function WebPluginCanvasToolbar(
+
+function WebPluginCanvasToolbarButtons(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
     plugin: InstalledWebPluginCanvasSurface
@@ -694,10 +686,11 @@ function WebPluginCanvasToolbar(
       : null
   const mounted = Boolean(frame && props.options.frameRegistry.has(frame))
   return (
-    <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+    <>
       {props.plugin.contributes.canvas.toolbar?.map((item) => (
         <CanvasNodeToolbarButton
           disabled={!mounted}
+          icon={item.icon === "play" ? <Play /> : undefined}
           key={item.id}
           label={item.title}
           onClick={() => {
@@ -719,10 +712,10 @@ function WebPluginCanvasToolbar(
               // A failed sandbox command must not break the Canvas toolbar.
             }
           }}
-          visibleLabel
+          visibleLabel={item.icon === undefined}
         />
       ))}
-    </div>
+    </>
   )
 }
 
@@ -732,9 +725,6 @@ export function createWebPluginCanvasContribution(
 ): CanvasFileRendererPlugin {
   const renderer = plugin.contributes.canvas.renderer
   const Component = (props: WebPluginNodeProps) => <WebPluginCanvasNode {...props} options={options} plugin={plugin} />
-  const Toolbar = plugin.contributes.canvas.toolbar?.length
-    ? (props: WebPluginNodeProps) => <WebPluginCanvasToolbar {...props} options={options} plugin={plugin} />
-    : undefined
   return {
     id: `desktop.${plugin.id}`,
     renderers: [
@@ -745,7 +735,6 @@ export function createWebPluginCanvasContribution(
         label: plugin.name,
         matches: (data) => matchesWebPluginCanvasNode(plugin, data),
         priority: 1_000,
-        ...(Toolbar ? { toolbar: Toolbar } : {}),
       },
     ],
   }

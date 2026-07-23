@@ -7,6 +7,7 @@ import license from "../../resources/plugins/storyai-3d-director-desk/LICENSE?ra
 import manifestDocument from "../../resources/plugins/storyai-3d-director-desk/manifest.json?raw"
 import skill from "../../resources/plugins/storyai-3d-director-desk/SKILL.md?raw"
 import upstream from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.md?raw"
+import upstreamFramePatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.frame.patch?raw"
 import upstreamPatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.patch?raw"
 import upstreamStatePatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.state.patch?raw"
 import upstreamViewPatch from "../../resources/plugins/storyai-3d-director-desk/UPSTREAM.view.patch?raw"
@@ -34,6 +35,7 @@ const directorStageBundle: WebPluginBundle = {
     "manifest.json": manifestDocument,
     "SKILL.md": skill,
     "UPSTREAM.md": upstream,
+    "UPSTREAM.frame.patch": upstreamFramePatch,
     "UPSTREAM.patch": upstreamPatch,
     "UPSTREAM.state.patch": upstreamStatePatch,
     "UPSTREAM.view.patch": upstreamViewPatch,

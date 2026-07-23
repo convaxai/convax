@@ -375,7 +375,9 @@ then adds only the contributions required by that product slice:
 
 - Canvas file matching by extension or MIME;
 - an optional creatable Canvas plugin node;
-- node-toolbar commands delivered to the mounted surface;
+- node-toolbar commands composed into the mounted node's single host toolbar
+  surface, with an optional icon chosen from the manifest's fixed host-rendered
+  allowlist;
 - an explicit capability allowlist;
 - an optional legacy companion `SKILL.md` path whose lifecycle remains independent.
 

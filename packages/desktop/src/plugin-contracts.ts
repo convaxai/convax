@@ -131,11 +131,23 @@ export interface WebPluginCanvasRendererContribution {
   width?: number
 }
 
+export const webPluginToolbarIcons = ["play"] as const
+
+export type WebPluginToolbarIcon = (typeof webPluginToolbarIcons)[number]
+
 export interface WebPluginToolbarContribution {
   /** Opaque command id delivered to the sandboxed plugin frame. */
   command: string
+  /** Optional host-rendered icon. Iconless actions retain their visible label. */
+  icon?: WebPluginToolbarIcon
   id: string
   title: string
+}
+
+function parseToolbarIcon(value: unknown): WebPluginToolbarIcon | undefined {
+  if (value === undefined) return undefined
+  if (value !== "play") throw new Error("Unsupported Canvas toolbar item icon")
+  return value
 }
 
 export interface WebPluginLocalizedText {
@@ -436,11 +448,13 @@ function parseToolbar(value: unknown): WebPluginToolbarContribution[] | undefine
   if (!Array.isArray(value) || value.length > 32) throw new Error("Canvas toolbar must be an array")
   const toolbar = value.map((item, index) => {
     const input = asRecord(item, `Canvas toolbar item ${index}`)
-    assertKeys(input, ["command", "id", "title"], `Canvas toolbar item ${index}`)
+    assertKeys(input, ["command", "icon", "id", "title"], `Canvas toolbar item ${index}`)
     const id = requireString(input.id, `Canvas toolbar item ${index} id`, 80)
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) throw new Error(`Invalid Canvas toolbar item id: ${id}`)
+    const icon = parseToolbarIcon(input.icon)
     return {
       command: requireString(input.command, `Canvas toolbar item ${index} command`, 256),
+      ...(icon === undefined ? {} : { icon }),
       id,
       title: requireString(input.title, `Canvas toolbar item ${index} title`, 120),
     }

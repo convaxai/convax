@@ -207,6 +207,32 @@ describe("parseWebPluginManifest", () => {
     })
   })
 
+  test("parses only supported host-rendered toolbar icons", () => {
+    const withPlayIcon = manifest({
+      contributes: {
+        canvas: {
+          renderer: { create: true },
+          toolbar: [{ command: "scene.play", icon: "play", id: "play", title: "Play" }],
+        },
+      },
+    })
+    expect(parseWebPluginManifest(withPlayIcon).contributes.canvas?.toolbar).toEqual([
+      { command: "scene.play", icon: "play", id: "play", title: "Play" },
+    ])
+
+    expect(() =>
+      parseWebPluginManifest({
+        ...withPlayIcon,
+        contributes: {
+          canvas: {
+            renderer: { create: true },
+            toolbar: [{ command: "scene.stop", icon: "stop", id: "stop", title: "Stop" }],
+          },
+        },
+      }),
+    ).toThrow("Unsupported Canvas toolbar item icon")
+  })
+
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
     expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/6" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
@@ -792,7 +818,7 @@ describe("WebPluginManager", () => {
     ).resolves.toMatchObject({ version: "2.0.0" })
   })
 
-  test("reserves catalog ids and marks only host-installed built-in bundles as trusted", async () => {
+  test("reserves catalog ids and upgrades provenance-verified built-ins without a legacy allowlist", async () => {
     const root = await temporaryRoot()
     const source = path.join(root, "source")
     await writePackage(source)
@@ -820,11 +846,7 @@ describe("WebPluginManager", () => {
         ),
       },
     }
-    await expect(
-      manager.installOrUpdateBuiltinBundle(updatedBundle, {
-        legacyBundleDigests: [{ bundleDigest: testBundleDigest(bundle), version: "1.2.3-beta.1+desktop" }],
-      }),
-    ).resolves.toMatchObject({ trustedBuiltin: true })
+    await expect(manager.installOrUpdateBuiltinBundle(updatedBundle)).resolves.toMatchObject({ trustedBuiltin: true })
     expect(await manager.isBuiltinBundleInstalled(bundle)).toBe(false)
     expect(await manager.isBuiltinBundleInstalled(updatedBundle)).toBe(true)
 

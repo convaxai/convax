@@ -499,12 +499,16 @@ function requireCanvasImageDataUrl(value: unknown) {
 }
 
 function requireCanvasImageName(value: unknown) {
+  const stem = typeof value === "string" ? (value.split(".")[0] ?? "") : ""
   if (
     typeof value !== "string" ||
     !value.trim() ||
     value !== value.trim() ||
     value.length > 120 ||
-    /[\\/\u0000-\u001f\u007f]/.test(value)
+    !value.toLowerCase().endsWith(".png") ||
+    /[\\/:*?"<>|\u0000-\u001f\u007f]/.test(value) ||
+    /[. ]$/.test(value) ||
+    windowsReservedName.test(stem)
   ) {
     throw new Error("Canvas image name is invalid")
   }
@@ -630,26 +634,34 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
   }
   if (request.method === "canvas.image.create") {
     requireCapability(context.plugin, "canvas.image.write")
-    if (!context.isCanvasWritable()) throw new Error("Canvas is not writable in the current scope")
-    const params = exactRecord(request.params, ["dataUrl", "name"], "Canvas image request")
-    const result = await context.createCanvasImage({
-      ...context.frame,
-      dataUrl: requireCanvasImageDataUrl(params.dataUrl),
-      name: requireCanvasImageName(params.name),
-      pluginVersion: context.plugin.version,
-      signal: context.signal,
-    })
-    assertCurrentFrame(context)
-    if (
-      !result ||
-      typeof result.createdNodeId !== "string" ||
-      !result.createdNodeId ||
-      !Number.isSafeInteger(result.revision) ||
-      result.revision < 0
-    ) {
-      throw new Error("Canvas image provider returned an invalid result")
+    if (context.canvasImageWriteGate.active) {
+      throw new Error("A Canvas image write is already in progress for this Plugin frame")
     }
-    return result
+    if (!context.isCanvasWritable()) throw new Error("Canvas is not writable in the current scope")
+    context.canvasImageWriteGate.active = true
+    try {
+      const params = exactRecord(request.params, ["dataUrl", "name"], "Canvas image request")
+      const result = await context.createCanvasImage({
+        ...context.frame,
+        dataUrl: requireCanvasImageDataUrl(params.dataUrl),
+        name: requireCanvasImageName(params.name),
+        pluginVersion: context.plugin.version,
+        signal: context.signal,
+      })
+      assertCurrentFrame(context)
+      if (
+        !result ||
+        typeof result.createdNodeId !== "string" ||
+        !result.createdNodeId ||
+        !Number.isSafeInteger(result.revision) ||
+        result.revision < 0
+      ) {
+        throw new Error("Canvas image provider returned an invalid result")
+      }
+      return result
+    } finally {
+      context.canvasImageWriteGate.active = false
+    }
   }
   if (request.method === "project.file.readText") {
     requireCapability(context.plugin, "project.files.read")
