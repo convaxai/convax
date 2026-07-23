@@ -1,14 +1,13 @@
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
 import { ArrowLeft, Cloud, Languages, PawPrint, Settings2, Sparkles } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
-import type { PetSettingsClient } from "../pet-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
-import { PetSettingsSurface } from "./pet-settings"
+import { PetSettingsHost, type PetSettingsHostClient, type PetSettingsProvider } from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
 export type SettingsSection = "general" | "services" | "capabilities" | "pets"
@@ -23,7 +22,8 @@ export interface SettingsViewProps {
   onLanguageChange(preference: AppLanguagePreference): void
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
-  petClient: PetSettingsClient
+  petClient: PetSettingsHostClient
+  petProvider?: PetSettingsProvider | null
   pluginClient: WebPluginClient
   serviceSnapshot: ServiceCatalogSnapshot
   skillClient: DesktopSkillClient
@@ -110,16 +110,49 @@ export function SettingsView({
   onRefreshServices,
   onServiceAction,
   petClient,
+  petProvider,
   pluginClient,
   serviceSnapshot,
   skillClient,
 }: SettingsViewProps) {
+  const [resolvedPetProvider, setResolvedPetProvider] = useState<PetSettingsProvider | null | undefined>(petProvider)
+  const hasPetProvider = resolvedPetProvider !== undefined && resolvedPetProvider !== null
   const enabledInitialSection =
     (initialSection === "services" && !featureFlags.services) ||
-    (initialSection === "capabilities" && !featureFlags.skillsAndPlugins)
+    (initialSection === "capabilities" && !featureFlags.skillsAndPlugins) ||
+    (initialSection === "pets" && !hasPetProvider)
       ? "general"
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
+
+  useEffect(() => {
+    if (petProvider !== undefined) {
+      setResolvedPetProvider(petProvider)
+      return
+    }
+    let active = true
+    const refresh = () => {
+      void petClient.getProvider().then(
+        (provider) => {
+          if (active) setResolvedPetProvider(provider ?? null)
+        },
+        () => {
+          if (active) setResolvedPetProvider(null)
+        },
+      )
+    }
+    refresh()
+    const unsubscribe = petClient.onProviderChanged(refresh)
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [petClient, petProvider])
+
+  useEffect(() => {
+    if (!hasPetProvider && section === "pets") setSection("general")
+  }, [hasPetProvider, section])
+
   const generalTitle = appMessage(locale, "settings.general")
   const servicesTitle = appMessage(locale, "settings.services")
   const capabilitiesTitle = appMessage(locale, "settings.capabilities")
@@ -160,9 +193,11 @@ export function SettingsView({
           >
             {generalTitle}
           </SettingsNavigationItem>
-          <SettingsNavigationItem active={section === "pets"} icon={<PawPrint />} onClick={() => setSection("pets")}>
-            {petsTitle}
-          </SettingsNavigationItem>
+          {hasPetProvider ? (
+            <SettingsNavigationItem active={section === "pets"} icon={<PawPrint />} onClick={() => setSection("pets")}>
+              {petsTitle}
+            </SettingsNavigationItem>
+          ) : null}
           {featureFlags.services ? (
             <SettingsNavigationItem
               active={section === "services"}
@@ -213,8 +248,12 @@ export function SettingsView({
               pluginClient={pluginClient}
               skillClient={skillClient}
             />
+          ) : resolvedPetProvider ? (
+            <PetSettingsHost client={petClient} provider={resolvedPetProvider} />
           ) : (
-            <PetSettingsSurface client={petClient} locale={locale} />
+            <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+              Pet provider unavailable.
+            </div>
           )}
         </div>
       </main>

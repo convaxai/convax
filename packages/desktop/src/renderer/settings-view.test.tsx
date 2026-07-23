@@ -1,9 +1,9 @@
 import { describe, expect, mock, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
-import type { PetSettingsClient } from "../pet-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
+import type { PetSettingsHostClient, PetSettingsProvider } from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 import { SettingsView } from "./settings-view"
 
@@ -46,15 +46,17 @@ const pluginClient: WebPluginClient = {
   uninstallPlugin: mock(async () => true),
 }
 
-const petClient: PetSettingsClient = {
-  deleteCustom: mock(async () => undefined),
-  importCustom: mock(async () => null),
-  list: mock(async () => ({ awake: false, pets: [] })),
-  markDisplayed: mock(async () => undefined),
-  onDidChange: mock(() => noop),
-  onNavigate: mock(() => noop),
-  select: mock(async () => undefined),
-  setAwake: mock(async () => undefined),
+const petProvider: PetSettingsProvider = {
+  generation: 7,
+  pluginId: "soft-companion",
+  settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+}
+
+const petClient: PetSettingsHostClient = {
+  connectSettings: mock(async () => undefined),
+  disconnectSettings: mock(() => undefined),
+  getProvider: mock(async () => petProvider),
+  onProviderChanged: mock(() => noop),
 }
 
 const serviceSnapshot: ServiceCatalogSnapshot = {
@@ -197,7 +199,7 @@ describe("SettingsView", () => {
     expect(markup).not.toContain("OpenCode")
   })
 
-  test("exposes pet preferences as a host-rendered settings section", () => {
+  test("hides Pet settings navigation and content when no provider is installed", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
         initialSection="pets"
@@ -214,7 +216,37 @@ describe("SettingsView", () => {
       />,
     )
 
-    expect(markup).toContain("Pets")
+    expect(markup).not.toContain("Pets")
     expect(markup).not.toContain("iframe")
+    expect(markup).toContain('id="settings-language"')
+  })
+
+  test("mounts only the installed Plugin-owned Pet settings surface", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        initialSection="pets"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        petProvider={petProvider}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+
+    expect(markup).toContain("Pets")
+    expect(markup).toContain('src="convax-plugin://soft-companion/settings/index.html"')
+    expect(markup).toContain('sandbox="allow-scripts"')
+    expect(markup).not.toContain("allow-same-origin")
+    expect(markup).not.toContain('type="file"')
+    expect(markup).not.toContain("pet-card")
+    expect(markup).not.toContain("Import")
+    expect(markup).not.toContain("Delete")
+    expect(markup).not.toContain("Upload")
   })
 })

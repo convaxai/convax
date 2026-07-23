@@ -18,7 +18,7 @@ import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
-import type { PetIpcChannels, PetNavigationTarget, PetSettingsClient } from "../pet-contracts"
+import type { PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
@@ -91,21 +91,112 @@ const agentSkillChannels = {
   uninstallSkill: "agent:skill-uninstall",
 } as const
 
-// Keep sandboxed preload entries self-contained. The shared type preserves exact
-// channel parity with Main without emitting a relative CommonJS require.
-const petIpcChannels = {
-  changed: "pet:changed",
-  deleteCustom: "pet:delete-custom",
-  importCustom: "pet:import-custom",
-  list: "pet:list",
+const petSettingsIpcChannels = {
+  connect: "pet:settings-connect",
+  disconnect: "pet:settings-disconnect",
   markDisplayed: "pet:mark-displayed",
   navigate: "pet:navigate",
-  select: "pet:select",
-  setAwake: "pet:set-awake",
-} as const satisfies Pick<
-  PetIpcChannels,
-  "changed" | "deleteCustom" | "importCustom" | "list" | "markDisplayed" | "navigate" | "select" | "setAwake"
->
+  port: "pet:settings-port",
+  provider: "pet:provider",
+  providerChanged: "pet:provider-changed",
+} as const
+
+interface PetSettingsIdentity {
+  generation: number
+  pluginId: string
+}
+
+interface PetSettingsConnectEnvelope extends PetSettingsIdentity {
+  protocol: "convax.pet-host/1"
+  surface: "settings"
+  type: "connect"
+}
+
+interface PetSettingsPreloadClient {
+  connectSettings(input: PetSettingsIdentity): Promise<void>
+  disconnectSettings(input: PetSettingsIdentity): Promise<void>
+  getProvider(): Promise<{ generation: number; pluginId: string; settingsUrl: string } | undefined>
+  markDisplayed(input: PetNavigationRequest): Promise<void>
+  onNavigate(listener: (target: PetNavigationTarget) => void): () => void
+  onProviderChanged(listener: () => void): () => void
+}
+
+function isPetSettingsIdentity(value: unknown): value is PetSettingsIdentity {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const input = value as Record<string, unknown>
+  const keys = Object.keys(input)
+  return (
+    keys.length === 2 &&
+    keys.every((key) => ["generation", "pluginId"].includes(key)) &&
+    Number.isSafeInteger(input.generation) &&
+    (input.generation as number) >= 1 &&
+    typeof input.pluginId === "string" &&
+    input.pluginId.length > 0 &&
+    input.pluginId.length <= 80 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.pluginId)
+  )
+}
+
+function isPetSettingsConnectEnvelope(value: unknown): value is PetSettingsConnectEnvelope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const input = value as Record<string, unknown>
+  const keys = Object.keys(input)
+  return (
+    keys.length === 5 &&
+    keys.every((key) => ["generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
+    isPetSettingsIdentity({ generation: input.generation, pluginId: input.pluginId }) &&
+    input.protocol === "convax.pet-host/1" &&
+    input.surface === "settings" &&
+    input.type === "connect"
+  )
+}
+
+function petSettingsIdentityKey(identity: PetSettingsIdentity) {
+  return `${identity.pluginId}:${identity.generation}`
+}
+
+function closePetSettingsPorts(ports: readonly MessagePort[]) {
+  for (const port of ports) {
+    try {
+      port.close()
+    } catch {}
+  }
+}
+
+const requestedPetSettingsConnections = new Set<string>()
+const relayedPetSettingsConnections = new Set<string>()
+
+ipcRenderer.on(petSettingsIpcChannels.port, (event, envelope: unknown) => {
+  const ports = event.ports ?? []
+  const settingsEnvelope = isPetSettingsConnectEnvelope(envelope) ? envelope : undefined
+  if (settingsEnvelope === undefined) {
+    closePetSettingsPorts(ports)
+    return
+  }
+  const key = petSettingsIdentityKey(settingsEnvelope)
+  if (
+    window.top !== window ||
+    !requestedPetSettingsConnections.has(key) ||
+    relayedPetSettingsConnections.has(key) ||
+    ports.length !== 1
+  ) {
+    closePetSettingsPorts(ports)
+    return
+  }
+  requestedPetSettingsConnections.delete(key)
+  relayedPetSettingsConnections.add(key)
+  const port = ports[0]!
+  try {
+    window.postMessage(settingsEnvelope, "*", [port])
+  } catch {
+    relayedPetSettingsConnections.delete(key)
+    port.close()
+    void ipcRenderer.invoke(petSettingsIpcChannels.disconnect, {
+      generation: settingsEnvelope.generation,
+      pluginId: settingsEnvelope.pluginId,
+    })
+  }
+})
 
 const pluginChannels = {
   changed: "plugin:changed",
@@ -339,23 +430,38 @@ const generationClient = {
 } satisfies GenerationClient
 
 const petSettingsClient = {
-  deleteCustom: (input) => ipcRenderer.invoke(petIpcChannels.deleteCustom, input),
-  importCustom: () => ipcRenderer.invoke(petIpcChannels.importCustom),
-  list: () => ipcRenderer.invoke(petIpcChannels.list),
-  markDisplayed: (input) => ipcRenderer.invoke(petIpcChannels.markDisplayed, input),
-  onDidChange(listener) {
-    const handleChange = () => listener()
-    ipcRenderer.on(petIpcChannels.changed, handleChange)
-    return () => ipcRenderer.removeListener(petIpcChannels.changed, handleChange)
+  async connectSettings(input: PetSettingsIdentity) {
+    if (!isPetSettingsIdentity(input)) throw new Error("Pet settings connection identity is invalid")
+    const key = petSettingsIdentityKey(input)
+    if (requestedPetSettingsConnections.has(key) || relayedPetSettingsConnections.has(key)) return
+    requestedPetSettingsConnections.add(key)
+    try {
+      await ipcRenderer.invoke(petSettingsIpcChannels.connect, input)
+    } catch (error) {
+      requestedPetSettingsConnections.delete(key)
+      throw error
+    }
   },
-  onNavigate(listener) {
+  async disconnectSettings(input: PetSettingsIdentity) {
+    if (!isPetSettingsIdentity(input)) throw new Error("Pet settings connection identity is invalid")
+    const key = petSettingsIdentityKey(input)
+    requestedPetSettingsConnections.delete(key)
+    relayedPetSettingsConnections.delete(key)
+    await ipcRenderer.invoke(petSettingsIpcChannels.disconnect, input)
+  },
+  getProvider: () => ipcRenderer.invoke(petSettingsIpcChannels.provider),
+  markDisplayed: (input: PetNavigationRequest) => ipcRenderer.invoke(petSettingsIpcChannels.markDisplayed, input),
+  onNavigate(listener: (target: PetNavigationTarget) => void) {
     const handleNavigate = (_event: Electron.IpcRendererEvent, target: PetNavigationTarget) => listener(target)
-    ipcRenderer.on(petIpcChannels.navigate, handleNavigate)
-    return () => ipcRenderer.removeListener(petIpcChannels.navigate, handleNavigate)
+    ipcRenderer.on(petSettingsIpcChannels.navigate, handleNavigate)
+    return () => ipcRenderer.removeListener(petSettingsIpcChannels.navigate, handleNavigate)
   },
-  select: (input) => ipcRenderer.invoke(petIpcChannels.select, input),
-  setAwake: (input) => ipcRenderer.invoke(petIpcChannels.setAwake, input),
-} satisfies PetSettingsClient
+  onProviderChanged(listener: () => void) {
+    const handleChange = () => listener()
+    ipcRenderer.on(petSettingsIpcChannels.providerChanged, handleChange)
+    return () => ipcRenderer.removeListener(petSettingsIpcChannels.providerChanged, handleChange)
+  },
+} satisfies PetSettingsPreloadClient
 
 contextBridge.exposeInMainWorld("convax", {
   agent: { ...agentClient, skills: agentSkillClient },
