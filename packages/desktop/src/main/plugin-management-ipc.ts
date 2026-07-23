@@ -1,7 +1,12 @@
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
 import { compareWebPluginVersions, type InstalledWebPluginSummary, type WebPluginClient } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
-import type { WebPluginManager, WebPluginPublicationCandidate, WebPluginPublicationTransaction } from "./plugin-manager"
+import type {
+  WebPluginManager,
+  WebPluginMutationContext,
+  WebPluginPublicationCandidate,
+  WebPluginPublicationTransaction,
+} from "./plugin-manager"
 import type { RemotePluginCatalogPort } from "./remote-capability-installer"
 
 type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChange">> = Parameters<
@@ -29,7 +34,7 @@ export function registerPluginManagementIpc(
   remoteCatalog?: RemotePluginCatalogPort,
   lifecycle?: {
     beforeChange?(pluginId: string): Promise<void> | void
-    onDidChange(pluginId: string): Promise<void> | void
+    onDidChange(pluginId: string, mutation: WebPluginMutationContext): Promise<void> | void
     prepareInstall?(
       plugin: InstalledWebPluginSummary,
       candidate: WebPluginPublicationCandidate,
@@ -146,6 +151,20 @@ export function registerPluginManagementIpc(
       installed,
     }
   }
+  let changedLifecycleTail = Promise.resolve()
+  const runChangedLifecycle = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
+    const previous = changedLifecycleTail
+    let release!: () => void
+    changedLifecycleTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
   const changed = async <Result>(
     operation: () => Promise<Result>,
     pluginId: (result: Result) => string | undefined,
@@ -154,8 +173,10 @@ export function registerPluginManagementIpc(
     const changedPluginId = pluginId(result)
     if (changedPluginId) {
       try {
-        await manager.withPluginMutation(changedPluginId, () =>
-          Promise.resolve(lifecycle?.onDidChange(changedPluginId)),
+        await runChangedLifecycle(() =>
+          manager.withPluginMutation(changedPluginId, (mutation) =>
+            Promise.resolve(lifecycle?.onDidChange(changedPluginId, mutation)),
+          ),
         )
       } catch (error) {
         // The package mutation is already committed. Startup reconciliation

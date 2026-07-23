@@ -1260,6 +1260,25 @@ describe("WebPluginManager", () => {
     ).rejects.toThrow("mutation context")
   })
 
+  test("reuses an owned mutation context while resolving a capability identity", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    await manager.installBundle(simpleBundle("1.0.0", "application"))
+    const resolveWithMutation = manager.resolveCapabilityIdentity.bind(manager) as (
+      pluginId: string,
+      mutation: { pluginId: string },
+    ) => ReturnType<WebPluginManager["resolveCapabilityIdentity"]>
+
+    await manager.withPluginMutation("director-stage", async (mutation) => {
+      const identity = await Promise.race([
+        resolveWithMutation("director-stage", mutation),
+        Bun.sleep(100).then(() => "timed-out" as const),
+      ])
+      expect(identity).not.toBe("timed-out")
+      expect(identity).toMatchObject({ plugin: { id: "director-stage", version: "1.0.0" } })
+    })
+  })
+
   test("restores the unique validated backup after a crash between the two update renames", async () => {
     const root = await temporaryRoot()
     const installRoot = path.join(root, "installed")

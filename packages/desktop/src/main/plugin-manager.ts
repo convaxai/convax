@@ -1584,34 +1584,38 @@ export class WebPluginManager {
    * the resolution on every call, so permission changes, update, or uninstall
    * invalidate an existing connection without hashing unrelated static assets.
    */
-  async resolveCapabilityIdentity(pluginId: string) {
+  async resolveCapabilityIdentity(pluginId: string, mutation?: WebPluginMutationContext) {
     const id = requireWebPluginId(pluginId)
-    return this.#runPluginMutation(id, async () => {
-      const installationRoot = await this.#ensureRoot()
-      const pluginRootPath = path.join(installationRoot, id)
-      if (!(await exists(pluginRootPath))) return null
-      const pluginRoot = await assertPlainDirectory(pluginRootPath, "Installed plugin")
-      const manifest = await this.#validateInstalledPackage(pluginRoot)
-      if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
-      const digest = capabilityManifestDigest(manifest)
-      const verifiedManifest = await this.#validateInstalledPackage(pluginRoot)
-      if (
-        verifiedManifest.id !== manifest.id ||
-        verifiedManifest.version !== manifest.version ||
-        capabilityManifestDigest(verifiedManifest) !== digest
-      ) {
-        throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
-      }
-      const summary = toInstalledWebPluginSummary(verifiedManifest)
-      const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
-        async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
-        () => false,
-      )
-      return {
-        digest,
-        plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,
-      }
-    })
+    return this.#runPluginMutation(
+      id,
+      async () => {
+        const installationRoot = await this.#ensureRoot()
+        const pluginRootPath = path.join(installationRoot, id)
+        if (!(await exists(pluginRootPath))) return null
+        const pluginRoot = await assertPlainDirectory(pluginRootPath, "Installed plugin")
+        const manifest = await this.#validateInstalledPackage(pluginRoot)
+        if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
+        const digest = capabilityManifestDigest(manifest)
+        const verifiedManifest = await this.#validateInstalledPackage(pluginRoot)
+        if (
+          verifiedManifest.id !== manifest.id ||
+          verifiedManifest.version !== manifest.version ||
+          capabilityManifestDigest(verifiedManifest) !== digest
+        ) {
+          throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
+        }
+        const summary = toInstalledWebPluginSummary(verifiedManifest)
+        const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
+          async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
+          () => false,
+        )
+        return {
+          digest,
+          plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,
+        }
+      },
+      mutation,
+    )
   }
 
   async resolveAsset(pluginId: string, relativePath: string) {

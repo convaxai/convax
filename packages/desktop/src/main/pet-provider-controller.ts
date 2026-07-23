@@ -12,6 +12,7 @@ import {
   type PetPreferencesUpdate,
 } from "../pet-contracts"
 import type { PetPersistedState, PetStateWrite } from "./pet-state-store"
+import type { WebPluginMutationContext } from "./plugin-manager"
 
 type Awaitable<Value> = Promise<Value> | Value
 type Listener<Value> = (value: Value) => void
@@ -19,7 +20,10 @@ type Unsubscribe = () => void
 
 export interface PetProviderPluginManager {
   list(): Promise<readonly InstalledWebPluginSummary[]>
-  resolveCapabilityIdentity(pluginId: string): Promise<{
+  resolveCapabilityIdentity(
+    pluginId: string,
+    mutation?: WebPluginMutationContext,
+  ): Promise<{
     digest: string
     plugin: InstalledWebPluginSummary
   } | null>
@@ -168,8 +172,8 @@ export class PetProviderController {
     return this.#exclusive(() => this.#initialize())
   }
 
-  refresh() {
-    return this.#exclusive(() => this.#refresh())
+  refresh(mutation?: WebPluginMutationContext) {
+    return this.#exclusive(() => this.#refresh(mutation))
   }
 
   getProvider(): InstalledPetProvider | undefined {
@@ -296,13 +300,13 @@ export class PetProviderController {
     }
   }
 
-  async #refresh() {
+  async #refresh(mutation?: WebPluginMutationContext) {
     this.#assertInitialized()
     const currentProvider = this.#provider
     const currentState = this.#requireState()
     let nextProvider: InstalledPetProvider | undefined
     try {
-      nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider)
+      nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider, mutation)
     } catch (error) {
       if (
         error instanceof PetProviderConflictError &&
@@ -345,6 +349,7 @@ export class PetProviderController {
   async #resolveProvider(
     preferredProviderId: string | undefined,
     currentProvider: InstalledPetProvider | undefined,
+    mutation?: WebPluginMutationContext,
   ): Promise<InstalledPetProvider | undefined> {
     const candidates = (await this.#pluginManager.list())
       .filter((plugin) => plugin.contributes.pet !== undefined)
@@ -359,7 +364,8 @@ export class PetProviderController {
       if (candidate === undefined) throw new PetProviderConflictError(candidates.map((plugin) => plugin.id))
     }
 
-    const identity = await this.#pluginManager.resolveCapabilityIdentity(candidate.id)
+    const ownedMutation = mutation?.pluginId === candidate.id ? mutation : undefined
+    const identity = await this.#pluginManager.resolveCapabilityIdentity(candidate.id, ownedMutation)
     if (identity === null || identity.plugin.id !== candidate.id) {
       throw new Error(`Pet feature provider is no longer installed: ${candidate.id}`)
     }

@@ -219,6 +219,42 @@ describe("registerPluginManagementIpc", () => {
     dispose()
   })
 
+  test("serializes changed lifecycles before acquiring each Plugin mutation", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
+    let releaseFirst!: () => void
+    let markFirstEntered!: () => void
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    const firstEntered = new Promise<void>((resolve) => {
+      markFirstEntered = resolve
+    })
+    const lifecycleOrder: string[] = []
+    const onDidChange = mock(async (pluginId: string) => {
+      lifecycleOrder.push(pluginId)
+      if (pluginId !== "imported-plugin") return
+      markFirstEntered()
+      await firstBlocked
+    })
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, { onDidChange })
+
+    const first = Promise.resolve(invoke(pluginManagementIpcChannels.importPlugin))
+    await firstEntered
+    const second = Promise.resolve(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "other-plugin" }))
+    const secondState = await Promise.race([
+      second.then(() => "completed" as const),
+      Bun.sleep(25).then(() => "blocked" as const),
+    ])
+    releaseFirst()
+    await Promise.all([first, second])
+
+    expect(secondState).toBe("blocked")
+    expect(lifecycleOrder).toEqual(["imported-plugin", "other-plugin"])
+    dispose()
+  })
+
   test("exposes and installs only a newer catalog Plugin version", async () => {
     const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
     const installed = { ...manifest("installed-plugin"), version: "0.0.1-convax.1" }
@@ -340,7 +376,7 @@ describe("registerPluginManagementIpc", () => {
       beforePublish: expect.any(Function),
     })
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })
-    expect(onDidChange).toHaveBeenCalledWith("installed-plugin")
+    expect(onDidChange).toHaveBeenCalledWith("installed-plugin", { pluginId: "installed-plugin" })
 
     manager.uninstall = mock(async () => false) as WebPluginManager["uninstall"]
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "missing-plugin" })

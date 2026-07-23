@@ -165,6 +165,27 @@ describe("PetProviderController", () => {
     expect(changes).toHaveLength(1)
   })
 
+  test("reuses an owned Plugin mutation context while refreshing provider identity", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    value.pluginManager.resolveCapabilityIdentity.mockClear()
+    const mutation = { pluginId: "convax-pet" } as const
+
+    await value.controller.refresh(mutation)
+
+    expect(value.pluginManager.resolveCapabilityIdentity).toHaveBeenCalledWith("convax-pet", mutation)
+  })
+
+  test("does not reuse another Plugin mutation while refreshing provider identity", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    value.pluginManager.resolveCapabilityIdentity.mockClear()
+
+    await value.controller.refresh({ pluginId: "hello-convax" })
+
+    expect(value.pluginManager.resolveCapabilityIdentity).toHaveBeenCalledWith("convax-pet", undefined)
+  })
+
   test("keeps selection separate from explicit wake and subscribes to activity only while awake", async () => {
     const value = fixture({ installed: [provider()] })
     const preferences: unknown[] = []

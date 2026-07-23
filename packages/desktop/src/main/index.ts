@@ -837,7 +837,7 @@ function startApplication() {
         },
         prepareInstall: prepareLocalPluginPublication,
         prepareRemove: (plugin) => pluginSkillLifecycle.prepareUninstall(plugin),
-        async onDidChange(pluginId) {
+        async onDidChange(pluginId, mutation) {
           generationRuntime.disposePlugin(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
           void agentRuntime.refreshProviders().catch((error) => {
@@ -846,7 +846,7 @@ function startApplication() {
           void skillManager.refresh().catch((error) => {
             console.warn("Could not immediately refresh OpenCode Plugin-owned Skills", error)
           })
-          await pets.refresh()
+          await pets.refresh(mutation)
         },
       },
     )
