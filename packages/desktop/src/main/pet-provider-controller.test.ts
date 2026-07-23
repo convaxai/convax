@@ -539,6 +539,41 @@ describe("PetProviderController", () => {
     expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
   })
 
+  test("closes a residual partial window before retrying wake", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    const order: string[] = []
+    const openError = new Error("overlay open failed")
+    const cleanupCloseError = new Error("overlay cleanup failed")
+    const retryCloseError = new Error("overlay retry close failed")
+    let openAttempts = 0
+    let closeAttempts = 0
+    value.window.open.mockImplementation(async () => {
+      openAttempts += 1
+      order.push(`open:${openAttempts}`)
+      if (openAttempts === 1) throw openError
+    })
+    value.window.close.mockImplementation(async () => {
+      closeAttempts += 1
+      order.push(`close:${closeAttempts}`)
+      if (closeAttempts === 1) throw cleanupCloseError
+      if (closeAttempts === 2) throw retryCloseError
+    })
+
+    await expect(value.controller.setAwake({ awake: true })).rejects.toBe(openError)
+    expect(value.stateStore.state.awake).toBe(false)
+    expect(order).toEqual(["open:1", "close:1"])
+
+    await expect(value.controller.setAwake({ awake: true })).rejects.toBe(retryCloseError)
+    expect(value.stateStore.state.awake).toBe(false)
+    expect(value.window.open).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(["open:1", "close:1", "close:2"])
+
+    await expect(value.controller.setAwake({ awake: true })).resolves.toEqual({ awake: true })
+    expect(order).toEqual(["open:1", "close:1", "close:2", "close:3", "open:2"])
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(1)
+  })
+
   test("best-effort closes a partially mounted window after open rejects without replacing the error", async () => {
     const value = fixture({ installed: [provider()] })
     const preferences: unknown[] = []

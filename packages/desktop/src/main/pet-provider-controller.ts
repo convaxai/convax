@@ -232,7 +232,7 @@ export class PetProviderController {
       if (awake) {
         if (this.#provider === undefined) throw new Error("No Pet feature provider is installed")
         if (current.awake && this.#runtimeReady()) return preferencesFromState(current)
-        if (current.awake && this.#windowMayBeMounted) {
+        if (this.#windowMayBeMounted && !this.#runtimeReady()) {
           await this.#closeRuntime()
         }
         if (!current.awake) {
