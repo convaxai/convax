@@ -39,7 +39,7 @@ The built-in coding Agent is powered by OpenCode.
 Built-in examples include:
 
 - **3D Director Desk** for arranging characters, props, and cameras in an interactive 3D scene whose state stays with the Canvas node.
-- **Panorama Viewer** for exploring local or connected panoramic images with drag-to-look, zoom, auto-rotation, and fullscreen viewing.
+- **全景图预览 (Panorama Viewer)** for exploring local or connected panoramic images with drag-to-look, zoom, auto-rotation, fullscreen viewing, and current-viewport capture back to a managed Canvas image node.
 
 ### Shape the workspace around your task
 

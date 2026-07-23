@@ -422,6 +422,29 @@ function App() {
       if (signal.aborted) throw signal.reason ?? new Error("Plugin call was canceled")
     }
     return {
+      async createCanvasImage(input) {
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        const authoritativeDocument = await flushAuthoritativeCanvas()
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        if (!authoritativeDocument || authoritativeDocument.id !== input.canvasId) {
+          throw new Error("Plugin Canvas image could not resolve Main's authoritative document")
+        }
+        const result = await window.convax.canvas.pluginImages.create({
+          dataUrl: input.dataUrl,
+          expectedRevision: authoritativeDocument.revision,
+          name: input.name,
+          operationId: globalThis.crypto.randomUUID(),
+          ownerNodeId: input.nodeId,
+          pluginId: input.pluginId,
+          pluginVersion: input.pluginVersion,
+          ref: { canvasId: input.canvasId, scopeId: input.projectId },
+        })
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        return result
+      },
       async executeCanvasGeneration(input) {
         throwIfAborted(input.signal)
         currentScope(input.projectId, input.canvasId)

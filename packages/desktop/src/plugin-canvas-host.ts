@@ -24,10 +24,12 @@ import type {
 } from "./plugin-host-types"
 
 const defaultRequestBytes = 256 * 1024
+const defaultCanvasImageRequestBytes = 24 * 1024 * 1024
 const defaultResponseBytes = 1024 * 1024
 const defaultConnectedImageResponseBytes = 24 * 1024 * 1024
 const defaultStateBytes = 256 * 1024
 const maximumConnectedImageBytes = 16 * 1024 * 1024
+const maximumCanvasImageBytes = 16 * 1024 * 1024
 const maximumPromptLength = 20_000
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -478,6 +480,37 @@ function requireConnectedImageDataUrl(value: unknown, mimeType: unknown, size?: 
   return value
 }
 
+function requireCanvasImageDataUrl(value: unknown) {
+  if (typeof value !== "string") throw new Error("Canvas image data is invalid")
+  const prefix = "data:image/png;base64,"
+  if (value.slice(0, prefix.length).toLowerCase() !== prefix) {
+    throw new Error("Canvas image data must be a base64 PNG")
+  }
+  const encoded = value.slice(prefix.length)
+  if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    throw new Error("Canvas image data is not canonical base64")
+  }
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
+  const decodedBytes = (encoded.length / 4) * 3 - padding
+  if (decodedBytes < 24 || decodedBytes > maximumCanvasImageBytes) {
+    throw new Error(`Canvas image must contain at most ${maximumCanvasImageBytes / 1024 / 1024} MiB`)
+  }
+  return value
+}
+
+function requireCanvasImageName(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value !== value.trim() ||
+    value.length > 120 ||
+    /[\\/\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error("Canvas image name is invalid")
+  }
+  return value
+}
+
 function requireCapability(plugin: InstalledPlugin, capability: PluginCapability) {
   if (!plugin.capabilities.includes(capability)) throw new Error(`Plugin capability is not granted: ${capability}`)
 }
@@ -595,6 +628,29 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
       context.nodeStateWriteGate.active = false
     }
   }
+  if (request.method === "canvas.image.create") {
+    requireCapability(context.plugin, "canvas.image.write")
+    if (!context.isCanvasWritable()) throw new Error("Canvas is not writable in the current scope")
+    const params = exactRecord(request.params, ["dataUrl", "name"], "Canvas image request")
+    const result = await context.createCanvasImage({
+      ...context.frame,
+      dataUrl: requireCanvasImageDataUrl(params.dataUrl),
+      name: requireCanvasImageName(params.name),
+      pluginVersion: context.plugin.version,
+      signal: context.signal,
+    })
+    assertCurrentFrame(context)
+    if (
+      !result ||
+      typeof result.createdNodeId !== "string" ||
+      !result.createdNodeId ||
+      !Number.isSafeInteger(result.revision) ||
+      result.revision < 0
+    ) {
+      throw new Error("Canvas image provider returned an invalid result")
+    }
+    return result
+  }
   if (request.method === "project.file.readText") {
     requireCapability(context.plugin, "project.files.read")
     const params = exactRecord(request.params, ["path"], "Project text request")
@@ -698,9 +754,16 @@ export async function dispatchPluginHostRequest(
   if (!id) return null
   const protocol = desktopPluginHostProtocolForManifestSchema(context.plugin.schema)
   try {
+    const imageRequest = isRecord(value) && value.method === "canvas.image.create"
     assertMessageSize(
       value,
-      requireLimit(context.limits?.requestBytes, defaultRequestBytes, "Plugin request byte limit"),
+      imageRequest
+        ? requireLimit(
+            context.limits?.canvasImageRequestBytes,
+            defaultCanvasImageRequestBytes,
+            "Plugin Canvas image request byte limit",
+          )
+        : requireLimit(context.limits?.requestBytes, defaultRequestBytes, "Plugin request byte limit"),
       "Plugin request",
     )
     exactRecord(value, ["id", "method", "params", "protocol", "type"], "Plugin host request")

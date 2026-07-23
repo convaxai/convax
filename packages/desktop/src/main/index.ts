@@ -74,6 +74,8 @@ import {
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
+import { registerPluginCanvasImageIpc } from "./plugin-canvas-image-ipc"
+import { PluginCanvasImageService } from "./plugin-canvas-image-service"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
@@ -451,6 +453,11 @@ function startApplication() {
       plugins: pluginPrincipals,
       projects: projectManager,
     })
+    const pluginCanvasImages = new PluginCanvasImageService({
+      documents: canvasDocuments,
+      projects: projectManager,
+      resources: canvasResources,
+    })
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({
         isPackaged: app.isPackaged,
@@ -658,6 +665,7 @@ function startApplication() {
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, canvasApplication, ipcSecurity)
+    const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       onError: (error) => console.warn("Canvas native media drag failed", error),
@@ -781,6 +789,7 @@ function startApplication() {
         disposeProjectIpc,
         disposeProjectCanvasIpc,
         disposeCanvasDocumentIpc,
+        disposePluginCanvasImageIpc,
         disposeCanvasExternalMediaDragIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,

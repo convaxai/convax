@@ -171,6 +171,41 @@ export function createPanoramaRenderer(canvas, viewer, scheduleRender) {
     gl.drawArrays(gl.TRIANGLES, 0, 3)
   }
 
+  renderer.capture = function (viewState) {
+    const gl = renderer.gl
+    if (!gl || !renderer.program || !renderer.texture || !renderer.ready) {
+      return Promise.reject(new Error("请先载入全景图后再截取画面"))
+    }
+    renderer.render(viewState)
+    const width = canvas.width
+    const height = canvas.height
+    const pixels = new Uint8Array(width * height * 4)
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+    const readError = gl.getError()
+    if (readError !== gl.NO_ERROR) {
+      return Promise.reject(new Error("当前画面读取失败（WebGL " + String(readError) + "）"))
+    }
+
+    const output = document.createElement("canvas")
+    output.width = width
+    output.height = height
+    const context = output.getContext("2d", { alpha: false })
+    if (!context) return Promise.reject(new Error("无法创建截图画布"))
+    const flipped = new Uint8ClampedArray(pixels.length)
+    const rowBytes = width * 4
+    for (let sourceRow = 0; sourceRow < height; sourceRow += 1) {
+      const targetRow = height - sourceRow - 1
+      flipped.set(pixels.subarray(sourceRow * rowBytes, (sourceRow + 1) * rowBytes), targetRow * rowBytes)
+    }
+    context.putImageData(new ImageData(flipped, width, height), 0, 0)
+    return new Promise(function (resolve, reject) {
+      output.toBlob(function (blob) {
+        if (blob) resolve(blob)
+        else reject(new Error("当前画面编码失败"))
+      }, "image/png")
+    })
+  }
+
   renderer.dispose = function () {
     renderer.clearTexture()
     if (renderer.gl && renderer.program) renderer.gl.deleteProgram(renderer.program)

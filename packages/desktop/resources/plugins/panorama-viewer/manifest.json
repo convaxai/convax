@@ -1,12 +1,13 @@
 {
   "schema": "convax.plugin/1",
   "id": "panorama-viewer",
-  "name": "Panorama Viewer",
-  "description": "Preview equirectangular 360° panoramas with drag-to-look, wheel zoom, auto-rotation, fullscreen, local files, and directly connected Canvas images.",
-  "version": "0.1.0",
+  "name": "全景图预览",
+  "description": "预览等距柱状投影 360° 全景图，支持拖拽环视、滚轮缩放、自动旋转、全屏、本地文件及画布连接图片。",
+  "version": "0.2.0",
   "entry": "index.html",
   "capabilities": [
     "canvas.connectedImages.read",
+    "canvas.image.write",
     "canvas.node.write",
     "ui.fullscreen"
   ],
@@ -19,19 +20,24 @@
       },
       "toolbar": [
         {
+          "command": "panorama.capture-viewport",
+          "id": "capture-viewport",
+          "title": "截取画面"
+        },
+        {
           "command": "panorama.reset",
           "id": "reset",
-          "title": "Reset panorama view"
+          "title": "重置视角"
         },
         {
           "command": "panorama.toggle-auto-rotate",
           "id": "auto-rotate",
-          "title": "Toggle panorama auto-rotation"
+          "title": "自动旋转"
         },
         {
           "command": "panorama.refresh-connections",
           "id": "refresh",
-          "title": "Refresh connected Canvas images"
+          "title": "刷新图片"
         }
       ]
     }

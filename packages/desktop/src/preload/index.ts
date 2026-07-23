@@ -19,6 +19,10 @@ import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-se
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import {
+  pluginCanvasImageIpcChannel,
+  type PluginCanvasImageClient,
+} from "../plugin-canvas-image-contracts"
+import {
   canvasRendererChannels,
   type CanvasRendererClient,
   type CanvasRendererRequestEnvelope,
@@ -274,6 +278,10 @@ const pluginClient = {
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
 
+const pluginCanvasImageClient = {
+  create: (input) => ipcRenderer.invoke(pluginCanvasImageIpcChannel, input),
+} satisfies PluginCanvasImageClient
+
 const pluginCapabilityClient = {
   call: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.call, input),
   connect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.connect, input),
@@ -317,6 +325,7 @@ contextBridge.exposeInMainWorld("convax", {
   canvas: {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
+    pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
   },
   generation: generationClient,

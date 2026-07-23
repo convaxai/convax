@@ -16,6 +16,7 @@ export const webPluginCapabilities = [
   "canvas.connectedImages.read",
   "canvas.node.read",
   "canvas.node.write",
+  "canvas.image.write",
   "project.files.read",
   "agent.prompt",
   "generation.execute",

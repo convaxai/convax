@@ -736,7 +736,7 @@ try {
         if (window.convax) {
           const expected = [
             ["storyai-3d-director-desk", "3D Director Desk plugin"],
-            ["panorama-viewer", "Panorama Viewer plugin"],
+            ["panorama-viewer", "全景图预览 plugin"],
             ["jianying-editor", "JianYing Export plugin"],
           ]
           const frames = expected.map(([id, title]) => {
@@ -824,10 +824,13 @@ try {
         const bounds = canvas?.getBoundingClientRect()
         const webgl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"))
         const connection = document.querySelector("#connectionText")?.textContent?.trim()
+        const captureButton = document.querySelector("#captureButton")
         if (canvas && webgl && bounds.width > 0 && bounds.height > 0 && connection === "画布已连接") {
           return {
             canvasHeight: bounds.height,
             canvasWidth: bounds.width,
+            captureDisabled: captureButton?.disabled,
+            captureLabel: captureButton?.textContent?.trim(),
             connection,
             title: document.title,
             webgl: true,
@@ -840,13 +843,17 @@ try {
   )) as {
     canvasHeight?: number
     canvasWidth?: number
+    captureDisabled?: boolean
+    captureLabel?: string
     connection?: string
     title?: string
     webgl?: boolean
   }
   if (
-    panorama.title !== "Panorama Viewer" ||
+    panorama.title !== "全景图预览" ||
     panorama.connection !== "画布已连接" ||
+    panorama.captureDisabled !== true ||
+    panorama.captureLabel !== "截取画面" ||
     panorama.webgl !== true ||
     !panorama.canvasWidth ||
     !panorama.canvasHeight

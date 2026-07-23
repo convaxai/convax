@@ -52,6 +52,7 @@ describe("built-in Panorama Viewer", () => {
     const rendererModule = await read("assets/panorama-renderer.js")
     const runtime = [application, imageModule, rendererModule].join("\n")
     const styles = await read("assets/styles.css")
+    expect(entry).toContain("<title>全景图预览</title>")
     expect(entry).toContain('src="./assets/app.js"')
     expect(entry).toContain('href="./assets/styles.css"')
     expect(entry.match(/<script\b/gu)).toHaveLength(1)
@@ -66,6 +67,7 @@ describe("built-in Panorama Viewer", () => {
     expect(application).toContain("canvas.connectedImages.list")
     expect(application).toContain("canvas.connectedImage.read")
     expect(application).toContain("canvas.node.updateState")
+    expect(application).toContain("canvas.image.create")
     expect(application).toContain("host.context.get")
     expect(application).toContain('from "./panorama-image.js"')
     expect(application).toContain('from "./panorama-renderer.js"')
@@ -80,6 +82,8 @@ describe("built-in Panorama Viewer", () => {
     expect(application).toContain("STATE_SAVE_MAX_ATTEMPTS")
     expect(application).toContain("requestFullscreen")
     expect(rendererModule).toContain("UNPACK_FLIP_Y_WEBGL, false")
+    expect(rendererModule).toContain("gl.readPixels")
+    expect(entry).toContain('id="captureButton"')
     expect(runtime).not.toContain("window.parent.postMessage")
     expect(runtime).not.toContain("localStorage")
     expect(runtime).not.toContain("sessionStorage")
@@ -102,18 +106,26 @@ describe("built-in Panorama Viewer", () => {
     expect(manifest).toMatchObject({
       capabilities: [
         "canvas.connectedImages.read",
+        "canvas.image.write",
         "canvas.node.write",
         "ui.fullscreen",
       ],
       contributes: {
         canvas: {
           renderer: { create: true, height: 640, width: 980 },
+          toolbar: [
+            { command: "panorama.capture-viewport", id: "capture-viewport", title: "截取画面" },
+            { command: "panorama.reset", id: "reset", title: "重置视角" },
+            { command: "panorama.toggle-auto-rotate", id: "auto-rotate", title: "自动旋转" },
+            { command: "panorama.refresh-connections", id: "refresh", title: "刷新图片" },
+          ],
         },
       },
       entry: "index.html",
       id: "panorama-viewer",
+      name: "全景图预览",
       schema: "convax.plugin/1",
-      version: "0.1.0",
+      version: "0.2.0",
     })
     expect(manifest).not.toHaveProperty("tags")
     expect(manifest).not.toHaveProperty("network")
@@ -130,7 +142,7 @@ describe("built-in Panorama Viewer", () => {
     const installed = await manager.installBundle(catalogItem.bundle)
 
     expect(installed).toEqual(catalogItem.manifest)
-    expect(installed.name).toBe("Panorama Viewer")
+    expect(installed.name).toBe("全景图预览")
     expect(await fs.readFile(await manager.resolveAsset(installed.id, installed.entry!), "utf8"))
       .toContain("./assets/app.js")
     expect((await fs.stat(await manager.resolveAsset(installed.id, "assets/app.js"))).size).toBeGreaterThan(10_000)
