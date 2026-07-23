@@ -18,7 +18,7 @@ import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
-import type { PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
+import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
@@ -100,6 +100,7 @@ const petSettingsIpcChannels = {
   port: "pet:settings-port",
   provider: "pet:provider",
   providerChanged: "pet:provider-changed",
+  sessionDisplayed: "pet:session-displayed",
 } as const
 
 interface PetSettingsIdentity {
@@ -119,6 +120,7 @@ interface PetSettingsPreloadClient {
   disconnectSettings(input: PetSettingsIdentity): Promise<void>
   getProvider(): Promise<{ generation: number; pluginId: string; settingsUrl: string } | undefined>
   markDisplayed(input: PetNavigationRequest): Promise<void>
+  markSessionDisplayed(input: PetDisplayedSession): Promise<void>
   onNavigate(listener: (target: PetNavigationTarget) => void): () => void
   onProviderChanged(listener: () => void): () => void
 }
@@ -513,6 +515,8 @@ const petSettingsClient = {
   },
   getProvider: () => ipcRenderer.invoke(petSettingsIpcChannels.provider),
   markDisplayed: (input: PetNavigationRequest) => ipcRenderer.invoke(petSettingsIpcChannels.markDisplayed, input),
+  markSessionDisplayed: (input: PetDisplayedSession) =>
+    ipcRenderer.invoke(petSettingsIpcChannels.sessionDisplayed, input),
   onNavigate(listener: (target: PetNavigationTarget) => void) {
     const handleNavigate = (_event: Electron.IpcRendererEvent, target: PetNavigationTarget) => listener(target)
     ipcRenderer.on(petSettingsIpcChannels.navigate, handleNavigate)

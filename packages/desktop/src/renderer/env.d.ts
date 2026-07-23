@@ -13,7 +13,7 @@ import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
 import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import type { PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
-import type { PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
+import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import type { PetSettingsHostClient } from "./pet-settings-host"
 
 declare global {
@@ -33,6 +33,7 @@ declare global {
       jianying: JianyingRendererClient
       pets: PetSettingsHostClient & {
         markDisplayed(input: PetNavigationRequest): Promise<void>
+        markSessionDisplayed(input: PetDisplayedSession): Promise<void>
         onNavigate(listener: (target: PetNavigationTarget) => void): () => void
       }
       platform: NodeJS.Platform

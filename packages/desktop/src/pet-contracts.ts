@@ -105,6 +105,11 @@ export interface PetActivityTarget {
   sessionId: string
 }
 
+export interface PetDisplayedSession {
+  projectId: string
+  sessionId: string
+}
+
 export interface PetNavigationRequest {
   activityId: string
   revision: number
@@ -128,6 +133,7 @@ export const petIpcChannels = {
   navigationReady: "pet:navigation-ready",
   provider: "pet:provider",
   providerChanged: "pet:provider-changed",
+  sessionDisplayed: "pet:session-displayed",
   settingsConnect: "pet:settings-connect",
   settingsDisconnect: "pet:settings-disconnect",
   settingsPort: "pet:settings-port",

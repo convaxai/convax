@@ -4,6 +4,7 @@ import {
   petHostProtocol,
   petIpcChannels,
   type PetActivitySnapshot,
+  type PetDisplayedSession,
   type PetHostProviderBinding,
   type PetNavigationRequest,
   type PetNavigationTarget,
@@ -29,6 +30,7 @@ interface PetProviderPort {
 }
 
 interface PetActivityNavigationPort {
+  markSessionDisplayed(projectId: string, sessionId: string): Promise<void>
   markSeen(activityId: string, expectedRevision: number): Promise<void>
   resolveActivity(activityId: string): { projectId: string; sessionId: string } | null
 }
@@ -99,6 +101,7 @@ export interface RegisterPetIpcOptions {
 export interface PetIpcRegistration {
   connectOverlay(sender: PetHostWebContents, binding: PetHostProviderBinding): void
   dispose(): void
+  openActivity(input: PetNavigationRequest): Promise<void>
   prepareProviderChange(pluginId: string): WebPluginPublicationTransaction
 }
 
@@ -162,6 +165,20 @@ function activityRequest(value: unknown): PetNavigationRequest {
     throw new Error("Pet activity request is invalid")
   }
   return { activityId: input.activityId, revision: input.revision as number }
+}
+
+function displayedSession(value: unknown): PetDisplayedSession {
+  const input = exactRecord(value, ["projectId", "sessionId"], "Pet displayed session")
+  const validId = (candidate: unknown) =>
+    typeof candidate === "string" &&
+    candidate.length > 0 &&
+    candidate.length <= 128 &&
+    candidate === candidate.trim() &&
+    /^[a-zA-Z0-9_-]+$/.test(candidate)
+  if (!validId(input.projectId) || !validId(input.sessionId)) {
+    throw new Error("Pet displayed session is invalid")
+  }
+  return { projectId: input.projectId as string, sessionId: input.sessionId as string }
 }
 
 function sameBinding(left: PetHostProviderBinding, right: PetHostProviderBinding | undefined) {
@@ -417,6 +434,11 @@ export function registerPetIpc(
     requireActivityTarget(input)
     await activity.markSeen(input.activityId, input.revision)
   })
+  ipcMain.handle(petIpcChannels.sessionDisplayed, async (event, value: unknown) => {
+    requireTrusted(event)
+    const input = displayedSession(value)
+    await activity.markSessionDisplayed(input.projectId, input.sessionId)
+  })
   ipcMain.handle(petIpcChannels.navigationReady, (event) => {
     const sender = requireTrusted(event)
     const mainWindow = options.getMainWindow()
@@ -444,6 +466,7 @@ export function registerPetIpc(
     ipcMain.removeHandler(petIpcChannels.settingsConnect)
     ipcMain.removeHandler(petIpcChannels.settingsDisconnect)
     ipcMain.removeHandler(petIpcChannels.markDisplayed)
+    ipcMain.removeHandler(petIpcChannels.sessionDisplayed)
     ipcMain.removeHandler(petIpcChannels.navigationReady)
     try {
       unsubscribeProvider()
@@ -477,6 +500,7 @@ export function registerPetIpc(
       })
     },
     dispose,
+    openActivity,
     prepareProviderChange(pluginId) {
       let revoked: PetHostProviderBinding | undefined
       return {

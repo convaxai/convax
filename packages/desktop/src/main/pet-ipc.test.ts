@@ -142,6 +142,7 @@ function fixture() {
     updatePreferences: mock(async ({ selectedPetId }: { selectedPetId: string }) => ({ awake: true, selectedPetId })),
   }
   const activity = {
+    markSessionDisplayed: mock(async () => undefined),
     markSeen: mock(async () => undefined),
     resolveActivity: mock((activityId: string) =>
       activityId === "activity-one" ? { projectId: "project-one", sessionId: "session-one" } : null,
@@ -210,6 +211,7 @@ describe("registerPetIpc", () => {
         petIpcChannels.markDisplayed,
         petIpcChannels.navigationReady,
         petIpcChannels.provider,
+        petIpcChannels.sessionDisplayed,
         petIpcChannels.settingsConnect,
         petIpcChannels.settingsDisconnect,
       ].sort(),
@@ -585,6 +587,33 @@ describe("registerPetIpc", () => {
     await expect(mark(value.trustedEvent, { activityId: "missing", revision: 7 })).rejects.toThrow("no longer")
     await mark(value.trustedEvent, { activityId: "activity-one", revision: 7 })
     expect(value.activity.markSeen).toHaveBeenCalledWith("activity-one", 7)
+    registration.dispose()
+  })
+
+  test("marks a bounded visible session from only the trusted main renderer", async () => {
+    const value = fixture()
+    const { registerPetIpc } = await import("./pet-ipc")
+    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
+    const markSession = invokeHandlers.get(petIpcChannels.sessionDisplayed)!
+
+    await expect(
+      markSession(value.untrustedEvent, { projectId: "project-one", sessionId: "session-one" }),
+    ).rejects.toThrow("untrusted")
+    await expect(
+      markSession(value.trustedEvent, { projectId: "../bad", sessionId: "session-one" }),
+    ).rejects.toThrow("invalid")
+    await expect(
+      markSession(value.trustedEvent, { projectId: "project-one", sessionId: "" }),
+    ).rejects.toThrow("invalid")
+    await markSession(value.trustedEvent, { projectId: "project-one", sessionId: "session-one" })
+
+    expect(value.activity.markSessionDisplayed).toHaveBeenCalledWith("project-one", "session-one")
+
+    await registration.openActivity({ activityId: "activity-one", revision: 7 })
+    expect(value.openMainWindow).toHaveBeenCalledTimes(1)
+    expect(value.mainWindow.show).toHaveBeenCalledTimes(1)
+    expect(value.mainWindow.focus).toHaveBeenCalledTimes(1)
+
     registration.dispose()
   })
 })
