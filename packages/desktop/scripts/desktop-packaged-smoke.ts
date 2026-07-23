@@ -14,7 +14,7 @@ const distRoot = path.join(desktopRoot, "dist")
 const startupTimeoutMs = 90_000
 const operationTimeoutMs = 120_000
 const pluginTimeoutMs = 45_000
-const pluginIds = ["storyai-3d-director-desk", "panorama-viewer", "jianying-editor"] as const
+const pluginIds = ["storyai-3d-director-desk", "jianying-editor"] as const
 const defaultRemotePluginId = "ffmpeg-tools"
 const jianyingDraftStatuses = new Set([
   "active",
@@ -641,11 +641,11 @@ try {
       if (loaded.document.nodes.length !== 0) {
         throw new Error("The isolated packaged Canvas was not empty: " + JSON.stringify(loaded.document.nodes))
       }
-      await window.convax.canvas.documents.save({
-        document: {
-          ...loaded.document,
-          revision: loaded.document.revision + 1,
-          nodes: [
+      await window.convax.canvas.documents.execute({
+        command: {
+          type: "document.patch",
+          addedEdges: [],
+          addedNodes: [
             {
               data: {
                 kind: "plugin.storyai-3d-director-desk",
@@ -657,20 +657,6 @@ try {
               },
               id: "packaged-smoke-storyai",
               position: { x: 0, y: 0 },
-              style: { height: 460, width: 700 },
-              type: "file",
-            },
-            {
-              data: {
-                kind: "plugin.panorama-viewer",
-                label: "Panorama Viewer",
-                metadata: {
-                  convaxPlugin: identity("panorama-viewer"),
-                  convaxPluginState: {},
-                },
-              },
-              id: "packaged-smoke-panorama",
-              position: { x: 740, y: 0 },
               style: { height: 460, width: 700 },
               type: "file",
             },
@@ -689,8 +675,13 @@ try {
               type: "file",
             },
           ],
+          removedEdgeIds: [],
+          removedNodeIds: [],
+          updatedEdges: [],
+          updatedNodes: [],
         },
-        expectedStorageVersion: loaded.storageVersion,
+        commandId: "packaged-smoke-seed-plugins",
+        expectedRevision: loaded.document.revision,
         ref: { canvasId, scopeId: project.id },
       })
       return {
@@ -736,7 +727,6 @@ try {
         if (window.convax) {
           const expected = [
             ["storyai-3d-director-desk", "3D Director Desk plugin"],
-            ["panorama-viewer", "全景图预览 plugin"],
             ["jianying-editor", "JianYing Export plugin"],
           ]
           const frames = expected.map(([id, title]) => {
@@ -766,9 +756,6 @@ try {
     const frame = outerFrames.find((candidate) => candidate.id === pluginId)
     if (frame?.sandbox !== "allow-scripts" || !frame.src?.startsWith(`convax-plugin://${pluginId}/`)) {
       throw new Error(`Unexpected packaged ${pluginId} iframe: ${JSON.stringify(frame)}`)
-    }
-    if (pluginId === "panorama-viewer" && (!frame.allow?.includes("fullscreen *") || frame.allowFullscreen !== false)) {
-      throw new Error(`Panorama Viewer lost its packaged fullscreen grant: ${JSON.stringify(frame)}`)
     }
   }
 
@@ -811,54 +798,6 @@ try {
     (director.controlCount ?? 0) < 6
   ) {
     throw new Error(`Unexpected packaged 3D Director runtime: ${JSON.stringify(director)}`)
-  }
-
-  const panorama = (await evaluatePluginFrame(
-    debuggerPort,
-    renderer,
-    "panorama-viewer",
-    `(async () => {
-      const deadline = Date.now() + ${pluginTimeoutMs - 5_000}
-      while (Date.now() < deadline) {
-        const canvas = document.querySelector("#panoramaCanvas")
-        const bounds = canvas?.getBoundingClientRect()
-        const webgl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"))
-        const connection = document.querySelector("#connectionText")?.textContent?.trim()
-        const captureButton = document.querySelector("#captureButton")
-        if (canvas && webgl && bounds.width > 0 && bounds.height > 0 && connection === "画布已连接") {
-          return {
-            canvasHeight: bounds.height,
-            canvasWidth: bounds.width,
-            captureDisabled: captureButton?.disabled,
-            captureLabel: captureButton?.textContent?.trim(),
-            connection,
-            title: document.title,
-            webgl: true,
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      throw new Error("Panorama Viewer did not initialize WebGL and connect to the host")
-    })()`,
-  )) as {
-    canvasHeight?: number
-    canvasWidth?: number
-    captureDisabled?: boolean
-    captureLabel?: string
-    connection?: string
-    title?: string
-    webgl?: boolean
-  }
-  if (
-    panorama.title !== "全景图预览" ||
-    panorama.connection !== "画布已连接" ||
-    panorama.captureDisabled !== true ||
-    panorama.captureLabel !== "截取画面" ||
-    panorama.webgl !== true ||
-    !panorama.canvasWidth ||
-    !panorama.canvasHeight
-  ) {
-    throw new Error(`Unexpected packaged Panorama Viewer runtime: ${JSON.stringify(panorama)}`)
   }
 
   const jianying = (await evaluatePluginFrame(
@@ -922,7 +861,7 @@ try {
   }
   const directorNode = persisted.nodes?.find((node) => node.id === "packaged-smoke-storyai")
   if (
-    persisted.nodes?.length !== 3 ||
+    persisted.nodes?.length !== pluginIds.length ||
     directorNode?.data?.kind !== "plugin.storyai-3d-director-desk" ||
     directorNode.data.metadata?.convaxPluginState?.schemaVersion !== 2
   ) {

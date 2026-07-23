@@ -287,11 +287,6 @@ surfaces:
   graph and director viewport camera are stored as separate fields in the owning
   Canvas node through `canvas.node.updateState`; its legacy independently managed
   companion Skill reviews the same snapshot through normal Canvas Agent resources.
-- **全景图预览 (Panorama Viewer)** is an original offline WebGL2 surface for equirectangular 360°
-  images. It accepts JPEG, PNG and WebP files selected in the sandbox or reads only
-  image nodes connected into its own Canvas node through a narrow host capability.
-  The selected connected-node preference and view settings are portable; local file
-  pixels remain session-local and are never stored in Plugin state.
 - **JianYing Editor** is default-provisioned as a trusted built-in Plugin plus a
   separately receipted legacy companion Skill. The package controls lifecycle and
   describes the workflow; its native implementation remains compiled into Desktop
