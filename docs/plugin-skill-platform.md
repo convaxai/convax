@@ -144,14 +144,6 @@ fully validates a staging copy, switches same-root directories, and restores the
 directory if the second rename fails. Imported packages still cannot replace an
 installed id, and equal-version or downgrade catalog replacements are rejected.
 
-When a static built-in moves to the official Registry, Desktop carries an explicit
-retired-id compatibility migration rather than leaving the old identity reserved.
-The migration verifies the host marker against the complete installed package,
-removes only that marker, and keeps the Plugin bytes installed as an ordinary
-package. Missing or already-untrusted installations are unchanged; tampered
-provenance fails closed. A higher Registry SemVer can then replace the preserved
-package through the normal verified update transaction.
-
 An installed Plugin package is global to the user. A Canvas document stores only a
 stable plugin id/version reference and namespaced portable instance state. Removing
 a Plugin therefore does not destroy Canvas nodes; they fall back to the unknown-file

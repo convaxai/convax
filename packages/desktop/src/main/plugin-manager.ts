@@ -1293,44 +1293,6 @@ export class WebPluginManager {
     return this.#runPluginMutation(manifest.id, () => this.#claimInstalledBuiltinBundle(bundle, options))
   }
 
-  /**
-   * Converts one previously trusted built-in installation into an ordinary
-   * installed Plugin without changing its package bytes. Callers own the
-   * explicit retired-id migration list; this method only removes provenance
-   * after verifying that the marker still matches the complete installation.
-   */
-  async retireInstalledBuiltinProvenance(pluginId: string) {
-    const id = requireWebPluginId(pluginId)
-    return this.#runPluginMutation(id, async () => {
-      const installationRoot = await this.#ensureRoot()
-      const target = path.join(installationRoot, id)
-      if (!(await exists(target))) return false
-
-      const installedManifest = await validateInstalledPackage(target, this.#limits)
-      if (installedManifest.id !== id) throw new Error("Installed plugin id does not match its directory")
-      const markerPath = path.join(target, builtinProvenanceFileName)
-      if (!(await exists(markerPath))) return false
-
-      const provenance = await readBuiltinProvenance(target, installedManifest)
-      const actualDigest = await installedPackageDigest(target, this.#limits)
-      if (provenance.bundleDigest !== actualDigest) {
-        throw new Error(`Installed built-in Plugin files do not match their provenance: ${id}`)
-      }
-
-      await fs.unlink(markerPath)
-      const verifiedManifest = await validateInstalledPackage(target, this.#limits)
-      const verifiedDigest = await installedPackageDigest(target, this.#limits)
-      if (
-        verifiedManifest.id !== installedManifest.id ||
-        verifiedManifest.version !== installedManifest.version ||
-        verifiedDigest !== actualDigest
-      ) {
-        throw new Error(`Installed Plugin changed while built-in provenance was retired: ${id}`)
-      }
-      return true
-    })
-  }
-
   async #claimInstalledBuiltinBundle(
     bundle: WebPluginBundle,
     options: { legacyBundleDigests?: readonly WebPluginLegacyBundleDigest[] } = {},

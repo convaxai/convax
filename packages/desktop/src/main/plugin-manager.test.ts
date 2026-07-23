@@ -835,44 +835,6 @@ describe("WebPluginManager", () => {
     expect(await legacy.isBuiltinBundleInstalled(bundle)).toBe(true)
   })
 
-  test("retires verified built-in provenance without removing the installed Plugin", async () => {
-    const root = await temporaryRoot()
-    const installRoot = path.join(root, "installed")
-    const builtInManager = new WebPluginManager(installRoot, {}, ["director-stage"])
-    const builtInBundle = simpleBundle("1.0.0", "legacy built-in")
-    await builtInManager.installOrUpdateBuiltinBundle(builtInBundle)
-    expect(await builtInManager.list()).toEqual([
-      expect.objectContaining({ id: "director-stage", trustedBuiltin: true, version: "1.0.0" }),
-    ])
-
-    const registryManager = new WebPluginManager(installRoot)
-    await expect(registryManager.retireInstalledBuiltinProvenance("director-stage")).resolves.toBe(true)
-    await expect(registryManager.retireInstalledBuiltinProvenance("director-stage")).resolves.toBe(false)
-    expect(await registryManager.list()).toEqual([expect.not.objectContaining({ trustedBuiltin: true })])
-
-    await expect(
-      registryManager.installBundle(simpleBundle("1.1.0", "Registry package"), { replaceExisting: true }),
-    ).resolves.toMatchObject({ id: "director-stage", version: "1.1.0" })
-    expect(await fs.readFile(await registryManager.resolveAsset("director-stage", "index.html"), "utf8")).toBe(
-      "Registry package",
-    )
-  })
-
-  test("does not retire tampered built-in provenance", async () => {
-    const root = await temporaryRoot()
-    const installRoot = path.join(root, "installed")
-    const manager = new WebPluginManager(installRoot, {}, ["director-stage"])
-    await manager.installOrUpdateBuiltinBundle(simpleBundle("1.0.0", "trusted built-in"))
-    await fs.writeFile(path.join(installRoot, "director-stage", "index.html"), "tampered")
-
-    await expect(manager.retireInstalledBuiltinProvenance("director-stage")).rejects.toThrow(
-      "do not match their provenance",
-    )
-    expect(await fs.readFile(path.join(installRoot, "director-stage", ".convax-builtin.json"), "utf8")).toContain(
-      "convax.plugin-builtin/1",
-    )
-  })
-
   test("adopts only an exact host-listed legacy bundle before upgrading it", async () => {
     const root = await temporaryRoot()
     const oldBundle = {
