@@ -92,6 +92,7 @@ import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import { createWebPluginCanvasContribution, type WebPluginCanvasHost } from "./web-plugin-canvas"
+import { WebPluginGenerationProjectionCoordinator } from "./web-plugin-generation-projection"
 import "./styles.css"
 
 const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
@@ -202,6 +203,7 @@ function App() {
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
+  const webPluginGenerationProjection = useMemo(() => new WebPluginGenerationProjectionCoordinator(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
   const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
   const generationToolCatalogVersionRef = useRef("")
@@ -433,18 +435,34 @@ function App() {
         const cancel = () => window.convax.generation.cancel({ operationId })
         input.signal.addEventListener("abort", cancel, { once: true })
         try {
-          const result = await window.convax.generation.generate({
-            anchor: input.anchor,
-            expectedRevision: authoritativeDocument.revision,
-            operationId,
-            ...(input.output ? { output: input.output } : {}),
-            prompt: input.prompt,
-            ref: { canvasId: input.canvasId, scopeId: input.projectId },
-            referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
-            references: input.references,
-            ...(input.resultMode ? { resultMode: { type: input.resultMode } } : {}),
-            ...(input.toolId ? { toolId: input.toolId } : {}),
-          })
+          const result = await webPluginGenerationProjection.execute(
+            input,
+            () =>
+              window.convax.generation.generate({
+                anchor: input.anchor,
+                expectedRevision: authoritativeDocument.revision,
+                operationId,
+                ...(input.output ? { output: input.output } : {}),
+                prompt: input.prompt,
+                ref: { canvasId: input.canvasId, scopeId: input.projectId },
+                referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
+                references: input.references,
+                ...(input.resultMode ? { resultMode: { type: input.resultMode } } : {}),
+                ...(input.toolId ? { toolId: input.toolId } : {}),
+              }),
+            async () => {
+              const current = pluginHostContextRef.current
+              const editor = canvasEditorRef.current
+              if (
+                !editor ||
+                current.activeProject?.id !== input.projectId ||
+                current.activeCanvas?.id !== input.canvasId
+              ) {
+                return
+              }
+              await editor.reloadAuthoritative()
+            },
+          )
           throwIfAborted(input.signal)
           currentScope(input.projectId, input.canvasId)
           return result
@@ -564,8 +582,11 @@ function App() {
         }
         return result
       },
+      async waitForGenerationProjection(input) {
+        await webPluginGenerationProjection.wait(input, input.signal)
+      },
     }
-  }, [flushAuthoritativeCanvas])
+  }, [flushAuthoritativeCanvas, webPluginGenerationProjection])
 
   useEffect(() => {
     let active = true

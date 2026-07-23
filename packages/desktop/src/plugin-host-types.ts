@@ -91,6 +91,7 @@ export interface PluginCanvasHost {
     projectId: string
     signal: AbortSignal
   }): Promise<PluginProjectFileResult>
+  waitForGenerationProjection(input: PluginNodeInvocationRef & { signal: AbortSignal }): Promise<void>
 }
 
 export interface PluginHostLimits {
@@ -108,6 +109,7 @@ export interface PluginHostRequestContext {
   connectedImageReadGate: { active: boolean }
   frame: PluginNodeInvocationRef
   generationGate: { active: boolean }
+  nodeStateWriteGate: { active: boolean }
   getActiveContext(): PluginCanvasActiveContext | null
   getConnectedImageNodes(): CanvasNode[]
   getDocument(): CanvasDocument | undefined
@@ -147,7 +149,7 @@ export interface PluginHostRequestContext {
     signal: AbortSignal
   }): Promise<PluginProjectFileResult>
   signal: AbortSignal
-  updateNodeState(state: Record<string, unknown>): void
+  updateNodeState(state: Record<string, unknown>): Promise<void>
 }
 
 // Compatibility aliases retained while callers migrate away from Web-specific names.
