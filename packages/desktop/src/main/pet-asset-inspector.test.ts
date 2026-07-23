@@ -3,11 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import {
-  assertValidPetAssetInspection,
-  createElectronPetAssetInspector,
-  petAssetMaxBytes,
-} from "./pet-asset-inspector"
+import { assertValidPetAssetInspection, createElectronPetAssetInspector, petAssetMaxBytes } from "./pet-asset-inspector"
 
 const temporaryRoots: string[] = []
 
@@ -24,11 +20,7 @@ afterEach(async () => {
 })
 
 function webpBytes() {
-  return Uint8Array.from([
-    0x52, 0x49, 0x46, 0x46,
-    0x04, 0x00, 0x00, 0x00,
-    0x57, 0x45, 0x42, 0x50,
-  ])
+  return Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50])
 }
 
 function nativeImageFixture(input: { empty?: boolean; alpha?: number; height?: number; width?: number } = {}) {
@@ -58,6 +50,17 @@ describe("Electron pet asset inspection", () => {
     expect(fixture.adapter.createFromBuffer).toHaveBeenCalledTimes(1)
   })
 
+  test("matches uppercase portable image extensions to their signatures", async () => {
+    const file = await temporaryFile("violet.WEBP", webpBytes())
+    const inspector = createElectronPetAssetInspector(nativeImageFixture().adapter)
+
+    await expect(inspector.inspect(file)).resolves.toMatchObject({
+      format: "webp",
+      height: 1_872,
+      width: 1_536,
+    })
+  })
+
   test("rejects extension-signature mismatch, undecodable bytes, and oversized files", async () => {
     const wrongMagic = await temporaryFile("violet.webp", Buffer.from("not-a-webp"))
     await expect(createElectronPetAssetInspector(nativeImageFixture().adapter).inspect(wrongMagic)).rejects.toThrow(
@@ -78,22 +81,13 @@ describe("Electron pet asset inspection", () => {
 
   test("enforces the sprite v2 geometry, alpha channel, and declared format", () => {
     expect(() =>
-      assertValidPetAssetInspection(
-        { format: "webp", hasTransparency: true, height: 1_872, width: 1_535 },
-        "webp",
-      ),
+      assertValidPetAssetInspection({ format: "webp", hasTransparency: true, height: 1_872, width: 1_535 }, "webp"),
     ).toThrow("1536 by 1872")
     expect(() =>
-      assertValidPetAssetInspection(
-        { format: "webp", hasTransparency: false, height: 1_872, width: 1_536 },
-        "webp",
-      ),
+      assertValidPetAssetInspection({ format: "webp", hasTransparency: false, height: 1_872, width: 1_536 }, "webp"),
     ).toThrow("transparency")
     expect(() =>
-      assertValidPetAssetInspection(
-        { format: "png", hasTransparency: true, height: 1_872, width: 1_536 },
-        "webp",
-      ),
+      assertValidPetAssetInspection({ format: "png", hasTransparency: true, height: 1_872, width: 1_536 }, "webp"),
     ).toThrow("format")
   })
 })

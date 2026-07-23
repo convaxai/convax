@@ -27,7 +27,7 @@ interface NativeImageDecoder {
 }
 
 function formatFromExtension(filePath: string): PetAssetInspection["format"] {
-  const extension = path.extname(filePath)
+  const extension = path.extname(filePath).toLocaleLowerCase("en-US")
   if (extension === ".png") return "png"
   if (extension === ".webp") return "webp"
   throw new Error("Pet spritesheet must be a PNG or WebP file")

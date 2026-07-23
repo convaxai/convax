@@ -26,6 +26,9 @@ export const webPluginCapabilities = [
   "canvas.document.read",
   "canvas.document.write",
   "canvas.events.subscribe",
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
 ] as const
 
 export type WebPluginCapability = (typeof webPluginCapabilities)[number]
@@ -36,6 +39,12 @@ export const webPluginProjectCanvasCapabilities = [
   "canvas.document.read",
   "canvas.document.write",
   "canvas.events.subscribe",
+] as const satisfies readonly WebPluginCapability[]
+
+export const webPluginPetCapabilities = [
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
 ] as const satisfies readonly WebPluginCapability[]
 
 export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
@@ -115,13 +124,12 @@ export interface WebPluginLlmContribution {
   provider: { id: string; name: string }
 }
 
-/** An inert local sprite atlas rendered only by the host-owned pet window. */
+/** Static surfaces and packaged library for one sandboxed Pet feature provider. */
 export interface WebPluginPetContribution {
-  alt: string
-  description: string
-  name: string
-  spritesheet: string
-  spriteVersion: 2
+  library: string
+  overlay: string
+  protocol: "convax.pet-host/1"
+  settings: string
 }
 
 export interface WebPluginMcpStdioRuntime {
@@ -199,7 +207,7 @@ export interface WebPluginManifest {
     generation?: WebPluginGenerationContribution
     /** Main-only provider metadata; connection details come from the verified runtime. */
     llm?: WebPluginLlmContribution
-    /** Inert display metadata; the Plugin receives no pet window or Agent capability. */
+    /** One sandboxed Pet feature provider; Desktop supplies only narrow native host primitives. */
     pet?: WebPluginPetContribution
     /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
@@ -758,18 +766,21 @@ function parseLlm(value: unknown): WebPluginLlmContribution {
 
 function parsePet(value: unknown): WebPluginPetContribution {
   const input = asRecord(value, "Pet contribution")
-  assertKeys(input, ["alt", "description", "name", "spritesheet", "spriteVersion"], "Pet contribution")
-  const spritesheet = requireWebPluginRelativePath(input.spritesheet, "Pet spritesheet")
-  if (!/\.(?:png|webp)$/.test(spritesheet)) {
-    throw new Error("Pet spritesheet must be a PNG or WebP file")
+  assertKeys(input, ["library", "overlay", "protocol", "settings"], "Pet contribution")
+  const library = requireWebPluginRelativePath(input.library, "Pet library")
+  const overlay = requireWebPluginRelativePath(input.overlay, "Pet overlay")
+  const settings = requireWebPluginRelativePath(input.settings, "Pet settings")
+  if (!library.toLowerCase().endsWith(".json")) throw new Error("Pet library must be a JSON file")
+  if (!overlay.toLowerCase().endsWith(".html")) throw new Error("Pet overlay must be an HTML file")
+  if (!settings.toLowerCase().endsWith(".html")) throw new Error("Pet settings must be an HTML file")
+  if (input.protocol !== "convax.pet-host/1") {
+    throw new Error("Pet protocol must equal convax.pet-host/1")
   }
-  if (input.spriteVersion !== 2) throw new Error("Pet spriteVersion must equal 2")
   return {
-    alt: requireString(input.alt, "Pet alt", 500),
-    description: requireString(input.description, "Pet description", 2_000),
-    name: requireString(input.name, "Pet name", 120),
-    spritesheet,
-    spriteVersion: 2,
+    library,
+    overlay,
+    protocol: "convax.pet-host/1",
+    settings,
   }
 }
 
@@ -858,7 +869,10 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (schema === webPluginManifestSchema && capabilities.includes("generation.execute")) {
     throw new Error("generation.execute is available only to executable Plugin manifests")
   }
-  const v5Capabilities = new Set<WebPluginCapability>(webPluginProjectCanvasCapabilities)
+  const v5Capabilities = new Set<WebPluginCapability>([
+    ...webPluginProjectCanvasCapabilities,
+    ...webPluginPetCapabilities,
+  ])
   if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => v5Capabilities.has(capability))) {
     throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5")
   }
@@ -880,6 +894,17 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const hasServiceContribution = contributes.service !== undefined
   const hasLlmContribution = contributes.llm !== undefined
   const hasPetContribution = contributes.pet !== undefined
+  if (hasPetContribution) {
+    if (
+      capabilities.length !== webPluginPetCapabilities.length ||
+      webPluginPetCapabilities.some((capability) => !capabilities.includes(capability))
+    ) {
+      throw new Error(
+        "Pet capabilities must be exactly pet.activity.read, pet.activity.open, and pet.preferences.write",
+      )
+    }
+    if (hasRuntime) throw new Error("Pet feature cannot declare an executable runtime")
+  }
   const hasExecutableContribution = hasGenerationContribution || hasServiceContribution || hasLlmContribution
   const hasCanvasContribution = contributes.canvas !== undefined
   const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined

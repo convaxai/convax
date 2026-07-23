@@ -121,34 +121,77 @@ function projectCanvasManifest(overrides: Partial<WebPluginManifest> = {}): WebP
   }
 }
 
-function petBundle(asset: Uint8Array | null = Uint8Array.from([1, 2, 3])) {
+function petBundle(
+  overrides: {
+    files?: Record<string, string | Uint8Array | null>
+    library?: unknown
+  } = {},
+) {
   const petManifest = {
-    capabilities: [],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
     contributes: {
       pet: {
-        alt: "Violet, the Convax pixel companion",
-        description: "A calm companion that reflects Agent activity.",
-        name: "Violet",
-        spritesheet: "assets/violet.webp",
-        spriteVersion: 2,
+        library: "pet-library.json",
+        overlay: "pet/index.html",
+        protocol: "convax.pet-host/1",
+        settings: "settings/index.html",
       },
     },
-    description: "Adds Violet as a desktop companion",
+    description: "A local desktop companion and pet library.",
     id: "convax-pet",
     name: "Convax Pet",
     schema: "convax.plugin/5",
-    version: "0.1.0",
+    version: "0.2.0",
+  }
+  const library = overrides.library ?? {
+    schema: "convax.pet-library/1",
+    pets: [
+      {
+        alt: "Violet, the Convax pixel companion",
+        description: "A calm companion that reflects Agent activity.",
+        displayName: "Violet",
+        id: "violet",
+        spritesheet: "assets/violet.webp",
+        spriteVersion: 2,
+      },
+      {
+        alt: "Comet, a second pixel companion",
+        description: "A second packaged companion.",
+        displayName: "Comet",
+        id: "comet",
+        spritesheet: "assets/comet.png",
+        spriteVersion: 2,
+      },
+    ],
+  }
+  const files: Record<string, string | Uint8Array> = {
+    "assets/comet.png": Uint8Array.from([4, 5, 6]),
+    "assets/violet.webp": Uint8Array.from([1, 2, 3]),
+    "manifest.json": JSON.stringify(petManifest),
+    "pet-library.json": JSON.stringify(library),
+    "pet/index.html": "<!doctype html><title>Pet</title>",
+    "settings/index.html": "<!doctype html><title>Pet settings</title>",
+  }
+  for (const [relativePath, content] of Object.entries(overrides.files ?? {})) {
+    if (content === null) delete files[relativePath]
+    else files[relativePath] = content
   }
   return {
-    files: {
-      "manifest.json": JSON.stringify(petManifest),
-      ...(asset === null ? {} : { "assets/violet.webp": asset }),
-    },
+    files,
   }
 }
 
-function petAssetInspector(inspection: PetAssetInspection) {
-  return { inspect: mock(async () => inspection) }
+function validPetAssetInspector() {
+  return {
+    inspect: mock(
+      async (filePath: string): Promise<PetAssetInspection> => ({
+        format: filePath.endsWith(".png") ? "png" : "webp",
+        hasTransparency: true,
+        height: 1_872,
+        width: 1_536,
+      }),
+    ),
+  }
 }
 
 const noOpPublication = async () => ({
@@ -830,39 +873,104 @@ describe("WebPluginManager", () => {
     expect(installed.entry).toBeUndefined()
   })
 
-  test("validates a declared pet asset before atomically publishing its Plugin", async () => {
+  test("validates every packaged Pet library atlas before atomically publishing its Plugin", async () => {
     const root = await temporaryRoot()
-    const inspector = petAssetInspector({
-      format: "webp",
-      hasTransparency: true,
-      height: 1_872,
-      width: 1_536,
-    })
+    const inspector = validPetAssetInspector()
     const manager = new WebPluginManager(path.join(root, "installed"), {}, [], { petAssetInspector: inspector })
 
-    await expect(manager.installBundle(petBundle(null))).rejects.toThrow("Pet spritesheet does not exist")
+    await expect(manager.installBundle(petBundle({ files: { "pet-library.json": null } }))).rejects.toThrow(
+      "Pet library does not exist",
+    )
     expect(await manager.list()).toEqual([])
 
-    inspector.inspect.mockResolvedValue({
-      format: "webp",
-      hasTransparency: true,
-      height: 1_871,
-      width: 1_536,
-    })
-    await expect(manager.installBundle(petBundle())).rejects.toThrow("1536 by 1872")
+    await expect(manager.installBundle(petBundle({ files: { "pet/index.html": null } }))).rejects.toThrow(
+      "Pet overlay does not exist",
+    )
+    await expect(manager.installBundle(petBundle({ files: { "settings/index.html": null } }))).rejects.toThrow(
+      "Pet settings does not exist",
+    )
+    await expect(manager.installBundle(petBundle({ files: { "assets/comet.png": null } }))).rejects.toThrow(
+      "Pet spritesheet comet does not exist",
+    )
     expect(await manager.list()).toEqual([])
 
-    inspector.inspect.mockResolvedValue({
-      format: "webp",
-      hasTransparency: true,
-      height: 1_872,
-      width: 1_536,
-    })
+    inspector.inspect.mockClear()
     await expect(manager.installBundle(petBundle())).resolves.toMatchObject({
       id: "convax-pet",
       schema: "convax.plugin/5",
     })
     expect(inspector.inspect).toHaveBeenCalled()
+    expect(new Set(inspector.inspect.mock.calls.map(([filePath]) => path.basename(String(filePath))))).toEqual(
+      new Set(["comet.png", "violet.webp"]),
+    )
+  })
+
+  test("rejects invalid Pet library JSON, duplicate metadata, and invalid atlases", async () => {
+    const root = await temporaryRoot()
+    const inspector = validPetAssetInspector()
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, [], { petAssetInspector: inspector })
+
+    await expect(manager.installBundle(petBundle({ files: { "pet-library.json": "{" } }))).rejects.toThrow("valid JSON")
+    const duplicateLibrary = {
+      schema: "convax.pet-library/1",
+      pets: [
+        {
+          alt: "First",
+          description: "First packaged pet",
+          displayName: "First",
+          id: "same",
+          spritesheet: "assets/violet.webp",
+          spriteVersion: 2,
+        },
+        {
+          alt: "Second",
+          description: "Second packaged pet",
+          displayName: "Second",
+          id: "same",
+          spritesheet: "assets/comet.png",
+          spriteVersion: 2,
+        },
+      ],
+    }
+    await expect(manager.installBundle(petBundle({ library: duplicateLibrary }))).rejects.toThrow("duplicate ids")
+
+    inspector.inspect.mockImplementationOnce(async () => ({
+      format: "webp",
+      hasTransparency: true,
+      height: 1_871,
+      width: 1_536,
+    }))
+    await expect(manager.installBundle(petBundle())).rejects.toThrow("1536 by 1872")
+    expect(await manager.list()).toEqual([])
+  })
+
+  test("reopens an installed Pet library through a bounded no-follow handle", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot, {}, [], {
+      petAssetInspector: validPetAssetInspector(),
+    })
+    await manager.installBundle(petBundle())
+
+    const originalOpen = fs.open.bind(fs)
+    const libraryOpenFlags: Array<number | string> = []
+    const open = spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (flags !== undefined && String(filePath).endsWith(`${path.sep}pet-library.json`)) {
+        libraryOpenFlags.push(flags)
+      }
+      return originalOpen(filePath, flags, mode)
+    })
+    try {
+      await expect(manager.resolveCapabilityIdentity("convax-pet")).resolves.toMatchObject({
+        plugin: { id: "convax-pet" },
+      })
+    } finally {
+      open.mockRestore()
+    }
+
+    expect(libraryOpenFlags.length).toBeGreaterThan(0)
+    const noFollow = fs.constants.O_NOFOLLOW ?? 0
+    expect(libraryOpenFlags.some((flags) => typeof flags === "number" && (flags & noFollow) === noFollow)).toBe(true)
   })
 
   test("cannot bypass the owned-Skill lifecycle when an update removes the last Skill or uninstalls", async () => {

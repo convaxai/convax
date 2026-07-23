@@ -124,21 +124,20 @@ function ownedSkillsManifest(overrides: Record<string, unknown> = {}) {
 
 function petManifest(overrides: Record<string, unknown> = {}) {
   return {
-    capabilities: [],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
     contributes: {
       pet: {
-        alt: "Violet, the Convax pixel companion",
-        description: "A calm companion that reflects Agent activity.",
-        name: "Violet",
-        spritesheet: "assets/violet.webp",
-        spriteVersion: 2,
+        library: "pet-library.json",
+        overlay: "pet/index.html",
+        protocol: "convax.pet-host/1",
+        settings: "settings/index.html",
       },
     },
-    description: "Adds Violet as a desktop companion",
+    description: "A local desktop companion and pet library.",
     id: "convax-pet",
     name: "Convax Pet",
     schema: "convax.plugin/5",
-    version: "0.1.0",
+    version: "0.2.0",
     ...overrides,
   }
 }
@@ -308,36 +307,67 @@ describe("versioned Plugin manifest generation declarations", () => {
     ).toThrow("unsupported field")
   })
 
-  test("parses a v5 inert pet as a Plugin capability", () => {
+  test("parses a v5 Pet feature provider with exact capabilities", () => {
     const parsed = parseWebPluginManifest(petManifest())
 
     expect(parsed.contributes.pet).toEqual({
-      alt: "Violet, the Convax pixel companion",
-      description: "A calm companion that reflects Agent activity.",
-      name: "Violet",
-      spritesheet: "assets/violet.webp",
-      spriteVersion: 2,
+      library: "pet-library.json",
+      overlay: "pet/index.html",
+      protocol: "convax.pet-host/1",
+      settings: "settings/index.html",
     })
+    expect(parsed.capabilities).toEqual(["pet.activity.read", "pet.activity.open", "pet.preferences.write"])
     expect(parsed.entry).toBeUndefined()
     expect(parsed.runtime).toBeUndefined()
-    expect(() => parseWebPluginManifest({ ...petManifest(), schema: "convax.plugin/4" })).toThrow(
-      "unsupported field",
-    )
+    expect(() => parseWebPluginManifest({ ...petManifest(), schema: "convax.plugin/4" })).toThrow()
+    expect(() =>
+      parseWebPluginManifest({
+        ...petManifest(),
+        runtime: { command: "pet-runtime", type: "mcp-stdio" },
+      }),
+    ).toThrow()
   })
 
   test.each([
-    ["remote URL", { spritesheet: "https://example.invalid/violet.webp" }],
-    ["path traversal", { spritesheet: "../violet.webp" }],
-    ["unsupported format", { spritesheet: "assets/violet.gif" }],
-    ["unsupported sprite version", { spriteVersion: 3 }],
+    ["remote library URL", { library: "https://example.invalid/pet-library.json" }],
+    ["library traversal", { library: "../pet-library.json" }],
+    ["non-JSON library", { library: "pet-library.txt" }],
+    ["non-HTML overlay", { overlay: "pet/app.js" }],
+    ["settings traversal", { settings: "../settings/index.html" }],
+    ["unsupported protocol", { protocol: "convax.pet-host/2" }],
     ["unknown fields", { source: "remote" }],
-  ])("rejects a pet with %s", (_label, override) => {
+  ])("rejects a Pet feature with %s", (_label, override) => {
     const manifest = petManifest()
     const pet = manifest.contributes.pet
     expect(() =>
       parseWebPluginManifest({
         ...manifest,
         contributes: { pet: { ...pet, ...override } },
+      }),
+    ).toThrow()
+  })
+
+  test("rejects the old spritesheet contribution and non-exact Pet capabilities", () => {
+    const manifest = petManifest()
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          pet: {
+            alt: "Legacy pet",
+            description: "Legacy one-atlas contribution",
+            name: "Legacy",
+            spritesheet: "assets/legacy.webp",
+            spriteVersion: 2,
+          },
+        },
+      }),
+    ).toThrow()
+    expect(() => parseWebPluginManifest({ ...manifest, capabilities: ["pet.activity.read"] })).toThrow()
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        capabilities: [...manifest.capabilities, "canvas.document.read"],
       }),
     ).toThrow()
   })

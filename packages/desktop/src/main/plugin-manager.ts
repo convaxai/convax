@@ -13,11 +13,8 @@ import {
   validatePortablePluginSegment,
   webPluginManifestFileName,
 } from "../plugin-contracts"
-import {
-  assertValidPetAssetInspection,
-  type PetAssetInspector,
-  type PetAssetInspection,
-} from "./pet-asset-inspector"
+import { assertValidPetAssetInspection, type PetAssetInspector, type PetAssetInspection } from "./pet-asset-inspector"
+import { parseInstalledPetLibrary } from "./pet-library"
 
 const defaultLimits = {
   maxEntryCount: 2_000,
@@ -356,6 +353,48 @@ async function assertRegularInstalledFile(pluginRoot: string, relativePath: stri
   return realPath
 }
 
+async function readBoundedInstalledFile(pluginRoot: string, relativePath: string, label: string, maximumBytes: number) {
+  const filePath = await assertRegularInstalledFile(pluginRoot, relativePath, label)
+  const before = await fs.lstat(filePath)
+  const handle = await fs.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+  try {
+    const opened = await handle.stat()
+    const currentRealPath = await fs.realpath(filePath)
+    assertInside(currentRealPath, pluginRoot, label)
+    const current = await fs.stat(currentRealPath)
+    if (
+      !before.isFile() ||
+      !opened.isFile() ||
+      !current.isFile() ||
+      before.dev !== opened.dev ||
+      before.ino !== opened.ino ||
+      before.size !== opened.size ||
+      before.mtimeMs !== opened.mtimeMs ||
+      before.ctimeMs !== opened.ctimeMs ||
+      opened.dev !== current.dev ||
+      opened.ino !== current.ino
+    ) {
+      throw new Error(`${label} changed while it was opened: ${relativePath}`)
+    }
+    if (opened.size > maximumBytes) throw new Error(`${label} exceeds the per-file size limit`)
+    const content = await handle.readFile()
+    if (content.byteLength > maximumBytes) throw new Error(`${label} exceeds the per-file size limit`)
+    const after = await handle.stat()
+    if (
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size ||
+      after.mtimeMs !== opened.mtimeMs ||
+      after.ctimeMs !== opened.ctimeMs
+    ) {
+      throw new Error(`${label} changed while it was read: ${relativePath}`)
+    }
+    return content
+  } finally {
+    await handle.close()
+  }
+}
+
 async function validateInstalledPackage(
   directory: string,
   limits: ResolvedLimits,
@@ -374,11 +413,29 @@ async function validateInstalledPackage(
   }
   const pet = manifest.contributes.pet
   if (pet) {
-    const spritesheet = await assertRegularInstalledFile(directory, pet.spritesheet, "Pet spritesheet")
+    const libraryBytes = await readBoundedInstalledFile(directory, pet.library, "Pet library", limits.maxFileBytes)
+    await assertRegularInstalledFile(directory, pet.overlay, "Pet overlay")
+    await assertRegularInstalledFile(directory, pet.settings, "Pet settings")
+    let libraryValue: unknown
+    try {
+      libraryValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(libraryBytes))
+    } catch (error) {
+      throw new Error("Pet library is not valid JSON", { cause: error })
+    }
+    const library = parseInstalledPetLibrary(libraryValue)
     if (!petAssetInspector) throw new Error("Pet asset inspection is unavailable")
-    const inspection = await petAssetInspector.inspect(spritesheet)
-    const expectedFormat: PetAssetInspection["format"] = pet.spritesheet.endsWith(".png") ? "png" : "webp"
-    assertValidPetAssetInspection(inspection, expectedFormat)
+    for (const libraryPet of library.pets) {
+      const spritesheet = await assertRegularInstalledFile(
+        directory,
+        libraryPet.spritesheet,
+        `Pet spritesheet ${libraryPet.id}`,
+      )
+      const inspection = await petAssetInspector.inspect(spritesheet)
+      const expectedFormat: PetAssetInspection["format"] = libraryPet.spritesheet.toLowerCase().endsWith(".png")
+        ? "png"
+        : "webp"
+      assertValidPetAssetInspection(inspection, expectedFormat)
+    }
   }
   return manifest
 }
