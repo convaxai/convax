@@ -27,6 +27,7 @@ function provider(overrides: Partial<InstalledPetProvider> = {}): InstalledPetPr
 class FakeWebContents extends EventEmitter {
   id = 91
   openHandler?: () => { action: "deny" }
+  postMessage = mock(() => undefined)
   send = mock(() => undefined)
   session = Object.assign(new EventEmitter(), {
     permissionCheckHandler: undefined as undefined | (() => boolean),
@@ -45,6 +46,10 @@ class FakeWebContents extends EventEmitter {
 
   setWindowOpenHandler(handler: () => { action: "deny" }) {
     this.openHandler = handler
+  }
+
+  isDestroyed() {
+    return false
   }
 }
 
@@ -91,6 +96,7 @@ function fixture(
   savedPositions: Record<string, { scaleFactor?: number; x: number; y: number }> = {},
   savedDisplayId?: string,
   configureWindow?: (window: FakeWindow, index: number) => void,
+  onLoaded = mock(async () => undefined),
 ) {
   const created: Array<{ options: Record<string, unknown>; window: FakeWindow }> = []
   const screen = new EventEmitter() as EventEmitter & {
@@ -126,6 +132,7 @@ function fixture(
       return window
     },
     onFatal,
+    onLoaded,
     onPositionChanged,
     powerMonitor,
     preloadPath: "/app/preload/pet.js",
@@ -133,7 +140,7 @@ function fixture(
     resolvePosition: (displayId) => savedPositions[displayId],
     screen,
   })
-  return { created, display, onFatal, onPositionChanged, pet, powerMonitor, screen, secondary }
+  return { created, display, onFatal, onLoaded, onPositionChanged, pet, powerMonitor, screen, secondary }
 }
 
 function settlementWithin(promise: Promise<void>) {
@@ -174,6 +181,8 @@ describe("PetWindow", () => {
     expect(created.window.webContents.openHandler?.()).toEqual({ action: "deny" })
     expect(created.window.loadedUrl).toBe(selectedProvider.overlayUrl)
     expect(value.pet.isTrustedWebContentsId(created.window.webContents.id)).toBe(true)
+    expect(value.onLoaded).toHaveBeenCalledWith(created.window.webContents, selectedProvider)
+    expect(created.window.showInactive).toHaveBeenCalledTimes(1)
 
     const sameProviderNavigation = { preventDefault: mock(() => undefined) }
     created.window.webContents.emit(
@@ -208,8 +217,6 @@ describe("PetWindow", () => {
     expect(permissionAllowed).toBe(false)
     expect(created.window.webContents.session.permissionCheckHandler?.()).toBe(false)
 
-    created.window.webContents.emit("did-finish-load")
-    expect(created.window.showInactive).toHaveBeenCalled()
     expect(created.window.webContents.send).not.toHaveBeenCalled()
   })
 
@@ -284,11 +291,24 @@ describe("PetWindow", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.created).toHaveLength(2)
     expect(value.created[1]!.window.loadedUrl).toBe("convax-plugin://soft-companion/pet/index.html")
+    expect(value.onLoaded).toHaveBeenCalledTimes(2)
 
     value.created[1]!.window.webContents.emit("render-process-gone")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.onFatal).toHaveBeenCalledTimes(1)
     expect(value.created).toHaveLength(2)
+  })
+
+  test("does not expose an overlay whose scoped host port cannot be connected", async () => {
+    const onLoaded = mock(async () => {
+      throw new Error("host connector failed")
+    })
+    const value = fixture({}, undefined, undefined, onLoaded)
+
+    await expect(value.pet.open(provider())).rejects.toThrow("host connector failed")
+    expect(value.created[0]!.window.destroyed).toBeTrue()
+    expect(value.created[0]!.window.showInactive).not.toHaveBeenCalled()
+    expect(value.pet.isTrustedWebContentsId(value.created[0]!.window.webContents.id)).toBeFalse()
   })
 
   test("tucks exactly once when the first crash recovery overlay fails to load", async () => {

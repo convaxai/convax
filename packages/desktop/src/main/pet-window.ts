@@ -40,9 +40,13 @@ interface PetNativeSession {
   ): void
 }
 
-interface PetNativeWebContents {
+export interface PetNativeWebContents {
   id: number
+  isDestroyed(): boolean
   on(event: string, listener: (...args: any[]) => void): unknown
+  once(event: string, listener: (...args: any[]) => void): unknown
+  postMessage(channel: string, message: unknown, transfer?: readonly unknown[]): void
+  removeListener(event: string, listener: (...args: any[]) => void): unknown
   session: PetNativeSession
   setWindowOpenHandler(handler: () => { action: "deny" }): void
 }
@@ -81,6 +85,7 @@ interface PetPowerMonitorPort {
 export interface PetWindowOptions {
   createWindow(options: Record<string, unknown>): PetNativeWindow
   onFatal(): Promise<void> | void
+  onLoaded?(webContents: PetNativeWebContents, provider: InstalledPetProvider): Promise<unknown> | unknown
   onPositionChanged(displayId: string, position: PetPoint, scaleFactor: number): Promise<void> | void
   powerMonitor: PetPowerMonitorPort
   preloadPath: string
@@ -277,10 +282,6 @@ export class PetWindow {
     window.webContents.session.on("will-download", (event) => event.preventDefault())
     window.webContents.session.setPermissionCheckHandler(() => false)
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-    window.webContents.on("did-finish-load", () => {
-      if (window !== this.#window || generation !== this.#generation || !this.#provider) return
-      window.showInactive()
-    })
     let crashStarted = false
     let settleCrash!: (outcome: PetCreateOutcome) => void
     const crashOutcome = new Promise<PetCreateOutcome>((resolve) => {
@@ -304,6 +305,11 @@ export class PetWindow {
     })
     const loadOutcome = Promise.resolve()
       .then(() => window.loadURL(provider.overlayUrl))
+      .then(async () => {
+        if (!this.#isCurrentCreate(window, generation, provider)) return
+        await this.#options.onLoaded?.(window.webContents, cloneProvider(provider))
+        if (this.#isCurrentCreate(window, generation, provider)) window.showInactive()
+      })
       .then<PetCreateOutcome, PetCreateOutcome>(
         () => ({ status: "loaded" }),
         (error: unknown) => ({ error, status: "load-failed" }),
