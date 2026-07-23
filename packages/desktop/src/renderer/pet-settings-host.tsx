@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 
 const petHostProtocol = "convax.pet-host/1" as const
-let petSettingsConnectionSequence = 0
 
 export interface PetSettingsProvider {
   generation: number
@@ -52,6 +51,23 @@ function isPluginId(value: unknown): value is string {
 
 function isGeneration(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1
+}
+
+function defaultPetSettingsConnectionId() {
+  return "settings-" + globalThis.crypto.randomUUID()
+}
+
+function requirePetSettingsConnectionId(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 80 ||
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new Error("Pet settings connection id is invalid")
+  }
+  return value
 }
 
 function sameIdentity(left: PetSettingsProvider, right: PetSettingsProvider) {
@@ -152,7 +168,20 @@ export class PetSettingsProviderLoader {
   start() {
     if (this.#disposed || this.#started) return
     this.#started = true
-    this.#unsubscribe = this.#client.onProviderChanged(() => this.#refresh())
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = this.#client.onProviderChanged(() => this.#refresh())
+    } catch {
+      if (!this.#disposed) this.#setSnapshot({ status: "error" })
+      return
+    }
+    if (this.#disposed) {
+      try {
+        unsubscribe()
+      } catch {}
+      return
+    }
+    this.#unsubscribe = unsubscribe
     this.#refresh()
   }
 
@@ -171,7 +200,15 @@ export class PetSettingsProviderLoader {
     if (this.#disposed) return
     const request = ++this.#request
     this.#setSnapshot({ status: "loading" })
-    void this.#client.getProvider().then(
+    if (this.#disposed || request !== this.#request) return
+    let providerQuery: Promise<PetSettingsProvider | undefined>
+    try {
+      providerQuery = this.#client.getProvider()
+    } catch {
+      if (!this.#disposed && request === this.#request) this.#setSnapshot({ status: "error" })
+      return
+    }
+    void providerQuery.then(
       (provider) => {
         if (this.#disposed || request !== this.#request) return
         if (provider === undefined) {
@@ -190,15 +227,71 @@ export class PetSettingsProviderLoader {
 
   #setSnapshot(snapshot: PetSettingsProviderSnapshot) {
     this.#snapshot = cloneProviderSnapshot(snapshot)
-    for (const listener of this.#listeners) listener(cloneProviderSnapshot(snapshot))
+    for (const listener of [...this.#listeners]) {
+      try {
+        listener(cloneProviderSnapshot(snapshot))
+      } catch {}
+    }
   }
 }
 
 export type PetSettingsFrameStatus = "idle" | "loading" | "connected" | "unavailable"
 
+interface PetSettingsFrameLoadTarget {
+  frameLoaded(): Promise<void> | void
+}
+
+export class PetSettingsFrameLifecycle {
+  #binding: string | undefined
+  #deliveredTarget: PetSettingsFrameLoadTarget | undefined
+  #deliveredVersion = 0
+  #loadVersion = 0
+  #target: PetSettingsFrameLoadTarget | undefined
+
+  bind(binding: string) {
+    if (binding === this.#binding) return
+    this.#binding = binding
+    this.#deliveredTarget = undefined
+    this.#deliveredVersion = 0
+    this.#loadVersion = 0
+    this.#target = undefined
+  }
+
+  attach(binding: string, target: PetSettingsFrameLoadTarget) {
+    if (binding !== this.#binding) return () => undefined
+    this.#target = target
+    this.#deliver()
+    return () => {
+      if (this.#target === target) this.#target = undefined
+    }
+  }
+
+  loaded(binding: string) {
+    if (binding !== this.#binding) return
+    this.#loadVersion += 1
+    this.#deliver()
+  }
+
+  #deliver() {
+    const target = this.#target
+    if (
+      !target ||
+      this.#loadVersion === 0 ||
+      (this.#deliveredVersion === this.#loadVersion && this.#deliveredTarget === target)
+    )
+      return
+    this.#deliveredVersion = this.#loadVersion
+    this.#deliveredTarget = target
+    try {
+      void Promise.resolve(target.frameLoaded()).catch(() => undefined)
+    } catch {}
+  }
+}
+
 export class PetSettingsFrameRelay {
   readonly #client: PetSettingsHostClient
   readonly #frameWindow: FrameWindowLike
+  readonly #createConnectionId: () => string
   readonly #statusListeners = new Set<(status: PetSettingsFrameStatus) => void>()
   readonly hostWindow: unknown
   #activeIdentity: PetSettingsConnectionIdentity | undefined
@@ -211,12 +304,14 @@ export class PetSettingsFrameRelay {
   constructor(options: {
     client: PetSettingsHostClient
     frameWindow: FrameWindowLike
+    createConnectionId?: () => string
     hostWindow: unknown
     provider: PetSettingsProvider
   }) {
     if (!isPetSettingsProvider(options.provider)) throw new Error("Pet settings provider is invalid")
     this.#client = options.client
     this.#frameWindow = options.frameWindow
+    this.#createConnectionId = options.createConnectionId ?? defaultPetSettingsConnectionId
     this.hostWindow = options.hostWindow
     this.#provider = { ...options.provider }
   }
@@ -241,21 +336,32 @@ export class PetSettingsFrameRelay {
     if (previous) await this.#disconnect(previous)
     if (this.#disposed || epoch !== this.#loadEpoch) return
 
+    let connectionId: string
+    try {
+      connectionId = requirePetSettingsConnectionId(this.#createConnectionId())
+    } catch {
+      this.#setStatus("unavailable")
+      return
+    }
     const identity: PetSettingsConnectionIdentity = {
-      connectionId: `settings-${++petSettingsConnectionSequence}`,
+      connectionId,
       generation: this.#provider.generation,
       pluginId: this.#provider.pluginId,
     }
     this.#activeIdentity = identity
     try {
       await this.#client.connectSettings(identity)
-      if (!this.#disposed && epoch === this.#loadEpoch && this.#activeIdentity === identity) {
-        this.#setStatus(this.#portRelayed ? "connected" : "loading")
+      if (this.#disposed || epoch !== this.#loadEpoch || this.#activeIdentity !== identity) {
+        await this.#disconnect(identity)
+        return
       }
+      this.#setStatus(this.#portRelayed ? "connected" : "loading")
     } catch {
-      if (!this.#disposed && epoch === this.#loadEpoch && this.#activeIdentity === identity) {
-        this.#setStatus("unavailable")
+      if (this.#disposed || epoch !== this.#loadEpoch || this.#activeIdentity !== identity) {
+        await this.#disconnect(identity)
+        return
       }
+      this.#setStatus("unavailable")
     }
   }
 
@@ -341,6 +447,10 @@ export function PetSettingsHost({
   const trustedProvider = isPetSettingsProvider(provider) ? provider : undefined
   const bindingKey = trustedProvider ? `${trustedProvider.pluginId}:${trustedProvider.generation}` : "unavailable"
   const frameKey = trustedProvider ? `${bindingKey}:${trustedProvider.settingsUrl}` : bindingKey
+  const frameLifecycleRef = useRef<PetSettingsFrameLifecycle | null>(null)
+  if (!frameLifecycleRef.current) frameLifecycleRef.current = new PetSettingsFrameLifecycle()
+  frameLifecycleRef.current.bind(frameKey)
+  const frameLifecycle = frameLifecycleRef.current
   const [frameSnapshot, setFrameSnapshot] = useState<{ key: string; status: PetSettingsFrameStatus }>({
     key: frameKey,
     status: "loading",
@@ -353,6 +463,7 @@ export function PetSettingsHost({
     setFrameSnapshot({ key: frameKey, status: "loading" })
     const relay = new PetSettingsFrameRelay({ client, frameWindow, hostWindow: window, provider: trustedProvider })
     relayRef.current = relay
+    const detachFrame = frameLifecycle.attach(frameKey, relay)
     const receive = (event: MessageEvent) => {
       relay.receive({ data: event.data, ports: event.ports, source: event.source })
     }
@@ -362,6 +473,7 @@ export function PetSettingsHost({
       if (!active) return
       active = false
       window.removeEventListener("message", receive)
+      detachFrame()
       unsubscribeStatus()
       if (relayRef.current === relay) relayRef.current = null
       void relay.dispose()
@@ -373,7 +485,7 @@ export function PetSettingsHost({
     })
     window.addEventListener("message", receive)
     return teardown
-  }, [client, frameKey, trustedProvider])
+  }, [client, frameKey, frameLifecycle, trustedProvider])
 
   if (!trustedProvider || frameStatus === "unavailable") {
     return (
@@ -393,7 +505,7 @@ export function PetSettingsHost({
       data-pet-settings-binding={bindingKey}
       data-pet-settings-status={frameStatus}
       key={frameKey}
-      onLoad={() => void relayRef.current?.frameLoaded()}
+      onLoad={() => frameLifecycle.loaded(frameKey)}
       ref={iframeRef}
       sandbox="allow-scripts"
       src={trustedProvider.settingsUrl}

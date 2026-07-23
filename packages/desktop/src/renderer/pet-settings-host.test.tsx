@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
+  PetSettingsFrameLifecycle,
   PetSettingsFrameRelay,
   PetSettingsHost,
   PetSettingsProviderLoader,
@@ -107,7 +108,9 @@ describe("PetSettingsHost", () => {
     expect(client.connectSettings).toHaveBeenCalledTimes(1)
     const identity = connectedIdentity(client)
     expect(identity).toEqual({
-      connectionId: expect.stringMatching(/^settings-[1-9][0-9]*$/),
+      connectionId: expect.stringMatching(
+        /^settings-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
       generation: provider.generation,
       pluginId: provider.pluginId,
     })
@@ -259,6 +262,53 @@ describe("PetSettingsHost", () => {
     expect(frameWindow.postMessage).toHaveBeenCalledWith(connectEnvelope(secondIdentity), "*", [freshPort])
   })
 
+  test("uses an injected bounded connection id factory", async () => {
+    const client = createClient()
+    const createConnectionId = mock(() => "settings-test-connection")
+    const relay = new PetSettingsFrameRelay({
+      client,
+      createConnectionId,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow: {},
+      provider,
+    })
+
+    await relay.frameLoaded()
+
+    expect(createConnectionId).toHaveBeenCalledTimes(1)
+    expect(connectedIdentity(client).connectionId).toBe("settings-test-connection")
+  })
+
+  test("contains an invalid oversized injected connection id", async () => {
+    const client = createClient()
+    const relay = new PetSettingsFrameRelay({
+      client,
+      createConnectionId: () => `settings-${"x".repeat(80)}`,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow: {},
+      provider,
+    })
+
+    await expect(relay.frameLoaded()).resolves.toBeUndefined()
+
+    expect(client.connectSettings).not.toHaveBeenCalled()
+    expect(relay.getStatus()).toBe("unavailable")
+  })
+
+  test("default connection ids remain unique across relay instances", async () => {
+    const client = createClient()
+    const first = new PetSettingsFrameRelay({ client, frameWindow: { postMessage() {} }, hostWindow: {}, provider })
+    const second = new PetSettingsFrameRelay({ client, frameWindow: { postMessage() {} }, hostWindow: {}, provider })
+    await first.frameLoaded()
+    await second.frameLoaded()
+
+    const firstId = connectedIdentity(client).connectionId
+    const secondId = connectedIdentity(client, 1).connectionId
+    expect(firstId).not.toBe(secondId)
+    expect(firstId.length).toBeLessThanOrEqual(80)
+    expect(secondId.length).toBeLessThanOrEqual(80)
+  })
+
   test("contains connection rejection and exposes an unavailable state before cleanup", async () => {
     const client = createClient()
     client.connectSettings = mock(async () => {
@@ -279,6 +329,80 @@ describe("PetSettingsHost", () => {
     const identity = connectedIdentity(client)
     await relay.dispose()
     expect(client.disconnectSettings).toHaveBeenCalledWith(identity)
+  })
+
+  test("disconnects a pending connect again when it settles after a reload", async () => {
+    const pending = deferred<void>()
+    const client = createClient()
+    client.connectSettings = mock(() =>
+      (client.connectSettings as ReturnType<typeof mock>).mock.calls.length === 1 ? pending.promise : Promise.resolve(),
+    )
+    const relay = new PetSettingsFrameRelay({
+      client,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow: {},
+      provider,
+    })
+
+    const firstLoad = relay.frameLoaded()
+    await Promise.resolve()
+    const firstIdentity = connectedIdentity(client)
+    await relay.frameLoaded()
+    expect(client.disconnectSettings).toHaveBeenCalledTimes(1)
+    expect(client.disconnectSettings).toHaveBeenLastCalledWith(firstIdentity)
+
+    pending.reject(new Error("stale connect failed"))
+    await firstLoad
+    expect(client.disconnectSettings).toHaveBeenCalledTimes(2)
+    expect(client.disconnectSettings).toHaveBeenLastCalledWith(firstIdentity)
+    expect(relay.getStatus()).not.toBe("unavailable")
+  })
+
+  test("disconnects a pending connect again when it settles after provider replacement", async () => {
+    const pending = deferred<void>()
+    const client = createClient()
+    client.connectSettings = mock(() => pending.promise)
+    const relay = new PetSettingsFrameRelay({
+      client,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow: {},
+      provider,
+    })
+
+    const load = relay.frameLoaded()
+    await Promise.resolve()
+    const identity = connectedIdentity(client)
+    await relay.replaceProvider({ ...provider, generation: provider.generation + 1 })
+    pending.resolve()
+    await load
+
+    expect(client.disconnectSettings).toHaveBeenCalledTimes(2)
+    expect(client.disconnectSettings).toHaveBeenNthCalledWith(1, identity)
+    expect(client.disconnectSettings).toHaveBeenNthCalledWith(2, identity)
+    expect(relay.getStatus()).toBe("idle")
+  })
+
+  test("disconnects a pending connect again when it settles after dispose", async () => {
+    const pending = deferred<void>()
+    const client = createClient()
+    client.connectSettings = mock(() => pending.promise)
+    const relay = new PetSettingsFrameRelay({
+      client,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow: {},
+      provider,
+    })
+
+    const load = relay.frameLoaded()
+    await Promise.resolve()
+    const identity = connectedIdentity(client)
+    await relay.dispose()
+    pending.resolve()
+    await load
+
+    expect(client.disconnectSettings).toHaveBeenCalledTimes(2)
+    expect(client.disconnectSettings).toHaveBeenNthCalledWith(1, identity)
+    expect(client.disconnectSettings).toHaveBeenNthCalledWith(2, identity)
   })
 
   test("derives a different frame binding key for provider identity changes", () => {
@@ -451,5 +575,130 @@ describe("PetSettingsProviderLoader", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1)
     expect(loader.getSnapshot()).toEqual({ status: "loading" })
     expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  test("contains synchronous provider subscription failure", () => {
+    const client = createClient()
+    client.onProviderChanged = mock(() => {
+      throw new Error("subscription failed")
+    })
+    const loader = new PetSettingsProviderLoader(client)
+
+    expect(() => loader.start()).not.toThrow()
+    expect(loader.getSnapshot()).toEqual({ status: "error" })
+    expect(client.getProvider).not.toHaveBeenCalled()
+  })
+
+  test("contains synchronous provider query failure", () => {
+    const client = createClient()
+    client.getProvider = mock(() => {
+      throw new Error("query failed")
+    })
+    const loader = new PetSettingsProviderLoader(client)
+
+    expect(() => loader.start()).not.toThrow()
+    expect(loader.getSnapshot()).toEqual({ status: "error" })
+  })
+
+  test("unsubscribes when dispose happens synchronously before registration returns", () => {
+    const client = createClient()
+    const unsubscribe = mock(() => undefined)
+    let loader: PetSettingsProviderLoader
+    client.onProviderChanged = mock((listener) => {
+      loader.dispose()
+      listener()
+      return unsubscribe
+    })
+    loader = new PetSettingsProviderLoader(client)
+
+    expect(() => loader.start()).not.toThrow()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(client.getProvider).not.toHaveBeenCalled()
+  })
+
+  test("isolates throwing snapshot listeners", async () => {
+    const client = createClient()
+    const failedListener = mock(() => {
+      throw new Error("listener failed")
+    })
+    const healthyListener = mock(() => undefined)
+    const loader = new PetSettingsProviderLoader(client)
+    loader.subscribe(failedListener)
+    loader.subscribe(healthyListener)
+
+    expect(() => loader.start()).not.toThrow()
+    await Promise.resolve()
+
+    expect(loader.getSnapshot()).toEqual({ provider, status: "ready" })
+    expect(failedListener).toHaveBeenCalled()
+    expect(healthyListener).toHaveBeenCalled()
+  })
+})
+
+describe("PetSettingsFrameLifecycle", () => {
+  function target() {
+    return { frameLoaded: mock(async () => undefined) }
+  }
+
+  test("replays a frame load that happens before the passive effect attaches", async () => {
+    const lifecycle = new PetSettingsFrameLifecycle()
+    const relay = target()
+    lifecycle.bind("soft-companion:7")
+
+    lifecycle.loaded("soft-companion:7")
+    const detach = lifecycle.attach("soft-companion:7", relay)
+    await Promise.resolve()
+
+    expect(relay.frameLoaded).toHaveBeenCalledTimes(1)
+    detach()
+  })
+
+  test("delivers a frame load that happens after attach exactly once", async () => {
+    const lifecycle = new PetSettingsFrameLifecycle()
+    const relay = target()
+    lifecycle.bind("soft-companion:7")
+    lifecycle.attach("soft-companion:7", relay)
+
+    lifecycle.loaded("soft-companion:7")
+    await Promise.resolve()
+
+    expect(relay.frameLoaded).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not duplicate delivered loads across StrictMode detach and reattach", async () => {
+    const lifecycle = new PetSettingsFrameLifecycle()
+    const relay = target()
+    lifecycle.bind("soft-companion:7")
+    let detach = lifecycle.attach("soft-companion:7", relay)
+    lifecycle.loaded("soft-companion:7")
+    await Promise.resolve()
+    detach()
+
+    detach = lifecycle.attach("soft-companion:7", relay)
+    await Promise.resolve()
+    expect(relay.frameLoaded).toHaveBeenCalledTimes(1)
+
+    detach()
+    lifecycle.loaded("soft-companion:7")
+    lifecycle.attach("soft-companion:7", relay)
+    await Promise.resolve()
+    expect(relay.frameLoaded).toHaveBeenCalledTimes(2)
+  })
+
+  test("ignores stale loads after rebinding to a new provider frame", async () => {
+    const lifecycle = new PetSettingsFrameLifecycle()
+    const previous = target()
+    const current = target()
+    lifecycle.bind("soft-companion:7")
+    lifecycle.attach("soft-companion:7", previous)
+    lifecycle.bind("other-companion:8")
+    lifecycle.attach("other-companion:8", current)
+
+    lifecycle.loaded("soft-companion:7")
+    lifecycle.loaded("other-companion:8")
+    await Promise.resolve()
+
+    expect(previous.frameLoaded).not.toHaveBeenCalled()
+    expect(current.frameLoaded).toHaveBeenCalledTimes(1)
   })
 })
