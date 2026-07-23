@@ -136,6 +136,18 @@ function fixture(
   return { created, display, onFatal, onPositionChanged, pet, powerMonitor, screen, secondary }
 }
 
+function settlementWithin(promise: Promise<void>) {
+  return Promise.race([
+    promise.then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ error, status: "rejected" as const }),
+    ),
+    new Promise<{ status: "timeout" }>((resolve) => {
+      setTimeout(() => resolve({ status: "timeout" }), 50)
+    }),
+  ])
+}
+
 describe("PetWindow", () => {
   test("creates a hardened, inactive floating window and blocks ambient browser capabilities", async () => {
     const value = fixture()
@@ -289,6 +301,62 @@ describe("PetWindow", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(value.created).toHaveLength(2)
+    expect(value.created[1]!.window.destroyed).toBe(true)
+    expect(value.onFatal).toHaveBeenCalledTimes(1)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)
+  })
+
+  test("settles the initial open from a successful recovery while its first load remains pending", async () => {
+    const never = new Promise<void>(() => undefined)
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 0) window.loadTask = never
+    })
+    const opening = value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+
+    expect(await settlementWithin(opening)).toEqual({ status: "resolved" })
+    expect(value.created).toHaveLength(2)
+    expect(value.created[0]!.window.destroyed).toBe(true)
+    expect(value.created[1]!.window.destroyed).toBe(false)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(true)
+    expect(value.onFatal).not.toHaveBeenCalled()
+  })
+
+  test("ignores the first load rejection after its recovery becomes current", async () => {
+    let rejectFirst!: (error: Error) => void
+    const firstLoad = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject
+    })
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 0) window.loadTask = firstLoad
+    })
+    const opening = value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    rejectFirst(new Error("stale first load failed"))
+
+    expect(await settlementWithin(opening)).toEqual({ status: "resolved" })
+    expect(value.created).toHaveLength(2)
+    expect(value.created[1]!.window.destroyed).toBe(false)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(true)
+    expect(value.onFatal).not.toHaveBeenCalled()
+  })
+
+  test("rejects the initial open when its crash recovery fails to load", async () => {
+    const never = new Promise<void>(() => undefined)
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 0) window.loadTask = never
+      if (index === 1) window.loadError = new Error("recovery load failed")
+    })
+    const opening = value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+
+    expect((await settlementWithin(opening)).status).toBe("rejected")
+    expect(value.created).toHaveLength(2)
+    expect(value.created[0]!.window.destroyed).toBe(true)
     expect(value.created[1]!.window.destroyed).toBe(true)
     expect(value.onFatal).toHaveBeenCalledTimes(1)
     expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)

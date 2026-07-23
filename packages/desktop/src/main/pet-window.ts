@@ -106,6 +106,12 @@ function cloneProvider(provider: InstalledPetProvider): InstalledPetProvider {
   }
 }
 
+type PetCreateOutcome =
+  | { status: "loaded" }
+  | { status: "load-failed"; error: unknown }
+  | { status: "recovered" }
+  | { status: "recovery-failed"; error: unknown }
+
 export class PetWindow {
   readonly #options: PetWindowOptions
   #crashes = 0
@@ -259,21 +265,38 @@ export class PetWindow {
       if (window !== this.#window || generation !== this.#generation || !this.#provider) return
       window.showInactive()
     })
+    let crashStarted = false
+    let settleCrash!: (outcome: PetCreateOutcome) => void
+    const crashOutcome = new Promise<PetCreateOutcome>((resolve) => {
+      settleCrash = resolve
+    })
     window.webContents.on("render-process-gone", () => {
-      void this.#handleCrash(window, generation).catch(() => undefined)
+      if (crashStarted) return
+      crashStarted = true
+      void this.#handleCrash(window, generation).then(
+        () => settleCrash({ status: "recovered" }),
+        (error: unknown) => settleCrash({ error, status: "recovery-failed" }),
+      )
     })
     window.on("closed", () => {
       if (this.#window === window) this.#window = undefined
     })
-    try {
-      await window.loadURL(provider.overlayUrl)
-    } catch (error) {
-      if (window === this.#window && generation === this.#generation) {
-        this.#window = undefined
-        this.#destroyWindow(window)
-      }
-      throw error
-    }
+    const loadOutcome = Promise.resolve()
+      .then(() => window.loadURL(provider.overlayUrl))
+      .then<PetCreateOutcome, PetCreateOutcome>(
+        () => ({ status: "loaded" }),
+        (error: unknown) => ({ error, status: "load-failed" }),
+      )
+    const outcome = await Promise.race([
+      loadOutcome.then((settled) => (crashStarted ? crashOutcome : settled)),
+      crashOutcome,
+    ])
+    if (outcome.status === "loaded" || outcome.status === "recovered") return
+    if (outcome.status === "recovery-failed") throw outcome.error
+    if (!this.#isCurrentCreate(window, generation, provider)) return
+    this.#window = undefined
+    this.#destroyWindow(window)
+    throw outcome.error
   }
 
   async #handleCrash(window: PetNativeWindow, generation: number) {
@@ -285,7 +308,7 @@ export class PetWindow {
     if (this.#crashes === 1) {
       try {
         await this.#create(generation)
-      } catch {
+      } catch (error) {
         const currentProvider = this.#provider
         if (generation !== this.#generation || !currentProvider || !sameProviderBinding(provider, currentProvider)) {
           return
@@ -295,11 +318,22 @@ export class PetWindow {
         this.#provider = undefined
         this.#destroyWindow(recovery)
         await this.#options.onFatal()
+        throw error
       }
       return
     }
     this.#provider = undefined
     await this.#options.onFatal()
+  }
+
+  #isCurrentCreate(window: PetNativeWindow, generation: number, provider: InstalledPetProvider) {
+    const currentProvider = this.#provider
+    return (
+      window === this.#window &&
+      generation === this.#generation &&
+      currentProvider !== undefined &&
+      sameProviderBinding(provider, currentProvider)
+    )
   }
 
   #destroyWindow(window: PetNativeWindow | undefined) {
