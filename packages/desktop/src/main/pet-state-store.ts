@@ -10,15 +10,18 @@ const maximumStateBytes = 512 * 1024
 const maximumPositions = 64
 const maximumWatermarks = 256
 
-export type PetSelection = { kind: "plugin"; pluginId: string } | { id: string; kind: "custom" }
+export interface PetPersistedPreferences {
+  selectedPetId?: string
+}
 
 export interface PetPersistedState {
   awake: boolean
   displayId?: string
   positions: Record<string, { scaleFactor?: number; x: number; y: number }>
+  preferences: PetPersistedPreferences
+  providerId?: string
   schema: typeof petStateSchema
   seen: Record<string, number>
-  selected?: PetSelection
 }
 
 export type PetStateWrite = Omit<PetPersistedState, "schema"> & { schema?: typeof petStateSchema }
@@ -26,6 +29,7 @@ export type PetStateWrite = Omit<PetPersistedState, "schema"> & { schema?: typeo
 export const defaultPetState: PetPersistedState = Object.freeze({
   awake: false,
   positions: Object.freeze({}),
+  preferences: Object.freeze({}),
   schema: petStateSchema,
   seen: Object.freeze({}),
 })
@@ -82,29 +86,26 @@ function parsePosition(value: unknown, label: string) {
   }
 }
 
-function parseSelection(value: unknown): PetSelection | undefined {
-  if (value === undefined) return undefined
-  const input = asRecord(value, "Pet selection")
-  if (input.kind === "plugin") {
-    exactKeys(input, ["kind", "pluginId"], ["kind", "pluginId"], "Pet Plugin selection")
-    return { kind: "plugin", pluginId: requireWebPluginId(input.pluginId) }
+function parsePreferences(value: unknown): PetPersistedPreferences {
+  const input = asRecord(value, "Pet preferences")
+  exactKeys(input, ["selectedPetId"], [], "Pet preferences")
+  if (input.selectedPetId === undefined) return {}
+  if (
+    typeof input.selectedPetId !== "string" ||
+    input.selectedPetId.length > 80 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.selectedPetId)
+  ) {
+    throw new Error("Pet selectedPetId is invalid")
   }
-  if (input.kind === "custom") {
-    exactKeys(input, ["id", "kind"], ["id", "kind"], "Custom pet selection")
-    if (typeof input.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.id)) {
-      throw new Error("Custom pet selection id is invalid")
-    }
-    return { id: input.id, kind: "custom" }
-  }
-  throw new Error("Pet selection kind is invalid")
+  return { selectedPetId: input.selectedPetId }
 }
 
 export function boundPetState(value: unknown): PetPersistedState {
   const input = asRecord(value, "Pet state")
   exactKeys(
     input,
-    ["awake", "displayId", "positions", "schema", "seen", "selected"],
-    ["awake", "positions", "seen"],
+    ["awake", "displayId", "positions", "preferences", "providerId", "schema", "seen"],
+    ["awake", "positions", "preferences", "seen"],
     "Pet state",
   )
   if (input.schema !== undefined && input.schema !== petStateSchema) throw new Error("Pet state schema is unsupported")
@@ -131,7 +132,8 @@ export function boundPetState(value: unknown): PetPersistedState {
   })
   watermarks.sort(([leftKey, left], [rightKey, right]) => right - left || leftKey.localeCompare(rightKey))
   const seen = Object.fromEntries(watermarks.slice(0, maximumWatermarks))
-  const selected = parseSelection(input.selected)
+  const preferences = parsePreferences(input.preferences)
+  const providerId = input.providerId === undefined ? undefined : requireWebPluginId(input.providerId)
   if (input.displayId !== undefined && typeof input.displayId !== "string") {
     throw new Error("Pet display id is invalid")
   }
@@ -140,9 +142,10 @@ export function boundPetState(value: unknown): PetPersistedState {
     awake: input.awake,
     ...(displayId === undefined ? {} : { displayId }),
     positions,
+    preferences,
+    ...(providerId === undefined ? {} : { providerId }),
     schema: petStateSchema,
     seen,
-    ...(selected === undefined ? {} : { selected }),
   }
 }
 
@@ -151,9 +154,10 @@ function cloneState(state: PetPersistedState): PetPersistedState {
     awake: state.awake,
     ...(state.displayId === undefined ? {} : { displayId: state.displayId }),
     positions: Object.fromEntries(Object.entries(state.positions).map(([key, value]) => [key, { ...value }])),
+    preferences: { ...state.preferences },
+    ...(state.providerId === undefined ? {} : { providerId: state.providerId }),
     schema: petStateSchema,
     seen: { ...state.seen },
-    ...(state.selected === undefined ? {} : { selected: { ...state.selected } }),
   }
 }
 

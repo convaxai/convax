@@ -19,23 +19,25 @@ afterEach(async () => {
 })
 
 describe("PetStateStore", () => {
-  test("atomically persists selection, wake state, display positions, and watermarks", async () => {
+  test("atomically persists provider preferences, wake state, display positions, and watermarks", async () => {
     const { file, store } = await fixture()
     await store.write({
       awake: true,
       displayId: "displayA",
       positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
+      preferences: { selectedPetId: "violet" },
+      providerId: "convax-pet",
       seen: { "project-a\u0000session-a": 100 },
-      selected: { kind: "plugin", pluginId: "convax-pet" },
     })
 
     expect(await store.read()).toEqual({
       awake: true,
       displayId: "displayA",
       positions: { displayA: { scaleFactor: 2, x: 40, y: 60 } },
+      preferences: { selectedPetId: "violet" },
+      providerId: "convax-pet",
       schema: "convax.pet-state/1",
       seen: { "project-a\u0000session-a": 100 },
-      selected: { kind: "plugin", pluginId: "convax-pet" },
     })
     if (process.platform !== "win32") expect((await fs.stat(file)).mode & 0o777).toBe(0o600)
     expect((await fs.readdir(path.dirname(file))).filter((name) => name.endsWith(".tmp"))).toEqual([])
@@ -60,7 +62,7 @@ describe("PetStateStore", () => {
     const positions = Object.fromEntries(
       Array.from({ length: 80 }, (_, index) => [`display-${index}`, { x: index, y: index }]),
     )
-    const state = boundPetState({ awake: false, positions, seen })
+    const state = boundPetState({ awake: false, positions, preferences: {}, seen })
 
     expect(Object.keys(state.seen)).toHaveLength(256)
     expect(Object.values(state.seen)).not.toContain(0)
@@ -70,23 +72,30 @@ describe("PetStateStore", () => {
   test("serializes independent preference and watermark updates without lost writes", async () => {
     const { store } = await fixture()
     await Promise.all([
-      store.update((state) => ({ ...state, awake: true, selected: { kind: "plugin", pluginId: "convax-pet" } })),
+      store.update((state) => ({
+        ...state,
+        awake: true,
+        preferences: { selectedPetId: "retired-pet" },
+        providerId: "convax-pet",
+      })),
       store.markSeen("project-a\u0000session-a", 900),
     ])
 
     expect(await store.read()).toMatchObject({
       awake: true,
+      preferences: { selectedPetId: "retired-pet" },
+      providerId: "convax-pet",
       seen: { "project-a\u0000session-a": 900 },
-      selected: { kind: "plugin", pluginId: "convax-pet" },
     })
   })
 
-  test("rejects unsafe selection, coordinates, timestamps, and unknown fields on write", async () => {
+  test("rejects unsafe provider preferences, coordinates, timestamps, and unknown fields on write", async () => {
     const { store } = await fixture()
     await expect(
       store.write({
         awake: true,
         positions: { displayA: { x: Number.NaN, y: 0 } },
+        preferences: {},
         seen: {},
       }),
     ).rejects.toThrow("position")
@@ -94,6 +103,7 @@ describe("PetStateStore", () => {
       store.write({
         awake: true,
         positions: {},
+        preferences: {},
         seen: { activity: -1 },
       }),
     ).rejects.toThrow("watermark")
@@ -102,9 +112,21 @@ describe("PetStateStore", () => {
         awake: true,
         extra: true,
         positions: {},
+        preferences: {},
         seen: {},
-        selected: { kind: "plugin", pluginId: "../escape" },
       }),
     ).toThrow()
+    expect(() =>
+      boundPetState({
+        awake: false,
+        positions: {},
+        preferences: { selectedPetId: "Bad_Id" },
+        providerId: "../escape",
+        seen: {},
+      }),
+    ).toThrow()
+    expect(() =>
+      boundPetState({ ...defaultPetState, selected: { kind: "plugin", pluginId: "convax-pet" } }),
+    ).toThrow("unsupported field")
   })
 })
