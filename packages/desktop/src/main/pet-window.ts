@@ -59,6 +59,10 @@ export interface PetNativeWindow {
   on(event: string, listener: (...args: any[]) => void): unknown
   once?(event: string, listener: (...args: any[]) => void): unknown
   setBounds(bounds: Partial<PetRectangle>): void
+  setVisibleOnAllWorkspaces?(
+    visible: boolean,
+    options: { visibleOnFullScreen: boolean },
+  ): void
   showInactive(): void
   webContents: PetNativeWebContents
 }
@@ -88,6 +92,7 @@ export interface PetWindowOptions {
   onLoaded?(webContents: PetNativeWebContents, provider: InstalledPetProvider): Promise<unknown> | unknown
   onPositionChanged(displayId: string, position: PetPoint, scaleFactor: number): Promise<void> | void
   powerMonitor: PetPowerMonitorPort
+  platform?: NodeJS.Platform
   preloadPath: string
   resolveDisplayId?(): string | undefined
   resolvePosition?(displayId: string): PetSavedPosition | undefined
@@ -138,12 +143,14 @@ export class PetWindow {
   #crashes = 0
   #expanded = false
   #generation = 0
+  readonly #platform: NodeJS.Platform
   #provider?: InstalledPetProvider
   #window?: PetNativeWindow
   readonly #reclampListener = () => this.#reclamp()
 
   constructor(options: PetWindowOptions) {
     this.#options = options
+    this.#platform = options.platform ?? process.platform
     options.screen.on("display-removed", this.#reclampListener)
     options.screen.on("display-metrics-changed", this.#reclampListener)
     options.powerMonitor.on("resume", this.#reclampListener)
@@ -195,8 +202,12 @@ export class PetWindow {
     if (!current || current.isDestroyed()) return
     const bounds = current.getBounds()
     const size = expanded ? petExpandedSize : petCollapsedSize
-    const display = this.#options.screen.getDisplayMatching(bounds)
-    const position = clampPetBounds(bounds, display.workArea, size)
+    const desired = {
+      x: bounds.x + bounds.width - size.width,
+      y: bounds.y + bounds.height - size.height,
+    }
+    const display = this.#options.screen.getDisplayMatching({ ...desired, ...size })
+    const position = clampPetBounds(desired, display.workArea, size)
     current.setBounds({ ...position, ...size })
   }
 
@@ -244,12 +255,14 @@ export class PetWindow {
       alwaysOnTop: true,
       focusable: true,
       frame: false,
+      fullscreenable: false,
       hasShadow: false,
       height: size.height,
       resizable: false,
       show: false,
       skipTaskbar: true,
       transparent: true,
+      ...(this.#platform === "darwin" ? { type: "panel" } : {}),
       width: size.width,
       x: position.x,
       y: position.y,
@@ -262,6 +275,9 @@ export class PetWindow {
       },
     })
     this.#window = window
+    if (this.#platform === "darwin") {
+      window.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true })
+    }
     window.setBounds({ ...position, ...size })
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     window.webContents.on("will-navigate", (event: { preventDefault(): void }, url: string) => {

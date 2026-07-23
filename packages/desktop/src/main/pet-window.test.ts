@@ -61,6 +61,9 @@ class FakeWindow extends EventEmitter {
   loadedUrl?: string
   refuseClose = false
   showInactive = mock(() => undefined)
+  setVisibleOnAllWorkspaces = mock(
+    (_visible: boolean, _options: { visibleOnFullScreen: boolean }) => undefined,
+  )
   webContents = new FakeWebContents()
 
   close() {
@@ -135,6 +138,7 @@ function fixture(
     onLoaded,
     onPositionChanged,
     powerMonitor,
+    platform: "darwin",
     preloadPath: "/app/preload/pet.js",
     resolveDisplayId: () => savedDisplayId,
     resolvePosition: (displayId) => savedPositions[displayId],
@@ -165,6 +169,7 @@ describe("PetWindow", () => {
     expect(created.options).toMatchObject({
       alwaysOnTop: true,
       frame: false,
+      fullscreenable: false,
       height: 176,
       show: false,
       skipTaskbar: true,
@@ -177,12 +182,16 @@ describe("PetWindow", () => {
         preload: "/app/preload/pet.js",
         sandbox: true,
       },
+      type: "panel",
     })
     expect(created.window.webContents.openHandler?.()).toEqual({ action: "deny" })
     expect(created.window.loadedUrl).toBe(selectedProvider.overlayUrl)
     expect(value.pet.isTrustedWebContentsId(created.window.webContents.id)).toBe(true)
     expect(value.onLoaded).toHaveBeenCalledWith(created.window.webContents, selectedProvider)
     expect(created.window.showInactive).toHaveBeenCalledTimes(1)
+    expect(created.window.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, {
+      visibleOnFullScreen: true,
+    })
 
     const sameProviderNavigation = { preventDefault: mock(() => undefined) }
     created.window.webContents.emit(
@@ -232,6 +241,22 @@ describe("PetWindow", () => {
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 5_000, y: -20 }
     value.screen.emit("display-metrics-changed")
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_824, y: 0 })
+  })
+
+  test("keeps the collapsed pet stage anchored while expanding and collapsing", async () => {
+    const value = fixture()
+    await value.pet.open(provider())
+    const before = value.created[0]!.window.getBounds()
+
+    await value.pet.setExpanded(true)
+    expect(value.created[0]!.window.getBounds()).toEqual({
+      height: 320,
+      width: 356,
+      x: before.x + before.width - 356,
+      y: before.y + before.height - 320,
+    })
+    await value.pet.setExpanded(false)
+    expect(value.created[0]!.window.getBounds()).toEqual(before)
   })
 
   test("restores and clamps the saved position for the selected display", async () => {
