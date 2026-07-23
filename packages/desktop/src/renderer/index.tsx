@@ -1216,6 +1216,12 @@ function App() {
           retry: "Retry",
         }
 
+  const reportDisplayedPetSession = useCallback((input: { projectId: string; sessionId: string }) => {
+    void window.convax.pets.markSessionDisplayed(input).catch((error) => {
+      console.error("Failed to acknowledge the displayed Pet conversation", error)
+    })
+  }, [])
+
   useEffect(
     () =>
       window.convax.pets.onNavigate((target) => {
@@ -1471,6 +1477,7 @@ function App() {
             projectId={activeProjectId}
             projectName={activeProject?.name}
             ref={agentPanelRef}
+            onSessionDisplayed={reportDisplayedPetSession}
           />
         </RendererErrorBoundary>
         {notification ? <Toast notification={notification} /> : null}

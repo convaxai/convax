@@ -209,6 +209,29 @@ export function agentSessionContentKey(state: AgentSessionState | undefined) {
   })
 }
 
+export function displayedAgentSession(input: {
+  documentVisible: boolean
+  historyVisible: boolean
+  open: boolean
+  projectId?: string
+  selectedSessionId?: string
+  stateSessionId?: string
+}) {
+  if (
+    !input.documentVisible ||
+    !input.open ||
+    input.historyVisible ||
+    !input.projectId ||
+    !input.selectedSessionId ||
+    input.stateSessionId !== input.selectedSessionId
+  )
+    return undefined
+  return {
+    projectId: input.projectId,
+    sessionId: input.selectedSessionId,
+  }
+}
+
 export class AgentSessionStateRequestTracker {
   readonly #generations = new Map<string, number>()
   #nextGeneration = 0
