@@ -19,7 +19,7 @@ export interface PetActivitySnapshot {
 }
 
 export const petHostProtocol = "convax.pet-host/1" as const
-export const petHostMaximumMessageCharacters = 64 * 1024
+export const petHostMaximumMessageBytes = 64 * 1024
 export const petHostMaximumPendingRequests = 64
 
 export type PetHostSurface = "overlay" | "settings"

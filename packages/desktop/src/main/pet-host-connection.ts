@@ -1,6 +1,8 @@
+import { Buffer } from "node:buffer"
+
 import type { WebPluginCapability } from "../plugin-contracts"
 import {
-  petHostMaximumMessageCharacters,
+  petHostMaximumMessageBytes,
   petHostMaximumPendingRequests,
   petHostProtocol,
   type PetActivitySnapshot,
@@ -68,7 +70,7 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
 function isBoundedMessage(value: unknown) {
   try {
     const text = JSON.stringify(value)
-    return text !== undefined && text.length <= petHostMaximumMessageCharacters
+    return text !== undefined && Buffer.byteLength(text, "utf8") <= petHostMaximumMessageBytes
   } catch {
     return false
   }
@@ -228,9 +230,10 @@ export class PetHostConnection {
       return
     }
 
-    if (!this.#isCurrent()) {
-      this.#sendFailure(id, "Pet provider changed")
-      this.close("Pet provider changed")
+    const initialBinding = this.#bindingStatus()
+    if (!initialBinding.current) {
+      this.#sendFailure(id, initialBinding.reason)
+      this.close(initialBinding.reason)
       return
     }
     if (this.#pending.has(id)) {
@@ -246,8 +249,9 @@ export class PetHostConnection {
     try {
       const result = await this.#dispatch(envelope.method, envelope.params)
       if (this.#closed) return
-      if (!this.#isCurrent()) {
-        this.close("Pet provider changed")
+      const completedBinding = this.#bindingStatus()
+      if (!completedBinding.current) {
+        this.close(completedBinding.reason)
         return
       }
       this.#sendSuccess(id, result)
@@ -317,11 +321,18 @@ export class PetHostConnection {
 
   #emit(event: PetHostEvent["event"], payload: PetActivitySnapshot | PetPreferences) {
     if (this.#closed) return
-    if (!this.#isCurrent()) {
-      this.close("Pet provider changed")
+    const binding = this.#bindingStatus()
+    if (!binding.current) {
+      this.close(binding.reason)
       return
     }
-    const message = { event, payload: clone(payload), protocol: petHostProtocol, type: "event" } as PetHostEvent
+    let message: PetHostEvent
+    try {
+      message = { event, payload: clone(payload), protocol: petHostProtocol, type: "event" } as PetHostEvent
+    } catch {
+      this.close("Pet host event cannot be cloned")
+      return
+    }
     if (!isBoundedMessage(message)) {
       this.close("Pet host event exceeds the size limit")
       return
@@ -333,8 +344,14 @@ export class PetHostConnection {
     return this.#binding.capabilities.includes(capability)
   }
 
-  #isCurrent() {
-    return sameBinding(this.#binding, this.#services.getBinding())
+  #bindingStatus(): { current: true } | { current: false; reason: string } {
+    try {
+      return sameBinding(this.#binding, this.#services.getBinding())
+        ? { current: true }
+        : { current: false, reason: "Pet provider changed" }
+    } catch {
+      return { current: false, reason: "Pet provider binding is unavailable" }
+    }
   }
 
   #sendFailure(id: string, error: string) {

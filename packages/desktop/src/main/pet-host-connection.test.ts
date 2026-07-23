@@ -201,6 +201,15 @@ describe("PetHostConnection", () => {
       id: "oversized",
       ok: false,
     })
+
+    await host.connection.handle(
+      request("utf8-oversized", "activity.open", { activityId: "宠".repeat(22_000), revision: 1 }),
+    )
+    expect(host.messages.at(-1)).toMatchObject({
+      error: expect.stringContaining("size limit"),
+      id: "utf8-oversized",
+      ok: false,
+    })
   })
 
   test("rejects duplicate or excessive pending request identifiers", async () => {
@@ -248,6 +257,20 @@ describe("PetHostConnection", () => {
     expect(staleAtStart.services.getActivitySnapshot).not.toHaveBeenCalled()
   })
 
+  test("contains provider binding lookup failures and closes the connection", async () => {
+    const host = fixture()
+    host.services.getBinding.mockImplementation(() => {
+      throw new Error("binding failed")
+    })
+
+    await expect(host.connection.handle(request("binding", "activity.getSnapshot"))).resolves.toBeUndefined()
+    expect(host.messages).toEqual([
+      expect.objectContaining({ error: expect.stringContaining("binding"), id: "binding", ok: false }),
+    ])
+    expect(host.unsubscribeActivity).toHaveBeenCalledTimes(1)
+    expect(host.unsubscribePreferences).toHaveBeenCalledTimes(1)
+  })
+
   test("delivers cloned activity and preference events only to eligible live surfaces", () => {
     const overlay = fixture()
     const activity = { activities: [], revision: 5 }
@@ -279,6 +302,28 @@ describe("PetHostConnection", () => {
     noRead.activity({ activities: [], revision: 1 })
     expect(noRead.services.subscribeActivity).not.toHaveBeenCalled()
     expect(noRead.messages).toEqual([])
+  })
+
+  test("contains uncloneable events and event-time binding failures", () => {
+    const uncloneable = fixture()
+    expect(() =>
+      uncloneable.activity({
+        activities: [],
+        callback: () => undefined,
+        revision: 1,
+      } as unknown as PetActivitySnapshot),
+    ).not.toThrow()
+    expect(uncloneable.unsubscribeActivity).toHaveBeenCalledTimes(1)
+    expect(uncloneable.unsubscribePreferences).toHaveBeenCalledTimes(1)
+
+    const bindingFailure = fixture()
+    bindingFailure.services.getBinding.mockImplementation(() => {
+      throw new Error("binding failed")
+    })
+    expect(() => bindingFailure.activity({ activities: [], revision: 1 })).not.toThrow()
+    expect(bindingFailure.messages).toEqual([])
+    expect(bindingFailure.unsubscribeActivity).toHaveBeenCalledTimes(1)
+    expect(bindingFailure.unsubscribePreferences).toHaveBeenCalledTimes(1)
   })
 
   test("closes once without recursing when the transport throws", async () => {
