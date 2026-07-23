@@ -32,7 +32,14 @@ function isPetConnectEnvelope(value: unknown): value is PetConnectEnvelope {
 let connected = false
 ipcRenderer.on(petHostConnectChannel, (event, envelope: unknown) => {
   const ports = event.ports ?? []
-  if (connected || window.top !== window || !isPetConnectEnvelope(envelope) || ports.length !== 1) {
+  if (
+    connected ||
+    window.top !== window ||
+    !isPetConnectEnvelope(envelope) ||
+    window.location.protocol !== "convax-plugin:" ||
+    window.location.hostname !== envelope.pluginId ||
+    ports.length !== 1
+  ) {
     for (const port of ports) port.close()
     return
   }
