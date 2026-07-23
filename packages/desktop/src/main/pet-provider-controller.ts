@@ -300,7 +300,26 @@ export class PetProviderController {
     this.#assertInitialized()
     const currentProvider = this.#provider
     const currentState = this.#requireState()
-    const nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider)
+    let nextProvider: InstalledPetProvider | undefined
+    try {
+      nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider)
+    } catch (error) {
+      if (
+        error instanceof PetProviderConflictError &&
+        currentProvider !== undefined &&
+        !error.providerIds.includes(currentProvider.pluginId)
+      ) {
+        if (currentState.awake) {
+          this.#stopActivity()
+          await this.#window.close()
+        }
+        this.#provider = undefined
+        this.#state = await this.#persistProviderState(false, undefined)
+        this.#emitProvider()
+        if (currentState.awake) this.#emitPreferences()
+      }
+      throw error
+    }
 
     if (sameProviderIdentity(currentProvider, nextProvider)) return
 

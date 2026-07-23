@@ -241,6 +241,31 @@ describe("PetProviderController", () => {
     expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
   })
 
+  test("tucks a removed awake provider before reporting a replacement conflict", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    await value.controller.updatePreferences({ selectedPetId: "violet" })
+    await value.controller.setAwake({ awake: true })
+
+    value.install(provider("beta-pet"), provider("alpha-pet"))
+    const refresh = value.controller.refresh()
+
+    await expect(refresh).rejects.toBeInstanceOf(PetProviderConflictError)
+    await expect(refresh).rejects.toThrow("alpha-pet, beta-pet")
+    expect(value.window.close).toHaveBeenCalledTimes(1)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
+    expect(value.controller.getProvider()).toBeUndefined()
+    expect(value.stateStore.state).toMatchObject({
+      awake: false,
+      preferences: { selectedPetId: "violet" },
+    })
+    expect(value.stateStore.state.providerId).toBeUndefined()
+    expect(value.controller.getPreferences()).toEqual({
+      awake: false,
+      selectedPetId: "violet",
+    })
+  })
+
   test("rejects ambiguous singleton activation deterministically but honors a persisted active provider", async () => {
     const alpha = provider("alpha-pet")
     const beta = provider("beta-pet")
