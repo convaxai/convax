@@ -48,7 +48,6 @@ interface PetNativeWebContents {
 }
 
 export interface PetNativeWindow {
-  close(): void
   destroy(): void
   getBounds(): PetRectangle
   isDestroyed(): boolean
@@ -133,7 +132,7 @@ export class PetWindow {
     this.#crashes = 0
     this.#provider = cloneProvider(provider)
     this.#window = undefined
-    if (current && !current.isDestroyed()) current.close()
+    this.#destroyWindow(current)
     try {
       await this.#create(generation)
     } catch (error) {
@@ -148,7 +147,7 @@ export class PetWindow {
     this.#provider = undefined
     const current = this.#window
     this.#window = undefined
-    if (current && !current.isDestroyed()) current.close()
+    this.#destroyWindow(current)
   }
 
   isTrustedWebContentsId(id: number) {
@@ -261,7 +260,7 @@ export class PetWindow {
       window.showInactive()
     })
     window.webContents.on("render-process-gone", () => {
-      void this.#handleCrash(window, generation)
+      void this.#handleCrash(window, generation).catch(() => undefined)
     })
     window.on("closed", () => {
       if (this.#window === window) this.#window = undefined
@@ -271,23 +270,40 @@ export class PetWindow {
     } catch (error) {
       if (window === this.#window && generation === this.#generation) {
         this.#window = undefined
-        if (!window.isDestroyed()) window.destroy()
+        this.#destroyWindow(window)
       }
       throw error
     }
   }
 
   async #handleCrash(window: PetNativeWindow, generation: number) {
-    if (window !== this.#window || generation !== this.#generation || !this.#provider) return
+    const provider = this.#provider
+    if (window !== this.#window || generation !== this.#generation || !provider) return
     this.#crashes += 1
     this.#window = undefined
-    if (!window.isDestroyed()) window.destroy()
+    this.#destroyWindow(window)
     if (this.#crashes === 1) {
-      await this.#create(generation)
+      try {
+        await this.#create(generation)
+      } catch {
+        const currentProvider = this.#provider
+        if (generation !== this.#generation || !currentProvider || !sameProviderBinding(provider, currentProvider)) {
+          return
+        }
+        const recovery = this.#window
+        this.#window = undefined
+        this.#provider = undefined
+        this.#destroyWindow(recovery)
+        await this.#options.onFatal()
+      }
       return
     }
     this.#provider = undefined
     await this.#options.onFatal()
+  }
+
+  #destroyWindow(window: PetNativeWindow | undefined) {
+    if (window && !window.isDestroyed()) window.destroy()
   }
 
   #reclamp() {

@@ -51,17 +51,21 @@ class FakeWebContents extends EventEmitter {
 class FakeWindow extends EventEmitter {
   bounds = { height: 176, width: 176, x: 600, y: 400 }
   destroyed = false
+  loadError?: Error
+  loadTask?: Promise<void>
   loadedUrl?: string
+  refuseClose = false
   showInactive = mock(() => undefined)
   webContents = new FakeWebContents()
 
   close() {
-    this.destroyed = true
-    this.emit("closed")
+    if (!this.refuseClose) this.destroy()
   }
 
   destroy() {
-    this.close()
+    if (this.destroyed) return
+    this.destroyed = true
+    this.emit("closed")
   }
 
   getBounds() {
@@ -74,6 +78,8 @@ class FakeWindow extends EventEmitter {
 
   async loadURL(url: string) {
     this.loadedUrl = url
+    await this.loadTask
+    if (this.loadError) throw this.loadError
   }
 
   setBounds(bounds: Partial<typeof this.bounds>) {
@@ -84,6 +90,7 @@ class FakeWindow extends EventEmitter {
 function fixture(
   savedPositions: Record<string, { scaleFactor?: number; x: number; y: number }> = {},
   savedDisplayId?: string,
+  configureWindow?: (window: FakeWindow, index: number) => void,
 ) {
   const created: Array<{ options: Record<string, unknown>; window: FakeWindow }> = []
   const screen = new EventEmitter() as EventEmitter & {
@@ -114,6 +121,7 @@ function fixture(
   const pet = new PetWindow({
     createWindow: (options) => {
       const window = new FakeWindow()
+      configureWindow?.(window, created.length)
       created.push({ options, window })
       return window
     },
@@ -231,6 +239,7 @@ describe("PetWindow", () => {
     await value.pet.open(provider())
     expect(value.created).toHaveLength(1)
 
+    value.created[0]!.window.refuseClose = true
     await value.pet.open(provider({ digest: "digest:soft-companion:2", generation: 2, version: "1.1.0" }))
     expect(value.created).toHaveLength(2)
     expect(value.created[0]!.window.destroyed).toBe(true)
@@ -238,6 +247,22 @@ describe("PetWindow", () => {
     await value.pet.open(provider({ digest: "digest:soft-companion:2", generation: 3, version: "1.1.0" }))
     expect(value.created).toHaveLength(3)
     expect(value.created[1]!.window.destroyed).toBe(true)
+  })
+
+  test("force-destroys untrusted overlays when tucked or disposed", async () => {
+    const tucked = fixture()
+    await tucked.pet.open(provider())
+    tucked.created[0]!.window.refuseClose = true
+    await tucked.pet.close()
+    expect(tucked.created[0]!.window.destroyed).toBe(true)
+    expect(tucked.pet.isTrustedWebContentsId(tucked.created[0]!.window.webContents.id)).toBe(false)
+
+    const disposed = fixture()
+    await disposed.pet.open(provider())
+    disposed.created[0]!.window.refuseClose = true
+    await disposed.pet.dispose()
+    expect(disposed.created[0]!.window.destroyed).toBe(true)
+    expect(disposed.pet.isTrustedWebContentsId(disposed.created[0]!.window.webContents.id)).toBe(false)
   })
 
   test("recreates once after Plugin overlay crash and tucks after a second crash", async () => {
@@ -252,6 +277,53 @@ describe("PetWindow", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.onFatal).toHaveBeenCalledTimes(1)
     expect(value.created).toHaveLength(2)
+  })
+
+  test("tucks exactly once when the first crash recovery overlay fails to load", async () => {
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 1) window.loadError = new Error("recovery load failed")
+    })
+    await value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(value.created).toHaveLength(2)
+    expect(value.created[1]!.window.destroyed).toBe(true)
+    expect(value.onFatal).toHaveBeenCalledTimes(1)
+    expect(value.pet.isTrustedWebContentsId(value.created[1]!.window.webContents.id)).toBe(false)
+  })
+
+  test("ignores a stale recovery rejection after a new provider binding opens", async () => {
+    let rejectRecovery!: (error: Error) => void
+    const recoveryLoad = new Promise<void>((_resolve, reject) => {
+      rejectRecovery = reject
+    })
+    const value = fixture({}, undefined, (window, index) => {
+      if (index === 1) window.loadTask = recoveryLoad
+    })
+    await value.pet.open(provider())
+
+    value.created[0]!.window.webContents.emit("render-process-gone")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(value.created).toHaveLength(2)
+
+    const nextProvider = provider({
+      digest: "digest:beta-pet:1",
+      generation: 2,
+      overlayUrl: "convax-plugin://beta-pet/pet/index.html",
+      pluginId: "beta-pet",
+    })
+    await value.pet.open(nextProvider)
+    rejectRecovery(new Error("stale recovery load failed"))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(value.created).toHaveLength(3)
+    expect(value.created[1]!.window.destroyed).toBe(true)
+    expect(value.created[2]!.window.destroyed).toBe(false)
+    expect(value.created[2]!.window.loadedUrl).toBe(nextProvider.overlayUrl)
+    expect(value.pet.isTrustedWebContentsId(value.created[2]!.window.webContents.id)).toBe(true)
+    expect(value.onFatal).not.toHaveBeenCalled()
   })
 })
 
