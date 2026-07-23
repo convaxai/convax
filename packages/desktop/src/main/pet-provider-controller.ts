@@ -244,7 +244,8 @@ export class PetProviderController {
           await this.#rollbackFailedOpen(error, this.#provider?.pluginId)
         }
         this.#emitPreferences()
-        return preferencesFromState(this.#state)
+        const state = this.#requireState()
+        return preferencesFromState(state)
       }
 
       if (!current.awake && !this.#windowMayBeMounted) return preferencesFromState(current)
@@ -253,7 +254,8 @@ export class PetProviderController {
         this.#emitPreferences()
       }
       await this.#closeRuntime()
-      return preferencesFromState(this.#state)
+      const state = this.#requireState()
+      return preferencesFromState(state)
     })
   }
 
