@@ -240,11 +240,22 @@ export class AgentActivityController {
     await this.refresh()
   }
 
+  async markSessionDisplayed(projectId: string, sessionId: string) {
+    const key = activityKey(projectId, sessionId)
+    const record = this.#records.get(key)
+    if (!record || (record.state.state !== "ready" && record.state.state !== "blocked")) return
+    await this.#markRecordSeen(key, record)
+  }
+
   async markSeen(activityId: string, expectedRevision: number) {
     if (expectedRevision !== this.#snapshot.revision) throw new Error("Agent activity revision is stale")
     const record = [...this.#records.values()].find((candidate) => candidate.id === activityId)
     if (!record) throw new Error("Agent activity is no longer available")
     const key = activityKey(record.projectId, record.sessionId)
+    await this.#markRecordSeen(key, record)
+  }
+
+  async #markRecordSeen(key: string, record: ActivityRecord) {
     const generation = this.#nextSessionGeneration(key)
     await this.#watermarks?.markSeen(key, record.updatedAt)
     this.#rememberSeen(key, record.updatedAt)

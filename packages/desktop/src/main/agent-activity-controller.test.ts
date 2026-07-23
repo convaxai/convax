@@ -171,6 +171,59 @@ describe("AgentActivityController", () => {
     controller.stop()
   })
 
+  test("marks a terminal session seen when its conversation is actually displayed", async () => {
+    const complete = {
+      completedAt: 500,
+      createdAt: 450,
+      id: "message-a",
+      parts: [{ id: "part-a", text: "secret response", type: "text" as const }],
+      role: "assistant" as const,
+      sessionId: "session-a",
+    }
+    const states = { "session-a": state("project-a", "session-a", "A", 500, { messages: [complete] }) }
+    const watermarks = {
+      loadSeen: mock(async () => ({})),
+      markSeen: mock(async () => undefined),
+    }
+    const { controller } = fixture({ projects: [project("project-a", "Alpha", 100)], states, watermarks })
+
+    await controller.start()
+    expect(controller.getSnapshot().activities[0]?.state).toBe("ready")
+    await controller.markSessionDisplayed("project-a", "session-a")
+
+    expect(watermarks.markSeen).toHaveBeenCalledWith("project-a\u0000session-a", 500)
+    expect(controller.getSnapshot().activities).toEqual([])
+
+    await controller.markSessionDisplayed("project-a", "missing")
+    expect(watermarks.markSeen).toHaveBeenCalledTimes(1)
+    controller.stop()
+  })
+
+  test("does not clear or watermark a visible non-terminal session", async () => {
+    const states = {
+      "session-a": state("project-a", "session-a", "A", 500, { status: { type: "busy" } }),
+      "session-b": state("project-a", "session-b", "B", 600, {
+        pendingQuestions: [{ id: "question-b", questions: [], sessionID: "session-b" }],
+      }),
+    }
+    const watermarks = {
+      loadSeen: mock(async () => ({})),
+      markSeen: mock(async () => undefined),
+    }
+    const { controller } = fixture({ projects: [project("project-a", "Alpha", 100)], states, watermarks })
+
+    await controller.start()
+    await controller.markSessionDisplayed("project-a", "session-a")
+    await controller.markSessionDisplayed("project-a", "session-b")
+
+    expect(controller.getSnapshot().activities.map(({ sessionId, state }) => [sessionId, state])).toEqual([
+      ["session-b", "needs-input"],
+      ["session-a", "running"],
+    ])
+    expect(watermarks.markSeen).not.toHaveBeenCalled()
+    controller.stop()
+  })
+
   test("marks a blocked terminal activity seen", async () => {
     const failed = {
       completedAt: 500,
