@@ -246,14 +246,22 @@ export class PetSettingsFrameLifecycle {
   #deliveredTarget: PetSettingsFrameLoadTarget | undefined
   #deliveredVersion = 0
   #loadVersion = 0
+  #pendingBinding: string | undefined
+  #pendingLoadVersion = 0
   #target: PetSettingsFrameLoadTarget | undefined
+
+  prepare(binding: string) {
+    return () => this.loaded(binding)
+  }
 
   bind(binding: string) {
     if (binding === this.#binding) return
     this.#binding = binding
     this.#deliveredTarget = undefined
     this.#deliveredVersion = 0
-    this.#loadVersion = 0
+    this.#loadVersion = this.#pendingBinding === binding ? this.#pendingLoadVersion : 0
+    this.#pendingBinding = undefined
+    this.#pendingLoadVersion = 0
     this.#target = undefined
   }
 
@@ -267,7 +275,15 @@ export class PetSettingsFrameLifecycle {
   }
 
   loaded(binding: string) {
-    if (binding !== this.#binding) return
+    if (binding !== this.#binding) {
+      if (binding === this.#pendingBinding) {
+        this.#pendingLoadVersion += 1
+      } else {
+        this.#pendingBinding = binding
+        this.#pendingLoadVersion = 1
+      }
+      return
+    }
     this.#loadVersion += 1
     this.#deliver()
   }
@@ -449,8 +465,8 @@ export function PetSettingsHost({
   const frameKey = trustedProvider ? `${bindingKey}:${trustedProvider.settingsUrl}` : bindingKey
   const frameLifecycleRef = useRef<PetSettingsFrameLifecycle | null>(null)
   if (!frameLifecycleRef.current) frameLifecycleRef.current = new PetSettingsFrameLifecycle()
-  frameLifecycleRef.current.bind(frameKey)
   const frameLifecycle = frameLifecycleRef.current
+  const frameLoaded = frameLifecycle.prepare(frameKey)
   const [frameSnapshot, setFrameSnapshot] = useState<{ key: string; status: PetSettingsFrameStatus }>({
     key: frameKey,
     status: "loading",
@@ -458,6 +474,7 @@ export function PetSettingsHost({
   const frameStatus = injectedFrameStatus ?? (frameSnapshot.key === frameKey ? frameSnapshot.status : "loading")
 
   useEffect(() => {
+    frameLifecycle.bind(frameKey)
     const frameWindow = iframeRef.current?.contentWindow
     if (!frameWindow || !trustedProvider) return
     setFrameSnapshot({ key: frameKey, status: "loading" })
@@ -505,7 +522,7 @@ export function PetSettingsHost({
       data-pet-settings-binding={bindingKey}
       data-pet-settings-status={frameStatus}
       key={frameKey}
-      onLoad={() => frameLifecycle.loaded(frameKey)}
+      onLoad={frameLoaded}
       ref={iframeRef}
       sandbox="allow-scripts"
       src={trustedProvider.settingsUrl}

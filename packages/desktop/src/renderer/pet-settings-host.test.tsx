@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, mock, spyOn, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
   PetSettingsFrameLifecycle,
@@ -458,6 +458,25 @@ describe("PetSettingsHost", () => {
     expect(first).toContain('data-pet-settings-binding="soft-companion:7"')
     expect(next).toContain('data-pet-settings-binding="other-companion:8"')
   })
+
+  test("does not bind a frame lifecycle during an uncommitted render", () => {
+    const bind = spyOn(PetSettingsFrameLifecycle.prototype, "bind")
+    try {
+      renderToStaticMarkup(
+        <PetSettingsHost
+          client={createClient()}
+          provider={{
+            generation: provider.generation + 1,
+            pluginId: "other-companion",
+            settingsUrl: "convax-plugin://other-companion/settings/index.html",
+          }}
+        />,
+      )
+      expect(bind).not.toHaveBeenCalled()
+    } finally {
+      bind.mockRestore()
+    }
+  })
 })
 
 describe("Pet settings preload integration", () => {
@@ -815,17 +834,32 @@ describe("PetSettingsFrameLifecycle", () => {
     return { frameLoaded: mock(async () => undefined) }
   }
 
-  test("replays a frame load that happens before the passive effect attaches", async () => {
+  test("replays a frame load that happens before the passive effect binds and attaches", async () => {
     const lifecycle = new PetSettingsFrameLifecycle()
     const relay = target()
-    lifecycle.bind("soft-companion:7")
+    const loaded = lifecycle.prepare("soft-companion:7")
 
-    lifecycle.loaded("soft-companion:7")
+    loaded()
+    lifecycle.bind("soft-companion:7")
     const detach = lifecycle.attach("soft-companion:7", relay)
     await Promise.resolve()
 
     expect(relay.frameLoaded).toHaveBeenCalledTimes(1)
     detach()
+  })
+
+  test("keeps a committed binding active when a prepared render is abandoned", async () => {
+    const lifecycle = new PetSettingsFrameLifecycle()
+    const current = target()
+    const loadCurrent = lifecycle.prepare("soft-companion:7")
+    lifecycle.bind("soft-companion:7")
+    lifecycle.attach("soft-companion:7", current)
+
+    lifecycle.prepare("other-companion:8")
+    loadCurrent()
+    await Promise.resolve()
+
+    expect(current.frameLoaded).toHaveBeenCalledTimes(1)
   })
 
   test("delivers a frame load that happens after attach exactly once", async () => {
