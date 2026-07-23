@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 
 const petHostProtocol = "convax.pet-host/1" as const
+let petSettingsConnectionSequence = 0
 
 export interface PetSettingsProvider {
   generation: number
@@ -201,7 +202,6 @@ export class PetSettingsFrameRelay {
   readonly #statusListeners = new Set<(status: PetSettingsFrameStatus) => void>()
   readonly hostWindow: unknown
   #activeIdentity: PetSettingsConnectionIdentity | undefined
-  #connectionSequence = 0
   #disposed = false
   #loadEpoch = 0
   #portRelayed = false
@@ -242,7 +242,7 @@ export class PetSettingsFrameRelay {
     if (this.#disposed || epoch !== this.#loadEpoch) return
 
     const identity: PetSettingsConnectionIdentity = {
-      connectionId: `settings-${++this.#connectionSequence}`,
+      connectionId: `settings-${++petSettingsConnectionSequence}`,
       generation: this.#provider.generation,
       pluginId: this.#provider.pluginId,
     }

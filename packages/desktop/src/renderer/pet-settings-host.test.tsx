@@ -226,6 +226,39 @@ describe("PetSettingsHost", () => {
     expect(frameWindow.postMessage).toHaveBeenCalledTimes(2)
   })
 
+  test("keeps connection identities fresh across relay instances", async () => {
+    const client = createClient()
+    const hostWindow = {}
+    const firstRelay = new PetSettingsFrameRelay({
+      client,
+      frameWindow: { postMessage: mock(() => undefined) },
+      hostWindow,
+      provider,
+    })
+    await firstRelay.frameLoaded()
+    const firstIdentity = connectedIdentity(client)
+    await firstRelay.dispose()
+
+    const frameWindow = { postMessage: mock(() => undefined) }
+    const secondRelay = new PetSettingsFrameRelay({ client, frameWindow, hostWindow, provider })
+    await secondRelay.frameLoaded()
+    const secondIdentity = connectedIdentity(client, 1)
+    expect(secondIdentity.connectionId).not.toBe(firstIdentity.connectionId)
+
+    const stalePort = createPort()
+    expect(
+      secondRelay.receive({ data: connectEnvelope(firstIdentity), ports: [stalePort], source: hostWindow }),
+    ).toBeFalse()
+    expect(stalePort.close).toHaveBeenCalledTimes(1)
+    expect(frameWindow.postMessage).not.toHaveBeenCalled()
+
+    const freshPort = createPort()
+    expect(
+      secondRelay.receive({ data: connectEnvelope(secondIdentity), ports: [freshPort], source: hostWindow }),
+    ).toBeTrue()
+    expect(frameWindow.postMessage).toHaveBeenCalledWith(connectEnvelope(secondIdentity), "*", [freshPort])
+  })
+
   test("contains connection rejection and exposes an unavailable state before cleanup", async () => {
     const client = createClient()
     client.connectSettings = mock(async () => {
