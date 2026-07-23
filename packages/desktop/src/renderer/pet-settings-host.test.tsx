@@ -13,11 +13,15 @@ type PreloadPortListener = (event: { ports?: Array<{ close(): void }> }, envelop
 
 const preloadInvoke = mock(async (_channel: string, _input?: unknown) => undefined)
 const preloadListeners = new Map<string, PreloadPortListener>()
-let exposedPreloadBridge: { pets: PetSettingsHostClient } | undefined
+interface TestPreloadPetSettingsClient extends PetSettingsHostClient {
+  disconnectSettings(input: TestConnectionIdentity): Promise<void>
+}
+
+let exposedPreloadBridge: { pets: TestPreloadPetSettingsClient } | undefined
 
 mock.module("electron", () => ({
   contextBridge: {
-    exposeInMainWorld(name: string, value: { pets: PetSettingsHostClient }) {
+    exposeInMainWorld(name: string, value: { pets: TestPreloadPetSettingsClient }) {
       if (name === "convax") exposedPreloadBridge = value
     },
   },
@@ -73,6 +77,39 @@ function connectEnvelope(identity: TestConnectionIdentity, input: Partial<Record
     type: "connect",
     ...input,
   }
+}
+
+async function loadPreloadHarness(postMessage = mock(() => undefined)) {
+  const preloadWindow = { postMessage } as unknown as Window & typeof globalThis
+  Object.defineProperty(preloadWindow, "top", { value: preloadWindow })
+  const previousWindow = globalThis.window
+  Object.defineProperty(globalThis, "window", { configurable: true, value: preloadWindow })
+  try {
+    await import("../preload/index")
+  } catch (error) {
+    restoreWindow()
+    throw error
+  }
+  const client = exposedPreloadBridge?.pets
+  const receivePort = preloadListeners.get("pet:settings-port")
+  if (!client || !receivePort) {
+    restoreWindow()
+    throw new Error("Pet settings preload bridge was not exposed")
+  }
+  return { client, postMessage, receivePort, restoreWindow }
+
+  function restoreWindow() {
+    if (previousWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window")
+    } else {
+      Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow })
+    }
+  }
+}
+
+async function flushPreloadPromises() {
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe("PetSettingsHost", () => {
@@ -421,65 +458,203 @@ describe("PetSettingsHost", () => {
     expect(first).toContain('data-pet-settings-binding="soft-companion:7"')
     expect(next).toContain('data-pet-settings-binding="other-companion:8"')
   })
+})
 
-  test("keeps preload and renderer connection identities aligned across reloads", async () => {
-    const firstIdentity: TestConnectionIdentity = {
-      connectionId: "settings-1",
+describe("Pet settings preload integration", () => {
+  test("waits for a matching relayed port before resolving a main-accepted connection", async () => {
+    const identity: TestConnectionIdentity = {
+      connectionId: "settings-preload-wait",
       generation: provider.generation,
       pluginId: provider.pluginId,
     }
-    const secondIdentity: TestConnectionIdentity = { ...firstIdentity, connectionId: "settings-2" }
-    const postMessage = mock(() => undefined)
-    const preloadWindow = { postMessage } as unknown as Window & typeof globalThis
-    Object.defineProperty(preloadWindow, "top", { value: preloadWindow })
-    const previousWindow = globalThis.window
-    Object.defineProperty(globalThis, "window", { configurable: true, value: preloadWindow })
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation(async () => undefined)
+    const harness = await loadPreloadHarness()
 
     try {
-      await import("../preload/index")
-      const client = exposedPreloadBridge?.pets
-      const receivePort = preloadListeners.get("pet:settings-port")
-      if (!client || !receivePort) throw new Error("Pet settings preload bridge was not exposed")
+      const connection = harness.client.connectSettings(identity)
+      const settled = mock(() => undefined)
+      void connection.then(settled, settled)
+      await flushPreloadPromises()
 
-      preloadInvoke.mockClear()
-      await client.connectSettings(firstIdentity)
-      expect(preloadInvoke).toHaveBeenNthCalledWith(1, "pet:settings-connect", firstIdentity)
+      expect(preloadInvoke).toHaveBeenCalledWith("pet:settings-connect", identity)
+      expect(settled).not.toHaveBeenCalled()
 
+      const port = createPort()
+      const envelope = connectEnvelope(identity)
+      harness.receivePort({ ports: [port] }, envelope)
+
+      await expect(connection).resolves.toBeUndefined()
+      expect(harness.postMessage).toHaveBeenCalledWith(envelope, "*", [port])
+      expect(port.close).not.toHaveBeenCalled()
+      await harness.client.disconnectSettings(identity)
+    } finally {
+      harness.restoreWindow()
+    }
+  })
+
+  test("rejects relay failure, safely closes the port, and consumes best-effort disconnect rejection", async () => {
+    const identity: TestConnectionIdentity = {
+      connectionId: "settings-preload-relay-failure",
+      generation: provider.generation,
+      pluginId: provider.pluginId,
+    }
+    const relayFailure = new Error("settings relay failed")
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation((channel: string) =>
+      channel === "pet:settings-disconnect"
+        ? Promise.reject(new Error("best-effort disconnect failed"))
+        : Promise.resolve(undefined),
+    )
+    const postMessage = mock(() => undefined)
+    postMessage.mockImplementation(() => {
+      throw relayFailure
+    })
+    const harness = await loadPreloadHarness(postMessage)
+
+    try {
+      const connection = harness.client.connectSettings(identity)
+      const rejected = mock(() => undefined)
+      void connection.catch(rejected)
+      await flushPreloadPromises()
+      const port = {
+        close: mock(() => {
+          throw new Error("port close failed")
+        }),
+      }
+
+      expect(() => harness.receivePort({ ports: [port] }, connectEnvelope(identity))).not.toThrow()
+      await flushPreloadPromises()
+      expect(postMessage).toHaveBeenCalledTimes(1)
+      expect(port.close).toHaveBeenCalledTimes(1)
+      expect(rejected).toHaveBeenCalledWith(relayFailure)
+      expect(preloadInvoke).toHaveBeenCalledWith("pet:settings-disconnect", identity)
+
+      postMessage.mockImplementation(() => undefined)
+      const retry = harness.client.connectSettings(identity)
+      await flushPreloadPromises()
+      const retryPort = createPort()
+      harness.receivePort({ ports: [retryPort] }, connectEnvelope(identity))
+      await expect(retry).resolves.toBeUndefined()
+      const disconnectError = await harness.client.disconnectSettings(identity).catch((error) => error)
+      expect(disconnectError).toEqual(new Error("best-effort disconnect failed"))
+    } finally {
+      harness.restoreWindow()
+    }
+  })
+
+  test("cancels an exact pending connection before awaiting main disconnect and closes a late port", async () => {
+    const identity: TestConnectionIdentity = {
+      connectionId: "settings-preload-pending-disconnect",
+      generation: provider.generation,
+      pluginId: provider.pluginId,
+    }
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation((channel: string) =>
+      channel === "pet:settings-disconnect"
+        ? Promise.reject(new Error("main disconnect failed"))
+        : Promise.resolve(undefined),
+    )
+    const harness = await loadPreloadHarness()
+
+    try {
+      const connection = harness.client.connectSettings(identity)
+      const cancellation = connection.catch((error) => error)
+      await flushPreloadPromises()
+      const disconnectError = await harness.client.disconnectSettings(identity).catch((error) => error)
+      expect(disconnectError).toEqual(new Error("main disconnect failed"))
+      expect(await cancellation).toEqual(new Error("Pet settings connection was disconnected"))
+
+      const latePort = createPort()
+      expect(() => harness.receivePort({ ports: [latePort] }, connectEnvelope(identity))).not.toThrow()
+      expect(latePort.close).toHaveBeenCalledTimes(1)
+      expect(harness.postMessage).not.toHaveBeenCalled()
+
+      preloadInvoke.mockImplementation(async () => undefined)
+      const retry = harness.client.connectSettings(identity)
+      await flushPreloadPromises()
+      const retryPort = createPort()
+      harness.receivePort({ ports: [retryPort] }, connectEnvelope(identity))
+      await expect(retry).resolves.toBeUndefined()
+      await harness.client.disconnectSettings(identity)
+    } finally {
+      harness.restoreWindow()
+    }
+  })
+
+  test("isolates wrong and stale ports and rejects duplicate pending identities", async () => {
+    const identity: TestConnectionIdentity = {
+      connectionId: "settings-preload-duplicate",
+      generation: provider.generation,
+      pluginId: provider.pluginId,
+    }
+    const wrongIdentity: TestConnectionIdentity = { ...identity, connectionId: "settings-preload-wrong" }
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation(async () => undefined)
+    const harness = await loadPreloadHarness()
+
+    try {
+      const connection = harness.client.connectSettings(identity)
+      const settled = mock(() => undefined)
+      void connection.then(settled, settled)
+      await flushPreloadPromises()
+
+      await expect(harness.client.connectSettings(identity)).rejects.toThrow("already pending")
       const wrongPort = createPort()
-      receivePort({ ports: [wrongPort] }, connectEnvelope(secondIdentity))
+      harness.receivePort({ ports: [wrongPort] }, connectEnvelope(wrongIdentity))
+      await flushPreloadPromises()
       expect(wrongPort.close).toHaveBeenCalledTimes(1)
-      expect(postMessage).not.toHaveBeenCalled()
+      expect(settled).not.toHaveBeenCalled()
 
-      const firstPort = createPort()
-      const firstEnvelope = connectEnvelope(firstIdentity)
-      receivePort({ ports: [firstPort] }, firstEnvelope)
-      expect(postMessage).toHaveBeenNthCalledWith(1, firstEnvelope, "*", [firstPort])
-      expect(firstPort.close).not.toHaveBeenCalled()
-
-      await client.connectSettings(secondIdentity)
-      expect(preloadInvoke).toHaveBeenNthCalledWith(2, "pet:settings-connect", secondIdentity)
-      await client.disconnectSettings(firstIdentity)
-      expect(preloadInvoke).toHaveBeenNthCalledWith(3, "pet:settings-disconnect", firstIdentity)
-
-      const secondPort = createPort()
-      const secondEnvelope = connectEnvelope(secondIdentity)
-      receivePort({ ports: [secondPort] }, secondEnvelope)
-      expect(postMessage).toHaveBeenNthCalledWith(2, secondEnvelope, "*", [secondPort])
-      expect(secondPort.close).not.toHaveBeenCalled()
+      const rightPort = createPort()
+      const envelope = connectEnvelope(identity)
+      harness.receivePort({ ports: [rightPort] }, envelope)
+      await expect(connection).resolves.toBeUndefined()
+      expect(harness.postMessage).toHaveBeenCalledWith(envelope, "*", [rightPort])
 
       const stalePort = createPort()
-      receivePort({ ports: [stalePort] }, firstEnvelope)
+      harness.receivePort({ ports: [stalePort] }, envelope)
       expect(stalePort.close).toHaveBeenCalledTimes(1)
-      expect(postMessage).toHaveBeenCalledTimes(2)
+      expect(harness.postMessage).toHaveBeenCalledTimes(1)
 
-      await client.disconnectSettings(secondIdentity)
-      expect(preloadInvoke).toHaveBeenNthCalledWith(4, "pet:settings-disconnect", secondIdentity)
+      await harness.client.disconnectSettings(identity)
+      const retry = harness.client.connectSettings(identity)
+      await flushPreloadPromises()
+      const retryPort = createPort()
+      harness.receivePort({ ports: [retryPort] }, envelope)
+      await expect(retry).resolves.toBeUndefined()
+      await harness.client.disconnectSettings(identity)
     } finally {
-      if (previousWindow === undefined) {
-        Reflect.deleteProperty(globalThis, "window")
-      } else {
-        Object.defineProperty(globalThis, "window", { configurable: true, value: previousWindow })
-      }
+      harness.restoreWindow()
+    }
+  })
+
+  test("removes a main-rejected pending identity so the exact key can retry", async () => {
+    const identity: TestConnectionIdentity = {
+      connectionId: "settings-preload-main-rejection",
+      generation: provider.generation,
+      pluginId: provider.pluginId,
+    }
+    preloadInvoke.mockClear()
+    preloadInvoke.mockImplementation((channel: string) =>
+      channel === "pet:settings-connect"
+        ? Promise.reject(new Error("main connect failed"))
+        : Promise.resolve(undefined),
+    )
+    const harness = await loadPreloadHarness()
+
+    try {
+      await expect(harness.client.connectSettings(identity)).rejects.toThrow("main connect failed")
+
+      preloadInvoke.mockImplementation(async () => undefined)
+      const retry = harness.client.connectSettings(identity)
+      await flushPreloadPromises()
+      const retryPort = createPort()
+      harness.receivePort({ ports: [retryPort] }, connectEnvelope(identity))
+      await expect(retry).resolves.toBeUndefined()
+      await harness.client.disconnectSettings(identity)
+    } finally {
+      harness.restoreWindow()
     }
   })
 })

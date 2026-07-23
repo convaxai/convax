@@ -172,8 +172,34 @@ function closePetSettingsPorts(ports: readonly MessagePort[]) {
   }
 }
 
-const requestedPetSettingsConnections = new Set<string>()
-const relayedPetSettingsConnections = new Set<string>()
+interface PendingPetSettingsConnection {
+  mainAccepted: boolean
+  portRelayed: boolean
+  reject(error: unknown): void
+  resolve(): void
+}
+
+const pendingPetSettingsConnections = new Map<string, PendingPetSettingsConnection>()
+const activePetSettingsConnections = new Set<string>()
+
+function settlePetSettingsConnection(key: string, pending: PendingPetSettingsConnection) {
+  if (pendingPetSettingsConnections.get(key) !== pending || !pending.mainAccepted || !pending.portRelayed) return
+  pendingPetSettingsConnections.delete(key)
+  activePetSettingsConnections.add(key)
+  pending.resolve()
+}
+
+function rejectPetSettingsConnection(key: string, pending: PendingPetSettingsConnection, error: unknown) {
+  if (pendingPetSettingsConnections.get(key) !== pending) return
+  pendingPetSettingsConnections.delete(key)
+  pending.reject(error)
+}
+
+function disconnectPetSettingsBestEffort(identity: PetSettingsIdentity) {
+  try {
+    void ipcRenderer.invoke(petSettingsIpcChannels.disconnect, identity).catch(() => undefined)
+  } catch {}
+}
 
 ipcRenderer.on(petSettingsIpcChannels.port, (event, envelope: unknown) => {
   const ports = event.ports ?? []
@@ -183,24 +209,20 @@ ipcRenderer.on(petSettingsIpcChannels.port, (event, envelope: unknown) => {
     return
   }
   const key = petSettingsIdentityKey(settingsEnvelope)
-  if (
-    window.top !== window ||
-    !requestedPetSettingsConnections.has(key) ||
-    relayedPetSettingsConnections.has(key) ||
-    ports.length !== 1
-  ) {
+  const pending = pendingPetSettingsConnections.get(key)
+  if (window.top !== window || pending === undefined || pending.portRelayed || ports.length !== 1) {
     closePetSettingsPorts(ports)
     return
   }
-  requestedPetSettingsConnections.delete(key)
-  relayedPetSettingsConnections.add(key)
   const port = ports[0]!
   try {
     window.postMessage(settingsEnvelope, "*", [port])
-  } catch {
-    relayedPetSettingsConnections.delete(key)
-    port.close()
-    void ipcRenderer.invoke(petSettingsIpcChannels.disconnect, {
+    pending.portRelayed = true
+    settlePetSettingsConnection(key, pending)
+  } catch (error) {
+    closePetSettingsPorts([port])
+    rejectPetSettingsConnection(key, pending, error)
+    disconnectPetSettingsBestEffort({
       connectionId: settingsEnvelope.connectionId,
       generation: settingsEnvelope.generation,
       pluginId: settingsEnvelope.pluginId,
@@ -442,21 +464,50 @@ const generationClient = {
 const petSettingsClient = {
   async connectSettings(input: PetSettingsIdentity) {
     if (!isPetSettingsIdentity(input)) throw new Error("Pet settings connection identity is invalid")
-    const key = petSettingsIdentityKey(input)
-    if (requestedPetSettingsConnections.has(key) || relayedPetSettingsConnections.has(key)) return
-    requestedPetSettingsConnections.add(key)
-    try {
-      await ipcRenderer.invoke(petSettingsIpcChannels.connect, input)
-    } catch (error) {
-      requestedPetSettingsConnections.delete(key)
-      throw error
+    const identity = { ...input }
+    const key = petSettingsIdentityKey(identity)
+    if (pendingPetSettingsConnections.has(key) || activePetSettingsConnections.has(key)) {
+      throw new Error("Pet settings connection is already pending or connected")
     }
+    let resolveConnection!: () => void
+    let rejectConnection!: (error: unknown) => void
+    const connection = new Promise<void>((resolve, reject) => {
+      resolveConnection = resolve
+      rejectConnection = reject
+    })
+    const pending: PendingPetSettingsConnection = {
+      mainAccepted: false,
+      portRelayed: false,
+      reject: rejectConnection,
+      resolve: resolveConnection,
+    }
+    pendingPetSettingsConnections.set(key, pending)
+    try {
+      void ipcRenderer.invoke(petSettingsIpcChannels.connect, identity).then(
+        () => {
+          if (pendingPetSettingsConnections.get(key) !== pending) return
+          pending.mainAccepted = true
+          settlePetSettingsConnection(key, pending)
+        },
+        (error) => {
+          rejectPetSettingsConnection(key, pending, error)
+          if (pending.portRelayed) disconnectPetSettingsBestEffort(identity)
+        },
+      )
+    } catch (error) {
+      rejectPetSettingsConnection(key, pending, error)
+    }
+    return connection
   },
   async disconnectSettings(input: PetSettingsIdentity) {
     if (!isPetSettingsIdentity(input)) throw new Error("Pet settings connection identity is invalid")
     const key = petSettingsIdentityKey(input)
-    requestedPetSettingsConnections.delete(key)
-    relayedPetSettingsConnections.delete(key)
+    const pending = pendingPetSettingsConnections.get(key)
+    if (pending) {
+      pendingPetSettingsConnections.delete(key)
+      pending.reject(new Error("Pet settings connection was disconnected"))
+    }
+    activePetSettingsConnections.delete(key)
     await ipcRenderer.invoke(petSettingsIpcChannels.disconnect, input)
   },
   getProvider: () => ipcRenderer.invoke(petSettingsIpcChannels.provider),
