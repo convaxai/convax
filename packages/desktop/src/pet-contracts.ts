@@ -143,17 +143,14 @@ export interface PetDragInput {
 }
 
 export const petIpcChannels = {
-  changed: "pet:changed",
-  deleteCustom: "pet:delete-custom",
-  drag: "pet:drag",
-  importCustom: "pet:import-custom",
-  list: "pet:list",
+  connectOverlay: "pet:connect-host",
   markDisplayed: "pet:mark-displayed",
   navigate: "pet:navigate",
-  select: "pet:select",
-  setAwake: "pet:set-awake",
-  setExpanded: "pet:set-expanded",
-  snapshot: "pet:snapshot",
+  provider: "pet:provider",
+  providerChanged: "pet:provider-changed",
+  settingsConnect: "pet:settings-connect",
+  settingsDisconnect: "pet:settings-disconnect",
+  settingsPort: "pet:settings-port",
 } as const
 
 export type PetIpcChannels = typeof petIpcChannels

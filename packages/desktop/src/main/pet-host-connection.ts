@@ -36,6 +36,7 @@ export interface PetHostServices {
 
 export interface PetHostConnectionOptions {
   binding: PetHostProviderBinding
+  onClose?(): void
   send(message: PetHostMessage): void
   services: PetHostServices
   surface: PetHostSurface
@@ -187,6 +188,7 @@ function failureResponse(id: string, error: string) {
 
 export class PetHostConnection {
   readonly #binding: PetHostProviderBinding
+  readonly #onClose: NonNullable<PetHostConnectionOptions["onClose"]>
   readonly #pending = new Set<string>()
   readonly #send: PetHostConnectionOptions["send"]
   readonly #services: PetHostServices
@@ -201,19 +203,25 @@ export class PetHostConnection {
       generation: options.binding.generation,
       pluginId: options.binding.pluginId,
     })
+    this.#onClose = options.onClose ?? (() => undefined)
     this.#send = options.send
     this.#services = options.services
     this.#surface = options.surface
 
-    if (options.surface === "overlay" && this.#hasCapability("pet.activity.read")) {
-      this.#unsubscribers.push(
-        options.services.subscribeActivity((snapshot) => this.#emit("activity.changed", snapshot)),
-      )
-    }
-    if (this.#hasCapability("pet.preferences.write") && options.services.subscribePreferences) {
-      this.#unsubscribers.push(
-        options.services.subscribePreferences((preferences) => this.#emit("preferences.changed", preferences)),
-      )
+    try {
+      if (options.surface === "overlay" && this.#hasCapability("pet.activity.read")) {
+        this.#unsubscribers.push(
+          options.services.subscribeActivity((snapshot) => this.#emit("activity.changed", snapshot)),
+        )
+      }
+      if (this.#hasCapability("pet.preferences.write") && options.services.subscribePreferences) {
+        this.#unsubscribers.push(
+          options.services.subscribePreferences((preferences) => this.#emit("preferences.changed", preferences)),
+        )
+      }
+    } catch (error) {
+      this.#finishClose()
+      throw error
     }
   }
 
@@ -284,6 +292,9 @@ export class PetHostConnection {
         unsubscribe()
       } catch {}
     }
+    try {
+      this.#onClose()
+    } catch {}
   }
 
   #assertAllowed(method: PetHostMethod) {

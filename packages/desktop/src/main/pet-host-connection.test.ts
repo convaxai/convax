@@ -22,6 +22,7 @@ function request(id: string, method: string, params: unknown = {}) {
 function fixture(
   surface: "overlay" | "settings" = "overlay",
   capabilityOverrides: readonly WebPluginCapability[] = capabilities,
+  onClose = mock(() => undefined),
 ) {
   let currentBinding: PetHostProviderBinding = {
     capabilities: [...capabilityOverrides],
@@ -67,7 +68,7 @@ function fixture(
   } satisfies PetHostServices
   const messages: unknown[] = []
   const send = mock((message: unknown) => messages.push(message))
-  const connection = new PetHostConnection({ binding: currentBinding, send, services, surface })
+  const connection = new PetHostConnection({ binding: currentBinding, onClose, send, services, surface })
   return {
     activity(next: PetActivitySnapshot) {
       activityListener?.(next)
@@ -76,6 +77,7 @@ function fixture(
       return currentBinding
     },
     connection,
+    onClose,
     messages,
     preferences(next: PetPreferences) {
       preferencesListener?.(next)
@@ -339,6 +341,7 @@ describe("PetHostConnection", () => {
     const calls = host.services.getActivitySnapshot.mock.calls.length
     await host.connection.handle(request("closed", "activity.getSnapshot"))
     expect(host.services.getActivitySnapshot).toHaveBeenCalledTimes(calls)
+    expect(host.onClose).toHaveBeenCalledTimes(1)
   })
 
   test("attempts every cleanup without throwing when an unsubscribe fails", () => {
@@ -356,6 +359,7 @@ describe("PetHostConnection", () => {
     const host = fixture()
     host.connection.close("Surface removed")
     host.connection.close("Again")
+    expect(host.onClose).toHaveBeenCalledTimes(1)
 
     expect(host.unsubscribeActivity).toHaveBeenCalledTimes(1)
     expect(host.unsubscribePreferences).toHaveBeenCalledTimes(1)

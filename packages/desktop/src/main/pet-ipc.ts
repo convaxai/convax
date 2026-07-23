@@ -1,29 +1,35 @@
-import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
+import { MessageChannelMain, ipcMain, type IpcMainInvokeEvent } from "electron"
 
 import {
+  petHostProtocol,
   petIpcChannels,
   type PetActivitySnapshot,
-  type PetActivityTarget,
-  type PetDragInput,
-  type PetInventoryItem,
-  type PetInventorySnapshot,
+  type PetHostProviderBinding,
   type PetNavigationRequest,
   type PetNavigationTarget,
+  type PetPreferences,
+  type PetPreferencesUpdate,
 } from "../pet-contracts"
+import { PetHostConnection, type PetHostServices } from "./pet-host-connection"
+import type { InstalledPetProvider } from "./pet-provider-controller"
 
-interface PetManagementPort {
-  deleteCustom(id: string): Promise<void>
-  importCustom(sourcePath: string): Promise<PetInventoryItem>
-  listPets(): Promise<PetInventorySnapshot>
-  select(id: string): Promise<void>
-  setAwake(awake: boolean): Promise<void>
-  subscribe(listener: () => void): () => void
+type Unsubscribe = () => void
+
+interface PetProviderPort {
+  getActivitySnapshot(): PetActivitySnapshot
+  getBinding(): PetHostProviderBinding | undefined
+  getPreferences(): PetPreferences
+  getProvider(): InstalledPetProvider | undefined
+  setAwake(input: { awake: boolean }): Promise<PetPreferences>
+  subscribeActivity(listener: (snapshot: PetActivitySnapshot) => void): Unsubscribe
+  subscribePreferences(listener: (preferences: PetPreferences) => void): Unsubscribe
+  subscribeProvider(listener: (provider: InstalledPetProvider | undefined) => void): Unsubscribe
+  updatePreferences(input: PetPreferencesUpdate): Promise<PetPreferences>
 }
 
 interface PetActivityNavigationPort {
-  getSnapshot(): PetActivitySnapshot
   markSeen(activityId: string, expectedRevision: number): Promise<void>
-  resolveActivity(activityId: string): PetActivityTarget | null
+  resolveActivity(activityId: string): { projectId: string; sessionId: string } | null
 }
 
 interface PetOverlayWindowPort {
@@ -39,133 +45,339 @@ interface PetMainWindow {
   webContents: { send(channel: string, target?: PetNavigationTarget): void }
 }
 
+interface PetMessagePortMain {
+  close(): void
+  on(event: "close", listener: () => void): unknown
+  on(event: "message", listener: (event: { data: unknown }) => void): unknown
+  postMessage(message: unknown): void
+  removeListener?(event: "close" | "message", listener: (...args: any[]) => void): unknown
+  start(): void
+}
+
+interface PetMessageChannelMain {
+  port1: PetMessagePortMain
+  port2: PetMessagePortMain
+}
+
+export interface PetHostWebContents {
+  id: number
+  isDestroyed(): boolean
+  once(event: "destroyed", listener: () => void): unknown
+  postMessage(channel: string, message: unknown, transfer?: readonly unknown[]): void
+  removeListener(event: "destroyed", listener: () => void): unknown
+}
+
 export interface RegisterPetIpcOptions {
+  createMessageChannel?(): PetMessageChannelMain
   getMainWindow(): PetMainWindow | null
-  isTrustedMainSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean
-  isTrustedPetSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean
+  isTrustedMainSender(event: IpcMainInvokeEvent): boolean
   openMainWindow(): Promise<PetMainWindow>
-  selectCustomPetFile(): Promise<string | null>
 }
 
-function record(value: unknown, label: string) {
+export interface PetIpcRegistration {
+  connectOverlay(sender: PetHostWebContents, binding: PetHostProviderBinding): void
+  dispose(): void
+}
+
+interface PetSettingsIdentity {
+  connectionId: string
+  generation: number
+  pluginId: string
+}
+
+interface LiveConnection {
+  closed: boolean
+  connection: PetHostConnection
+  port: PetMessagePortMain
+  senderId: number
+  settingsKey?: string
+}
+
+const maximumSettingsConnectionsPerSender = 32
+
+function exactRecord(value: unknown, keys: readonly string[], label: string) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} is invalid`)
-  return value as Record<string, unknown>
-}
-
-function exactInput(value: unknown, keys: readonly string[], label: string) {
-  const input = record(value, label)
-  if (Object.keys(input).length !== keys.length || keys.some((key) => !(key in input))) {
+  const input = value as Record<string, unknown>
+  const actual = Object.keys(input)
+  if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) {
     throw new Error(`${label} is invalid`)
   }
   return input
 }
 
-function activityRequest(value: unknown): PetNavigationRequest {
-  const input = exactInput(value, ["activityId", "revision"], "Pet activity request")
-  if (typeof input.activityId !== "string" || input.activityId.length < 1 || input.activityId.length > 128) {
-    throw new Error("Pet activity id is invalid")
+function settingsIdentity(value: unknown): PetSettingsIdentity {
+  const input = exactRecord(value, ["connectionId", "generation", "pluginId"], "Pet settings connection")
+  if (
+    typeof input.connectionId !== "string" ||
+    input.connectionId.length < 1 ||
+    input.connectionId.length > 80 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.connectionId) ||
+    !Number.isSafeInteger(input.generation) ||
+    (input.generation as number) < 1 ||
+    typeof input.pluginId !== "string" ||
+    input.pluginId.length > 80 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.pluginId)
+  ) {
+    throw new Error("Pet settings connection is invalid")
   }
-  if (!Number.isSafeInteger(input.revision) || (input.revision as number) < 0) {
-    throw new Error("Pet activity revision is invalid")
+  return {
+    connectionId: input.connectionId,
+    generation: input.generation as number,
+    pluginId: input.pluginId,
+  }
+}
+
+function activityRequest(value: unknown): PetNavigationRequest {
+  const input = exactRecord(value, ["activityId", "revision"], "Pet activity request")
+  if (
+    typeof input.activityId !== "string" ||
+    input.activityId.length < 1 ||
+    input.activityId.length > 128 ||
+    !Number.isSafeInteger(input.revision) ||
+    (input.revision as number) < 0
+  ) {
+    throw new Error("Pet activity request is invalid")
   }
   return { activityId: input.activityId, revision: input.revision as number }
 }
 
-function dragInput(value: unknown): PetDragInput {
-  const input = exactInput(value, ["dx", "dy", "phase"], "Pet drag request")
-  if (
-    typeof input.dx !== "number" ||
-    typeof input.dy !== "number" ||
-    !Number.isFinite(input.dx) ||
-    !Number.isFinite(input.dy) ||
-    Math.abs(input.dx) > 512 ||
-    Math.abs(input.dy) > 512
-  ) {
-    throw new Error("Pet drag delta must be finite and bounded")
-  }
-  if (input.phase !== "move" && input.phase !== "end") throw new Error("Pet drag phase is invalid")
-  return { dx: input.dx, dy: input.dy, phase: input.phase }
+function sameBinding(left: PetHostProviderBinding, right: PetHostProviderBinding | undefined) {
+  return (
+    right !== undefined &&
+    left.pluginId === right.pluginId &&
+    left.digest === right.digest &&
+    left.generation === right.generation &&
+    left.capabilities.length === right.capabilities.length &&
+    left.capabilities.every((capability, index) => capability === right.capabilities[index])
+  )
+}
+
+function settingsKey(senderId: number, identity: PetSettingsIdentity) {
+  return `${senderId}:${identity.pluginId}:${identity.generation}:${identity.connectionId}`
 }
 
 export function registerPetIpc(
-  controller: PetManagementPort,
+  provider: PetProviderPort,
   activity: PetActivityNavigationPort,
   overlay: PetOverlayWindowPort,
   options: RegisterPetIpcOptions,
-) {
-  const disposers: Array<() => void> = []
-  const handle = <Input, Result>(
-    channel: string,
-    trusted: (event: IpcMainInvokeEvent) => boolean,
-    operation: (input: Input) => Promise<Result> | Result,
-  ) => {
-    ipcMain.handle(channel, async (event, input: Input) => {
-      if (!trusted(event)) throw new Error("Pet IPC request came from an untrusted renderer")
-      return await operation(input)
-    })
-    disposers.push(() => ipcMain.removeHandler(channel))
-  }
+): PetIpcRegistration {
+  const connections = new Set<LiveConnection>()
+  const settingsConnections = new Map<string, LiveConnection>()
+  const observedSenders = new Map<number, { listener: () => void; sender: PetHostWebContents }>()
+  const createMessageChannel = options.createMessageChannel ?? (() => new MessageChannelMain() as PetMessageChannelMain)
+  let disposed = false
 
-  handle<undefined, PetInventorySnapshot>(petIpcChannels.list, options.isTrustedMainSender, () => controller.listPets())
-  handle<unknown, void>(petIpcChannels.select, options.isTrustedMainSender, async (value) => {
-    const input = exactInput(value, ["id"], "Pet selection request")
-    if (typeof input.id !== "string" || input.id.length < 1 || input.id.length > 160) {
-      throw new Error("Pet selection id is invalid")
+  const closeConnection = (live: LiveConnection, reason = "Pet host connection closed") => {
+    if (live.closed) return
+    live.closed = true
+    connections.delete(live)
+    if (live.settingsKey && settingsConnections.get(live.settingsKey) === live) {
+      settingsConnections.delete(live.settingsKey)
     }
-    await controller.select(input.id)
-  })
-  handle<unknown, void>(petIpcChannels.setAwake, options.isTrustedMainSender, async (value) => {
-    const input = exactInput(value, ["awake"], "Pet wake request")
-    if (typeof input.awake !== "boolean") throw new Error("Pet wake request is invalid")
-    await controller.setAwake(input.awake)
-  })
-  handle<undefined, PetInventoryItem | null>(petIpcChannels.importCustom, options.isTrustedMainSender, async () => {
-    const source = await options.selectCustomPetFile()
-    return source ? controller.importCustom(source) : null
-  })
-  handle<unknown, void>(petIpcChannels.deleteCustom, options.isTrustedMainSender, async (value) => {
-    const input = exactInput(value, ["id"], "Custom pet deletion request")
-    if (typeof input.id !== "string") throw new Error("Custom pet deletion request is invalid")
-    await controller.deleteCustom(input.id)
-  })
-  handle<unknown, void>(petIpcChannels.markDisplayed, options.isTrustedMainSender, async (value) => {
-    const { activityId, revision } = activityRequest(value)
-    if (!activity.resolveActivity(activityId)) throw new Error("Pet activity is no longer available")
-    await activity.markSeen(activityId, revision)
-  })
-  handle<unknown, void>(petIpcChannels.navigate, options.isTrustedPetSender, async (value) => {
-    const { activityId, revision } = activityRequest(value)
-    const target = activity.resolveActivity(activityId)
+    live.connection.close(reason)
+    try {
+      live.port.close()
+    } catch {}
+  }
+  const closeSender = (senderId: number) => {
+    observedSenders.delete(senderId)
+    for (const live of [...connections]) {
+      if (live.senderId === senderId) closeConnection(live, "Pet host renderer was destroyed")
+    }
+  }
+  const observeSender = (sender: PetHostWebContents) => {
+    if (observedSenders.has(sender.id)) return
+    const listener = () => closeSender(sender.id)
+    observedSenders.set(sender.id, { listener, sender })
+    sender.once("destroyed", listener)
+  }
+  const requireTrusted = (event: IpcMainInvokeEvent) => {
+    if (disposed) throw new Error("Pet IPC is disposed")
+    if (!options.isTrustedMainSender(event)) throw new Error("Pet IPC request came from an untrusted renderer")
+    const sender = event.sender as unknown as PetHostWebContents
+    if (sender.isDestroyed()) throw new Error("Pet IPC renderer was destroyed")
+    observeSender(sender)
+    return sender
+  }
+  const requireActivityTarget = (input: PetNavigationRequest) => {
+    const snapshot = provider.getActivitySnapshot()
+    if (snapshot.revision !== input.revision) throw new Error("Pet activity revision is stale")
+    if (!snapshot.activities.some((candidate) => candidate.id === input.activityId)) {
+      throw new Error("Pet activity is no longer available")
+    }
+    const target = activity.resolveActivity(input.activityId)
     if (!target) throw new Error("Pet activity is no longer available")
+    return target
+  }
+  const openActivity = async (input: PetNavigationRequest) => {
+    const target = requireActivityTarget(input)
     const mainWindow = await options.openMainWindow()
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
-    mainWindow.webContents.send(petIpcChannels.navigate, { activityId, revision, ...target })
-  })
-  handle<unknown, void>(petIpcChannels.setExpanded, options.isTrustedPetSender, async (value) => {
-    const input = exactInput(value, ["expanded"], "Pet tray request")
-    if (typeof input.expanded !== "boolean") throw new Error("Pet tray request is invalid")
-    await overlay.setExpanded(input.expanded)
-  })
-
-  const dragHandler = (event: IpcMainEvent, value: unknown) => {
-    if (!options.isTrustedPetSender(event)) throw new Error("Pet IPC request came from an untrusted renderer")
-    const input = dragInput(value)
-    void overlay.moveBy({ x: input.dx, y: input.dy }, input.phase === "end").catch(() => undefined)
+    mainWindow.webContents.send(petIpcChannels.navigate, { ...input, ...target })
   }
-  ipcMain.on(petIpcChannels.drag, dragHandler)
-  disposers.push(() => ipcMain.removeListener(petIpcChannels.drag, dragHandler))
+  const services: PetHostServices = {
+    getActivitySnapshot: () => provider.getActivitySnapshot(),
+    getBinding: () => provider.getBinding(),
+    getPreferences: () => provider.getPreferences(),
+    moveOverlay: (input) => overlay.moveBy({ x: input.dx, y: input.dy }, input.phase === "end"),
+    openActivity,
+    setAwake: (input) => provider.setAwake(input),
+    setExpanded: (input) => overlay.setExpanded(input.expanded),
+    subscribeActivity: (listener) => provider.subscribeActivity(listener),
+    subscribePreferences: (listener) => provider.subscribePreferences(listener),
+    updatePreferences: (input) => provider.updatePreferences(input),
+  }
 
-  const disposeChanged = controller.subscribe(() => {
-    options.getMainWindow()?.webContents.send(petIpcChannels.changed)
+  const connect = (
+    sender: PetHostWebContents,
+    binding: PetHostProviderBinding,
+    surface: "overlay" | "settings",
+    channel: string,
+    envelope: Record<string, unknown>,
+    key?: string,
+  ) => {
+    if (disposed) throw new Error("Pet IPC is disposed")
+    if (sender.isDestroyed()) throw new Error("Pet host renderer was destroyed")
+    if (!sameBinding(binding, provider.getBinding())) throw new Error("Pet provider changed before connecting")
+    observeSender(sender)
+    const { port1, port2 } = createMessageChannel()
+    let live: LiveConnection | undefined
+    let closedBeforeRegistration = false
+    try {
+      const connection = new PetHostConnection({
+        binding,
+        onClose: () => {
+          if (live) closeConnection(live)
+          else closedBeforeRegistration = true
+        },
+        send: (message) => port1.postMessage(message),
+        services,
+        surface,
+      })
+      if (closedBeforeRegistration) throw new Error("Pet host connection closed while connecting")
+      live = {
+        closed: false,
+        connection,
+        port: port1,
+        senderId: sender.id,
+        ...(key ? { settingsKey: key } : {}),
+      }
+      connections.add(live)
+      if (key) settingsConnections.set(key, live)
+      const receive = (event: { data: unknown }) => {
+        void connection.handle(event.data).catch(() => closeConnection(live!, "Pet host request failed"))
+      }
+      const closed = () => closeConnection(live!)
+      port1.on("message", receive)
+      port1.on("close", closed)
+      port1.start()
+      if (live.closed) throw new Error("Pet host connection closed while connecting")
+      sender.postMessage(channel, envelope, [port2])
+    } catch (error) {
+      if (live) closeConnection(live, "Pet host port could not be delivered")
+      try {
+        port1.close()
+      } catch {}
+      try {
+        port2.close()
+      } catch {}
+      throw error
+    }
+    return live
+  }
+
+  ipcMain.handle(petIpcChannels.provider, (event) => {
+    requireTrusted(event)
+    const installed = provider.getProvider()
+    return installed
+      ? { generation: installed.generation, pluginId: installed.pluginId, settingsUrl: installed.settingsUrl }
+      : undefined
   })
-  disposers.push(disposeChanged)
+  ipcMain.handle(petIpcChannels.settingsConnect, (event, value: unknown) => {
+    const sender = requireTrusted(event)
+    const identity = settingsIdentity(value)
+    const binding = provider.getBinding()
+    if (!binding || binding.pluginId !== identity.pluginId || binding.generation !== identity.generation) {
+      throw new Error("Pet settings provider changed before connecting")
+    }
+    const key = settingsKey(sender.id, identity)
+    if (settingsConnections.has(key)) throw new Error("Pet settings connection already exists")
+    const senderCount = [...settingsConnections.values()].filter((live) => live.senderId === sender.id).length
+    if (senderCount >= maximumSettingsConnectionsPerSender) {
+      throw new Error("Pet settings connection limit reached")
+    }
+    connect(
+      sender,
+      binding,
+      "settings",
+      petIpcChannels.settingsPort,
+      {
+        ...identity,
+        protocol: petHostProtocol,
+        surface: "settings",
+        type: "connect",
+      },
+      key,
+    )
+  })
+  ipcMain.handle(petIpcChannels.settingsDisconnect, (event, value: unknown) => {
+    const sender = requireTrusted(event)
+    const identity = settingsIdentity(value)
+    const key = settingsKey(sender.id, identity)
+    const live = settingsConnections.get(key)
+    if (!live) return false
+    closeConnection(live)
+    return true
+  })
+  ipcMain.handle(petIpcChannels.markDisplayed, async (event, value: unknown) => {
+    requireTrusted(event)
+    const input = activityRequest(value)
+    requireActivityTarget(input)
+    await activity.markSeen(input.activityId, input.revision)
+  })
 
-  return () => {
-    disposers
-      .splice(0)
-      .reverse()
-      .forEach((dispose) => dispose())
+  const unsubscribeProvider = provider.subscribeProvider(() => {
+    if (disposed) return
+    for (const live of [...connections]) closeConnection(live, "Pet provider changed")
+    try {
+      options.getMainWindow()?.webContents.send(petIpcChannels.providerChanged)
+    } catch {}
+  })
+
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    ipcMain.removeHandler(petIpcChannels.provider)
+    ipcMain.removeHandler(petIpcChannels.settingsConnect)
+    ipcMain.removeHandler(petIpcChannels.settingsDisconnect)
+    ipcMain.removeHandler(petIpcChannels.markDisplayed)
+    try {
+      unsubscribeProvider()
+    } catch {}
+    for (const live of [...connections]) closeConnection(live)
+    for (const { listener, sender } of observedSenders.values()) sender.removeListener("destroyed", listener)
+    observedSenders.clear()
+  }
+
+  return {
+    connectOverlay(sender, binding) {
+      if (!sameBinding(binding, provider.getBinding()))
+        throw new Error("Pet overlay provider changed before connecting")
+      for (const live of [...connections]) {
+        if (live.senderId === sender.id && live.settingsKey === undefined) {
+          closeConnection(live, "Pet overlay reconnected")
+        }
+      }
+      connect(sender, binding, "overlay", petIpcChannels.connectOverlay, {
+        pluginId: binding.pluginId,
+        protocol: petHostProtocol,
+        surface: "overlay",
+        type: "connect",
+      })
+    },
+    dispose,
   }
 }
