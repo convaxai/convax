@@ -57,16 +57,21 @@ export function sandboxedPreloadBoundaryPlugin(): Plugin {
   }
 }
 
+export const desktopPreloadInputs = {
+  index: "src/preload/index.ts",
+  pet: "src/preload/pet.ts",
+  "plugin-service-browser-authorization": "src/preload/plugin-service-browser-authorization.ts",
+} as const
+
+export const desktopRendererInputs = {
+  index: "src/renderer/index.html",
+} as const
+
 export default defineConfig({
   main: {
     build: {
       externalizeDeps: {
-        exclude: [
-          "@convax/agent-runtime",
-          "@convax/canvas",
-          "@convax/project",
-          "@opencode-ai/sdk",
-        ],
+        exclude: ["@convax/agent-runtime", "@convax/canvas", "@convax/project", "@opencode-ai/sdk"],
       },
       rollupOptions: {
         input: "src/main/index.ts",
@@ -77,11 +82,7 @@ export default defineConfig({
     plugins: [sandboxedPreloadBoundaryPlugin()],
     build: {
       rollupOptions: {
-        input: {
-          index: "src/preload/index.ts",
-          pet: "src/preload/pet.ts",
-          "plugin-service-browser-authorization": "src/preload/plugin-service-browser-authorization.ts",
-        },
+        input: desktopPreloadInputs,
         output: {
           format: "cjs",
           entryFileNames: "[name].js",
@@ -102,10 +103,7 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: {
-          index: "src/renderer/index.html",
-          pet: "src/renderer/pet/index.html",
-        },
+        input: desktopRendererInputs,
       },
     },
   },

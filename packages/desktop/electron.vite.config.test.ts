@@ -2,6 +2,8 @@ import { describe, expect, mock, test } from "bun:test"
 import type { DevEnvironment, HotUpdateOptions } from "vite"
 import {
   assertSandboxedPreloadBundle,
+  desktopPreloadInputs,
+  desktopRendererInputs,
   isWorkspaceDistPath,
   workspaceDistFullReloadPlugin,
 } from "./electron.vite.config"
@@ -63,5 +65,14 @@ describe("sandboxed Desktop preload bundles", () => {
         "pet.txt": { type: "asset" },
       }),
     ).not.toThrow()
+  })
+})
+
+describe("Pet Plugin overlay build boundary", () => {
+  test("keeps the fixed Pet connector preload but removes the host-owned Pet renderer", () => {
+    expect(desktopPreloadInputs).toMatchObject({ pet: "src/preload/pet.ts" })
+    expect(desktopRendererInputs).toEqual({
+      index: "src/renderer/index.html",
+    })
   })
 })

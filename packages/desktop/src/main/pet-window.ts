@@ -1,9 +1,9 @@
-import type { PetRendererSnapshot } from "../pet-contracts"
+import type { InstalledPetProvider } from "./pet-provider-controller"
+import { isAllowedWebPluginFrameNavigation } from "./plugin-asset-protocol"
 import { petWindowPartition } from "./pet-session"
 
 export const petCollapsedSize = { height: 176, width: 176 } as const
 export const petExpandedSize = { height: 320, width: 356 } as const
-export const petSnapshotChannel = "pet:snapshot"
 
 export interface PetPoint {
   x: number
@@ -43,7 +43,6 @@ interface PetNativeSession {
 interface PetNativeWebContents {
   id: number
   on(event: string, listener: (...args: any[]) => void): unknown
-  send(channel: string, snapshot: PetRendererSnapshot): void
   session: PetNativeSession
   setWindowOpenHandler(handler: () => { action: "deny" }): void
 }
@@ -86,21 +85,25 @@ export interface PetWindowOptions {
   onPositionChanged(displayId: string, position: PetPoint, scaleFactor: number): Promise<void> | void
   powerMonitor: PetPowerMonitorPort
   preloadPath: string
-  rendererUrl: string
   resolveDisplayId?(): string | undefined
   resolvePosition?(displayId: string): PetSavedPosition | undefined
   screen: PetScreenPort
 }
 
-function sameNavigationUrl(left: string, right: string) {
-  try {
-    const actual = new URL(left)
-    const expected = new URL(right)
-    return (
-      actual.protocol === expected.protocol && actual.host === expected.host && actual.pathname === expected.pathname
-    )
-  } catch {
-    return false
+function sameProviderBinding(left: InstalledPetProvider, right: InstalledPetProvider) {
+  return (
+    left.pluginId === right.pluginId &&
+    left.digest === right.digest &&
+    left.generation === right.generation &&
+    left.overlayUrl === right.overlayUrl
+  )
+}
+
+function cloneProvider(provider: InstalledPetProvider): InstalledPetProvider {
+  return {
+    ...provider,
+    capabilities: [...provider.capabilities],
+    contribution: { ...provider.contribution },
   }
 }
 
@@ -109,7 +112,7 @@ export class PetWindow {
   #crashes = 0
   #expanded = false
   #generation = 0
-  #snapshot?: PetRendererSnapshot
+  #provider?: InstalledPetProvider
   #window?: PetNativeWindow
   readonly #reclampListener = () => this.#reclamp()
 
@@ -120,29 +123,29 @@ export class PetWindow {
     options.powerMonitor.on("resume", this.#reclampListener)
   }
 
-  async open(snapshot: PetRendererSnapshot) {
-    this.#snapshot = snapshot
+  async open(provider: InstalledPetProvider) {
     const current = this.#window
-    if (current && !current.isDestroyed()) {
-      current.webContents.send(petSnapshotChannel, snapshot)
+    if (current && !current.isDestroyed() && this.#provider && sameProviderBinding(this.#provider, provider)) {
       current.showInactive()
       return
     }
-    this.#generation += 1
+    const generation = ++this.#generation
     this.#crashes = 0
-    await this.#create(this.#generation)
-  }
-
-  update(snapshot: PetRendererSnapshot) {
-    this.#snapshot = snapshot
-    const current = this.#window
-    if (current && !current.isDestroyed()) current.webContents.send(petSnapshotChannel, snapshot)
+    this.#provider = cloneProvider(provider)
+    this.#window = undefined
+    if (current && !current.isDestroyed()) current.close()
+    try {
+      await this.#create(generation)
+    } catch (error) {
+      if (generation === this.#generation) this.#provider = undefined
+      throw error
+    }
   }
 
   async close() {
     this.#generation += 1
     this.#crashes = 0
-    this.#snapshot = undefined
+    this.#provider = undefined
     const current = this.#window
     this.#window = undefined
     if (current && !current.isDestroyed()) current.close()
@@ -187,8 +190,8 @@ export class PetWindow {
   }
 
   async #create(generation: number) {
-    const snapshot = this.#snapshot
-    if (!snapshot || generation !== this.#generation) return
+    const provider = this.#provider
+    if (!provider || generation !== this.#generation) return
     const primaryDisplay = this.#options.screen.getPrimaryDisplay()
     const savedDisplayId = this.#options.resolveDisplayId?.()
     const savedCandidates = this.#options.screen
@@ -236,12 +239,17 @@ export class PetWindow {
     window.setBounds({ ...position, ...size })
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     window.webContents.on("will-navigate", (event: { preventDefault(): void }, url: string) => {
-      if (!sameNavigationUrl(url, this.#options.rendererUrl)) event.preventDefault()
+      if (!isAllowedWebPluginFrameNavigation(provider.overlayUrl, url, provider.pluginId)) event.preventDefault()
     })
     window.webContents.on(
       "will-frame-navigate",
       (event: { isMainFrame: boolean; preventDefault(): void; url: string }) => {
-        if (!event.isMainFrame || !sameNavigationUrl(event.url, this.#options.rendererUrl)) event.preventDefault()
+        if (
+          !event.isMainFrame ||
+          !isAllowedWebPluginFrameNavigation(provider.overlayUrl, event.url, provider.pluginId)
+        ) {
+          event.preventDefault()
+        }
       },
     )
     window.webContents.on("will-attach-webview", (event: { preventDefault(): void }) => event.preventDefault())
@@ -249,8 +257,7 @@ export class PetWindow {
     window.webContents.session.setPermissionCheckHandler(() => false)
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     window.webContents.on("did-finish-load", () => {
-      if (window !== this.#window || generation !== this.#generation || !this.#snapshot) return
-      window.webContents.send(petSnapshotChannel, this.#snapshot)
+      if (window !== this.#window || generation !== this.#generation || !this.#provider) return
       window.showInactive()
     })
     window.webContents.on("render-process-gone", () => {
@@ -259,11 +266,19 @@ export class PetWindow {
     window.on("closed", () => {
       if (this.#window === window) this.#window = undefined
     })
-    await window.loadURL(this.#options.rendererUrl)
+    try {
+      await window.loadURL(provider.overlayUrl)
+    } catch (error) {
+      if (window === this.#window && generation === this.#generation) {
+        this.#window = undefined
+        if (!window.isDestroyed()) window.destroy()
+      }
+      throw error
+    }
   }
 
   async #handleCrash(window: PetNativeWindow, generation: number) {
-    if (window !== this.#window || generation !== this.#generation || !this.#snapshot) return
+    if (window !== this.#window || generation !== this.#generation || !this.#provider) return
     this.#crashes += 1
     this.#window = undefined
     if (!window.isDestroyed()) window.destroy()
@@ -271,7 +286,7 @@ export class PetWindow {
       await this.#create(generation)
       return
     }
-    this.#snapshot = undefined
+    this.#provider = undefined
     await this.#options.onFatal()
   }
 

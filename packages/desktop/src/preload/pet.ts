@@ -1,24 +1,47 @@
-import { contextBridge, ipcRenderer } from "electron"
+import { ipcRenderer } from "electron"
 
-import type { PetIpcChannels, PetOverlayClient, PetRendererSnapshot } from "../pet-contracts"
+const petHostConnectChannel = "pet:connect-host"
+const petHostProtocol = "convax.pet-host/1"
 
-// Electron's sandboxed preload require cannot load emitted relative chunks.
-const petIpcChannels = {
-  drag: "pet:drag",
-  navigate: "pet:navigate",
-  setExpanded: "pet:set-expanded",
-  snapshot: "pet:snapshot",
-} as const satisfies Pick<PetIpcChannels, "drag" | "navigate" | "setExpanded" | "snapshot">
+interface PetConnectEnvelope {
+  pluginId: string
+  protocol: typeof petHostProtocol
+  surface: "overlay"
+  type: "connect"
+}
 
-const petOverlayClient = {
-  drag: (input) => ipcRenderer.send(petIpcChannels.drag, input),
-  navigate: (input) => ipcRenderer.invoke(petIpcChannels.navigate, input),
-  onSnapshot(listener) {
-    const handleSnapshot = (_event: Electron.IpcRendererEvent, snapshot: PetRendererSnapshot) => listener(snapshot)
-    ipcRenderer.on(petIpcChannels.snapshot, handleSnapshot)
-    return () => ipcRenderer.removeListener(petIpcChannels.snapshot, handleSnapshot)
-  },
-  setExpanded: (input) => ipcRenderer.invoke(petIpcChannels.setExpanded, input),
-} satisfies PetOverlayClient
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
 
-contextBridge.exposeInMainWorld("convaxPet", petOverlayClient)
+function isPetConnectEnvelope(value: unknown): value is PetConnectEnvelope {
+  if (!isRecord(value)) return false
+  const keys = Object.keys(value)
+  return (
+    keys.length === 4 &&
+    keys.every((key) => ["pluginId", "protocol", "surface", "type"].includes(key)) &&
+    value.protocol === petHostProtocol &&
+    value.type === "connect" &&
+    value.surface === "overlay" &&
+    typeof value.pluginId === "string" &&
+    value.pluginId.length <= 80 &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.pluginId)
+  )
+}
+
+let connected = false
+ipcRenderer.on(petHostConnectChannel, (event, envelope: unknown) => {
+  const ports = event.ports ?? []
+  if (connected || window.top !== window || !isPetConnectEnvelope(envelope) || ports.length !== 1) {
+    for (const port of ports) port.close()
+    return
+  }
+  connected = true
+  const port = ports[0]!
+  try {
+    window.postMessage(envelope, "*", [port])
+  } catch {
+    connected = false
+    port.close()
+  }
+})

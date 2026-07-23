@@ -1,20 +1,27 @@
 import { describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
 
-import type { PetRendererSnapshot } from "../pet-contracts"
+import type { InstalledPetProvider } from "./pet-provider-controller"
 import { clampPetBounds, PetWindow } from "./pet-window"
 
-const snapshot: PetRendererSnapshot = {
-  activity: { activities: [], revision: 1 },
-  pet: {
-    alt: "Violet",
-    assetUrl: "convax-pet-asset://pet/plugin%3Apet",
-    description: "A pixel companion",
-    id: "plugin:pet",
-    name: "Violet",
-    source: "plugin",
-    spriteVersion: 2,
-  },
+function provider(overrides: Partial<InstalledPetProvider> = {}): InstalledPetProvider {
+  return {
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+    contribution: {
+      library: "pet-library.json",
+      overlay: "pet/index.html",
+      protocol: "convax.pet-host/1",
+      settings: "settings/index.html",
+    },
+    digest: "digest:soft-companion:1",
+    generation: 1,
+    libraryUrl: "convax-plugin://soft-companion/pet-library.json",
+    overlayUrl: "convax-plugin://soft-companion/pet/index.html",
+    pluginId: "soft-companion",
+    settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+    version: "1.0.0",
+    ...overrides,
+  }
 }
 
 class FakeWebContents extends EventEmitter {
@@ -114,7 +121,6 @@ function fixture(
     onPositionChanged,
     powerMonitor,
     preloadPath: "/app/preload/pet.js",
-    rendererUrl: "file:///app/renderer/pet/index.html",
     resolveDisplayId: () => savedDisplayId,
     resolvePosition: (displayId) => savedPositions[displayId],
     screen,
@@ -125,7 +131,8 @@ function fixture(
 describe("PetWindow", () => {
   test("creates a hardened, inactive floating window and blocks ambient browser capabilities", async () => {
     const value = fixture()
-    await value.pet.open(snapshot)
+    const selectedProvider = provider()
+    await value.pet.open(selectedProvider)
     const created = value.created[0]!
 
     expect(created.options).toMatchObject({
@@ -145,12 +152,33 @@ describe("PetWindow", () => {
       },
     })
     expect(created.window.webContents.openHandler?.()).toEqual({ action: "deny" })
-    expect(created.window.loadedUrl).toBe("file:///app/renderer/pet/index.html")
+    expect(created.window.loadedUrl).toBe(selectedProvider.overlayUrl)
     expect(value.pet.isTrustedWebContentsId(created.window.webContents.id)).toBe(true)
 
-    const navigate = { preventDefault: mock(() => undefined) }
-    created.window.webContents.emit("will-navigate", navigate, "https://example.invalid")
-    expect(navigate.preventDefault).toHaveBeenCalled()
+    const sameProviderNavigation = { preventDefault: mock(() => undefined) }
+    created.window.webContents.emit(
+      "will-navigate",
+      sameProviderNavigation,
+      "convax-plugin://soft-companion/pet/next.html",
+    )
+    expect(sameProviderNavigation.preventDefault).not.toHaveBeenCalled()
+    for (const url of [
+      "convax-plugin://other-provider/pet/index.html",
+      "https://example.invalid/",
+      "data:text/html,escaped",
+      "file:///tmp/escaped.html",
+    ]) {
+      const navigation = { preventDefault: mock(() => undefined) }
+      created.window.webContents.emit("will-navigate", navigation, url)
+      expect(navigation.preventDefault).toHaveBeenCalled()
+    }
+    const subframe = {
+      isMainFrame: false,
+      preventDefault: mock(() => undefined),
+      url: "convax-plugin://soft-companion/pet/frame.html",
+    }
+    created.window.webContents.emit("will-frame-navigate", subframe)
+    expect(subframe.preventDefault).toHaveBeenCalled()
     const download = { preventDefault: mock(() => undefined) }
     created.window.webContents.session.emit?.("will-download", download)
     let permissionAllowed = true
@@ -162,12 +190,12 @@ describe("PetWindow", () => {
 
     created.window.webContents.emit("did-finish-load")
     expect(created.window.showInactive).toHaveBeenCalled()
-    expect(created.window.webContents.send).toHaveBeenCalledWith("pet:snapshot", snapshot)
+    expect(created.window.webContents.send).not.toHaveBeenCalled()
   })
 
   test("clamps movement, persists only completed drag, and re-clamps on display changes", async () => {
     const value = fixture()
-    await value.pet.open(snapshot)
+    await value.pet.open(provider())
     await value.pet.moveBy({ x: 5_000, y: -5_000 }, false)
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_824, y: 0 })
     expect(value.onPositionChanged).not.toHaveBeenCalled()
@@ -181,13 +209,13 @@ describe("PetWindow", () => {
 
   test("restores and clamps the saved position for the selected display", async () => {
     const value = fixture({ "7": { x: 920, y: 100 } })
-    await value.pet.open(snapshot)
+    await value.pet.open(provider())
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 824, y: 100 })
   })
 
   test("crosses displays while dragging and restores a saved secondary-display position", async () => {
     const value = fixture({ "7": { scaleFactor: 1, x: 400, y: 200 }, "8": { scaleFactor: 2, x: 1_240, y: 120 } }, "8")
-    await value.pet.open(snapshot)
+    await value.pet.open(provider())
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_240, y: 120 })
 
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 824, y: 120 }
@@ -196,16 +224,34 @@ describe("PetWindow", () => {
     expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_064, y: 120 }, 2)
   })
 
-  test("recreates once after renderer crash and tucks after a second crash", async () => {
+  test("reuses only the exact provider binding and remounts after digest or generation changes", async () => {
     const value = fixture()
-    await value.pet.open(snapshot)
+    const selectedProvider = provider()
+    await value.pet.open(selectedProvider)
+    await value.pet.open(provider())
+    expect(value.created).toHaveLength(1)
+
+    await value.pet.open(provider({ digest: "digest:soft-companion:2", generation: 2, version: "1.1.0" }))
+    expect(value.created).toHaveLength(2)
+    expect(value.created[0]!.window.destroyed).toBe(true)
+
+    await value.pet.open(provider({ digest: "digest:soft-companion:2", generation: 3, version: "1.1.0" }))
+    expect(value.created).toHaveLength(3)
+    expect(value.created[1]!.window.destroyed).toBe(true)
+  })
+
+  test("recreates once after Plugin overlay crash and tucks after a second crash", async () => {
+    const value = fixture()
+    await value.pet.open(provider())
     value.created[0]!.window.webContents.emit("render-process-gone")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.created).toHaveLength(2)
+    expect(value.created[1]!.window.loadedUrl).toBe("convax-plugin://soft-companion/pet/index.html")
 
     value.created[1]!.window.webContents.emit("render-process-gone")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.onFatal).toHaveBeenCalledTimes(1)
+    expect(value.created).toHaveLength(2)
   })
 })
 
