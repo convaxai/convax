@@ -34,7 +34,7 @@ function cloneState(state: PetPersistedState) {
 
 class MemoryStateStore {
   state: PetPersistedState
-  #nextUpdateError: Error | undefined
+  #scheduledUpdateFailure: { error: Error; successfulUpdatesBeforeFailure: number } | undefined
 
   constructor(initial: PetStateWrite | PetPersistedState = defaultPetState) {
     this.state = boundPetState(initial)
@@ -45,17 +45,24 @@ class MemoryStateStore {
   }
 
   async update(update: (state: PetPersistedState) => PetStateWrite | PetPersistedState) {
-    if (this.#nextUpdateError !== undefined) {
-      const error = this.#nextUpdateError
-      this.#nextUpdateError = undefined
-      throw error
+    if (this.#scheduledUpdateFailure !== undefined) {
+      if (this.#scheduledUpdateFailure.successfulUpdatesBeforeFailure === 0) {
+        const { error } = this.#scheduledUpdateFailure
+        this.#scheduledUpdateFailure = undefined
+        throw error
+      }
+      this.#scheduledUpdateFailure.successfulUpdatesBeforeFailure -= 1
     }
     this.state = boundPetState(update(cloneState(this.state)))
     return cloneState(this.state)
   }
 
   rejectNextUpdate(error: Error) {
-    this.#nextUpdateError = error
+    this.rejectUpdateAfter(0, error)
+  }
+
+  rejectUpdateAfter(successfulUpdatesBeforeFailure: number, error: Error) {
+    this.#scheduledUpdateFailure = { error, successfulUpdatesBeforeFailure }
   }
 }
 
@@ -263,6 +270,31 @@ describe("PetProviderController", () => {
     expect(value.window.open).toHaveBeenCalledTimes(2)
   })
 
+  test("restores old activity when an awake provider update close rejects", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    await value.controller.setAwake({ awake: true })
+    const initialProvider = value.controller.getProvider()
+    const updated = provider("convax-pet", "0.3.0")
+    value.install(updated)
+    value.digests.set(updated.id, "digest:updated")
+    const closeError = new Error("overlay close failed")
+    value.window.close.mockRejectedValueOnce(closeError)
+
+    await expect(value.controller.refresh()).rejects.toBe(closeError)
+
+    expect(value.controller.getProvider()).toEqual(initialProvider)
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
+
+    await value.controller.refresh()
+    expect(value.controller.getProvider()).toMatchObject({ digest: "digest:updated" })
+    expect(value.window.close).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(3)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(2)
+  })
+
   test("tucks and removes the provider on uninstall without discarding Plugin-owned preferences", async () => {
     const value = fixture({ installed: [provider()] })
     await value.controller.initialize()
@@ -300,6 +332,29 @@ describe("PetProviderController", () => {
     expect(value.controller.getProvider()).toBeUndefined()
     expect(value.controller.getPreferences()).toEqual({ awake: false, selectedPetId: "violet" })
     expect(value.window.close).toHaveBeenCalledTimes(1)
+  })
+
+  test("restores old activity when an awake provider uninstall close rejects", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    await value.controller.setAwake({ awake: true })
+    value.install()
+    const closeError = new Error("overlay close failed")
+    value.window.close.mockRejectedValueOnce(closeError)
+
+    await expect(value.controller.refresh()).rejects.toBe(closeError)
+
+    expect(value.controller.getProvider()?.pluginId).toBe("convax-pet")
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
+
+    await value.controller.refresh()
+    expect(value.controller.getProvider()).toBeUndefined()
+    expect(value.controller.getPreferences()).toEqual({ awake: false })
+    expect(value.window.close).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(2)
   })
 
   test("tucks a removed awake provider before reporting a replacement conflict", async () => {
@@ -352,6 +407,31 @@ describe("PetProviderController", () => {
     expect(value.window.close).toHaveBeenCalledTimes(1)
   })
 
+  test("restores old activity when removed-provider conflict cleanup close rejects", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    await value.controller.setAwake({ awake: true })
+    value.install(provider("beta-pet"), provider("alpha-pet"))
+    const closeError = new Error("overlay close failed")
+    value.window.close.mockRejectedValueOnce(closeError)
+
+    await expect(value.controller.refresh()).rejects.toBe(closeError)
+
+    expect(value.controller.getProvider()?.pluginId).toBe("convax-pet")
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(1)
+
+    const retry = value.controller.refresh()
+    await expect(retry).rejects.toBeInstanceOf(PetProviderConflictError)
+    await expect(retry).rejects.toThrow("alpha-pet, beta-pet")
+    expect(value.controller.getProvider()).toBeUndefined()
+    expect(value.controller.getPreferences()).toEqual({ awake: false })
+    expect(value.window.close).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+    expect(value.unsubscribeActivity).toHaveBeenCalledTimes(2)
+  })
+
   test("rejects ambiguous singleton activation deterministically but honors a persisted active provider", async () => {
     const alpha = provider("alpha-pet")
     const beta = provider("beta-pet")
@@ -373,6 +453,90 @@ describe("PetProviderController", () => {
     })
     await selected.controller.initialize()
     expect(selected.controller.getProvider()?.pluginId).toBe("beta-pet")
+  })
+
+  test("preserves an open error when awake rollback persistence fails and retries runtime recovery", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    const openError = new Error("overlay open failed")
+    value.window.open.mockRejectedValueOnce(openError)
+    value.stateStore.rejectUpdateAfter(1, new Error("awake rollback failed"))
+
+    await expect(value.controller.setAwake({ awake: true })).rejects.toBe(openError)
+
+    expect(value.window.close).toHaveBeenCalledTimes(1)
+    expect(value.stateStore.state.awake).toBe(true)
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+    expect(value.activity.subscribe).not.toHaveBeenCalled()
+
+    await value.controller.setAwake({ awake: true })
+    expect(value.window.open).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  test("preserves a subscribe error when awake rollback persistence fails and retries runtime recovery", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    const subscribeError = new Error("activity subscription failed")
+    value.activity.subscribe.mockImplementationOnce(() => {
+      throw subscribeError
+    })
+    value.stateStore.rejectUpdateAfter(1, new Error("awake rollback failed"))
+
+    await expect(value.controller.setAwake({ awake: true })).rejects.toBe(subscribeError)
+
+    expect(value.window.close).toHaveBeenCalledTimes(1)
+    expect(value.stateStore.state.awake).toBe(true)
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+
+    await value.controller.setAwake({ awake: true })
+    expect(value.window.open).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
+  })
+
+  test("preserves an initialize open error when awake rollback persistence fails", async () => {
+    const value = fixture({
+      installed: [provider()],
+      state: {
+        awake: true,
+        positions: {},
+        preferences: {},
+        providerId: "convax-pet",
+        seen: {},
+      },
+    })
+    const openError = new Error("overlay open failed")
+    value.window.open.mockRejectedValueOnce(openError)
+    value.stateStore.rejectUpdateAfter(1, new Error("awake rollback failed"))
+
+    await expect(value.controller.initialize()).rejects.toBe(openError)
+
+    expect(value.window.close).toHaveBeenCalledTimes(1)
+    expect(value.stateStore.state.awake).toBe(true)
+    await value.controller.setAwake({ awake: true })
+    expect(value.window.open).toHaveBeenCalledTimes(2)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  test("preserves a refresh open error when awake rollback persistence fails", async () => {
+    const value = fixture({ installed: [provider()] })
+    await value.controller.initialize()
+    await value.controller.setAwake({ awake: true })
+    const updated = provider("convax-pet", "0.3.0")
+    value.install(updated)
+    value.digests.set(updated.id, "digest:updated")
+    const openError = new Error("updated overlay open failed")
+    value.window.open.mockRejectedValueOnce(openError)
+    value.stateStore.rejectUpdateAfter(1, new Error("awake rollback failed"))
+
+    await expect(value.controller.refresh()).rejects.toBe(openError)
+
+    expect(value.controller.getProvider()).toMatchObject({ digest: "digest:updated" })
+    expect(value.stateStore.state.awake).toBe(true)
+    expect(value.controller.getPreferences()).toEqual({ awake: true })
+    await value.controller.setAwake({ awake: true })
+    expect(value.window.open).toHaveBeenCalledTimes(3)
+    expect(value.activity.subscribe).toHaveBeenCalledTimes(2)
   })
 
   test("best-effort closes a partially mounted window after open rejects without replacing the error", async () => {

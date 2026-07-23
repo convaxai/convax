@@ -230,15 +230,18 @@ export class PetProviderController {
       const awake = requireAwake(input?.awake)
       const current = this.#requireState()
       if (awake) {
-        if (current.awake) return preferencesFromState(current)
         if (this.#provider === undefined) throw new Error("No Pet feature provider is installed")
-        this.#state = await this.#persistProviderState(true, this.#provider.pluginId)
+        if (current.awake && this.#runtimeReady()) return preferencesFromState(current)
+        if (current.awake && this.#windowMayBeMounted) {
+          await this.#closeRuntime()
+        }
+        if (!current.awake) {
+          this.#state = await this.#persistProviderState(true, this.#provider.pluginId)
+        }
         try {
           await this.#openAwakeProvider()
         } catch (error) {
-          this.#state = await this.#persistProviderState(false, this.#provider?.pluginId)
-          this.#emitPreferences()
-          throw error
+          await this.#rollbackFailedOpen(error, this.#provider?.pluginId)
         }
         this.#emitPreferences()
         return preferencesFromState(this.#state)
@@ -286,9 +289,7 @@ export class PetProviderController {
       try {
         await this.#openAwakeProvider()
       } catch (error) {
-        this.#state = await this.#persistProviderState(false, nextProvider?.pluginId)
-        this.#emitPreferences()
-        throw error
+        await this.#rollbackFailedOpen(error, nextProvider?.pluginId)
       }
     }
   }
@@ -333,9 +334,7 @@ export class PetProviderController {
       try {
         await this.#openAwakeProvider()
       } catch (error) {
-        this.#state = await this.#persistProviderState(false, nextProvider?.pluginId)
-        this.#emitPreferences()
-        throw error
+        await this.#rollbackFailedOpen(error, nextProvider?.pluginId)
       }
     }
     if (wasAwake !== awake) this.#emitPreferences()
@@ -395,16 +394,25 @@ export class PetProviderController {
     })
   }
 
+  async #rollbackFailedOpen(error: unknown, providerId: string | undefined): Promise<never> {
+    try {
+      this.#state = await this.#persistProviderState(false, providerId)
+      this.#emitPreferences()
+    } catch {}
+    throw error
+  }
+
+  #runtimeReady() {
+    return this.#windowMayBeMounted && this.#activityUnsubscribe !== undefined
+  }
+
   async #openAwakeProvider() {
     const provider = this.#provider
     if (provider === undefined) throw new Error("No Pet feature provider is installed")
     this.#windowMayBeMounted = true
     try {
       await this.#window.open(cloneProvider(provider))
-      this.#activityUnsubscribe = this.#activity.subscribe((snapshot) => {
-        const cloned = cloneActivity(snapshot)
-        this.#emit(this.#activityListeners, cloned, cloneActivity)
-      })
+      this.#startActivity()
     } catch (error) {
       await this.#closeRuntime().catch(() => undefined)
       throw error
@@ -418,8 +426,21 @@ export class PetProviderController {
       try {
         this.#state = await this.#persistProviderState(currentState.awake, currentProvider?.pluginId)
       } catch {}
+      if (currentState.awake && currentProvider !== undefined && !this.#disposed) {
+        try {
+          this.#startActivity()
+        } catch {}
+      }
       throw error
     }
+  }
+
+  #startActivity() {
+    if (this.#activityUnsubscribe !== undefined) return
+    this.#activityUnsubscribe = this.#activity.subscribe((snapshot) => {
+      const cloned = cloneActivity(snapshot)
+      this.#emit(this.#activityListeners, cloned, cloneActivity)
+    })
   }
 
   async #closeRuntime() {
