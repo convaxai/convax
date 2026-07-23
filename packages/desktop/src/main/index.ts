@@ -20,6 +20,7 @@ import {
   ipcMain,
   MessageChannelMain,
   nativeImage,
+  Notification,
   net,
   powerMonitor,
   protocol,
@@ -103,6 +104,7 @@ import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
 import { registerSkillManagementIpc } from "./skill-management-ipc"
 import { AgentActivityController } from "./agent-activity-controller"
+import { PetActivityNotifier } from "./pet-activity-notifier"
 import { createElectronPetAssetInspector } from "./pet-asset-inspector"
 import { PetProviderController } from "./pet-provider-controller"
 import { registerPetIpc } from "./pet-ipc"
@@ -768,6 +770,31 @@ function startApplication() {
     )
     const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager)
     await pets.initialize()
+    const petActivityNotifier = new PetActivityNotifier({
+      createNotification(options) {
+        return Notification.isSupported() ? new Notification(options) : undefined
+      },
+      getMainWindow: () => mainWindow,
+      onError: (error) => console.warn("Could not show or open a Pet activity notification", error),
+      async openActivity(activityId) {
+        const snapshot = pets.getActivitySnapshot()
+        if (!snapshot.activities.some((activity) => activity.id === activityId)) return
+        await petIpc.openActivity({ activityId, revision: snapshot.revision })
+      },
+    })
+    petActivityNotifier.updatePreferences(pets.getPreferences())
+    petActivityNotifier.updateActivity(pets.getActivitySnapshot())
+    const unsubscribePetNotificationPreferences = pets.subscribePreferences((preferences) => {
+      petActivityNotifier.updatePreferences(preferences)
+    })
+    const unsubscribePetNotificationActivity = pets.subscribeActivity((snapshot) => {
+      petActivityNotifier.updateActivity(snapshot)
+    })
+    const disposePetActivityNotifier = () => {
+      unsubscribePetNotificationActivity()
+      unsubscribePetNotificationPreferences()
+      petActivityNotifier.dispose()
+    }
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
@@ -882,6 +909,7 @@ function startApplication() {
       },
     })
     const disposePetApplication = createIdempotentAsyncCleanup([
+      disposePetActivityNotifier,
       () => petIpc.dispose(),
       () => pets.dispose(),
       () => activityLifecycle.dispose(),
