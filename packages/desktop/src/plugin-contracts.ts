@@ -49,6 +49,14 @@ export const webPluginPetCapabilities = [
   "pet.custom.manage",
 ] as const satisfies readonly WebPluginCapability[]
 
+const requiredWebPluginPetCapabilities = [
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
+] as const satisfies readonly WebPluginCapability[]
+
+const allowedWebPluginPetCapabilities: ReadonlySet<string> = new Set(webPluginPetCapabilities)
+
 export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
 export const webPluginGenerationInputRoles = [
   "reference_image",
@@ -898,11 +906,13 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const hasPetContribution = contributes.pet !== undefined
   if (hasPetContribution) {
     if (
-      capabilities.length !== webPluginPetCapabilities.length ||
-      webPluginPetCapabilities.some((capability) => !capabilities.includes(capability))
+      capabilities.length < requiredWebPluginPetCapabilities.length ||
+      capabilities.length > webPluginPetCapabilities.length ||
+      requiredWebPluginPetCapabilities.some((capability) => !capabilities.includes(capability)) ||
+      capabilities.some((capability) => !allowedWebPluginPetCapabilities.has(capability))
     ) {
       throw new Error(
-        "Pet capabilities must be exactly pet.activity.read, pet.activity.open, pet.preferences.write, and pet.custom.manage",
+        "Pet capabilities must include pet.activity.read, pet.activity.open, and pet.preferences.write; pet.custom.manage is optional",
       )
     }
     if (hasRuntime) throw new Error("Pet feature cannot declare an executable runtime")

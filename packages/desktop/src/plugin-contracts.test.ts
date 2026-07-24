@@ -333,6 +333,21 @@ describe("versioned Plugin manifest generation declarations", () => {
     ).toThrow()
   })
 
+  test("keeps published Pet manifests valid when custom management is absent", () => {
+    const parsed = parseWebPluginManifest(
+      petManifest({
+        capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+        version: "0.2.1",
+      }),
+    )
+
+    expect(parsed.capabilities).toEqual([
+      "pet.activity.read",
+      "pet.activity.open",
+      "pet.preferences.write",
+    ])
+  })
+
   test.each([
     ["remote library URL", { library: "https://example.invalid/pet-library.json" }],
     ["library traversal", { library: "../pet-library.json" }],

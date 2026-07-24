@@ -125,6 +125,7 @@ function petBundle(
   overrides: {
     files?: Record<string, string | Uint8Array | null>
     library?: unknown
+    manifest?: Record<string, unknown>
   } = {},
 ) {
   const petManifest = {
@@ -142,6 +143,7 @@ function petBundle(
     name: "Convax Pet",
     schema: "convax.plugin/5",
     version: "0.2.0",
+    ...overrides.manifest,
   }
   const library = overrides.library ?? {
     schema: "convax.pet-library/1",
@@ -903,6 +905,37 @@ describe("WebPluginManager", () => {
     expect(new Set(inspector.inspect.mock.calls.map(([filePath]) => path.basename(String(filePath))))).toEqual(
       new Set(["comet.png", "aster.webp"]),
     )
+  })
+
+  test("recognizes and updates a published Pet package without custom management", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const installedRoot = path.join(installationRoot, "convax-pet")
+    const legacyBundle = petBundle({
+      manifest: {
+        capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+        version: "0.2.1",
+      },
+    })
+    for (const [relativePath, contents] of Object.entries(legacyBundle.files)) {
+      const target = path.join(installedRoot, relativePath)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      await fs.writeFile(target, contents)
+    }
+    const manager = new WebPluginManager(installationRoot, {}, [], {
+      petAssetInspector: validPetAssetInspector(),
+    })
+
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({ id: "convax-pet", version: "0.2.1" }),
+    ])
+    await expect(
+      manager.installBundle(petBundle({ manifest: { version: "0.2.2" } }), { replaceExisting: true }),
+    ).resolves.toMatchObject({
+      capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
+      id: "convax-pet",
+      version: "0.2.2",
+    })
   })
 
   test("rejects invalid Pet library JSON, duplicate metadata, and invalid atlases", async () => {
