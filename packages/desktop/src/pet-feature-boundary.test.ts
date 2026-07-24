@@ -18,12 +18,10 @@ async function productionSources(directory: string): Promise<string[]> {
 }
 
 describe("pet feature ownership boundary", () => {
-  test("keeps product rendering and inventory outside the host", async () => {
+  test("keeps product rendering and packaged inventory outside the host", async () => {
     const legacyFiles = [
       "main/pet-controller.ts",
       "main/pet-controller.test.ts",
-      "main/pet-asset-protocol.ts",
-      "main/pet-asset-protocol.test.ts",
       "renderer/pet-settings.tsx",
       "renderer/pet-settings.test.tsx",
       "renderer/pet/index.html",
@@ -40,14 +38,10 @@ describe("pet feature ownership boundary", () => {
 
     const forbiddenFragments = [
       "Violet",
-      "convax-pet-asset",
       "PetInventory",
       "PetRendererSnapshot",
       "PetSettingsContent",
       "petAnimations",
-      "importCustom",
-      "deleteCustom",
-      "convax.custom-pet",
       '"pets.import"',
       '"pet:import-custom"',
       '"pet:delete-custom"',
@@ -68,6 +62,8 @@ describe("pet feature ownership boundary", () => {
   test("retains only the documented feature-plugin host composition", async () => {
     const expectedExports = new Map([
       ["main/agent-activity-controller.ts", "export class AgentActivityController"],
+      ["main/custom-pet-store.ts", "export class CustomPetStore"],
+      ["main/pet-asset-protocol.ts", 'export const petAssetScheme = "convax-pet-asset"'],
       ["main/pet-provider-controller.ts", "export class PetProviderController"],
       ["main/pet-window.ts", "export class PetWindow"],
       ["pet-contracts.ts", 'export const petHostProtocol = "convax.pet-host/1"'],
