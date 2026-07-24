@@ -40,9 +40,31 @@ export interface PetPreferencesUpdate {
   selectedPetId: string
 }
 
+export interface PetCustomPet {
+  alt: string
+  description: string
+  displayName: string
+  id: string
+  source: "custom"
+  spritesheetUrl: string
+  spriteVersion: 2
+}
+
+export interface PetCustomCollectionSnapshot {
+  pets: PetCustomPet[]
+  revision: number
+}
+
+export interface PetCustomDelete {
+  petId: string
+}
+
 export type PetHostMethod =
   | "activity.getSnapshot"
   | "activity.open"
+  | "collection.delete"
+  | "collection.get"
+  | "collection.import"
   | "lifecycle.setAwake"
   | "overlay.move"
   | "overlay.setExpanded"
@@ -58,6 +80,9 @@ interface PetHostRequestBase {
 export type PetHostRequest =
   | (PetHostRequestBase & { method: "activity.getSnapshot"; params: Record<string, never> })
   | (PetHostRequestBase & { method: "activity.open"; params: PetNavigationRequest })
+  | (PetHostRequestBase & { method: "collection.delete"; params: PetCustomDelete })
+  | (PetHostRequestBase & { method: "collection.get"; params: Record<string, never> })
+  | (PetHostRequestBase & { method: "collection.import"; params: Record<string, never> })
   | (PetHostRequestBase & { method: "lifecycle.setAwake"; params: { awake: boolean } })
   | (PetHostRequestBase & { method: "overlay.move"; params: PetDragInput })
   | (PetHostRequestBase & { method: "overlay.setExpanded"; params: { expanded: boolean } })
@@ -96,7 +121,14 @@ export interface PetHostPreferencesEvent {
   type: "event"
 }
 
-export type PetHostEvent = PetHostActivityEvent | PetHostPreferencesEvent
+export interface PetHostCollectionEvent {
+  event: "collection.changed"
+  payload: PetCustomCollectionSnapshot
+  protocol: typeof petHostProtocol
+  type: "event"
+}
+
+export type PetHostEvent = PetHostActivityEvent | PetHostCollectionEvent | PetHostPreferencesEvent
 export type PetHostMessage = PetHostEvent | PetHostResponse
 
 /** Main-only target. It is deliberately absent from renderer snapshots. */
@@ -121,9 +153,11 @@ export interface PetNavigationTarget extends PetActivityTarget {
 }
 
 export interface PetDragInput {
-  dx: number
-  dy: number
-  phase: "end" | "move"
+  phase: "end" | "move" | "start"
+  screenX: number
+  screenY: number
+  sequence: number
+  session: string
 }
 
 export const petIpcChannels = {

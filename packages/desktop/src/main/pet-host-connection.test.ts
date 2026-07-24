@@ -1,11 +1,16 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import type { WebPluginCapability } from "../plugin-contracts"
-import type { PetActivitySnapshot, PetHostProviderBinding, PetPreferences } from "../pet-contracts"
+import type {
+  PetActivitySnapshot,
+  PetCustomCollectionSnapshot,
+  PetHostProviderBinding,
+  PetPreferences,
+} from "../pet-contracts"
 import { PetHostConnection, type PetHostServices } from "./pet-host-connection"
 
 const protocol = "convax.pet-host/1"
-const capabilities = ["pet.activity.read", "pet.activity.open", "pet.preferences.write"] as const
+const capabilities = ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"] as const
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -31,8 +36,10 @@ function fixture(
     pluginId: "convax-pet",
   }
   let activityListener: ((snapshot: PetActivitySnapshot) => void) | undefined
+  let collectionListener: ((snapshot: PetCustomCollectionSnapshot) => void) | undefined
   let preferencesListener: ((preferences: PetPreferences) => void) | undefined
   const unsubscribeActivity = mock(() => undefined)
+  const unsubscribeCollection = mock(() => undefined)
   const unsubscribePreferences = mock(() => undefined)
   const snapshot: PetActivitySnapshot = {
     activities: [
@@ -48,10 +55,27 @@ function fixture(
     ],
     revision: 4,
   }
+  const collection: PetCustomCollectionSnapshot = {
+    pets: [
+      {
+        alt: "Nova, a custom pixel companion",
+        description: "A local custom companion.",
+        displayName: "Nova",
+        id: "custom-nova",
+        source: "custom",
+        spritesheetUrl: "convax-pet-asset://pet/custom-nova",
+        spriteVersion: 2,
+      },
+    ],
+    revision: 2,
+  }
   const services = {
+    deleteCustomPet: mock(async (_input: unknown) => collection),
     getActivitySnapshot: mock(async () => snapshot),
     getBinding: mock(() => currentBinding),
+    getCustomCollection: mock(async () => collection),
     getPreferences: mock(async () => ({ awake: true, selectedPetId: "aster" })),
+    importCustomPet: mock(async () => collection.pets[0]),
     moveOverlay: mock(async (_input: unknown) => undefined),
     openActivity: mock(async (_input: unknown) => undefined),
     setAwake: mock(async (input: { awake: boolean }) => ({ awake: input.awake, selectedPetId: "aster" })),
@@ -59,6 +83,10 @@ function fixture(
     subscribeActivity: mock((listener: (next: PetActivitySnapshot) => void) => {
       activityListener = listener
       return unsubscribeActivity
+    }),
+    subscribeCustomCollection: mock((listener: (next: PetCustomCollectionSnapshot) => void) => {
+      collectionListener = listener
+      return unsubscribeCollection
     }),
     subscribePreferences: mock((listener: (next: PetPreferences) => void) => {
       preferencesListener = listener
@@ -77,6 +105,9 @@ function fixture(
       return currentBinding
     },
     connection,
+    collection(next: PetCustomCollectionSnapshot) {
+      collectionListener?.(next)
+    },
     onClose,
     messages,
     preferences(next: PetPreferences) {
@@ -89,6 +120,7 @@ function fixture(
     services,
     snapshot,
     unsubscribeActivity,
+    unsubscribeCollection,
     unsubscribePreferences,
   }
 }
@@ -112,12 +144,26 @@ describe("PetHostConnection", () => {
     await host.connection.handle(request("open", "activity.open", { activityId: "activity-one", revision: 4 }))
     await host.connection.handle(request("get-preferences", "preferences.get"))
     await host.connection.handle(request("set-preferences", "preferences.update", { selectedPetId: "aster" }))
-    await host.connection.handle(request("move", "overlay.move", { dx: 4, dy: -2, phase: "move" }))
+    await host.connection.handle(
+      request("move", "overlay.move", {
+        phase: "move",
+        screenX: 404,
+        screenY: 198,
+        sequence: 2,
+        session: "drag-one",
+      }),
+    )
     await host.connection.handle(request("expand", "overlay.setExpanded", { expanded: true }))
 
     expect(host.services.openActivity).toHaveBeenCalledWith({ activityId: "activity-one", revision: 4 })
     expect(host.services.updatePreferences).toHaveBeenCalledWith({ selectedPetId: "aster" })
-    expect(host.services.moveOverlay).toHaveBeenCalledWith({ dx: 4, dy: -2, phase: "move" })
+    expect(host.services.moveOverlay).toHaveBeenCalledWith({
+      phase: "move",
+      screenX: 404,
+      screenY: 198,
+      sequence: 2,
+      session: "drag-one",
+    })
     expect(host.services.setExpanded).toHaveBeenCalledWith({ expanded: true })
     expect(host.messages.every((message) => (message as { ok?: boolean }).ok === true)).toBe(true)
   })
@@ -149,25 +195,62 @@ describe("PetHostConnection", () => {
     expect(host.services.moveOverlay).not.toHaveBeenCalled()
   })
 
+  test("exposes collection reads to both surfaces and collection mutations only to settings", async () => {
+    const settings = fixture("settings")
+
+    await settings.connection.handle(request("collection", "collection.get"))
+    await settings.connection.handle(request("import", "collection.import"))
+    await settings.connection.handle(request("delete", "collection.delete", { petId: "custom-nova" }))
+
+    expect(settings.services.getCustomCollection).toHaveBeenCalledTimes(1)
+    expect(settings.services.importCustomPet).toHaveBeenCalledTimes(1)
+    expect(settings.services.deleteCustomPet).toHaveBeenCalledWith({ petId: "custom-nova" })
+    expect(settings.messages.every((message) => (message as { ok?: boolean }).ok === true)).toBe(true)
+
+    const overlay = fixture()
+    await overlay.connection.handle(request("collection", "collection.get"))
+    await overlay.connection.handle(request("import", "collection.import"))
+    await overlay.connection.handle(request("delete", "collection.delete", { petId: "custom-nova" }))
+
+    expect(overlay.services.getCustomCollection).toHaveBeenCalledTimes(1)
+    expect(overlay.services.importCustomPet).not.toHaveBeenCalled()
+    expect(overlay.services.deleteCustomPet).not.toHaveBeenCalled()
+    expect(overlay.messages).toEqual([
+      expect.objectContaining({ id: "collection", ok: true }),
+      expect.objectContaining({ id: "import", ok: false }),
+      expect.objectContaining({ id: "delete", ok: false }),
+    ])
+  })
+
   test("requires the capability belonging to each data operation", async () => {
-    const noRead = fixture("overlay", ["pet.activity.open", "pet.preferences.write"])
+    const noRead = fixture("overlay", ["pet.activity.open", "pet.preferences.write", "pet.custom.manage"])
     await noRead.connection.handle(request("read", "activity.getSnapshot"))
     expect(noRead.messages).toEqual([
       expect.objectContaining({ error: expect.stringContaining("pet.activity.read"), id: "read", ok: false }),
     ])
 
-    const noOpen = fixture("overlay", ["pet.activity.read", "pet.preferences.write"])
+    const noOpen = fixture("overlay", ["pet.activity.read", "pet.preferences.write", "pet.custom.manage"])
     await noOpen.connection.handle(request("open", "activity.open", { activityId: "one", revision: 1 }))
     expect(noOpen.messages).toEqual([
       expect.objectContaining({ error: expect.stringContaining("pet.activity.open"), id: "open", ok: false }),
     ])
 
-    const noPreferences = fixture("settings", ["pet.activity.read", "pet.activity.open"])
+    const noPreferences = fixture("settings", ["pet.activity.read", "pet.activity.open", "pet.custom.manage"])
     await noPreferences.connection.handle(request("preferences", "preferences.get"))
     expect(noPreferences.messages).toEqual([
       expect.objectContaining({
         error: expect.stringContaining("pet.preferences.write"),
         id: "preferences",
+        ok: false,
+      }),
+    ])
+
+    const noCustom = fixture("settings", ["pet.activity.read", "pet.activity.open", "pet.preferences.write"])
+    await noCustom.connection.handle(request("custom", "collection.get"))
+    expect(noCustom.messages).toEqual([
+      expect.objectContaining({
+        error: expect.stringContaining("pet.custom.manage"),
+        id: "custom",
         ok: false,
       }),
     ])
@@ -181,10 +264,20 @@ describe("PetHostConnection", () => {
     await host.connection.handle(request("preferences", "preferences.update", { selectedPetId: "Bad_Id" }))
     await host.connection.handle(request("empty-preferences", "preferences.update", {}))
     await host.connection.handle(request("undefined-preferences", "preferences.update", { selectedPetId: undefined }))
-    await host.connection.handle(request("move", "overlay.move", { dx: Number.NaN, dy: 0, phase: "move" }))
+    await host.connection.handle(
+      request("move", "overlay.move", {
+        phase: "move",
+        screenX: Number.NaN,
+        screenY: 0,
+        sequence: 1,
+        session: "drag-one",
+      }),
+    )
     await host.connection.handle(request("revision", "activity.open", { activityId: "one", revision: -1 }))
+    await host.connection.handle(request("delete", "collection.delete", { petId: "nova" }))
+    await host.connection.handle(request("delete-extra", "collection.delete", { extra: true, petId: "custom-nova" }))
 
-    expect(host.messages).toHaveLength(8)
+    expect(host.messages).toHaveLength(10)
     expect(host.messages.every((message) => (message as { ok?: boolean }).ok === false)).toBe(true)
     expect(host.services.openActivity).not.toHaveBeenCalled()
     expect(host.services.updatePreferences).not.toHaveBeenCalled()
@@ -273,17 +366,50 @@ describe("PetHostConnection", () => {
     expect(host.unsubscribePreferences).toHaveBeenCalledTimes(1)
   })
 
-  test("delivers cloned activity and preference events only to eligible live surfaces", () => {
+  test("delivers cloned activity, collection, and preference events only to eligible live surfaces", () => {
     const overlay = fixture()
     const activity = { activities: [], revision: 5 }
     const preferences = { awake: false, selectedPetId: "aster" }
     overlay.activity(activity)
+    overlay.collection({
+      pets: [
+        {
+          alt: "Nova",
+          description: "Custom",
+          displayName: "Nova",
+          id: "custom-nova",
+          source: "custom",
+          spritesheetUrl: "convax-pet-asset://pet/custom-nova",
+          spriteVersion: 2,
+        },
+      ],
+      revision: 3,
+    })
     overlay.preferences(preferences)
     activity.revision = 6
     preferences.selectedPetId = "comet"
 
     expect(overlay.messages).toEqual([
       { event: "activity.changed", payload: { activities: [], revision: 5 }, protocol, type: "event" },
+      {
+        event: "collection.changed",
+        payload: {
+          pets: [
+            {
+              alt: "Nova",
+              description: "Custom",
+              displayName: "Nova",
+              id: "custom-nova",
+              source: "custom",
+              spritesheetUrl: "convax-pet-asset://pet/custom-nova",
+              spriteVersion: 2,
+            },
+          ],
+          revision: 3,
+        },
+        protocol,
+        type: "event",
+      },
       {
         event: "preferences.changed",
         payload: { awake: false, selectedPetId: "aster" },
@@ -294,13 +420,15 @@ describe("PetHostConnection", () => {
 
     const settings = fixture("settings")
     settings.activity({ activities: [], revision: 1 })
+    settings.collection({ pets: [], revision: 4 })
     settings.preferences({ awake: true })
     expect(settings.services.subscribeActivity).not.toHaveBeenCalled()
     expect(settings.messages).toEqual([
+      { event: "collection.changed", payload: { pets: [], revision: 4 }, protocol, type: "event" },
       { event: "preferences.changed", payload: { awake: true }, protocol, type: "event" },
     ])
 
-    const noRead = fixture("overlay", ["pet.activity.open", "pet.preferences.write"])
+    const noRead = fixture("overlay", ["pet.activity.open", "pet.preferences.write", "pet.custom.manage"])
     noRead.activity({ activities: [], revision: 1 })
     expect(noRead.services.subscribeActivity).not.toHaveBeenCalled()
     expect(noRead.messages).toEqual([])

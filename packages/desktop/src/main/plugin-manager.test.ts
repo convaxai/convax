@@ -128,7 +128,7 @@ function petBundle(
   } = {},
 ) {
   const petManifest = {
-    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
     contributes: {
       pet: {
         library: "pet-library.json",

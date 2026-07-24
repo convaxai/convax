@@ -124,7 +124,7 @@ function ownedSkillsManifest(overrides: Record<string, unknown> = {}) {
 
 function petManifest(overrides: Record<string, unknown> = {}) {
   return {
-    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
     contributes: {
       pet: {
         library: "pet-library.json",
@@ -316,7 +316,12 @@ describe("versioned Plugin manifest generation declarations", () => {
       protocol: "convax.pet-host/1",
       settings: "settings/index.html",
     })
-    expect(parsed.capabilities).toEqual(["pet.activity.read", "pet.activity.open", "pet.preferences.write"])
+    expect(parsed.capabilities).toEqual([
+      "pet.activity.read",
+      "pet.activity.open",
+      "pet.preferences.write",
+      "pet.custom.manage",
+    ])
     expect(parsed.entry).toBeUndefined()
     expect(parsed.runtime).toBeUndefined()
     expect(() => parseWebPluginManifest({ ...petManifest(), schema: "convax.plugin/4" })).toThrow()

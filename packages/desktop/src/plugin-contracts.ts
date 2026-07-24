@@ -29,6 +29,7 @@ export const webPluginCapabilities = [
   "pet.activity.read",
   "pet.activity.open",
   "pet.preferences.write",
+  "pet.custom.manage",
 ] as const
 
 export type WebPluginCapability = (typeof webPluginCapabilities)[number]
@@ -45,6 +46,7 @@ export const webPluginPetCapabilities = [
   "pet.activity.read",
   "pet.activity.open",
   "pet.preferences.write",
+  "pet.custom.manage",
 ] as const satisfies readonly WebPluginCapability[]
 
 export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
@@ -900,7 +902,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
       webPluginPetCapabilities.some((capability) => !capabilities.includes(capability))
     ) {
       throw new Error(
-        "Pet capabilities must be exactly pet.activity.read, pet.activity.open, and pet.preferences.write",
+        "Pet capabilities must be exactly pet.activity.read, pet.activity.open, pet.preferences.write, and pet.custom.manage",
       )
     }
     if (hasRuntime) throw new Error("Pet feature cannot declare an executable runtime")

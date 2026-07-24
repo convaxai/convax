@@ -6,6 +6,9 @@ import {
   petHostMaximumPendingRequests,
   petHostProtocol,
   type PetActivitySnapshot,
+  type PetCustomCollectionSnapshot,
+  type PetCustomDelete,
+  type PetCustomPet,
   type PetDragInput,
   type PetHostEvent,
   type PetHostMessage,
@@ -22,14 +25,18 @@ type Awaitable<T> = Promise<T> | T
 type Unsubscribe = () => void
 
 export interface PetHostServices {
+  deleteCustomPet(input: PetCustomDelete): Awaitable<PetCustomCollectionSnapshot>
   getActivitySnapshot(): Awaitable<PetActivitySnapshot>
   getBinding(): PetHostProviderBinding | undefined
+  getCustomCollection(): Awaitable<PetCustomCollectionSnapshot>
   getPreferences(): Awaitable<PetPreferences>
+  importCustomPet(): Awaitable<PetCustomPet | null>
   moveOverlay(input: PetDragInput): Awaitable<unknown>
   openActivity(input: PetNavigationRequest): Awaitable<unknown>
   setAwake(input: { awake: boolean }): Awaitable<PetPreferences>
   setExpanded(input: { expanded: boolean }): Awaitable<unknown>
   subscribeActivity(listener: (snapshot: PetActivitySnapshot) => void): Unsubscribe
+  subscribeCustomCollection(listener: (snapshot: PetCustomCollectionSnapshot) => void): Unsubscribe
   subscribePreferences?(listener: (preferences: PetPreferences) => void): Unsubscribe
   updatePreferences(input: PetPreferencesUpdate): Awaitable<PetPreferences>
 }
@@ -45,16 +52,27 @@ export interface PetHostConnectionOptions {
 const overlayMethods = new Set<PetHostMethod>([
   "activity.getSnapshot",
   "activity.open",
+  "collection.get",
   "overlay.move",
   "overlay.setExpanded",
   "preferences.get",
   "preferences.update",
 ])
-const settingsMethods = new Set<PetHostMethod>(["lifecycle.setAwake", "preferences.get", "preferences.update"])
+const settingsMethods = new Set<PetHostMethod>([
+  "collection.delete",
+  "collection.get",
+  "collection.import",
+  "lifecycle.setAwake",
+  "preferences.get",
+  "preferences.update",
+])
 const knownMethods = new Set<PetHostMethod>([...overlayMethods, ...settingsMethods])
 const requiredCapabilities = new Map<PetHostMethod, WebPluginCapability>([
   ["activity.getSnapshot", "pet.activity.read"],
   ["activity.open", "pet.activity.open"],
+  ["collection.delete", "pet.custom.manage"],
+  ["collection.get", "pet.custom.manage"],
+  ["collection.import", "pet.custom.manage"],
   ["preferences.get", "pet.preferences.write"],
   ["preferences.update", "pet.preferences.write"],
 ])
@@ -132,22 +150,42 @@ function preferencesUpdateParams(value: unknown): PetPreferencesUpdate {
   return { selectedPetId: value.selectedPetId }
 }
 
+function customDeleteParams(value: unknown): PetCustomDelete {
+  if (!isRecord(value) || !hasExactKeys(value, ["petId"])) {
+    throw new Error("collection.delete params are invalid")
+  }
+  if (!isBoundedText(value.petId, 80) || !/^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.petId)) {
+    throw new Error("collection.delete petId is invalid")
+  }
+  return { petId: value.petId }
+}
+
 function overlayMoveParams(value: unknown): PetDragInput {
-  if (!isRecord(value) || !hasExactKeys(value, ["dx", "dy", "phase"])) {
+  if (!isRecord(value) || !hasExactKeys(value, ["phase", "screenX", "screenY", "sequence", "session"])) {
     throw new Error("overlay.move params are invalid")
   }
   if (
-    typeof value.dx !== "number" ||
-    !Number.isFinite(value.dx) ||
-    Math.abs(value.dx) > 100_000 ||
-    typeof value.dy !== "number" ||
-    !Number.isFinite(value.dy) ||
-    Math.abs(value.dy) > 100_000 ||
-    (value.phase !== "end" && value.phase !== "move")
+    typeof value.screenX !== "number" ||
+    !Number.isFinite(value.screenX) ||
+    Math.abs(value.screenX) > 1_000_000 ||
+    typeof value.screenY !== "number" ||
+    !Number.isFinite(value.screenY) ||
+    Math.abs(value.screenY) > 1_000_000 ||
+    !Number.isSafeInteger(value.sequence) ||
+    (value.sequence as number) < 0 ||
+    !isBoundedText(value.session, 80) ||
+    !/^[a-zA-Z0-9-]+$/.test(value.session) ||
+    (value.phase !== "start" && value.phase !== "move" && value.phase !== "end")
   ) {
     throw new Error("overlay.move params are invalid")
   }
-  return { dx: value.dx, dy: value.dy, phase: value.phase }
+  return {
+    phase: value.phase,
+    screenX: value.screenX,
+    screenY: value.screenY,
+    sequence: value.sequence as number,
+    session: value.session,
+  }
 }
 
 function booleanParams<K extends "awake" | "expanded">(value: unknown, key: K): Record<K, boolean> {
@@ -217,6 +255,11 @@ export class PetHostConnection {
       if (this.#hasCapability("pet.preferences.write") && options.services.subscribePreferences) {
         this.#unsubscribers.push(
           options.services.subscribePreferences((preferences) => this.#emit("preferences.changed", preferences)),
+        )
+      }
+      if (this.#hasCapability("pet.custom.manage")) {
+        this.#unsubscribers.push(
+          options.services.subscribeCustomCollection((snapshot) => this.#emit("collection.changed", snapshot)),
         )
       }
     } catch (error) {
@@ -316,6 +359,14 @@ export class PetHostConnection {
         return this.#services.getActivitySnapshot()
       case "activity.open":
         return this.#services.openActivity(activityOpenParams(params))
+      case "collection.delete":
+        return this.#services.deleteCustomPet(customDeleteParams(params))
+      case "collection.get":
+        emptyParams(params)
+        return this.#services.getCustomCollection()
+      case "collection.import":
+        emptyParams(params)
+        return this.#services.importCustomPet()
       case "preferences.get":
         emptyParams(params)
         return this.#services.getPreferences()
@@ -330,7 +381,7 @@ export class PetHostConnection {
     }
   }
 
-  #emit(event: PetHostEvent["event"], payload: PetActivitySnapshot | PetPreferences) {
+  #emit(event: PetHostEvent["event"], payload: PetActivitySnapshot | PetCustomCollectionSnapshot | PetPreferences) {
     if (this.#closed) return
     const binding = this.#bindingStatus()
     if (!binding.current) {

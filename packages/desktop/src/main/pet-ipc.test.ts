@@ -66,7 +66,7 @@ class FakeWebContents extends EventEmitter {
 }
 
 const binding: PetHostProviderBinding = {
-  capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+  capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
   digest: "sha256:provider-one",
   generation: 4,
   pluginId: "soft-companion",
@@ -94,6 +94,20 @@ function fixture() {
   let currentBinding: PetHostProviderBinding | undefined = { ...binding, capabilities: [...binding.capabilities] }
   let providerListener: ((provider: unknown) => void) | undefined
   const activityListeners = new Set<(snapshot: typeof activitySnapshot) => void>()
+  const customPetListeners = new Set<
+    (snapshot: {
+      pets: Array<{
+        alt: string
+        description: string
+        displayName: string
+        id: string
+        source: "custom"
+        spritesheetUrl: string
+        spriteVersion: 2
+      }>
+      revision: number
+    }) => void
+  >()
   const preferenceListeners = new Set<(preferences: { awake: boolean; selectedPetId?: string }) => void>()
   const mainContents = new FakeWebContents(1)
   const mainWindow = {
@@ -149,9 +163,28 @@ function fixture() {
     ),
   }
   const overlay = {
-    moveBy: mock(async () => undefined),
+    drag: mock(async () => undefined),
     setExpanded: mock(async () => undefined),
   }
+  const importedPet = {
+    alt: "Nova, a custom pixel companion",
+    description: "A local custom companion.",
+    displayName: "Nova",
+    id: "custom-nova",
+    source: "custom" as const,
+    spritesheetUrl: "convax-pet-asset://pet/custom-nova",
+    spriteVersion: 2 as const,
+  }
+  const customPets = {
+    delete: mock(async (_id: string) => undefined),
+    getSnapshot: mock(async () => ({ pets: [importedPet], revision: 2 })),
+    importAtlas: mock(async (_sourcePath: string) => importedPet),
+    subscribe: mock((listener: (snapshot: { pets: (typeof importedPet)[]; revision: number }) => void) => {
+      customPetListeners.add(listener)
+      return () => customPetListeners.delete(listener)
+    }),
+  }
+  const pickCustomPetSource = mock(async () => "/tmp/Nova.png" as string | undefined)
   const settingsSender = new FakeWebContents(11)
   const untrustedSender = new FakeWebContents(12)
   const trustedEvent = { sender: settingsSender }
@@ -160,9 +193,12 @@ function fixture() {
   return {
     activity,
     activityListeners,
+    customPets,
+    customPetListeners,
     mainWindow,
     openMainWindow: mock(async () => mainWindow),
     overlay,
+    pickCustomPetSource,
     preferenceListeners,
     provider,
     providerChanged(next?: PetHostProviderBinding) {
@@ -186,13 +222,14 @@ function registrationOptions(
     ipcMain: fakeIpcMain,
     isTrustedMainSender,
     openMainWindow: value.openMainWindow,
+    customPets: value.customPets,
+    pickCustomPetSource: value.pickCustomPetSource,
     restoreProvider: value.restoreProvider,
   }
 }
 
 async function settlePort() {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let index = 0; index < 8; index += 1) await Promise.resolve()
 }
 
 afterEach(() => {
@@ -254,6 +291,21 @@ describe("registerPetIpc", () => {
         result: { awake: true, selectedPetId: "aster" },
         type: "response",
       },
+    ])
+
+    channel.port1.emit("message", { data: request("collection", "collection.get") })
+    channel.port1.emit("message", { data: request("import", "collection.import") })
+    channel.port1.emit("message", {
+      data: request("delete", "collection.delete", { petId: "custom-nova" }),
+    })
+    await settlePort()
+    expect(value.pickCustomPetSource).toHaveBeenCalledTimes(1)
+    expect(value.customPets.importAtlas).toHaveBeenCalledWith("/tmp/Nova.png")
+    expect(value.customPets.delete).toHaveBeenCalledWith("custom-nova")
+    expect(channel.port1.messages.slice(-3)).toEqual([
+      expect.objectContaining({ id: "collection", ok: true }),
+      expect.objectContaining({ id: "import", ok: true }),
+      expect.objectContaining({ id: "delete", ok: true }),
     ])
     expect(() => invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)).toThrow(
       "already exists",
@@ -599,12 +651,12 @@ describe("registerPetIpc", () => {
     await expect(
       markSession(value.untrustedEvent, { projectId: "project-one", sessionId: "session-one" }),
     ).rejects.toThrow("untrusted")
-    await expect(
-      markSession(value.trustedEvent, { projectId: "../bad", sessionId: "session-one" }),
-    ).rejects.toThrow("invalid")
-    await expect(
-      markSession(value.trustedEvent, { projectId: "project-one", sessionId: "" }),
-    ).rejects.toThrow("invalid")
+    await expect(markSession(value.trustedEvent, { projectId: "../bad", sessionId: "session-one" })).rejects.toThrow(
+      "invalid",
+    )
+    await expect(markSession(value.trustedEvent, { projectId: "project-one", sessionId: "" })).rejects.toThrow(
+      "invalid",
+    )
     await markSession(value.trustedEvent, { projectId: "project-one", sessionId: "session-one" })
 
     expect(value.activity.markSessionDisplayed).toHaveBeenCalledWith("project-one", "session-one")

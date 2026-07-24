@@ -2,6 +2,7 @@ import { constants as fsConstants, type Dirent } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
+import type { PetCustomCollectionSnapshot, PetCustomPet } from "../pet-contracts"
 import {
   assertValidPetAssetInspection,
   petAssetMaxBytes,
@@ -13,20 +14,8 @@ export const customPetSchema = "convax.custom-pet/1" as const
 export const maximumCustomPets = 32
 export const customPetIdPattern = /^custom-[a-z0-9]+(?:-[a-z0-9]+)*$/
 
-export interface CustomPetSummary {
-  alt: string
-  description: string
-  displayName: string
-  id: string
-  source: "custom"
-  spritesheetUrl: string
-  spriteVersion: 2
-}
-
-export interface CustomPetCollectionSnapshot {
-  pets: CustomPetSummary[]
-  revision: number
-}
+export type CustomPetSummary = PetCustomPet
+export type CustomPetCollectionSnapshot = PetCustomCollectionSnapshot
 
 interface CustomPetMetadata {
   alt: string

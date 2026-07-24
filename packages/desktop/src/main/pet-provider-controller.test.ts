@@ -11,7 +11,7 @@ import { boundPetState, defaultPetState, type PetPersistedState, type PetStateWr
 
 function provider(id = "convax-pet", version = "0.2.0"): InstalledWebPluginSummary {
   return {
-    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
     contributes: {
       pet: {
         library: "pet-library.json",

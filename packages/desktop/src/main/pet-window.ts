@@ -1,3 +1,4 @@
+import type { PetDragInput } from "../pet-contracts"
 import type { InstalledPetProvider } from "./pet-provider-controller"
 import { isAllowedWebPluginFrameNavigation } from "./plugin-asset-protocol"
 import { petWindowPartition } from "./pet-session"
@@ -141,6 +142,12 @@ function terminalRecoveryError(error?: unknown) {
 export class PetWindow {
   readonly #options: PetWindowOptions
   #crashes = 0
+  #drag?: {
+    lastSequence: number
+    pointerOrigin: PetPoint
+    session: string
+    windowOrigin: PetPoint
+  }
   #expanded = false
   #generation = 0
   readonly #platform: NodeJS.Platform
@@ -163,6 +170,7 @@ export class PetWindow {
       return
     }
     const generation = ++this.#generation
+    this.#drag = undefined
     this.#crashes = 0
     this.#provider = cloneProvider(provider)
     this.#window = undefined
@@ -179,6 +187,7 @@ export class PetWindow {
     this.#generation += 1
     this.#crashes = 0
     this.#provider = undefined
+    this.#drag = undefined
     const current = this.#window
     this.#window = undefined
     this.#destroyWindow(current)
@@ -197,6 +206,7 @@ export class PetWindow {
   }
 
   async setExpanded(expanded: boolean) {
+    this.#drag = undefined
     this.#expanded = expanded
     const current = this.#window
     if (!current || current.isDestroyed()) return
@@ -211,19 +221,45 @@ export class PetWindow {
     current.setBounds({ ...position, ...size })
   }
 
-  async moveBy(delta: PetPoint, completed: boolean) {
+  async drag(input: PetDragInput) {
     const current = this.#window
     if (!current || current.isDestroyed()) return
-    if (!Number.isFinite(delta.x) || !Number.isFinite(delta.y)) throw new Error("Pet drag delta must be finite")
+    if (
+      !Number.isFinite(input.screenX) ||
+      !Number.isFinite(input.screenY) ||
+      !Number.isSafeInteger(input.sequence) ||
+      input.sequence < 0
+    ) {
+      throw new Error("Pet drag position must be finite")
+    }
+    if (input.phase === "start") {
+      const bounds = current.getBounds()
+      this.#drag = {
+        lastSequence: input.sequence,
+        pointerOrigin: { x: input.screenX, y: input.screenY },
+        session: input.session,
+        windowOrigin: { x: bounds.x, y: bounds.y },
+      }
+      return
+    }
+    const drag = this.#drag
+    if (!drag || drag.session !== input.session || input.sequence <= drag.lastSequence) return
+    drag.lastSequence = input.sequence
     const bounds = current.getBounds()
+    const desired = {
+      x: drag.windowOrigin.x + input.screenX - drag.pointerOrigin.x,
+      y: drag.windowOrigin.y + input.screenY - drag.pointerOrigin.y,
+    }
     const display = this.#options.screen.getDisplayMatching({
       ...bounds,
-      x: bounds.x + delta.x,
-      y: bounds.y + delta.y,
+      ...desired,
     })
-    const position = clampPetBounds({ x: bounds.x + delta.x, y: bounds.y + delta.y }, display.workArea, bounds)
+    const position = clampPetBounds(desired, display.workArea, bounds)
     current.setBounds(position)
-    if (completed) await this.#options.onPositionChanged(String(display.id), position, display.scaleFactor)
+    if (input.phase === "end") {
+      this.#drag = undefined
+      await this.#options.onPositionChanged(String(display.id), position, display.scaleFactor)
+    }
   }
 
   async #create(generation: number) {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -17,6 +18,7 @@ import {
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   MessageChannelMain,
   nativeImage,
@@ -31,6 +33,7 @@ import {
   type BrowserWindowConstructorOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from "electron"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
@@ -106,6 +109,8 @@ import { registerSkillManagementIpc } from "./skill-management-ipc"
 import { AgentActivityController } from "./agent-activity-controller"
 import { PetActivityNotifier } from "./pet-activity-notifier"
 import { createElectronPetAssetInspector } from "./pet-asset-inspector"
+import { createPetAssetHandler, petAssetPrivileges, petAssetScheme } from "./pet-asset-protocol"
+import { CustomPetStore } from "./custom-pet-store"
 import { PetProviderController } from "./pet-provider-controller"
 import { registerPetIpc } from "./pet-ipc"
 import { PetStateStore } from "./pet-state-store"
@@ -288,6 +293,7 @@ function startApplication() {
       privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
     },
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
+    { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
   app.on("second-instance", () => {
     const window = mainWindow
@@ -307,6 +313,11 @@ function startApplication() {
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
     const petAssetInspector = createElectronPetAssetInspector(nativeImage)
+    const customPets = new CustomPetStore({
+      createId: randomUUID,
+      inspector: petAssetInspector,
+      petsRoot: join(userDataDirectory, "pets"),
+    })
     const pluginManager = new WebPluginManager(
       join(userDataDirectory, "plugins"),
       {},
@@ -648,11 +659,25 @@ function startApplication() {
     })
     const petIpc = registerPetIpc(pets, activity, petWindow, {
       createMessageChannel: () => new MessageChannelMain(),
+      customPets,
       getMainWindow: () => mainWindow,
       ipcMain,
       isTrustedMainSender: ipcSecurity.isTrustedSender,
       async openMainWindow() {
         return mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
+      },
+      async pickCustomPetSource() {
+        const options: OpenDialogOptions = {
+          filters: [
+            { extensions: ["png"], name: "PNG atlas" },
+            { extensions: ["webp"], name: "WebP atlas" },
+          ],
+          properties: ["openFile"],
+          title: "Add custom pet",
+        }
+        const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+        const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+        return result.canceled ? undefined : result.filePaths[0]
       },
       restoreProvider: (pluginId) => pets.restoreProviderRuntime(pluginId),
     })
@@ -768,7 +793,8 @@ function startApplication() {
         if (error instanceof WebPluginPublicationDeferredError) throw error
       },
     )
-    const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager)
+    const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
+    const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager, customPets, fetchPetAsset)
     await pets.initialize()
     const petActivityNotifier = new PetActivityNotifier({
       createNotification(options) {
@@ -921,6 +947,7 @@ function startApplication() {
         rendererUrl: trustedRendererUrl,
       }),
     )
+    protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
         const url = new URL(request.url)
@@ -938,6 +965,7 @@ function startApplication() {
         () => void disposePetApplication(),
         disposePetPluginProtocol,
         () => protocol.unhandle("convax-asset"),
+        () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
         disposeDesktopProtocolIpc,
         disposeProjectIpc,

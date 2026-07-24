@@ -4,7 +4,10 @@ import {
   petHostProtocol,
   petIpcChannels,
   type PetActivitySnapshot,
+  type PetCustomCollectionSnapshot,
+  type PetCustomPet,
   type PetDisplayedSession,
+  type PetDragInput,
   type PetHostProviderBinding,
   type PetNavigationRequest,
   type PetNavigationTarget,
@@ -36,8 +39,15 @@ interface PetActivityNavigationPort {
 }
 
 interface PetOverlayWindowPort {
-  moveBy(delta: { x: number; y: number }, completed: boolean): Promise<void>
+  drag(input: PetDragInput): Promise<void>
   setExpanded(expanded: boolean): Promise<void>
+}
+
+interface PetCustomStorePort {
+  delete(id: string): Promise<void>
+  getSnapshot(): Promise<PetCustomCollectionSnapshot>
+  importAtlas(sourcePath: string): Promise<PetCustomPet>
+  subscribe(listener: (snapshot: PetCustomCollectionSnapshot) => void): Unsubscribe
 }
 
 interface PetMainWindow {
@@ -91,10 +101,12 @@ export interface PetHostWebContents {
 
 export interface RegisterPetIpcOptions {
   createMessageChannel(): PetMessageChannelMain
+  customPets: PetCustomStorePort
   getMainWindow(): PetMainWindow | null
   ipcMain: PetIpcMain
   isTrustedMainSender(event: IpcMainInvokeEvent): boolean
   openMainWindow(): Promise<PetMainWindow>
+  pickCustomPetSource(): Promise<string | undefined>
   restoreProvider(pluginId: string): Promise<void>
 }
 
@@ -315,14 +327,24 @@ export function registerPetIpc(
     pendingNavigation = { senderId: mainWindow.webContents.id, target: navigationTarget }
   }
   const services: PetHostServices = {
+    deleteCustomPet: async ({ petId }) => {
+      await options.customPets.delete(petId)
+      return options.customPets.getSnapshot()
+    },
     getActivitySnapshot: () => provider.getActivitySnapshot(),
     getBinding: () => availableBinding(),
+    getCustomCollection: () => options.customPets.getSnapshot(),
     getPreferences: () => provider.getPreferences(),
-    moveOverlay: (input) => overlay.moveBy({ x: input.dx, y: input.dy }, input.phase === "end"),
+    importCustomPet: async () => {
+      const sourcePath = await options.pickCustomPetSource()
+      return sourcePath ? options.customPets.importAtlas(sourcePath) : null
+    },
+    moveOverlay: (input) => overlay.drag(input),
     openActivity,
     setAwake: (input) => provider.setAwake(input),
     setExpanded: (input) => overlay.setExpanded(input.expanded),
     subscribeActivity: (listener) => provider.subscribeActivity(listener),
+    subscribeCustomCollection: (listener) => options.customPets.subscribe(listener),
     subscribePreferences: (listener) => provider.subscribePreferences(listener),
     updatePreferences: (input) => provider.updatePreferences(input),
   }

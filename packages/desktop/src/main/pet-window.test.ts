@@ -6,7 +6,7 @@ import { clampPetBounds, PetWindow } from "./pet-window"
 
 function provider(overrides: Partial<InstalledPetProvider> = {}): InstalledPetProvider {
   return {
-    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
     contribution: {
       library: "pet-library.json",
       overlay: "pet/index.html",
@@ -61,9 +61,7 @@ class FakeWindow extends EventEmitter {
   loadedUrl?: string
   refuseClose = false
   showInactive = mock(() => undefined)
-  setVisibleOnAllWorkspaces = mock(
-    (_visible: boolean, _options: { visibleOnFullScreen: boolean }) => undefined,
-  )
+  setVisibleOnAllWorkspaces = mock((_visible: boolean, _options: { visibleOnFullScreen: boolean }) => undefined)
   webContents = new FakeWebContents()
 
   close() {
@@ -229,14 +227,42 @@ describe("PetWindow", () => {
     expect(created.window.webContents.send).not.toHaveBeenCalled()
   })
 
-  test("clamps movement, persists only completed drag, and re-clamps on display changes", async () => {
+  test("tracks absolute pointer drag, ignores stale frames, persists only completion, and re-clamps", async () => {
     const value = fixture()
     await value.pet.open(provider())
-    await value.pet.moveBy({ x: 5_000, y: -5_000 }, false)
+
+    await value.pet.drag({
+      phase: "start",
+      screenX: 620,
+      screenY: 430,
+      sequence: 0,
+      session: "drag-one",
+    })
+    await value.pet.drag({
+      phase: "move",
+      screenX: 5_620,
+      screenY: -4_570,
+      sequence: 2,
+      session: "drag-one",
+    })
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_824, y: 0 })
     expect(value.onPositionChanged).not.toHaveBeenCalled()
-    await value.pet.moveBy({ x: -10, y: 20 }, true)
-    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_814, y: 20 }, 2)
+    await value.pet.drag({
+      phase: "move",
+      screenX: 630,
+      screenY: 450,
+      sequence: 1,
+      session: "drag-one",
+    })
+    expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_824, y: 0 })
+    await value.pet.drag({
+      phase: "end",
+      screenX: 1_834,
+      screenY: 20,
+      sequence: 3,
+      session: "drag-one",
+    })
+    expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_824, y: 140 }, 2)
 
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 5_000, y: -20 }
     value.screen.emit("display-metrics-changed")
@@ -271,7 +297,20 @@ describe("PetWindow", () => {
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_240, y: 120 })
 
     value.created[0]!.window.bounds = { height: 176, width: 176, x: 824, y: 120 }
-    await value.pet.moveBy({ x: 240, y: 0 }, true)
+    await value.pet.drag({
+      phase: "start",
+      screenX: 900,
+      screenY: 180,
+      sequence: 0,
+      session: "drag-two",
+    })
+    await value.pet.drag({
+      phase: "end",
+      screenX: 1_140,
+      screenY: 180,
+      sequence: 1,
+      session: "drag-two",
+    })
     expect(value.created[0]!.window.bounds).toMatchObject({ x: 1_064, y: 120 })
     expect(value.onPositionChanged).toHaveBeenCalledWith("8", { x: 1_064, y: 120 }, 2)
   })

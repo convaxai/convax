@@ -77,11 +77,11 @@ describe("CustomPetStore", () => {
         width: 1_536,
       })
       .mockResolvedValueOnce({
-      format: "webp",
-      hasTransparency: false,
-      height: 1_872,
-      width: 1_536,
-    })
+        format: "webp",
+        hasTransparency: false,
+        height: 1_872,
+        width: 1_536,
+      })
 
     await expect(value.store.importAtlas(secondSource)).rejects.toThrow("transparency")
     expect((await value.store.getSnapshot()).pets.map((pet) => pet.id)).toEqual(["custom-pet-one"])
