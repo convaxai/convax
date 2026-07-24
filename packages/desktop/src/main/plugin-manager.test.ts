@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { type WebPluginManifest, compareWebPluginVersions, parseWebPluginManifest } from "../plugin-contracts"
+import type { PetAssetInspection } from "./pet-asset-inspector"
 import { WebPluginManager, WebPluginPublicationDeferredError } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
@@ -117,6 +118,81 @@ function projectCanvasManifest(overrides: Partial<WebPluginManifest> = {}): WebP
     schema: "convax.plugin/5",
     version: "1.0.0",
     ...overrides,
+  }
+}
+
+function petBundle(
+  overrides: {
+    files?: Record<string, string | Uint8Array | null>
+    library?: unknown
+    manifest?: Record<string, unknown>
+  } = {},
+) {
+  const petManifest = {
+    capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
+    contributes: {
+      pet: {
+        library: "pet-library.json",
+        overlay: "pet/index.html",
+        protocol: "convax.pet-host/1",
+        settings: "settings/index.html",
+      },
+    },
+    description: "A local desktop companion and pet library.",
+    id: "convax-pet",
+    name: "Convax Pet",
+    schema: "convax.plugin/5",
+    version: "0.2.0",
+    ...overrides.manifest,
+  }
+  const library = overrides.library ?? {
+    schema: "convax.pet-library/1",
+    pets: [
+      {
+        alt: "Aster, the Convax pixel companion",
+        description: "A calm companion that reflects Agent activity.",
+        displayName: "Aster",
+        id: "aster",
+        spritesheet: "assets/aster.webp",
+        spriteVersion: 2,
+      },
+      {
+        alt: "Comet, a second pixel companion",
+        description: "A second packaged companion.",
+        displayName: "Comet",
+        id: "comet",
+        spritesheet: "assets/comet.png",
+        spriteVersion: 2,
+      },
+    ],
+  }
+  const files: Record<string, string | Uint8Array> = {
+    "assets/comet.png": Uint8Array.from([4, 5, 6]),
+    "assets/aster.webp": Uint8Array.from([1, 2, 3]),
+    "manifest.json": JSON.stringify(petManifest),
+    "pet-library.json": JSON.stringify(library),
+    "pet/index.html": "<!doctype html><title>Pet</title>",
+    "settings/index.html": "<!doctype html><title>Pet settings</title>",
+  }
+  for (const [relativePath, content] of Object.entries(overrides.files ?? {})) {
+    if (content === null) delete files[relativePath]
+    else files[relativePath] = content
+  }
+  return {
+    files,
+  }
+}
+
+function validPetAssetInspector() {
+  return {
+    inspect: mock(
+      async (filePath: string): Promise<PetAssetInspection> => ({
+        format: filePath.endsWith(".png") ? "png" : "webp",
+        hasTransparency: true,
+        height: 1_872,
+        width: 1_536,
+      }),
+    ),
   }
 }
 
@@ -799,6 +875,137 @@ describe("WebPluginManager", () => {
     expect(installed.entry).toBeUndefined()
   })
 
+  test("validates every packaged Pet library atlas before atomically publishing its Plugin", async () => {
+    const root = await temporaryRoot()
+    const inspector = validPetAssetInspector()
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, [], { petAssetInspector: inspector })
+
+    await expect(manager.installBundle(petBundle({ files: { "pet-library.json": null } }))).rejects.toThrow(
+      "Pet library does not exist",
+    )
+    expect(await manager.list()).toEqual([])
+
+    await expect(manager.installBundle(petBundle({ files: { "pet/index.html": null } }))).rejects.toThrow(
+      "Pet overlay does not exist",
+    )
+    await expect(manager.installBundle(petBundle({ files: { "settings/index.html": null } }))).rejects.toThrow(
+      "Pet settings does not exist",
+    )
+    await expect(manager.installBundle(petBundle({ files: { "assets/comet.png": null } }))).rejects.toThrow(
+      "Pet spritesheet comet does not exist",
+    )
+    expect(await manager.list()).toEqual([])
+
+    inspector.inspect.mockClear()
+    await expect(manager.installBundle(petBundle())).resolves.toMatchObject({
+      id: "convax-pet",
+      schema: "convax.plugin/5",
+    })
+    expect(inspector.inspect).toHaveBeenCalled()
+    expect(new Set(inspector.inspect.mock.calls.map(([filePath]) => path.basename(String(filePath))))).toEqual(
+      new Set(["comet.png", "aster.webp"]),
+    )
+  })
+
+  test("recognizes and updates a published Pet package without custom management", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const installedRoot = path.join(installationRoot, "convax-pet")
+    const legacyBundle = petBundle({
+      manifest: {
+        capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+        version: "0.2.1",
+      },
+    })
+    for (const [relativePath, contents] of Object.entries(legacyBundle.files)) {
+      const target = path.join(installedRoot, relativePath)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      await fs.writeFile(target, contents)
+    }
+    const manager = new WebPluginManager(installationRoot, {}, [], {
+      petAssetInspector: validPetAssetInspector(),
+    })
+
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({ id: "convax-pet", version: "0.2.1" }),
+    ])
+    await expect(
+      manager.installBundle(petBundle({ manifest: { version: "0.2.2" } }), { replaceExisting: true }),
+    ).resolves.toMatchObject({
+      capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
+      id: "convax-pet",
+      version: "0.2.2",
+    })
+  })
+
+  test("rejects invalid Pet library JSON, duplicate metadata, and invalid atlases", async () => {
+    const root = await temporaryRoot()
+    const inspector = validPetAssetInspector()
+    const manager = new WebPluginManager(path.join(root, "installed"), {}, [], { petAssetInspector: inspector })
+
+    await expect(manager.installBundle(petBundle({ files: { "pet-library.json": "{" } }))).rejects.toThrow("valid JSON")
+    const duplicateLibrary = {
+      schema: "convax.pet-library/1",
+      pets: [
+        {
+          alt: "First",
+          description: "First packaged pet",
+          displayName: "First",
+          id: "same",
+          spritesheet: "assets/aster.webp",
+          spriteVersion: 2,
+        },
+        {
+          alt: "Second",
+          description: "Second packaged pet",
+          displayName: "Second",
+          id: "same",
+          spritesheet: "assets/comet.png",
+          spriteVersion: 2,
+        },
+      ],
+    }
+    await expect(manager.installBundle(petBundle({ library: duplicateLibrary }))).rejects.toThrow("duplicate ids")
+
+    inspector.inspect.mockImplementationOnce(async () => ({
+      format: "webp",
+      hasTransparency: true,
+      height: 1_871,
+      width: 1_536,
+    }))
+    await expect(manager.installBundle(petBundle())).rejects.toThrow("1536 by 1872")
+    expect(await manager.list()).toEqual([])
+  })
+
+  test("reopens an installed Pet library through a bounded no-follow handle", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installationRoot, {}, [], {
+      petAssetInspector: validPetAssetInspector(),
+    })
+    await manager.installBundle(petBundle())
+
+    const originalOpen = fs.open.bind(fs)
+    const libraryOpenFlags: Array<number | string> = []
+    const open = spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (flags !== undefined && String(filePath).endsWith(`${path.sep}pet-library.json`)) {
+        libraryOpenFlags.push(flags)
+      }
+      return originalOpen(filePath, flags, mode)
+    })
+    try {
+      await expect(manager.resolveCapabilityIdentity("convax-pet")).resolves.toMatchObject({
+        plugin: { id: "convax-pet" },
+      })
+    } finally {
+      open.mockRestore()
+    }
+
+    expect(libraryOpenFlags.length).toBeGreaterThan(0)
+    const noFollow = fs.constants.O_NOFOLLOW ?? 0
+    expect(libraryOpenFlags.some((flags) => typeof flags === "number" && (flags & noFollow) === noFollow)).toBe(true)
+  })
+
   test("cannot bypass the owned-Skill lifecycle when an update removes the last Skill or uninstalls", async () => {
     const root = await temporaryRoot()
     const manager = new WebPluginManager(path.join(root, "installed"))
@@ -1084,6 +1291,25 @@ describe("WebPluginManager", () => {
         mutation: { pluginId: "other-plugin" },
       }),
     ).rejects.toThrow("mutation context")
+  })
+
+  test("reuses an owned mutation context while resolving a capability identity", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    await manager.installBundle(simpleBundle("1.0.0", "application"))
+    const resolveWithMutation = manager.resolveCapabilityIdentity.bind(manager) as (
+      pluginId: string,
+      mutation: { pluginId: string },
+    ) => ReturnType<WebPluginManager["resolveCapabilityIdentity"]>
+
+    await manager.withPluginMutation("director-stage", async (mutation) => {
+      const identity = await Promise.race([
+        resolveWithMutation("director-stage", mutation),
+        Bun.sleep(100).then(() => "timed-out" as const),
+      ])
+      expect(identity).not.toBe("timed-out")
+      expect(identity).toMatchObject({ plugin: { id: "director-stage", version: "1.0.0" } })
+    })
   })
 
   test("restores the unique validated backup after a crash between the two update renames", async () => {

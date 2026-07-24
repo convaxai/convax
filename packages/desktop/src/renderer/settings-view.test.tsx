@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
+import type { PetSettingsHostClient, PetSettingsProvider, PetSettingsProviderSnapshot } from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 import { SettingsView } from "./settings-view"
 
@@ -45,6 +46,19 @@ const pluginClient: WebPluginClient = {
   uninstallPlugin: mock(async () => true),
 }
 
+const petProvider: PetSettingsProvider = {
+  generation: 7,
+  pluginId: "soft-companion",
+  settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+}
+
+const petClient: PetSettingsHostClient = {
+  connectSettings: mock(async () => undefined),
+  disconnectSettings: mock(() => undefined),
+  getProvider: mock(async () => undefined),
+  onProviderChanged: mock(() => noop),
+}
+
 const serviceSnapshot: ServiceCatalogSnapshot = {
   loading: false,
   services: [
@@ -73,6 +87,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -99,6 +114,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -120,6 +136,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -143,6 +160,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -167,6 +185,7 @@ describe("SettingsView", () => {
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
+        petClient={petClient}
         pluginClient={pluginClient}
         serviceSnapshot={serviceSnapshot}
         skillClient={skillClient}
@@ -179,4 +198,56 @@ describe("SettingsView", () => {
     expect(markup).not.toContain(appMessage("en", "settings.capabilities").replace("&", "&amp;"))
     expect(markup).not.toContain("OpenCode")
   })
+
+  test("keeps the requested Pet section in a generic shell while provider discovery is loading", () => {
+    const markup = renderPetSettings({ status: "loading" })
+
+    expect(markup).toContain('data-pet-provider-status="loading"')
+    expect(markup).toContain('aria-busy="true"')
+    expect(markup).not.toContain("iframe")
+    expect(markup).not.toContain('id="settings-language"')
+  })
+
+  test("hides Pet settings and falls back to General when the provider is absent or failed", () => {
+    for (const snapshot of [{ status: "absent" }, { status: "error" }] as const) {
+      const markup = renderPetSettings(snapshot)
+
+      expect(markup).not.toContain("Pets")
+      expect(markup).not.toContain("iframe")
+      expect(markup).toContain('id="settings-language"')
+    }
+  })
+
+  test("mounts only the installed Plugin-owned Pet settings surface", () => {
+    const markup = renderPetSettings({ provider: petProvider, status: "ready" })
+
+    expect(markup).toContain("Pets")
+    expect(markup).toContain('src="convax-plugin://soft-companion/settings/index.html"')
+    expect(markup).toContain('sandbox="allow-scripts"')
+    expect(markup).not.toContain("allow-same-origin")
+    expect(markup).not.toContain('type="file"')
+    expect(markup).not.toContain("pet-card")
+    expect(markup).not.toContain("Import")
+    expect(markup).not.toContain("Delete")
+    expect(markup).not.toContain("Upload")
+  })
+
+  function renderPetSettings(petProviderSnapshot: PetSettingsProviderSnapshot) {
+    return renderToStaticMarkup(
+      <SettingsView
+        initialSection="pets"
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        petProviderSnapshot={petProviderSnapshot}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+  }
 })

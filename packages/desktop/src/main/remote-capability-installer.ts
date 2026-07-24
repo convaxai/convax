@@ -31,7 +31,7 @@ import {
 } from "./remote-capability-registry"
 import type { DesktopSkillManager } from "./skill-manager"
 import { createSkillFilePreviews } from "./skill-details"
-import type { PluginSkillLifecycle } from "./plugin-skill-lifecycle"
+import { composePluginPublicationTransactions, type PluginSkillLifecycle } from "./plugin-skill-lifecycle"
 
 export interface RemoteCapabilityRegistryPort {
   downloadBundle: RemoteCapabilityRegistryClient["downloadBundle"]
@@ -69,6 +69,7 @@ export interface RemoteCapabilityInstallerOptions {
     "installBundle" | "isBundleInstalled" | "list" | "resolveAsset" | "withPluginMutation"
   >
   pluginSkillLifecycle: Pick<PluginSkillLifecycle, "prepareInstall" | "reconcileInstalled">
+  preparePluginPublication?(pluginId: string): Promise<WebPluginPublicationTransaction>
   registry: RemoteCapabilityRegistryPort
   skillManager: Pick<DesktopSkillManager, "installFromFiles">
 }
@@ -146,6 +147,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   readonly #platform: NodeJS.Platform
   readonly #pluginManager: RemoteCapabilityInstallerOptions["pluginManager"]
   readonly #pluginSkillLifecycle: RemoteCapabilityInstallerOptions["pluginSkillLifecycle"]
+  readonly #prepareHostPublication?: RemoteCapabilityInstallerOptions["preparePluginPublication"]
   readonly #registry: RemoteCapabilityRegistryPort
   readonly #skillManager: RemoteCapabilityInstallerOptions["skillManager"]
 
@@ -155,6 +157,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     this.#beforePluginPublish = options.beforePluginPublish
     this.#pluginManager = options.pluginManager
     this.#pluginSkillLifecycle = options.pluginSkillLifecycle
+    this.#prepareHostPublication = options.preparePluginPublication
     this.#companionStore = options.companionStore
     this.#platform = options.platform ?? process.platform
     this.#arch = options.arch ?? process.arch
@@ -383,8 +386,16 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
       await authorization.rollback().catch(() => undefined)
       throw error
     }
+    let hostPublication
+    try {
+      hostPublication = await this.#prepareHostPublication?.(plugin.id)
+    } catch (error) {
+      await ownedSkills?.rollback().catch(() => undefined)
+      await authorization.rollback().catch(() => undefined)
+      throw error
+    }
     const beforePluginPublish = this.#beforePluginPublish
-    return {
+    const capabilityPublication: WebPluginPublicationTransaction = {
       async activate() {
         await ownedSkills?.activate?.()
       },
@@ -421,6 +432,9 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         await ownedSkills?.deferToRecovery?.()
       },
     }
+    return hostPublication
+      ? composePluginPublicationTransactions([hostPublication, capabilityPublication])
+      : capabilityPublication
   }
 
   async #runCurrentPublication(publication: WebPluginPublicationTransaction, pluginId: string) {

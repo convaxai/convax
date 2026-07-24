@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -17,17 +18,32 @@ import {
 import {
   app,
   BrowserWindow,
+  dialog,
+  ipcMain,
+  MessageChannelMain,
   nativeImage,
+  Notification,
   net,
+  powerMonitor,
   protocol,
+  screen,
+  session,
   shell,
   webFrameMain,
+  type BrowserWindowConstructorOptions,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from "electron"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
-import { registerWillQuitCleanup } from "./application-lifecycle"
+import {
+  createDemandDrivenAsyncLifecycle,
+  createDetachedAsyncCallback,
+  createIdempotentAsyncCleanup,
+  registerMainWindowActivation,
+  registerWillQuitCleanup,
+} from "./application-lifecycle"
 import {
   desktopApplicationName,
   desktopProjectWorkspaceDirectory,
@@ -90,6 +106,16 @@ import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-auth
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
 import { registerSkillManagementIpc } from "./skill-management-ipc"
+import { AgentActivityController } from "./agent-activity-controller"
+import { PetActivityNotifier } from "./pet-activity-notifier"
+import { createElectronPetAssetInspector } from "./pet-asset-inspector"
+import { createPetAssetHandler, petAssetPrivileges, petAssetScheme } from "./pet-asset-protocol"
+import { CustomPetStore } from "./custom-pet-store"
+import { PetProviderController } from "./pet-provider-controller"
+import { registerPetIpc } from "./pet-ipc"
+import { PetStateStore } from "./pet-state-store"
+import { registerPetPluginSessionProtocol } from "./pet-session"
+import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
 import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
@@ -121,6 +147,7 @@ const agentHostToolInactivityTimeout = 60 * 60_000
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
+let mainWindow: BrowserWindow | null = null
 const rendererUrl = desktopRendererUrl({
   isPackaged: app.isPackaged,
   requestedUrl: process.env.ELECTRON_RENDERER_URL,
@@ -178,12 +205,14 @@ function createWindow(projectManager: NodeProjectManager) {
       v8CacheOptions: developmentCachePolicy.v8CacheOptions,
     },
   })
+  mainWindow = window
   const webContentsId = window.webContents.id
   const pluginFrameBindings = new Map<number, string>()
   trustedWebContents.add(webContentsId)
   window.once("closed", () => {
     pluginFrameBindings.clear()
     trustedWebContents.delete(webContentsId)
+    if (mainWindow === window) mainWindow = null
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   window.webContents.on("will-navigate", (event, url) => {
@@ -241,10 +270,11 @@ function createWindow(projectManager: NodeProjectManager) {
 
   if (rendererUrl) {
     void window.loadURL(rendererUrl)
-    return
+    return window
   }
 
   void window.loadURL(trustedRendererUrl)
+  return window
 }
 
 function startApplication() {
@@ -263,9 +293,10 @@ function startApplication() {
       privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
     },
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
+    { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
   app.on("second-instance", () => {
-    const window = BrowserWindow.getAllWindows()[0]
+    const window = mainWindow
     if (!window) return
     if (window.isMinimized()) window.restore()
     window.show()
@@ -281,10 +312,17 @@ function startApplication() {
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
+    const petAssetInspector = createElectronPetAssetInspector(nativeImage)
+    const customPets = new CustomPetStore({
+      createId: randomUUID,
+      inspector: petAssetInspector,
+      petsRoot: join(userDataDirectory, "pets"),
+    })
     const pluginManager = new WebPluginManager(
       join(userDataDirectory, "plugins"),
       {},
       desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
+      { petAssetInspector },
     )
     // Package recovery selects the authoritative Plugin version used by every
     // dependent authorization and owned-Skill journal. An ambiguous package
@@ -557,6 +595,93 @@ function startApplication() {
       ]),
       toolServerName: "convax",
     })
+    const petStateStore = new PetStateStore(join(userDataDirectory, "pet-state-v1.json"))
+    const activity = new AgentActivityController({
+      projects: projectManager,
+      runtime: agentRuntime,
+      watermarks: petStateStore,
+    })
+    const activityLifecycle = createDemandDrivenAsyncLifecycle({
+      onError: (error) => console.warn("Could not refresh Pet activity", error),
+      start: () => activity.start(),
+      stop: () => activity.stop(),
+    })
+    const petActivity = {
+      getSnapshot: () => activity.getSnapshot(),
+      subscribe(listener: Parameters<typeof activity.subscribe>[0]) {
+        const unsubscribe = activity.subscribe(listener)
+        let release: () => void
+        try {
+          release = activityLifecycle.acquire()
+        } catch (error) {
+          unsubscribe()
+          throw error
+        }
+        let disposed = false
+        return () => {
+          if (disposed) return
+          disposed = true
+          unsubscribe()
+          release()
+        }
+      },
+    }
+    let petDisplayState = await petStateStore.read()
+    let connectPetOverlay: ReturnType<typeof registerPetIpc>["connectOverlay"] = () => {
+      throw new Error("Pet overlay IPC is not ready")
+    }
+    let pets: PetProviderController
+    const petWindow = new PetWindow({
+      createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
+      onFatal: createDetachedAsyncCallback(
+        () => pets.setAwake({ awake: false }),
+        (error) => console.warn("Could not tuck a failed Pet overlay", error),
+      ),
+      onLoaded: (webContents, provider) => connectPetOverlay(webContents, provider),
+      async onPositionChanged(displayId, position, scaleFactor) {
+        petDisplayState = await petStateStore.update((state) => ({
+          ...state,
+          displayId,
+          positions: { ...state.positions, [displayId]: { ...position, scaleFactor } },
+        }))
+      },
+      powerMonitor,
+      preloadPath: join(import.meta.dirname, "../preload/pet.js"),
+      resolveDisplayId: () => petDisplayState.displayId,
+      resolvePosition: (displayId) => petDisplayState.positions[displayId],
+      screen,
+    })
+    pets = new PetProviderController({
+      activity: petActivity,
+      pluginManager,
+      stateStore: petStateStore,
+      window: petWindow,
+    })
+    const petIpc = registerPetIpc(pets, activity, petWindow, {
+      createMessageChannel: () => new MessageChannelMain(),
+      customPets,
+      getMainWindow: () => mainWindow,
+      ipcMain,
+      isTrustedMainSender: ipcSecurity.isTrustedSender,
+      async openMainWindow() {
+        return mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
+      },
+      async pickCustomPetSource() {
+        const options: OpenDialogOptions = {
+          filters: [
+            { extensions: ["png"], name: "PNG atlas" },
+            { extensions: ["webp"], name: "WebP atlas" },
+          ],
+          properties: ["openFile"],
+          title: "Add custom pet",
+        }
+        const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+        const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+        return result.canceled ? undefined : result.filePaths[0]
+      },
+      restoreProvider: (pluginId) => pets.restoreProviderRuntime(pluginId),
+    })
+    connectPetOverlay = petIpc.connectOverlay
     const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
     const pluginSkillOwnership = new PluginSkillOwnershipStore(
       join(userDataDirectory, "plugin-skill-bindings", "index-v1.json"),
@@ -584,12 +709,15 @@ function startApplication() {
     const createRemoteCapabilityInstaller = (registry: RemoteCapabilityRegistryPort) =>
       new RemoteCapabilityInstaller({
         authorizationStore: toolPluginAuthorizations,
-        beforePluginPublish: (pluginId) => pluginServices.discardPlugin(pluginId),
+        beforePluginPublish: async (pluginId) => {
+          pluginServices.discardPlugin(pluginId)
+        },
         builtinPlugins: desktopBuiltinPluginCatalog,
         builtinSkills: desktopBuiltinSkillCatalog,
         companionStore,
         pluginManager,
         pluginSkillLifecycle,
+        preparePluginPublication: async (pluginId) => petIpc.prepareProviderChange(pluginId),
         registry,
         skillManager,
       })
@@ -629,9 +757,14 @@ function startApplication() {
       const authorization = await toolPluginAuthorizations.prepareInstall(plugin)
       try {
         const ownedSkills = await pluginSkillLifecycle.prepareInstall(plugin, candidate)
-        // The owned-Skill transaction records the only fallible forward
-        // decision. Authorization cleanup is best-effort and follows it.
-        return composePluginPublicationTransactions([ownedSkills, authorization])
+        // Pet capability revocation shares the package rollback boundary. The
+        // owned-Skill transaction records the only fallible forward decision;
+        // authorization cleanup is best-effort and follows it.
+        return composePluginPublicationTransactions([
+          petIpc.prepareProviderChange(plugin.id),
+          ownedSkills,
+          authorization,
+        ])
       } catch (error) {
         await authorization.rollback().catch(() => undefined)
         throw error
@@ -660,6 +793,34 @@ function startApplication() {
         if (error instanceof WebPluginPublicationDeferredError) throw error
       },
     )
+    const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
+    const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager, customPets, fetchPetAsset)
+    await pets.initialize()
+    const petActivityNotifier = new PetActivityNotifier({
+      createNotification(options) {
+        return Notification.isSupported() ? new Notification(options) : undefined
+      },
+      getMainWindow: () => mainWindow,
+      onError: (error) => console.warn("Could not show or open a Pet activity notification", error),
+      async openActivity(activityId) {
+        const snapshot = pets.getActivitySnapshot()
+        if (!snapshot.activities.some((activity) => activity.id === activityId)) return
+        await petIpc.openActivity({ activityId, revision: snapshot.revision })
+      },
+    })
+    petActivityNotifier.updatePreferences(pets.getPreferences())
+    petActivityNotifier.updateActivity(pets.getActivitySnapshot())
+    const unsubscribePetNotificationPreferences = pets.subscribePreferences((preferences) => {
+      petActivityNotifier.updatePreferences(preferences)
+    })
+    const unsubscribePetNotificationActivity = pets.subscribeActivity((snapshot) => {
+      petActivityNotifier.updateActivity(snapshot)
+    })
+    const disposePetActivityNotifier = () => {
+      unsubscribePetNotificationActivity()
+      unsubscribePetNotificationPreferences()
+      petActivityNotifier.dispose()
+    }
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
@@ -726,10 +887,16 @@ function startApplication() {
       ipcSecurity.isTrustedSender,
       remoteCapabilities,
       {
-        beforeChange: (pluginId) => pluginServices.discardPlugin(pluginId),
+        beforeChange: async (pluginId) => {
+          pluginServices.discardPlugin(pluginId)
+        },
         prepareInstall: prepareLocalPluginPublication,
-        prepareRemove: (plugin) => pluginSkillLifecycle.prepareUninstall(plugin),
-        async onDidChange(pluginId) {
+        prepareRemove: async (plugin) =>
+          composePluginPublicationTransactions([
+            petIpc.prepareProviderChange(plugin.id),
+            await pluginSkillLifecycle.prepareUninstall(plugin),
+          ]),
+        async onDidChange(pluginId, mutation) {
           generationRuntime.disposePlugin(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
           void agentRuntime.refreshProviders().catch((error) => {
@@ -738,6 +905,7 @@ function startApplication() {
           void skillManager.refresh().catch((error) => {
             console.warn("Could not immediately refresh OpenCode Plugin-owned Skills", error)
           })
+          await pets.refresh(mutation)
         },
       },
     )
@@ -750,6 +918,7 @@ function startApplication() {
     )
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,
+      activity,
       canvasSnapshots: {
         async resolveCanvasSnapshot(ref) {
           const [snapshot, catalog] = await Promise.all([
@@ -765,12 +934,20 @@ function startApplication() {
         },
       },
     })
+    const disposePetApplication = createIdempotentAsyncCleanup([
+      disposePetActivityNotifier,
+      () => petIpc.dispose(),
+      () => pets.dispose(),
+      () => activityLifecycle.dispose(),
+      () => petWindow.dispose(),
+    ])
     protocol.handle(
       webPluginAssetScheme,
       createWebPluginAssetHandler(pluginManager, {
         rendererUrl: trustedRendererUrl,
       }),
     )
+    protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
         const url = new URL(request.url)
@@ -785,7 +962,10 @@ function startApplication() {
     registerWillQuitCleanup(
       app,
       [
+        () => void disposePetApplication(),
+        disposePetPluginProtocol,
         () => protocol.unhandle("convax-asset"),
+        () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
         disposeDesktopProtocolIpc,
         disposeProjectIpc,
@@ -821,6 +1001,7 @@ function startApplication() {
       void projectManager
         .flushPendingWrites()
         .then(async () => {
+          await disposePetApplication()
           await agentRuntime.dispose()
           await canvasExternalMediaDrag.dispose().catch((error) => {
             console.warn("Could not dispose Canvas native drag media during shutdown", error)
@@ -873,10 +1054,13 @@ function startApplication() {
       }, 30_000).unref()
     }
 
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length > 0) return
-      createWindow(projectManager)
-    })
+    registerMainWindowActivation(
+      app,
+      () => mainWindow,
+      () => {
+        createWindow(projectManager)
+      },
+    )
   })
   app.on("window-all-closed", () => {
     if (process.platform === "darwin") return

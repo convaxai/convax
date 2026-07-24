@@ -138,3 +138,11 @@ describe("Agent composer source contract", () => {
     expect(source).not.toContain('aria-label="Add context or Skill"')
   })
 })
+
+describe("Agent conversation visibility contract", () => {
+  test("reports displayed content immediately and when the document becomes visible", () => {
+    const source = readFileSync(fileURLToPath(new URL("./agent-panel.tsx", import.meta.url)), "utf8")
+    expect(source).toContain("displayedAgentSession")
+    expect(source).toContain('document.addEventListener("visibilitychange", reportDisplayed)')
+  })
+})

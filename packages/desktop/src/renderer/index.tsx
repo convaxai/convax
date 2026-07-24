@@ -1216,6 +1216,39 @@ function App() {
           retry: "Retry",
         }
 
+  const reportDisplayedPetSession = useCallback((input: { projectId: string; sessionId: string }) => {
+    void window.convax.pets.markSessionDisplayed(input).catch((error) => {
+      console.error("Failed to acknowledge the displayed Pet conversation", error)
+    })
+  }, [])
+
+  useEffect(
+    () =>
+      window.convax.pets.onNavigate((target) => {
+        void (async () => {
+          try {
+            await projectController.activate(target.projectId)
+            if (projectController.getSnapshot().activeProjectId !== target.projectId) {
+              throw new Error("The activity Project is no longer available")
+            }
+            workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+            const panel = agentPanelRef.current
+            if (!panel) throw new Error("The Agent panel is not ready")
+            await panel.openSession(target.sessionId)
+            await window.convax.pets.markDisplayed({ activityId: target.activityId, revision: target.revision })
+          } catch (error) {
+            setNotification({
+              description: error instanceof Error ? error.message : String(error),
+              kind: "warning",
+              title: locale === "zh-CN" ? "无法打开宠物活动" : "Pet activity is unavailable",
+            })
+          }
+        })()
+      }),
+    [locale, projectController, workbenchLayoutController],
+  )
+
   useEffect(() => {
     if (!activeProject || workbenchLayoutSnapshot.resize || !secondarySidebar.visible) return
     if (secondarySidebar.size > secondarySidebarAvailableSize) {
@@ -1444,6 +1477,7 @@ function App() {
             projectId={activeProjectId}
             projectName={activeProject?.name}
             ref={agentPanelRef}
+            onSessionDisplayed={reportDisplayedPetSession}
           />
         </RendererErrorBoundary>
         {notification ? <Toast notification={notification} /> : null}
@@ -1467,6 +1501,7 @@ function App() {
           onLanguageChange={changeLanguage}
           onRefreshServices={() => void serviceCatalogController.refresh()}
           onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
+          petClient={window.convax.pets}
           pluginClient={window.convax.plugins}
           serviceSnapshot={serviceCatalogSnapshot}
           skillClient={window.convax.agent.skills}

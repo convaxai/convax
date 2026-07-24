@@ -26,6 +26,10 @@ export const webPluginCapabilities = [
   "canvas.document.read",
   "canvas.document.write",
   "canvas.events.subscribe",
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
+  "pet.custom.manage",
 ] as const
 
 export type WebPluginCapability = (typeof webPluginCapabilities)[number]
@@ -37,6 +41,21 @@ export const webPluginProjectCanvasCapabilities = [
   "canvas.document.write",
   "canvas.events.subscribe",
 ] as const satisfies readonly WebPluginCapability[]
+
+export const webPluginPetCapabilities = [
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
+  "pet.custom.manage",
+] as const satisfies readonly WebPluginCapability[]
+
+const requiredWebPluginPetCapabilities = [
+  "pet.activity.read",
+  "pet.activity.open",
+  "pet.preferences.write",
+] as const satisfies readonly WebPluginCapability[]
+
+const allowedWebPluginPetCapabilities: ReadonlySet<string> = new Set(webPluginPetCapabilities)
 
 export const webPluginGenerationModalities = ["text", "image", "video", "audio"] as const
 export const webPluginGenerationInputRoles = [
@@ -115,6 +134,14 @@ export interface WebPluginLlmContribution {
   provider: { id: string; name: string }
 }
 
+/** Static surfaces and packaged library for one sandboxed Pet feature provider. */
+export interface WebPluginPetContribution {
+  library: string
+  overlay: string
+  protocol: "convax.pet-host/1"
+  settings: string
+}
+
 export interface WebPluginMcpStdioRuntime {
   args?: string[]
   /** A portable executable name resolved by the trusted host; never a path. */
@@ -190,6 +217,8 @@ export interface WebPluginManifest {
     generation?: WebPluginGenerationContribution
     /** Main-only provider metadata; connection details come from the verified runtime. */
     llm?: WebPluginLlmContribution
+    /** One sandboxed Pet feature provider; Desktop supplies only narrow native host primitives. */
+    pet?: WebPluginPetContribution
     /** Present only in a convax.plugin/2 or later manifest with a matching MCP runtime. */
     service?: WebPluginServiceContribution
     /** Plugin-owned Skills are available to convax.plugin/4 and later. */
@@ -745,6 +774,26 @@ function parseLlm(value: unknown): WebPluginLlmContribution {
   }
 }
 
+function parsePet(value: unknown): WebPluginPetContribution {
+  const input = asRecord(value, "Pet contribution")
+  assertKeys(input, ["library", "overlay", "protocol", "settings"], "Pet contribution")
+  const library = requireWebPluginRelativePath(input.library, "Pet library")
+  const overlay = requireWebPluginRelativePath(input.overlay, "Pet overlay")
+  const settings = requireWebPluginRelativePath(input.settings, "Pet settings")
+  if (!library.toLowerCase().endsWith(".json")) throw new Error("Pet library must be a JSON file")
+  if (!overlay.toLowerCase().endsWith(".html")) throw new Error("Pet overlay must be an HTML file")
+  if (!settings.toLowerCase().endsWith(".html")) throw new Error("Pet settings must be an HTML file")
+  if (input.protocol !== "convax.pet-host/1") {
+    throw new Error("Pet protocol must equal convax.pet-host/1")
+  }
+  return {
+    library,
+    overlay,
+    protocol: "convax.pet-host/1",
+    settings,
+  }
+}
+
 function validateDeclarativeToolReferences(input: {
   agent?: WebPluginAgentContribution
   generation?: WebPluginGenerationContribution
@@ -830,7 +879,10 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (schema === webPluginManifestSchema && capabilities.includes("generation.execute")) {
     throw new Error("generation.execute is available only to executable Plugin manifests")
   }
-  const v5Capabilities = new Set<WebPluginCapability>(webPluginProjectCanvasCapabilities)
+  const v5Capabilities = new Set<WebPluginCapability>([
+    ...webPluginProjectCanvasCapabilities,
+    ...webPluginPetCapabilities,
+  ])
   if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => v5Capabilities.has(capability))) {
     throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5")
   }
@@ -841,7 +893,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
-      ...(schema === webPluginManifestSchemaV5 ? ["llm"] : []),
+      ...(schema === webPluginManifestSchemaV5 ? ["llm", "pet"] : []),
       ...(declarativeSchema ? ["agent"] : []),
       ...(ownsSkills ? ["skills"] : []),
     ],
@@ -851,6 +903,20 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const hasGenerationContribution = contributes.generation !== undefined
   const hasServiceContribution = contributes.service !== undefined
   const hasLlmContribution = contributes.llm !== undefined
+  const hasPetContribution = contributes.pet !== undefined
+  if (hasPetContribution) {
+    if (
+      capabilities.length < requiredWebPluginPetCapabilities.length ||
+      capabilities.length > webPluginPetCapabilities.length ||
+      requiredWebPluginPetCapabilities.some((capability) => !capabilities.includes(capability)) ||
+      capabilities.some((capability) => !allowedWebPluginPetCapabilities.has(capability))
+    ) {
+      throw new Error(
+        "Pet capabilities must include pet.activity.read, pet.activity.open, and pet.preferences.write; pet.custom.manage is optional",
+      )
+    }
+    if (hasRuntime) throw new Error("Pet feature cannot declare an executable runtime")
+  }
   const hasExecutableContribution = hasGenerationContribution || hasServiceContribution || hasLlmContribution
   const hasCanvasContribution = contributes.canvas !== undefined
   const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined
@@ -896,7 +962,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     !selectionActions?.length &&
     !hasExecutableContribution &&
     !capabilities.includes("generation.execute") &&
-    !hasProjectCanvasCapability
+    !hasProjectCanvasCapability &&
+    !hasPetContribution
   ) {
     throw new Error(`${schema} must declare a Plugin capability beyond owned Skills`)
   }
@@ -913,6 +980,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined
   const llm = hasLlmContribution ? parseLlm(contributes.llm) : undefined
+  const pet = hasPetContribution ? parsePet(contributes.pet) : undefined
   const runtime = hasRuntime ? parseMcpStdioRuntime(input.runtime) : undefined
   if (declarativeSchema) {
     validateDeclarativeToolReferences({ agent, generation, selectionActions })
@@ -932,6 +1000,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
           }),
       ...(generation === undefined ? {} : { generation }),
       ...(llm === undefined ? {} : { llm }),
+      ...(pet === undefined ? {} : { pet }),
       ...(service === undefined ? {} : { service }),
       ...(skills === undefined ? {} : { skills }),
     },

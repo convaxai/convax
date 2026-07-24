@@ -7,6 +7,7 @@ import {
   type AgentCanvasSnapshotResolver,
   type AgentProjectResolver,
 } from "./agent-resource-preparation"
+import type { AgentActivityMutationSink } from "./agent-activity-controller"
 
 export type {
   AgentCanvasSnapshot,
@@ -46,11 +47,20 @@ export function registerAgentIpc(
   runtime: AgentRuntime,
   manager: AgentProjectResolver,
   options: {
+    activity?: AgentActivityMutationSink
     canvasSnapshots?: AgentCanvasSnapshotResolver
     isTrustedSender: (event: IpcMainInvokeEvent) => boolean
   },
 ) {
   const directoryFor = (scopeId: string) => manager.resolveEntryPath({ projectId: scopeId })
+  const updateActivity = async (operation: (() => Promise<void>) | undefined) => {
+    if (!operation) return
+    try {
+      await operation()
+    } catch {
+      console.warn("Agent activity projection update failed")
+    }
+  }
   const disposers = [
     registerHandler<undefined, Awaited<ReturnType<AgentClient["getStatus"]>>>(
       agentIpcChannels.getStatus,
@@ -80,22 +90,34 @@ export function registerAgentIpc(
     registerHandler<AgentPromptRequest, Awaited<ReturnType<AgentClient["prompt"]>>>(
       agentIpcChannels.prompt,
       options.isTrustedSender,
-      async (input) =>
-        runtime.prompt({
-          agent: input.agent,
-          directory: await directoryFor(input.scopeId),
-          instructions: input.instructions,
-          model: input.model,
-          resources: await prepareAgentResources(manager, options.canvasSnapshots, input.scopeId, input.resources),
-          scopeId: input.scopeId,
-          sessionId: input.sessionId,
-          text: input.text,
-          variant: input.variant,
-        }),
+      async (input) => {
+        await updateActivity(options.activity && (() => options.activity!.promptStarted(input.scopeId, input.sessionId)))
+        try {
+          const result = await runtime.prompt({
+            agent: input.agent,
+            directory: await directoryFor(input.scopeId),
+            instructions: input.instructions,
+            model: input.model,
+            resources: await prepareAgentResources(manager, options.canvasSnapshots, input.scopeId, input.resources),
+            scopeId: input.scopeId,
+            sessionId: input.sessionId,
+            text: input.text,
+            variant: input.variant,
+          })
+          await updateActivity(options.activity && (() => options.activity!.promptSettled(input.scopeId, input.sessionId)))
+          return result
+        } catch (error) {
+          await updateActivity(
+            options.activity && (() => options.activity!.promptSettled(input.scopeId, input.sessionId, { failed: true })),
+          )
+          throw error
+        }
+      },
     ),
-    registerHandler<ClientInput<"abort">, void>(agentIpcChannels.abort, options.isTrustedSender, async (input) =>
-      runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId }),
-    ),
+    registerHandler<ClientInput<"abort">, void>(agentIpcChannels.abort, options.isTrustedSender, async (input) => {
+      await runtime.abort({ directory: await directoryFor(input.scopeId), sessionId: input.sessionId })
+      await updateActivity(options.activity && (() => options.activity!.aborted(input.scopeId, input.sessionId)))
+    }),
     registerHandler<ClientInput<"listCapabilities">, Awaited<ReturnType<AgentClient["listCapabilities"]>>>(
       agentIpcChannels.listCapabilities,
       options.isTrustedSender,
@@ -117,32 +139,38 @@ export function registerAgentIpc(
     registerHandler<ClientInput<"replyPermission">, void>(
       agentIpcChannels.replyPermission,
       options.isTrustedSender,
-      async (input) =>
-        runtime.replyPermission({
+      async (input) => {
+        await runtime.replyPermission({
           directory: await directoryFor(input.scopeId),
           message: input.message,
           reply: input.reply,
           requestId: input.requestId,
-        }),
+        })
+        await updateActivity(options.activity && (() => options.activity!.permissionReplied(input.scopeId, input.requestId)))
+      },
     ),
     registerHandler<ClientInput<"replyQuestion">, void>(
       agentIpcChannels.replyQuestion,
       options.isTrustedSender,
-      async (input) =>
-        runtime.replyQuestion({
+      async (input) => {
+        await runtime.replyQuestion({
           answers: input.answers,
           directory: await directoryFor(input.scopeId),
           requestId: input.requestId,
-        }),
+        })
+        await updateActivity(options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)))
+      },
     ),
     registerHandler<ClientInput<"rejectQuestion">, void>(
       agentIpcChannels.rejectQuestion,
       options.isTrustedSender,
-      async (input) =>
-        runtime.rejectQuestion({
+      async (input) => {
+        await runtime.rejectQuestion({
           directory: await directoryFor(input.scopeId),
           requestId: input.requestId,
-        }),
+        })
+        await updateActivity(options.activity && (() => options.activity!.questionReplied(input.scopeId, input.requestId)))
+      },
     ),
   ]
 

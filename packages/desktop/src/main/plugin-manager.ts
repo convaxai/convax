@@ -13,6 +13,8 @@ import {
   validatePortablePluginSegment,
   webPluginManifestFileName,
 } from "../plugin-contracts"
+import { assertValidPetAssetInspection, type PetAssetInspector, type PetAssetInspection } from "./pet-asset-inspector"
+import { parseInstalledPetLibrary } from "./pet-library"
 
 const defaultLimits = {
   maxEntryCount: 2_000,
@@ -37,6 +39,10 @@ export interface WebPluginInstallLimits {
   maxEntryCount?: number
   maxFileBytes?: number
   maxTotalBytes?: number
+}
+
+export interface WebPluginManagerOptions {
+  petAssetInspector?: PetAssetInspector
 }
 
 export interface WebPluginBundle {
@@ -347,7 +353,53 @@ async function assertRegularInstalledFile(pluginRoot: string, relativePath: stri
   return realPath
 }
 
-async function validateInstalledPackage(directory: string, limits: ResolvedLimits) {
+async function readBoundedInstalledFile(pluginRoot: string, relativePath: string, label: string, maximumBytes: number) {
+  const filePath = await assertRegularInstalledFile(pluginRoot, relativePath, label)
+  const before = await fs.lstat(filePath)
+  const handle = await fs.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+  try {
+    const opened = await handle.stat()
+    const currentRealPath = await fs.realpath(filePath)
+    assertInside(currentRealPath, pluginRoot, label)
+    const current = await fs.stat(currentRealPath)
+    if (
+      !before.isFile() ||
+      !opened.isFile() ||
+      !current.isFile() ||
+      before.dev !== opened.dev ||
+      before.ino !== opened.ino ||
+      before.size !== opened.size ||
+      before.mtimeMs !== opened.mtimeMs ||
+      before.ctimeMs !== opened.ctimeMs ||
+      opened.dev !== current.dev ||
+      opened.ino !== current.ino
+    ) {
+      throw new Error(`${label} changed while it was opened: ${relativePath}`)
+    }
+    if (opened.size > maximumBytes) throw new Error(`${label} exceeds the per-file size limit`)
+    const content = await handle.readFile()
+    if (content.byteLength > maximumBytes) throw new Error(`${label} exceeds the per-file size limit`)
+    const after = await handle.stat()
+    if (
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size ||
+      after.mtimeMs !== opened.mtimeMs ||
+      after.ctimeMs !== opened.ctimeMs
+    ) {
+      throw new Error(`${label} changed while it was read: ${relativePath}`)
+    }
+    return content
+  } finally {
+    await handle.close()
+  }
+}
+
+async function validateInstalledPackage(
+  directory: string,
+  limits: ResolvedLimits,
+  petAssetInspector?: PetAssetInspector,
+) {
   const manifest = await readManifest(directory, limits.maxFileBytes)
   if (manifest.entry) await assertRegularInstalledFile(directory, manifest.entry, "Plugin entry")
   if (manifest.skill) {
@@ -358,6 +410,32 @@ async function validateInstalledPackage(directory: string, limits: ResolvedLimit
   }
   for (const skill of manifest.contributes.skills ?? []) {
     await assertRegularInstalledFile(directory, `${skill.path}/SKILL.md`, `Plugin-owned Skill ${skill.name}`)
+  }
+  const pet = manifest.contributes.pet
+  if (pet) {
+    const libraryBytes = await readBoundedInstalledFile(directory, pet.library, "Pet library", limits.maxFileBytes)
+    await assertRegularInstalledFile(directory, pet.overlay, "Pet overlay")
+    await assertRegularInstalledFile(directory, pet.settings, "Pet settings")
+    let libraryValue: unknown
+    try {
+      libraryValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(libraryBytes))
+    } catch (error) {
+      throw new Error("Pet library is not valid JSON", { cause: error })
+    }
+    const library = parseInstalledPetLibrary(libraryValue)
+    if (!petAssetInspector) throw new Error("Pet asset inspection is unavailable")
+    for (const libraryPet of library.pets) {
+      const spritesheet = await assertRegularInstalledFile(
+        directory,
+        libraryPet.spritesheet,
+        `Pet spritesheet ${libraryPet.id}`,
+      )
+      const inspection = await petAssetInspector.inspect(spritesheet)
+      const expectedFormat: PetAssetInspection["format"] = libraryPet.spritesheet.toLowerCase().endsWith(".png")
+        ? "png"
+        : "webp"
+      assertValidPetAssetInspection(inspection, expectedFormat)
+    }
   }
   return manifest
 }
@@ -525,14 +603,25 @@ export class WebPluginManager {
   readonly #activeMutationContexts = new WeakSet<WebPluginMutationContext>()
   readonly #limits: ResolvedLimits
   readonly #mutationTails = new Map<string, Promise<void>>()
+  readonly #petAssetInspector?: PetAssetInspector
   readonly #reservedBuiltinIds: ReadonlySet<string>
   readonly #rootPath: string
 
-  constructor(rootPath: string, limits: WebPluginInstallLimits = {}, reservedBuiltinIds: readonly string[] = []) {
+  constructor(
+    rootPath: string,
+    limits: WebPluginInstallLimits = {},
+    reservedBuiltinIds: readonly string[] = [],
+    options: WebPluginManagerOptions = {},
+  ) {
     if (!rootPath.trim()) throw new Error("Plugin installation root is required")
     this.#rootPath = path.resolve(rootPath)
     this.#limits = resolveLimits(limits)
+    this.#petAssetInspector = options.petAssetInspector
     this.#reservedBuiltinIds = new Set(reservedBuiltinIds.map(requireWebPluginId))
+  }
+
+  async #validateInstalledPackage(directory: string) {
+    return validateInstalledPackage(directory, this.#limits, this.#petAssetInspector)
   }
 
   async #ensureRoot() {
@@ -605,7 +694,7 @@ export class WebPluginManager {
     }
     const realDirectory = await fs.realpath(directory)
     if (realDirectory !== directory) throw new Error(`${label} must not resolve through a symbolic link`)
-    const manifest = await validateInstalledPackage(realDirectory, this.#limits)
+    const manifest = await this.#validateInstalledPackage(realDirectory)
     if (manifest.id !== expectedId) throw new Error(`${label} manifest identity does not match its transaction name`)
     const digest = await installedPackageDigest(realDirectory, this.#limits)
     const markerPath = path.join(realDirectory, builtinProvenanceFileName)
@@ -846,7 +935,7 @@ export class WebPluginManager {
     staging: string,
     options: WebPluginBundleInstallOptions & { builtinProvenance?: boolean; expectedId?: string } = {},
   ) {
-    const initialManifest = await validateInstalledPackage(staging, this.#limits)
+    const initialManifest = await this.#validateInstalledPackage(staging)
     const stagingPackage = await this.#validatePublicationPackage(
       installationRoot,
       staging,
@@ -1042,7 +1131,7 @@ export class WebPluginManager {
     expectedId: string,
     options: WebPluginPublicationOptions = {},
   ) {
-    const initialManifest = await validateInstalledPackage(staging, this.#limits)
+    const initialManifest = await this.#validateInstalledPackage(staging)
     const stagingPackage = await this.#validatePublicationPackage(
       installationRoot,
       staging,
@@ -1252,7 +1341,7 @@ export class WebPluginManager {
         const target = path.join(installationRoot, manifest.id)
         if (await exists(target)) {
           await this.#claimInstalledBuiltinBundle(bundle, options)
-          const installedManifest = await validateInstalledPackage(target, this.#limits)
+          const installedManifest = await this.#validateInstalledPackage(target)
           const provenance = await readBuiltinProvenance(target, installedManifest)
           if (
             installedManifest.id === manifest.id &&
@@ -1305,7 +1394,7 @@ export class WebPluginManager {
     const target = path.join(installationRoot, manifest.id)
     if (!(await exists(target))) return false
 
-    const installedManifest = await validateInstalledPackage(target, this.#limits)
+    const installedManifest = await this.#validateInstalledPackage(target)
     const actualDigest = await installedPackageDigest(target, this.#limits).catch(() => "")
     const markerPath = path.join(target, builtinProvenanceFileName)
     const provenance = (await exists(markerPath)) ? await readBuiltinProvenance(target, installedManifest) : null
@@ -1342,7 +1431,7 @@ export class WebPluginManager {
     try {
       const installationRoot = await this.#ensureRoot()
       const target = path.join(installationRoot, manifest.id)
-      const installedManifest = await validateInstalledPackage(target, this.#limits)
+      const installedManifest = await this.#validateInstalledPackage(target)
       const provenance = await readBuiltinProvenance(target, installedManifest)
       return (
         installedManifest.id === manifest.id &&
@@ -1364,7 +1453,7 @@ export class WebPluginManager {
         try {
           const installationRoot = await this.#ensureRoot()
           const target = path.join(installationRoot, manifest.id)
-          const installedManifest = await validateInstalledPackage(target, this.#limits)
+          const installedManifest = await this.#validateInstalledPackage(target)
           return (
             installedManifest.id === manifest.id &&
             installedManifest.version === manifest.version &&
@@ -1472,7 +1561,7 @@ export class WebPluginManager {
       if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith(".")) continue
       try {
         const pluginRoot = path.join(installationRoot, entry.name)
-        const manifest = await validateInstalledPackage(pluginRoot, this.#limits)
+        const manifest = await this.#validateInstalledPackage(pluginRoot)
         if (manifest.id === entry.name) {
           const summary = toInstalledWebPluginSummary(manifest)
           const trustedBuiltin = await readBuiltinProvenance(pluginRoot, manifest).then(
@@ -1495,34 +1584,38 @@ export class WebPluginManager {
    * the resolution on every call, so permission changes, update, or uninstall
    * invalidate an existing connection without hashing unrelated static assets.
    */
-  async resolveCapabilityIdentity(pluginId: string) {
+  async resolveCapabilityIdentity(pluginId: string, mutation?: WebPluginMutationContext) {
     const id = requireWebPluginId(pluginId)
-    return this.#runPluginMutation(id, async () => {
-      const installationRoot = await this.#ensureRoot()
-      const pluginRootPath = path.join(installationRoot, id)
-      if (!(await exists(pluginRootPath))) return null
-      const pluginRoot = await assertPlainDirectory(pluginRootPath, "Installed plugin")
-      const manifest = await validateInstalledPackage(pluginRoot, this.#limits)
-      if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
-      const digest = capabilityManifestDigest(manifest)
-      const verifiedManifest = await validateInstalledPackage(pluginRoot, this.#limits)
-      if (
-        verifiedManifest.id !== manifest.id ||
-        verifiedManifest.version !== manifest.version ||
-        capabilityManifestDigest(verifiedManifest) !== digest
-      ) {
-        throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
-      }
-      const summary = toInstalledWebPluginSummary(verifiedManifest)
-      const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
-        async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
-        () => false,
-      )
-      return {
-        digest,
-        plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,
-      }
-    })
+    return this.#runPluginMutation(
+      id,
+      async () => {
+        const installationRoot = await this.#ensureRoot()
+        const pluginRootPath = path.join(installationRoot, id)
+        if (!(await exists(pluginRootPath))) return null
+        const pluginRoot = await assertPlainDirectory(pluginRootPath, "Installed plugin")
+        const manifest = await this.#validateInstalledPackage(pluginRoot)
+        if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
+        const digest = capabilityManifestDigest(manifest)
+        const verifiedManifest = await this.#validateInstalledPackage(pluginRoot)
+        if (
+          verifiedManifest.id !== manifest.id ||
+          verifiedManifest.version !== manifest.version ||
+          capabilityManifestDigest(verifiedManifest) !== digest
+        ) {
+          throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
+        }
+        const summary = toInstalledWebPluginSummary(verifiedManifest)
+        const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
+          async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
+          () => false,
+        )
+        return {
+          digest,
+          plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,
+        }
+      },
+      mutation,
+    )
   }
 
   async resolveAsset(pluginId: string, relativePath: string) {
@@ -1546,7 +1639,7 @@ export class WebPluginManager {
         const target = path.join(installationRoot, id)
         if (!(await exists(target))) return false
         const installedRoot = await assertPlainDirectory(target, "Installed plugin")
-        const manifest = await validateInstalledPackage(installedRoot, this.#limits)
+        const manifest = await this.#validateInstalledPackage(installedRoot)
         if (manifest.id !== id) throw new Error("Installed plugin id does not match its directory")
         if (manifest.contributes.skills?.length && !options.beforeRemove) {
           throw new Error(`Plugin-owned Skills require a host publication lifecycle: ${manifest.id}`)

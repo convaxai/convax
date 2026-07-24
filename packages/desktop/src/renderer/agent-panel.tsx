@@ -11,6 +11,7 @@ import type {
 import type { CanvasDocument } from "@convax/canvas"
 import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
+import type { PetDisplayedSession } from "../pet-contracts"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
 import { Button, cn, createToolInputDefaultValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
 import type {
@@ -69,6 +70,7 @@ import {
   containEmbeddedResourceDrag,
   embeddedConversationTitle,
   embeddedConversationSessions,
+  displayedAgentSession,
   filterStandaloneAgentSessions,
   forgetStaleEmbeddedConversation,
   isAgentScrollNearBottom,
@@ -209,6 +211,7 @@ export interface AgentPanelProps {
   embedded?: boolean
   embeddedHeader?: boolean
   generationCatalogVersion?: string
+  onSessionDisplayed?: (input: PetDisplayedSession) => void
   layout?: AgentPanelLayout
   projectId?: string
   projectName?: string
@@ -216,6 +219,7 @@ export interface AgentPanelProps {
 
 export interface AgentPanelHandle {
   addResources(resources: readonly AgentResource[]): void
+  openSession(sessionId: string): Promise<void>
 }
 
 export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(props, ref) {
@@ -730,6 +734,30 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const displayedResources = contextResources
   const sessionContentKey = useMemo(() => agentSessionContentKey(sessionState), [sessionState])
   useEffect(() => {
+    const reportDisplayed = () => {
+      const displayed = displayedAgentSession({
+        documentVisible: document.visibilityState === "visible",
+        historyVisible,
+        open,
+        projectId: props.projectId,
+        selectedSessionId: sessionId,
+        stateSessionId: sessionState?.session.id,
+      })
+      if (displayed) props.onSessionDisplayed?.(displayed)
+    }
+    reportDisplayed()
+    document.addEventListener("visibilitychange", reportDisplayed)
+    return () => document.removeEventListener("visibilitychange", reportDisplayed)
+  }, [
+    historyVisible,
+    open,
+    props.onSessionDisplayed,
+    props.projectId,
+    sessionContentKey,
+    sessionId,
+    sessionState?.session.id,
+  ])
+  useEffect(() => {
     if (!runtimeBusy || !sessionId) return
     let stopped = false
     let timer: number | undefined
@@ -1189,8 +1217,29 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         props.layout?.onOpenChange(true)
         setComposerFocusRequest((request) => request + 1)
       },
+      async openSession(targetSessionId) {
+        if (embedded || !props.projectId) throw new Error("The Agent panel cannot open this conversation")
+        props.layout?.onOpenChange(true)
+        const available = await refreshSessions(targetSessionId)
+        if (!available.some((session) => session.id === targetSessionId)) {
+          throw new Error("The Agent conversation is no longer available")
+        }
+        selectSession(targetSessionId)
+        setHistoryVisible(false)
+        stickToBottomRef.current = true
+        setFollowingLatest(true)
+        await refreshSessionState(targetSessionId)
+      },
     }),
-    [addResources, props.layout?.onOpenChange, props.projectId],
+    [
+      addResources,
+      embedded,
+      props.layout?.onOpenChange,
+      props.projectId,
+      refreshSessions,
+      refreshSessionState,
+      selectSession,
+    ],
   )
 
   useLayoutEffect(() => {

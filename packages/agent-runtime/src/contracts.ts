@@ -97,6 +97,19 @@ export interface AgentSessionState {
   pendingQuestions: AgentQuestionRequest[]
 }
 
+/** Content-free session activity safe to aggregate and display outside the Agent surface. */
+export type AgentActivityState =
+  | { state: "needs-input"; input: "permission" | "question" }
+  | { state: "blocked" }
+  | { state: "ready" }
+  | { state: "running" }
+  | { state: "idle" }
+
+export interface AgentActivityProjectionContext {
+  canceled?: boolean
+  seenAfter?: number
+}
+
 export interface AgentSkill {
   name: string
   description?: string

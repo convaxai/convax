@@ -1,15 +1,21 @@
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
-import { ArrowLeft, Cloud, Languages, Settings2, Sparkles } from "lucide-react"
-import { useState } from "react"
+import { ArrowLeft, Cloud, Languages, PawPrint, Settings2, Sparkles } from "lucide-react"
+import { useEffect, useState } from "react"
 import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
+import {
+  PetSettingsHost,
+  type PetSettingsHostClient,
+  PetSettingsProviderLoader,
+  type PetSettingsProviderSnapshot,
+} from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-export type SettingsSection = "general" | "services" | "capabilities"
+export type SettingsSection = "general" | "services" | "capabilities" | "pets"
 
 export interface SettingsViewProps {
   className?: string
@@ -21,6 +27,8 @@ export interface SettingsViewProps {
   onLanguageChange(preference: AppLanguagePreference): void
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
+  petClient: PetSettingsHostClient
+  petProviderSnapshot?: PetSettingsProviderSnapshot
   pluginClient: WebPluginClient
   serviceSnapshot: ServiceCatalogSnapshot
   skillClient: DesktopSkillClient
@@ -106,20 +114,54 @@ export function SettingsView({
   onLanguageChange,
   onRefreshServices,
   onServiceAction,
+  petClient,
+  petProviderSnapshot: injectedPetProviderSnapshot,
   pluginClient,
   serviceSnapshot,
   skillClient,
 }: SettingsViewProps) {
+  const [loadedPetProviderSnapshot, setLoadedPetProviderSnapshot] = useState<PetSettingsProviderSnapshot>({
+    status: "loading",
+  })
+  const petProviderSnapshot = injectedPetProviderSnapshot ?? loadedPetProviderSnapshot
+  const hasPetProvider = petProviderSnapshot.status === "ready"
+  const petProviderUnavailable = petProviderSnapshot.status === "absent" || petProviderSnapshot.status === "error"
   const enabledInitialSection =
     (initialSection === "services" && !featureFlags.services) ||
-    (initialSection === "capabilities" && !featureFlags.skillsAndPlugins)
+    (initialSection === "capabilities" && !featureFlags.skillsAndPlugins) ||
+    (initialSection === "pets" && petProviderUnavailable)
       ? "general"
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
+
+  useEffect(() => {
+    if (injectedPetProviderSnapshot !== undefined) return
+    const loader = new PetSettingsProviderLoader(petClient)
+    setLoadedPetProviderSnapshot(loader.getSnapshot())
+    const unsubscribe = loader.subscribe(setLoadedPetProviderSnapshot)
+    loader.start()
+    return () => {
+      unsubscribe()
+      loader.dispose()
+    }
+  }, [injectedPetProviderSnapshot, petClient])
+
+  useEffect(() => {
+    if (petProviderUnavailable && section === "pets") setSection("general")
+  }, [petProviderUnavailable, section])
+
   const generalTitle = appMessage(locale, "settings.general")
   const servicesTitle = appMessage(locale, "settings.services")
   const capabilitiesTitle = appMessage(locale, "settings.capabilities")
-  const sectionTitle = section === "general" ? generalTitle : section === "services" ? servicesTitle : capabilitiesTitle
+  const petsTitle = appMessage(locale, "pets.title")
+  const sectionTitle =
+    section === "general"
+      ? generalTitle
+      : section === "services"
+        ? servicesTitle
+        : section === "capabilities"
+          ? capabilitiesTitle
+          : petsTitle
 
   return (
     <section
@@ -148,6 +190,11 @@ export function SettingsView({
           >
             {generalTitle}
           </SettingsNavigationItem>
+          {hasPetProvider ? (
+            <SettingsNavigationItem active={section === "pets"} icon={<PawPrint />} onClick={() => setSection("pets")}>
+              {petsTitle}
+            </SettingsNavigationItem>
+          ) : null}
           {featureFlags.services ? (
             <SettingsNavigationItem
               active={section === "services"}
@@ -191,13 +238,25 @@ export function SettingsView({
               onRefresh={onRefreshServices}
               snapshot={serviceSnapshot}
             />
-          ) : (
+          ) : section === "capabilities" ? (
             <CapabilityManagementSurface
               className="min-h-[32rem]"
               locale={locale}
               pluginClient={pluginClient}
               skillClient={skillClient}
             />
+          ) : petProviderSnapshot.status === "ready" ? (
+            <PetSettingsHost client={petClient} provider={petProviderSnapshot.provider} />
+          ) : petProviderSnapshot.status === "loading" ? (
+            <div
+              aria-busy="true"
+              className="min-h-[36rem] rounded-xl border border-border bg-card"
+              data-pet-provider-status="loading"
+            />
+          ) : (
+            <div className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground" role="status">
+              Pet provider unavailable.
+            </div>
           )}
         </div>
       </main>

@@ -8,6 +8,7 @@ import {
   embeddedConversationSessionKey,
   embeddedConversationTitle,
   embeddedConversationTitlePrefix,
+  displayedAgentSession,
   filterStandaloneAgentSessions,
   forgetStaleEmbeddedConversation,
   agentSessionContentKey,
@@ -211,6 +212,34 @@ describe("agent message scrolling", () => {
     }
     expect(agentSessionContentKey(state)).toBe(agentSessionContentKey(structuredClone(state)))
     expect(agentSessionContentKey({ ...state, status: { type: "idle" } })).not.toBe(agentSessionContentKey(state))
+  })
+})
+
+describe("displayed agent session", () => {
+  const visible = {
+    documentVisible: true,
+    historyVisible: false,
+    open: true,
+    projectId: "project-one",
+    selectedSessionId: "session-one",
+    stateSessionId: "session-one",
+  }
+
+  test("returns only the conversation whose content is visibly mounted", () => {
+    expect(displayedAgentSession(visible)).toEqual({
+      projectId: "project-one",
+      sessionId: "session-one",
+    })
+  })
+
+  test("does not acknowledge hidden or mismatched content", () => {
+    expect(displayedAgentSession({ ...visible, documentVisible: false })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, historyVisible: true })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, open: false })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, projectId: undefined })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, selectedSessionId: undefined })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, stateSessionId: undefined })).toBeUndefined()
+    expect(displayedAgentSession({ ...visible, stateSessionId: "session-two" })).toBeUndefined()
   })
 })
 
