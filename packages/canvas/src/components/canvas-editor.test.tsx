@@ -137,7 +137,21 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const { createCanvasDocument, createTextNode } = await import("../document")
-const { CanvasEditor } = await import("./canvas-editor")
+const { canvasHistoryReducer, createCanvasHistory } = await import("../history")
+const {
+  abortCanvasReload,
+  abortCanvasReloadBeforeWait,
+  CanvasEditor,
+  CanvasResourceRefreshController,
+  completeCanvasResourceMutation,
+  handleCanvasResourceMutationFailure,
+  handleCanvasResourceRelinkSelection,
+  handleCanvasResourceUploadSelection,
+  linkCanvasReloadAbortSignal,
+  replaceCanvasNodeResourceState,
+  runCanvasReloadScopeEffect,
+  settleCanvasReloadFailure,
+} = await import("./canvas-editor")
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
@@ -175,7 +189,7 @@ function renderEditor(
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
 ) {
-  renderToStaticMarkup(
+  return renderToStaticMarkup(
     <CanvasEditor
       initialDocument={options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })}
       readOnly={options.readOnly}
@@ -187,26 +201,51 @@ function renderEditor(
 
 describe("CanvasEditor node dimension projection", () => {
   test("projects persisted numeric style dimensions without mutating the Canvas document", () => {
-    const styleOnly = createTextNode({ id: "style-only", position: { x: 0, y: 0 } })
+    const styleOnly = createTextNode({
+      id: "style-only",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
     const measured = {
-      ...createTextNode({ id: "measured", position: { x: 300, y: 0 } }),
+      ...createTextNode({
+        id: "measured",
+        metadata: {},
+        position: { x: 300, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       measured: { height: 222, width: 333 },
       style: { height: 888, width: 999 },
     }
     const explicit = {
-      ...createTextNode({ id: "explicit", position: { x: 600, y: 0 } }),
+      ...createTextNode({
+        id: "explicit",
+        metadata: {},
+        position: { x: 600, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       height: 234,
       width: 345,
       style: { height: 876, width: 987 },
     }
     const initialized = {
-      ...createTextNode({ id: "initialized", position: { x: 900, y: 0 } }),
+      ...createTextNode({
+        id: "initialized",
+        metadata: {},
+        position: { x: 900, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       initialHeight: 456,
       initialWidth: 567,
       style: { height: 765, width: 876 },
     }
     const stringStyle = {
-      ...createTextNode({ id: "string-style", position: { x: 1_200, y: 0 } }),
+      ...createTextNode({
+        id: "string-style",
+        metadata: {},
+        position: { x: 1_200, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       style: { height: "auto", width: "50%" },
     }
     const initialDocument = createCanvasDocument({
@@ -235,31 +274,524 @@ describe("CanvasEditor node dimension projection", () => {
   })
 })
 
-describe("CanvasEditor viewport ownership", () => {
-  test("does not fit the viewport after adding a regular node", () => {
-    renderEditor()
+describe("CanvasEditor resource mutation", () => {
+  test("keeps a cancelled relink selection isolated from the next ordinary multi-file upload", () => {
+    const uploaded: File[][] = []
+    const relinked: Array<{ file: File; nodeId: string }> = []
+    const first = new File(["first"], "first.png", { type: "image/png" })
+    const second = new File(["second"], "second.png", { type: "image/png" })
+
+    // Cancelling the dedicated relink picker produces no change event. The next
+    // ordinary picker selection must still route every file through Add.
+    handleCanvasResourceUploadSelection([first, second], (files) => uploaded.push([...files]))
+
+    expect(uploaded).toEqual([[first, second]])
+    expect(relinked).toEqual([])
+
+    handleCanvasResourceRelinkSelection("missing-image", [first, second], (nodeId, file) => {
+      relinked.push({ file, nodeId })
+    })
+    expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
+
+    const markup = renderEditor()
+    expect(markup).toContain('data-canvas-resource-picker="upload"')
+    expect(markup).toContain('data-canvas-resource-picker="relink"')
+    expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="relink"[^>]*multiple/)
+  })
+
+  test("replaces only transient resource state without changing the Canvas revision", () => {
+    const document = createCanvasDocument({
+      id: "canvas-runtime-refresh",
+      nodes: [
+        {
+          id: "note",
+          data: {
+            kind: "text",
+            label: "Note",
+            metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/a.md" } },
+            resourceState: { contentRevision: "a".repeat(64), status: "ready", text: "before" },
+          },
+          position: { x: 0, y: 0 },
+          type: "file",
+        },
+      ],
+    })
+
+    const updated = replaceCanvasNodeResourceState(document, "note", {
+      contentRevision: "b".repeat(64),
+      editableText: true,
+      status: "ready",
+      text: "after",
+    })
+
+    expect(updated.revision).toBe(document.revision)
+    expect(updated.nodes[0]!.data.resourceState).toEqual({
+      contentRevision: "b".repeat(64),
+      editableText: true,
+      status: "ready",
+      text: "after",
+    })
+    expect(updated.nodes[0]!.data.metadata).toBe(document.nodes[0]!.data.metadata)
+  })
+
+  test("marks mounted resources stale synchronously and single-flights one trailing runtime refresh", async () => {
+    const initial = createCanvasDocument({
+      id: "canvas-watcher-refresh",
+      nodes: [
+        {
+          id: "note",
+          data: {
+            kind: "text",
+            label: "Note",
+            metadata: { resource: "Notes/a.md" },
+            resourceState: { status: "ready", text: "before" },
+          },
+          position: { x: 0, y: 0 },
+          type: "file",
+        },
+      ],
+    })
+    const older = createCanvasDocument({ id: "older" })
+    const newer = createCanvasDocument({ id: "newer" })
+    let history = { ...createCanvasHistory(initial), future: [newer], past: [older] }
+    const selection = { nodeIds: ["note"] }
+    const viewport = { x: 17, y: 29, zoom: 1.35 }
+    const persist = mock(() => undefined)
+    const pending: Array<{ resolve(document: typeof initial): void; promise: Promise<typeof initial> }> = []
+    const hydrateStale = mock((_input: { document: typeof initial }) => {
+      let resolve!: (document: typeof initial) => void
+      const promise = new Promise<typeof initial>((next) => {
+        resolve = next
+      })
+      pending.push({ promise, resolve })
+      return promise
+    })
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({
+        document: history.document,
+        scope: { documentId: history.document.id, generation: 0, scopeId: "project-one" },
+      }),
+      replace(document) {
+        history = canvasHistoryReducer(history, { document, type: "replace" })
+      },
+      service: {
+        hydrateStale,
+        markStale(document) {
+          return {
+            ...document,
+            nodes: document.nodes.map((node) => ({
+              ...node,
+              data: {
+                ...node.data,
+                resourceState: {
+                  ...(node.data.resourceState as Record<string, unknown>),
+                  status: "stale",
+                },
+              },
+            })),
+          }
+        },
+      },
+    })
+
+    const first = controller.invalidateResources()
+    expect((history.document.nodes[0]!.data.resourceState as { status: string }).status).toBe("stale")
+    const second = controller.invalidateResources()
+    expect(hydrateStale).toHaveBeenCalledTimes(1)
+
+    pending[0]!.resolve({
+      ...initial,
+      nodes: initial.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "first" } },
+      })),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(hydrateStale).toHaveBeenCalledTimes(2)
+
+    const trailingInput = hydrateStale.mock.calls[1]![0].document
+    pending[1]!.resolve({
+      ...trailingInput,
+      nodes: trailingInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "second" } },
+      })),
+    })
+    await Promise.all([first, second])
+
+    expect(history.document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "second" })
+    expect(history.document.revision).toBe(initial.revision)
+    expect(history.past).toEqual([older])
+    expect(history.future).toEqual([newer])
+    expect(selection).toEqual({ nodeIds: ["note"] })
+    expect(viewport).toEqual({ x: 17, y: 29, zoom: 1.35 })
+    expect(persist).not.toHaveBeenCalled()
+  })
+
+  test("discards a stale hydration result and schedules a trailing pass after scope, revision, or reference changes", async () => {
+    const initial = {
+      ...createCanvasDocument({
+        id: "canvas-stale-result",
+        nodes: [
+          {
+            id: "note",
+            data: {
+              kind: "text" as const,
+              label: "Note",
+              metadata: { resource: "Notes/a.md" },
+              resourceState: { status: "ready" as const },
+            },
+            position: { x: 0, y: 0 },
+            type: "file" as const,
+          },
+        ],
+      }),
+      revision: 4,
+    }
+    let document = initial
+    let scopeId = "project-one"
+    const requests: Array<{ input: typeof initial; resolve(document: typeof initial): void }> = []
+    const hydrateStale = mock(
+      (input: { document: typeof initial }) =>
+        new Promise<typeof initial>((resolve) => requests.push({ input: input.document, resolve })),
+    )
+    const controller = new CanvasResourceRefreshController({
+      current: () => ({ document, scope: { documentId: document.id, generation: 0, scopeId } }),
+      replace(next) {
+        document = next as typeof initial
+      },
+      service: {
+        hydrateStale,
+        markStale(current) {
+          return {
+            ...current,
+            nodes: current.nodes.map((node) => ({
+              ...node,
+              data: { ...node.data, resourceState: { status: "stale" } },
+            })),
+          }
+        },
+      },
+    })
+
+    const refresh = controller.invalidateResources()
+    const firstInput = requests[0]!.input
+    scopeId = "project-two"
+    document = {
+      ...document,
+      revision: 5,
+      nodes: document.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, metadata: { resource: "Notes/b.md" } },
+      })),
+    }
+    requests[0]!.resolve({
+      ...firstInput,
+      nodes: firstInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "obsolete" } },
+      })),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(hydrateStale).toHaveBeenCalledTimes(2)
+    expect(document.nodes[0]!.data.resourceState).not.toHaveProperty("text", "obsolete")
+    const trailingInput = requests[1]!.input
+    requests[1]!.resolve({
+      ...trailingInput,
+      nodes: trailingInput.nodes.map((node) => ({
+        ...node,
+        data: { ...node.data, resourceState: { status: "ready", text: "current" } },
+      })),
+    })
+    await refresh
+
+    expect(document.revision).toBe(5)
+    expect(document.nodes[0]!.data.metadata).toEqual({ resource: "Notes/b.md" })
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "current" })
+  })
+
+  test("ignores delayed success and failure after switching to another scope with the same Canvas id", async () => {
+    const operation = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    let current = operation
+    let resolveMutation!: (value: { createdNodeIds: string[]; revision: number; warnings: string[] }) => void
+    const mutation = new Promise<{ createdNodeIds: string[]; revision: number; warnings: string[] }>((resolve) => {
+      resolveMutation = resolve
+    })
+    const reload = mock(async () => undefined)
+    const selectNodes = mock(() => undefined)
+    const show = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+    const completion = mutation.then((result) =>
+      completeCanvasResourceMutation({
+        currentScope: () => current,
+        operationScope: operation,
+        reload,
+        result,
+        selectNodes,
+        show,
+        signal: new AbortController().signal,
+      }),
+    )
+
+    current = { documentId: "canvas-main", generation: 1, scopeId: "project-b" }
+    resolveMutation({ createdNodeIds: ["old-note"], revision: 1, warnings: [] })
+    await completion
+    handleCanvasResourceMutationFailure({
+      currentScope: () => current,
+      error: new Error("old Project failed"),
+      notifyError,
+      operationScope: operation,
+      signal: new AbortController().signal,
+    })
+
+    expect(reload).not.toHaveBeenCalled()
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("warns when committed resources cannot be refreshed without exposing the reload error", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const selectNodes = mock(() => undefined)
+    const show = mock(() => undefined)
+
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => {
+        throw new Error("ENOENT: /native/private/project")
+      },
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes,
+      show,
+      signal: new AbortController().signal,
+    })
+
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).toHaveBeenCalledWith({
+      description: "Reload the Canvas to show the committed resources.",
+      kind: "warning",
+      title: "Resources added, but refresh failed",
+    })
+    expect(JSON.stringify(show.mock.calls)).not.toContain("/native/")
+  })
+
+  test("ignores an aborted success in the same scope before and during refresh completion", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const abortedBefore = new AbortController()
+    abortedBefore.abort()
+    const reloadBefore = mock(async () => undefined)
+    const selectBefore = mock(() => undefined)
+    const showBefore = mock(() => undefined)
+
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: reloadBefore,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: selectBefore,
+      show: showBefore,
+      signal: abortedBefore.signal,
+    })
+    expect(reloadBefore).not.toHaveBeenCalled()
+    expect(selectBefore).not.toHaveBeenCalled()
+    expect(showBefore).not.toHaveBeenCalled()
+
+    const abortedDuring = new AbortController()
+    const selectDuring = mock(() => undefined)
+    const showDuring = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => {
+        abortedDuring.abort()
+      },
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: selectDuring,
+      show: showDuring,
+      signal: abortedDuring.signal,
+    })
+    expect(selectDuring).not.toHaveBeenCalled()
+    expect(showDuring).not.toHaveBeenCalled()
+
+    const abortedBeforeNotify = new AbortController()
+    const showAfterSelect = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => undefined,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes: () => abortedBeforeNotify.abort(),
+      show: showAfterSelect,
+      signal: abortedBeforeNotify.signal,
+    })
+    expect(showAfterSelect).not.toHaveBeenCalled()
+  })
+
+  test("passes the mutation signal through a slow persistence reload and aborts it", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const mutationController = new AbortController()
+    let persistenceSignal: AbortSignal | undefined
+    const show = mock(() => undefined)
+    const selectNodes = mock(() => undefined)
+    const completion = completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: (async (signal: AbortSignal) => {
+        persistenceSignal = signal
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+        })
+      }) as never,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      selectNodes,
+      show,
+      signal: mutationController.signal,
+    })
+
+    await Promise.resolve()
+    mutationController.abort()
+    await completion
+
+    expect(persistenceSignal).toBe(mutationController.signal)
+    expect(persistenceSignal?.aborted).toBeTrue()
+    expect(selectNodes).not.toHaveBeenCalled()
+    expect(show).not.toHaveBeenCalled()
+  })
+
+  test("resolves an aborted reload barrier without recording an error or notification", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const mutationController = new AbortController()
+    const reloadController = new AbortController()
+    const unlink = linkCanvasReloadAbortSignal(mutationController.signal, reloadController)
+    const resolveBarrier = mock(() => undefined)
+    const rejectBarrier = mock(() => undefined)
+    const setLoadError = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+
+    mutationController.abort()
+    const outcome = settleCanvasReloadFailure({
+      currentScope: () => scope,
+      error: new DOMException("Aborted", "AbortError"),
+      notifyError,
+      rejectBarrier,
+      reloadScope: scope,
+      resolveBarrier,
+      setLoadError,
+      signal: reloadController.signal,
+    })
+    unlink()
+
+    expect(outcome).toBe("aborted")
+    expect(reloadController.signal.aborted).toBeTrue()
+    expect(resolveBarrier).toHaveBeenCalledTimes(1)
+    expect(rejectBarrier).not.toHaveBeenCalled()
+    expect(setLoadError).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("aborts a tracked slow reload before prepare-to-leave waits for the load barrier", async () => {
+    const reloadController = new AbortController()
+    const events: string[] = []
+    const slowReload = new Promise<void>((resolve) => {
+      reloadController.signal.addEventListener(
+        "abort",
+        () => {
+          events.push("abort")
+          resolve()
+        },
+        { once: true },
+      )
+    })
+
+    await abortCanvasReloadBeforeWait(reloadController, async () => {
+      events.push("wait")
+      expect(reloadController.signal.aborted).toBeTrue()
+      await slowReload
+    })
+
+    expect(events).toEqual(["abort", "wait"])
+  })
+
+  test("aborts a tracked slow reload when the view scope changes without a remount", async () => {
+    const reloadController = new AbortController()
+    const aborted = new Promise<void>((resolve) =>
+      reloadController.signal.addEventListener("abort", () => resolve(), { once: true }),
+    )
+
+    abortCanvasReload(reloadController)
+    await aborted
+
+    expect(reloadController.signal.aborted).toBeTrue()
+  })
+
+  test("does not apply stale reload state after a no-remount view scope change", () => {
+    const reloadScope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    let current = reloadScope
+    const setLoadError = mock(() => undefined)
+    const setHydrating = mock(() => undefined)
+    const notifyError = mock(() => undefined)
+
+    current = { documentId: "canvas-main", generation: 1, scopeId: "project-b" }
+    runCanvasReloadScopeEffect({
+      currentScope: () => current,
+      effect: () => {
+        setLoadError()
+        notifyError()
+      },
+      reloadScope,
+    })
+    runCanvasReloadScopeEffect({
+      currentScope: () => current,
+      effect: setHydrating,
+      reloadScope,
+    })
+
+    expect(setLoadError).not.toHaveBeenCalled()
+    expect(setHydrating).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  test("routes header text creation through new-text mutation without fitting the viewport", async () => {
+    const additions: unknown[] = []
+    renderEditor(
+      createCanvasServices({
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["note"], revision: 1, warnings: [] }
+          },
+        },
+      }),
+    )
 
     expect(buttonActions.get("Text")).toBeFunction()
     buttonActions.get("Text")?.()
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      expectedRevision: 0,
+      files: [],
+      sources: [{ kind: "new-text", text: "" }],
+    })
+    expect((additions[0] as { sources: Array<{ sourceId: unknown }> }).sources[0]?.sourceId).toBeString()
 
     expectViewportUnchanged()
   })
 
-  test("does not fit the viewport after a dropped file finishes uploading", async () => {
-    let uploadFinished!: () => void
-    const finished = new Promise<void>((resolve) => {
-      uploadFinished = resolve
-    })
+  test("routes a drop through resource mutation and preserves the viewport", async () => {
+    const additions: unknown[] = []
     renderEditor(
       createCanvasServices({
-        notify: {
-          show(notification) {
-            if (notification.kind === "success") uploadFinished()
-          },
-        },
-        upload: {
-          async upload() {
-            return [{ id: "brief", kind: "text", name: "brief.txt", text: "Brief" }]
+        mutation: {
+          async add(input) {
+            additions.push(input)
+            return { createdNodeIds: ["brief"], revision: 1, warnings: [] }
           },
         },
       }),
@@ -276,8 +808,15 @@ describe("CanvasEditor viewport ownership", () => {
       },
       preventDefault: () => undefined,
     })
-    await finished
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
+    expect(additions).toHaveLength(1)
+    expect(additions[0]).toMatchObject({
+      expectedRevision: 0,
+      files: [expect.objectContaining({ name: "brief.txt" })],
+      sources: [],
+      transfer: { data: { Files: "" }, types: ["Files"] },
+    })
     expectViewportUnchanged()
   })
 
@@ -287,8 +826,13 @@ describe("CanvasEditor viewport ownership", () => {
         edges: [{ id: "edge", source: "first", target: "second" }],
         id: "canvas-layout",
         nodes: [
-          createTextNode({ id: "first", position: { x: 400, y: 200 } }),
-          createTextNode({ id: "second", position: { x: 0, y: 0 } }),
+          createTextNode({
+            id: "first",
+            metadata: {},
+            position: { x: 400, y: 200 },
+            resourceState: { status: "ready" },
+          }),
+          createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
         ],
       }),
     })
@@ -302,7 +846,9 @@ describe("CanvasEditor viewport ownership", () => {
   test("lets the explicit Fit view use the Canvas zoom ceiling", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
-        nodes: [createTextNode({ id: "small", position: { x: 0, y: 0 } })],
+        nodes: [
+          createTextNode({ id: "small", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+        ],
       }),
     })
 
@@ -315,8 +861,13 @@ describe("CanvasEditor viewport ownership", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
         nodes: [
-          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
-          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+          createTextNode({ id: "first", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+          createTextNode({
+            id: "second",
+            metadata: {},
+            position: { x: 400, y: 0 },
+            resourceState: { status: "ready" },
+          }),
         ],
       }),
     })
@@ -334,8 +885,13 @@ describe("CanvasEditor viewport ownership", () => {
     renderEditor(createCanvasServices(), {
       initialDocument: createCanvasDocument({
         nodes: [
-          createTextNode({ id: "first", position: { x: 0, y: 0 } }),
-          createTextNode({ id: "second", position: { x: 400, y: 0 } }),
+          createTextNode({ id: "first", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+          createTextNode({
+            id: "second",
+            metadata: {},
+            position: { x: 400, y: 0 },
+            resourceState: { status: "ready" },
+          }),
         ],
       }),
       readOnly: true,
@@ -354,7 +910,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(pasteOnCanvas).toBeFunction()
   })
 
-  test("offers concrete built-in cards and plugin cards without generic file or agent roles", () => {
+  test("offers plugin cards without source-less built-in file or agent roles", () => {
     const fileRenderers = createDefaultCanvasFileRendererRegistry()
     const nodes = createDefaultCanvasNodeRegistry()
     fileRenderers.register({
@@ -370,16 +926,10 @@ describe("CanvasEditor insertion surfaces", () => {
       matches: (data) => data.kind === "diagram",
     })
 
-    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual([
-      "audio",
-      "diagram",
-      "image",
-      "text",
-      "video",
-    ])
+    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual(["diagram"])
   })
 
-  test("shows concrete media actions in the top bar without Agent or Generate", () => {
+  test("shows file-backed text and host generation actions without source-less media or Agent", () => {
     renderEditor(
       createCanvasServices({
         generate: {
@@ -391,11 +941,11 @@ describe("CanvasEditor insertion surfaces", () => {
     )
 
     expect(buttonActions.get("Text")).toBeFunction()
-    expect(buttonActions.get("Image")).toBeFunction()
-    expect(buttonActions.get("Video")).toBeFunction()
-    expect(buttonActions.get("Audio")).toBeFunction()
+    expect(buttonActions.get("Image")).toBeUndefined()
+    expect(buttonActions.get("Video")).toBeUndefined()
+    expect(buttonActions.get("Audio")).toBeUndefined()
     expect(buttonActions.get("Agent")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeUndefined()
+    expect(buttonActions.get("Generate")).toBeFunction()
   })
 })
 

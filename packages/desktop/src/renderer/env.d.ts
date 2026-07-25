@@ -5,7 +5,7 @@ import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-d
 import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
-import type { DesktopProtocolClient } from "../desktop-protocol"
+import type { CanvasResourceClient, CanvasTextResourceClient, DesktopProtocolClient } from "../desktop-protocol"
 import type { GenerationClient } from "../generation-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
@@ -28,6 +28,8 @@ declare global {
         externalMediaDrag?: CanvasExternalMediaDragRendererClient
         pluginImages: PluginCanvasImageClient
         renderer: CanvasRendererClient
+        resources: CanvasResourceClient
+        textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
       jianying: JianyingRendererClient

@@ -1,6 +1,9 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasDocument, CanvasNode, CanvasPoint, CanvasUploadItem } from "./types"
+import type { CanvasResourceSource } from "./application"
+import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
+
+export { CanvasTextResourceConflictError } from "./application/errors"
 
 export interface CanvasServiceContext {
   documentId: string
@@ -8,19 +11,122 @@ export interface CanvasServiceContext {
   source: string
 }
 
-export interface CanvasUploadRequest {
-  files: readonly File[]
-  position?: CanvasPoint
-  transfer?: {
-    data: Readonly<Record<string, string>>
-    types: readonly string[]
-  }
-  context: CanvasServiceContext
-  signal: AbortSignal
+export interface CanvasResourceMutationTransfer {
+  data: Readonly<Record<string, string>>
+  types: readonly string[]
 }
 
-export interface CanvasUploadService {
-  upload: (request: CanvasUploadRequest) => Promise<readonly CanvasUploadItem[]>
+export interface CanvasResourceMutationRequest {
+  anchor: CanvasPoint
+  expectedRevision: number
+  files?: readonly File[]
+  relation?: {
+    anchorNodeIds: readonly string[]
+    direction?: "from-anchor" | "to-anchor"
+    mode: "connect" | "none"
+  }
+  sources: readonly CanvasResourceSource[]
+  signal: AbortSignal
+  transfer?: CanvasResourceMutationTransfer
+}
+
+export interface CanvasResourceMutationService {
+  add(input: CanvasResourceMutationRequest): Promise<{
+    createdNodeIds: readonly string[]
+    revision: number
+    warnings: readonly string[]
+  }>
+  relink?(input: {
+    expectedRevision: number
+    file?: File
+    nodeId: string
+    signal: AbortSignal
+    source?: Extract<CanvasResourceSource, { kind: "host-directory" | "host-file" }>
+  }): Promise<{ revision: number; warnings: readonly string[] }>
+  saveEditableCopy?(input: {
+    expectedRevision: number
+    nodeId: string
+    signal: AbortSignal
+  }): Promise<{ revision: number; warnings: readonly string[] }>
+}
+
+export interface CanvasResourceHydrationService {
+  markStale(document: CanvasDocument): CanvasDocument
+  hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
+}
+
+export interface CanvasTextResourceService {
+  save(
+    input: {
+      content: string
+      contentRevision: string
+      nodeId: string
+    },
+    signal: AbortSignal,
+  ): Promise<{ contentRevision: string }>
+}
+
+export interface CanvasPendingDraft {
+  discard(): void
+  inFlightSave(): Promise<void> | null
+  isDirty(): boolean
+  save(): Promise<void>
+}
+
+export type CanvasPendingDraftDecision = "save" | "discard" | "cancel"
+
+export interface CanvasPendingDraftDecisionService {
+  decide(input: { count: number }): Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision
+}
+
+export interface CanvasPendingDraftRegistry {
+  hasPending(): boolean
+  pendingCount(): number
+  prepareToLeave(decide: () => Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision): Promise<boolean>
+  register(draft: CanvasPendingDraft): () => void
+}
+
+export function createCanvasPendingDraftRegistry(): CanvasPendingDraftRegistry {
+  const drafts = new Set<CanvasPendingDraft>()
+  const pendingDrafts = () => [...drafts].filter((draft) => draft.isDirty())
+  const settleStartedSaves = () => {
+    const started = [...drafts]
+      .map((draft) => draft.inFlightSave())
+      .filter((save): save is Promise<void> => Boolean(save))
+    if (started.length === 0) return null
+    return Promise.allSettled(started).then((results) => {
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failure) throw failure.reason
+    })
+  }
+  return {
+    hasPending: () => pendingDrafts().length > 0,
+    pendingCount: () => pendingDrafts().length,
+    async prepareToLeave(decide) {
+      const startedBeforeDecision = settleStartedSaves()
+      if (startedBeforeDecision) await startedBeforeDecision
+      let pending = pendingDrafts()
+      if (pending.length === 0) return true
+      const decision = await decide()
+      if (decision === "cancel") return false
+      const startedDuringDecision = settleStartedSaves()
+      if (startedDuringDecision) await startedDuringDecision
+      pending = pendingDrafts()
+      if (pending.length === 0) return true
+      if (decision === "discard") {
+        for (const draft of pending) draft.discard()
+        return true
+      }
+      const results = await Promise.allSettled(pending.map((draft) => draft.save()))
+      const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failure) throw failure.reason
+      return true
+    },
+    register(draft) {
+      drafts.add(draft)
+      return () => drafts.delete(draft)
+    },
+  }
 }
 
 export type CanvasGenerationOutput = "text" | "image" | "video" | "audio"
@@ -137,11 +243,15 @@ export function getCanvasGenerationReferenceError(
 }
 
 function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInputRole | undefined {
+  const resourceState = node.data.resourceState
+  if (!resourceState || typeof resourceState !== "object") return undefined
   if (node.data.kind === "text") {
-    return "text" in node.data && typeof node.data.text === "string" && node.data.text.trim() ? "text" : undefined
+    return "text" in resourceState && typeof resourceState.text === "string" && resourceState.text.trim()
+      ? "text"
+      : undefined
   }
   if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
-  if (!("url" in node.data) || typeof node.data.url !== "string" || !node.data.url.trim()) return undefined
+  if (!("url" in resourceState) || typeof resourceState.url !== "string" || !resourceState.url.trim()) return undefined
   if (node.data.kind === "image") return "reference_image"
   if (node.data.kind === "video") return "reference_video"
   if (node.data.kind === "audio") return "audio"
@@ -256,12 +366,15 @@ export interface CanvasAssistantService {
 
 export interface CanvasServiceMap {
   assistant: CanvasAssistantService
-  upload: CanvasUploadService
+  hydration: CanvasResourceHydrationService
+  mutation: CanvasResourceMutationService
   generate: CanvasGenerateService
   persistence: CanvasPersistenceService
   export: CanvasExportService
   notify: CanvasNotificationService
   telemetry: CanvasTelemetryService
+  textResources: CanvasTextResourceService
+  draftDecision: CanvasPendingDraftDecisionService
 }
 
 export interface CanvasServices {

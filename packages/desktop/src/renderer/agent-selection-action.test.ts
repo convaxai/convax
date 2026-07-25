@@ -1,10 +1,23 @@
 import { createCanvasDocument, createCanvasSelectionActionContext, createTextNode } from "@convax/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { describe, expect, mock, test } from "bun:test"
 import { createAddSelectionToConversationAction } from "./agent-selection-action"
 
 describe("add Canvas selection to Agent conversation", () => {
-  const first = createTextNode({ id: "first/node", label: "First", position: { x: 0, y: 0 } })
-  const second = createTextNode({ id: "second", label: "Second", position: { x: 40, y: 0 } })
+  const first = createTextNode({
+    id: "first/node",
+    label: "First",
+    metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/first.md" } },
+    position: { x: 0, y: 0 },
+    resourceState: { status: "ready", text: "First" },
+  })
+  const second = createTextNode({
+    id: "second",
+    label: "Second",
+    metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/second.md" } },
+    position: { x: 40, y: 0 },
+    resourceState: { status: "ready", text: "Second" },
+  })
   const document = createCanvasDocument({ id: "canvas main", nodes: [first, second] })
 
   test("preserves selection order and creates scoped semantic node resources", () => {

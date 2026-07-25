@@ -1,5 +1,6 @@
 import type { AgentToolDefinition, AgentToolProvider, AgentToolScope } from "@convax/agent-runtime"
 import {
+  CanvasResourcePartialFailureError,
   type CanvasAddResourceSourcesRequest,
   type CanvasAutoLayoutOptions,
   type CanvasApplicationCommandResult,
@@ -16,7 +17,7 @@ import {
   type CanvasViewCommand,
   type CanvasViewCommandRequest,
 } from "@convax/canvas/view"
-import type { ProjectCanvasClient } from "@convax/project/canvas"
+import { requireProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 
 type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
@@ -46,8 +47,7 @@ const resourceSourceSchema = {
     {
       additionalProperties: false,
       properties: {
-        format: { enum: ["markdown", "plain"], type: "string" },
-        kind: { const: "inline-text" },
+        kind: { const: "new-text" },
         name: { type: "string" },
         sourceId: nonEmptyStringSchema,
         text: { type: "string" },
@@ -73,18 +73,6 @@ const resourceSourceSchema = {
         sourceId: nonEmptyStringSchema,
       },
       required: ["kind", "path", "sourceId"],
-      type: "object",
-    },
-    {
-      additionalProperties: false,
-      properties: {
-        kind: { const: "remote-url" },
-        mimeType: { type: "string" },
-        name: { type: "string" },
-        sourceId: nonEmptyStringSchema,
-        url: nonEmptyStringSchema,
-      },
-      required: ["kind", "sourceId", "url"],
       type: "object",
     },
   ],
@@ -260,7 +248,7 @@ const tools = [
   {
     name: "canvas_add_resources",
     description:
-      "Preferred business tool for adding inline text, host files or directories, images, media, or remote URLs. It prepares assets, inspects media, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
+      "Preferred business tool for publishing new Markdown text or adding trusted Project files and directories. It prepares resources, sizes and places cards, applies relations, saves atomically, and refreshes the live editor.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -281,7 +269,7 @@ const tools = [
           type: "object",
         },
         sources: {
-          description: "Sources with a stable sourceId and kind inline-text, host-file, host-directory, or remote-url.",
+          description: "Sources with a stable sourceId and kind new-text, host-file, or host-directory.",
           items: resourceSourceSchema,
           minItems: 1,
           type: "array",
@@ -434,7 +422,12 @@ async function addResources(
   const documentRef = ref(scope, canvasId)
   await assertCanvasExists(canvases, scope, canvasId, signal)
   throwIfAborted(signal)
-  const result = await resources.addResources(request)
+  let result
+  try {
+    result = await resources.addResources(request)
+  } catch (error) {
+    throw canvasAgentResourceError(error)
+  }
   const sync = await documentMutationSync(renderer, documentRef, result.document.revision)
   const warnings = [...result.warnings]
   let view
@@ -453,8 +446,8 @@ async function addResources(
         expectedScopeId: scope.scopeId,
         viewId: reveal.viewId,
       })
-    } catch (error) {
-      warnings.push(`Canvas resources were saved, but the live view could not be updated: ${errorMessage(error)}`)
+    } catch {
+      warnings.push("Canvas resources were saved, but the live view could not be updated.")
     }
   }
   return { ...mutationSummary(result), sync, view, warnings }
@@ -754,8 +747,32 @@ async function documentMutationSync(renderer: CanvasRendererBridge, value: Canva
   }
 }
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
+function canvasAgentResourceError(error: unknown) {
+  if (error instanceof CanvasResourcePartialFailureError) {
+    const retainedLabels = safeRetainedNoteLabels(error)
+    if (retainedLabels) {
+      return new Error(`Could not add resources to the Canvas; retained Project files: ${retainedLabels.join(", ")}`)
+    }
+  }
+  return new Error("Could not add resources to the Canvas")
+}
+
+function safeRetainedNoteLabels(error: CanvasResourcePartialFailureError): readonly string[] | null {
+  try {
+    return error.retainedOnFailure.map(({ label }) => {
+      const reference = requireProjectResourceReference({ kind: "project-file", path: label })
+      if (reference.kind !== "project-file") throw new Error("Retained resource must be a Project file")
+      const components = reference.path.split("/")
+      const fileName = components[1]
+      if (components.length !== 2 || components[0] !== "Notes" || !fileName || !fileName.endsWith(".md")) {
+        throw new Error("Retained resource must be a single-level Notes Markdown file")
+      }
+      if (fileName.length <= ".md".length) throw new Error("Retained Notes file name is required")
+      return reference.path
+    })
+  } catch {
+    return null
+  }
 }
 
 function actor(scope: AgentToolScope) {
@@ -773,9 +790,8 @@ function resourceSources(value: unknown): CanvasResourceSource[] {
     const source = record(item, label)
     const kind = requiredString(source.kind, `${label}.kind`)
     const sourceId = requiredString(source.sourceId, `${label}.sourceId`)
-    if (kind === "inline-text") {
+    if (kind === "new-text") {
       return {
-        format: optionalEnum(source.format, `${label}.format`, ["markdown", "plain"] as const),
         kind,
         name: optionalText(source.name, `${label}.name`),
         sourceId,
@@ -785,29 +801,26 @@ function resourceSources(value: unknown): CanvasResourceSource[] {
     if (kind === "host-file" || kind === "host-directory") {
       return {
         kind,
-        path: requiredString(source.path, `${label}.path`),
+        path: trustedProjectRelativePath(source.path, `${label}.path`),
         sourceId,
-      }
-    }
-    if (kind === "remote-url") {
-      const urlValue = requiredString(source.url, `${label}.url`)
-      let url: URL
-      try {
-        url = new URL(urlValue)
-      } catch {
-        throw new Error(`${label}.url must be a valid URL`)
-      }
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error("Remote Canvas resources must use HTTP or HTTPS")
-      return {
-        kind,
-        mimeType: optionalText(source.mimeType, `${label}.mimeType`),
-        name: optionalText(source.name, `${label}.name`),
-        sourceId,
-        url: urlValue,
       }
     }
     throw new Error(`Unsupported Canvas resource source: ${kind}`)
   })
+}
+
+function trustedProjectRelativePath(value: unknown, label: string) {
+  const path = requiredString(value, label)
+  if (
+    path.startsWith("/") ||
+    path.startsWith("\\\\") ||
+    /^[a-z]:[\\/]/i.test(path) ||
+    path.includes("\\") ||
+    path.split("/").some((segment) => segment === "." || segment === ".." || segment.toLowerCase() === ".convax")
+  ) {
+    throw new Error(`${label} must be a trusted Project-relative path outside .convax`)
+  }
+  return path
 }
 
 function relation(value: unknown): CanvasAddResourceSourcesRequest["relation"] {

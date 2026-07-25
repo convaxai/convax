@@ -1,6 +1,7 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
 import type { ProjectRecord } from "@convax/project"
 import type { ProjectChangeEvent } from "@convax/project-files"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { DesktopProjectManager } from "./project-ipc"
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
@@ -19,28 +20,31 @@ const windows: TestWindow[] = []
 const projectCreationDirectory = "/Documents/Convax"
 const showOpenDialog = mock(async () => ({ canceled: true, filePaths: [] as string[] }))
 
-void mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => undefined,
-    getAllWindows: () => windows,
-  },
-  dialog: {
-    showOpenDialog,
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => handlers.delete(channel),
-  },
-  shell: {
-    openPath: async () => "",
-    showItemInFolder: () => undefined,
-  },
-}))
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => undefined,
+      getAllWindows: () => windows,
+    },
+    dialog: {
+      showOpenDialog,
+    },
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => handlers.delete(channel),
+    },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder: () => undefined,
+    },
+  })
+})
 
 afterEach(() => {
   handlers.clear()
   windows.splice(0)
   showOpenDialog.mockClear()
+  resetElectronMock()
 })
 
 function project(id: string, missing = false): ProjectRecord {
@@ -92,7 +96,6 @@ test("watches projects lazily when their files are first used", async () => {
     moveEntries: unsupported,
     readFile: unsupported,
     readFileInfo: unsupported,
-    readManagedImageFile: unsupported,
     readTextFile: unsupported,
     readTextPreview: unsupported,
     rename: unsupported,
@@ -175,7 +178,6 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
     moveEntries: unsupported,
     readFile: unsupported,
     readFileInfo: unsupported,
-    readManagedImageFile: unsupported,
     readTextFile: unsupported,
     readTextPreview: unsupported,
     rename: unsupported,
@@ -184,9 +186,10 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
     watchProject,
     writeTextFile: unsupported,
   } satisfies DesktopProjectManager
+  const onForgot = mock((_projectId: string) => undefined)
 
   const { projectFilesIpcChannels, projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
-  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, onForgot, projectCreationDirectory })
 
   const firstFileRequest = Promise.resolve(
     invoke(projectFilesIpcChannels.listDirectory, { path: "", projectId: "one" }),
@@ -196,6 +199,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
 
   const forgetRequest = Promise.resolve(invoke(projectIpcChannels.forgetProject, { projectId: "one" }))
   await Bun.sleep(0)
+  expect(onForgot).toHaveBeenCalledWith("one")
   const replacementFileRequest = Promise.resolve(
     invoke(projectFilesIpcChannels.listDirectory, { path: "assets", projectId: "one" }),
   )
@@ -207,6 +211,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
 
   expect(reportError).toHaveBeenCalledWith("Failed to watch project one", expect.any(Error))
   expect(replacementStop).toHaveBeenCalledTimes(1)
+  expect(onForgot).toHaveBeenCalledWith("one")
   reportError.mockRestore()
   dispose()
 })
@@ -235,7 +240,6 @@ test("creates a named project in the injected user workspace without opening a d
     moveEntries: unsupported,
     readFile: unsupported,
     readFileInfo: unsupported,
-    readManagedImageFile: unsupported,
     readTextFile: unsupported,
     readTextPreview: unsupported,
     rename: unsupported,
@@ -263,7 +267,9 @@ test("creates a named project in the injected user workspace without opening a d
   create.mockImplementationOnce(async () => {
     throw new Error("Project already exists: Storyboard")
   })
-  await expect(invoke(projectIpcChannels.createProject, { name: "Storyboard" })).rejects.toThrow("Project already exists")
+  await expect(invoke(projectIpcChannels.createProject, { name: "Storyboard" })).rejects.toThrow(
+    "Project already exists",
+  )
   expect(showOpenDialog).not.toHaveBeenCalled()
   expect(watchProject).toHaveBeenCalledTimes(1)
 

@@ -90,6 +90,23 @@ describe("WorkbenchController", () => {
     expect(controller.getSnapshot().error).toBeNull()
   })
 
+  test("treats a false input guard as a clean cancellation", async () => {
+    const onInputChangeCanceled = mock(() => undefined)
+    const controller = new WorkbenchController({
+      beforeInputChange: async (_current, next) => next?.kind !== "canvas" || next.canvasId !== "canvas-2",
+      onInputChangeCanceled,
+    })
+    controller.setProject("project-1")
+    const first = { canvasId: "canvas-1", kind: "canvas", projectId: "project-1" } as const
+    const second = { canvasId: "canvas-2", kind: "canvas", projectId: "project-1" } as const
+    await controller.open(first)
+
+    expect(await controller.open(second)).toBe(false)
+
+    expect(controller.getSnapshot()).toMatchObject({ activeInput: first, changingInput: false, error: null })
+    expect(onInputChangeCanceled).toHaveBeenCalledTimes(1)
+  })
+
   test("guards close before clearing the active input", async () => {
     const beforeInputChange = mock(async () => undefined)
     const controller = new WorkbenchController({ beforeInputChange })

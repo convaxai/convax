@@ -24,14 +24,19 @@ function harness() {
       current = catalog(input.projectId, canvases)
       return { deleted: true, catalog: current }
     }),
-    getCanvasCatalog: mock(async ({ projectId }) => projectId === current.projectId ? current : catalog(projectId)),
+    getCanvasCatalog: mock(async ({ projectId }) => (projectId === current.projectId ? current : catalog(projectId))),
     onDidChange: (next) => {
       listener = next
-      return () => { listener = undefined }
+      return () => {
+        listener = undefined
+      }
     },
     renameCanvas: mock(async (input) => {
       const renamed = { ...current.canvases.find((item) => item.id === input.canvasId)!, name: input.name }
-      current = catalog(input.projectId, current.canvases.map((item) => item.id === input.canvasId ? renamed : item))
+      current = catalog(
+        input.projectId,
+        current.canvases.map((item) => (item.id === input.canvasId ? renamed : item)),
+      )
       return { canvas: renamed, catalog: current }
     }),
   }
@@ -48,7 +53,6 @@ describe("ProjectCanvasController", () => {
       canvases: [canvas("canvas-main")],
       error: null,
       projectId: "one",
-      workbenchPreferenceMigration: null,
     })
 
     const creating = controller.createCanvas("Storyboard")
@@ -63,33 +67,15 @@ describe("ProjectCanvasController", () => {
     controller.dispose()
   })
 
-  test("keeps a valid legacy Workbench preference handoff outside catalog CRUD", async () => {
-    const { client } = harness()
-    let initialLoad = true
-    client.getCanvasCatalog = mock(async ({ projectId }) => {
-      if (projectId !== "one") return catalog(projectId)
-      const result = catalog(projectId, [canvas("canvas-main"), canvas("canvas-legacy")])
-      if (!initialLoad) return result
-      initialLoad = false
-      return { ...result, workbenchPreferenceMigration: { canvasId: "canvas-legacy" } }
-    })
-    const controller = new ProjectCanvasController(client)
-
-    await controller.setProject("one")
-    expect(controller.getSnapshot().workbenchPreferenceMigration).toEqual({ canvasId: "canvas-legacy" })
-    await controller.refresh()
-    expect(controller.getSnapshot().workbenchPreferenceMigration).toEqual({ canvasId: "canvas-legacy" })
-
-    await controller.setProject("two")
-    expect(controller.getSnapshot().workbenchPreferenceMigration).toBeNull()
-    controller.dispose()
-  })
-
   test("drops stale Project Canvas catalog responses when the host project changes", async () => {
     let resolveOne: ((value: ProjectCanvasCatalog) => void) | undefined
-    const pending = new Promise<ProjectCanvasCatalog>((resolve) => { resolveOne = resolve })
+    const pending = new Promise<ProjectCanvasCatalog>((resolve) => {
+      resolveOne = resolve
+    })
     const { client } = harness()
-    client.getCanvasCatalog = mock(async ({ projectId }) => projectId === "one" ? pending : catalog("two", [canvas("canvas-two")]))
+    client.getCanvasCatalog = mock(async ({ projectId }) =>
+      projectId === "one" ? pending : catalog("two", [canvas("canvas-two")]),
+    )
     const controller = new ProjectCanvasController(client)
     const first = controller.setProject("one")
     await controller.setProject("two")

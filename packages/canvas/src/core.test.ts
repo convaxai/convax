@@ -25,16 +25,104 @@ import {
   cloneCanvasDocument,
   createAgentNode,
   createCanvasDocument,
-  createFolderNode,
+  createFolderNode as createCanvasFolderNode,
   createGroupNode,
-  createMediaNode,
-  createTextNode,
+  createMediaNode as createCanvasMediaNode,
+  createTextNode as createCanvasTextNode,
   parseCanvasDocument,
 } from "./document"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
+type TestTextNodeInput = Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
+  metadata?: Record<string, unknown>
+  resourceState?: Parameters<typeof createCanvasTextNode>[0]["resourceState"]
+  text?: string
+}
+
+function createTextNode({ text, ...input }: TestTextNodeInput) {
+  return createCanvasTextNode({
+    ...input,
+    metadata: input.metadata ?? {},
+    resourceState: input.resourceState ?? { status: "ready", ...(text === undefined ? {} : { text }) },
+  })
+}
+
+function createMediaNode(
+  input: Omit<Parameters<typeof createCanvasMediaNode>[0], "resource"> & {
+    resource: Partial<Parameters<typeof createCanvasMediaNode>[0]["resource"]> &
+      Pick<Parameters<typeof createCanvasMediaNode>[0]["resource"], "id" | "kind">
+  },
+) {
+  return createCanvasMediaNode({
+    ...input,
+    resource: {
+      ...input.resource,
+      metadata: input.resource.metadata ?? {},
+      state: input.resource.state ?? { status: "ready" },
+    },
+  })
+}
+
+function createFolderNode(
+  input: Omit<Parameters<typeof createCanvasFolderNode>[0], "resource"> & {
+    resource: Partial<Parameters<typeof createCanvasFolderNode>[0]["resource"]> &
+      Pick<Parameters<typeof createCanvasFolderNode>[0]["resource"], "id" | "kind" | "name">
+  },
+) {
+  return createCanvasFolderNode({
+    ...input,
+    resource: {
+      ...input.resource,
+      metadata: input.resource.metadata ?? {},
+      state: input.resource.state ?? { status: "ready" },
+    },
+  })
+}
+
 describe("canvas history", () => {
+  test("resource factories keep prepared bytes only in transient resource state", () => {
+    const text = createTextNode({
+      metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
+      position: { x: 0, y: 0 },
+      resourceState: { contentRevision: "rev-text", status: "ready", text: "# Brief" },
+    })
+    const image = createMediaNode({
+      position: { x: 320, y: 0 },
+      resource: {
+        id: "image",
+        kind: "image",
+        metadata: { source: "Generated/hero.png" },
+        state: { posterUrl: "blob:poster", status: "ready", url: "blob:image" },
+      },
+    })
+    const folder = createFolderNode({
+      position: { x: 640, y: 0 },
+      resource: {
+        id: "folder",
+        kind: "folder",
+        metadata: { source: "references" },
+        name: "references",
+        state: { status: "stale" },
+      },
+    })
+
+    expect(text.data).toMatchObject({
+      metadata: { source: "Notes/brief.md" },
+      resourceState: { contentRevision: "rev-text", status: "ready", text: "# Brief" },
+    })
+    expect(text.data).not.toHaveProperty("text")
+    expect(image.data).toMatchObject({
+      resourceState: { posterUrl: "blob:poster", status: "ready", url: "blob:image" },
+    })
+    expect(image.data).not.toHaveProperty("url")
+    expect(image.data).not.toHaveProperty("posterUrl")
+    expect(folder.data).toMatchObject({ resourceState: { status: "stale" } })
+    expect(folder.data).not.toHaveProperty("path")
+  })
+
   test("clones portable Plugin node state with the Canvas document", () => {
     const pluginState = { directorProject: { objects: [{ id: "cube" }] }, schemaVersion: 1 }
     const node = createTextNode({
@@ -78,9 +166,7 @@ describe("canvas history", () => {
     ).toEqual(["audio", "file", "folder", "image", "text", "video"])
     expect(createDefaultCanvasFileRendererRegistry().get("file")?.hidden).toBeTrue()
     expect(createTextNode({ position: { x: 0, y: 0 } }).type).toBe("file")
-    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image", url: "" } }).type).toBe(
-      "file",
-    )
+    expect(createMediaNode({ position: { x: 0, y: 0 }, resource: { id: "image", kind: "image" } }).type).toBe("file")
     expect(createAgentNode({ position: { x: 0, y: 0 } }).type).toBe("agent")
 
     const text = createTextNode({ position: { x: 0, y: 0 } })
@@ -114,12 +200,37 @@ describe("canvas history", () => {
     })
     expect(parseCanvasDocument(createCanvasDocument({ id: "cycle", nodes: [first, second] }))).toBeNull()
     const text = createTextNode({ id: "text", position: { x: 0, y: 0 } })
+    const { metadata: _metadata, ...textWithoutMetadata } = text.data
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "missing-resource-metadata", nodes: [text] }),
+        nodes: [{ ...text, data: textWithoutMetadata }],
+      }),
+    ).toBeNull()
     expect(
       parseCanvasDocument({
         ...createCanvasDocument({ id: "rich-text", nodes: [text] }),
         nodes: [{ ...text, data: { ...text.data, richText: { type: "doc", content: "invalid" } } }],
       }),
     ).toBeNull()
+    const image = createMediaNode({
+      position: { x: 0, y: 0 },
+      resource: { id: "image", kind: "image", metadata: {}, state: { status: "ready" } },
+    })
+    expect(
+      parseCanvasDocument({
+        ...createCanvasDocument({ id: "legacy-media-url", nodes: [image] }),
+        nodes: [{ ...image, data: { ...image.data, url: "blob:legacy" } }],
+      }),
+    ).toBeNull()
+    for (const status of [["ready"], { toString: () => "ready" }]) {
+      expect(
+        parseCanvasDocument({
+          ...createCanvasDocument({ id: "invalid-runtime-status", nodes: [text] }),
+          nodes: [{ ...text, data: { ...text.data, resourceState: { status } } }],
+        }),
+      ).toBeNull()
+    }
     expect(
       parseCanvasDocument({
         ...createCanvasDocument({ id: "bad-folder", nodes: [text] }),
@@ -151,7 +262,7 @@ describe("canvas history", () => {
       })?.nodes[0]?.data.status,
     ).toBe("pending")
   })
-  test("migrates legacy notes into text nodes", () => {
+  test("rejects legacy note inputs instead of migrating inline content", () => {
     const legacy = {
       ...createCanvasDocument({ id: "legacy" }),
       nodes: [
@@ -163,45 +274,32 @@ describe("canvas history", () => {
         },
       ],
     }
-    const parsed = parseCanvasDocument(legacy)
-
-    expect(parsed?.nodes[0]).toMatchObject({
-      data: { kind: "text", label: "Text", text: "Keep this thought" },
-      type: "file",
-    })
-    expect(parsed?.nodes[0].data).not.toHaveProperty("tone")
-    const media = createMediaNode({
-      position: { x: 0, y: 0 },
-      resource: { id: "empty-video", kind: "video", url: "" },
-    })
-    expect(
-      parseCanvasDocument(
-        createCanvasDocument({
-          nodes: [{ ...media, data: { ...media.data, label: "Media" } }],
-        }),
-      )?.nodes[0].data.label,
-    ).toBe("Video")
+    expect(parseCanvasDocument(legacy)).toBeNull()
   })
 
-  test("preserves imported text formats", () => {
+  test("preserves resource view metadata without durable text", () => {
     const node = createTextNode({
-      format: "markdown",
       label: "brief.md",
+      metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
       position: { x: 0, y: 0 },
-      text: "# Brief",
+      resourceState: { status: "ready", text: "# Brief" },
     })
     expect(parseCanvasDocument(createCanvasDocument({ nodes: [node] }))?.nodes[0].data).toMatchObject({
-      format: "markdown",
-      text: "# Brief",
+      metadata: { source: "Notes/brief.md" },
+      mimeType: "text/markdown",
+      name: "brief.md",
+      resourceState: { status: "ready", text: "# Brief" },
     })
+    expect(node.data).not.toHaveProperty("format")
     expect(node.style).toEqual({ width: 360, height: 240 })
-    expect(createTextNode({ position: { x: 0, y: 0 } }).data).toMatchObject({ text: "" })
     expect(
       createMediaNode({
         position: { x: 0, y: 0 },
-        resource: { id: "empty", kind: "video", url: "" },
+        resource: { id: "empty", kind: "video", metadata: {}, state: { status: "stale" } },
       }).data,
-    ).toMatchObject({ label: "Video" })
+    ).toMatchObject({ label: "Video", resourceState: { status: "stale" } })
   })
   test("undoes and redoes committed documents", () => {
     const initial = createCanvasDocument({ id: "canvas_test" })
@@ -288,7 +386,7 @@ describe("canvas agent context", () => {
     const second = createMediaNode({
       id: "second",
       position: { x: 0, y: 0 },
-      resource: { id: "image", kind: "image", url: "image.png" },
+      resource: { id: "image", kind: "image" },
     })
     const otherAgent = createAgentNode({ id: "other-agent", position: { x: 0, y: 0 } })
     const group = createGroupNode({ id: "group", height: 100, position: { x: 0, y: 0 }, width: 100 })
@@ -311,7 +409,7 @@ describe("canvas agent context", () => {
     const incoming = createMediaNode({
       id: "incoming",
       position: { x: 0, y: 0 },
-      resource: { id: "image", kind: "image", url: "reference.jpg" },
+      resource: { id: "image", kind: "image" },
     })
     const outgoing = createTextNode({ id: "outgoing", position: { x: 0, y: 0 } })
     const document = createCanvasDocument({
@@ -502,7 +600,7 @@ describe("canvas clipboard", () => {
     const folder = createFolderNode({
       id: "folder",
       position: { x: 0, y: 0 },
-      resource: { id: "folder", kind: "folder", name: "docs", path: "docs" },
+      resource: { id: "folder", kind: "folder", name: "docs" },
     })
     const sourcedText = createTextNode({
       id: "text",

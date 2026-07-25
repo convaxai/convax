@@ -129,7 +129,7 @@ import {
   writeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
-import { createMediaNode, getCanvasNodeSize, parseCanvasDocument } from "../document"
+import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider } from "../editor-context"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
@@ -150,15 +150,27 @@ import {
 } from "../selection-drag-source"
 import {
   CanvasServicesProvider,
+  createCanvasPendingDraftRegistry,
   getCanvasGenerationReferenceError,
   getCompatibleCanvasGenerationTools,
   inferCanvasGenerationReferences,
+  type CanvasNotification,
+  type CanvasPendingDraft,
   type CanvasGenerationInputRole,
   type CanvasGenerationToolSummary,
+  type CanvasResourceMutationRequest,
+  type CanvasResourceHydrationService,
   type CanvasServices,
   useCanvasService,
 } from "../services"
-import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSelection } from "../types"
+import type {
+  CanvasDocument,
+  CanvasEdge,
+  CanvasNode,
+  CanvasPoint,
+  CanvasResourceRuntimeState,
+  CanvasSelection,
+} from "../types"
 import {
   createCanvasShortcutHandler,
   isCanvasEditableShortcutTarget,
@@ -373,13 +385,347 @@ export interface CanvasEditorHandle {
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
   insertNode: (type: string) => string | undefined
-  prepareToLeave: () => Promise<void>
+  invalidateResources: () => Promise<void>
+  prepareToLeave: () => Promise<boolean>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
 }
 
+export interface CanvasResourceMutationScopeToken {
+  documentId: string
+  generation: number
+  scopeId: string
+}
+
+export function replaceCanvasNodeResourceState(
+  document: CanvasDocument,
+  nodeId: string,
+  resourceState: CanvasResourceRuntimeState,
+): CanvasDocument {
+  let changed = false
+  const nodes = document.nodes.map((node) => {
+    if (node.id !== nodeId || !("resourceState" in node.data)) return node
+    changed = true
+    return { ...node, data: { ...node.data, resourceState } }
+  })
+  return changed ? { ...document, nodes } : document
+}
+
+function isCanvasResourceMutationScopeCurrent(
+  currentScope: () => CanvasResourceMutationScopeToken,
+  operationScope: CanvasResourceMutationScopeToken,
+) {
+  const current = currentScope()
+  return (
+    current.documentId === operationScope.documentId &&
+    current.generation === operationScope.generation &&
+    current.scopeId === operationScope.scopeId
+  )
+}
+
+export function runCanvasReloadScopeEffect(input: {
+  currentScope: () => CanvasResourceMutationScopeToken
+  effect: () => void
+  reloadScope: CanvasResourceMutationScopeToken
+}) {
+  if (!isCanvasResourceMutationScopeCurrent(input.currentScope, input.reloadScope)) return false
+  input.effect()
+  return true
+}
+
+interface CanvasResourceRefreshSnapshot {
+  document: CanvasDocument
+  scope: CanvasResourceMutationScopeToken
+}
+
+interface CanvasResourceRefreshControllerOptions {
+  current(): CanvasResourceRefreshSnapshot
+  onError?(error: unknown): void
+  queue?: CanvasReloadQueue
+  replace(document: CanvasDocument): void
+  service: CanvasResourceHydrationService
+}
+
+export class CanvasResourceRefreshController {
+  readonly #controllers = new Set<AbortController>()
+  readonly #queue: CanvasReloadQueue
+  #disposed = false
+  #invalidationGeneration = 0
+
+  constructor(private readonly options: CanvasResourceRefreshControllerOptions) {
+    this.#queue = options.queue ?? new CanvasReloadQueue()
+  }
+
+  invalidateResources(): Promise<void> {
+    if (this.#disposed) return Promise.resolve()
+    const current = this.options.current()
+    this.options.replace(this.options.service.markStale(current.document))
+    this.#invalidationGeneration += 1
+    return this.#requestRefresh()
+  }
+
+  abort() {
+    for (const controller of this.#controllers) controller.abort()
+    this.#controllers.clear()
+  }
+
+  dispose() {
+    this.#disposed = true
+    this.abort()
+  }
+
+  #requestRefresh() {
+    const pending = this.#queue.request(() => this.#refresh())
+    void pending.catch((error) => this.options.onError?.(error))
+    return pending
+  }
+
+  async #refresh() {
+    if (this.#disposed) return
+    const invalidationGeneration = this.#invalidationGeneration
+    const requested = this.options.current()
+    const controller = new AbortController()
+    this.#controllers.add(controller)
+    let hydrated: CanvasDocument
+    try {
+      hydrated = await this.options.service.hydrateStale({
+        document: requested.document,
+        signal: controller.signal,
+      })
+    } catch (error) {
+      if (
+        !this.#disposed &&
+        !controller.signal.aborted &&
+        !isCanvasResourceRefreshTargetCurrent(requested, this.options.current())
+      ) {
+        void this.#requestRefresh()
+        return
+      }
+      throw error
+    } finally {
+      this.#controllers.delete(controller)
+    }
+    if (this.#disposed || controller.signal.aborted || invalidationGeneration !== this.#invalidationGeneration) return
+
+    const current = this.options.current()
+    const merged = mergeCanvasResourceRefresh(requested, current, hydrated)
+    if (!merged) {
+      void this.#requestRefresh()
+      return
+    }
+    this.options.replace(merged)
+  }
+}
+
+function mergeCanvasResourceRefresh(
+  requested: CanvasResourceRefreshSnapshot,
+  current: CanvasResourceRefreshSnapshot,
+  hydrated: CanvasDocument,
+): CanvasDocument | null {
+  if (
+    !isCanvasResourceRefreshTargetCurrent(requested, current) ||
+    hydrated.id !== requested.document.id ||
+    hydrated.revision !== requested.document.revision
+  ) {
+    return null
+  }
+
+  const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
+  const hydratedNodes = new Map(hydrated.nodes.map((node) => [node.id, node]))
+  let changed = false
+  let invalid = false
+  const nodes = current.document.nodes.map((currentNode) => {
+    const requestedNode = requested.document.nodes.find((node) => node.id === currentNode.id)
+    const requestedState = requestedNode ? canvasNodeResourceState(requestedNode) : undefined
+    if (!requestedNode || !isStaleCanvasResourceState(requestedState)) return currentNode
+    const hydratedNode = hydratedNodes.get(currentNode.id)
+    const currentState = canvasNodeResourceState(currentNode)
+    const hydratedState = hydratedNode ? canvasNodeResourceState(hydratedNode) : undefined
+    if (
+      !hydratedNode ||
+      !sameCanvasRuntimeValue(requestedNode.data.metadata, currentNode.data.metadata) ||
+      !sameCanvasRuntimeValue(requestedNode.data.metadata, hydratedNode.data.metadata) ||
+      !sameCanvasRuntimeValue(requestedState, currentState) ||
+      hydratedState === undefined
+    ) {
+      invalid = true
+      return currentNode
+    }
+    if (sameCanvasRuntimeValue(currentState, hydratedState)) return currentNode
+    changed = true
+    return { ...currentNode, data: { ...currentNode.data, resourceState: hydratedState } }
+  })
+
+  if (invalid) return null
+
+  for (const requestedNode of requested.document.nodes) {
+    if (
+      isStaleCanvasResourceState(canvasNodeResourceState(requestedNode)) &&
+      (!currentNodes.has(requestedNode.id) || !hydratedNodes.has(requestedNode.id))
+    ) {
+      return null
+    }
+  }
+  return changed ? { ...current.document, nodes } : current.document
+}
+
+function isCanvasResourceRefreshTargetCurrent(
+  requested: CanvasResourceRefreshSnapshot,
+  current: CanvasResourceRefreshSnapshot,
+) {
+  if (
+    !isCanvasResourceMutationScopeCurrent(() => current.scope, requested.scope) ||
+    current.document.id !== requested.document.id ||
+    current.document.revision !== requested.document.revision
+  )
+    return false
+  const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
+  return requested.document.nodes.every((requestedNode) => {
+    const requestedState = canvasNodeResourceState(requestedNode)
+    if (!isStaleCanvasResourceState(requestedState)) return true
+    const currentNode = currentNodes.get(requestedNode.id)
+    return Boolean(
+      currentNode &&
+        sameCanvasRuntimeValue(requestedNode.data.metadata, currentNode.data.metadata) &&
+        sameCanvasRuntimeValue(requestedState, canvasNodeResourceState(currentNode)),
+    )
+  })
+}
+
+function canvasNodeResourceState(node: CanvasNode): unknown {
+  return node.data.resourceState
+}
+
+function isStaleCanvasResourceState(value: unknown) {
+  return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
+}
+
+function sameCanvasRuntimeValue(left: unknown, right: unknown) {
+  if (left === right) return true
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
+}
+
+export function linkCanvasReloadAbortSignal(source: AbortSignal | undefined, target: AbortController) {
+  if (!source) return () => undefined
+  const abort = () => target.abort(source.reason)
+  if (source.aborted) abort()
+  else source.addEventListener("abort", abort, { once: true })
+  return () => source.removeEventListener("abort", abort)
+}
+
+export function abortCanvasReload(controller: AbortController | undefined) {
+  controller?.abort()
+}
+
+export async function abortCanvasReloadBeforeWait(
+  controller: AbortController | undefined,
+  waitForStableLoad: () => Promise<void>,
+) {
+  abortCanvasReload(controller)
+  await waitForStableLoad()
+}
+
+function canvasReloadAbortError(signal: AbortSignal) {
+  if (signal.reason instanceof Error) return signal.reason
+  const error = new Error("Canvas reload was aborted")
+  error.name = "AbortError"
+  return error
+}
+
+export function settleCanvasReloadFailure(input: {
+  currentScope: () => CanvasResourceMutationScopeToken
+  error: unknown
+  notifyError: (title: string, error: unknown) => void
+  rejectBarrier: (error: unknown) => void
+  reloadScope: CanvasResourceMutationScopeToken
+  resolveBarrier: () => void
+  setLoadError: (message: string) => void
+  signal: AbortSignal
+}) {
+  if (input.signal.aborted || (input.error instanceof Error && input.error.name === "AbortError")) {
+    input.resolveBarrier()
+    return "aborted" as const
+  }
+  input.rejectBarrier(input.error)
+  runCanvasReloadScopeEffect({
+    currentScope: input.currentScope,
+    effect: () => {
+      input.setLoadError(input.error instanceof Error ? input.error.message : String(input.error))
+      input.notifyError("Could not reload canvas", input.error)
+    },
+    reloadScope: input.reloadScope,
+  })
+  return "failed" as const
+}
+
+export async function completeCanvasResourceMutation(input: {
+  currentScope: () => CanvasResourceMutationScopeToken
+  operationScope: CanvasResourceMutationScopeToken
+  reload: (signal: AbortSignal) => Promise<void>
+  result: { createdNodeIds: readonly string[]; revision: number; warnings: readonly string[] }
+  selectNodes: (nodeIds: readonly string[]) => void
+  show: (notification: CanvasNotification) => void
+  signal: AbortSignal
+}) {
+  const isActive = () =>
+    !input.signal.aborted && isCanvasResourceMutationScopeCurrent(input.currentScope, input.operationScope)
+  if (!isActive()) return
+  const reload = input.reload
+  if (!isActive()) return
+  try {
+    await reload(input.signal)
+  } catch {
+    if (isActive()) {
+      input.show({
+        description: "Reload the Canvas to show the committed resources.",
+        kind: "warning",
+        title: "Resources added, but refresh failed",
+      })
+    }
+    return
+  }
+  if (!isActive()) return
+  const createdNodeIds = input.result.createdNodeIds
+  if (!isActive()) return
+  input.selectNodes(createdNodeIds)
+  if (!isActive()) return
+  input.show({
+    description: input.result.warnings.length ? input.result.warnings.join("\n") : undefined,
+    kind: input.result.warnings.length ? "warning" : "success",
+    title: `${createdNodeIds.length} item${createdNodeIds.length === 1 ? "" : "s"} added`,
+  })
+}
+
+export function handleCanvasResourceMutationFailure(input: {
+  currentScope: () => CanvasResourceMutationScopeToken
+  error: unknown
+  notifyError: (title: string, error: unknown) => void
+  operationScope: CanvasResourceMutationScopeToken
+  signal: AbortSignal
+  title?: string
+}) {
+  if (!input.signal.aborted && isCanvasResourceMutationScopeCurrent(input.currentScope, input.operationScope)) {
+    input.notifyError(input.title ?? "Could not add resources", input.error)
+  }
+}
+export function handleCanvasResourceUploadSelection(files: readonly File[], upload: (files: readonly File[]) => void) {
+  upload(files)
+}
+
+export function handleCanvasResourceRelinkSelection(
+  nodeId: string | null,
+  files: readonly File[],
+  relink: (nodeId: string, file: File) => void,
+) {
+  const file = files[0]
+  if (nodeId && file) relink(nodeId, file)
+}
 export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(function CanvasEditor(props, ref) {
   const nodeRegistry = useMemo(() => props.nodeRegistry ?? createDefaultCanvasNodeRegistry(), [props.nodeRegistry])
   const fileRendererRegistry = useMemo(
@@ -441,6 +787,8 @@ function CanvasEditorContent(
   const spacePanning = useSpacePanning()
   const rootRef = useRef<HTMLDivElement>(null)
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const relinkInputRef = useRef<HTMLInputElement>(null)
+  const relinkNodeIdRef = useRef<string | null>(null)
   const pointerRef = useRef<CanvasPoint | null>(null)
   const boxSelectionActiveRef = useRef(false)
   const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
@@ -453,6 +801,20 @@ function CanvasEditorContent(
   const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ duplicatedNodeIdBySourceId: ReadonlyMap<string, string> } | null>(null)
   const documentRef = useRef(history.document)
+  const resourceMutationScopeRef = useRef<CanvasResourceMutationScopeToken>({
+    documentId: history.document.id,
+    generation: 0,
+    scopeId: props.viewScopeId ?? "",
+  })
+  const currentResourceScope = resourceMutationScopeRef.current
+  const currentViewScopeId = props.viewScopeId ?? ""
+  if (currentResourceScope.documentId !== history.document.id || currentResourceScope.scopeId !== currentViewScopeId) {
+    resourceMutationScopeRef.current = {
+      documentId: history.document.id,
+      generation: currentResourceScope.generation + 1,
+      scopeId: currentViewScopeId,
+    }
+  }
   const historyRef = useRef(history)
   const hasLocalEditsRef = useRef(false)
   const saveErrorRef = useRef<string | null>(null)
@@ -463,17 +825,23 @@ function CanvasEditorContent(
   const savedRevisionRef = useRef(history.document.revision)
   const reloadQueueRef = useRef(new CanvasReloadQueue())
   const authoritativeRenderWaitersRef = useRef(new Set<CanvasAuthoritativeRenderWaiter>())
+  const reloadControllerRef = useRef<AbortController | undefined>(undefined)
   const operationControllersRef = useRef(new Set<AbortController>())
   const authoritativeLoadRequestedRef = useRef(false)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
+  const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
-  const uploadService = useCanvasService("upload")
+  const reactFlowRef = useRef(reactFlow)
+  reactFlowRef.current = reactFlow
+  const mutationService = useCanvasService("mutation")
+  const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
   const persistenceService = useCanvasService("persistence")
   const exportService = useCanvasService("export")
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
+  const draftDecisionService = useCanvasService("draftDecision")
   const [hydrating, setHydrating] = useState(Boolean(persistenceService))
   const hydratingRef = useRef(Boolean(persistenceService))
   const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
@@ -514,12 +882,23 @@ function CanvasEditorContent(
     connectionTargetNodeIdRef.current = nodeId
     setConnectionTargetNodeId(nodeId)
   }, [])
+  useLayoutEffect(() => {
+    for (const controller of operationControllersRef.current) controller.abort()
+    operationControllersRef.current.clear()
+    abortCanvasReload(reloadControllerRef.current)
+  }, [currentViewScopeId, history.document.id])
   const dispatch = useCallback((action: CanvasHistoryAction) => {
     if (leavingRef.current || hydratingRef.current) return
     if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
       hasLocalEditsRef.current = true
     }
     reduce(action)
+  }, [])
+  const replaceRuntimeDocument = useCallback((document: CanvasDocument) => {
+    const replaced = canvasHistoryReducer(historyRef.current, { document, type: "replace" })
+    historyRef.current = replaced
+    documentRef.current = replaced.document
+    reduce({ document, type: "replace" })
   }, [])
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
@@ -629,7 +1008,10 @@ function CanvasEditorContent(
     ) as NodeTypes
   }, [props.nodeRegistry, registryVersion])
   const connectionNodeTypes = useMemo(
-    () => getCanvasNodeInsertionItems(props.fileRendererRegistry, props.nodeRegistry),
+    () => [
+      { label: "Text", type: "text" },
+      ...getCanvasNodeInsertionItems(props.fileRendererRegistry, props.nodeRegistry),
+    ],
     [fileRendererRegistryVersion, props.fileRendererRegistry, props.nodeRegistry, registryVersion],
   )
 
@@ -868,9 +1250,20 @@ function CanvasEditorContent(
   const pointAtCenter = useCallback(() => {
     const bounds = rootRef.current?.getBoundingClientRect()
     if (!bounds) return { x: 0, y: 0 }
-    return reactFlow.screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
-  }, [reactFlow])
+    return reactFlowRef.current.screenToFlowPosition({
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + bounds.height / 2,
+    })
+  }, [])
   const fitCanvas = useCallback(() => void fitDocumentViewport(documentRef.current), [fitDocumentViewport])
+  const nextInsertPoint = useCallback(
+    (index = 0) => {
+      const point = insertPoint ?? pointerRef.current ?? pointAtCenter()
+      const open = findOpenCanvasPoint(history.document, point)
+      return { x: open.x + index * 36, y: open.y + index * 36 }
+    },
+    [history.document, insertPoint, pointAtCenter],
+  )
   const notifyError = useCallback(
     (title: string, error: unknown) => {
       notificationService?.show({
@@ -881,6 +1274,23 @@ function CanvasEditorContent(
     },
     [notificationService],
   )
+  const resourceRefreshController = useMemo(
+    () =>
+      hydrationService
+        ? new CanvasResourceRefreshController({
+            current: () => ({
+              document: documentRef.current,
+              scope: resourceMutationScopeRef.current,
+            }),
+            onError: (error) => notifyError("Could not refresh canvas resources", error),
+            queue: reloadQueueRef.current,
+            replace: replaceRuntimeDocument,
+            service: hydrationService,
+          })
+        : undefined,
+    [hydrationService, notifyError, replaceRuntimeDocument],
+  )
+  useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
   const selectionActionsMountedRef = useRef(false)
   const selectionActionErrorRef = useRef(notifyError)
@@ -1227,6 +1637,7 @@ function CanvasEditorContent(
   const abortPendingOperations = useCallback(() => {
     for (const controller of operationControllersRef.current) controller.abort()
     operationControllersRef.current.clear()
+    abortCanvasReload(reloadControllerRef.current)
   }, [])
   const finalizeGestureAndSave = useCallback(async () => {
     const current = historyRef.current
@@ -1247,75 +1658,144 @@ function CanvasEditorContent(
     documentRef.current = hydrated.document
     reduce({ type: "hydrate", document })
   }, [])
-  const reloadDocument = useCallback(() => {
-    if (!persistenceService) return Promise.resolve()
-    selectionActionControllerRef.current?.abort()
-    return reloadQueueRef.current.request(async () => {
-      await waitForStableLoad()
-      if (loadError) throw new Error(loadError)
-      const loadBarrier = createCanvasLoadBarrier()
-      loadBarrierRef.current = loadBarrier
-      hydratingRef.current = true
-      setHydrating(true)
-      setLoadError(null)
-      const controller = new AbortController()
-      try {
-        await startSave(historyRef.current.document)
-        const documentId = documentRef.current.id
-        const document = await persistenceService.load(documentId, controller.signal)
-        if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
-        if (document.id !== documentId || documentRef.current.id !== documentId) {
-          throw new Error("Canvas changed while reloading")
+  const reloadDocument = useCallback(
+    (signal?: AbortSignal) => {
+      if (!persistenceService) return Promise.resolve()
+      selectionActionControllerRef.current?.abort()
+      const reloadScope = resourceMutationScopeRef.current
+      return reloadQueueRef.current.request(async () => {
+        if (signal?.aborted) return
+        await waitForStableLoad()
+        if (
+          signal?.aborted ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
+        )
+          return
+        if (loadError) throw new Error(loadError)
+        const loadBarrier = createCanvasLoadBarrier()
+        loadBarrierRef.current = loadBarrier
+        hydratingRef.current = true
+        setHydrating(true)
+        setLoadError(null)
+        const controller = new AbortController()
+        abortCanvasReload(reloadControllerRef.current)
+        reloadControllerRef.current = controller
+        const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
+        try {
+          await startSave(historyRef.current.document)
+          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
+          const documentId = documentRef.current.id
+          const document = await persistenceService.load(documentId, controller.signal)
+          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
+          if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
+          if (
+            document.id !== documentId ||
+            documentRef.current.id !== documentId ||
+            !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
+          ) {
+            throw new Error("Canvas changed while reloading")
+          }
+          acceptHydratedDocument(document)
+          loadBarrier.resolve()
+        } catch (error) {
+          const outcome = settleCanvasReloadFailure({
+            currentScope: () => resourceMutationScopeRef.current,
+            error,
+            notifyError: (title, failure) => {
+              if (loadBarrierRef.current === loadBarrier) notifyError(title, failure)
+            },
+            rejectBarrier: loadBarrier.reject,
+            reloadScope,
+            resolveBarrier: loadBarrier.resolve,
+            setLoadError: (message) => {
+              if (loadBarrierRef.current !== loadBarrier) return
+              setLoadError(message)
+            },
+            signal: controller.signal,
+          })
+          if (outcome === "failed") throw error
+        } finally {
+          unlinkAbortSignal()
+          if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
+          runCanvasReloadScopeEffect({
+            currentScope: () => resourceMutationScopeRef.current,
+            effect: () => {
+              if (loadBarrierRef.current !== loadBarrier) return
+              hydratingRef.current = false
+              setHydrating(false)
+            },
+            reloadScope,
+          })
         }
-        acceptHydratedDocument(document)
-        loadBarrier.resolve()
-      } catch (error) {
-        loadBarrier.reject(error)
-        setLoadError(error instanceof Error ? error.message : String(error))
-        notifyError("Could not reload canvas", error)
-        throw error
-      } finally {
-        hydratingRef.current = false
-        setHydrating(false)
-      }
-    })
-  }, [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad])
-  const reloadAuthoritativeDocument = useCallback(() => {
+      })
+    },
+    [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad],
+  )
+  const reloadAuthoritativeDocument = useCallback((signal?: AbortSignal) => {
     if (!persistenceService) {
       return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
     }
     selectionActionControllerRef.current?.abort()
     return reloadQueueRef.current.request(async () => {
+      if (signal?.aborted) return
+      const reloadScope = resourceMutationScopeRef.current
       const loadBarrier = createCanvasLoadBarrier()
       loadBarrierRef.current = loadBarrier
       hydratingRef.current = true
       setHydrating(true)
       setLoadError(null)
       const controller = new AbortController()
+      abortCanvasReload(reloadControllerRef.current)
+      reloadControllerRef.current = controller
+      const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
       operationControllersRef.current.add(controller)
       let rendered: Promise<void> | undefined
       try {
+        if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
         const documentId = documentRef.current.id
         // Main has already committed the authoritative document. Never persist the stale renderer projection here.
         const document = await persistenceService.load(documentId, controller.signal)
+        if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
         if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
-        if (document.id !== documentId || documentRef.current.id !== documentId) {
+        if (
+          document.id !== documentId ||
+          documentRef.current.id !== documentId ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
+        ) {
           throw new Error("Canvas changed while loading the authoritative document")
         }
         rendered = waitForAuthoritativeRender(document)
         acceptHydratedDocument(document)
         loadBarrier.resolve()
       } catch (error) {
+        if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+          loadBarrier.resolve()
+          return
+        }
         loadBarrier.reject(error)
-        setLoadError(error instanceof Error ? error.message : String(error))
-        notifyError("Could not load authoritative canvas", error)
+        runCanvasReloadScopeEffect({
+          currentScope: () => resourceMutationScopeRef.current,
+          effect: () => {
+            setLoadError(error instanceof Error ? error.message : String(error))
+            notifyError("Could not load authoritative canvas", error)
+          },
+          reloadScope,
+        })
         throw error
       } finally {
+        unlinkAbortSignal()
+        if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
         if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
           loadBarrierRef.current = createCanvasLoadBarrier(true)
         }
-        hydratingRef.current = false
-        setHydrating(false)
+        runCanvasReloadScopeEffect({
+          currentScope: () => resourceMutationScopeRef.current,
+          effect: () => {
+            hydratingRef.current = false
+            setHydrating(false)
+          },
+          reloadScope,
+        })
         operationControllersRef.current.delete(controller)
       }
       await rendered
@@ -1346,12 +1826,20 @@ function CanvasEditorContent(
     hydratingRef.current = true
     setLoadError(null)
     const controller = new AbortController()
-    const loadBarrier = loadBarrierRef.current
+    const previousLoadBarrier = loadBarrierRef.current
+    const loadBarrier = createCanvasLoadBarrier()
+    loadBarrierRef.current = loadBarrier
+    previousLoadBarrier.resolve()
+    const loadScope = resourceMutationScopeRef.current
     const documentId = history.document.id
+    const isCurrentLoad = () =>
+      !controller.signal.aborted &&
+      loadBarrierRef.current === loadBarrier &&
+      isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, loadScope)
     void persistenceService.load(documentId, controller.signal).then(
       (document) => {
         const authoritativeRetry = authoritativeLoadRequestedRef.current
-        if (!controller.signal.aborted && authoritativeRetry && !document) {
+        if (isCurrentLoad() && authoritativeRetry && !document) {
           const error = new Error(`Canvas document was not found: ${documentId}`)
           setHydrating(false)
           hydratingRef.current = false
@@ -1361,7 +1849,7 @@ function CanvasEditorContent(
           return
         }
         if (
-          !controller.signal.aborted &&
+          isCurrentLoad() &&
           document &&
           documentRef.current.id === documentId &&
           (authoritativeRetry || (documentRef.current.revision === 0 && !hasLocalEditsRef.current))
@@ -1371,14 +1859,14 @@ function CanvasEditorContent(
             authoritativeLoadRequestedRef.current = false
           }
         }
-        if (!controller.signal.aborted) {
+        if (isCurrentLoad()) {
           setHydrating(false)
           hydratingRef.current = false
           loadBarrier.resolve()
         }
       },
       (error) => {
-        if (!controller.signal.aborted) {
+        if (isCurrentLoad()) {
           setHydrating(false)
           hydratingRef.current = false
           setLoadError(error instanceof Error ? error.message : String(error))
@@ -1391,7 +1879,7 @@ function CanvasEditorContent(
       controller.abort()
       loadBarrier.reject(new Error("Canvas load was canceled"))
     }
-  }, [acceptHydratedDocument, history.document.id, loadAttempt, persistenceService, notifyError])
+  }, [acceptHydratedDocument, history.document.id, loadAttempt, notifyError, persistenceService, props.viewScopeId])
   useLayoutEffect(() => {
     void startSave(history.document).catch(() => undefined)
   }, [history.document.revision, saveAttempt, startSave])
@@ -1399,6 +1887,7 @@ function CanvasEditorContent(
     const preventUnsavedClose = (event: BeforeUnloadEvent) => {
       const hasUnsavedRevision = documentRef.current.revision !== savedRevisionRef.current
       if (
+        !pendingDraftsRef.current.hasPending() &&
         !saveErrorRef.current &&
         !saveControllerRef.current &&
         !historyRef.current.gestureStart &&
@@ -1416,6 +1905,7 @@ function CanvasEditorContent(
       leavingRef.current = true
       for (const controller of operationControllersRef.current) controller.abort()
       operationControllersRef.current.clear()
+      abortCanvasReload(reloadControllerRef.current)
       saveControllerRef.current?.abort()
     },
     [],
@@ -1434,12 +1924,151 @@ function CanvasEditorContent(
       setPendingConnection(null)
     }
   }, [history.document.nodes, pendingConnection])
+  const runResourceMutation = useCallback(
+    (input: Omit<CanvasResourceMutationRequest, "expectedRevision" | "signal">) => {
+      if (!mutationService || readOnly) return
+      const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      void (async () => {
+        const operationScope = resourceMutationScopeRef.current
+        try {
+          const document = documentRef.current
+          const result = await mutationService.add({
+            ...input,
+            expectedRevision: document.revision,
+            signal: controller.signal,
+          })
+          await completeCanvasResourceMutation({
+            currentScope: () => resourceMutationScopeRef.current,
+            operationScope,
+            reload: reloadAuthoritativeDocument,
+            result,
+            selectNodes,
+            show: (notification) => notificationService?.show(notification),
+            signal: controller.signal,
+          })
+        } catch (error) {
+          handleCanvasResourceMutationFailure({
+            currentScope: () => resourceMutationScopeRef.current,
+            error,
+            notifyError,
+            operationScope,
+            signal: controller.signal,
+          })
+        } finally {
+          operationControllersRef.current.delete(controller)
+        }
+      })()
+    },
+    [mutationService, notificationService, notifyError, readOnly, reloadAuthoritativeDocument, selectNodes],
+  )
+  const runResourceRelink = useCallback(
+    async (
+      operation: (input: { expectedRevision: number; signal: AbortSignal }) => Promise<{
+        revision: number
+        warnings: readonly string[]
+      }>,
+      successTitle: string,
+    ) => {
+      if (readOnly) return
+      const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      const operationScope = resourceMutationScopeRef.current
+      try {
+        const result = await operation({
+          expectedRevision: documentRef.current.revision,
+          signal: controller.signal,
+        })
+        if (
+          controller.signal.aborted ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, operationScope)
+        )
+          return
+        try {
+          await reloadDocument(controller.signal)
+        } catch {
+          if (!controller.signal.aborted) {
+            notificationService?.show({
+              description: "Reload the Canvas to show the committed resource.",
+              kind: "warning",
+              title: `${successTitle}, but refresh failed`,
+            })
+          }
+          return
+        }
+        if (
+          controller.signal.aborted ||
+          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, operationScope)
+        )
+          return
+        notificationService?.show({
+          description: result.warnings.length ? result.warnings.join("\n") : undefined,
+          kind: result.warnings.length ? "warning" : "success",
+          title: successTitle,
+        })
+      } catch (error) {
+        handleCanvasResourceMutationFailure({
+          currentScope: () => resourceMutationScopeRef.current,
+          error,
+          notifyError,
+          operationScope,
+          signal: controller.signal,
+          title: "Could not relink resource",
+        })
+      } finally {
+        operationControllersRef.current.delete(controller)
+      }
+    },
+    [notificationService, notifyError, readOnly, reloadDocument],
+  )
+  const requestResourceRelink = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.relink || readOnly) return
+      relinkNodeIdRef.current = nodeId
+      relinkInputRef.current?.click()
+    },
+    [mutationService, readOnly],
+  )
+  const requestSelectedResourceRelink = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.relink || readOnly) return
+      void runResourceRelink(
+        ({ expectedRevision, signal }) => mutationService.relink!({ expectedRevision, nodeId, signal }),
+        "Resource relinked",
+      )
+    },
+    [mutationService, readOnly, runResourceRelink],
+  )
+  const saveEditableCopy = useCallback(
+    (nodeId: string) => {
+      if (!mutationService?.saveEditableCopy || readOnly) return Promise.resolve()
+      return runResourceRelink(
+        ({ expectedRevision, signal }) => mutationService.saveEditableCopy!({ expectedRevision, nodeId, signal }),
+        "Editable copy saved",
+      )
+    },
+    [mutationService, readOnly, runResourceRelink],
+  )
+  const addTextResource = useCallback(
+    (position?: CanvasPoint, relation?: CanvasResourceMutationRequest["relation"]) => {
+      runResourceMutation({
+        anchor: position ?? nextInsertPoint(),
+        files: [],
+        relation,
+        sources: [{ kind: "new-text", sourceId: createCanvasId("source"), text: "" }],
+      })
+      setNodeMenuOpen(false)
+      setInsertPoint(null)
+      telemetryService?.track({ name: "canvas.node.added", properties: { type: "text" } })
+    },
+    [nextInsertPoint, runResourceMutation, telemetryService],
+  )
   const createNodeForType = useCallback(
     (type: string, position: CanvasPoint, data?: Record<string, unknown>) => {
       try {
         const fileRenderer = props.fileRendererRegistry.get(type)
         if (fileRenderer?.create) return createCanvasFileNode(fileRenderer, { data, position })
-        return props.nodeRegistry.get(type)?.create({ data, position })
+        return props.nodeRegistry.get(type)?.create?.({ data, position })
       } catch (error) {
         notifyError("Could not create canvas node", error)
         return undefined
@@ -1450,6 +2079,10 @@ function CanvasEditorContent(
   const addNode = useCallback(
     (type: string, position?: CanvasPoint) => {
       if (readOnly || leavingRef.current || hydratingRef.current || saveErrorRef.current) return undefined
+      if (type === "text") {
+        addTextResource(position)
+        return undefined
+      }
       const preferredPosition = position ?? insertPoint ?? pointerRef.current ?? pointAtCenter()
       const created = createNodeForType(type, preferredPosition)
       if (!created) return undefined
@@ -1465,7 +2098,16 @@ function CanvasEditorContent(
       telemetryService?.track({ name: "canvas.node.added", properties: { type } })
       return node.id
     },
-    [createNodeForType, history.document, insertPoint, pointAtCenter, readOnly, selectNodes, telemetryService],
+    [
+      addTextResource,
+      createNodeForType,
+      history.document,
+      insertPoint,
+      pointAtCenter,
+      readOnly,
+      selectNodes,
+      telemetryService,
+    ],
   )
   useImperativeHandle(
     props.editorRef,
@@ -1477,12 +2119,20 @@ function CanvasEditorContent(
       insertNode(type) {
         return addNode(type)
       },
+      invalidateResources() {
+        return resourceRefreshController?.invalidateResources() ?? Promise.resolve()
+      },
       async prepareToLeave() {
         await waitForStableLoad()
         leavingRef.current = true
         setLeaving(true)
+        const canLeave = await pendingDraftsRef.current.prepareToLeave(
+          () => draftDecisionService?.decide({ count: pendingDraftsRef.current.pendingCount() }) ?? "cancel",
+        )
+        if (!canLeave) return false
         abortPendingOperations()
         await finalizeGestureAndSave()
+        return true
       },
       async reload() {
         await reloadDocument()
@@ -1498,10 +2148,12 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       addNode,
+      draftDecisionService,
       finalizeGestureAndSave,
       props.editorRef,
       reloadDocument,
       reloadAuthoritativeDocument,
+      resourceRefreshController,
       startSave,
       waitForStableLoad,
     ],
@@ -1524,6 +2176,30 @@ function CanvasEditorContent(
   const quickConnect = useCallback(
     (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
       if (readOnly) return
+      if (nodeType === "text") {
+        const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
+        if (!anchor) return
+        const anchorSize = getCanvasNodeSize(anchor)
+        const parentPosition = anchor.parentId
+          ? getNodeWorldPosition(documentRef.current, anchor.parentId)
+          : { x: 0, y: 0 }
+        const anchorWorld = {
+          x: anchor.position.x + parentPosition.x,
+          y: anchor.position.y + parentPosition.y,
+        }
+        addTextResource(
+          targetPosition ?? {
+            x: side === "right" ? anchorWorld.x + anchorSize.width + 160 : anchorWorld.x - 480,
+            y: anchorWorld.y,
+          },
+          {
+            anchorNodeIds: [nodeId],
+            direction: side === "right" ? "from-anchor" : "to-anchor",
+            mode: "connect",
+          },
+        )
+        return
+      }
       const created = createNodeForType(nodeType, targetPosition ?? { x: 0, y: 0 })
       if (!created) return
       commit((document) => {
@@ -1574,7 +2250,7 @@ function CanvasEditorContent(
       selectNodes([created.id])
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
-    [commit, createNodeForType, readOnly, selectNodes, telemetryService],
+    [addTextResource, commit, createNodeForType, readOnly, selectNodes, telemetryService],
   )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
@@ -1753,100 +2429,11 @@ function CanvasEditorContent(
       position?: CanvasPoint,
       transfer?: { data: Readonly<Record<string, string>>; types: readonly string[] },
     ) => {
-      if (!uploadService || (files.length === 0 && !transfer) || readOnly) return
-      const controller = new AbortController()
-      operationControllersRef.current.add(controller)
-      const documentId = documentRef.current.id
+      if (!mutationService || (files.length === 0 && !transfer) || readOnly) return
       const anchor = position ?? pointerRef.current ?? pointAtCenter()
-      void uploadService
-        .upload({
-          files,
-          position,
-          transfer,
-          context: { documentId, selectedNodeIds, source: "canvas" },
-          signal: controller.signal,
-        })
-        .then(
-          (items) => {
-            if (controller.signal.aborted || documentRef.current.id !== documentId) return
-            if (items.length === 0) {
-              notificationService?.show({ kind: "warning", title: "No supported files to add" })
-              return
-            }
-            const command = createAddCanvasResourcesCommand({ anchor, items })
-            const nodeIds = command.items.map((item) => item.nodeId)
-            dispatch({
-              type: "commit-update",
-              update: (document) => applyCanvasBusinessCommand(document, command).document,
-            })
-            selectNodes(nodeIds)
-            notificationService?.show({
-              kind: "success",
-              title: `${items.length} item${items.length === 1 ? "" : "s"} added`,
-            })
-          },
-          (error) => {
-            if (!controller.signal.aborted) notifyError("Upload failed", error)
-          },
-        )
-        .finally(() => operationControllersRef.current.delete(controller))
+      runResourceMutation({ anchor, files, sources: [], transfer })
     },
-    [dispatch, notificationService, notifyError, pointAtCenter, readOnly, selectedNodeIds, selectNodes, uploadService],
-  )
-  const replaceNodeMedia = useCallback(
-    (nodeId: string, file: File) => {
-      if (!uploadService || readOnly) return
-      const sourceNode = documentRef.current.nodes.find((node) => node.id === nodeId)
-      if (!sourceNode || !["image", "video", "audio", "file"].includes(sourceNode.data.kind)) return
-      const expectedKind = sourceNode.data.kind
-      const documentId = documentRef.current.id
-      const operationController = new AbortController()
-      operationControllersRef.current.add(operationController)
-      void uploadService
-        .upload({
-          files: [file],
-          context: { documentId, selectedNodeIds: [nodeId], source: "node" },
-          signal: operationController.signal,
-        })
-        .then(
-          (items) => {
-            if (operationController.signal.aborted || documentRef.current.id !== documentId) return
-            const resource = items.find((item) => item.kind !== "text" && item.kind === expectedKind)
-            if (!resource || resource.kind === "text" || resource.kind === "folder") {
-              notificationService?.show({
-                kind: "warning",
-                title: `Choose a ${expectedKind} file`,
-                description: "The selected file did not match this node type.",
-              })
-              return
-            }
-            commit((document) => {
-              const current = document.nodes.find((node) => node.id === nodeId)
-              if (!current) return document
-              const replacement = createMediaNode({ position: current.position, resource })
-              return {
-                ...document,
-                nodes: document.nodes.map((node) =>
-                  node.id === nodeId
-                    ? {
-                        ...node,
-                        data: replacement.data,
-                        type: replacement.type,
-                      }
-                    : node,
-                ),
-              }
-            })
-            selectNodes([nodeId])
-            notificationService?.show({ kind: "success", title: `${resource.name ?? resource.kind} replaced` })
-          },
-          (error) => {
-            if (!operationController.signal.aborted) notifyError("Could not replace media", error)
-          },
-        )
-        .finally(() => operationControllersRef.current.delete(operationController))
-    },
-    [commit, notificationService, notifyError, readOnly, selectNodes, uploadService],
+    [mutationService, pointAtCenter, readOnly, runResourceMutation],
   )
   const runGenerate = useCallback(() => {
     if (!generateService || readOnly) return
@@ -1993,7 +2580,7 @@ function CanvasEditorContent(
       selection,
       selectionContext,
       readOnly,
-      canUpload: Boolean(uploadService),
+      canUpload: Boolean(mutationService),
       fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
       visibleSelectionActions,
@@ -2013,8 +2600,16 @@ function CanvasEditorContent(
       setSelectionDragCandidateNode,
       startSelectionDrag,
       quickConnect,
+      relinkResource: requestResourceRelink,
+      relinkSelectedResource: requestSelectedResourceRelink,
+      replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) =>
+        dispatch({
+          type: "replace-update",
+          update: (document) => replaceCanvasNodeResourceState(document, nodeId, state),
+        }),
+      registerPendingDraft: (draft: CanvasPendingDraft) => pendingDraftsRef.current.register(draft),
       removeNode,
-      replaceNodeMedia,
+      saveEditableCopy,
       selectNodes,
     }),
     [
@@ -2029,8 +2624,10 @@ function CanvasEditorContent(
       quickConnect,
       readOnly,
       finishSelectionDrag,
+      requestResourceRelink,
+      requestSelectedResourceRelink,
       removeNode,
-      replaceNodeMedia,
+      saveEditableCopy,
       selectNodes,
       selection,
       selectionActionStateVersion,
@@ -2042,7 +2639,7 @@ function CanvasEditorContent(
       selectionContext,
       startSelectionDrag,
       setSelectionDragCandidateNode,
-      uploadService,
+      mutationService,
       visibleSelectionActions,
       visibleSelectionDragSource,
     ],
@@ -2219,12 +2816,12 @@ function CanvasEditorContent(
               )}
               onCopy={onCanvasCopy}
               onDragOver={(event) => {
-                if (!uploadService || readOnly) return
+                if (!mutationService || readOnly) return
                 event.preventDefault()
                 event.dataTransfer.dropEffect = "copy"
               }}
               onDrop={(event) => {
-                if (!uploadService || readOnly) return
+                if (!mutationService || readOnly) return
                 event.preventDefault()
                 const types = Array.from(event.dataTransfer.types)
                 uploadFiles(
@@ -2371,15 +2968,15 @@ function CanvasEditorContent(
 
               <CanvasHeader
                 canExport={Boolean(exportService)}
+                canGenerate={Boolean(generateService)}
                 canRedo={history.future.length > 0}
                 canUndo={history.past.length > 0}
-                canUpload={Boolean(uploadService)}
+                canUpload={Boolean(mutationService)}
                 document={history.document}
-                onAddAudio={() => addNode("audio")}
-                onAddImage={() => addNode("image")}
+                generating={generating}
                 onAddText={() => addNode("text")}
-                onAddVideo={() => addNode("video")}
                 onExport={exportCanvas}
+                onGenerate={() => setGenerateOpen(true)}
                 onSelectionDragModeChange={(active) => {
                   if (active) enterSelectionDragMode()
                   else exitSelectionDragMode()
@@ -2724,9 +3321,34 @@ function CanvasEditorContent(
               <input
                 ref={uploadInputRef}
                 className="hidden"
+                data-canvas-resource-picker="upload"
                 multiple
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                  uploadFiles([...(event.currentTarget.files ?? [])])
+                  const files = [...(event.currentTarget.files ?? [])]
+                  handleCanvasResourceUploadSelection(files, uploadFiles)
+                  event.currentTarget.value = ""
+                }}
+                type="file"
+              />
+              <input
+                ref={relinkInputRef}
+                className="hidden"
+                data-canvas-resource-picker="relink"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  const relinkNodeId = relinkNodeIdRef.current
+                  relinkNodeIdRef.current = null
+                  handleCanvasResourceRelinkSelection(
+                    relinkNodeId,
+                    [...(event.currentTarget.files ?? [])],
+                    (nodeId, file) => {
+                      if (!mutationService?.relink) return
+                      void runResourceRelink(
+                        ({ expectedRevision, signal }) =>
+                          mutationService.relink!({ expectedRevision, file, nodeId, signal }),
+                        "Resource relinked",
+                      )
+                    },
+                  )
                   event.currentTarget.value = ""
                 }}
                 type="file"
@@ -2740,7 +3362,7 @@ function CanvasEditorContent(
             canRedo={history.future.length > 0}
             canUngroup={hasSingleGroupSelection}
             canUndo={history.past.length > 0}
-            canUpload={Boolean(uploadService)}
+            canUpload={Boolean(mutationService)}
             createItems={connectionNodeTypes}
             hasNodeSelection={hasNodeOnlySelection}
             hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
@@ -2830,15 +3452,15 @@ function FloatingPanel(props: { children: ReactNode; className?: string }) {
 
 function CanvasHeader(props: {
   canExport: boolean
+  canGenerate: boolean
   canRedo: boolean
   canUndo: boolean
   canUpload: boolean
   document: CanvasDocument
-  onAddAudio: () => void
-  onAddImage: () => void
+  generating: boolean
   onAddText: () => void
-  onAddVideo: () => void
   onExport: () => void
+  onGenerate: () => void
   onRedo: () => void
   onSearch: () => void
   onSelect: () => void
@@ -2883,11 +3505,17 @@ function CanvasHeader(props: {
         ) : null}
         <span className="mx-1 h-5 w-px bg-border" />
         <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
-        <IconButton disabled={props.readOnly} icon={<ImagePlus />} label="Image" onClick={props.onAddImage} />
-        <IconButton disabled={props.readOnly} icon={<Video />} label="Video" onClick={props.onAddVideo} />
-        <IconButton disabled={props.readOnly} icon={<Music2 />} label="Audio" onClick={props.onAddAudio} />
         {props.canUpload ? (
           <IconButton disabled={props.readOnly} icon={<FileUp />} label="Upload" onClick={props.onUpload} />
+        ) : null}
+        {props.canGenerate ? (
+          <IconButton
+            disabled={props.readOnly || props.generating}
+            icon={props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+            label="Generate"
+            onClick={props.onGenerate}
+            shortcut="⌘↵"
+          />
         ) : null}
       </ToolSurface>
       <ToolSurface className="right-4 top-4 gap-0.5 max-[820px]:top-16">

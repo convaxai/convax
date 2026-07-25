@@ -33,6 +33,7 @@ export class ProjectFilesController {
   private snapshot = initialSnapshot
   private readonly listeners = new Set<() => void>()
   private readonly directoryRequests = new Map<string, number>()
+  private nextDirectoryRequestId = 0
   private generation = 0
   private changeTimer: ReturnType<typeof setTimeout> | undefined
   private pendingDirectoryRefresh = false
@@ -93,16 +94,24 @@ export class ProjectFilesController {
     if (expectedGeneration !== this.generation) return
     const projectId = this.snapshot.projectId
     if (!projectId) return
-    const requestId = (this.directoryRequests.get(path) ?? 0) + 1
+    const requestId = ++this.nextDirectoryRequestId
     this.directoryRequests.set(path, requestId)
     this.update({ loadingPaths: addUnique(this.snapshot.loadingPaths, path) })
     try {
       const listing = await this.client.listDirectory({ path, projectId })
       if (!this.isCurrentDirectoryRequest(projectId, path, requestId, expectedGeneration)) return
+      const previousListing = this.snapshot.listings[path]
+      const nextDirectories = new Set(
+        listing.entries.filter((entry) => entry.kind === "directory").map((entry) => entry.path),
+      )
+      const vanishedDirectories = (previousListing?.entries ?? [])
+        .filter((entry) => entry.kind === "directory" && !nextDirectories.has(entry.path))
+        .map((entry) => entry.path)
       this.update({
         error: null,
         listings: { ...this.snapshot.listings, [path]: listing },
       })
+      if (vanishedDirectories.length > 0) this.pruneSubtrees(vanishedDirectories)
     } catch (error) {
       if (this.isCurrentDirectoryRequest(projectId, path, requestId, expectedGeneration)) {
         this.update({ error: errorMessage(error) })
@@ -302,6 +311,9 @@ export class ProjectFilesController {
 
   private pruneSubtrees(paths: string[]) {
     const isPruned = (candidate: string) => paths.some((path) => candidate === path || candidate.startsWith(`${path}/`))
+    for (const path of this.directoryRequests.keys()) {
+      if (isPruned(path)) this.directoryRequests.delete(path)
+    }
     this.update({
       expandedPaths: this.snapshot.expandedPaths.filter((path) => !isPruned(path)),
       listings: Object.fromEntries(Object.entries(this.snapshot.listings).filter(([path]) => !isPruned(path))),

@@ -16,6 +16,7 @@ import {
   Download,
   Bot,
   File,
+  FileUp,
   Folder,
   Heading1,
   Heading2,
@@ -27,15 +28,17 @@ import {
   Maximize2,
   Music2,
   Pause,
+  Pencil,
   Pilcrow,
   Play,
   Plus,
   Quote,
+  RefreshCw,
+  Save,
   Scan,
   Strikethrough,
   Trash2,
   Type,
-  Upload,
   Video as VideoIcon,
   Volume2,
   VolumeX,
@@ -64,22 +67,25 @@ import {
   getIncomingConnectedCanvasFileNodeIds,
 } from "../connections"
 import { useCanvasEditor } from "../editor-context"
+import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
 import type { CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import {
   CanvasFileGenerationActivityOwner,
+  CanvasTextResourceConflictError,
   useCanvasService,
   type CanvasAssistantGenerationActivity,
   type CanvasFileGenerationActivity,
+  type CanvasTextResourceService,
 } from "../services"
 import type {
   CanvasFolderNodeData,
   CanvasMediaKind,
   CanvasMediaNodeData,
   CanvasNode,
-  CanvasRichTextContent,
+  CanvasResourceRuntimeState,
   CanvasTextNodeData,
 } from "../types"
 import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
@@ -326,15 +332,125 @@ function textEditorSource(data: CanvasTextNodeData): {
   content: JSONContent | string
   contentType: "json" | "markdown"
 } {
-  if (data.richText?.type === "doc") {
-    return { content: data.richText as JSONContent, contentType: "json" }
-  }
-  if (data.format === "markdown") return { content: data.text, contentType: "markdown" }
-  return { content: plainTextDocument(data.text), contentType: "json" }
+  const text = data.resourceState?.text ?? ""
+  if (textFileFormat(data) === "markdown") return { content: text, contentType: "markdown" }
+  return { content: plainTextDocument(text), contentType: "json" }
 }
 
 function textDataFingerprint(data: CanvasTextNodeData) {
-  return `${data.format ?? "plain"}\u0000${data.text}\u0000${JSON.stringify(data.richText ?? null)}`
+  return `${textFileFormat(data)}\u0000${data.resourceState?.contentRevision ?? ""}\u0000${data.resourceState?.text ?? ""}`
+}
+
+function textFileFormat(data: CanvasTextNodeData) {
+  return getCanvasTextFileFormat({ mimeType: data.mimeType, name: data.name ?? "" }) ?? "plain"
+}
+
+function textEditorValue(data: CanvasTextNodeData, editor: Editor) {
+  return textFileFormat(data) === "markdown" ? editor.getMarkdown() : editor.getText({ blockSeparator: "\n" })
+}
+
+export interface CanvasTextDraftState {
+  baseContent: string
+  baseRevision: string
+  content: string
+  dirty: boolean
+  error: string | null
+}
+
+export function createCanvasTextDraftState(input: { contentRevision?: string; text?: string }): CanvasTextDraftState {
+  const content = input.text ?? ""
+  return {
+    baseContent: content,
+    baseRevision: input.contentRevision ?? "",
+    content,
+    dirty: false,
+    error: null,
+  }
+}
+
+export function updateCanvasTextDraft(state: CanvasTextDraftState, content: string): CanvasTextDraftState {
+  return { ...state, content, dirty: content !== state.baseContent, error: null }
+}
+
+export function applyCanvasTextDraftBase(
+  state: CanvasTextDraftState,
+  input: { contentRevision?: string; text?: string },
+): CanvasTextDraftState {
+  return state.dirty ? state : createCanvasTextDraftState(input)
+}
+
+export function failCanvasTextDraftSave(state: CanvasTextDraftState, error: string): CanvasTextDraftState {
+  return { ...state, dirty: true, error }
+}
+
+export function completeCanvasTextDraftSave(
+  state: CanvasTextDraftState,
+  contentRevision: string,
+): CanvasTextDraftState {
+  return {
+    baseContent: state.content,
+    baseRevision: contentRevision,
+    content: state.content,
+    dirty: false,
+    error: null,
+  }
+}
+
+export async function saveCanvasTextDraft(
+  state: CanvasTextDraftState,
+  nodeId: string,
+  service: CanvasTextResourceService,
+  signal: AbortSignal,
+) {
+  if (!state.dirty) return state
+  if (!state.baseRevision) throw new Error("Canvas text resource revision is required")
+  const result = await service.save({ content: state.content, contentRevision: state.baseRevision, nodeId }, signal)
+  return completeCanvasTextDraftSave(state, result.contentRevision)
+}
+
+export function discardCanvasTextDraft(state: CanvasTextDraftState): CanvasTextDraftState {
+  return {
+    baseContent: state.baseContent,
+    baseRevision: state.baseRevision,
+    content: state.baseContent,
+    dirty: false,
+    error: null,
+  }
+}
+
+export function isCanvasTextResourceEditable(state: CanvasResourceRuntimeState | undefined) {
+  return state?.status === "ready" && state.editableText === true && Boolean(state.contentRevision)
+}
+
+export interface CanvasTextDraftSaveQueue {
+  inFlight(): Promise<void> | null
+  run(operation: () => Promise<void>): Promise<void>
+}
+
+export function createCanvasTextDraftSaveQueue(): CanvasTextDraftSaveQueue {
+  let pending: Promise<void> | null = null
+  return {
+    inFlight: () => pending,
+    run(operation) {
+      if (pending) return pending
+      let current: Promise<void>
+      try {
+        current = operation()
+      } catch (error) {
+        current = Promise.reject(error)
+      }
+      pending = current
+      void current.then(
+        () => {
+          if (pending === current) pending = null
+        },
+        () => {
+          if (pending === current) pending = null
+        },
+      )
+      return current
+    },
+  }
 }
 
 function createTextEditorExtensions() {
@@ -413,19 +529,25 @@ export function ExpandedTextEditorDialog(props: {
 
 export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const canvasEditor = useCanvasEditor()
+  const textResources = useCanvasService("textResources")
   const ownsSingleNodeContext = isSingleNodeSelectionContext(canvasEditor.selectionContext, props.id)
   const data = props.data as CanvasTextNodeData
   const dataRef = useRef(data)
-  const canvasEditorRef = useRef(canvasEditor)
-  const nodeIdRef = useRef(props.id)
   const appliedFingerprintRef = useRef(textDataFingerprint(data))
-  const initialDataRef = useRef(data)
   const initialSourceRef = useRef(textEditorSource(data))
   const [editing, setEditing] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [savingEditableCopy, setSavingEditableCopy] = useState(false)
+  const [draft, setDraft] = useState(() => createCanvasTextDraftState(data.resourceState ?? {}))
+  const draftRef = useRef(draft)
+  const mountedRef = useRef(true)
+  const saveControllerRef = useRef<AbortController | null>(null)
+  const saveGenerationRef = useRef(0)
+  const saveQueueRef = useRef(createCanvasTextDraftSaveQueue())
   dataRef.current = data
-  canvasEditorRef.current = canvasEditor
-  nodeIdRef.current = props.id
+  draftRef.current = draft
+  const editableResource = isCanvasTextResourceEditable(data.resourceState)
 
   const textEditor = useEditor({
     content: initialSourceRef.current.content,
@@ -440,18 +562,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     extensions: createTextEditorExtensions(),
     shouldRerenderOnTransaction: true,
     onUpdate: ({ editor }) => {
-      const current = dataRef.current
-      const nextData: CanvasTextNodeData = {
-        ...current,
-        format: "markdown",
-        richText: editor.getJSON() as CanvasRichTextContent,
-        text: editor.getMarkdown(),
-      }
-      const nextFingerprint = textDataFingerprint(nextData)
-      if (nextFingerprint === appliedFingerprintRef.current) return
-      dataRef.current = nextData
-      appliedFingerprintRef.current = nextFingerprint
-      canvasEditorRef.current.commit((document) => updateCanvasNodeData(document, nodeIdRef.current, () => nextData))
+      const next = updateCanvasTextDraft(draftRef.current, textEditorValue(dataRef.current, editor))
+      draftRef.current = next
+      setDraft(next)
     },
   })
 
@@ -459,25 +572,37 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     if (!textEditor) return
     const nextFingerprint = textDataFingerprint(data)
     if (nextFingerprint === appliedFingerprintRef.current) return
+    const nextDraft = applyCanvasTextDraftBase(draftRef.current, data.resourceState ?? {})
+    if (nextDraft === draftRef.current) return
     appliedFingerprintRef.current = nextFingerprint
+    draftRef.current = nextDraft
+    setDraft(nextDraft)
     const source = textEditorSource(data)
     textEditor.commands.setContent(source.content, {
       contentType: source.contentType,
       emitUpdate: false,
     })
-  }, [data, textEditor])
+  }, [data, draft.dirty, textEditor])
 
   useEffect(() => {
-    textEditor?.setEditable(editing && !canvasEditor.readOnly)
-  }, [canvasEditor.readOnly, editing, textEditor])
+    textEditor?.setEditable(editing && editableResource && !canvasEditor.readOnly && !saving)
+  }, [canvasEditor.readOnly, editableResource, editing, saving, textEditor])
 
   useEffect(() => {
-    if (!editing || (ownsSingleNodeContext && !canvasEditor.readOnly)) return
+    if (!editing || (ownsSingleNodeContext && !canvasEditor.readOnly && editableResource)) return
     textEditor?.setEditable(false)
     setEditing(false)
     setExpanded(false)
-    canvasEditor.endGesture()
-  }, [canvasEditor, editing, ownsSingleNodeContext, textEditor])
+  }, [canvasEditor.readOnly, editableResource, editing, ownsSingleNodeContext, textEditor])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      saveGenerationRef.current += 1
+      saveControllerRef.current?.abort()
+    }
+  }, [])
 
   useEffect(() => {
     if (!expanded || !textEditor) return
@@ -486,25 +611,14 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   }, [expanded, textEditor])
 
   const beginEditing = (position: "start" | "end" = "end") => {
-    if (!textEditor || canvasEditor.readOnly) return
-    if (!editing) {
-      initialDataRef.current = dataRef.current
-      canvasEditor.beginGesture()
-      setEditing(true)
-    }
+    if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+    if (!editing) setEditing(true)
     textEditor.setEditable(true)
     textEditor.commands.focus(position)
   }
 
-  const finishEditing = () => {
-    if (!editing) return
-    textEditor?.setEditable(false)
-    setEditing(false)
-    canvasEditor.endGesture()
-  }
-
   const openExpandedEditor = () => {
-    if (!textEditor || canvasEditor.readOnly) return
+    if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
     if (editing) textEditor.setEditable(true)
     else beginEditing("start")
     setExpanded(true)
@@ -512,15 +626,20 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   const closeExpandedEditor = () => {
     setExpanded(false)
-    finishEditing()
+    textEditor?.setEditable(false)
+    setEditing(false)
   }
 
-  const cancelEditing = () => {
-    if (!textEditor || !editing) return
-    const initial = initialDataRef.current
-    dataRef.current = initial
-    appliedFingerprintRef.current = textDataFingerprint(initial)
-    const source = textEditorSource(initial)
+  const discardDraft = useCallback(() => {
+    if (!textEditor) return
+    const next = discardCanvasTextDraft(draftRef.current)
+    draftRef.current = next
+    setDraft(next)
+    const baseData: CanvasTextNodeData = {
+      ...dataRef.current,
+      resourceState: { ...(dataRef.current.resourceState ?? { status: "ready" }), text: next.content },
+    }
+    const source = textEditorSource(baseData)
     textEditor.commands.setContent(source.content, {
       contentType: source.contentType,
       emitUpdate: false,
@@ -528,193 +647,334 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     textEditor.setEditable(false)
     setEditing(false)
     setExpanded(false)
-    canvasEditor.cancelGesture()
-  }
+  }, [textEditor])
+
+  const saveDraft = useCallback(
+    () =>
+      saveQueueRef.current.run(async () => {
+        const current = draftRef.current
+        if (!current.dirty) {
+          textEditor?.setEditable(false)
+          setEditing(false)
+          return
+        }
+        if (!textResources || !current.baseRevision) throw new Error("Canvas text resource cannot be saved")
+        const controller = new AbortController()
+        const generation = ++saveGenerationRef.current
+        saveControllerRef.current = controller
+        setSaving(true)
+        textEditor?.setEditable(false)
+        try {
+          const next = await saveCanvasTextDraft(current, props.id, textResources, controller.signal)
+          if (!mountedRef.current || controller.signal.aborted || generation !== saveGenerationRef.current) return
+          draftRef.current = next
+          setDraft(next)
+          const resourceState = {
+            ...(dataRef.current.resourceState ?? { status: "ready" as const }),
+            contentRevision: next.baseRevision,
+            text: next.baseContent,
+          }
+          const nextData = { ...dataRef.current, resourceState }
+          dataRef.current = nextData
+          appliedFingerprintRef.current = textDataFingerprint(nextData)
+          canvasEditor.replaceResourceState(props.id, resourceState)
+          setEditing(false)
+        } catch (error) {
+          if (!mountedRef.current || controller.signal.aborted || generation !== saveGenerationRef.current) throw error
+          const message =
+            error instanceof CanvasTextResourceConflictError
+              ? "This file changed outside Convax. Your draft was kept."
+              : "Could not save this text file. Your draft was kept."
+          const next = failCanvasTextDraftSave(draftRef.current, message)
+          draftRef.current = next
+          setDraft(next)
+          if (editing) textEditor?.setEditable(true)
+          throw error
+        } finally {
+          if (mountedRef.current && generation === saveGenerationRef.current) {
+            saveControllerRef.current = null
+            setSaving(false)
+          }
+        }
+      }),
+    [canvasEditor, editing, props.id, textEditor, textResources],
+  )
+
+  useEffect(() => {
+    if (!draft.dirty) return undefined
+    return canvasEditor.registerPendingDraft({
+      discard: discardDraft,
+      inFlightSave: () => saveQueueRef.current.inFlight(),
+      isDirty: () => draftRef.current.dirty,
+      save: saveDraft,
+    })
+  }, [canvasEditor, discardDraft, draft.dirty, saveDraft])
 
   const runTextCommand = (command: (editor: Editor) => void) => {
-    if (!textEditor) return
+    if (!textEditor || !editableResource || saving) return
     beginEditing()
     command(textEditor)
   }
 
-  const formattingToolbar = textEditor ? (
-    <>
-      <div className="convax-node-toolbar__segment" role="group" aria-label="Text style">
+  const resourceActionToolbar =
+    data.resourceState?.status === "missing" ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
         <ToolbarButton
-          icon={<Pilcrow />}
-          label="Paragraph"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().setParagraph().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("paragraph")}
+          icon={<RefreshCw />}
+          label="Relink selected Project resource"
+          onClick={() => canvasEditor.relinkSelectedResource(props.id)}
         />
         <ToolbarButton
-          icon={<Heading1 />}
-          label="Heading 1"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleHeading({ level: 1 }).run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("heading", { level: 1 })}
+          icon={<FileUp />}
+          label="Relink local file"
+          onClick={() => canvasEditor.relinkResource(props.id)}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => canvasEditor.removeNode(props.id)} />
+      </div>
+    ) : data.resourceState?.status === "ready" &&
+      data.resourceState.editableText === false &&
+      data.resourceState.canSaveEditableCopy === true ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+        <ToolbarButton
+          disabled={savingEditableCopy}
+          icon={savingEditableCopy ? <LoaderCircle className="animate-spin" /> : <Save />}
+          label="Save editable copy"
+          onClick={() => {
+            setSavingEditableCopy(true)
+            void canvasEditor.saveEditableCopy(props.id).finally(() => setSavingEditableCopy(false))
+          }}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => canvasEditor.removeNode(props.id)} />
+      </div>
+    ) : null
+
+  const formattingToolbar =
+    textEditor && editableResource ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+        <ToolbarButton
+          disabled={saving}
+          icon={<Pencil />}
+          label={editing ? "Editing text" : "Edit text"}
+          onClick={() => beginEditing()}
+          pressed={editing}
         />
         <ToolbarButton
-          icon={<Heading2 />}
-          label="Heading 2"
+          disabled={!draft.dirty || saving}
+          icon={<Save />}
+          label="Save text"
+          onClick={() => void saveDraft().catch(() => undefined)}
+        />
+        <ToolbarButton
+          disabled={(!draft.dirty && !editing) || saving}
+          icon={<X />}
+          label="Cancel text"
+          onClick={discardDraft}
+        />
+        <ToolbarDivider />
+        <div className="convax-node-toolbar__segment" role="group" aria-label="Text style">
+          <ToolbarButton
+            icon={<Pilcrow />}
+            label="Paragraph"
+            onClick={() =>
+              runTextCommand((editor) => {
+                editor.chain().focus().setParagraph().run()
+              })
+            }
+            preserveFocus
+            pressed={textEditor.isActive("paragraph")}
+          />
+          <ToolbarButton
+            icon={<Heading1 />}
+            label="Heading 1"
+            onClick={() =>
+              runTextCommand((editor) => {
+                editor.chain().focus().toggleHeading({ level: 1 }).run()
+              })
+            }
+            preserveFocus
+            pressed={textEditor.isActive("heading", { level: 1 })}
+          />
+          <ToolbarButton
+            icon={<Heading2 />}
+            label="Heading 2"
+            onClick={() =>
+              runTextCommand((editor) => {
+                editor.chain().focus().toggleHeading({ level: 2 }).run()
+              })
+            }
+            preserveFocus
+            pressed={textEditor.isActive("heading", { level: 2 })}
+          />
+        </div>
+        <ToolbarDivider />
+        <ToolbarButton
+          icon={<Bold />}
+          label="Bold"
           onClick={() =>
             runTextCommand((editor) => {
-              editor.chain().focus().toggleHeading({ level: 2 }).run()
+              editor.chain().focus().toggleBold().run()
             })
           }
           preserveFocus
-          pressed={textEditor.isActive("heading", { level: 2 })}
+          pressed={textEditor.isActive("bold")}
+        />
+        <ToolbarButton
+          icon={<Italic />}
+          label="Italic"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleItalic().run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive("italic")}
+        />
+        <ToolbarButton
+          icon={<Strikethrough />}
+          label="Strikethrough"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleStrike().run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive("strike")}
+        />
+        <ToolbarDivider />
+        <ToolbarButton
+          icon={<List />}
+          label="Bullet list"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleBulletList().run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive("bulletList")}
+        />
+        <ToolbarButton
+          icon={<ListOrdered />}
+          label="Numbered list"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleOrderedList().run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive("orderedList")}
+        />
+        <ToolbarButton
+          icon={<Quote />}
+          label="Quote"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().toggleBlockquote().run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive("blockquote")}
+        />
+        <ToolbarDivider />
+        <ToolbarButton
+          icon={<AlignLeft />}
+          label="Align left"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().setTextAlign("left").run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive({ textAlign: "left" })}
+        />
+        <ToolbarButton
+          icon={<AlignCenter />}
+          label="Align center"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().setTextAlign("center").run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive({ textAlign: "center" })}
+        />
+        <ToolbarButton
+          icon={<AlignRight />}
+          label="Align right"
+          onClick={() =>
+            runTextCommand((editor) => {
+              editor.chain().focus().setTextAlign("right").run()
+            })
+          }
+          preserveFocus
+          pressed={textEditor.isActive({ textAlign: "right" })}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton
+          destructive
+          icon={<Trash2 />}
+          label="Delete"
+          onClick={() => {
+            discardDraft()
+            canvasEditor.removeNode(props.id)
+          }}
         />
       </div>
-      <ToolbarDivider />
-      <ToolbarButton
-        icon={<Bold />}
-        label="Bold"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleBold().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("bold")}
-      />
-      <ToolbarButton
-        icon={<Italic />}
-        label="Italic"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleItalic().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("italic")}
-      />
-      <ToolbarButton
-        icon={<Strikethrough />}
-        label="Strikethrough"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleStrike().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("strike")}
-      />
-      <ToolbarDivider />
-      <ToolbarButton
-        icon={<List />}
-        label="Bullet list"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleBulletList().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("bulletList")}
-      />
-      <ToolbarButton
-        icon={<ListOrdered />}
-        label="Numbered list"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleOrderedList().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("orderedList")}
-      />
-      <ToolbarButton
-        icon={<Quote />}
-        label="Quote"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().toggleBlockquote().run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive("blockquote")}
-      />
-      <ToolbarDivider />
-      <ToolbarButton
-        icon={<AlignLeft />}
-        label="Align left"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().setTextAlign("left").run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive({ textAlign: "left" })}
-      />
-      <ToolbarButton
-        icon={<AlignCenter />}
-        label="Align center"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().setTextAlign("center").run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive({ textAlign: "center" })}
-      />
-      <ToolbarButton
-        icon={<AlignRight />}
-        label="Align right"
-        onClick={() =>
-          runTextCommand((editor) => {
-            editor.chain().focus().setTextAlign("right").run()
-          })
-        }
-        preserveFocus
-        pressed={textEditor.isActive({ textAlign: "right" })}
-      />
-    </>
-  ) : null
+    ) : null
 
-  const textToolbar = textEditor ? (
-    <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
-      <ToolbarButton icon={<Maximize2 />} label="Expand editor" onClick={openExpandedEditor} />
-      <ToolbarDivider />
-      <ToolbarButton
-        icon={<Copy />}
-        label="Duplicate"
-        onClick={() => {
-          finishEditing()
-          canvasEditor.duplicateNode(props.id)
-        }}
-      />
-      <ToolbarButton
-        destructive
-        icon={<Trash2 />}
-        label="Delete"
-        onClick={() => {
-          finishEditing()
-          canvasEditor.removeNode(props.id)
-        }}
-      />
-    </div>
-  ) : null
+  const textToolbar =
+    textEditor && editableResource ? (
+      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+        <ToolbarButton disabled={saving} icon={<Maximize2 />} label="Expand editor" onClick={openExpandedEditor} />
+        <ToolbarButton
+          disabled={!draft.dirty || saving}
+          icon={<Save />}
+          label="Save text"
+          onClick={() => void saveDraft().catch(() => undefined)}
+        />
+        <ToolbarButton
+          disabled={(!draft.dirty && !editing) || saving}
+          icon={<X />}
+          label="Cancel text"
+          onClick={discardDraft}
+        />
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
+        <ToolbarButton
+          destructive
+          icon={<Trash2 />}
+          label="Delete"
+          onClick={() => {
+            discardDraft()
+            canvasEditor.removeNode(props.id)
+          }}
+        />
+      </div>
+    ) : (
+      resourceActionToolbar
+    )
 
   return (
     <>
       <NodeChrome icon={<Type />} label={data.label} node={props} toolbar={textToolbar}>
+        {draft.error ? (
+          <div className="px-3 py-2 text-xs text-destructive" role="alert">
+            {draft.error}
+          </div>
+        ) : null}
         {expanded ? (
           <div className="convax-text-editor__expanded-placeholder size-full overflow-hidden whitespace-pre-wrap p-4 text-sm text-muted-foreground">
-            {data.text}
+            {draft.content}
           </div>
         ) : (
           <EditorContent
             className={cn("convax-text-editor size-full overflow-auto", editing && "nodrag nowheel is-editing")}
             data-canvas-shortcuts={editing ? "ignore" : undefined}
-            data-text-format={data.format ?? "plain"}
+            data-text-format={textFileFormat(data)}
             editor={textEditor}
             onDoubleClick={(event) => {
               event.stopPropagation()
@@ -724,7 +984,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
               if (event.key !== "Escape") return
               event.preventDefault()
               event.stopPropagation()
-              cancelEditing()
+              discardDraft()
             }}
           />
         )}
@@ -759,7 +1019,7 @@ function VideoBody(props: {
     setPlaying(false)
     setMuted(true)
     return () => videoRef.current?.pause()
-  }, [props.data.url])
+  }, [props.data.resourceState?.url])
 
   const requestPlayback = (intent: "hover" | "manual", forceMuted = false) => {
     const video = videoRef.current
@@ -808,9 +1068,9 @@ function VideoBody(props: {
         onPause={() => setPlaying(false)}
         onPlay={() => setPlaying(true)}
         playsInline
-        poster={props.data.posterUrl}
+        poster={props.data.resourceState?.posterUrl}
         preload="metadata"
-        src={props.data.url}
+        src={props.data.resourceState?.url}
       />
       <div className={cn("convax-video__controls", (hovered || playing || props.selected) && "is-visible")}>
         <button
@@ -865,21 +1125,14 @@ function mediaLabel(kind: CanvasMediaKind) {
   return "file"
 }
 
-function mediaAccept(kind: CanvasMediaKind) {
-  if (kind === "image") return "image/*"
-  if (kind === "video") return "video/*"
-  if (kind === "audio") return "audio/*"
-  return undefined
-}
-
 function EmptyMedia(props: { kind: CanvasMediaKind }) {
   const label = mediaLabel(props.kind)
   return (
     <div className="convax-media-empty size-full">
-      <div className="convax-media-empty__content" aria-hidden="true">
+      <div className="convax-media-empty__action nodrag nowheel">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">Empty {label}</span>
-        <span className="convax-media-empty__hint">Use the toolbar to add content</span>
+        <span className="convax-media-empty__title">{label} unavailable</span>
+        <span className="convax-media-empty__hint">Relink a selected Project resource or choose a local file</span>
       </div>
     </div>
   )
@@ -891,7 +1144,8 @@ function MediaBody(props: {
   selected: boolean
 }) {
   const fit = props.data.fit ?? "contain"
-  if (!props.data.url.trim()) {
+  const url = props.data.resourceState?.url ?? ""
+  if (!url.trim()) {
     return <EmptyMedia kind={props.data.kind} />
   }
   if (props.data.kind === "image") {
@@ -908,7 +1162,7 @@ function MediaBody(props: {
             width: event.currentTarget.naturalWidth,
           })
         }}
-        src={props.data.url}
+        src={url}
       />
     )
   }
@@ -919,7 +1173,7 @@ function MediaBody(props: {
     return (
       <div className="flex size-full flex-col items-center justify-center gap-4 p-5">
         <Music2 className="size-8 text-muted-foreground" />
-        <audio className="nodrag nowheel w-full" controls preload="metadata" src={props.data.url} />
+        <audio className="nodrag nowheel w-full" controls preload="metadata" src={url} />
       </div>
     )
   }
@@ -932,9 +1186,10 @@ function MediaBody(props: {
 }
 
 function downloadMedia(data: CanvasMediaNodeData) {
-  if (!data.url) return
+  const url = data.resourceState?.url
+  if (!url) return
   const anchor = document.createElement("a")
-  anchor.href = data.url
+  anchor.href = url
   anchor.download = data.name ?? data.label
   anchor.rel = "noopener"
   anchor.click()
@@ -943,24 +1198,24 @@ function downloadMedia(data: CanvasMediaNodeData) {
 export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const data = props.data as CanvasMediaNodeData
-  const mediaSourceUrl = data.url
-  const inputRef = useRef<HTMLInputElement>(null)
-  const chooseFile = () => {
-    editor.selectNodes([props.id])
-    inputRef.current?.click()
-  }
+  const url = data.resourceState?.url
   const supportsFit = data.kind === "image" || data.kind === "video"
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
-      <ToolbarButton
-        disabled={!editor.canUpload}
-        icon={<Upload />}
-        label={data.url ? `Replace ${mediaLabel(data.kind)}` : `Add ${mediaLabel(data.kind)}`}
-        onClick={chooseFile}
-      />
+      {data.resourceState?.status === "missing" ? (
+        <>
+          <ToolbarButton
+            icon={<RefreshCw />}
+            label="Relink selected Project resource"
+            onClick={() => editor.relinkSelectedResource(props.id)}
+          />
+          <ToolbarButton icon={<FileUp />} label="Relink local file" onClick={() => editor.relinkResource(props.id)} />
+          <ToolbarDivider />
+        </>
+      ) : null}
       {supportsFit ? (
         <ToolbarButton
-          disabled={!data.url}
+          disabled={!url}
           icon={<Scan />}
           label={data.fit === "cover" ? "Fit inside frame" : "Fill frame"}
           onClick={() =>
@@ -975,7 +1230,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
         />
       ) : null}
       <ToolbarButton
-        disabled={!data.url}
+        disabled={!url}
         icon={<Download />}
         label={`Download ${mediaLabel(data.kind)}`}
         onClick={() => downloadMedia(data)}
@@ -1002,24 +1257,13 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
                   fitCanvasMediaNodeToIntrinsicSize(document, {
                     ...size,
                     nodeId: props.id,
-                    sourceUrl: mediaSourceUrl,
+                    sourceUrl: url ?? "",
                   }),
                 )
               }
             : undefined
         }
         selected={props.selected}
-      />
-      <input
-        ref={inputRef}
-        accept={mediaAccept(data.kind)}
-        className="hidden"
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0]
-          if (file) editor.replaceNodeMedia(props.id, file)
-          event.currentTarget.value = ""
-        }}
-        type="file"
       />
     </NodeChrome>
   )
@@ -1057,6 +1301,16 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
   const data = props.data as CanvasFolderNodeData
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
+      {data.resourceState?.status === "missing" ? (
+        <>
+          <ToolbarButton
+            icon={<RefreshCw />}
+            label="Relink selected Project directory"
+            onClick={() => editor.relinkSelectedResource(props.id)}
+          />
+          <ToolbarDivider />
+        </>
+      ) : null}
       <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => editor.duplicateNode(props.id)} />
       <ToolbarButton destructive icon={<Trash2 />} label="Delete" onClick={() => editor.removeNode(props.id)} />
     </div>
@@ -1067,7 +1321,6 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
         <Folder className="size-10 text-primary/75" />
         <div className="max-w-full">
           <div className="truncate text-sm font-medium">{data.name ?? data.label}</div>
-          {data.path ? <div className="mt-1 truncate text-[11px] text-muted-foreground">{data.path}</div> : null}
         </div>
       </div>
     </NodeChrome>

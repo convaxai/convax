@@ -62,7 +62,13 @@ describe("Agent composer reference trees", () => {
       width: 400,
     })
     const child = {
-      ...createTextNode({ id: "child", label: "Title", position: { x: 10, y: 10 } }),
+      ...createTextNode({
+        id: "child",
+        label: "Title",
+        metadata: {},
+        position: { x: 10, y: 10 },
+        resourceState: { status: "ready" },
+      }),
       parentId: group.id,
     }
     const document = createCanvasDocument({ id: "canvas-a", nodes: [group, child] })

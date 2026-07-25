@@ -26,7 +26,7 @@ export function createRendererCanvasPersistence(options: {
         return null
       }
       if (result.document.id !== documentId) throw new Error("Loaded the wrong canvas document")
-      authoritativeDocument = structuredClone(result.document)
+      authoritativeDocument = structuredClone(options.dehydrate(result.document))
       return options.hydrate(result.document)
     },
     save(document, signal) {
@@ -45,7 +45,7 @@ export function createRendererCanvasPersistence(options: {
             expectedRevision: authoritativeDocument.revision,
             ref: options.ref,
           })
-          authoritativeDocument = structuredClone(result.document)
+          authoritativeDocument = structuredClone(options.dehydrate(result.document))
           return options.hydrate(result.document)
         })
       saveQueue = save

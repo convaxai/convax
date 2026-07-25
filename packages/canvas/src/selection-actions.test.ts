@@ -20,14 +20,14 @@ describe("Canvas selection actions", () => {
     const image = createMediaNode({
       id: "image",
       position: { x: 0, y: 0 },
-      resource: { id: "image", kind: "image", url: "asset://image" },
+      resource: { id: "image", kind: "image", metadata: {}, state: { status: "ready", url: "asset://image" } },
     })
     const video = createMediaNode({
       id: "video",
       position: { x: 20, y: 20 },
-      resource: { id: "video", kind: "video", url: "asset://video" },
+      resource: { id: "video", kind: "video", metadata: {}, state: { status: "ready", url: "asset://video" } },
     })
-    const text = createTextNode({ id: "text", position: { x: 40, y: 40 } })
+    const text = createTextNode({ id: "text", metadata: {}, position: { x: 40, y: 40 }, resourceState: { status: "ready" } })
     const document = createCanvasDocument({ nodes: [image, video, text] })
     const controller = new AbortController()
     const mediaOnly: CanvasSelectionAction = {

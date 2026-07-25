@@ -11,7 +11,6 @@ const snapshot: ProjectCanvasControllerSnapshot = {
   ],
   error: null,
   projectId: "project-1",
-  workbenchPreferenceMigration: null,
 }
 
 const controller = {

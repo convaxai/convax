@@ -64,6 +64,13 @@ export interface CanvasAddResourcesCommand {
   }
 }
 
+export interface CanvasRelinkResourceCommand {
+  type: "resources.relink"
+  item: CanvasUploadItem
+  metadataKeysToRemove?: readonly string[]
+  nodeId: string
+}
+
 /**
  * Content-only guard for a long-running replacement. Position, size, parentage,
  * selection and edges intentionally stay outside this snapshot so unrelated
@@ -126,10 +133,11 @@ export interface CanvasDocumentPatchCommand {
  */
 export type CanvasBusinessCommand =
   | CanvasAddResourcesCommand
-  | CanvasReplaceResourceCommand
   | CanvasCreatePendingResourceCommand
   | CanvasFailPendingResourceCommand
   | CanvasAutoLayoutCommand
+  | CanvasRelinkResourceCommand
+  | CanvasReplaceResourceCommand
 
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
@@ -217,12 +225,17 @@ export function createCanvasPendingResourceCommand(input: {
 }
 
 export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeContentGuard {
-  return structuredClone({ data: node.data, type: node.type })
+  return structuredClone(durableCanvasNodeContent(node))
 }
 
 /** Matches the portable content semantics used by Canvas persistence. */
 export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
+  return stableJson(durableCanvasNodeContent(node)) === stableJson(expected)
+}
+
+function durableCanvasNodeContent(node: CanvasNode): CanvasNodeContentGuard {
+  const { resourceState: _resourceState, ...data } = node.data
+  return { data, type: node.type }
 }
 
 export function createCanvasDocumentPatchCommand(
@@ -253,6 +266,19 @@ export function createCanvasDocumentPatchCommand(
         return current !== undefined && !sameJson(current, node)
       })
       .map((node) => structuredClone(node)),
+  }
+}
+
+export function createRelinkCanvasResourceCommand(input: {
+  item: CanvasUploadItem
+  metadataKeysToRemove?: readonly string[]
+  nodeId: string
+}): CanvasRelinkResourceCommand {
+  return {
+    item: input.item,
+    ...(input.metadataKeysToRemove === undefined ? {} : { metadataKeysToRemove: [...input.metadataKeysToRemove] }),
+    nodeId: input.nodeId,
+    type: "resources.relink",
   }
 }
 
@@ -328,6 +354,7 @@ export function applyCanvasApplicationCommand(
   }
   if (command.type === "resources.pending.create") return createPendingResource(document, command)
   if (command.type === "resources.pending.fail") return failPendingResource(document, command)
+  if (command.type === "resources.relink") return relinkResource(document, command)
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -406,6 +433,62 @@ export function applyCanvasApplicationCommand(
   }
   requireNodeIds(document, command.nodeIds)
   return result(document, distributeCanvasNodes(document, command.nodeIds, command.axis), [...command.nodeIds])
+}
+
+const relinkableCanvasResourceKinds = new Set(["audio", "file", "folder", "image", "text", "video"])
+
+function relinkResource(document: CanvasDocument, command: CanvasRelinkResourceCommand): CanvasBusinessCommandResult {
+  const index = document.nodes.findIndex((node) => node.id === command.nodeId)
+  if (index < 0) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.nodeId}`)
+  const node = document.nodes[index]
+  if (!relinkableCanvasResourceKinds.has(node.data.kind) || node.data.kind !== command.item.kind) {
+    throw new CanvasCommandValidationError(
+      `Canvas ${node.data.kind} node cannot be relinked to a ${command.item.kind} resource`,
+    )
+  }
+  if (!isRecord(node.data.metadata) || !isRecord(command.item.metadata) || !isRecord(command.item.state)) {
+    throw new CanvasCommandValidationError("Relinked Canvas resource is invalid")
+  }
+  const metadataKeysToRemove = requireRelinkMetadataKeys(command.metadataKeysToRemove)
+  const metadata = { ...node.data.metadata }
+  for (const key of metadataKeysToRemove) delete metadata[key]
+
+  let nextData: CanvasNode["data"] = {
+    ...node.data,
+    metadata: { ...metadata, ...command.item.metadata },
+    mimeType: command.item.kind === "folder" ? undefined : command.item.mimeType,
+    name: command.item.name,
+    resourceState: { ...command.item.state },
+  }
+  if (command.item.kind !== "folder" && command.item.kind !== "text") {
+    const { durationMs: _durationMs, height: _height, width: _width, ...dataWithoutMediaIntrinsicValues } = nextData
+    nextData = {
+      ...dataWithoutMediaIntrinsicValues,
+      ...(command.item.durationMs === undefined ? {} : { durationMs: command.item.durationMs }),
+      ...(command.item.height === undefined ? {} : { height: command.item.height }),
+      ...(command.item.width === undefined ? {} : { width: command.item.width }),
+    }
+  }
+  const nextNode: CanvasNode = {
+    ...node,
+    data: nextData,
+  }
+  const nodes = [...document.nodes]
+  nodes[index] = nextNode
+  return result(document, { ...document, nodes }, [node.id])
+}
+
+function requireRelinkMetadataKeys(value: readonly string[] | undefined) {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new CanvasCommandValidationError("Relink metadata keys must be an array")
+  const keys = new Set<string>()
+  for (const key of value) {
+    if (typeof key !== "string" || !/^[A-Za-z][A-Za-z0-9._-]{0,127}$/.test(key) || keys.has(key)) {
+      throw new CanvasCommandValidationError("Relink metadata key is invalid or duplicated")
+    }
+    keys.add(key)
+  }
+  return keys
 }
 
 export function executeCanvasApplicationCommand(
@@ -666,8 +749,9 @@ function createPendingResourceNode(command: CanvasCreatePendingResourceCommand):
     const node = createTextNode({
       id: command.nodeId,
       label: command.label,
+      metadata: {},
       position: command.placement.anchor,
-      text: "",
+      resourceState: { status: "ready", text: "" },
     })
     return { ...node, data: { ...node.data, status: "pending" } }
   }
@@ -675,7 +759,12 @@ function createPendingResourceNode(command: CanvasCreatePendingResourceCommand):
     id: command.nodeId,
     label: command.label,
     position: command.placement.anchor,
-    resource: { id: command.nodeId, kind: command.kind, url: "" },
+    resource: {
+      id: command.nodeId,
+      kind: command.kind,
+      metadata: {},
+      state: { status: "ready", url: "" },
+    },
   })
   return { ...node, data: { ...node.data, status: "pending" } }
 }
@@ -693,12 +782,13 @@ function isPendingResourceNode(node: CanvasNode) {
 function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position: CanvasPoint): CanvasNode {
   if (item.kind === "text") {
     return createTextNode({
-      format: item.format,
       id: nodeId,
       label: item.name ?? "Text",
       metadata: item.metadata,
+      mimeType: item.mimeType,
+      name: item.name,
       position,
-      text: item.text,
+      resourceState: item.state,
     })
   }
   if (item.kind === "folder") return createFolderNode({ id: nodeId, position, resource: item })
@@ -809,4 +899,8 @@ function requireSafePendingResourceErrorMessage(message: unknown): asserts messa
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(message)) {
     throw new CanvasCommandValidationError("Pending resource error message contains unsupported control characters")
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }

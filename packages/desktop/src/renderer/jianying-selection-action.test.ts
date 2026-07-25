@@ -5,7 +5,7 @@ import {
   createMediaNode,
   createTextNode,
 } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type { JianyingCanvasExportRequest, JianyingRendererClient } from "../jianying-contracts"
 
 import {
@@ -21,8 +21,8 @@ const image = createMediaNode({
   resource: {
     id: "image-resource",
     kind: "image",
-    metadata: { [projectFileReferenceKey]: { path: ".convax/assets/image.png" } },
-    url: "convax-asset://project/image.png",
+    metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "media/image.png" } },
+    state: { status: "ready", url: "convax-asset://project/image.png" },
   },
 })
 const video = createMediaNode({
@@ -31,11 +31,23 @@ const video = createMediaNode({
   resource: {
     id: "video-resource",
     kind: "video",
-    metadata: { [projectFileReferenceKey]: { path: ".convax/assets/video.mp4" } },
-    url: "convax-asset://project/video.mp4",
+    metadata: {
+      [projectResourceReferenceKey]: {
+        kind: "managed-asset",
+        mediaType: "video/mp4",
+        name: "video.mp4",
+        sha256: "a".repeat(64),
+      },
+    },
+    state: { status: "ready", url: "convax-asset://project/video.mp4" },
   },
 })
-const text = createTextNode({ id: "text", position: { x: 20, y: 0 }, text: "No" })
+const text = createTextNode({
+  id: "text",
+  metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/no.md" } },
+  position: { x: 20, y: 0 },
+  resourceState: { status: "ready", text: "No" },
+})
 
 function context(nodeIds: string[], edgeIds: string[] = []) {
   const base = createCanvasDocument({ id: "canvas", title: "Canvas" })
@@ -55,11 +67,11 @@ describe("canExportSelectionToJianying", () => {
     expect(canExportSelectionToJianying(context(["image", "video"], ["edge"]))).toBe(false)
   })
 
-  test("does not offer a guaranteed-to-fail export for remote-only or forged private media", () => {
-    const remote = createMediaNode({
-      id: "remote",
+  test("does not offer a guaranteed-to-fail export for unbacked, directory, or forged private media", () => {
+    const unbacked = createMediaNode({
+      id: "unbacked",
       position: { x: 0, y: 0 },
-      resource: { id: "remote-resource", kind: "image", url: "https://example.com/image.png" },
+      resource: { id: "unbacked-resource", kind: "image", metadata: {}, state: { status: "stale" } },
     })
     const privateMedia = createMediaNode({
       id: "private",
@@ -67,14 +79,24 @@ describe("canExportSelectionToJianying", () => {
       resource: {
         id: "private-resource",
         kind: "video",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/project.json" } },
-        url: "",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: ".convax/project.json" } },
+        state: { status: "stale" },
+      },
+    })
+    const directory = createMediaNode({
+      id: "directory",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "directory-resource",
+        kind: "image",
+        metadata: { [projectResourceReferenceKey]: { kind: "project-directory", path: "media" } },
+        state: { status: "stale" },
       },
     })
     const base = createCanvasDocument({ id: "canvas", title: "Canvas" })
     const selection = createCanvasSelectionActionContext(
-      { ...base, nodes: [remote, privateMedia] },
-      ["remote", "private"],
+      { ...base, nodes: [unbacked, privateMedia, directory] },
+      ["unbacked", "private", "directory"],
       [],
       signal,
     )

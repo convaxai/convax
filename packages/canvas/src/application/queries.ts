@@ -41,7 +41,11 @@ export function queryCanvasNodes(document: CanvasDocument, query: CanvasNodeQuer
     const incomingNodeIds = incoming.get(node.id) ?? []
     const outgoingNodeIds = outgoing.get(node.id) ?? []
     if (related && ![...incomingNodeIds, ...outgoingNodeIds].some((id) => related.has(id))) return []
-    const text = "text" in node.data && typeof node.data.text === "string" ? node.data.text : undefined
+    const resourceState = node.data.resourceState
+    const text = resourceState && typeof resourceState === "object" && "text" in resourceState
+      && typeof resourceState.text === "string"
+      ? resourceState.text
+      : undefined
     const name = "name" in node.data && typeof node.data.name === "string" ? node.data.name : undefined
     const description = typeof node.data.description === "string" ? node.data.description : undefined
     if (needle && ![node.id, node.data.kind, node.data.label, description, name, text]

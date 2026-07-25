@@ -12,6 +12,21 @@ export type CanvasFileKind = "text" | CanvasMediaKind | "folder"
 export type CanvasNodeType = "file" | "agent"
 export type CanvasTextFormat = "plain" | "markdown"
 
+export type CanvasResourceStatus = "stale" | "ready" | "missing" | "corrupt" | "unsupported" | "conflict"
+
+export interface CanvasResourceRuntimeState {
+  canSaveEditableCopy?: boolean
+  contentRevision?: string
+  editableText?: boolean
+  error?: string
+  mediaType?: string
+  name?: string
+  posterUrl?: string
+  status: CanvasResourceStatus
+  text?: string
+  url?: string
+}
+
 export interface CanvasBaseNodeData extends Record<string, unknown> {
   kind: string
   label: string
@@ -20,33 +35,24 @@ export interface CanvasBaseNodeData extends Record<string, unknown> {
   error?: string
 }
 
-export interface CanvasRichTextContent {
-  type: string
-  attrs?: Record<string, unknown>
-  content?: CanvasRichTextContent[]
-  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>
-  text?: string
-}
-
 export interface CanvasTextNodeData extends CanvasBaseNodeData {
   kind: "text"
-  text: string
-  format?: CanvasTextFormat
-  richText?: CanvasRichTextContent
-  metadata?: Record<string, unknown>
+  name?: string
+  mimeType?: string
+  metadata: Record<string, unknown>
+  resourceState?: CanvasResourceRuntimeState
 }
 
 export interface CanvasMediaNodeData extends CanvasBaseNodeData {
   kind: CanvasMediaKind
-  url: string
   fit?: "contain" | "cover"
   name?: string
   mimeType?: string
-  posterUrl?: string
   width?: number
   height?: number
   durationMs?: number
-  metadata?: Record<string, unknown>
+  metadata: Record<string, unknown>
+  resourceState?: CanvasResourceRuntimeState
 }
 
 export interface CanvasGroupNodeData extends CanvasBaseNodeData {
@@ -56,8 +62,8 @@ export interface CanvasGroupNodeData extends CanvasBaseNodeData {
 export interface CanvasFolderNodeData extends CanvasBaseNodeData {
   kind: "folder"
   name?: string
-  path?: string
-  metadata?: Record<string, unknown>
+  metadata: Record<string, unknown>
+  resourceState?: CanvasResourceRuntimeState
 }
 
 export interface CanvasAgentNodeData extends CanvasBaseNodeData {
@@ -111,32 +117,30 @@ export interface CanvasSize {
 export interface CanvasResource {
   id: string
   kind: CanvasMediaKind
-  url: string
+  metadata: Record<string, unknown>
   name?: string
   mimeType?: string
-  posterUrl?: string
+  state: CanvasResourceRuntimeState
   width?: number
   height?: number
   durationMs?: number
-  metadata?: Record<string, unknown>
 }
 
 export interface CanvasTextResource {
   id: string
   kind: "text"
-  text: string
-  format?: CanvasTextFormat
+  metadata: Record<string, unknown>
   name?: string
   mimeType?: string
-  metadata?: Record<string, unknown>
+  state: CanvasResourceRuntimeState
 }
 
 export interface CanvasFolderResource {
   id: string
   kind: "folder"
+  metadata: Record<string, unknown>
   name: string
-  path?: string
-  metadata?: Record<string, unknown>
+  state: CanvasResourceRuntimeState
 }
 
 export type CanvasUploadItem = CanvasResource | CanvasTextResource | CanvasFolderResource

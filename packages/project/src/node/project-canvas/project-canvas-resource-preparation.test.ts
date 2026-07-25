@@ -1,330 +1,549 @@
+import { createHash } from "node:crypto"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, test } from "bun:test"
-import { projectFileReferenceKey } from "../../canvas/project-resources"
+import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
+import { getProjectResourceReference, type ProjectResourceReference } from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
-  type ProjectCanvasMediaInspector,
+  type ProjectCanvasFilePublisher,
   type ProjectCanvasResourceHost,
 } from "./project-canvas-resource-preparation"
+import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 const requestRef = { canvasId: "canvas_main", scopeId: "project_one" }
 
 describe("project canvas resource preparation", () => {
-  test("prepares inline text and reads project text through the Project host", async () => {
-    const readPaths: string[] = []
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries() {
-        throw new Error("Text resources must not be copied")
-      },
-      async listDirectory() {
-        throw new Error("Text resources must not list directories")
-      },
-      async readFileInfo(input) {
-        readPaths.push(input.path)
-        return {
-          mimeType: "text/markdown; charset=utf-8",
-          name: "brief.md",
-          path: input.path,
-          size: 14,
-        }
-      },
-      async readTextFile(input) {
-        readPaths.push(input.path)
-        return { content: "# Project brief", exists: true, path: input.path }
-      },
-    }
-    const preparation = new ProjectCanvasResourcePreparation(host)
-
-    const result = await preparation.prepare({
-      ...requestRef,
-      sources: [
-        { format: "plain", kind: "inline-text", sourceId: "inline", text: "Hello" },
-        { kind: "host-file", path: "docs/brief.md", sourceId: "project-text" },
-      ],
-    })
-
-    expect(result.items).toEqual([
-      { format: "plain", id: "inline", kind: "text", name: undefined, text: "Hello" },
+  test.each([
+    ["Brief.md", ".md", "text/markdown"],
+    ["notes.TXT", ".txt", "text/plain"],
+  ] as const)("publishes a verified managed %s as an editable Notes copy", async (name, extension, mimeType) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-editable-copy-"))
+    const sourcePath = path.join(root, name)
+    const content = "# 你好\nPlain text"
+    const bytes = Buffer.from(content, "utf8")
+    const sha256 = createHash("sha256").update(bytes).digest("hex")
+    await fs.writeFile(sourcePath, bytes)
+    const publications: unknown[] = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
       {
-        format: "markdown",
-        id: "project-text",
+        async publishText(input) {
+          publications.push(input)
+          return { contentRevision: sha256, path: `Notes/${name}-copy${extension}` }
+        },
+      },
+      {
+        async resolve(input: unknown) {
+          expect(input).toEqual({
+            projectId: "project_one",
+            reference: { kind: "managed-asset", mediaType: mimeType, name, sha256 },
+          })
+          return fs.realpath(sourcePath)
+        },
+      } as unknown as ProjectManagedAssetStore,
+    )
+
+    try {
+      const prepared = await preparation.prepareManagedTextEditableCopy({
+        projectId: "project_one",
+        reference: { kind: "managed-asset", mediaType: mimeType, name, sha256 },
+        sourceId: "editable-copy",
+      })
+
+      expect(publications).toEqual([
+        {
+          content,
+          directory: "Notes",
+          extension,
+          name,
+          projectId: "project_one",
+        },
+      ])
+      expect(prepared.retainedOnFailure).toEqual([{ label: `Notes/${name}-copy${extension}` }])
+      expect(prepared.items[0]).toMatchObject({
+        id: "editable-copy",
         kind: "text",
-        metadata: { [projectFileReferenceKey]: { path: "docs/brief.md" } },
-        mimeType: "text/markdown",
-        name: "brief.md",
-        text: "# Project brief",
-      },
-    ])
-    expect(readPaths).toEqual(["docs/brief.md", "docs/brief.md"])
+        metadata: {
+          convaxProjectResource: { kind: "project-file", path: `Notes/${name}-copy${extension}` },
+        },
+        mimeType,
+        name: `${name}-copy${extension}`,
+        state: {
+          contentRevision: sha256,
+          editableText: true,
+          status: "ready",
+          text: content,
+        },
+      })
+      expect(await fs.readFile(sourcePath)).toEqual(bytes)
+    } finally {
+      await fs.rm(root, { force: true, recursive: true })
+    }
   })
 
-  test("prepares a host directory as a folder without reading or copying it as a file", async () => {
-    const directoryRequests: unknown[] = []
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries() {
-        throw new Error("Directories must not be copied into managed media")
-      },
-      async listDirectory(input) {
-        directoryRequests.push(input)
-        return { entries: [], path: input.path ?? "", projectId: input.projectId }
-      },
-      async readFileInfo() {
-        throw new Error("Directories must not be read as files")
-      },
-      async readTextFile() {
-        throw new Error("Directories must not be read as text")
-      },
-    }
-
-    const result = await new ProjectCanvasResourcePreparation(host).prepare({
-      ...requestRef,
-      sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder" }],
-    })
-
-    expect(directoryRequests).toEqual([{ path: "design/references", projectId: "project_one" }])
-    expect(result.items).toEqual([
+  test("rejects non-text, invalid UTF-8, and digest-mismatched managed editable copies before publication", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-invalid-editable-copy-"))
+    const sourcePath = path.join(root, "invalid.md")
+    let publications = 0
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
       {
-        id: "folder",
-        kind: "folder",
-        metadata: { [projectFileReferenceKey]: { path: "design/references" } },
-        name: "references",
-        path: "design/references",
+        async publishText() {
+          publications += 1
+          throw new Error("must not publish")
+        },
       },
-    ])
+      {
+        async resolve() {
+          return fs.realpath(sourcePath)
+        },
+      } as unknown as ProjectManagedAssetStore,
+    )
+    const base = { projectId: "project_one", sourceId: "editable-copy" }
+
+    try {
+      await fs.writeFile(sourcePath, "valid")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "image.png", sha256: "a".repeat(64) },
+        }),
+      ).rejects.toThrow("Markdown or plain text")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "project-file", path: "Notes/already.md" },
+        }),
+      ).rejects.toThrow("managed asset")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "wrong.md", sha256: "a".repeat(64) },
+        }),
+      ).rejects.toThrow("digest")
+
+      await fs.writeFile(sourcePath, Buffer.from([0xc3, 0x28]))
+      const invalidDigest = createHash("sha256")
+        .update(Buffer.from([0xc3, 0x28]))
+        .digest("hex")
+      await expect(
+        preparation.prepareManagedTextEditableCopy({
+          ...base,
+          reference: { kind: "managed-asset", name: "invalid.md", sha256: invalidDigest },
+        }),
+      ).rejects.toThrow("UTF-8")
+      expect(publications).toBe(0)
+    } finally {
+      await fs.rm(root, { force: true, recursive: true })
+    }
   })
 
-  test("copies project media into managed assets and uses the returned collision path", async () => {
-    const readPaths: string[] = []
-    const copyInputs: Array<{ destinationPath?: string; paths: string[] }> = []
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries(input) {
-        copyInputs.push({ destinationPath: input.destinationPath, paths: input.paths })
-        return {
-          affectedPaths: [".convax/assets/hero copy.png"],
-          operation: "copy",
-          projectId: input.projectId,
-          sourcePaths: input.paths,
-          targetPaths: [".convax/assets/hero copy.png"],
-        }
-      },
-      async listDirectory() {
-        throw new Error("Media resources must not list directories")
-      },
-      async readFileInfo(input) {
-        readPaths.push(input.path)
-        return {
-          mimeType: "image/png",
-          name: input.path.endsWith("hero copy.png") ? "hero copy.png" : "hero.png",
-          path: input.path,
-          size: 42,
-        }
-      },
-      async readTextFile() {
-        throw new Error("Media resources must not be read as text")
-      },
-    }
-    const preparation = new ProjectCanvasResourcePreparation(host)
+  test("keeps every Project file in place", async () => {
+    let assetCalls = 0
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "image/png", name: "hero.png", path: input.path, size: 42 }
+        },
+      }),
+      unusedPublisher(),
+      {
+        admitExternalFile() {
+          assetCalls += 1
+          throw new Error("Project files must not be admitted as managed assets")
+        },
+      } as unknown as ProjectManagedAssetStore,
+    )
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "host-file", path: "media\\hero.png", sourceId: "hero" }],
+      sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
     })
 
-    expect(copyInputs).toEqual([{ destinationPath: ".convax/assets", paths: ["media/hero.png"] }])
-    expect(readPaths).toEqual(["media/hero.png", ".convax/assets/hero copy.png"])
+    expect(assetCalls).toBe(0)
+    expect(getProjectResourceReference(result.items[0]!.metadata)).toEqual({
+      kind: "project-file",
+      path: "media/hero.png",
+    })
     expect(result.items[0]).toMatchObject({
       id: "hero",
       kind: "image",
-      metadata: { [projectFileReferenceKey]: { path: ".convax/assets/hero copy.png" } },
-      mimeType: "image/png",
-      name: "hero copy.png",
-      url: "",
+      name: "hero.png",
+      state: { status: "stale" },
     })
+    expect(result.items[0]).not.toHaveProperty("path")
+    expect(result.items[0]).not.toHaveProperty("url")
   })
 
-  test("reuses an existing managed asset and enriches media through the inspector", async () => {
-    let copied = false
-    const inspections: unknown[] = []
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries() {
-        copied = true
-        throw new Error("Existing assets must not be copied")
-      },
-      async listDirectory() {
-        throw new Error("Media resources must not list directories")
-      },
-      async readFileInfo(input) {
-        return {
-          mimeType: "video/mp4",
-          name: "clip.mp4",
-          path: input.path,
-          size: 1_024,
-        }
-      },
-      async readTextFile() {
-        throw new Error("Media resources must not be read as text")
-      },
-    }
-    const inspector: ProjectCanvasMediaInspector = {
-      async inspect(input) {
-        inspections.push(input)
-        return {
-          durationMs: 2_400,
-          height: 720,
-          posterUrl: "convax-poster://clip",
-          width: 1_280,
-        }
-      },
-    }
-    const preparation = new ProjectCanvasResourcePreparation(host, inspector)
+  test("reads Project text directly into runtime state", async () => {
+    const readPaths: string[] = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          readPaths.push(input.path)
+          return { mimeType: "text/markdown", name: "brief.md", path: input.path, size: 7 }
+        },
+        async readTextFile(input) {
+          readPaths.push(input.path)
+          return { content: "# Brief", contentRevision: "stable-byte-revision", exists: true, path: input.path }
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+    )
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "host-file", path: ".convax/assets/clip.mp4", sourceId: "clip" }],
+      sources: [{ kind: "host-file", path: "docs/brief.md", sourceId: "brief" }],
     })
 
-    expect(copied).toBe(false)
+    expect(readPaths).toEqual(["docs/brief.md", "docs/brief.md"])
+    expect(result.items[0]).toMatchObject({
+      id: "brief",
+      kind: "text",
+      mimeType: "text/markdown",
+      name: "brief.md",
+      state: {
+        contentRevision: "stable-byte-revision",
+        status: "ready",
+        text: "# Brief",
+      },
+    })
+    expect(result.items[0]).not.toHaveProperty("format")
+    expect(result.items[0]).not.toHaveProperty("text")
+  })
+
+  test("keeps Project media inspection URLs only in transient resource state", async () => {
+    const inspections: unknown[] = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "video/mp4", name: "clip.mp4", path: input.path, size: 42 }
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+      {
+        async inspect(input) {
+          inspections.push(input)
+          return { durationMs: 1_500, height: 720, posterUrl: "blob:poster", width: 1_280 }
+        },
+      },
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "host-file", path: "media/clip.mp4", sourceId: "clip" }],
+    })
+
     expect(inspections).toEqual([
       {
         kind: "video",
         mimeType: "video/mp4",
         name: "clip.mp4",
-        path: ".convax/assets/clip.mp4",
+        path: "media/clip.mp4",
         projectId: "project_one",
       },
     ])
     expect(result.items[0]).toMatchObject({
-      durationMs: 2_400,
+      durationMs: 1_500,
       height: 720,
+      id: "clip",
       kind: "video",
-      posterUrl: "convax-poster://clip",
-      url: "",
+      state: { posterUrl: "blob:poster", status: "stale" },
       width: 1_280,
     })
+    expect(result.items[0]).not.toHaveProperty("posterUrl")
+    expect(result.items[0]).not.toHaveProperty("path")
+    expect(result.items[0]).not.toHaveProperty("url")
   })
 
-  test("does not copy a resource when cancellation wins after file inspection", async () => {
-    let resolveInfo!: (value: Awaited<ReturnType<ProjectCanvasResourceHost["readFileInfo"]>>) => void
-    const pendingInfo = new Promise<Awaited<ReturnType<ProjectCanvasResourceHost["readFileInfo"]>>>((resolve) => {
-      resolveInfo = resolve
-    })
-    let copyCalls = 0
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries() {
-        copyCalls += 1
-        throw new Error("Canceled resource preparation reached asset admission")
-      },
-      async listDirectory() {
-        throw new Error("Unexpected directory read")
-      },
-      async readFileInfo() {
-        return pendingInfo
-      },
-      async readTextFile() {
-        throw new Error("Unexpected text read")
+  test("publishes new text below Notes before returning a prepared item", async () => {
+    const publications: unknown[] = []
+    const publisher: ProjectCanvasFilePublisher = {
+      async publishText(input) {
+        publications.push(input)
+        return { contentRevision: "revision-a", path: "Notes/Brief-a1.md" }
       },
     }
-    const controller = new AbortController()
-    const operation = new ProjectCanvasResourcePreparation(host).prepare({
-      ...requestRef,
-      signal: controller.signal,
-      sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
-    })
-    controller.abort(new DOMException("Agent stopped", "AbortError"))
-    resolveInfo({ mimeType: "image/png", name: "hero.png", path: "media/hero.png", size: 42 })
-
-    await expect(operation).rejects.toThrow("Agent stopped")
-    expect(copyCalls).toBe(0)
-  })
-
-  test("maps remote URLs by MIME type without touching the Project host", async () => {
-    const host: ProjectCanvasResourceHost = {
-      async copyEntries() {
-        throw new Error("Remote resources must not use Project storage")
-      },
-      async listDirectory() {
-        throw new Error("Remote resources must not use Project storage")
-      },
-      async readFileInfo() {
-        throw new Error("Remote resources must not use Project storage")
-      },
-      async readTextFile() {
-        throw new Error("Remote resources must not use Project storage")
-      },
-    }
-    const preparation = new ProjectCanvasResourcePreparation(host)
+    const preparation = new ProjectCanvasResourcePreparation(host(), publisher, unusedAssets())
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [
-        { kind: "remote-url", mimeType: "audio/mpeg", sourceId: "audio", url: "https://example.com/song.mp3" },
-        { kind: "remote-url", mimeType: "application/pdf", sourceId: "pdf", url: "https://example.com/spec.pdf" },
-      ],
+      sources: [{ kind: "new-text", name: "Brief", sourceId: "new", text: "# Brief" }],
     })
 
-    expect(result.items).toMatchObject([
-      { id: "audio", kind: "audio", name: "song.mp3", url: "https://example.com/song.mp3" },
-      { id: "pdf", kind: "file", name: "spec.pdf", url: "https://example.com/spec.pdf" },
+    expect(publications).toEqual([
+      {
+        content: "# Brief",
+        directory: "Notes",
+        extension: ".md",
+        name: "Brief",
+        projectId: "project_one",
+      },
     ])
+    expect(getProjectResourceReference(result.items[0]!.metadata)).toEqual({
+      kind: "project-file",
+      path: "Notes/Brief-a1.md",
+    })
+    expect(result.items[0]).toMatchObject({
+      id: "new",
+      kind: "text",
+      mimeType: "text/markdown",
+      name: "Brief-a1.md",
+      state: { contentRevision: "revision-a", status: "ready", text: "# Brief" },
+    })
+    expect(result.items[0]).not.toHaveProperty("format")
+    expect(result.retainedOnFailure).toEqual([{ label: "Notes/Brief-a1.md" }])
   })
 
-  test("rejects remote URLs outside HTTP and HTTPS", async () => {
-    const preparation = new ProjectCanvasResourcePreparation(unusedHost())
+  test("reports only successfully published new text when later preparation fails", async () => {
+    const laterFailure = new Error("native file lookup failed")
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo() {
+          throw laterFailure
+        },
+      }),
+      {
+        async publishText() {
+          return { contentRevision: "revision-a", path: "Notes/First-a1.md" }
+        },
+      },
+      unusedAssets(),
+    )
+
+    try {
+      await preparation.prepare({
+        ...requestRef,
+        sources: [
+          { kind: "new-text", name: "First", sourceId: "first", text: "# First" },
+          { kind: "host-file", path: "media/missing.png", sourceId: "missing" },
+        ],
+      })
+      throw new Error("Expected preparation to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
+      expect((error as CanvasResourcePartialFailureError).cause).toBe(laterFailure)
+      expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/First-a1.md" }])
+    }
+  })
+
+  test("does not report host-file preparation as a retained resource", async () => {
+    const hostFailure = new Error("native file lookup failed")
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo() {
+          throw hostFailure
+        },
+      }),
+      unusedPublisher(),
+      unusedAssets(),
+    )
 
     await expect(
       preparation.prepare({
         ...requestRef,
-        sources: [{ kind: "remote-url", sourceId: "local", url: "file:///tmp/secret.png" }],
+        sources: [{ kind: "host-file", path: "media/missing.png", sourceId: "missing" }],
       }),
-    ).rejects.toThrow("HTTP or HTTPS")
+    ).rejects.toBe(hostFailure)
   })
 
-  test.each([
-    "C:\\Users\\someone\\image.png",
-    "\\\\server\\share\\image.png",
-    "..\\outside.png",
-    "media/CON.png",
-    "media/COM².png",
-    "media/LPT³.txt",
-    "media/trailing. ",
-  ])("rejects non-portable project paths: %s", async (path) => {
-    const preparation = new ProjectCanvasResourcePreparation(unusedHost())
-
-    await expect(
-      preparation.prepare({
-        ...requestRef,
-        sources: [{ kind: "host-file", path, sourceId: "unsafe" }],
+  test("accepts only Project directories as folder references", async () => {
+    const directoryRequests: unknown[] = []
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async listDirectory(input) {
+          directoryRequests.push(input)
+          return { entries: [], path: input.path ?? "", projectId: input.projectId }
+        },
       }),
-    ).rejects.toThrow(/Invalid portable project path|Project path escapes its root/)
+      unusedPublisher(),
+      unusedAssets(),
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "host-directory", path: "design/references", sourceId: "folder" }],
+    })
+
+    expect(directoryRequests).toEqual([{ path: "design/references", projectId: "project_one" }])
+    expect(getProjectResourceReference(result.items[0]!.metadata)).toEqual({
+      kind: "project-directory",
+      path: "design/references",
+    })
+    expect(result.items[0]).not.toHaveProperty("path")
   })
 
-  test.each([".convax/project.json", ".convax/canvases/canvas-main/document.json", ".CONVAX/assets/image.png"])(
-    "rejects project private storage as a resource: %s",
-    async (path) => {
-      const preparation = new ProjectCanvasResourcePreparation(unusedHost())
+  test("maps external admissions inside the managed-store callback without exposing source paths", async () => {
+    const events: string[] = []
+    const references: ProjectResourceReference[] = [
+      {
+        kind: "managed-asset",
+        mediaType: "image/png",
+        name: "outside.png",
+        sha256: "a".repeat(64),
+      },
+    ]
+    const assets = {
+      async withAdmittedLocalFiles(
+        _input: unknown,
+        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+      ) {
+        events.push("store:enter")
+        const result = await commit(references)
+        events.push("store:leave")
+        return result
+      },
+    } as unknown as ProjectManagedAssetStore
+    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
 
-      await expect(
-        preparation.prepare({
-          ...requestRef,
-          sources: [{ kind: "host-file", path, sourceId: "private" }],
-        }),
-      ).rejects.toThrow("Project private storage")
-    },
-  )
+    const result = await preparation.withAdmittedLocalFiles(
+      {
+        files: [
+          {
+            mediaType: "image/png",
+            name: "outside.png",
+            sourceId: "outside",
+            sourcePath: "/native/outside.png",
+          },
+        ],
+        projectId: "project_one",
+      },
+      async (prepared) => {
+        events.push("commit")
+        expect(JSON.stringify(prepared)).not.toContain("/native/outside.png")
+        expect(getProjectResourceReference(prepared.items[0]!.metadata)).toEqual(references[0])
+        expect(prepared.items[0]).toMatchObject({
+          id: "outside",
+          kind: "image",
+          state: { status: "stale" },
+        })
+        return "committed"
+      },
+    )
+
+    expect(result).toBe("committed")
+    expect(events).toEqual(["store:enter", "commit", "store:leave"])
+  })
+
+  test("maps a Project-local File token to a direct project-file item without a managed copy", async () => {
+    const reference = { kind: "project-file" as const, path: "Images/local.png" }
+    const assets = {
+      async withAdmittedLocalFiles(
+        _input: unknown,
+        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+      ) {
+        return commit([reference])
+      },
+    } as unknown as ProjectManagedAssetStore
+    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
+
+    await preparation.withAdmittedLocalFiles(
+      {
+        files: [
+          {
+            mediaType: "image/png",
+            name: "local.png",
+            sourceId: "local",
+            sourcePath: "/native/project/Images/local.png",
+          },
+        ],
+        projectId: "project_one",
+      },
+      async ({ items }) => {
+        expect(getProjectResourceReference(items[0]!.metadata)).toEqual(reference)
+        expect(items[0]).toMatchObject({
+          id: "local",
+          kind: "image",
+          mimeType: "image/png",
+          name: "local.png",
+          state: { status: "stale" },
+        })
+        expect(JSON.stringify(items[0])).not.toContain("/native/project")
+      },
+    )
+  })
+
+  test("classifies admitted managed Markdown and plain text without reading source bytes", async () => {
+    for (const [name, mediaType] of [
+      ["brief.md", "text/markdown"],
+      ["notes.txt", undefined],
+    ] as const) {
+      const reference = {
+        kind: "managed-asset" as const,
+        mediaType,
+        name,
+        sha256: "b".repeat(64),
+      }
+      const assets = {
+        async withAdmittedLocalFiles(
+          _input: unknown,
+          commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+        ) {
+          return commit([reference])
+        },
+      } as unknown as ProjectManagedAssetStore
+      const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
+
+      await preparation.withAdmittedLocalFiles(
+        {
+          files: [
+            {
+              mediaType: reference.mediaType,
+              name: reference.name,
+              sourceId: "managed-text",
+              sourcePath: `/outside/${reference.name}`,
+            },
+          ],
+          projectId: "project_one",
+        },
+        async ({ items }) => {
+          expect(items[0]).toMatchObject({
+            id: "managed-text",
+            kind: "text",
+            mimeType: reference.mediaType ?? "text/plain",
+            name: reference.name,
+            state: { status: "stale" },
+          })
+          expect(items[0]).not.toHaveProperty("format")
+          expect(items[0]!.state).not.toHaveProperty("text")
+          expect(items[0]!.state).not.toHaveProperty("contentRevision")
+        },
+      )
+    }
+  })
 })
 
-function unusedHost(): ProjectCanvasResourceHost {
+function host(overrides: Partial<ProjectCanvasResourceHost> = {}): ProjectCanvasResourceHost {
   return {
-    async copyEntries() {
-      throw new Error("Invalid resources must not use Project storage")
+    async listDirectory(input) {
+      return { entries: [], path: input.path ?? "", projectId: input.projectId }
     },
-    async listDirectory() {
-      throw new Error("Invalid resources must not use Project storage")
+    async readFileInfo(input) {
+      return { mimeType: "application/octet-stream", name: "file.bin", path: input.path, size: 1 }
     },
-    async readFileInfo() {
-      throw new Error("Invalid resources must not use Project storage")
+    async readTextFile(input) {
+      return { content: "", contentRevision: "", exists: false, path: input.path }
     },
-    async readTextFile() {
-      throw new Error("Invalid resources must not use Project storage")
+    ...overrides,
+  }
+}
+
+function unusedPublisher(): ProjectCanvasFilePublisher {
+  return {
+    async publishText() {
+      throw new Error("Publisher must not be used")
     },
   }
+}
+
+function unusedAssets() {
+  return {
+    async withAdmittedLocalFiles() {
+      throw new Error("Managed assets must not be used")
+    },
+  } as unknown as ProjectManagedAssetStore
 }

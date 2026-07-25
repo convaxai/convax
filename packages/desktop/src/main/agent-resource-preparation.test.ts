@@ -17,22 +17,34 @@ function canvasSnapshot() {
     metadata: { title: "Canvas 1" },
     nodes: [
       {
-        data: { kind: "file", label: "Launch brief", url: "" },
+        data: {
+          kind: "file",
+          label: "Launch brief",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Docs/launch.pdf" } },
+        },
         id: "node-1",
         position: { x: 0, y: 0 },
         type: "file",
       },
       {
-        data: { kind: "text", label: "Related", text: "Related text" },
+        data: {
+          kind: "text",
+          label: "Related",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/related.md" } },
+        },
         id: "node-2",
         position: { x: 320, y: 0 },
-        type: "text",
+        type: "file",
       },
       {
-        data: { kind: "text", label: "Unrelated", text: "Unrelated text" },
+        data: {
+          kind: "text",
+          label: "Unrelated",
+          metadata: { convaxProjectResource: { kind: "project-file", path: "Notes/unrelated.md" } },
+        },
         id: "node-3",
         position: { x: 640, y: 0 },
-        type: "text",
+        type: "file",
       },
     ],
     revision: 4,
@@ -48,7 +60,13 @@ function nestedGroupCanvasSnapshot() {
     width: 600,
   })
   const childA = {
-    ...createTextNode({ id: "child-a", label: "Child A", position: { x: 20, y: 20 } }),
+    ...createTextNode({
+      id: "child-a",
+      label: "Child A",
+      metadata: {},
+      position: { x: 20, y: 20 },
+      resourceState: { status: "ready" },
+    }),
     parentId: group.id,
   }
   const childB = {
@@ -62,10 +80,22 @@ function nestedGroupCanvasSnapshot() {
     parentId: group.id,
   }
   const nestedChild = {
-    ...createTextNode({ id: "nested-child", label: "Nested", position: { x: 10, y: 10 } }),
+    ...createTextNode({
+      id: "nested-child",
+      label: "Nested",
+      metadata: {},
+      position: { x: 10, y: 10 },
+      resourceState: { status: "ready" },
+    }),
     parentId: childB.id,
   }
-  const unrelated = createTextNode({ id: "unrelated", label: "Unrelated", position: { x: 800, y: 0 } })
+  const unrelated = createTextNode({
+    id: "unrelated",
+    label: "Unrelated",
+    metadata: {},
+    position: { x: 800, y: 0 },
+    resourceState: { status: "ready" },
+  })
   return JSON.stringify(
     createCanvasDocument({
       edges: [

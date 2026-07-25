@@ -44,7 +44,7 @@ sandboxed Plugin -- versioned host generation calls -+      | stage selected inp
                                                             v
                                                 CanvasResourceBusinessService
                                                             |
-                                                .convax/assets + normal file/text nodes
+                                                Generated/ + normal file/text nodes
 ```
 
 `GenerationCanvasService` is the one application operation shared by all three
@@ -532,10 +532,11 @@ key when its service supports one. Sidecars must not infer authority or user-vis
 identity from this value.
 
 The host loads the authoritative live Canvas and validates every reference against
-its declared role. Media inputs must already be normal Canvas media nodes backed by
-managed `.convax/assets` references. Desktop opens and copies those files into a
-private temporary input directory; Project native paths never cross the renderer,
-preload, Agent or iframe boundary. Text nodes are copied as bounded text values.
+its declared role. Media and text inputs must already be normal Canvas nodes backed
+by typed Project-file or managed-asset references. Desktop resolves them through the
+bounded Main-owned resource reader and copies verified snapshots into a private
+temporary input directory; Project native paths never cross the renderer, preload,
+Agent or iframe boundary. Text input is read from its file rather than Canvas JSON.
 After staging and immediately before `tools/call`, Desktop rechecks both the persisted
 Canvas document and the live Canvas revision, plus any direct-incoming constraint, so
 a stale request cannot start a paid job.
@@ -589,19 +590,30 @@ file. Text input/output is bounded separately. Inline base64 is additionally
 constrained by the MCP message limit.
 
 For a non-text tool, text content is normalized into at most 32 bounded warnings
-rather than inserted as Canvas nodes. After admission, Desktop copies media through the managed
-Project asset import, calls `CanvasResourceBusinessService.addResources`, creates
-normal Canvas file nodes and connects them to the referenced input nodes. A failed
-Canvas commit rolls back newly imported assets. A low-level Project import copy
-failure may conservatively leave a partial target: the portable Node filesystem API
-cannot atomically prove pathname identity and remove it, so Convax never risks
-deleting a concurrent writer's replacement. Text output becomes a normal text
-resource. The generation call/result-admission path never lets the sidecar write
-Canvas JSON or choose Project scope, revision, placement or node ids. A v5 sidecar
-with separate Canvas grants may make explicit broker calls, but those remain
-revision-checked application transactions rather than generation result admission.
+rather than inserted as Canvas nodes. After admission, Desktop copies each verified
+result into same-filesystem short-lived staging and publishes it without overwriting
+an existing object under the user-visible `Generated/` directory. Text results are
+UTF-8 Markdown files. Media is streamed from the verified materialized source into
+Project staging while hashing and enforcing the existing 2 GiB ceiling; it is never
+read wholesale into memory. Notes and generated output share the same Project-owned
+no-clobber publisher and directory-identity checks. Desktop then calls
+`CanvasResourceBusinessService.addResources`, creates normal Canvas nodes and
+connects them to the referenced input nodes. A failed Canvas commit retains the
+published files and raises a bounded partial-success error containing only portable
+`Generated/*` paths (with the original failure retained as its cause); it does not
+delete user output. The same rule applies when a later output publication, stale
+reference check, cancellation or live-scope check fails after at least one file was
+published. The sidecar never writes Canvas JSON or chooses Project scope, revision,
+placement or node ids.
+A v5 sidecar with separate Canvas grants may make explicit broker calls, but those
+remain revision-checked application transactions rather than generation result
+admission.
 
-The entire temporary tree is removed after success, failure or cancellation.
+There is no cross-file publication WAL. A crash may leave unpublished staging, which
+is deleted after 24 hours, or a published Project file without a Canvas node, which is
+preserved for the user to add later. Normal completion cleans temporary generation
+input/materialization directories best-effort; Project publication staging aliases
+are left for the shared 24-hour staging GC rather than unlinked by pathname.
 
 ## Sandboxed Plugin caller API
 
@@ -696,7 +708,9 @@ Changes to this boundary must preserve all of the following:
 - host-derived Project/Canvas scope, revision, placement and mutation actor;
 - install-authorized and runtime-verified execution before staging, aggregate-bounded
   temporary inputs and bounded outputs;
-- generated media entering Canvas only through the managed asset/resource flow;
+- generated content entering Canvas only through no-clobber user-visible `Generated/`
+  Project files and the shared resource business flow; a later Canvas failure retains
+  the file instead of requiring cross-file rollback;
 - strict v1-v5 manifest compatibility, `plugin-host/1-4` compatibility, and the
   independent `plugin-capability/1` contract for v5;
 - explicit install/update authorization, no first-call prompt and no shell execution;

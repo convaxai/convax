@@ -73,8 +73,8 @@ Project or Canvas data and has no DOM, React, Electron, or localStorage dependen
 ### Workspace
 
 There is no current Workspace aggregate. The term is reserved for a future feature
-where one window/session genuinely coordinates multiple Projects. The legacy schema
-name `convax.canvas-workspace/1` exists only as a migration input.
+where one window/session genuinely coordinates multiple Projects. Legacy Workspace
+catalog schemas are unsupported and are never migrated or rewritten.
 
 ### Skill and Plugin
 
@@ -246,11 +246,16 @@ Packaged app Resources/
 browser localStorage                    per-user Workbench/renderer preferences
 
 <project root>/
+  Notes/                                user-visible Canvas-created text files
+  Generated/                            user-visible generated output files
   .convax/
     project.json                        stable Project identity only
     canvases/catalog.json               portable Canvas catalog, no selection
     canvases/<canvas-id>/document.json  Canvas document
-    assets/                             managed Canvas resources
+    assets/blobs/<sha256>               deduplicated copies admitted from outside the Project
+    assets/.staging/                    short-lived managed-asset imports
+    assets/gc.json                      rebuildable delayed-GC timing state
+    staging/                            short-lived user-file publication staging
 ```
 
 `Create Project` receives only a portable project name from renderer and creates a
@@ -262,9 +267,10 @@ directory creation, identity initialization, and registry publication.
 
 Private Project metadata is owned by `@convax/project/node`. Renderer, preload,
 Agent tools, and general Project Files operations do not read or write its JSON.
-Managed assets are the explicit exception: they are imported/copied through the
-scoped Project Files capability into `.convax/assets`, while the rest of `.convax`
-remains hidden and protected.
+Managed assets are the explicit exception: scoped Project resource capabilities copy
+only files admitted from outside the Project into deterministic content-addressed
+paths below `.convax/assets`. Files already inside the Project are referenced
+directly. The rest of `.convax` remains hidden and protected.
 
 The remote capability catalog and showcase caches are Desktop-owned, user-global,
 and non-authoritative. Catalog reads may return the validated local snapshot
@@ -286,9 +292,40 @@ current Registry size and SHA-256 before use. Losing any cache never removes ins
 capabilities; an invalid or rolled-back network response never replaces it.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
-application services. A schema change needs a version, a migration path, and tests
-using real old data. Never “fix” an incompatibility by deleting or silently resetting
-portable data.
+application services. A schema change needs a new version and tests. It provides a
+migration path using real old data by default. An explicitly approved breaking
+cutover may instead reject the old version without migration. Rejection must preserve
+unsupported bytes and keep them outside new mutation and GC paths.
+
+The Project asset single-source transition is one approved breaking cutover under
+this rule. Its authoritative scope and safeguards are recorded in
+[the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
+Canvas owns generic resource-slot and application semantics. Project Canvas owns the
+concrete `project-file`, `project-directory` and `managed-asset` union stored in
+host-owned node metadata, plus Project validation, traversal and hydration. The new
+persistence rejects legacy path-only references, inline text and remote URLs instead
+of migrating them.
+
+Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
+is a normal user-visible Project file below `Generated/`. Both flows publish the file
+first and commit its Canvas reference second. If the Canvas commit fails, the file is
+retained and the UI reports partial success. Canvas undo never rewrites an already
+saved user file.
+
+Managed assets are immutable SHA-256-addressed value copies. The original external
+path is not persisted or watched after admission. Desktop composes one
+`ProjectManagedAssetStore` shared by preparation, repositories and GC; Project Node
+serializes import, reference admission and GC with its in-process per-Project asset
+mutex. GC derives liveness by scanning typed references in every supported Canvas document, records the
+first unreferenced time, waits seven days and completes another full scan before
+deletion. It atomically saves the next `gc.json` timing state before unlinking due
+blobs; stale records after a crash are removed by the next scan. Any unreadable Canvas
+document, corrupt state or digest mismatch stops deletion conservatively.
+
+Every coalesced Project filesystem event marks the current Project's mounted resource
+snapshots stale; an optional path only prioritizes lazy refresh. Watcher events are not
+an event log. File and directory moves do not rewrite Canvas references in v1. Users
+explicitly relink missing nodes.
 
 Installed Plugins are user-global. Canvas documents persist only the existing file
 node kind plus a stable Plugin reference and namespaced portable instance state.
@@ -301,8 +338,9 @@ schema version and migrations; an unknown or invalid schema is preserved and mus
 not be replaced with defaults. Node/Canvas copy carries the latest snapshot already
 committed to Canvas. Continuous iframe edits may be throttled, but semantic gesture
 completion and frame teardown must request an immediate commit. Large images,
-models, captures, and other binary payloads belong in managed Project assets; node
-state stores only portable references to them.
+models, captures, and other binary payloads use host-owned typed resource bindings on
+the node. Opaque Plugin state cannot keep an asset alive merely by containing a path
+or hash string.
 
 Portable Plugin presentation state may share that namespaced snapshot while staying
 separate from the Plugin's domain document. A 3D director camera/orbit is portable;
@@ -357,8 +395,10 @@ Agent, Toolbar/UI, and sandboxed Plugin entry points call the same scoped genera
 tool executor owned by Desktop main. OpenCode is only the Agent-side tool client: it
 does not own generation execution, and direct product actions do not require an
 OpenCode session. Successful media output is prepared through
-`CanvasResourceBusinessService`, imported into managed `.convax/assets/`, and then
-referenced by the existing Canvas `file` node flow.
+`CanvasResourceBusinessService` after Main atomically publishes it as a user-visible
+Project file under `Generated/`; the existing Canvas `file` node flow then references
+that Project file. A failed Canvas commit retains the published output and reports
+the partial success instead of deleting user data.
 
 Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` through
 `/6`: a validated manifest declares generation tools and a separately installed bare
@@ -386,6 +426,15 @@ orphaned state is non-executable and startup reconciliation removes it. A Regist
 that declares a managed companion cannot fall back to a same-named PATH command.
 Missing and changed bindings fail installation without replacing a working version.
 Listing or installing never starts the command.
+Desktop stages bounded typed Canvas references, rechecks live scope and revision
+before the external call, admits only bounded signature-checked results, and commits
+generated content through `CanvasResourceBusinessService` after publishing it without
+overwriting an existing object as a user-visible Project file under `Generated/`.
+If Canvas insertion fails, the generated file remains available for a later retry;
+unpublished staging is best-effort cleanup rather than a durable transaction. Tool-
+specific controls come only from the selected MCP tool's current
+`tools/list.inputSchema`; Main projects bounded scalar fields across preload and
+validates them again immediately before execution.
 
 On execution Desktop silently resolves and fingerprints the binding again and
 requires the matching persisted receipt; missing, tampered or drifted state fails
@@ -771,16 +820,17 @@ rechecked before durable Canvas saves.
 
 A Plugin may read image bytes only when its manifest declares the connected-image
 capability and the image feeds the owning node through a direct incoming Canvas
-edge. Desktop derives the managed Project file reference from that node, preflights
-the exact `.convax/assets` reference, and delegates one bounded read to Main. Main
-opens one no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling, performs
-a fixed-length read and rejects identity changes before returning bytes. Desktop
-then rechecks scope, connectivity and the exact source reference. This legacy
-connected-image method never accepts a Plugin-supplied Project path and does not
-return a document projection; separately granted v5 document reads use the bounded
-broker projections described above. Browser
-features such as fullscreen are likewise enabled per manifest; all other iframe
-feature-policy denials remain in force.
+edge. Desktop derives the typed Project-file or managed-asset reference from that
+node and delegates one scoped request to Main. Main performs two bounded physical
+reads; each opens a no-follow handle, enforces JPEG/PNG/WebP plus the 16 MiB ceiling,
+performs a fixed-length read and rejects identity changes. Main rechecks the active
+scope, direct edge and exact typed reference after each read, then requires matching
+content digests and metadata before returning bytes. The Plugin never supplies a
+Project path. This legacy connected-image method does not return a document
+projection; separately granted v5 document reads use the bounded broker projections
+described above. Browser features such as
+fullscreen are likewise enabled per manifest; all other iframe feature-policy
+denials remain in force.
 
 V6 Web nodes may separately request `canvas.connectedInputs.read`. Its fixed
 `canvas.connectedInputs.list` method returns pathless, bounded metadata for direct
@@ -829,7 +879,7 @@ fingerprint. Missing packages remain missing, so this migration cannot undo a us
 uninstall.
 
 The Canvas toolbar action appears for one or more selected image/video nodes backed
-by managed Project references under `.convax/assets`: single media uses its node
+by valid typed Project-file or managed-asset references: single media uses its node
 toolbar and multiple media use the selection toolbar. Main reloads the live active
 Canvas, checks the expected revision and selected nodes,
 validates matching image/video MIME and regular contained files, and only then

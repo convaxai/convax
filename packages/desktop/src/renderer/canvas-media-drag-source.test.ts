@@ -5,7 +5,7 @@ import {
   createMediaNode,
   createTextNode,
 } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 import type {
   CanvasExternalMediaDragPrepareRequest,
   CanvasExternalMediaDragRendererClient,
@@ -13,20 +13,38 @@ import type {
 
 import { createCanvasMediaSelectionDragSource, isManagedCanvasMediaDragSelection } from "./canvas-media-drag-source"
 
-const image = media("image", "image", ".convax/assets/image.png")
-const video = media("video", "video", ".convax/assets/video.mp4")
-const audio = media("audio", "audio", ".convax/assets/audio.wav")
-const text = createTextNode({ id: "text", position: { x: 30, y: 0 }, text: "No" })
+const image = media("image", "image", managedReference("image.png", "image/png", "a"))
+const video = media("video", "video", managedReference("video.mp4", "video/mp4", "b"))
+const audio = media("audio", "audio", managedReference("audio.wav", "audio/wav", "c"))
+const projectFileVideo = media("project-file-video", "video", {
+  kind: "project-file",
+  path: "Media/project-file-video.mp4",
+})
+const text = createTextNode({
+  id: "text",
+  metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/no.md" } },
+  position: { x: 30, y: 0 },
+  resourceState: { status: "ready", text: "No" },
+})
 
-function media(id: string, kind: "audio" | "image" | "video", path: string) {
+function managedReference(name: string, mediaType: string, digestCharacter: string) {
+  return {
+    kind: "managed-asset" as const,
+    mediaType,
+    name,
+    sha256: digestCharacter.repeat(64),
+  }
+}
+
+function media(id: string, kind: "audio" | "image" | "video", reference: ProjectResourceReference) {
   return createMediaNode({
     id,
     position: { x: 0, y: 0 },
     resource: {
       id: `${id}-resource`,
       kind,
-      metadata: { [projectFileReferenceKey]: { path } },
-      url: `convax-asset://project/${id}`,
+      metadata: { [projectResourceReferenceKey]: reference },
+      state: { status: "ready", url: `convax-asset://project/${id}` },
     },
   })
 }
@@ -80,9 +98,10 @@ function deferred<T>() {
 }
 
 describe("Canvas media external drag visibility", () => {
-  test("accepts complete selections of managed image, video, and audio nodes", () => {
+  test("accepts complete selections of managed assets and Project files", () => {
     expect(isManagedCanvasMediaDragSelection(context([image.id]))).toBe(true)
     expect(isManagedCanvasMediaDragSelection(context([video.id, audio.id, image.id]))).toBe(true)
+    expect(isManagedCanvasMediaDragSelection(context([projectFileVideo.id], { nodes: [projectFileVideo] }))).toBe(true)
   })
 
   test("rejects empty, mixed, incomplete, edge, remote, private, and aborted selections", () => {
@@ -94,9 +113,17 @@ describe("Canvas media external drag visibility", () => {
     const remote = createMediaNode({
       id: "remote",
       position: { x: 0, y: 0 },
-      resource: { id: "remote-resource", kind: "image", url: "https://example.com/image.png" },
+      resource: {
+        id: "remote-resource",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "https://example.com/image.png" },
+      },
     })
-    const privateMedia = media("private", "video", ".convax/canvases/canvas-1/document.json")
+    const privateMedia = media("private", "video", {
+      kind: "project-file",
+      path: ".convax/canvases/canvas-1/document.json",
+    })
     expect(isManagedCanvasMediaDragSelection(context([remote.id], { nodes: [remote] }))).toBe(false)
     expect(isManagedCanvasMediaDragSelection(context([privateMedia.id], { nodes: [privateMedia] }))).toBe(false)
 

@@ -1,13 +1,14 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 import { createCanvasDocument, createCanvasSelectionActionContext, createMediaNode } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 
 import type { JianyingRendererClient } from "../jianying-contracts"
 import { canExportSelectionToJianying, exportCanvasMediaToJianying } from "../renderer/jianying-selection-action"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import { JianyingCanvasService } from "./jianying-canvas-service"
 import { MacOSJianyingDeepLinkTransport } from "./jianying-deeplink"
 import { JianyingIntegrationService, MacOSJianyingNativeAdapter, type JianyingCommandRunner } from "./jianying-service"
@@ -40,18 +41,21 @@ const handlers = new Map<string, InvokeHandler>()
 const listeners = new Map<string, EventHandler>()
 const temporaryRoots: string[] = []
 
-mock.module("electron", () => ({
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    on: (channel: string, listener: EventHandler) => listeners.set(channel, listener),
-    removeHandler: (channel: string) => handlers.delete(channel),
-    removeListener: (channel: string) => listeners.delete(channel),
-  },
-}))
+beforeEach(() => {
+  configureElectronMock({
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      on: (channel: string, listener: EventHandler) => listeners.set(channel, listener),
+      removeHandler: (channel: string) => handlers.delete(channel),
+      removeListener: (channel: string) => listeners.delete(channel),
+    },
+  })
+})
 
 afterEach(async () => {
   handlers.clear()
   listeners.clear()
+  resetElectronMock()
   await Promise.all(temporaryRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
@@ -84,13 +88,14 @@ describe("JianYing toolbar integration", () => {
   test("sends selected image and video bytes to the active draft through IPC and one Deep Link", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-jianying-toolbar-"))
     temporaryRoots.push(root)
-    const assetsRoot = path.join(root, ".convax", "assets")
-    const imagePath = path.join(assetsRoot, "frame.png")
-    const videoPath = path.join(assetsRoot, "clip.mp4")
+    const managedDigest = "a".repeat(64)
+    const imagePath = path.join(root, "Media", "frame.png")
+    const videoPath = path.join(root, ".convax", "assets", "blobs", managedDigest)
     const draftPath = path.join(root, "drafts", "Temporary")
     const imageBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
     const videoBytes = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from("ftypisomvideo")])
-    await fs.mkdir(assetsRoot, { recursive: true })
+    await fs.mkdir(path.dirname(imagePath), { recursive: true })
+    await fs.mkdir(path.dirname(videoPath), { recursive: true })
     await fs.mkdir(draftPath, { recursive: true })
     await fs.writeFile(imagePath, imageBytes)
     await fs.writeFile(videoPath, videoBytes)
@@ -147,9 +152,9 @@ describe("JianYing toolbar integration", () => {
       resource: {
         id: "image-resource",
         kind: "image",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/frame.png" } },
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Media/frame.png" } },
         name: "Frame",
-        url: "convax-asset://project/frame.png",
+        state: { status: "ready" },
       },
     })
     const video = createMediaNode({
@@ -158,9 +163,16 @@ describe("JianYing toolbar integration", () => {
       resource: {
         id: "video-resource",
         kind: "video",
-        metadata: { [projectFileReferenceKey]: { path: ".convax/assets/clip.mp4" } },
+        metadata: {
+          [projectResourceReferenceKey]: {
+            kind: "managed-asset",
+            mediaType: "video/mp4",
+            name: "clip.mp4",
+            sha256: managedDigest,
+          },
+        },
         name: "Clip",
-        url: "convax-asset://project/clip.mp4",
+        state: { status: "ready" },
       },
     })
     const document = {
@@ -169,6 +181,9 @@ describe("JianYing toolbar integration", () => {
       revision: 7,
     }
     const canvas = new JianyingCanvasService({
+      assets: {
+        resolve: async ({ reference }) => path.join(root, ".convax", "assets", "blobs", reference.sha256),
+      },
       documents: { load: async () => ({ document, storageVersion: "v1" }) },
       integration,
       isEnabled: async () => true,

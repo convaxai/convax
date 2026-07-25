@@ -1,6 +1,7 @@
-import { afterEach, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, test } from "bun:test"
 
 import type { JianyingCanvasExportRequest, JianyingClient } from "../jianying-contracts"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
 type InvokeHandler = (event: TestEvent, input?: unknown) => unknown
 type EventHandler = (event: TestEvent, input?: unknown) => void
@@ -35,26 +36,29 @@ function sender(id: number): TestSender {
   }
 }
 
-mock.module("electron", () => ({
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    on: (channel: string, listener: EventHandler) => listeners.set(channel, listener),
-    removeHandler: (channel: string) => {
-      removedHandlers.push(channel)
-      handlers.delete(channel)
+beforeEach(() => {
+  configureElectronMock({
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      on: (channel: string, listener: EventHandler) => listeners.set(channel, listener),
+      removeHandler: (channel: string) => {
+        removedHandlers.push(channel)
+        handlers.delete(channel)
+      },
+      removeListener: (channel: string) => {
+        removedListeners.push(channel)
+        listeners.delete(channel)
+      },
     },
-    removeListener: (channel: string) => {
-      removedListeners.push(channel)
-      listeners.delete(channel)
-    },
-  },
-}))
+  })
+})
 
 afterEach(() => {
   handlers.clear()
   listeners.clear()
   removedHandlers.splice(0)
   removedListeners.splice(0)
+  resetElectronMock()
 })
 
 const request: JianyingCanvasExportRequest = {

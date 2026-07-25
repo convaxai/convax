@@ -5,7 +5,7 @@ import type {
   CanvasNodeQuery,
 } from "@convax/canvas/application"
 import { getCanvasNodeSize } from "@convax/canvas/core"
-import { getProjectFileReference, type ProjectCanvasClient } from "@convax/project/canvas"
+import { getProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
 
 import type {
@@ -197,16 +197,26 @@ export class PluginCanvasCapabilityService {
                   edges: snapshot.document.edges.map(({ id, source, target }) => ({ id, source, target })),
                   id: snapshot.document.id,
                   nodes: snapshot.document.nodes.map((node, index) => {
-                    const reference = getProjectFileReference(node.data.metadata)
+                    const reference = getProjectResourceReference(node.data.metadata)
+                    const resourceState =
+                      node.data.resourceState &&
+                      typeof node.data.resourceState === "object" &&
+                      !Array.isArray(node.data.resourceState)
+                        ? (node.data.resourceState as Record<string, unknown>)
+                        : undefined
                     return {
                       ...geometryNodes[index]!,
                       ...(typeof node.data.description === "string" ? { description: node.data.description } : {}),
                       ...(typeof node.data.durationMs === "number" ? { durationMs: node.data.durationMs } : {}),
                       ...(typeof node.data.mimeType === "string" ? { mimeType: node.data.mimeType } : {}),
                       ...(typeof node.data.name === "string" ? { name: node.data.name } : {}),
-                      ...(reference ? { resource: { kind: "project-file" as const, path: reference.path } } : {}),
-                      ...(typeof node.data.status === "string" ? { status: node.data.status } : {}),
-                      ...(typeof node.data.text === "string" ? { text: node.data.text } : {}),
+                      ...(reference?.kind === "project-file"
+                        ? { resource: { kind: "project-file" as const, path: reference.path } }
+                        : {}),
+                      ...(resourceState && typeof resourceState.status === "string"
+                        ? { status: resourceState.status }
+                        : {}),
+                      ...(resourceState && typeof resourceState.text === "string" ? { text: resourceState.text } : {}),
                     }
                   }),
                   revision: snapshot.document.revision,

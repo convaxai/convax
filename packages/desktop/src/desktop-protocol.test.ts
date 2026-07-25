@@ -1,9 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { checkDesktopProtocol, desktopProtocolVersion } from "./desktop-protocol"
+import {
+  canvasResourceIpcChannel,
+  canvasResourceHydrateStaleIpcChannel,
+  canvasResourceReadConnectedImageIpcChannel,
+  canvasTextResourceIpcChannel,
+  checkDesktopProtocol,
+  desktopProtocolVersion,
+} from "./desktop-protocol"
 
 describe("desktop IPC protocol compatibility", () => {
   test("tracks the Desktop preload bridge contract", () => {
-    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/18")
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/21")
+    expect(canvasResourceIpcChannel).toBe("canvas:resource-add")
+    expect(canvasResourceHydrateStaleIpcChannel).toBe("canvas:resource-hydrate-stale")
+    expect(canvasResourceReadConnectedImageIpcChannel).toBe("canvas:resource-read-connected-image")
+    expect(canvasTextResourceIpcChannel).toBe("canvas:text-resource-save")
   })
 
   test("accepts a matching main, preload, and renderer protocol", async () => {

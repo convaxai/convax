@@ -53,6 +53,24 @@ describe("ProjectController", () => {
     controller.dispose()
   })
 
+  test("treats a false active-project guard as a clean cancellation", async () => {
+    const onActiveProjectChangeCanceled = mock(() => undefined)
+    const controller = new ProjectController(createClient(), {
+      beforeActiveProjectChange: async () => false,
+      onActiveProjectChangeCanceled,
+    })
+    await controller.initialize()
+
+    await controller.activate("two")
+
+    expect(controller.getSnapshot()).toMatchObject({
+      activeProjectId: "one",
+      changingActiveProject: false,
+      error: null,
+    })
+    expect(onActiveProjectChangeCanceled).toHaveBeenCalledTimes(1)
+  })
+
   test("activates a newly opened project returned by the lifecycle client", async () => {
     const opened: ProjectRecord = { createdAt: 3, id: "three", lastOpenedAt: 3, name: "Three", rootPath: "/three" }
     const openProject = mock(async (): Promise<ProjectSelectionResult> => ({

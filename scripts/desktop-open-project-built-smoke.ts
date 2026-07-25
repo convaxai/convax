@@ -395,7 +395,11 @@ try {
       () => settingsView.querySelector("#settings-language"),
       "the application language setting",
     )
-    languageSelect.click()
+    languageSelect.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    }))
     await waitFor(
       () => document.querySelector('[data-slot="select-content"]'),
       "the application language options",
@@ -414,7 +418,11 @@ try {
     if (!document.querySelector('[data-settings-view="true"]')) {
       throw new Error("Escape closed Settings together with the language options")
     }
-    languageSelect.click()
+    languageSelect.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    }))
     const chineseLanguageOption = await waitFor(
       () => [...document.querySelectorAll('[role="option"]')]
         .find((option) => option.textContent?.trim() === "简体中文"),
@@ -584,8 +592,14 @@ try {
 
   await evaluateStable(
     rendererDebugger,
-    `(() => {
-      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      let composer
+      while (Date.now() < deadline) {
+        composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+        if (composer) break
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
       if (!composer) throw new Error("The Agent composer is missing")
       composer.replaceChildren()
       composer.focus()
@@ -963,35 +977,42 @@ try {
     throw new Error(`Unexpected saved 3D Director state: ${JSON.stringify(savedDirectorState)}`)
   }
 
-  const persistedDocument = JSON.parse(
+  const persistedEnvelope = JSON.parse(
     await fs.readFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "utf8"),
   ) as {
-    edges?: unknown[]
-    id?: string
-    nodes?: Array<{
-      data?: {
-        kind?: string
-        metadata?: {
-          convaxPlugin?: { version?: string }
-          convaxPluginState?: {
-            directorProject?: {
-              objects?: Array<{ id?: string; transform?: { rotation?: number[] } }>
-              version?: number
+    document?: {
+      edges?: unknown[]
+      id?: string
+      nodes?: Array<{
+        data?: {
+          kind?: string
+          metadata?: {
+            convaxPlugin?: { version?: string }
+            convaxPluginState?: {
+              directorProject?: {
+                objects?: Array<{ id?: string; transform?: { rotation?: number[] } }>
+                version?: number
+              }
+              presentation?: { viewport?: { directorView?: unknown } }
+              schemaVersion?: number
             }
-            presentation?: { viewport?: { directorView?: unknown } }
-            schemaVersion?: number
           }
         }
-      }
-    }>
+      }>
+    }
+    schemaVersion?: unknown
   }
-  const persistedDirectorState = persistedDocument.nodes?.[0]?.data?.metadata?.convaxPluginState
+  if (persistedEnvelope.schemaVersion !== "convax.canvas/2") {
+    throw new Error(`Unexpected persisted Canvas envelope: ${JSON.stringify(persistedEnvelope)}`)
+  }
+  const persistedDocument = persistedEnvelope.document
+  const persistedDirectorState = persistedDocument?.nodes?.[0]?.data?.metadata?.convaxPluginState
   const persistedRole = persistedDirectorState?.directorProject?.objects?.find(
     (object) => object.id === "char_default_a",
   )
   const persistedRotationY = persistedRole?.transform?.rotation?.[1]
   if (
-    persistedDocument.id !== "canvas-main" ||
+    persistedDocument?.id !== "canvas-main" ||
     persistedDocument.nodes?.length !== 1 ||
     persistedDocument.nodes[0]?.data?.kind !== "plugin.storyai-3d-director-desk" ||
     persistedDocument.nodes[0]?.data?.metadata?.convaxPluginState?.schemaVersion !== 2 ||
@@ -1004,7 +1025,7 @@ try {
     persistedDocument.nodes[0]?.data?.metadata?.convaxPlugin?.version !== "0.0.1-convax.3" ||
     persistedDocument.edges?.length !== 0
   ) {
-    throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedDocument)}`)
+    throw new Error(`Unexpected persisted Canvas: ${JSON.stringify(persistedEnvelope)}`)
   }
 
   // Match the recorded failure: finish an Orbit gesture and click the host-owned
@@ -1233,19 +1254,20 @@ try {
         const frame = edge
           ? loaded.document?.nodes.find((candidate) => candidate.id === edge.target)
           : null
-        const assetPath = frame?.data.metadata?.convaxProjectFile?.path
+        const reference = frame?.data.metadata?.convaxProjectResource
+        const projectPath = reference?.kind === "project-file" ? reference.path : undefined
         if (
           edge
           && frame?.data.kind === "image"
           && frame.data.mimeType === "image/png"
-          && typeof assetPath === "string"
+          && typeof projectPath === "string"
         ) {
           return {
-            assetPath,
             edgeSource: edge.source,
             edgeTarget: edge.target,
             frameNodeId: frame.id,
             ownerNodeId,
+            projectPath,
           }
         }
         await new Promise((resolve) => setTimeout(resolve, 50))
@@ -1256,11 +1278,11 @@ try {
       }
     })()`,
   )) as {
-    assetPath?: string
     edgeSource?: string
     edgeTarget?: string
     frameNodeId?: string
     ownerNodeId?: string
+    projectPath?: string
     revision?: number
     timedOut?: boolean
   }
@@ -1271,7 +1293,7 @@ try {
     2,
   )
   if (
-    !currentFrame.assetPath?.startsWith(".convax/assets/") ||
+    !currentFrame.projectPath?.startsWith("Generated/") ||
     currentFrame.edgeSource !== currentFrame.ownerNodeId ||
     currentFrame.edgeTarget !== currentFrame.frameNodeId
   ) {
@@ -1282,7 +1304,7 @@ try {
       })}`,
     )
   }
-  const currentFrameBytes = await fs.readFile(path.join(projectRoot, ...currentFrame.assetPath.split("/")))
+  const currentFrameBytes = await fs.readFile(path.join(projectRoot, ...currentFrame.projectPath.split("/")))
   if (
     currentFrameBytes.byteLength <= 8 ||
     !Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).equals(currentFrameBytes.subarray(0, 8))

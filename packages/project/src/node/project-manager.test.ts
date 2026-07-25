@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { ProjectTextFileConflictError } from "@convax/project-files"
 import { NodeProjectManager } from "./project-manager"
 import { copyPath } from "./project-manager-helpers"
 import { ProjectPrivateStorageConflictError } from "./project-private-storage"
@@ -50,7 +52,13 @@ describe("NodeProjectManager registry", () => {
   test("persists, renames, and forgets projects without deleting their folders", async () => {
     expect((await manager.listProjects()).map((project) => project.id)).toEqual([projectId])
     expect((await manager.renameProject(projectId, "Launch board")).name).toBe("Launch board")
-    await manager.writePrivateTextFile({ namespace: "plugin-data", path: "items/main/document.json", content: "saved plugin data", createParents: true, projectId })
+    await manager.writePrivateTextFile({
+      namespace: "plugin-data",
+      path: "items/main/document.json",
+      content: "saved plugin data",
+      createParents: true,
+      projectId,
+    })
 
     const reloaded = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "state", "projects.json") })
     expect((await reloaded.listProjects())[0]?.name).toBe("Launch board")
@@ -60,7 +68,9 @@ describe("NodeProjectManager registry", () => {
 
     const rebound = await reloaded.addProject(projectRoot)
     expect(rebound.id).toBe(projectId)
-    expect(await reloaded.readPrivateTextFile({ namespace: "plugin-data", path: "items/main/document.json", projectId })).toMatchObject({
+    expect(
+      await reloaded.readPrivateTextFile({ namespace: "plugin-data", path: "items/main/document.json", projectId }),
+    ).toMatchObject({
       content: "saved plugin data",
       exists: true,
     })
@@ -103,7 +113,9 @@ describe("NodeProjectManager registry", () => {
     await fs.rename(projectRoot, movedRoot)
     const rebound = await manager.addProject(movedRoot)
     expect(rebound.id).toBe(projectId)
-    expect((await manager.listProjects()).map((project) => [project.id, project.rootPath])).toEqual([[projectId, await fs.realpath(movedRoot)]])
+    expect((await manager.listProjects()).map((project) => [project.id, project.rootPath])).toEqual([
+      [projectId, await fs.realpath(movedRoot)],
+    ])
   })
 
   test("rejects a copied project id without replacing the original binding", async () => {
@@ -111,7 +123,9 @@ describe("NodeProjectManager registry", () => {
     await fs.cp(projectRoot, copiedRoot, { recursive: true })
 
     await expect(manager.addProject(copiedRoot)).rejects.toThrow("already bound")
-    expect((await manager.listProjects()).map((project) => [project.id, project.rootPath])).toEqual([[projectId, await fs.realpath(projectRoot)]])
+    expect((await manager.listProjects()).map((project) => [project.id, project.rootPath])).toEqual([
+      [projectId, await fs.realpath(projectRoot)],
+    ])
   })
 
   test("lists other bindings without eagerly parsing a corrupt project manifest", async () => {
@@ -127,25 +141,36 @@ describe("NodeProjectManager private storage", () => {
     const ref = { namespace: "plugin-data", path: "items/main/document.json", projectId }
     expect(await manager.readPrivateTextFile(ref)).toEqual({ content: "", exists: false, version: null })
 
-    const first = await manager.writePrivateTextFile({ ...ref, content: "first", createParents: true, expectedVersion: null })
+    const first = await manager.writePrivateTextFile({
+      ...ref,
+      content: "first",
+      createParents: true,
+      expectedVersion: null,
+    })
     expect(first.version).toHaveLength(64)
     expect(await manager.readPrivateTextFile(ref)).toEqual({ content: "first", exists: true, version: first.version })
 
-    await expect(manager.writePrivateTextFile({ ...ref, content: "stale", expectedVersion: null }))
-      .rejects.toBeInstanceOf(ProjectPrivateStorageConflictError)
+    await expect(
+      manager.writePrivateTextFile({ ...ref, content: "stale", expectedVersion: null }),
+    ).rejects.toBeInstanceOf(ProjectPrivateStorageConflictError)
     const second = await manager.writePrivateTextFile({ ...ref, content: "second", expectedVersion: first.version })
     expect(second.version).not.toBe(first.version)
-    expect(await manager.removePrivatePath({ namespace: "plugin-data", path: "items", projectId })).toEqual({ removed: true })
+    expect(await manager.removePrivatePath({ namespace: "plugin-data", path: "items", projectId })).toEqual({
+      removed: true,
+    })
     expect(await manager.readPrivateTextFile(ref)).toMatchObject({ exists: false })
   })
 
   test("rejects non-portable namespaces and private paths", async () => {
-    await expect(manager.readPrivateTextFile({ namespace: "Plugin", path: "document.json", projectId }))
-      .rejects.toThrow("Invalid project private namespace")
-    await expect(manager.readPrivateTextFile({ namespace: "plugin-data", path: "../document.json", projectId }))
-      .rejects.toThrow("escapes its root")
-    await expect(manager.readPrivateTextFile({ namespace: "plugin-data", path: "C:\\document.json", projectId }))
-      .rejects.toThrow("Invalid project-relative path")
+    await expect(
+      manager.readPrivateTextFile({ namespace: "Plugin", path: "document.json", projectId }),
+    ).rejects.toThrow("Invalid project private namespace")
+    await expect(
+      manager.readPrivateTextFile({ namespace: "plugin-data", path: "../document.json", projectId }),
+    ).rejects.toThrow("escapes its root")
+    await expect(
+      manager.readPrivateTextFile({ namespace: "plugin-data", path: "C:\\document.json", projectId }),
+    ).rejects.toThrow("Invalid project-relative path")
   })
 })
 
@@ -161,62 +186,25 @@ describe("NodeProjectManager files", () => {
     expect(await manager.readTextPreview({ path: "exact.txt", projectId })).toMatchObject({ truncated: false })
   })
 
-  test("reads only bounded, typed images from managed Canvas assets", async () => {
-    const assetRoot = path.join(projectRoot, ".convax", "assets")
-    const fixtures = [
-      { bytes: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), mimeType: "image/jpeg", name: "pano.jpg" },
-      { bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), mimeType: "image/png", name: "pano.png" },
-      { bytes: Buffer.from("RIFF\u0004\u0000\u0000\u0000WEBP", "binary"), mimeType: "image/webp", name: "pano.webp" },
-    ]
-    for (const fixture of fixtures) {
-      await fs.writeFile(path.join(assetRoot, fixture.name), fixture.bytes)
-      expect(await manager.readManagedImageFile({
-        path: `.convax/assets/${fixture.name}`,
-        projectId,
-      })).toMatchObject({
-        mimeType: fixture.mimeType,
-        name: fixture.name,
-        size: fixture.bytes.byteLength,
-      })
-    }
-  })
-
-  test("rejects forged, mismatched, and oversized managed Canvas image reads", async () => {
-    const assetRoot = path.join(projectRoot, ".convax", "assets")
-    await fs.writeFile(path.join(projectRoot, "secret.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "pano.jpg"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "mismatch.png"), Buffer.from([0xff, 0xd8, 0xff]))
-    await fs.writeFile(path.join(assetRoot, "oversized.jpg"), Buffer.alloc(16 * 1024 * 1024 + 1, 0xff))
-
-    for (const filePath of [
-      "secret.jpg",
-      ".convax/project.json",
-      ".convax/assets/../project.json",
-      ".convax/assets/references/.convax/secret.jpg",
-      ".CONVAX/assets/pano.jpg",
-      ".convax\\assets\\pano.jpg",
-      ".convax/assets//pano.jpg",
-      "./.convax/assets/pano.jpg",
-    ]) {
-      await expect(manager.readManagedImageFile({ path: filePath, projectId })).rejects.toThrow()
-    }
-    await expect(manager.readManagedImageFile({
-      path: ".convax/assets/mismatch.png",
-      projectId,
-    })).rejects.toThrow("do not match")
-    await expect(manager.readManagedImageFile({
-      path: ".convax/assets/oversized.jpg",
-      projectId,
-    })).rejects.toThrow("too large")
-  })
-
   test("uses portable names and case-folded collision checks on every platform", async () => {
-    for (const name of ["bad:name.txt", "bad?.txt", "trail.", "trail ", "NUL", "con.txt", "COM¹.txt", "lpt³", "control\u0001.txt"]) {
+    for (const name of [
+      "bad:name.txt",
+      "bad?.txt",
+      "trail.",
+      "trail ",
+      "NUL",
+      "con.txt",
+      "COM¹.txt",
+      "lpt³",
+      "control\u0001.txt",
+    ]) {
       await expect(manager.createEntry({ kind: "file", name, projectId })).rejects.toThrow("Invalid")
     }
 
     await manager.createEntry({ content: "one", kind: "file", name: "Report.txt", projectId })
-    await expect(manager.createEntry({ content: "two", kind: "file", name: "report.TXT", projectId })).rejects.toThrow("already exists")
+    await expect(manager.createEntry({ content: "two", kind: "file", name: "report.TXT", projectId })).rejects.toThrow(
+      "already exists",
+    )
     await manager.renameEntry({ name: "report.txt", path: "Report.txt", projectId })
     expect(await fs.readFile(path.join(projectRoot, "report.txt"), "utf8")).toBe("one")
 
@@ -235,7 +223,9 @@ describe("NodeProjectManager files", () => {
     await manager.createEntry({ kind: "directory", name: "target", projectId })
     await manager.createEntry({ content: "one", kind: "file", name: "Report.txt", parentPath: "first", projectId })
     await manager.createEntry({ content: "two", kind: "file", name: "report.TXT", parentPath: "second", projectId })
-    await expect(manager.moveEntries({ destinationPath: "target", paths: ["first/Report.txt", "second/report.TXT"], projectId })).rejects.toThrow("already exists")
+    await expect(
+      manager.moveEntries({ destinationPath: "target", paths: ["first/Report.txt", "second/report.TXT"], projectId }),
+    ).rejects.toThrow("already exists")
     expect(await fs.readFile(path.join(projectRoot, "first", "Report.txt"), "utf8")).toBe("one")
     expect(await fs.readFile(path.join(projectRoot, "second", "report.TXT"), "utf8")).toBe("two")
 
@@ -255,24 +245,37 @@ describe("NodeProjectManager files", () => {
   test("supports lazy listing, create, rename, move, text persistence, preview, and delete", async () => {
     await manager.createEntry({ kind: "directory", name: "assets", projectId })
     await manager.createEntry({ content: "hello", kind: "file", name: "brief.txt", projectId })
-    expect((await manager.listDirectory({ projectId })).entries.map((entry) => entry.name)).toEqual(["assets", "brief.txt"])
+    expect((await manager.listDirectory({ projectId })).entries.map((entry) => entry.name)).toEqual([
+      "assets",
+      "brief.txt",
+    ])
 
     const renamed = await manager.renameEntry({ name: "notes.txt", path: "brief.txt", projectId })
     expect(renamed.targetPaths).toEqual(["notes.txt"])
     const moved = await manager.moveEntries({ destinationPath: "assets", paths: ["notes.txt"], projectId })
     expect(moved.targetPaths).toEqual(["assets/notes.txt"])
-    expect(await manager.readTextFile({ path: "assets/notes.txt", projectId })).toMatchObject({ content: "hello", exists: true })
+    expect(await manager.readTextFile({ path: "assets/notes.txt", projectId })).toMatchObject({
+      content: "hello",
+      contentRevision: createHash("sha256").update(Buffer.from("hello", "utf8")).digest("hex"),
+      exists: true,
+    })
 
     await manager.writeTextFile({ content: "updated", createParents: true, path: "assets/canvas.json", projectId })
-    expect(await manager.readTextFile({ path: "assets/canvas.json", projectId })).toMatchObject({ content: "updated", exists: true })
+    expect(await manager.readTextFile({ path: "assets/canvas.json", projectId })).toMatchObject({
+      content: "updated",
+      contentRevision: createHash("sha256").update(Buffer.from("updated", "utf8")).digest("hex"),
+      exists: true,
+    })
     expect((await manager.listDirectory({ projectId })).entries.map((entry) => entry.name)).toEqual(["assets"])
-    expect((await manager.readFile({ path: "assets/notes.txt", projectId })).dataUrl).toBe("data:text/plain;base64,aGVsbG8=")
+    expect((await manager.readFile({ path: "assets/notes.txt", projectId })).dataUrl).toBe(
+      "data:text/plain;base64,aGVsbG8=",
+    )
 
     await manager.deleteEntries({ paths: ["assets"], projectId })
     expect((await manager.listDirectory({ projectId })).entries).toEqual([])
   })
 
-  test("protects the Convax namespace while allowing managed canvas assets", async () => {
+  test("protects the Convax namespace from every general Project Files mutation", async () => {
     await manager.createEntry({ content: "visible", kind: "file", name: "visible.txt", projectId })
     await expect(manager.createEntry({ kind: "file", name: ".convax", projectId })).rejects.toThrow("reserved")
     await expect(manager.createEntry({ kind: "file", name: ".CONVAX", projectId })).rejects.toThrow("reserved")
@@ -282,25 +285,57 @@ describe("NodeProjectManager files", () => {
     await fs.writeFile(externalReserved, "external")
     await expect(manager.importEntries({ projectId, sourcePaths: [externalReserved] })).rejects.toThrow("reserved")
 
-    await manager.writeTextFile({ content: "", createParents: true, path: ".convax/assets/.keep", projectId })
-    await expect(manager.writeTextFile({ content: "corrupt", path: ".convax/project.json", projectId })).rejects.toThrow("reserved")
-    const copied = await manager.copyEntries({ destinationPath: ".convax/assets", paths: ["visible.txt"], projectId })
-    expect(copied.targetPaths).toEqual([".convax/assets/visible.txt"])
-    await expect(manager.deleteEntries({ paths: [".convax"], projectId })).rejects.toThrow("reserved")
-    await expect(manager.moveEntries({ destinationPath: ".convax/assets", paths: ["visible.txt"], projectId })).rejects.toThrow("reserved")
-    expect(await fs.readFile(path.join(projectRoot, ".convax", "assets", "visible.txt"), "utf8")).toBe("visible")
-    await expect(manager.deleteManagedAssets({ paths: ["visible.txt"], projectId })).rejects.toThrow("invalid")
-    await manager.deleteManagedAssets({ paths: [".convax/assets/visible.txt"], projectId })
-    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "visible.txt"))).rejects.toThrow()
+    const externalFile = path.join(temporaryRoot, "external-file.txt")
+    await fs.writeFile(externalFile, "external")
+    expect(await manager.readTextFile({ path: "missing.txt", projectId })).toEqual({
+      content: "",
+      contentRevision: "",
+      exists: false,
+      path: "missing.txt",
+    })
+    const digestPath = "a".repeat(64)
+    for (const reservedRoot of [".convax", ".CONVAX", ".ConvAx"]) {
+      const assetRoot = `${reservedRoot}/assets`
+      const manifestPath = `${reservedRoot}/project.json`
+      await expect(
+        manager.copyEntries({
+          destinationPath: assetRoot,
+          paths: ["visible.txt"],
+          projectId,
+        }),
+      ).rejects.toThrow("reserved for Convax")
+      await expect(
+        manager.importEntries({
+          destinationPath: assetRoot,
+          projectId,
+          sourcePaths: [externalFile],
+        }),
+      ).rejects.toThrow("reserved for Convax")
+      await expect(
+        manager.writeTextFile({
+          content: "must not be written",
+          createParents: true,
+          path: `${assetRoot}/blobs/${digestPath}`,
+          projectId,
+        }),
+      ).rejects.toThrow("reserved for Convax")
+      await expect(manager.deleteEntries({ paths: [assetRoot], projectId })).rejects.toThrow("reserved for Convax")
+      await expect(
+        manager.moveEntries({
+          destinationPath: assetRoot,
+          paths: ["visible.txt"],
+          projectId,
+        }),
+      ).rejects.toThrow("reserved for Convax")
+      await expect(manager.listDirectory({ path: assetRoot, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readTextPreview({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readFile({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readFileInfo({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.readTextFile({ path: manifestPath, projectId })).rejects.toThrow("reserved for Convax")
+      await expect(manager.resolveEntryPath({ path: assetRoot, projectId })).rejects.toThrow("reserved for Convax")
+    }
 
-    await fs.mkdir(path.join(projectRoot, ".convax", "assets", "invalid-directory"))
-    await fs.writeFile(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"), "generated")
-    await expect(manager.deleteManagedAssets({
-      paths: [".convax/assets/invalid-directory", ".convax/assets/later-cleanup.png"],
-      projectId,
-    })).rejects.toThrow("could not be removed")
-    await expect(fs.stat(path.join(projectRoot, ".convax", "assets", "later-cleanup.png"))).rejects.toThrow()
-    expect(await fs.stat(path.join(projectRoot, ".convax", "assets", "invalid-directory")).then((stat) => stat.isDirectory())).toBe(true)
+    expect(await fs.readdir(path.join(projectRoot, ".convax", "assets"))).toEqual([])
   })
 
   test("does not claim or remove a copy target that another writer already owns", async () => {
@@ -318,7 +353,10 @@ describe("NodeProjectManager files", () => {
     await fs.writeFile(path.join(sourceRoot, "note.txt"), "first")
     await fs.writeFile(path.join(sourceRoot, "nested", "data.json"), "{}")
 
-    const first = await manager.importEntries({ projectId, sourcePaths: [path.join(sourceRoot, "note.txt"), path.join(sourceRoot, "nested")] })
+    const first = await manager.importEntries({
+      projectId,
+      sourcePaths: [path.join(sourceRoot, "note.txt"), path.join(sourceRoot, "nested")],
+    })
     const second = await manager.importEntries({ projectId, sourcePaths: [path.join(sourceRoot, "note.txt")] })
     expect(first.targetPaths).toEqual(["note.txt", "nested"])
     expect(second.targetPaths).toEqual(["note copy.txt"])
@@ -340,7 +378,9 @@ describe("NodeProjectManager files", () => {
 
     await expect(manager.listDirectory({ path: "../outside", projectId })).rejects.toThrow("escapes")
     await expect(manager.readFile({ path: "linked/secret.txt", projectId })).rejects.toThrow()
-    await expect(manager.moveEntries({ destinationPath: "parent/child", paths: ["parent"], projectId })).rejects.toThrow("into itself")
+    await expect(
+      manager.moveEntries({ destinationPath: "parent/child", paths: ["parent"], projectId }),
+    ).rejects.toThrow("into itself")
     expect((await manager.listDirectory({ projectId })).entries.some((entry) => entry.name === "linked")).toBe(false)
   })
 
@@ -349,7 +389,9 @@ describe("NodeProjectManager files", () => {
     await fs.writeFile(outsideFile, "safe")
     await fs.symlink(outsideFile, path.join(projectRoot, "alias.txt"))
 
-    await expect(manager.writeTextFile({ content: "overwritten", path: "alias.txt", projectId })).rejects.toThrow("Symbolic links")
+    await expect(manager.writeTextFile({ content: "overwritten", path: "alias.txt", projectId })).rejects.toThrow(
+      "Symbolic links",
+    )
     await expect(manager.deleteEntries({ paths: ["alias.txt"], projectId })).rejects.toThrow("Symbolic links")
     expect(await fs.readFile(outsideFile, "utf8")).toBe("safe")
     expect(await fs.lstat(path.join(projectRoot, "alias.txt")).then((stat) => stat.isSymbolicLink())).toBe(true)
@@ -375,7 +417,9 @@ describe("NodeProjectManager files", () => {
     await manager.createEntry({ content: "one", kind: "file", name: "same.txt", parentPath: "first", projectId })
     await manager.createEntry({ content: "two", kind: "file", name: "same.txt", parentPath: "second", projectId })
 
-    await expect(manager.moveEntries({ paths: ["first/same.txt", "second/same.txt"], projectId })).rejects.toThrow("already exists")
+    await expect(manager.moveEntries({ paths: ["first/same.txt", "second/same.txt"], projectId })).rejects.toThrow(
+      "already exists",
+    )
     expect(await fs.readFile(path.join(projectRoot, "first", "same.txt"), "utf8")).toBe("one")
     expect(await fs.readFile(path.join(projectRoot, "second", "same.txt"), "utf8")).toBe("two")
     await expect(manager.importEntries({ projectId, sourcePaths: [projectRoot] })).rejects.toThrow("into itself")
@@ -397,15 +441,173 @@ describe("NodeProjectManager files", () => {
 
   test("serializes text writes so the latest requested write wins", async () => {
     const first = manager.writeTextFile({ content: "first", createParents: true, path: "state/canvas.json", projectId })
-    const second = manager.writeTextFile({ content: "second", createParents: true, path: "state/canvas.json", projectId })
+    const second = manager.writeTextFile({
+      content: "second",
+      createParents: true,
+      path: "state/canvas.json",
+      projectId,
+    })
     const concurrentRead = manager.readTextFile({ path: "state/canvas.json", projectId })
     await Promise.all([first, second])
     expect(await fs.readFile(path.join(projectRoot, "state", "canvas.json"), "utf8")).toBe("second")
-    expect((await concurrentRead).content).toBe("second")
+    expect(await concurrentRead).toMatchObject({
+      content: "second",
+      contentRevision: createHash("sha256").update(Buffer.from("second", "utf8")).digest("hex"),
+    })
+  })
+
+  test("rejects invalid UTF-8 instead of decoding replacement text", async () => {
+    await fs.writeFile(path.join(projectRoot, "invalid.txt"), Buffer.from([0xc3, 0x28]))
+
+    await expect(manager.readTextFile({ path: "invalid.txt", projectId })).rejects.toThrow(/UTF-8/i)
+  })
+
+  test("allows only one of two concurrent compare-and-replace saves", async () => {
+    await fs.writeFile(path.join(projectRoot, "brief.md"), "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const results = await Promise.allSettled([
+      manager.compareAndReplaceTextFile({ content: "first", expectedRevision, path: "brief.md", projectId }),
+      manager.compareAndReplaceTextFile({ content: "second", expectedRevision, path: "brief.md", projectId }),
+    ])
+
+    const success = results.find((result) => result.status === "fulfilled")
+    const conflict = results.find((result) => result.status === "rejected")
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1)
+    expect(conflict?.status === "rejected" && conflict.reason).toBeInstanceOf(ProjectTextFileConflictError)
+    const finalBytes = await fs.readFile(path.join(projectRoot, "brief.md"))
+    const finalRevision = createHash("sha256").update(finalBytes).digest("hex")
+    expect(success?.status === "fulfilled" && success.value.contentRevision).toBe(finalRevision)
+    expect(
+      conflict?.status === "rejected" && (conflict.reason as ProjectTextFileConflictError).actualRevision,
+    ).toBe(finalRevision)
+  })
+
+  test("does not overwrite an external replacement staged before compare-and-replace commit", async () => {
+    let stagedPath = ""
+    let enterBarrier!: () => void
+    let releaseBarrier!: () => void
+    const barrierEntered = new Promise<void>((resolve) => {
+      enterBarrier = resolve
+    })
+    const barrierReleased = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    class BarrierProjectManager extends NodeProjectManager {
+      protected async beforeCompareAndReplaceCommit(input: { targetPath: string; temporaryPath: string }) {
+        stagedPath = input.temporaryPath
+        enterBarrier()
+        await barrierReleased
+      }
+    }
+    const racingManager = new BarrierProjectManager({
+      registryFile: path.join(temporaryRoot, "state", "projects.json"),
+    })
+    const targetPath = path.join(projectRoot, "brief.md")
+    const displacedPath = path.join(projectRoot, "brief-before-external.md")
+    await fs.writeFile(targetPath, "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const save = racingManager.compareAndReplaceTextFile({
+      content: "convax replacement",
+      expectedRevision,
+      path: "brief.md",
+      projectId,
+    })
+    const enteredBeforeSaveSettled = await Promise.race([
+      barrierEntered.then(() => true),
+      save.then(
+        () => false,
+        () => false,
+      ),
+    ])
+
+    expect(enteredBeforeSaveSettled).toBeTrue()
+    try {
+      expect(await fs.readFile(stagedPath, "utf8")).toBe("convax replacement")
+      await fs.rename(targetPath, displacedPath)
+      await fs.writeFile(targetPath, "external replacement", { flag: "wx" })
+    } finally {
+      releaseBarrier()
+    }
+
+    await expect(save).rejects.toBeInstanceOf(ProjectTextFileConflictError)
+    expect(await fs.readFile(targetPath, "utf8")).toBe("external replacement")
+    expect(await fs.readFile(displacedPath, "utf8")).toBe("before")
+    await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("serializes compare-and-replace with ordinary Project text writes", async () => {
+    await fs.writeFile(path.join(projectRoot, "brief.md"), "before")
+    const expectedRevision = createHash("sha256").update("before").digest("hex")
+
+    const compare = manager.compareAndReplaceTextFile({
+      content: "compared",
+      expectedRevision,
+      path: "brief.md",
+      projectId,
+    })
+    const ordinary = manager.writeTextFile({ content: "ordinary", path: "brief.md", projectId })
+
+    await expect(compare).resolves.toEqual({
+      contentRevision: createHash("sha256").update("compared").digest("hex"),
+    })
+    await expect(ordinary).resolves.toMatchObject({ operation: "write" })
+    expect(await fs.readFile(path.join(projectRoot, "brief.md"), "utf8")).toBe("ordinary")
+  })
+
+  test("does not create a missing compare-and-replace target", async () => {
+    let failure: unknown
+    try {
+      await manager.compareAndReplaceTextFile({
+        content: "new",
+        expectedRevision: "a".repeat(64),
+        path: "missing.md",
+        projectId,
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(ProjectTextFileConflictError)
+    expect((failure as ProjectTextFileConflictError).actualRevision).toBeNull()
+    await expect(fs.stat(path.join(projectRoot, "missing.md"))).rejects.toMatchObject({ code: "ENOENT" })
+  })
+
+  test("does not replace invalid UTF-8 or a symlink target", async () => {
+    const invalid = Buffer.from([0xc3, 0x28])
+    await fs.writeFile(path.join(projectRoot, "invalid.txt"), invalid)
+    await expect(
+      manager.compareAndReplaceTextFile({
+        content: "replacement",
+        expectedRevision: createHash("sha256").update(invalid).digest("hex"),
+        path: "invalid.txt",
+        projectId,
+      }),
+    ).rejects.toThrow(/UTF-8/i)
+    expect(await fs.readFile(path.join(projectRoot, "invalid.txt"))).toEqual(invalid)
+
+    const outside = path.join(temporaryRoot, "outside.txt")
+    await fs.writeFile(outside, "outside")
+    await fs.symlink(outside, path.join(projectRoot, "linked.txt"))
+    await expect(
+      manager.compareAndReplaceTextFile({
+        content: "replacement",
+        expectedRevision: createHash("sha256").update("outside").digest("hex"),
+        path: "linked.txt",
+        projectId,
+      }),
+    ).rejects.toThrow(/symbolic link/i)
+    expect(await fs.readFile(outside, "utf8")).toBe("outside")
   })
 
   test("flushes pending project writes before forgetting the registry entry", async () => {
-    const write = manager.writeTextFile({ content: "latest", createParents: true, path: "state/canvas.json", projectId })
+    const write = manager.writeTextFile({
+      content: "latest",
+      createParents: true,
+      path: "state/canvas.json",
+      projectId,
+    })
     const forget = manager.forgetProject(projectId)
     await expect(write).resolves.toMatchObject({ operation: "write" })
     await expect(forget).resolves.toBe(true)
@@ -417,14 +619,21 @@ describe("NodeProjectManager files", () => {
       maxTextFileBytes: 3,
       registryFile: path.join(temporaryRoot, "state", "projects.json"),
     })
-    const failedWrite = limited.writeTextFile({ content: "too large", createParents: true, path: "state/canvas.json", projectId })
+    const failedWrite = limited.writeTextFile({
+      content: "too large",
+      createParents: true,
+      path: "state/canvas.json",
+      projectId,
+    })
     const observedWrite = failedWrite.catch((error: unknown) => error)
     const concurrentFlush = limited.flushPendingWrites()
     const observedFlush = concurrentFlush.catch((error: unknown) => error)
     expect(String(await observedWrite)).toContain("too large")
     expect(String(await observedFlush)).toContain("could not be saved")
     await expect(limited.flushPendingWrites()).resolves.toBeUndefined()
-    await expect(limited.writeTextFile({ content: "ok", createParents: true, path: "state/canvas.json", projectId })).resolves.toMatchObject({ operation: "write" })
+    await expect(
+      limited.writeTextFile({ content: "ok", createParents: true, path: "state/canvas.json", projectId }),
+    ).resolves.toMatchObject({ operation: "write" })
     await expect(limited.flushPendingWrites()).resolves.toBeUndefined()
   })
 })

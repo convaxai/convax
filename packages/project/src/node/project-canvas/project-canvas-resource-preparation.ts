@@ -1,3 +1,4 @@
+import path from "node:path"
 import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
 import type {
   CanvasResourcePreparationPort,
@@ -5,20 +6,28 @@ import type {
   CanvasResourcePreparationResult,
   CanvasResourceSource,
 } from "@convax/canvas/application"
-import type { ProjectFileInfo, ProjectFilesClient } from "@convax/project-files/contracts"
+import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
+import type { ProjectFilesClient } from "@convax/project-files/contracts"
 import {
-  isProjectCanvasManagedAssetPath,
-  projectCanvasManagedAssetDirectory,
-  projectFileReferenceKey,
-  requireProjectCanvasResourcePath,
+  projectResourceReferenceKey,
+  requireProjectResourceReference,
+  type ProjectResourceReference,
 } from "../../canvas/project-resources"
+import { readStableProjectUtf8File } from "../stable-project-file"
+import { defaultProjectTextPublicationMaximumBytes } from "./project-file-publisher"
+import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
-const managedAssetDirectory = projectCanvasManagedAssetDirectory
+export type ProjectCanvasResourceHost = Pick<ProjectFilesClient, "listDirectory" | "readFileInfo" | "readTextFile">
 
-export type ProjectCanvasResourceHost = Pick<
-  ProjectFilesClient,
-  "copyEntries" | "listDirectory" | "readFileInfo" | "readTextFile"
->
+export interface ProjectCanvasFilePublisher {
+  publishText(input: {
+    content: string
+    directory: "Notes"
+    extension: ".md" | ".txt"
+    name?: string
+    projectId: string
+  }): Promise<{ contentRevision: string; path: string }>
+}
 
 export interface ProjectCanvasMediaInspection {
   durationMs?: number
@@ -37,143 +46,290 @@ export interface ProjectCanvasMediaInspector {
   }): Promise<ProjectCanvasMediaInspection>
 }
 
-/**
- * Resolves serializable Canvas resource sources without exposing native paths.
- * The Project host remains responsible for every filesystem operation.
- */
 export class ProjectCanvasResourcePreparation implements CanvasResourcePreparationPort {
   constructor(
     private readonly project: ProjectCanvasResourceHost,
+    private readonly publisher: ProjectCanvasFilePublisher,
+    private readonly assets: ProjectManagedAssetStore,
     private readonly mediaInspector?: ProjectCanvasMediaInspector,
   ) {}
 
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
     throwIfAborted(request.signal)
     const items: CanvasUploadItem[] = []
-    for (const source of request.sources) {
-      items.push(await this.prepareSource(request.scopeId, source, request.signal))
-      throwIfAborted(request.signal)
+    const retainedOnFailure: { label: string }[] = []
+    try {
+      for (const source of request.sources) {
+        const prepared = await this.prepareSource(request.scopeId, source, request.signal)
+        items.push(prepared.item)
+        if (prepared.retainedOnFailure) retainedOnFailure.push(prepared.retainedOnFailure)
+        throwIfAborted(request.signal)
+      }
+    } catch (error) {
+      if (error instanceof CanvasResourcePartialFailureError) {
+        if (retainedOnFailure.length === 0) throw error
+        throw new CanvasResourcePartialFailureError(error.cause, [...retainedOnFailure, ...error.retainedOnFailure])
+      }
+      if (retainedOnFailure.length > 0) {
+        throw new CanvasResourcePartialFailureError(error, retainedOnFailure)
+      }
+      throw error
     }
-    return { items }
+    return {
+      items,
+      ...(retainedOnFailure.length === 0 ? {} : { retainedOnFailure }),
+    }
+  }
+
+  async prepareManagedTextEditableCopy(input: {
+    projectId: string
+    reference: ProjectResourceReference
+    sourceId: string
+  }): Promise<CanvasResourcePreparationResult> {
+    if (typeof input.projectId !== "string" || !input.projectId.trim()) throw new Error("Project id is required")
+    if (typeof input.sourceId !== "string" || !input.sourceId.trim()) {
+      throw new Error("Managed text editable-copy source id is required")
+    }
+    const reference = requireProjectResourceReference(input.reference)
+    if (reference.kind !== "managed-asset") {
+      throw new Error("Managed text editable copy requires a managed asset reference")
+    }
+    const extension = managedEditableTextExtension(reference.name)
+    if (!extension) throw new Error("Managed editable copy requires Markdown or plain text")
+    const sourcePath = await this.assets.resolve({ projectId: input.projectId, reference })
+    const contents = await readStableProjectUtf8File(
+      sourcePath,
+      `managed:${reference.sha256}`,
+      defaultProjectTextPublicationMaximumBytes,
+    )
+    if (contents.contentRevision !== reference.sha256) {
+      throw new Error("Managed editable-copy source digest does not match its reference")
+    }
+    const published = await this.publisher.publishText({
+      content: contents.content,
+      directory: "Notes",
+      extension,
+      name: reference.name,
+      projectId: input.projectId,
+    })
+    const publishedReference = requireProjectFileReference(published.path)
+    return {
+      items: [
+        {
+          id: input.sourceId,
+          kind: "text",
+          metadata: metadataFor(publishedReference),
+          mimeType: extension === ".md" ? "text/markdown" : "text/plain",
+          name: path.posix.basename(publishedReference.path),
+          state: {
+            contentRevision: published.contentRevision,
+            editableText: true,
+            status: "ready",
+            text: contents.content,
+          },
+        },
+      ],
+      retainedOnFailure: [{ label: publishedReference.path }],
+    }
+  }
+
+  withAdmittedLocalFiles<T>(
+    input: {
+      files: readonly {
+        mediaType?: string
+        name: string
+        sourceId: string
+        sourcePath: string
+      }[]
+      projectId: string
+    },
+    commit: (prepared: CanvasResourcePreparationResult) => Promise<T>,
+  ): Promise<T> {
+    const sourceIds = new Set<string>()
+    for (const file of input.files) {
+      if (typeof file.sourceId !== "string" || !file.sourceId.trim()) {
+        return Promise.reject(new Error("External Canvas resource source id is required"))
+      }
+      if (sourceIds.has(file.sourceId)) {
+        return Promise.reject(new Error(`External Canvas resource source id is duplicated: ${file.sourceId}`))
+      }
+      sourceIds.add(file.sourceId)
+    }
+
+    return this.assets.withAdmittedLocalFiles(
+      {
+        files: input.files.map(({ mediaType, name, sourcePath }) => ({ mediaType, name, sourcePath })),
+        projectId: input.projectId,
+      },
+      async (references) => {
+        if (references.length !== input.files.length) {
+          throw new Error("Managed asset admission returned an unexpected reference count")
+        }
+        return commit({
+          items: references.map((reference, index) => {
+            if (reference.kind === "project-directory") {
+              throw new Error("Local Canvas file admission returned a directory reference")
+            }
+            return localPreparedItem(input.files[index]!.sourceId, input.files[index]!, reference)
+          }),
+        })
+      },
+    )
   }
 
   private async prepareSource(
     projectId: string,
     source: CanvasResourceSource,
     signal?: AbortSignal,
-  ): Promise<CanvasUploadItem> {
+  ): Promise<{ item: CanvasUploadItem; retainedOnFailure?: { label: string } }> {
     throwIfAborted(signal)
-    if (source.kind === "inline-text") {
-      return {
-        format: source.format,
-        id: source.sourceId,
-        kind: "text",
+    if (source.kind === "new-text") {
+      const published = await this.publisher.publishText({
+        content: source.text,
+        directory: "Notes",
+        extension: ".md",
         name: source.name,
-        text: source.text,
+        projectId,
+      })
+      const reference = requireProjectFileReference(published.path)
+      if (signal?.aborted) {
+        throw new CanvasResourcePartialFailureError(
+          signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError"),
+          [{ label: reference.path }],
+        )
       }
-    }
-
-    if (source.kind === "remote-url") {
-      const url = new URL(source.url)
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error("Remote Canvas resources must use HTTP or HTTPS")
-      }
-      const mimeType = normalizeMimeType(source.mimeType)
       return {
-        id: source.sourceId,
-        kind: mediaKindForMimeType(mimeType),
-        mimeType: mimeType || undefined,
-        name: source.name ?? remoteResourceName(url),
-        url: url.href,
+        item: {
+          id: source.sourceId,
+          kind: "text",
+          metadata: metadataFor(reference),
+          mimeType: "text/markdown",
+          name: path.posix.basename(reference.path),
+          state: {
+            contentRevision: published.contentRevision,
+            status: "ready",
+            text: source.text,
+          },
+        },
+        retainedOnFailure: { label: reference.path },
       }
     }
 
-    const sourcePath = requireProjectCanvasResourcePath(source.path)
     if (source.kind === "host-directory") {
-      await this.project.listDirectory({ path: sourcePath, projectId })
+      const reference = requireProjectDirectoryReference(source.path)
+      await this.project.listDirectory({ path: reference.path, projectId })
       throwIfAborted(signal)
       return {
-        id: source.sourceId,
-        kind: "folder",
-        metadata: { [projectFileReferenceKey]: { path: sourcePath } },
-        name: sourcePath.split("/").at(-1)!,
-        path: sourcePath,
+        item: {
+          id: source.sourceId,
+          kind: "folder",
+          metadata: metadataFor(reference),
+          name: path.posix.basename(reference.path),
+          state: { status: "stale" },
+        },
       }
     }
 
-    const sourceInfo = await this.project.readFileInfo({ path: sourcePath, projectId })
+    const reference = requireProjectFileReference(source.path)
+    const sourceInfo = await this.project.readFileInfo({ path: reference.path, projectId })
     throwIfAborted(signal)
+    const mimeType = normalizeMimeType(sourceInfo.mimeType)
     const textFormat = getCanvasTextFileFormat(sourceInfo)
     if (textFormat) {
-      const text = await this.project.readTextFile({ path: sourcePath, projectId })
+      const text = await this.project.readTextFile({ path: reference.path, projectId })
       throwIfAborted(signal)
-      if (!text.exists) throw new Error(`Project text file was not found: ${sourcePath}`)
+      if (!text.exists) throw new Error(`Project text file was not found: ${reference.path}`)
       return {
-        format: textFormat,
-        id: source.sourceId,
-        kind: "text",
-        metadata: { [projectFileReferenceKey]: { path: sourcePath } },
-        mimeType: normalizeMimeType(sourceInfo.mimeType) || undefined,
-        name: sourceInfo.name,
-        text: text.content,
+        item: {
+          id: source.sourceId,
+          kind: "text",
+          metadata: metadataFor(reference),
+          mimeType: mimeType || textMimeTypeFor(textFormat),
+          name: sourceInfo.name,
+          state: {
+            contentRevision: text.contentRevision,
+            status: "ready",
+            text: text.content,
+          },
+        },
       }
     }
 
-    const asset = await this.materializeAsset(projectId, sourcePath, sourceInfo, signal)
-    const kind = mediaKindForMimeType(asset.mimeType)
+    const kind = mediaKindForMimeType(mimeType)
     const inspection =
       kind !== "file" && this.mediaInspector
         ? await this.mediaInspector.inspect({
             kind,
-            mimeType: asset.mimeType,
-            name: asset.name,
-            path: asset.path,
+            mimeType,
+            name: sourceInfo.name,
+            path: reference.path,
             projectId,
           })
         : undefined
     throwIfAborted(signal)
     return {
-      durationMs: inspection?.durationMs,
-      height: inspection?.height,
-      id: source.sourceId,
-      kind,
-      metadata: { [projectFileReferenceKey]: { path: asset.path } },
-      mimeType: asset.mimeType || undefined,
-      name: asset.name,
-      posterUrl: inspection?.posterUrl,
-      url: "",
-      width: inspection?.width,
+      item: {
+        durationMs: inspection?.durationMs,
+        height: inspection?.height,
+        id: source.sourceId,
+        kind,
+        metadata: metadataFor(reference),
+        mimeType: mimeType || undefined,
+        name: sourceInfo.name,
+        state: {
+          ...(inspection?.posterUrl === undefined ? {} : { posterUrl: inspection.posterUrl }),
+          status: "stale",
+        },
+        width: inspection?.width,
+      },
     }
   }
+}
 
-  private async materializeAsset(
-    projectId: string,
-    sourcePath: string,
-    sourceInfo: ProjectFileInfo,
-    signal?: AbortSignal,
-  ): Promise<ProjectFileInfo> {
-    throwIfAborted(signal)
-    if (isProjectCanvasManagedAssetPath(sourcePath)) {
-      return { ...sourceInfo, mimeType: normalizeMimeType(sourceInfo.mimeType), path: sourcePath }
+function localPreparedItem(
+  sourceId: string,
+  source: { mediaType?: string; name: string },
+  reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
+): CanvasUploadItem {
+  const name = reference.kind === "managed-asset" ? reference.name : source.name
+  const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : source.mediaType)
+  const textFormat = getCanvasTextFileFormat({ mimeType, name })
+  if (textFormat) {
+    return {
+      id: sourceId,
+      kind: "text",
+      metadata: metadataFor(reference),
+      mimeType: mimeType || textMimeTypeFor(textFormat),
+      name,
+      state: { status: "stale" },
     }
-
-    const copied = await this.project.copyEntries({
-      destinationPath: managedAssetDirectory,
-      paths: [sourcePath],
-      projectId,
-    })
-    throwIfAborted(signal)
-    if (copied.targetPaths?.length !== 1) {
-      throw new Error(`Project resource copy did not produce one asset: ${sourcePath}`)
-    }
-    const assetPath = requireProjectCanvasResourcePath(copied.targetPaths[0]!)
-    if (!isProjectCanvasManagedAssetPath(assetPath)) {
-      throw new Error(`Project resource copy escaped the managed asset directory: ${assetPath}`)
-    }
-    const assetInfo = await this.project.readFileInfo({ path: assetPath, projectId })
-    throwIfAborted(signal)
-    return { ...assetInfo, mimeType: normalizeMimeType(assetInfo.mimeType), path: assetPath }
   }
+  return {
+    id: sourceId,
+    kind: mediaKindForMimeType(mimeType),
+    metadata: metadataFor(reference),
+    mimeType: mimeType || undefined,
+    name,
+    state: { status: "stale" },
+  }
+}
+
+function metadataFor(reference: ProjectResourceReference) {
+  return { [projectResourceReferenceKey]: reference }
+}
+
+function requireProjectFileReference(path: string): Extract<ProjectResourceReference, { kind: "project-file" }> {
+  const reference = requireProjectResourceReference({ kind: "project-file", path })
+  if (reference.kind !== "project-file") throw new Error("Project file reference is required")
+  return reference
+}
+
+function requireProjectDirectoryReference(
+  path: string,
+): Extract<ProjectResourceReference, { kind: "project-directory" }> {
+  const reference = requireProjectResourceReference({ kind: "project-directory", path })
+  if (reference.kind !== "project-directory") throw new Error("Project directory reference is required")
+  return reference
 }
 
 function mediaKindForMimeType(mimeType: string): CanvasMediaKind {
@@ -187,16 +343,16 @@ function normalizeMimeType(value?: string) {
   return (value ?? "").split(";", 1)[0]!.trim().toLowerCase()
 }
 
-function remoteResourceName(value: URL) {
-  try {
-    const name = value.pathname.split("/").filter(Boolean).at(-1)
-    return name ? decodeURIComponent(name) : undefined
-  } catch {
-    return undefined
-  }
+function textMimeTypeFor(format: "markdown" | "plain") {
+  return format === "markdown" ? "text/markdown" : "text/plain"
 }
 
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return
   throw signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError")
+}
+
+function managedEditableTextExtension(value: string): ".md" | ".txt" | null {
+  const extension = path.posix.extname(value).toLowerCase()
+  return extension === ".md" || extension === ".txt" ? extension : null
 }

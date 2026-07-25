@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -11,15 +11,21 @@ import type {
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import { createTextNode } from "@convax/canvas/core"
 import type { ProjectLifecycleClient } from "@convax/project"
-import type { ProjectCanvasClient } from "@convax/project/canvas"
+import { projectResourceReferenceKey, type ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
+import type { CanvasResourceClient } from "../desktop-protocol"
 import type { JianyingCanvasExportIpcEnvelope, JianyingRendererClient } from "../jianying-contracts"
+import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
 type InvokeHandler = (event: unknown, input?: unknown) => unknown
 type DesktopBridge = {
   agent: AgentClient
-  canvas: { documents: CanvasRendererDocumentClient; externalMediaDrag: CanvasExternalMediaDragRendererClient }
+  canvas: {
+    documents: CanvasRendererDocumentClient
+    externalMediaDrag: CanvasExternalMediaDragRendererClient
+    resources: CanvasResourceClient
+  }
   jianying: JianyingRendererClient
   projectFiles: ProjectFilesClient
   projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
@@ -31,48 +37,51 @@ const rendererSends: Array<{ channel: string; input: unknown }> = []
 const trustedEvent = { sender: { id: 1 }, senderFrame: { url: "file:///convax/index.html" } }
 let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""
+let selectedLocalFilePath = ""
 
-mock.module("electron", () => ({
-  BrowserWindow: {
-    fromWebContents: () => undefined,
-    getAllWindows: () => [],
-  },
-  contextBridge: {
-    exposeInMainWorld: (name: string, value: DesktopBridge) => {
-      if (name === "convax") exposedBridge = value
+beforeEach(() => {
+  configureElectronMock({
+    BrowserWindow: {
+      fromWebContents: () => undefined,
+      getAllWindows: () => [],
     },
-  },
-  dialog: {
-    showOpenDialog: async () => ({ canceled: false, filePaths: [selectedProjectPath] }),
-  },
-  ipcMain: {
-    handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
-    removeHandler: (channel: string) => handlers.delete(channel),
-  },
-  ipcRenderer: {
-    invoke: (channel: string, input?: unknown) => {
-      const handler = handlers.get(channel)
-      if (!handler) throw new Error(`No main-process handler registered for ${channel}`)
-      return handler(trustedEvent, input)
+    contextBridge: {
+      exposeInMainWorld: (name: string, value: DesktopBridge) => {
+        if (name === "convax") exposedBridge = value
+      },
     },
-    on: (channel: string, listener: (...args: unknown[]) => void) => {
-      const listeners = rendererListeners.get(channel) ?? new Set()
-      listeners.add(listener)
-      rendererListeners.set(channel, listeners)
+    dialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: [selectedProjectPath] }),
     },
-    removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
-      rendererListeners.get(channel)?.delete(listener)
+    ipcMain: {
+      handle: (channel: string, handler: InvokeHandler) => handlers.set(channel, handler),
+      removeHandler: (channel: string) => handlers.delete(channel),
     },
-    send: (channel: string, input: unknown) => rendererSends.push({ channel, input }),
-  },
-  shell: {
-    openPath: async () => "",
-    showItemInFolder: () => undefined,
-  },
-  webUtils: {
-    getPathForFile: () => "",
-  },
-}))
+    ipcRenderer: {
+      invoke: (channel: string, input?: unknown) => {
+        const handler = handlers.get(channel)
+        if (!handler) throw new Error(`No main-process handler registered for ${channel}`)
+        return handler(trustedEvent, input)
+      },
+      on: (channel: string, listener: (...args: unknown[]) => void) => {
+        const listeners = rendererListeners.get(channel) ?? new Set()
+        listeners.add(listener)
+        rendererListeners.set(channel, listeners)
+      },
+      removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
+        rendererListeners.get(channel)?.delete(listener)
+      },
+      send: (channel: string, input: unknown) => rendererSends.push({ channel, input }),
+    },
+    shell: {
+      openPath: async () => "",
+      showItemInFolder: () => undefined,
+    },
+    webUtils: {
+      getPathForFile: () => selectedLocalFilePath,
+    },
+  })
+})
 
 let temporaryRoot = ""
 let disposeIpc: Array<() => void> = []
@@ -87,6 +96,8 @@ afterEach(async () => {
   rendererSends.length = 0
   exposedBridge = undefined
   selectedProjectPath = ""
+  selectedLocalFilePath = ""
+  resetElectronMock()
   if (temporaryRoot) await fs.rm(temporaryRoot, { force: true, recursive: true })
   temporaryRoot = ""
 })
@@ -102,25 +113,38 @@ describe("desktop Project lifecycle IPC smoke", () => {
       NodeProjectCanvasManager,
       ProjectCanvasDocumentRepository,
       ProjectCanvasDocumentService,
+      ProjectCanvasResourcePreparation,
+      ProjectFilePublisher,
+      ProjectManagedAssetStore,
     } = await import("@convax/project/node")
-    const [{ registerAgentIpc }, { registerCanvasDocumentIpc }, { registerProjectIpc }, { registerProjectCanvasIpc }] =
-      await Promise.all([
-        import("./agent-ipc"),
-        import("./canvas-document-ipc"),
-        import("./project-ipc"),
-        import("./project-canvas-ipc"),
-      ])
+    const [
+      { CanvasApplicationService, CanvasResourceBusinessService },
+      { registerAgentIpc },
+      { registerCanvasDocumentIpc, registerCanvasResourceIpc },
+      { registerProjectIpc },
+      { registerProjectCanvasIpc },
+    ] = await Promise.all([
+      import("@convax/canvas/application"),
+      import("./agent-ipc"),
+      import("./canvas-document-ipc"),
+      import("./project-ipc"),
+      import("./project-canvas-ipc"),
+    ])
 
-    const { CanvasApplicationService } = await import("@convax/canvas/application")
     const projects = new NodeProjectManager({
       registryFile: path.join(temporaryRoot, "user-data", "projects.json"),
     })
     const canvases = new NodeProjectCanvasManager(projects, projects)
-    const canvasDocuments = new ProjectCanvasDocumentService(
-      new ProjectCanvasDocumentRepository(projects, canvases),
-      canvases,
+    const assets = new ProjectManagedAssetStore(projects)
+    const canvasRepository = new ProjectCanvasDocumentRepository(projects, canvases, assets)
+    const canvasDocuments = new ProjectCanvasDocumentService(canvasRepository, canvases)
+    const resourcePreparation = new ProjectCanvasResourcePreparation(
+      projects,
+      new ProjectFilePublisher(projects, assets),
+      assets,
     )
     const canvasApplication = new CanvasApplicationService(canvasDocuments)
+    const canvasResources = new CanvasResourceBusinessService(resourcePreparation, canvasApplication)
     let listSessionsInput: AgentRuntimeListSessionsInput | undefined
     let listModelsInput: AgentRuntimeDirectoryInput | undefined
     const activity = {
@@ -160,6 +184,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       }),
     } as unknown as AgentRuntime
     const trusted = { isTrustedSender: () => true }
+    let activeProjectId = ""
 
     disposeIpc = [
       await registerProjectIpc(projects, {
@@ -168,6 +193,11 @@ describe("desktop Project lifecycle IPC smoke", () => {
       }),
       registerProjectCanvasIpc(canvases, trusted),
       registerCanvasDocumentIpc(canvasDocuments, canvasApplication, trusted),
+      registerCanvasResourceIpc(canvasResources, resourcePreparation, {
+        ...trusted,
+        resolveActiveCanvas: async () =>
+          activeProjectId ? { canvasId: "canvas-main", projectId: activeProjectId, revision: 0 } : null,
+      }),
       registerAgentIpc(runtime, projects, { ...trusted, activity }),
     ]
     handlers.set("jianying:draft-status", () => ({
@@ -190,7 +220,6 @@ describe("desktop Project lifecycle IPC smoke", () => {
     if (!exposedBridge) throw new Error("The preload bridge was not exposed")
     expect(exposedBridge.projects).not.toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("listDirectory")
-    expect(exposedBridge.projectFiles).toHaveProperty("readManagedImageFile")
     expect(await exposedBridge.jianying.getDraftStatus()).toEqual({
       draftName: "Current draft",
       draftToken: "draft-token",
@@ -247,29 +276,11 @@ describe("desktop Project lifecycle IPC smoke", () => {
     expect(selection).toMatchObject({ canceled: false, project: { name: "empty-project" } })
     const projectId = selection.project?.id
     if (!projectId) throw new Error("Open Project did not return a project id")
+    activeProjectId = projectId
     expect(await exposedBridge.projectFiles.listDirectory({ path: "", projectId })).toMatchObject({
       entries: [],
       path: "",
     })
-    const managedImagePath = path.join(selectedProjectPath, ".convax", "assets", "tiny.png")
-    await fs.writeFile(managedImagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-    expect(
-      await exposedBridge.projectFiles.readManagedImageFile({
-        path: ".convax/assets/tiny.png",
-        projectId,
-      }),
-    ).toMatchObject({ mimeType: "image/png", name: "tiny.png", size: 8 })
-    await fs.writeFile(
-      path.join(selectedProjectPath, "private.png"),
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    )
-    await expect(
-      exposedBridge.projectFiles.readManagedImageFile({
-        path: "private.png",
-        projectId,
-      }),
-    ).rejects.toThrow("managed Canvas asset")
-
     const catalog = await exposedBridge.projects.canvases.getCanvasCatalog({ projectId })
     expect(catalog).toMatchObject({
       canvases: [{ id: "canvas-main", name: "Canvas 1" }],
@@ -277,7 +288,22 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     const loaded = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
     expect(loaded.document).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
-    const rendererNode = createTextNode({ id: "renderer-note", position: { x: 10, y: 20 }, text: "Command edit" })
+    await exposedBridge.projectFiles.writeTextFile({
+      content: "Command edit",
+      createParents: true,
+      path: "Notes/renderer-note.md",
+      projectId,
+    })
+    const rendererNode = createTextNode({
+      id: "renderer-note",
+      metadata: {
+        [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/renderer-note.md" },
+      },
+      mimeType: "text/markdown",
+      name: "renderer-note.md",
+      position: { x: 10, y: 20 },
+      resourceState: { status: "ready", text: "Command edit" },
+    })
     const commandResult = await exposedBridge.canvas.documents.execute({
       command: {
         addedEdges: [],
@@ -298,6 +324,26 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     expect(handlers.has("canvas:document-save")).toBeFalse()
 
+    selectedLocalFilePath = path.join(temporaryRoot, "outside.png")
+    await fs.writeFile(selectedLocalFilePath, "outside-image")
+    const outsideFile = new File(["renderer-placeholder"], "outside.png", { type: "image/png" })
+    const sourceToken = exposedBridge.canvas.resources.createLocalFileToken(outsideFile)
+    expect(sourceToken).not.toBe("")
+    const resourceResult = await exposedBridge.canvas.resources.add({
+      anchor: { x: 20, y: 40 },
+      canvasId: "canvas-main",
+      commandId: "smoke-add-external",
+      expectedRevision: 1,
+      localFiles: [{ mediaType: "image/png", name: "outside.png", sourceId: "outside", sourceToken }],
+      projectId,
+      sources: [],
+    })
+    expect(resourceResult).toMatchObject({ createdNodeIds: [expect.any(String)], revision: 2, warnings: [] })
+    expect(JSON.stringify(resourceResult)).not.toContain(selectedLocalFilePath)
+    const withResource = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
+    expect(withResource.document?.nodes).toHaveLength(2)
+    expect(JSON.stringify(withResource.document)).not.toContain(selectedLocalFilePath)
+
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })
     expect(listSessionsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), limit: 60 })
     await exposedBridge.agent.prompt({ scopeId: projectId, sessionId: "session-main", text: "Hello" })
@@ -314,14 +360,22 @@ describe("desktop Project lifecycle IPC smoke", () => {
     )
     expect(storedCatalog).toMatchObject({ schemaVersion: "convax.project-canvases/2" })
     expect(storedCatalog).not.toHaveProperty("activeCanvasId")
-    expect(
-      JSON.parse(
-        await fs.readFile(
-          path.join(selectedProjectPath, ".convax", "canvases", "canvas-main", "document.json"),
-          "utf8",
-        ),
+    const storedCanvasEnvelope = JSON.parse(
+      await fs.readFile(
+        path.join(selectedProjectPath, ".convax", "canvases", "canvas-main", "document.json"),
+        "utf8",
       ),
-    ).toMatchObject({ edges: [], id: "canvas-main", nodes: [{ id: rendererNode.id }], revision: 1 })
+    )
+    expect(storedCanvasEnvelope.schemaVersion).toBe("convax.canvas/2")
+    expect(storedCanvasEnvelope.document).toMatchObject({
+      edges: [],
+      id: "canvas-main",
+      revision: 2,
+    })
+    expect(storedCanvasEnvelope.document.nodes).toHaveLength(2)
+    expect(storedCanvasEnvelope.document.nodes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: rendererNode.id })]),
+    )
 
     const createdSelection = await exposedBridge.projects.createProject({ name: "Created project" })
     const createdProjectId = createdSelection.project?.id

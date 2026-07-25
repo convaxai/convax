@@ -7,19 +7,17 @@ import {
   createCanvasServices,
   type CanvasEditorHandle,
   type CanvasGenerateService,
-  type CanvasMediaKind,
   type CanvasNotification,
   type CanvasSelectionAction,
   type CanvasSelectionActionContext,
   type CanvasSelectionDragSource,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
-import { ProjectFilesController, type ProjectFileInfo } from "@convax/project-files"
+import { ProjectFilesController } from "@convax/project-files"
 import {
   dehydrateProjectCanvasDocument,
+  markProjectCanvasResourcesStale,
   ProjectCanvasController,
-  hydrateProjectCanvasDocument,
-  projectFileReferenceKey,
 } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
@@ -87,12 +85,13 @@ import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
-import { ProjectCanvasWorkbenchCoordinator } from "./project-canvas-workbench"
+import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController } from "./service-catalog-controller"
+import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView, type SettingsSection } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
-import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
+import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import { createWebPluginCanvasContribution, type WebPluginCanvasHost } from "./web-plugin-canvas"
 import { WebPluginGenerationProjectionCoordinator } from "./web-plugin-generation-projection"
 import { webPluginCanvasRendererId } from "../plugin-canvas-node"
@@ -106,81 +105,6 @@ const collapsedPrimarySidebarSize = 44
 const collapsedSecondarySidebarSize = 44
 const minimumCanvasPeekSize = 160
 const overlaySidebarBreakpoint = 1040
-
-function mediaKindFromMime(mimeType: string): CanvasMediaKind {
-  if (mimeType.startsWith("image/")) return "image"
-  if (mimeType.startsWith("video/")) return "video"
-  if (mimeType.startsWith("audio/")) return "audio"
-  return "file"
-}
-
-function projectAssetUrl(projectId: string, path: string) {
-  const url = new URL(`convax-asset://${projectId}/file`)
-  url.searchParams.set("path", path)
-  return url.href
-}
-
-function projectFileResource(file: ProjectFileInfo, projectId: string) {
-  return {
-    kind: mediaKindFromMime(file.mimeType),
-    metadata: { [projectFileReferenceKey]: { path: file.path } },
-    mimeType: file.mimeType,
-    name: file.name,
-    url: projectAssetUrl(projectId, file.path),
-  }
-}
-
-function uploadItemId(scope: "local" | "project", index: number) {
-  return `resource_${scope}_${Date.now()}_${index}`
-}
-
-async function ensureProjectAssetsDirectory(projectId: string) {
-  await window.convax.projectFiles.writeTextFile({
-    content: "",
-    createParents: true,
-    path: ".convax/assets/.keep",
-    projectId,
-  })
-}
-
-async function importCanvasFiles(files: readonly File[], projectId: string, signal: AbortSignal) {
-  if (files.length === 0) return []
-  await ensureProjectAssetsDirectory(projectId)
-  const sourceTokens = files.map((file) => window.convax.projectFiles.createImportToken(file))
-  if (sourceTokens.some((token) => !token))
-    throw new Error("Only files from the local disk can be added to a project canvas")
-  const imported = await window.convax.projectFiles.importEntries({
-    destinationPath: ".convax/assets",
-    projectId,
-    sourceTokens,
-  })
-  const projectFiles = await Promise.all(
-    (imported.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })),
-  )
-  if (signal.aborted) throw signal.reason
-  return projectFiles
-}
-
-async function copyCanvasProjectFiles(paths: string[], projectId: string, signal: AbortSignal) {
-  if (paths.length === 0) return []
-  await ensureProjectAssetsDirectory(projectId)
-  const copied = await window.convax.projectFiles.copyEntries({ destinationPath: ".convax/assets", paths, projectId })
-  const projectFiles = await Promise.all(
-    (copied.targetPaths ?? []).map((path) => window.convax.projectFiles.readFileInfo({ path, projectId })),
-  )
-  if (signal.aborted) throw signal.reason
-  return projectFiles
-}
-
-function hydrateRendererCanvasDocument(document: CanvasDocument, projectId: string, title?: string) {
-  return hydrateProjectCanvasDocument(
-    {
-      ...document,
-      metadata: { ...document.metadata, title: title ?? document.metadata.title },
-    },
-    ({ path }) => projectAssetUrl(projectId, path),
-  )
-}
 
 function mediaOperationActionIcon(editor: MediaOperationEditor) {
   if (editor === "time-point") return <ImageDown />
@@ -255,8 +179,10 @@ function App() {
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
-          await canvasEditorRef.current?.prepareToLeave()
+          const canLeave = await canvasEditorRef.current?.prepareToLeave()
+          if (canLeave === false) return false
           await drainCanvasSaves()
+          return true
         },
         onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
@@ -297,9 +223,11 @@ function App() {
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
           if (currentInput?.kind === "canvas") {
-            await canvasEditorRef.current?.prepareToLeave()
+            const canLeave = await canvasEditorRef.current?.prepareToLeave()
+            if (canLeave === false) return false
             await drainCanvasSaves()
           }
+          return true
         },
         onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
@@ -411,6 +339,17 @@ function App() {
   )
     ? mediaOperationDialog
     : null
+  const activeProjectIdRef = useRef<string | null>(activeProjectId ?? null)
+  activeProjectIdRef.current = activeProjectId ?? null
+  useEffect(
+    () =>
+      subscribeMountedCanvasResourceInvalidation({
+        currentEditor: () => canvasEditorRef.current,
+        currentProjectId: () => activeProjectIdRef.current,
+        projectFiles: window.convax.projectFiles,
+      }),
+    [],
+  )
   pluginHostContextRef.current = { activeCanvas, activeProject }
   useEffect(() => {
     setMediaOperationDialog((current) =>
@@ -608,21 +547,17 @@ function App() {
         }
         return result
       },
-      async readManagedProjectImage(input) {
+      async readConnectedImage(input) {
         throwIfAborted(input.signal)
-        const current = pluginHostContextRef.current
-        if (current.activeProject?.id !== input.projectId || !current.activeCanvas) {
-          throw new Error("Plugin call is no longer in the active Project")
-        }
-        const result = await window.convax.projectFiles.readManagedImageFile({
-          path: input.path,
-          projectId: input.projectId,
+        currentScope(input.projectId, input.canvasId)
+        const result = await window.convax.canvas.resources.readConnectedImage({
+          canvasId: input.canvasId,
+          expectedRevision: input.expectedRevision,
+          nodeId: input.nodeId,
+          ownerNodeId: input.ownerNodeId,
         })
         throwIfAborted(input.signal)
-        const latest = pluginHostContextRef.current
-        if (latest.activeProject?.id !== input.projectId || latest.activeCanvas?.id !== current.activeCanvas.id) {
-          throw new Error("Plugin call completed after its Project or Canvas changed")
-        }
+        currentScope(input.projectId, input.canvasId)
         return result
       },
       async waitForGenerationProjection(input) {
@@ -673,20 +608,12 @@ function App() {
   }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, webPluginHost])
   useEffect(() => {
     if (!activeProjectId || projectCanvasSnapshot.projectId !== activeProjectId) return
-    void projectCanvasWorkbench.reconcile(
-      activeProjectId,
-      migrateLastCanvasPreference(
-        localStorage,
-        activeProjectId,
-        projectCanvasSnapshot.workbenchPreferenceMigration?.canvasId,
-      ),
-    )
+    void projectCanvasWorkbench.reconcile(activeProjectId, readLastCanvasPreference(localStorage, activeProjectId))
   }, [
     activeProjectId,
     projectCanvasSnapshot.busy,
     projectCanvasSnapshot.canvases,
     projectCanvasSnapshot.projectId,
-    projectCanvasSnapshot.workbenchPreferenceMigration,
     projectCanvasWorkbench,
     workbenchSnapshot.activeInput,
     workbenchSnapshot.changingInput,
@@ -823,6 +750,14 @@ function App() {
       },
     }
     return createCanvasServices({
+      draftDecision: {
+        decide({ count }) {
+          if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
+            return "save"
+          }
+          return window.confirm("Discard the pending text draft changes?") ? "discard" : "cancel"
+        },
+      },
       assistant: {
         render(request) {
           const host = assistantHostRef.current
@@ -858,32 +793,75 @@ function App() {
           )
         },
       },
-      upload: {
-        async upload(request) {
+      hydration: {
+        async hydrateStale({ document, signal }) {
+          if (!activeProjectId || !activeCanvasId) {
+            throw new Error("Open a Project Canvas before refreshing resources")
+          }
+          if (signal.aborted) throw signal.reason
+          const hydrated = await window.convax.canvas.resources.hydrateStale({
+            canvasId: activeCanvasId,
+            revision: document.revision,
+          })
+          if (signal.aborted) throw signal.reason
+          return hydrated
+        },
+        markStale: markProjectCanvasResourcesStale,
+      },
+      mutation: {
+        async add(request) {
           if (request.signal.aborted) throw request.signal.reason
-          if (!activeProjectId) throw new Error("Open a project before adding files to the canvas")
-          return resolveCanvasUploadItems(request, {
+          if (!activeProjectId || !activeCanvasId) {
+            throw new Error("Open a Project Canvas before adding resources")
+          }
+          const transport = resolveCanvasUploadItems(
+            {
+              files: request.files ?? [],
+              signal: request.signal,
+              transfer: request.transfer,
+            },
+            {
+              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              projectId: activeProjectId,
+            },
+          )
+          const localFiles = transport.localFiles.map(({ file, ...source }) => {
+            const sourceToken = window.convax.canvas.resources.createLocalFileToken(file)
+            if (!sourceToken) throw new Error("Only files from the local disk can be added to a Project Canvas")
+            return { ...source, sourceToken }
+          })
+          return window.convax.canvas.resources.add({
+            anchor: request.anchor,
+            canvasId: activeCanvasId,
+            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+            expectedRevision: request.expectedRevision,
+            localFiles,
             projectId: activeProjectId,
-            async copyProjectMediaFiles(paths, signal) {
-              const files = await copyCanvasProjectFiles([...paths], activeProjectId, signal)
-              return files.map((file, index) => ({
-                id: uploadItemId("project", index),
-                ...projectFileResource(file, activeProjectId),
-              }))
-            },
-            async importLocalMediaFiles(files, signal) {
-              const imported = await importCanvasFiles(files, activeProjectId, signal)
-              return imported.map((file, index) => ({
-                id: uploadItemId("local", index),
-                ...projectFileResource(file, activeProjectId),
-              }))
-            },
-            async readProjectTextFile(path, signal) {
-              const result = await window.convax.projectFiles.readTextFile({ path, projectId: activeProjectId })
-              if (!result.exists) throw new Error(`Could not read ${path}`)
-              if (signal.aborted) throw signal.reason
-              return result.content
-            },
+            ...(request.relation === undefined ? {} : { relation: request.relation }),
+            sources: [...request.sources, ...transport.sources],
+          })
+        },
+        async relink(request) {
+          return runProjectCanvasResourceRelink({
+            activeCanvasId,
+            activeProjectId,
+            createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+            flush: flushCanvasForAgent,
+            projectFiles: projectFilesController,
+            request,
+            resources: window.convax.canvas.resources,
+          })
+        },
+        async saveEditableCopy(request) {
+          if (request.signal.aborted) throw request.signal.reason
+          if (!activeCanvasId) throw new Error("Open a Project Canvas before saving an editable copy")
+          await flushCanvasForAgent()
+          if (request.signal.aborted) throw request.signal.reason
+          return window.convax.canvas.resources.saveEditableCopy({
+            canvasId: activeCanvasId,
+            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+            expectedRevision: request.expectedRevision,
+            nodeId: request.nodeId,
           })
         },
       },
@@ -894,8 +872,13 @@ function App() {
               client: window.convax.canvas.documents,
               commandId: () => `renderer-${globalThis.crypto.randomUUID()}`,
               dehydrate: dehydrateProjectCanvasDocument,
-              hydrate: (document) =>
-                hydrateRendererCanvasDocument(document, activeProjectId, activeCanvasNameRef.current),
+              hydrate: (document) => ({
+                ...document,
+                metadata: {
+                  ...document.metadata,
+                  title: activeCanvasNameRef.current ?? document.metadata.title,
+                },
+              }),
               onSavePending: (pending) => {
                 latestCanvasSaveRef.current = pending
               },
@@ -920,6 +903,7 @@ function App() {
           console.info("[convax]", event.name, event.properties ?? {})
         },
       },
+      textResources: window.convax.canvas.textResources,
     })
   }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas])
 
@@ -1352,7 +1336,6 @@ function App() {
                 <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
               }
               hideWhenNoProject
-              resolveFileUrl={({ path, projectId }) => projectAssetUrl(projectId, path)}
             />
           ) : (
             <aside className="flex h-full w-full flex-col items-center border-r border-border bg-card py-2 text-card-foreground">

@@ -1,5 +1,5 @@
 import type { CanvasNodeData } from "@convax/canvas/core"
-import { getProjectFileReference } from "@convax/project/canvas"
+import { getProjectResourceReference } from "@convax/project/canvas"
 import { requireWebPluginId, type InstalledWebPluginCanvasSurface } from "./plugin-contracts"
 
 export const webPluginStateMetadataKey = "convaxPluginState" as const
@@ -60,7 +60,8 @@ export function matchesWebPluginCanvasNode(plugin: InstalledWebPluginCanvasSurfa
   if (renderer.nodeKinds?.includes(data.kind)) return true
   const mimeType = typeof data.mimeType === "string" ? data.mimeType.toLowerCase() : undefined
   if (mimeType && renderer.mimeTypes?.includes(mimeType)) return true
-  const projectPath = getProjectFileReference(metadata)?.path
+  const reference = getProjectResourceReference(metadata)
+  const projectPath = reference?.kind === "project-file" ? reference.path : undefined
   const names = [data.name, data.path, data.label, projectPath].filter(
     (value): value is string => typeof value === "string",
   )

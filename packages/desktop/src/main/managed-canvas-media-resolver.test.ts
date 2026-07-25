@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { createCanvasDocument, createMediaNode } from "@convax/canvas"
-import { projectFileReferenceKey } from "@convax/project/canvas"
+import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 
@@ -17,23 +17,29 @@ afterEach(async () => {
 async function setupAsset(name: string, bytes: Uint8Array) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-managed-media-test-"))
   temporaryRoots.push(root)
-  const resourcePath = `.convax/assets/${name}`
-  const asset = path.join(root, resourcePath)
+  const asset = path.join(root, name)
   await fs.mkdir(path.dirname(asset), { recursive: true })
   await fs.writeFile(asset, bytes)
-  return { asset, resourcePath, root }
+  return { asset, root }
 }
 
-function audioDocument(resourcePath: string) {
+function managedAudioReference(
+  name: string,
+  sha256: string,
+): Extract<ProjectResourceReference, { kind: "managed-asset" }> {
+  return { kind: "managed-asset", mediaType: "audio/mpeg", name, sha256 }
+}
+
+function audioDocument(reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>) {
   const audio = createMediaNode({
     id: "audio-1",
     position: { x: 0, y: 0 },
     resource: {
       id: "audio-resource",
       kind: "audio",
-      metadata: { [projectFileReferenceKey]: { path: resourcePath } },
+      metadata: { [projectResourceReferenceKey]: reference },
       name: "Soundtrack",
-      url: "convax-asset://project/audio",
+      state: { status: "ready", url: "convax-asset://project/audio" },
     },
   })
   return { ...createCanvasDocument({ id: "canvas-1", nodes: [audio], title: "Canvas" }), revision: 3 }
@@ -41,18 +47,19 @@ function audioDocument(resourcePath: string) {
 
 describe("ManagedCanvasMediaResolver", () => {
   test("resolves a validated managed audio file with an immutable native identity", async () => {
-    const { asset, resourcePath } = await setupAsset("soundtrack.mp3", Buffer.from("ID3\u0004\u0000\u0000"))
-    const document = audioDocument(resourcePath)
+    const { asset } = await setupAsset("soundtrack.mp3", Buffer.from("ID3\u0004\u0000\u0000"))
+    const reference = managedAudioReference("soundtrack.mp3", "a".repeat(64))
+    const document = audioDocument(reference)
     const resolver = new ManagedCanvasMediaResolver({
+      assets: { resolve: mock(async () => asset) },
       documents: { load: mock(async () => ({ document, storageVersion: "v1" })) },
       projects: {
-        readFileInfo: mock(async () => ({
-          mimeType: "audio/mpeg",
-          name: "soundtrack.mp3",
-          path: resourcePath,
-          size: 10,
-        })),
-        resolveEntryPath: mock(async () => asset),
+        readFileInfo: mock(async () => {
+          throw new Error("Managed assets must not use Project file info")
+        }),
+        resolveEntryPath: mock(async () => {
+          throw new Error("Managed assets must not use Project entry paths")
+        }),
       },
     })
 
@@ -77,27 +84,27 @@ describe("ManagedCanvasMediaResolver", () => {
       mimeType: "audio/mpeg",
       name: "soundtrack.mp3",
       path: await fs.realpath(asset),
-      resourcePath,
+      resourcePath: `managed-asset:${reference.sha256}`,
       size: stat.size,
     })
   })
 
   test("rejects a symlink or forged bytes before publishing a native path", async () => {
     const valid = await setupAsset("valid.mp3", Buffer.from("ID3\u0004\u0000\u0000"))
-    const linked = path.join(valid.root, ".convax", "assets", "linked.mp3")
+    const linked = path.join(valid.root, "linked.mp3")
     await fs.symlink(valid.asset, linked)
-    const linkedResourcePath = ".convax/assets/linked.mp3"
-    const linkedDocument = audioDocument(linkedResourcePath)
+    const linkedReference = managedAudioReference("linked.mp3", "b".repeat(64))
+    const linkedDocument = audioDocument(linkedReference)
     const resolver = new ManagedCanvasMediaResolver({
+      assets: { resolve: mock(async () => linked) },
       documents: { load: mock(async () => ({ document: linkedDocument, storageVersion: "v1" })) },
       projects: {
-        readFileInfo: mock(async () => ({
-          mimeType: "audio/mpeg",
-          name: "linked.mp3",
-          path: linkedResourcePath,
-          size: 10,
-        })),
-        resolveEntryPath: mock(async () => linked),
+        readFileInfo: mock(async () => {
+          throw new Error("Managed assets must not use Project file info")
+        }),
+        resolveEntryPath: mock(async () => {
+          throw new Error("Managed assets must not use Project entry paths")
+        }),
       },
     })
     await expect(
@@ -112,17 +119,18 @@ describe("ManagedCanvasMediaResolver", () => {
     ).rejects.toThrow("not a regular Project file")
 
     const forged = await setupAsset("forged.mp3", Buffer.from("not audio"))
-    const forgedDocument = audioDocument(forged.resourcePath)
+    const forgedReference = managedAudioReference("forged.mp3", "c".repeat(64))
+    const forgedDocument = audioDocument(forgedReference)
     const forgedResolver = new ManagedCanvasMediaResolver({
+      assets: { resolve: mock(async () => forged.asset) },
       documents: { load: mock(async () => ({ document: forgedDocument, storageVersion: "v1" })) },
       projects: {
-        readFileInfo: mock(async () => ({
-          mimeType: "audio/mpeg",
-          name: "forged.mp3",
-          path: forged.resourcePath,
-          size: 9,
-        })),
-        resolveEntryPath: mock(async () => forged.asset),
+        readFileInfo: mock(async () => {
+          throw new Error("Managed assets must not use Project file info")
+        }),
+        resolveEntryPath: mock(async () => {
+          throw new Error("Managed assets must not use Project entry paths")
+        }),
       },
     })
     await expect(

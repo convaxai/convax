@@ -4,7 +4,7 @@ import {
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas"
-import { getProjectFileReference, isManagedProjectAssetPath } from "@convax/project/canvas"
+import { getProjectResourceReference } from "@convax/project/canvas"
 import type { WebPluginGenerationInputRole, WebPluginGenerationModality } from "./plugin-contracts"
 import type { InstalledPlugin, PluginCapability } from "./plugin-api"
 import {
@@ -345,7 +345,7 @@ function sanitizeGenerationResult(value: PluginGenerationCanvasResult): PluginGe
 
 const connectedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
 
-type ConnectedImageSource = { kind: "embedded"; dataUrl: string; mimeType: string } | { kind: "project"; path: string }
+type ConnectedImageSource = { key: string }
 
 function requireConnectedImageNodeId(value: unknown) {
   if (typeof value !== "string" || !value || value.length > 2_048 || /[\u0000-\u001f\u007f]/.test(value)) {
@@ -355,28 +355,13 @@ function requireConnectedImageNodeId(value: unknown) {
 }
 
 function connectedImageSource(node: CanvasNode): ConnectedImageSource | null {
-  const data = node.data
-  const reference = getProjectFileReference(metadataOf(data))
-  if (reference && isManagedProjectAssetPath(reference.path)) {
-    return { kind: "project", path: reference.path }
-  }
-  if (typeof data.url !== "string") return null
-  const match = /^data:([^;,]+);base64,/i.exec(data.url)
-  const mimeType = match?.[1]?.toLowerCase()
-  if (!mimeType || !connectedImageMimeTypes.has(mimeType)) return null
-  if (typeof data.mimeType === "string" && data.mimeType.toLowerCase() !== mimeType) return null
-  return { dataUrl: data.url, kind: "embedded", mimeType }
+  const reference = getProjectResourceReference(metadataOf(node.data))
+  if (!reference || reference.kind === "project-directory") return null
+  return { key: JSON.stringify(reference) }
 }
 
 function sameConnectedImageSource(left: ConnectedImageSource | null, right: ConnectedImageSource) {
-  if (!left || left.kind !== right.kind) return false
-  if (left.kind === "project" && right.kind === "project") return left.path === right.path
-  return (
-    left.kind === "embedded" &&
-    right.kind === "embedded" &&
-    left.mimeType === right.mimeType &&
-    left.dataUrl === right.dataUrl
-  )
+  return left?.key === right.key
 }
 
 function connectedImageDescriptor(node: CanvasNode) {
@@ -466,7 +451,10 @@ const connectedInputDataFingerprintCache = new WeakMap<
 >()
 
 function connectedInputDataFingerprint(data: CanvasNodeData) {
-  const source = typeof data.url === "string" ? data.url : ""
+  const resourceState = isRecord(data.resourceState) ? data.resourceState : undefined
+  const resourceReference = getProjectResourceReference(metadataOf(data))
+  const source =
+    resourceReference && resourceReference.kind !== "project-directory" ? JSON.stringify(resourceReference) : ""
   const metadata = JSON.stringify([
     data.kind,
     data.label,
@@ -476,7 +464,7 @@ function connectedInputDataFingerprint(data: CanvasNodeData) {
     data.width,
     data.height,
     data.durationMs,
-    getProjectFileReference(metadataOf(data))?.path,
+    typeof resourceState?.contentRevision === "string" ? resourceState.contentRevision : undefined,
   ])
   const cached = connectedInputDataFingerprintCache.get(data)
   if (cached && cached.source === source && cached.metadata === metadata) return cached.fingerprint
@@ -496,13 +484,16 @@ export async function connectedInputFingerprint(document: CanvasDocument, ownerN
 }
 
 function connectedImageDataFingerprint(data: CanvasNodeData) {
-  const source = typeof data.url === "string" ? data.url : ""
+  const reference = getProjectResourceReference(metadataOf(data))
+  const source = reference && reference.kind !== "project-directory" ? JSON.stringify(reference) : ""
   const metadata = JSON.stringify([
     data.name,
     data.mimeType,
     data.width,
     data.height,
-    getProjectFileReference(metadataOf(data))?.path,
+    isRecord(data.resourceState) && typeof data.resourceState.contentRevision === "string"
+      ? data.resourceState.contentRevision
+      : undefined,
   ])
   const cached = connectedImageDataFingerprintCache.get(data)
   if (cached && cached.source === source && cached.metadata === metadata) return cached.fingerprint
@@ -672,24 +663,23 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
       if (!node) throw new Error("Canvas image is not directly connected to this Plugin node")
       const source = connectedImageSource(node)
       if (!source) {
-        throw new Error("Canvas image is not backed by a readable managed Project asset or embedded image")
+        throw new Error("Canvas image is not backed by a readable typed Project file reference")
       }
       if (typeof node.data.mimeType === "string") requireConnectedImageInfo(node.data.mimeType)
-      if (source.kind === "embedded") {
-        return {
-          ...connectedImageDescriptor(node),
-          dataUrl: requireConnectedImageDataUrl(source.dataUrl, source.mimeType),
-        }
+      const document = context.getDocument()
+      if (!document || document.id !== context.frame.canvasId || !Number.isSafeInteger(document.revision)) {
+        throw new Error("Canvas document is not available for the connected image read")
       }
-      const result = await context.readManagedProjectImage({
-        path: source.path,
+      const result = await context.readConnectedImage({
+        canvasId: context.frame.canvasId,
+        expectedRevision: document.revision,
+        nodeId,
+        ownerNodeId: context.frame.nodeId,
         projectId: context.frame.projectId,
         signal: context.signal,
       })
       const latestNode = requireCurrentConnectedImage(context, nodeId, source)
-      if (result.path !== source.path || typeof result.name !== "string") {
-        throw new Error("Project file provider returned an invalid connected image")
-      }
+      if (typeof result.name !== "string") throw new Error("Connected image provider returned an invalid result")
       return {
         ...connectedImageDescriptor(latestNode),
         dataUrl: requireConnectedImageDataUrl(result.dataUrl, result.mimeType, result.size),

@@ -1,19 +1,12 @@
-import fs from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
-
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, type CanvasDocument } from "@convax/canvas/core"
 
 import type { PluginCanvasImageCreateRequest } from "../plugin-canvas-image-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
-import { PluginCanvasImageService } from "./plugin-canvas-image-service"
-
-const temporaryRoots: string[] = []
-
-afterEach(async () => {
-  await Promise.all(temporaryRoots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
-})
+import {
+  PluginCanvasImagePublicationPartialSuccessError,
+  PluginCanvasImageService,
+} from "./plugin-canvas-image-service"
 
 function pngDataUrl(width = 2, height = 1) {
   const bytes = Buffer.alloc(24)
@@ -86,9 +79,7 @@ function pluginIdentity(
 }
 
 describe("Plugin Canvas image service", () => {
-  test("imports a validated PNG, creates one connected image node, and keeps only the managed asset", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("publishes a validated PNG and creates one connected image node", async () => {
     const canvas = document()
     const addResources = mock(async () => ({
       affectedNodeIds: ["image-1"],
@@ -98,19 +89,18 @@ describe("Plugin Canvas image service", () => {
       storageVersion: "storage-4",
       warnings: [],
     }))
-    const importEntries = mock(async (input: { sourcePaths: string[] }) => {
-      expect(await fs.readFile(input.sourcePaths[0]!)).toEqual(Buffer.from(pngDataUrl().split(",")[1]!, "base64"))
-      return { targetPaths: [".convax/assets/viewport-capture.png"] }
+    const publishGenerated = mock(async (input: { bytes?: Uint8Array; extension: string; name?: string }) => {
+      expect(input.bytes).toEqual(Buffer.from(pngDataUrl().split(",")[1]!, "base64"))
+      expect(input).toMatchObject({ extension: ".png", name: "viewport-capture.png" })
+      return { path: "Generated/viewport-capture.png" }
     })
-    const deleteManagedAssets = mock(async () => undefined)
     const resolveCapabilityIdentity = mock(async () => pluginIdentity())
     const controller = new AbortController()
     const service = new PluginCanvasImageService({
       documents: { load: async () => ({ document: canvas }) },
       plugins: { resolveCapabilityIdentity },
-      projects: { deleteManagedAssets, importEntries },
+      projects: { publishGenerated },
       resources: { addResources },
-      temporaryRoot,
     })
 
     await expect(service.create(request(), controller.signal)).resolves.toEqual({
@@ -124,44 +114,38 @@ describe("Plugin Canvas image service", () => {
         anchor: { x: 1144, y: 60 },
         relation: { anchorNodeIds: ["plugin-node-1"], direction: "from-anchor", mode: "connect" },
         signal: controller.signal,
-        sources: [expect.objectContaining({ kind: "host-file", path: ".convax/assets/viewport-capture.png" })],
+        sources: [expect.objectContaining({ kind: "host-file", path: "Generated/viewport-capture.png" })],
       }),
     )
-    expect(deleteManagedAssets).not.toHaveBeenCalled()
   })
 
-  test("rolls back the imported asset when the Canvas commit fails", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("retains the published image when the Canvas commit fails", async () => {
     const canvas = document()
-    const deleteManagedAssets = mock(async () => undefined)
+    const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const service = new PluginCanvasImageService({
       documents: { load: async () => ({ document: canvas }) },
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
-      projects: {
-        deleteManagedAssets,
-        importEntries: async () => ({ targetPaths: [".convax/assets/capture.png"] }),
-      },
+      projects: { publishGenerated },
       resources: {
         addResources: async () => {
           throw new Error("Canvas changed")
         },
       },
-      temporaryRoot,
     })
 
-    await expect(service.create(request())).rejects.toThrow("Canvas changed")
-    expect(deleteManagedAssets).toHaveBeenCalledWith({
-      paths: [".convax/assets/capture.png"],
-      projectId: "project-1",
-    })
+    await expect(service.create(request())).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "Canvas changed" }),
+      message:
+        "Plugin screenshot was saved, but the Canvas update could not be confirmed. Saved file: Generated/capture.png",
+      name: "PluginCanvasImagePublicationPartialSuccessError",
+      publishedPaths: ["Generated/capture.png"],
+    } satisfies Partial<PluginCanvasImagePublicationPartialSuccessError>)
+    expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 
-  test("rechecks the exact Plugin identity after import and rolls back before a stale commit", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("rechecks the exact Plugin identity after publication before a stale commit", async () => {
     const canvas = document()
-    const deleteManagedAssets = mock(async () => undefined)
+    const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const addResources = mock(async () => {
       throw new Error("must not commit")
     })
@@ -172,27 +156,22 @@ describe("Plugin Canvas image service", () => {
         resolveCapabilityIdentity: async () =>
           resolution++ === 0 ? pluginIdentity() : pluginIdentity({}, "b".repeat(64)),
       },
-      projects: {
-        deleteManagedAssets,
-        importEntries: async () => ({ targetPaths: [".convax/assets/capture.png"] }),
-      },
+      projects: { publishGenerated },
       resources: { addResources },
-      temporaryRoot,
     })
 
-    await expect(service.create(request())).rejects.toThrow("Plugin identity or Canvas image permission changed")
-    expect(addResources).not.toHaveBeenCalled()
-    expect(deleteManagedAssets).toHaveBeenCalledWith({
-      paths: [".convax/assets/capture.png"],
-      projectId: "project-1",
+    await expect(service.create(request())).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "Plugin identity or Canvas image permission changed" }),
+      name: "PluginCanvasImagePublicationPartialSuccessError",
+      publishedPaths: ["Generated/capture.png"],
     })
+    expect(addResources).not.toHaveBeenCalled()
+    expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 
-  test("rechecks the authoritative Canvas revision after import and rolls back before a stale commit", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("rechecks the authoritative Canvas revision after publication before a stale commit", async () => {
     const canvas = document()
-    const deleteManagedAssets = mock(async () => undefined)
+    const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const addResources = mock(async () => {
       throw new Error("must not commit")
     })
@@ -204,67 +183,52 @@ describe("Plugin Canvas image service", () => {
         }),
       },
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
-      projects: {
-        deleteManagedAssets,
-        importEntries: async () => ({ targetPaths: [".convax/assets/capture.png"] }),
-      },
+      projects: { publishGenerated },
       resources: { addResources },
-      temporaryRoot,
     })
 
-    await expect(service.create(request())).rejects.toThrow(
-      "Canvas changed before the Plugin screenshot could be created",
-    )
-    expect(addResources).not.toHaveBeenCalled()
-    expect(deleteManagedAssets).toHaveBeenCalledWith({
-      paths: [".convax/assets/capture.png"],
-      projectId: "project-1",
+    await expect(service.create(request())).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "Canvas changed before the Plugin screenshot could be created" }),
+      name: "PluginCanvasImagePublicationPartialSuccessError",
+      publishedPaths: ["Generated/capture.png"],
     })
+    expect(addResources).not.toHaveBeenCalled()
+    expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 
-  test("observes cancellation after import and rolls back without committing", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("observes cancellation after publication without committing", async () => {
     const canvas = document()
     const controller = new AbortController()
-    const deleteManagedAssets = mock(async () => undefined)
+    const publishGenerated = mock(async () => {
+      controller.abort(new DOMException("capture canceled", "AbortError"))
+      return { path: "Generated/capture.png" }
+    })
     const addResources = mock(async () => {
       throw new Error("must not commit")
     })
     const service = new PluginCanvasImageService({
       documents: { load: async () => ({ document: canvas }) },
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
-      projects: {
-        deleteManagedAssets,
-        importEntries: async () => {
-          controller.abort(new DOMException("capture canceled", "AbortError"))
-          return { targetPaths: [".convax/assets/capture.png"] }
-        },
-      },
+      projects: { publishGenerated },
       resources: { addResources },
-      temporaryRoot,
     })
 
-    await expect(service.create(request(), controller.signal)).rejects.toThrow("capture canceled")
-    expect(addResources).not.toHaveBeenCalled()
-    expect(deleteManagedAssets).toHaveBeenCalledWith({
-      paths: [".convax/assets/capture.png"],
-      projectId: "project-1",
+    await expect(service.create(request(), controller.signal)).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: "capture canceled" }),
+      name: "PluginCanvasImagePublicationPartialSuccessError",
+      publishedPaths: ["Generated/capture.png"],
     })
+    expect(addResources).not.toHaveBeenCalled()
+    expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 
-  test("keeps an asset after the Canvas command committed even when its result is malformed", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-image-test-"))
-    temporaryRoots.push(temporaryRoot)
+  test("keeps a published image after the Canvas command committed even when its result is malformed", async () => {
     const canvas = document()
-    const deleteManagedAssets = mock(async () => undefined)
+    const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const service = new PluginCanvasImageService({
       documents: { load: async () => ({ document: canvas }) },
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
-      projects: {
-        deleteManagedAssets,
-        importEntries: async () => ({ targetPaths: [".convax/assets/capture.png"] }),
-      },
+      projects: { publishGenerated },
       resources: {
         addResources: async () => ({
           affectedNodeIds: [],
@@ -275,10 +239,15 @@ describe("Plugin Canvas image service", () => {
           warnings: [],
         }),
       },
-      temporaryRoot,
     })
 
-    await expect(service.create(request())).rejects.toThrow("did not create exactly one Canvas image node")
-    expect(deleteManagedAssets).not.toHaveBeenCalled()
+    await expect(service.create(request())).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringContaining("did not create exactly one Canvas image node"),
+      }),
+      name: "PluginCanvasImagePublicationPartialSuccessError",
+      publishedPaths: ["Generated/capture.png"],
+    })
+    expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 })

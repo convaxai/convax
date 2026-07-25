@@ -42,21 +42,36 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
   let changeListener: ((event: ProjectChangeEvent) => void) | undefined
   const client: ProjectFilesClient = {
     copyEntries: mock(async (input: Parameters<ProjectFilesClient["copyEntries"]>[0]) =>
-      mutation("copy", input.projectId, input.paths)),
+      mutation("copy", input.projectId, input.paths),
+    ),
     createEntry: mock(async (input: Parameters<ProjectFilesClient["createEntry"]>[0]) =>
-      mutation("create", input.projectId, [], [input.parentPath ? `${input.parentPath}/${input.name}` : input.name])),
+      mutation("create", input.projectId, [], [input.parentPath ? `${input.parentPath}/${input.name}` : input.name]),
+    ),
     createImportToken: (file: File) => `import:${file.name}`,
     deleteEntries: mock(async (input: Parameters<ProjectFilesClient["deleteEntries"]>[0]) =>
-      mutation("delete", input.projectId, input.paths)),
+      mutation("delete", input.projectId, input.paths),
+    ),
     importEntries: mock(async (input: Parameters<ProjectFilesClient["importEntries"]>[0]) =>
-      mutation("import", input.projectId, input.sourceTokens, [`${input.destinationPath ?? ""}/imported.txt`.replace(/^\//, "")])),
+      mutation("import", input.projectId, input.sourceTokens, [
+        `${input.destinationPath ?? ""}/imported.txt`.replace(/^\//, ""),
+      ]),
+    ),
     listDirectory: mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) =>
-      listing(input.projectId, input.path ?? "", [])),
+      listing(input.projectId, input.path ?? "", []),
+    ),
     moveEntries: mock(async (input: Parameters<ProjectFilesClient["moveEntries"]>[0]) =>
-      mutation("move", input.projectId, input.paths, input.paths.map((path) => `${input.destinationPath ?? ""}/${path.split("/").at(-1)}`.replace(/^\//, "")))),
+      mutation(
+        "move",
+        input.projectId,
+        input.paths,
+        input.paths.map((path) => `${input.destinationPath ?? ""}/${path.split("/").at(-1)}`.replace(/^\//, "")),
+      ),
+    ),
     onDidChange: (listener) => {
       changeListener = listener
-      return () => { changeListener = undefined }
+      return () => {
+        changeListener = undefined
+      }
     },
     openEntry: mock(async () => ({})),
     readFile: mock(async (input: Parameters<ProjectFilesClient["readFile"]>[0]) => ({
@@ -72,15 +87,9 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       path: input.path,
       size: 0,
     })),
-    readManagedImageFile: mock(async (input: Parameters<ProjectFilesClient["readManagedImageFile"]>[0]) => ({
-      dataUrl: "data:image/png;base64,",
-      mimeType: "image/png",
-      name: input.path,
-      path: input.path,
-      size: 0,
-    })),
     readTextFile: mock(async (input: Parameters<ProjectFilesClient["readTextFile"]>[0]) => ({
       content: "",
+      contentRevision: "",
       exists: false,
       path: input.path,
     })),
@@ -90,10 +99,12 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       truncated: false,
     })),
     renameEntry: mock(async (input: Parameters<ProjectFilesClient["renameEntry"]>[0]) =>
-      mutation("rename", input.projectId, [input.path], [input.path.replace(/[^/]+$/, input.name)])),
+      mutation("rename", input.projectId, [input.path], [input.path.replace(/[^/]+$/, input.name)]),
+    ),
     revealEntry: mock(async () => undefined),
     writeTextFile: mock(async (input: Parameters<ProjectFilesClient["writeTextFile"]>[0]) =>
-      mutation("write", input.projectId, [], [input.path])),
+      mutation("write", input.projectId, [], [input.path]),
+    ),
     ...overrides,
   }
   return {
@@ -105,11 +116,13 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
 describe("ProjectFilesController", () => {
   test("uses setProject as its only project boundary and ignores stale directory responses", async () => {
     let resolveFirst: ((value: ProjectDirectoryListing) => void) | undefined
-    const firstListing = new Promise<ProjectDirectoryListing>((resolve) => { resolveFirst = resolve })
+    const firstListing = new Promise<ProjectDirectoryListing>((resolve) => {
+      resolveFirst = resolve
+    })
     const { client } = createClient({
-      listDirectory: mock(async (input) => input.projectId === "one"
-        ? firstListing
-        : listing("two", "", [entry("two.txt")])),
+      listDirectory: mock(async (input) =>
+        input.projectId === "one" ? firstListing : listing("two", "", [entry("two.txt")]),
+      ),
     })
     const controller = new ProjectFilesController(client)
 
@@ -136,9 +149,11 @@ describe("ProjectFilesController", () => {
 
   test("owns directory expansion and visible range selection", async () => {
     const { client } = createClient({
-      listDirectory: mock(async (input) => input.path === "assets"
-        ? listing(input.projectId, "assets", [entry("assets/a.png"), entry("assets/b.png")])
-        : listing(input.projectId, "", [entry("assets", "directory"), entry("readme.md")])),
+      listDirectory: mock(async (input) =>
+        input.path === "assets"
+          ? listing(input.projectId, "assets", [entry("assets/a.png"), entry("assets/b.png")])
+          : listing(input.projectId, "", [entry("assets", "directory"), entry("readme.md")]),
+      ),
     })
     const controller = new ProjectFilesController(client)
 
@@ -156,11 +171,14 @@ describe("ProjectFilesController", () => {
 
   test("scopes mutations, imports, open, and reveal to the selected project", async () => {
     const createEntry = mock(async (input: Parameters<ProjectFilesClient["createEntry"]>[0]) =>
-      mutation("create", input.projectId, [], ["notes.txt"]))
+      mutation("create", input.projectId, [], ["notes.txt"]),
+    )
     const moveEntries = mock(async (input: Parameters<ProjectFilesClient["moveEntries"]>[0]) =>
-      mutation("move", input.projectId, input.paths, ["archive/folder"]))
+      mutation("move", input.projectId, input.paths, ["archive/folder"]),
+    )
     const importEntries = mock(async (input: Parameters<ProjectFilesClient["importEntries"]>[0]) =>
-      mutation("import", input.projectId, input.sourceTokens, ["assets/photo.png"]))
+      mutation("import", input.projectId, input.sourceTokens, ["assets/photo.png"]),
+    )
     const openEntry = mock(async () => ({ error: "No default application" }))
     const revealEntry = mock(async () => undefined)
     const { client } = createClient({ createEntry, importEntries, moveEntries, openEntry, revealEntry })
@@ -190,7 +208,8 @@ describe("ProjectFilesController", () => {
   test("refreshes visible directories only for events from its selected project", async () => {
     let current = [entry("first.txt")]
     const listDirectory = mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) =>
-      listing(input.projectId, input.path ?? "", current))
+      listing(input.projectId, input.path ?? "", current),
+    )
     const { client, emit } = createClient({ listDirectory })
     const controller = new ProjectFilesController(client)
     await controller.setProject("one")
@@ -209,5 +228,71 @@ describe("ProjectFilesController", () => {
     emit({ kind: "mutation", projectId: "one" })
     await new Promise((resolve) => setTimeout(resolve, 150))
     expect(controller.getSnapshot().listings[""]?.entries[0]?.path).toBe("second.txt")
+  })
+
+  test("prunes vanished directory listings after a successful parent refresh", async () => {
+    let rootEntries = [entry("assets", "directory")]
+    let rejectVanishedChild = false
+    const listDirectory = mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) => {
+      if (input.path === "assets" && rejectVanishedChild) throw new Error("ENOENT")
+      return input.path === "assets"
+        ? listing(input.projectId, "assets", [entry("assets/a.png")])
+        : listing(input.projectId, "", rootEntries)
+    })
+    const { client } = createClient({ listDirectory })
+    const controller = new ProjectFilesController(client)
+    await controller.setProject("one")
+    await controller.toggleDirectory("assets")
+    controller.selectEntry("assets/a.png", { range: false, toggle: false })
+
+    rootEntries = [entry("renamed", "directory")]
+    rejectVanishedChild = true
+    await controller.refreshVisibleDirectories()
+
+    expect(controller.getSnapshot().listings[""]?.entries.map((item) => item.path)).toEqual(["renamed"])
+    expect(controller.getSnapshot().listings).not.toHaveProperty("assets")
+    expect(controller.getSnapshot().expandedPaths).not.toContain("assets")
+    expect(controller.getSnapshot().selectedPaths).not.toContain("assets/a.png")
+    expect(controller.getSnapshot().error).toBeNull()
+    controller.dispose()
+  })
+
+  test("does not accept an old directory response after the same path is removed and recreated", async () => {
+    let rootEntries = [entry("assets", "directory")]
+    let resolveOld!: (value: ProjectDirectoryListing) => void
+    let resolveCurrent!: (value: ProjectDirectoryListing) => void
+    const oldListing = new Promise<ProjectDirectoryListing>((resolve) => {
+      resolveOld = resolve
+    })
+    const currentListing = new Promise<ProjectDirectoryListing>((resolve) => {
+      resolveCurrent = resolve
+    })
+    let assetsRequest = 0
+    const listDirectory = mock(async (input: Parameters<ProjectFilesClient["listDirectory"]>[0]) => {
+      if (input.path !== "assets") return listing(input.projectId, "", rootEntries)
+      assetsRequest += 1
+      return assetsRequest === 1 ? oldListing : currentListing
+    })
+    const { client } = createClient({ listDirectory })
+    const controller = new ProjectFilesController(client)
+    await controller.setProject("one")
+
+    const oldRequest = controller.loadDirectory("assets")
+    await Promise.resolve()
+    rootEntries = []
+    await controller.loadDirectory("")
+    rootEntries = [entry("assets", "directory")]
+    await controller.loadDirectory("")
+
+    const currentRequest = controller.loadDirectory("assets")
+    resolveCurrent(listing("one", "assets", [entry("assets/current.png")]))
+    await currentRequest
+    resolveOld(listing("one", "assets", [entry("assets/obsolete.png")]))
+    await oldRequest
+
+    expect(controller.getSnapshot().listings.assets?.entries.map((item) => item.path)).toEqual([
+      "assets/current.png",
+    ])
+    controller.dispose()
   })
 })

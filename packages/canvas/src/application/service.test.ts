@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createTextNode } from "../document"
+import { createCanvasDocument, createTextNode as createCanvasTextNode } from "../document"
 import type { CanvasDocumentRepository, CanvasDocumentSaveRequest, CanvasDocumentSnapshot } from "./persistence"
 import {
   CanvasApplicationService,
@@ -8,12 +8,31 @@ import {
   type CanvasApplicationCommandRequest,
 } from "./service"
 
+function createTextNode(
+  input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
+    text?: string
+  },
+) {
+  const { text, ...nodeInput } = input
+  return createCanvasTextNode({
+    ...nodeInput,
+    metadata: {},
+    resourceState: { status: "ready", ...(text === undefined ? {} : { text }) },
+  })
+}
+
 describe("canvas application service", () => {
   test("loads, executes, and compare-and-swap saves one business command", async () => {
     let snapshot: CanvasDocumentSnapshot = {
       document: createCanvasDocument({
         id: "canvas-main",
-        nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "Launch brief" })],
+        nodes: [
+          createTextNode({
+            id: "first",
+            position: { x: 0, y: 0 },
+            text: "Launch brief",
+          }),
+        ],
       }),
       storageVersion: "v1",
     }

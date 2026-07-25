@@ -1,9 +1,5 @@
 import type { CanvasSelectionActionContext, CanvasSelectionDragSource } from "@convax/canvas"
-import {
-  getProjectFileReference,
-  isProjectCanvasManagedAssetPath,
-  requireProjectCanvasResourcePath,
-} from "@convax/project/canvas"
+import { getProjectResourceReference } from "@convax/project/canvas"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 
 export const canvasMediaSelectionDragSourceId = "desktop.canvas-media.external-drag"
@@ -32,13 +28,8 @@ export function isManagedCanvasMediaDragSelection(context: CanvasSelectionAction
       ) {
         return false
       }
-      const reference = getProjectFileReference(node.data.metadata)
-      if (!reference) return false
-      try {
-        return isProjectCanvasManagedAssetPath(requireProjectCanvasResourcePath(reference.path))
-      } catch {
-        return false
-      }
+      const reference = getProjectResourceReference(node.data.metadata)
+      return reference !== null && reference.kind !== "project-directory"
     })
   )
 }

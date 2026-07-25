@@ -10,10 +10,14 @@ import {
 } from "@convax/canvas/application"
 import {
   NodeProjectManager,
+  ProjectAssetGc,
   ProjectCanvasDocumentRepository,
   ProjectCanvasDocumentService,
+  ProjectFilePublisher,
   NodeProjectCanvasManager,
+  ProjectCanvasResourceHydrator,
   ProjectCanvasResourcePreparation,
+  ProjectManagedAssetStore,
 } from "@convax/project/node"
 import {
   app,
@@ -60,7 +64,11 @@ import {
   GenerationPluginRuntime,
   resolveGenerationPluginExecutable,
 } from "./generation-plugin-runtime"
-import { registerCanvasDocumentIpc } from "./canvas-document-ipc"
+import {
+  registerCanvasDocumentIpc,
+  registerCanvasResourceIpc,
+  registerCanvasTextResourceIpc,
+} from "./canvas-document-ipc"
 import { createPluginOperationAgentToolProvider } from "./plugin-operation-agent-tools"
 import {
   registerCanvasExternalMediaDragIpc,
@@ -144,6 +152,8 @@ import {
   PluginSkillLifecycle,
   PluginSkillOwnershipStore,
 } from "./plugin-skill-lifecycle"
+import { createProjectResourceUrl, resolveProjectResourceProtocolPath } from "./project-resource-protocol"
+import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -191,7 +201,10 @@ function isTrustedRendererUrl(value: string) {
   }
 }
 
-function createWindow(projectManager: NodeProjectManager) {
+function createWindow(
+  projectManager: NodeProjectManager,
+  projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
+) {
   const window = new BrowserWindow({
     title: applicationName,
     icon: appIcon,
@@ -216,6 +229,7 @@ function createWindow(projectManager: NodeProjectManager) {
     pluginFrameBindings.clear()
     trustedWebContents.delete(webContentsId)
     if (mainWindow === window) mainWindow = null
+    projectAssetGcScheduler.closeAll()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   window.webContents.on("will-navigate", (event, url) => {
@@ -426,8 +440,23 @@ function startApplication() {
         console.warn("Could not list installed Tool Plugins for execution-state reconciliation", error)
       })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
-    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases)
+    const projectAssets = new ProjectManagedAssetStore(projectManager)
+    const projectFilePublisher = new ProjectFilePublisher(projectManager, projectAssets)
+    const canvasDocumentRepository = new ProjectCanvasDocumentRepository(projectManager, projectCanvases, projectAssets)
+    const projectAssetGcScheduler = new ProjectAssetGcScheduler({
+      gc: new ProjectAssetGc({
+        assets: projectAssets,
+        catalogs: projectCanvases,
+        documents: canvasDocumentRepository,
+        projects: projectManager,
+      }),
+    })
     const canvasDocuments = new ProjectCanvasDocumentService(canvasDocumentRepository, projectCanvases)
+    const canvasResourceHydrator = new ProjectCanvasResourceHydrator(
+      projectManager,
+      projectAssets,
+      createProjectResourceUrl,
+    )
     const canvasDocumentChanges = new CanvasDocumentChangeBus()
     // The application service uses the initializing document service so a
     // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
@@ -440,11 +469,14 @@ function startApplication() {
         })
       },
     })
-    const canvasResources = new CanvasResourceBusinessService(
-      new ProjectCanvasResourcePreparation(projectManager),
-      canvasApplication,
+    const canvasResourcePreparation = new ProjectCanvasResourcePreparation(
+      projectManager,
+      projectFilePublisher,
+      projectAssets,
     )
+    const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
     const managedCanvasMedia = new ManagedCanvasMediaResolver({
+      assets: projectAssets,
       documents: canvasDocuments,
       projects: projectManager,
     })
@@ -474,6 +506,7 @@ function startApplication() {
     }
     const isJianyingEnabled = () => pluginManager.isBuiltinBundleInstalled(jianyingBuiltin.bundle)
     const jianying = new JianyingCanvasService({
+      assets: projectAssets,
       documents: canvasDocuments,
       integration: jianyingIntegration,
       isEnabled: isJianyingEnabled,
@@ -507,9 +540,8 @@ function startApplication() {
     const pluginCanvasImages = new PluginCanvasImageService({
       documents: canvasDocuments,
       plugins: pluginManager,
-      projects: projectManager,
+      projects: projectFilePublisher,
       resources: canvasResources,
-      temporaryRoot: join(userDataDirectory, "plugin-canvas-image-staging"),
     })
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({
@@ -532,7 +564,9 @@ function startApplication() {
     )
     const pluginServices = new PluginServiceHost(generationRuntime, pluginServiceBrowserAuthorization)
     const generation = new GenerationCanvasService({
+      assets: projectAssets,
       documents: canvasDocuments,
+      publisher: projectFilePublisher,
       projects: projectManager,
       renderer: canvasRenderer,
       resources: canvasResources,
@@ -699,7 +733,9 @@ function startApplication() {
       ipcMain,
       isTrustedMainSender: ipcSecurity.isTrustedSender,
       async openMainWindow() {
-        return mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
+        return mainWindow && !mainWindow.isDestroyed()
+          ? mainWindow
+          : createWindow(projectManager, projectAssetGcScheduler)
       },
       async pickCustomPetSource() {
         const options: OpenDialogOptions = {
@@ -865,9 +901,29 @@ function startApplication() {
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
       projectCreationDirectory,
+      onForgot: (projectId) => projectAssetGcScheduler.close(projectId),
     })
     const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
-    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasDocuments, canvasApplication, ipcSecurity)
+    const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
+      const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
+      return snapshot
+        ? {
+            canvasId: snapshot.documentId,
+            projectId: snapshot.scopeId,
+            revision: snapshot.revision,
+          }
+        : null
+    }
+    const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(
+      canvasDocuments,
+      canvasApplication,
+      canvasResourceHydrator,
+      {
+        ...ipcSecurity,
+        prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
+        resolveActiveCanvas,
+      },
+    )
     const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -880,7 +936,7 @@ function startApplication() {
       },
       async resolveActiveCanvas(senderId) {
         if (process.platform !== "darwin" || !trustedWebContents.has(senderId)) return null
-        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
+        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", senderId)
         return snapshot
           ? {
               canvasId: snapshot.documentId,
@@ -891,6 +947,16 @@ function startApplication() {
             }
           : null
       },
+    })
+    const disposeCanvasResourceIpc = registerCanvasResourceIpc(canvasResources, canvasResourcePreparation, {
+      ...ipcSecurity,
+      documents: canvasDocuments,
+      images: canvasResourceHydrator,
+      resolveActiveCanvas,
+    })
+    const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasDocuments, {
+      ...ipcSecurity,
+      resolveActiveCanvas,
     })
     const disposeGenerationIpc = registerGenerationIpc(
       {
@@ -996,11 +1062,18 @@ function startApplication() {
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
-        const url = new URL(request.url)
-        const relativePath = url.searchParams.get("path")
-        if (!url.hostname || !relativePath) return new Response("Asset was not found", { status: 404 })
-        const absolutePath = await projectManager.resolveEntryPath({ path: relativePath, projectId: url.hostname })
-        return net.fetch(pathToFileURL(absolutePath).href, { headers: request.headers })
+        const resolved = await resolveProjectResourceProtocolPath(request.url, projectManager, projectAssets)
+        const response = await net.fetch(pathToFileURL(resolved.absolutePath).href, { headers: request.headers })
+        const headers = new Headers(response.headers)
+        headers.set(
+          "Cache-Control",
+          resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+        )
+        return new Response(response.body, {
+          headers,
+          status: response.status,
+          statusText: response.statusText,
+        })
       } catch {
         return new Response("Asset was not found", { status: 404 })
       }
@@ -1019,6 +1092,8 @@ function startApplication() {
         disposeCanvasDocumentIpc,
         disposePluginCanvasImageIpc,
         disposeCanvasExternalMediaDragIpc,
+        disposeCanvasResourceIpc,
+        disposeCanvasTextResourceIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
@@ -1033,6 +1108,7 @@ function startApplication() {
         },
         () => pluginServices.dispose(),
         () => pluginServiceBrowserAuthorization.dispose(),
+        () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
@@ -1068,7 +1144,7 @@ function startApplication() {
         })
     })
 
-    createWindow(projectManager)
+    createWindow(projectManager, projectAssetGcScheduler)
     // Registry updates are intentionally outside the first-window critical
     // path. A packaged first install comes from the verified local seed above;
     // dev and damaged/offline packages remain usable while network recovery or
@@ -1108,7 +1184,7 @@ function startApplication() {
       app,
       () => mainWindow,
       () => {
-        createWindow(projectManager)
+        createWindow(projectManager, projectAssetGcScheduler)
       },
     )
   })

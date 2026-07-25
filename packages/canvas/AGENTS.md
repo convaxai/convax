@@ -14,6 +14,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
 
 - Use host-neutral `scopeId`; Canvas must not know Project roots, `.convax`, Electron,
   Workbench, OpenCode, or native persistence.
+- Version persisted schema changes and provide migration tests by default. A breaking
+  cutover requires an explicit canonical architecture decision and rejection tests;
+  unknown or unsupported documents never become partially hydrated live state.
 - Add product behavior as a business operation first. UI handlers and Agent adapters
   call the same operation; do not duplicate sizing, placement, relationship, save, or
   validation logic at either edge.

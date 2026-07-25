@@ -1,5 +1,8 @@
 import type { CanvasDocument, CanvasNode } from "./types"
 
+export const CANVAS_NODE_INPUT_HANDLE_ID = "target-left"
+export const CANVAS_NODE_OUTPUT_HANDLE_ID = "source-right"
+
 export function isCanvasFileNode(node: CanvasNode) {
   return node.type === "file" && node.data.kind !== "agent" && node.data.kind !== "group"
 }
@@ -13,11 +16,8 @@ export function getConnectedCanvasFileNodeIds(document: CanvasDocument, ownerNod
   const result: string[] = []
   const seen = new Set<string>()
   for (const edge of document.edges) {
-    const candidateId = edge.source === ownerNodeId
-      ? edge.target
-      : edge.target === ownerNodeId
-        ? edge.source
-        : undefined
+    const candidateId =
+      edge.source === ownerNodeId ? edge.target : edge.target === ownerNodeId ? edge.source : undefined
     if (!candidateId || candidateId === ownerNodeId || seen.has(candidateId)) continue
     const candidate = nodes.get(candidateId)
     if (!candidate || !isCanvasFileNode(candidate)) continue

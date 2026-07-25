@@ -7,11 +7,7 @@ import {
   type CanvasPoint,
   type CanvasSelectionActionContext,
 } from "@convax/canvas"
-import {
-  getProjectFileReference,
-  isProjectCanvasManagedAssetPath,
-  requireProjectCanvasResourcePath,
-} from "@convax/project/canvas"
+import { getProjectResourceReference } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
 export type MediaOperationEditor = "confirmation" | "crop-region" | "time-point" | "time-range"
@@ -130,7 +126,7 @@ export function isManagedProjectVideoSelection(context: CanvasSelectionActionCon
   ) {
     return false
   }
-  return managedProjectMediaPath(context.selectedNodes[0], "video") !== undefined
+  return projectMediaReferenceIdentity(context.selectedNodes[0], "video") !== undefined
 }
 
 export function canRunMediaOperation(context: CanvasSelectionActionContext, action: MediaOperationAction) {
@@ -152,8 +148,12 @@ export function canResumeMediaOperation(
   }
   const originalSource = request.context.selectedNodes[0]
   const liveSource = document.nodes.find((node) => node.id === originalSource?.id)
-  const originalSourcePath = originalSource ? managedProjectMediaPath(originalSource, "video") : undefined
-  if (!originalSourcePath || !liveSource || originalSourcePath !== managedProjectMediaPath(liveSource, "video")) {
+  const originalSourceReference = originalSource ? projectMediaReferenceIdentity(originalSource, "video") : undefined
+  if (
+    !originalSourceReference ||
+    !liveSource ||
+    originalSourceReference !== projectMediaReferenceIdentity(liveSource, "video")
+  ) {
     return false
   }
   return createdNodeIds.every((nodeId, index) => {
@@ -162,7 +162,7 @@ export function canResumeMediaOperation(
     return (
       completed !== undefined &&
       expectedOutput !== undefined &&
-      managedProjectMediaPath(completed, expectedOutput) !== undefined &&
+      projectMediaReferenceIdentity(completed, expectedOutput) !== undefined &&
       document.edges.some((edge) => edge.source === originalSource.id && edge.target === completed.id)
     )
   })
@@ -294,21 +294,16 @@ function editorToolInput(
 
 function requireRequestVideoNode(request: MediaOperationDialogRequest) {
   if (!isManagedProjectVideoSelection(request.context)) {
-    throw new Error("The selected video is no longer available as a managed Project asset.")
+    throw new Error("The selected video is no longer available as a Project-backed file.")
   }
   return request.context.selectedNodes[0]
 }
 
-function managedProjectMediaPath(node: CanvasNode, output: CanvasGenerationOutput) {
+function projectMediaReferenceIdentity(node: CanvasNode, output: CanvasGenerationOutput) {
   if (node.type !== "file" || node.data.kind !== output) return undefined
-  const reference = getProjectFileReference(node.data.metadata)
-  if (!reference) return undefined
-  try {
-    const path = requireProjectCanvasResourcePath(reference.path)
-    return isProjectCanvasManagedAssetPath(path) ? path : undefined
-  } catch {
-    return undefined
-  }
+  const reference = getProjectResourceReference(node.data.metadata)
+  if (!reference || reference.kind === "project-directory") return undefined
+  return reference.kind === "project-file" ? `project-file:${reference.path}` : `managed-asset:${reference.sha256}`
 }
 
 function isNonNegativeFinite(value: number) {

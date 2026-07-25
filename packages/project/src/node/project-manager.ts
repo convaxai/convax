@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
-import { constants as fsConstants, watch as watchFileSystem, type BigIntStats, type FSWatcher } from "node:fs"
+import { watch as watchFileSystem, type FSWatcher } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { isManagedProjectAssetPath } from "../canvas/project-resources"
 import type {
   ProjectChangeEvent,
   ProjectDirectoryListing,
@@ -14,7 +13,12 @@ import type {
   ProjectTextPreviewContents,
 } from "../contracts"
 import {
-  assertCopyOrImportTarget,
+  ProjectTextFileConflictError,
+  type ProjectTextFileCompareAndReplaceInput,
+  type ProjectTextFileCompareAndReplacePort,
+  type ProjectTextFileCompareAndReplaceResult,
+} from "@convax/project-files"
+import {
   assertNoSymlinkSegments,
   assertNotProjectRoot,
   assertPortableTree,
@@ -29,12 +33,10 @@ import {
   isDirectory,
   isIgnoredName,
   isInsidePath,
-  isManagedAssetPath,
   isNodeError,
   isProjectRecord,
   isSafeProjectRoot,
   joinRelative,
-  managedAssetDirectory,
   mimeTypeForPath,
   movePath,
   mutation,
@@ -45,7 +47,6 @@ import {
   parseProjectManifest,
   projectIdForPath,
   projectManifestPath,
-  removePathWithRetries,
   requireEntryPath,
   requireProjectId,
   sameNativePath,
@@ -66,6 +67,11 @@ import {
   type ProjectPrivateTextFileRef,
   type ProjectPrivateTextFileWrite,
 } from "./project-private-storage"
+import {
+  readStableProjectFile,
+  readStableProjectUtf8File,
+  sameProjectFileSnapshot,
+} from "./stable-project-file"
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
@@ -104,8 +110,9 @@ function privateTextVersion(content: string) {
   return createHash("sha256").update(content).digest("hex")
 }
 
-export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPrivateStorage {
-  private managedImageReads = 0
+export class NodeProjectManager
+  implements ProjectPrivatePathResolver, ProjectPrivateStorage, ProjectTextFileCompareAndReplacePort
+{
   private readonly now: () => number
   private projectCreationQueue: Promise<void> = Promise.resolve()
   private registryQueue: Promise<unknown> = Promise.resolve()
@@ -115,6 +122,8 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   constructor(private readonly options: NodeProjectManagerOptions) {
     this.now = options.now ?? Date.now
   }
+
+  protected async beforeCompareAndReplaceCommit(_input: { targetPath: string; temporaryPath: string }) {}
 
   list() {
     return this.listProjects()
@@ -141,13 +150,20 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     while (true) {
       const projectCreation = this.projectCreationQueue
       const registry = this.registryQueue
-      const results = await Promise.allSettled([projectCreation, ...this.textWriteQueues.values(), ...this.projectMutationQueues.values()])
-      failures.push(...results.flatMap((result) => result.status === "rejected" ? [result.reason] : []))
+      const results = await Promise.allSettled([
+        projectCreation,
+        ...this.textWriteQueues.values(),
+        ...this.projectMutationQueues.values(),
+      ])
+      failures.push(...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])))
       await registry
-      if (this.textWriteQueues.size === 0
-        && this.projectMutationQueues.size === 0
-        && projectCreation === this.projectCreationQueue
-        && registry === this.registryQueue) break
+      if (
+        this.textWriteQueues.size === 0 &&
+        this.projectMutationQueues.size === 0 &&
+        projectCreation === this.projectCreationQueue &&
+        registry === this.registryQueue
+      )
+        break
     }
     if (failures.length > 0) throw new AggregateError(failures, "Project files could not be saved")
   }
@@ -222,10 +238,12 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async listProjects() {
     const projects = await this.readStableRegistry()
-    return Promise.all(projects.map(async (project) => {
-      const safe = await isSafeProjectRoot(project.rootPath)
-      return { ...toProjectRecord(project), missing: !safe }
-    })).then((records) => records.sort(compareProjects))
+    return Promise.all(
+      projects.map(async (project) => {
+        const safe = await isSafeProjectRoot(project.rootPath)
+        return { ...toProjectRecord(project), missing: !safe }
+      }),
+    ).then((records) => records.sort(compareProjects))
   }
 
   async addProject(rootPath: string) {
@@ -261,7 +279,10 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
             rootPath: realRoot,
           }
       return {
-        projects: [...projects.filter((candidate) => candidate.id !== id && !sameNativePath(candidate.rootPath, realRoot)), project],
+        projects: [
+          ...projects.filter((candidate) => candidate.id !== id && !sameNativePath(candidate.rootPath, realRoot)),
+          project,
+        ],
         value: toProjectRecord(project),
       }
     })
@@ -299,7 +320,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       if (!current) throw new Error(`Project was not found: ${projectId}`)
       const project: ProjectRegistryRecord = { ...current, name: normalizedName }
       return {
-        projects: projects.map((candidate) => candidate.id === projectId ? project : candidate),
+        projects: projects.map((candidate) => (candidate.id === projectId ? project : candidate)),
         value: toProjectRecord(project),
       }
     })
@@ -307,32 +328,40 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async forgetProject(projectId: string) {
     await this.waitForProjectTextWrites(projectId)
-    return this.queueProjectMutation(projectId, () => this.mutateRegistry((projects) => ({
-      projects: projects.filter((project) => project.id !== projectId),
-      value: projects.some((project) => project.id === projectId),
-    })))
+    return this.queueProjectMutation(projectId, () =>
+      this.mutateRegistry((projects) => ({
+        projects: projects.filter((project) => project.id !== projectId),
+        value: projects.some((project) => project.id === projectId),
+      })),
+    )
   }
 
   async listDirectory(input: { path?: string; projectId: string }): Promise<ProjectDirectoryListing> {
     const relativePath = normalizeRelativePath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
     if (!stat.isDirectory()) throw new Error(`Project path is not a directory: ${relativePath}`)
     const dirents = await fs.readdir(absolutePath, { withFileTypes: true })
-    const entries = await Promise.all(dirents
-      .filter((dirent) => !dirent.isSymbolicLink() && !isIgnoredName(dirent.name) && (dirent.isDirectory() || dirent.isFile()))
-      .map(async (dirent): Promise<ProjectEntry> => {
-        const entryPath = joinRelative(relativePath, dirent.name)
-        const entryStat = await fs.stat(path.join(absolutePath, dirent.name))
-        return {
-          kind: dirent.isDirectory() ? "directory" : "file",
-          modifiedAt: entryStat.mtimeMs,
-          name: dirent.name,
-          parentPath: relativePath,
-          path: entryPath,
-          size: dirent.isFile() ? entryStat.size : undefined,
-        }
-      }))
+    const entries = await Promise.all(
+      dirents
+        .filter(
+          (dirent) =>
+            !dirent.isSymbolicLink() && !isIgnoredName(dirent.name) && (dirent.isDirectory() || dirent.isFile()),
+        )
+        .map(async (dirent): Promise<ProjectEntry> => {
+          const entryPath = joinRelative(relativePath, dirent.name)
+          const entryStat = await fs.stat(path.join(absolutePath, dirent.name))
+          return {
+            kind: dirent.isDirectory() ? "directory" : "file",
+            modifiedAt: entryStat.mtimeMs,
+            name: dirent.name,
+            parentPath: relativePath,
+            path: entryPath,
+            size: dirent.isFile() ? entryStat.size : undefined,
+          }
+        }),
+    )
     entries.sort(compareEntries)
     return { entries, path: relativePath, projectId: input.projectId }
   }
@@ -362,7 +391,8 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     const targetPath = joinRelative(parentPath, name)
     assertUserMutationPath(targetPath)
     const target = path.join(parent, name)
-    if (await existsPortable(target, this.caseInsensitivePaths)) throw new Error(`Project entry already exists: ${targetPath}`)
+    if (await existsPortable(target, this.caseInsensitivePaths))
+      throw new Error(`Project entry already exists: ${targetPath}`)
     if (input.kind === "directory") await fs.mkdir(target)
     else await fs.writeFile(target, input.content ?? "", { encoding: "utf8", flag: "wx" })
     return mutation("create", input.projectId, [targetPath], undefined, [targetPath])
@@ -372,7 +402,11 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return this.queueProjectMutation(input.projectId, () => this.renameEntryUnlocked(input))
   }
 
-  private async renameEntryUnlocked(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult> {
+  private async renameEntryUnlocked(input: {
+    name: string
+    path: string
+    projectId: string
+  }): Promise<ProjectMutationResult> {
     const sourcePath = requireEntryPath(input.path)
     assertUserMutationPath(sourcePath)
     const name = validateName(input.name)
@@ -398,7 +432,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       return mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath])
     }
-    if (targetStat || await existsPortable(target, this.caseInsensitivePaths)) {
+    if (targetStat || (await existsPortable(target, this.caseInsensitivePaths))) {
       throw new Error(`Project entry already exists: ${targetPath}`)
     }
     await fs.rename(source, target)
@@ -409,11 +443,16 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return this.queueProjectMutation(input.projectId, () => this.moveEntriesUnlocked(input))
   }
 
-  private async moveEntriesUnlocked(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
+  private async moveEntriesUnlocked(input: {
+    destinationPath?: string
+    paths: string[]
+    projectId: string
+  }): Promise<ProjectMutationResult> {
     const destinationPath = normalizeRelativePath(input.destinationPath)
     assertUserMutationPath(destinationPath)
     const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
-    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Move destination is not a directory: ${destinationPath}`)
+    if (!(await fs.stat(destination)).isDirectory())
+      throw new Error(`Move destination is not a directory: ${destinationPath}`)
     const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
     const moves: Array<{ source: string; sourcePath: string; target: string; targetPath: string }> = []
     const plannedTargets = new Set<string>()
@@ -424,14 +463,17 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       const sourceStat = await fs.stat(source)
       validateName(path.posix.basename(sourcePath))
       await assertPortableTree(source)
-      if (sourceStat.isDirectory() && (destinationPath === sourcePath || destinationPath.startsWith(`${sourcePath}/`))) {
+      if (
+        sourceStat.isDirectory() &&
+        (destinationPath === sourcePath || destinationPath.startsWith(`${sourcePath}/`))
+      ) {
         throw new Error(`Cannot move a directory into itself: ${sourcePath}`)
       }
       const targetPath = joinRelative(destinationPath, path.posix.basename(sourcePath))
       if (targetPath === sourcePath) continue
       const { absolutePath: target } = await this.resolveOutput(input.projectId, targetPath)
       const targetKey = collisionKey(targetPath, this.caseInsensitivePaths)
-      if (await existsPortable(target, this.caseInsensitivePaths) || plannedTargets.has(targetKey)) {
+      if ((await existsPortable(target, this.caseInsensitivePaths)) || plannedTargets.has(targetKey)) {
         throw new Error(`Project entry already exists: ${targetPath}`)
       }
       plannedTargets.add(targetKey)
@@ -446,12 +488,16 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return this.queueProjectMutation(input.projectId, () => this.copyEntriesUnlocked(input))
   }
 
-  private async copyEntriesUnlocked(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
+  private async copyEntriesUnlocked(input: {
+    destinationPath?: string
+    paths: string[]
+    projectId: string
+  }): Promise<ProjectMutationResult> {
     const destinationPath = normalizeRelativePath(input.destinationPath)
-    const managedAssetCopy = destinationPath === managedAssetDirectory
-    if (!managedAssetCopy) assertUserMutationPath(destinationPath)
+    assertUserMutationPath(destinationPath)
     const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
-    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Copy destination is not a directory: ${destinationPath}`)
+    if (!(await fs.stat(destination)).isDirectory())
+      throw new Error(`Copy destination is not a directory: ${destinationPath}`)
     const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
     const copies: Array<{ source: string; target: string; targetPath: string }> = []
     const reservedTargets = new Set<string>()
@@ -464,9 +510,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       const sourceName = validateName(path.posix.basename(sourcePath))
       await assertPortableTree(source)
-      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetCopy)
+      assertUserMutationPath(joinRelative(destinationPath, sourceName))
       const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
-      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetCopy)
+      assertUserMutationPath(joinRelative(destinationPath, path.basename(target)))
       reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
       copies.push({ source, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
     }
@@ -479,37 +525,12 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return this.queueProjectMutation(input.projectId, () => this.deleteEntriesUnlocked(input))
   }
 
-  /** Main-only rollback boundary for files freshly admitted below `.convax/assets/`. */
-  deleteManagedAssets(input: { paths: string[]; projectId: string }) {
-    return this.queueProjectMutation(input.projectId, async () => {
-      const sourcePaths = [...new Set(input.paths)]
-      if (!sourcePaths.length || sourcePaths.some((sourcePath) => !isManagedProjectAssetPath(sourcePath))) {
-        throw new Error("Managed asset rollback paths are invalid")
-      }
-      const cleanupErrors: unknown[] = []
-      for (const relativePath of sourcePaths) {
-        try {
-          const item = await this.resolveExisting(input.projectId, relativePath)
-          const stat = await fs.lstat(item.absolutePath)
-          if (!stat.isFile() || stat.isSymbolicLink()) {
-            throw new Error(`Managed asset rollback accepts regular files only: ${relativePath}`)
-          }
-          await removePathWithRetries(item.absolutePath)
-        } catch (error) {
-          if (!isNodeError(error) || error.code !== "ENOENT") cleanupErrors.push(error)
-        }
-      }
-      if (cleanupErrors.length) {
-        throw new AggregateError(cleanupErrors, "One or more managed generation assets could not be removed")
-      }
-      return mutation("delete", input.projectId, sourcePaths, sourcePaths)
-    })
-  }
-
   private async deleteEntriesUnlocked(input: { paths: string[]; projectId: string }): Promise<ProjectMutationResult> {
     const sourcePaths = normalizeSelectionRoots(input.paths.map(requireEntryPath))
     sourcePaths.forEach(assertUserMutationPath)
-    const resolved = await Promise.all(sourcePaths.map((relativePath) => this.resolveExisting(input.projectId, relativePath)))
+    const resolved = await Promise.all(
+      sourcePaths.map((relativePath) => this.resolveExisting(input.projectId, relativePath)),
+    )
     for (const item of resolved) {
       assertNotProjectRoot(item.absolutePath, item.rootPath)
       if (this.options.trash) await this.options.trash(item.absolutePath)
@@ -518,11 +539,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     return mutation("delete", input.projectId, sourcePaths, sourcePaths)
   }
 
-  importEntries(input: {
-    destinationPath?: string
-    projectId: string
-    sourcePaths: string[]
-  }) {
+  importEntries(input: { destinationPath?: string; projectId: string; sourcePaths: string[] }) {
     return this.queueProjectMutation(input.projectId, () => this.importEntriesUnlocked(input))
   }
 
@@ -532,14 +549,18 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     sourcePaths: string[]
   }): Promise<ProjectMutationResult> {
     const destinationPath = normalizeRelativePath(input.destinationPath)
-    const managedAssetImport = destinationPath === managedAssetDirectory
-    if (!managedAssetImport) assertUserMutationPath(destinationPath)
+    assertUserMutationPath(destinationPath)
     const { absolutePath: destination } = await this.resolveExisting(input.projectId, destinationPath)
-    if (!(await fs.stat(destination)).isDirectory()) throw new Error(`Import destination is not a directory: ${destinationPath}`)
-    const sourcePaths = [...new Set(input.sourcePaths.map((sourcePath) => {
-      if (!sourcePath.trim()) throw new Error("Import source path is empty")
-      return path.resolve(sourcePath)
-    }))]
+    if (!(await fs.stat(destination)).isDirectory())
+      throw new Error(`Import destination is not a directory: ${destinationPath}`)
+    const sourcePaths = [
+      ...new Set(
+        input.sourcePaths.map((sourcePath) => {
+          if (!sourcePath.trim()) throw new Error("Import source path is empty")
+          return path.resolve(sourcePath)
+        }),
+      ),
+    ]
     const imports: Array<{ source: string; target: string; targetPath: string }> = []
     const reservedTargets = new Set<string>()
     for (const sourcePath of sourcePaths) {
@@ -553,9 +574,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       const sourceName = validateName(path.basename(sourcePath))
       await assertPortableTree(sourcePath)
-      assertCopyOrImportTarget(joinRelative(destinationPath, sourceName), managedAssetImport)
+      assertUserMutationPath(joinRelative(destinationPath, sourceName))
       const target = await nextAvailablePath(destination, sourceName, reservedTargets, this.caseInsensitivePaths)
-      assertCopyOrImportTarget(joinRelative(destinationPath, path.basename(target)), managedAssetImport)
+      assertUserMutationPath(joinRelative(destinationPath, path.basename(target)))
       reservedTargets.add(collisionKey(target, this.caseInsensitivePaths))
       imports.push({ source: sourcePath, target, targetPath: joinRelative(destinationPath, path.basename(target)) })
     }
@@ -571,6 +592,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
@@ -592,9 +614,10 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const maxBytes = this.options.maxReadableFileBytes ?? 64 * 1024 * 1024
-    const content = await readStableFile(absolutePath, relativePath, maxBytes)
+    const { bytes: content } = await readStableProjectFile(absolutePath, relativePath, maxBytes)
     const mimeType = mimeTypeForPath(relativePath)
     return {
       dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
@@ -605,39 +628,9 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     }
   }
 
-  async readManagedImageFile(input: { path: string; projectId: string }): Promise<ProjectFileContents> {
-    if (!isManagedProjectAssetPath(input.path)) {
-      throw new Error(`Project image is not a managed Canvas asset: ${input.path}`)
-    }
-    const relativePath = requireEntryPath(input.path)
-    const mimeType = mimeTypeForPath(relativePath).toLowerCase()
-    if (!managedImageMimeTypes.has(mimeType)) {
-      throw new Error(`Managed Canvas image type is not supported: ${relativePath}`)
-    }
-    if (this.managedImageReads >= maximumConcurrentManagedImageReads) {
-      throw new Error("Too many managed Canvas image reads are already in progress")
-    }
-    this.managedImageReads += 1
-    try {
-      const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
-      const content = await readStableFile(absolutePath, relativePath, maximumManagedImageBytes)
-      if (!hasManagedImageSignature(content, mimeType)) {
-        throw new Error(`Managed Canvas image contents do not match its file type: ${relativePath}`)
-      }
-      return {
-        dataUrl: `data:${mimeType};base64,${content.toString("base64")}`,
-        mimeType,
-        name: path.basename(absolutePath),
-        path: relativePath,
-        size: content.byteLength,
-      }
-    } finally {
-      this.managedImageReads -= 1
-    }
-  }
-
   async readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     const { absolutePath } = await this.resolveExisting(input.projectId, relativePath)
     const stat = await fs.stat(absolutePath)
     if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
@@ -652,19 +645,29 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
 
   async readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents> {
     const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
     await this.waitForTextWrite(textFileKey(input.projectId, relativePath))
     const output = await this.resolveOutput(input.projectId, relativePath)
     try {
       const existing = await this.resolveExisting(input.projectId, relativePath)
-      const stat = await fs.stat(existing.absolutePath)
-      if (!stat.isFile()) throw new Error(`Project path is not a file: ${relativePath}`)
-      if (stat.size > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
-        throw new Error(`Project text file is too large to read: ${relativePath}`)
+      const { content, contentRevision } = await readStableProjectUtf8File(
+        existing.absolutePath,
+        relativePath,
+        this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
+      )
+      return {
+        content,
+        contentRevision,
+        exists: true,
+        path: relativePath,
       }
-      return { content: await fs.readFile(existing.absolutePath, "utf8"), exists: true, path: relativePath }
     } catch (error) {
-      if (isNodeError(error) && error.code === "ENOENT") return { content: "", exists: false, path: relativePath }
-      if (!(await exists(output.absolutePath))) return { content: "", exists: false, path: relativePath }
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return { content: "", contentRevision: "", exists: false, path: relativePath }
+      }
+      if (!(await exists(output.absolutePath))) {
+        return { content: "", contentRevision: "", exists: false, path: relativePath }
+      }
       throw error
     }
   }
@@ -676,7 +679,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     projectId: string
   }): Promise<ProjectMutationResult> {
     const relativePath = requireEntryPath(input.path)
-    assertCopyOrImportTarget(relativePath, isManagedAssetPath(relativePath))
+    assertUserMutationPath(relativePath)
     await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
       if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
         throw new Error(`Project text file is too large to write: ${relativePath}`)
@@ -685,15 +688,99 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
         const { absolutePath } = await this.resolveOutput(input.projectId, relativePath)
         const parent = path.dirname(absolutePath)
         if (input.createParents) await fs.mkdir(parent, { recursive: true })
-        else if (!(await isDirectory(parent))) throw new Error(`Project parent directory was not found: ${parentOf(relativePath)}`)
+        else if (!(await isDirectory(parent)))
+          throw new Error(`Project parent directory was not found: ${parentOf(relativePath)}`)
         await writeFileReplacing(absolutePath, input.content)
       })
     })
     return mutation("write", input.projectId, [relativePath], undefined, [relativePath])
   }
 
+  async compareAndReplaceTextFile(
+    input: ProjectTextFileCompareAndReplaceInput,
+  ): Promise<ProjectTextFileCompareAndReplaceResult> {
+    const relativePath = requireEntryPath(input.path)
+    assertUserMutationPath(relativePath)
+    if (!/^[a-f0-9]{64}$/.test(input.expectedRevision)) {
+      throw new Error("Expected Project text revision is invalid")
+    }
+    if (typeof input.content !== "string") throw new Error("Project text content must be a string")
+    if (Buffer.byteLength(input.content, "utf8") > (this.options.maxTextFileBytes ?? 16 * 1024 * 1024)) {
+      throw new Error(`Project text file is too large to write: ${relativePath}`)
+    }
+
+    let contentRevision = ""
+    await this.queueTextWrite(textFileKey(input.projectId, relativePath), async () => {
+      await this.queueProjectMutation(input.projectId, async () => {
+        let existing: Awaited<ReturnType<NodeProjectManager["resolveExisting"]>>
+        try {
+          existing = await this.resolveExisting(input.projectId, relativePath)
+        } catch (error) {
+          if (isNodeError(error) && error.code === "ENOENT") {
+            throw new ProjectTextFileConflictError(input.expectedRevision, null)
+          }
+          throw error
+        }
+
+        const current = await readStableProjectUtf8File(
+          existing.absolutePath,
+          relativePath,
+          this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
+        )
+        if (current.contentRevision !== input.expectedRevision) {
+          throw new ProjectTextFileConflictError(input.expectedRevision, current.contentRevision)
+        }
+
+        await writeFileReplacing(existing.absolutePath, input.content, async (staged) => {
+          await this.beforeCompareAndReplaceCommit(staged)
+
+          let resolvedBeforeReplace: string
+          let targetBeforeReplace: Awaited<ReturnType<typeof fs.lstat>>
+          try {
+            resolvedBeforeReplace = await fs.realpath(existing.absolutePath)
+            targetBeforeReplace = await fs.lstat(existing.absolutePath, { bigint: true })
+          } catch (error) {
+            if (isNodeError(error) && error.code === "ENOENT") {
+              throw new ProjectTextFileConflictError(input.expectedRevision, null)
+            }
+            throw error
+          }
+          if (
+            targetBeforeReplace.isSymbolicLink() ||
+            !targetBeforeReplace.isFile() ||
+            !sameNativePath(resolvedBeforeReplace, existing.absolutePath)
+          ) {
+            throw new Error(`Project text file changed before it could be replaced: ${relativePath}`)
+          }
+          if (!sameProjectFileSnapshot(current.snapshot, targetBeforeReplace)) {
+            try {
+              const replacement = await readStableProjectFile(
+                existing.absolutePath,
+                relativePath,
+                this.options.maxTextFileBytes ?? 16 * 1024 * 1024,
+              )
+              throw new ProjectTextFileConflictError(
+                input.expectedRevision,
+                createHash("sha256").update(replacement.bytes).digest("hex"),
+              )
+            } catch (error) {
+              if (isNodeError(error) && error.code === "ENOENT") {
+                throw new ProjectTextFileConflictError(input.expectedRevision, null)
+              }
+              throw error
+            }
+          }
+        })
+        contentRevision = createHash("sha256").update(Buffer.from(input.content, "utf8")).digest("hex")
+      })
+    })
+    return { contentRevision }
+  }
+
   async resolveEntryPath(input: { path?: string; projectId: string }) {
-    return (await this.resolveExisting(input.projectId, normalizeRelativePath(input.path))).absolutePath
+    const relativePath = normalizeRelativePath(input.path)
+    assertUserMutationPath(relativePath)
+    return (await this.resolveExisting(input.projectId, relativePath)).absolutePath
   }
 
   async resolveProjectRoot(input: { projectId: string }) {
@@ -735,7 +822,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     }
     const scheduleRestart = () => {
       if (stopped || restartTimer || restartAttempts >= 5) return
-      const delay = Math.min(2_000, 100 * (2 ** restartAttempts))
+      const delay = Math.min(2_000, 100 * 2 ** restartAttempts)
       restartAttempts += 1
       restartTimer = setTimeout(() => {
         restartTimer = undefined
@@ -776,7 +863,8 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   private async getProject(projectId: string) {
     const project = (await this.readStableRegistry()).find((candidate) => candidate.id === projectId)
     if (!project) throw new Error(`Project was not found: ${projectId}`)
-    if (!(await isSafeProjectRoot(project.rootPath))) throw new Error(`Project folder is unavailable: ${project.rootPath}`)
+    if (!(await isSafeProjectRoot(project.rootPath)))
+      throw new Error(`Project folder is unavailable: ${project.rootPath}`)
     return project
   }
 
@@ -801,7 +889,7 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
       }
       manifestChanged = true
     }
-    if (manifest.projectId !== preferredProjectId && await this.registryContainsProject(preferredProjectId)) {
+    if (manifest.projectId !== preferredProjectId && (await this.registryContainsProject(preferredProjectId))) {
       throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
     }
 
@@ -879,7 +967,10 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
   private async queueProjectMutation<T>(projectId: string, mutate: () => Promise<T>) {
     const previous = this.projectMutationQueues.get(projectId) ?? Promise.resolve()
     const result = previous.catch(() => undefined).then(mutate)
-    const settled = result.then(() => undefined, () => undefined)
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    )
     this.projectMutationQueues.set(projectId, settled)
     try {
       return await result
@@ -901,14 +992,19 @@ export class NodeProjectManager implements ProjectPrivatePathResolver, ProjectPr
     }
   }
 
-  private mutateRegistry<T>(mutate: (projects: ProjectRegistryRecord[]) => { projects: ProjectRegistryRecord[]; value: T }) {
+  private mutateRegistry<T>(
+    mutate: (projects: ProjectRegistryRecord[]) => { projects: ProjectRegistryRecord[]; value: T },
+  ) {
     const result = this.registryQueue.then(async () => {
       const current = await this.readRegistry()
       const next = mutate(current)
       await this.writeRegistry(next.projects)
       return next.value
     })
-    this.registryQueue = result.then(() => undefined, () => undefined)
+    this.registryQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
     return result
   }
 
@@ -941,76 +1037,4 @@ async function ensureSafeDirectory(directory: string, description: string) {
   const stat = await fs.lstat(directory)
   if (stat.isSymbolicLink()) throw new Error(`${description} cannot be a symbolic link: ${directory}`)
   if (!stat.isDirectory()) throw new Error(`${description} is not a directory: ${directory}`)
-}
-
-const maximumManagedImageBytes = 16 * 1024 * 1024
-const maximumConcurrentManagedImageReads = 2
-const managedImageMimeTypes = new Set(["image/jpeg", "image/png", "image/webp"])
-
-async function readStableFile(absolutePath: string, relativePath: string, maximumBytes: number) {
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
-    throw new Error("Project file byte limit must be a positive integer")
-  }
-  const pathBeforeOpen = await fs.lstat(absolutePath, { bigint: true })
-  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink()) {
-    throw new Error(`Project path is not a regular file: ${relativePath}`)
-  }
-  const noFollow = process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW
-  const handle = await fs.open(absolutePath, fsConstants.O_RDONLY | noFollow)
-  try {
-    const before = await handle.stat({ bigint: true })
-    if (!before.isFile() || !sameFileIdentity(pathBeforeOpen, before)) {
-      throw new Error(`Project file changed before it could be read: ${relativePath}`)
-    }
-    if (before.size > BigInt(maximumBytes)) {
-      throw new Error(`Project file is too large to preview: ${relativePath}`)
-    }
-    const size = Number(before.size)
-    const content = Buffer.allocUnsafe(size)
-    let offset = 0
-    while (offset < size) {
-      const { bytesRead } = await handle.read(content, offset, size - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    const extra = Buffer.allocUnsafe(1)
-    const { bytesRead: extraBytes } = await handle.read(extra, 0, 1, size)
-    const after = await handle.stat({ bigint: true })
-    const pathAfterRead = await fs.lstat(absolutePath, { bigint: true })
-    const resolvedAfterRead = await fs.realpath(absolutePath)
-    if (offset !== size
-      || extraBytes !== 0
-      || !sameFileSnapshot(before, after)
-      || !sameFileIdentity(after, pathAfterRead)
-      || !sameNativePath(resolvedAfterRead, absolutePath)) {
-      throw new Error(`Project file changed while it was being read: ${relativePath}`)
-    }
-    return content
-  } finally {
-    await handle.close()
-  }
-}
-
-function sameFileIdentity(left: BigIntStats, right: BigIntStats) {
-  return left.dev === right.dev && left.ino === right.ino
-}
-
-function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
-  return sameFileIdentity(left, right)
-    && left.size === right.size
-    && left.mtimeNs === right.mtimeNs
-    && left.ctimeNs === right.ctimeNs
-}
-
-function hasManagedImageSignature(content: Buffer, mimeType: string) {
-  if (mimeType === "image/jpeg") {
-    return content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff
-  }
-  if (mimeType === "image/png") {
-    return content.length >= 8
-      && content.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  }
-  return content.length >= 12
-    && content.subarray(0, 4).toString("ascii") === "RIFF"
-    && content.subarray(8, 12).toString("ascii") === "WEBP"
 }

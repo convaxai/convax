@@ -23,6 +23,7 @@ import {
   pluginCanvasImageIpcChannels,
   type PluginCanvasImageClient,
 } from "../plugin-canvas-image-contracts"
+import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -49,7 +50,6 @@ const projectFilesChannels = {
   openEntry: "project-files:open-entry",
   readFile: "project-files:read-file",
   readFileInfo: "project-files:read-file-info",
-  readManagedImageFile: "project-files:read-managed-image-file",
   readTextPreview: "project-files:read-text-preview",
   readTextFile: "project-files:read-text-file",
   renameEntry: "project-files:rename-entry",
@@ -319,7 +319,6 @@ const projectFilesClient = {
   openEntry: (input) => ipcRenderer.invoke(projectFilesChannels.openEntry, input),
   readFile: (input) => ipcRenderer.invoke(projectFilesChannels.readFile, input),
   readFileInfo: (input) => ipcRenderer.invoke(projectFilesChannels.readFileInfo, input),
-  readManagedImageFile: (input) => ipcRenderer.invoke(projectFilesChannels.readManagedImageFile, input),
   readTextPreview: (input) => ipcRenderer.invoke(projectFilesChannels.readTextPreview, input),
   readTextFile: (input) => ipcRenderer.invoke(projectFilesChannels.readTextFile, input),
   renameEntry: (input) => ipcRenderer.invoke(projectFilesChannels.renameEntry, input),
@@ -378,6 +377,15 @@ const canvasDocumentClient = {
   execute: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.execute, input),
   load: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.load, input),
 } satisfies CanvasRendererDocumentClient
+
+const canvasResourceClient = createCanvasResourcePreloadClient({
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  invoke: (channel, input) => ipcRenderer.invoke(channel, input),
+})
+
+const canvasTextResourceClient = createCanvasTextResourcePreloadClient({
+  invoke: (channel, input) => ipcRenderer.invoke(channel, input),
+})
 
 const canvasRendererClient = {
   onRequest(handler) {
@@ -541,6 +549,8 @@ contextBridge.exposeInMainWorld("convax", {
     externalMediaDrag: canvasExternalMediaDragClient,
     pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
+    resources: canvasResourceClient,
+    textResources: canvasTextResourceClient,
   },
   generation: generationClient,
   jianying: jianyingClient,

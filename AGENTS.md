@@ -44,7 +44,7 @@ files under `packages/` add local rules and inherit this contract.
 | Package                 | Owns                                                                                                                                                             | Must not own                                                                             |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
-| `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog and relationships | Active Canvas selection, Canvas document semantics, Agent sessions                       |
+| `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                       |
 | `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                    | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
 | `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                         | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
 | `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                  | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
@@ -110,8 +110,11 @@ source, or ambient application state.
   active/selected Canvas state.
 - `<project>/.convax/canvases/<id>/document.json`: Canvas document data accessed
   through Canvas repository/application ports implemented by `@convax/project/node`.
-- `<project>/.convax/assets/`: managed Canvas assets accessed through the scoped
-  Project Files capability.
+- `<project>/.convax/assets/`: content-addressed copies of files admitted from
+  outside the Project, plus rebuildable delayed-GC state, accessed through scoped
+  Project resource capabilities.
+- `<project>/.convax/staging/`: short-lived, recoverable-by-deletion staging for
+  publishing user-visible Project files; never a durable transaction log.
 - Electron `userData/opencode/skills/user/<name>/`: materialized Convax-managed
   OpenCode Skills, including independently managed standalone Skills and Plugin-owned
   Skills. Ownership is never inferred from this shared discovery path.
@@ -140,8 +143,10 @@ source, or ambient application state.
 No package except `@convax/project/node` may read or write private Project metadata
 JSON directly. Desktop and Agent code must call typed clients/services. Never teach
 an Agent to edit `.convax` JSON; protect it and expose capabilities instead. Legacy
-formats are read only in explicit, tested migration code and are written back in the
-current schema.
+formats are read only in explicit, tested migration code. An explicitly approved
+breaking cutover may reject an old schema without migration, but it must bump the
+schema/protocol, preserve unsupported bytes, and test that rejection. Never silently
+reset, overwrite, migrate, or garbage-collect unsupported portable data.
 
 ## Project, Canvas, and Workbench rules
 
@@ -159,6 +164,14 @@ current schema.
   state and the only persistent writer. Renderer edits are optimistic projections
   that submit element-level commands with `expectedRevision`; renderer never saves
   a whole document or arbitrates Main mutations.
+- File-backed content and Canvas state are not one transaction. Create or publish the
+  user file first, then commit its Canvas reference. If the Canvas commit fails, keep
+  the file and report partial success. Managed-asset admission may likewise leave an
+  unreferenced blob for delayed GC; never add cross-file WAL merely to roll it back.
+- Project file moves and renames do not rewrite Canvas references in v1. Watchers
+  treat every coalesced filesystem event as invalidation of the current Project's
+  mounted resource snapshots; an optional event path is only a refresh-priority hint.
+  Missing references stay visible until the user relinks them.
 - Prefer Canvas business operations for product behavior. Primitive operations are
   explicit low-level escape hatches. View operations such as select, reveal,
   fit-view, animation, and notification are valid Agent capabilities when requested.
@@ -289,14 +302,16 @@ current schema.
   manifest and exact Hook bytes. Load only a private host-owned snapshot, never the
   mutable installed package path. Default provisioning and background updates must
   not authorize new or changed Hook bytes.
-- Fingerprint an external Tool Plugin executable before staging aggregate-bounded
-  inputs. Recheck live reference/revision guards immediately
-  before a billable call. Launch the install-authorized entrypoint through a verified
-  host-owned snapshot, terminate the whole process tree on disposal, and fail
-  closed on platforms where the host lacks a process-tree ownership primitive.
-- Generated media enters Canvas only through `CanvasResourceBusinessService` and
-  the managed `.convax/assets/` flow before existing `file` nodes reference it;
-  failed commits must roll back newly admitted assets.
+- Fingerprint the external Tool Plugin executable before staging aggregate-bounded
+  inputs. Recheck live reference/revision guards immediately before a billable call.
+  Launch the install-authorized entrypoint through a verified host-owned snapshot,
+  terminate the whole process tree on disposal, and fail closed on platforms where
+  the host lacks a process-tree ownership primitive.
+- Generated content enters Canvas only through `CanvasResourceBusinessService` after
+  Main publishes it without overwriting an existing object as a user-visible Project
+  file under `Generated/`. Existing nodes reference that Project file. A failed
+  Canvas commit retains the generated file and reports partial success; short-lived
+  unpublished staging is cleaned later without a publication WAL.
 - A Plugin-requested immediate generation result is a host-owned pending Canvas
   resource lifecycle. Canvas creates and commits the node id in Main before the
   external call, replaces it only through an exact content guard, and retains a
@@ -332,13 +347,16 @@ current schema.
   node state writes stay inside that node's namespaced field. V5 Project/Canvas
   methods route through an opaque sender-scoped main connection and derive authority
   only from the installed principal and its declared grants, not from node ownership.
+- Durable Plugin resources use host-owned typed node bindings; opaque Plugin state
+  stores only their binding keys and never grants asset liveness by containing a
+  path or hash.
 - Bound in-flight Plugin RPC before asynchronous connection/subscription work. Tool
   and Agent cancellation must cross queue and preparation boundaries and be checked
   immediately before any Canvas persistence call.
   Check permissions, message size, stale scope and target on every call.
 - Connected Plugin inputs must be derived from direct incoming Canvas edges. Never
   accept a caller-supplied Project path or widen that access to unrelated nodes;
-  use the bounded Main-owned managed-asset reader and recheck the exact edge and
+  use the bounded Main-owned typed Project-resource reader and recheck the exact edge and
   source reference afterward.
 - Gate browser feature-policy exceptions such as fullscreen through an explicit
   manifest capability. Preserve every unrelated iframe permission denial.
