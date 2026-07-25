@@ -89,7 +89,7 @@ describe("canvas resource business service", () => {
     expect(result.document.nodes.find((node) => node.id === createdNodeId)).toMatchObject({
       data: { kind: "image", url: "asset://poster" },
       position: { x: 304, y: 0 },
-      style: { height: 180, width: 320 },
+      style: { height: 160, width: 320 },
     })
     expect(result.storageVersion).toBe("v2")
     expect(result.warnings).toEqual(["metadata was normalized"])

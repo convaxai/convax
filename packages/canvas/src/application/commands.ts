@@ -574,6 +574,7 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
   }
 
   const replacement = createNodeFromResource(command.item, target.id, target.position)
+  const replacesResourceLifecycle = target.data.status === "pending" || target.data.status === "error"
   const next = {
     ...document,
     nodes: document.nodes.map((node) =>
@@ -581,6 +582,16 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
         ? {
             ...node,
             data: replacement.data,
+            ...(replacesResourceLifecycle
+              ? {
+                  height: undefined,
+                  initialHeight: undefined,
+                  initialWidth: undefined,
+                  measured: undefined,
+                  style: replacement.style,
+                  width: undefined,
+                }
+              : {}),
             type: replacement.type,
           }
         : node,
