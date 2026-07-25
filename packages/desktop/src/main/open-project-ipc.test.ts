@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -11,7 +11,7 @@ import type {
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import { createTextNode } from "@convax/canvas/core"
 import type { ProjectLifecycleClient } from "@convax/project"
-import type { ProjectCanvasClient } from "@convax/project/canvas"
+import { projectResourceReferenceKey, type ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { CanvasResourceClient } from "../desktop-protocol"
@@ -288,7 +288,22 @@ describe("desktop Project lifecycle IPC smoke", () => {
     })
     const loaded = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
     expect(loaded.document).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
-    const rendererNode = createTextNode({ id: "renderer-note", position: { x: 10, y: 20 }, text: "Command edit" })
+    await exposedBridge.projectFiles.writeTextFile({
+      content: "Command edit",
+      createParents: true,
+      path: "Notes/renderer-note.md",
+      projectId,
+    })
+    const rendererNode = createTextNode({
+      id: "renderer-note",
+      metadata: {
+        [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/renderer-note.md" },
+      },
+      mimeType: "text/markdown",
+      name: "renderer-note.md",
+      position: { x: 10, y: 20 },
+      resourceState: { status: "ready", text: "Command edit" },
+    })
     const commandResult = await exposedBridge.canvas.documents.execute({
       command: {
         addedEdges: [],

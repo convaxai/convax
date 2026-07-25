@@ -451,7 +451,10 @@ const connectedInputDataFingerprintCache = new WeakMap<
 >()
 
 function connectedInputDataFingerprint(data: CanvasNodeData) {
-  const source = typeof data.url === "string" ? data.url : ""
+  const resourceState = isRecord(data.resourceState) ? data.resourceState : undefined
+  const resourceReference = getProjectResourceReference(metadataOf(data))
+  const source =
+    resourceReference && resourceReference.kind !== "project-directory" ? JSON.stringify(resourceReference) : ""
   const metadata = JSON.stringify([
     data.kind,
     data.label,
@@ -461,7 +464,7 @@ function connectedInputDataFingerprint(data: CanvasNodeData) {
     data.width,
     data.height,
     data.durationMs,
-    getProjectFileReference(metadataOf(data))?.path,
+    typeof resourceState?.contentRevision === "string" ? resourceState.contentRevision : undefined,
   ])
   const cached = connectedInputDataFingerprintCache.get(data)
   if (cached && cached.source === source && cached.metadata === metadata) return cached.fingerprint

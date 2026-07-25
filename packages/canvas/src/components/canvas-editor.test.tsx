@@ -201,26 +201,51 @@ function renderEditor(
 
 describe("CanvasEditor node dimension projection", () => {
   test("projects persisted numeric style dimensions without mutating the Canvas document", () => {
-    const styleOnly = createTextNode({ id: "style-only", position: { x: 0, y: 0 } })
+    const styleOnly = createTextNode({
+      id: "style-only",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
     const measured = {
-      ...createTextNode({ id: "measured", position: { x: 300, y: 0 } }),
+      ...createTextNode({
+        id: "measured",
+        metadata: {},
+        position: { x: 300, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       measured: { height: 222, width: 333 },
       style: { height: 888, width: 999 },
     }
     const explicit = {
-      ...createTextNode({ id: "explicit", position: { x: 600, y: 0 } }),
+      ...createTextNode({
+        id: "explicit",
+        metadata: {},
+        position: { x: 600, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       height: 234,
       width: 345,
       style: { height: 876, width: 987 },
     }
     const initialized = {
-      ...createTextNode({ id: "initialized", position: { x: 900, y: 0 } }),
+      ...createTextNode({
+        id: "initialized",
+        metadata: {},
+        position: { x: 900, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       initialHeight: 456,
       initialWidth: 567,
       style: { height: 765, width: 876 },
     }
     const stringStyle = {
-      ...createTextNode({ id: "string-style", position: { x: 1_200, y: 0 } }),
+      ...createTextNode({
+        id: "string-style",
+        metadata: {},
+        position: { x: 1_200, y: 0 },
+        resourceState: { status: "ready" },
+      }),
       style: { height: "auto", width: "50%" },
     }
     const initialDocument = createCanvasDocument({

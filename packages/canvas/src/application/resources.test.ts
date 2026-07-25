@@ -1121,7 +1121,7 @@ describe("canvas resource business service", () => {
     expect(result.document.nodes.map((node) => node.id)).toContain("concurrent")
     expect(result.createdNodeIds).toHaveLength(1)
     expect(result.document.nodes.find((node) => node.id === result.createdNodeIds[0])?.position).toEqual({
-      x: 384,
+      x: 304,
       y: 0,
     })
     expect(result.warnings).toContain(
@@ -1240,7 +1240,13 @@ describe("canvas resource business service", () => {
     expect(preparationCalls).toBe(0)
     expect(created.document.revision).toBe(1)
     expect(pending).toMatchObject({
-      data: { kind: "image", label: "Relit image", status: "pending", url: "" },
+      data: {
+        kind: "image",
+        label: "Relit image",
+        metadata: {},
+        resourceState: { status: "ready", url: "" },
+        status: "pending",
+      },
       type: "file",
     })
     expect(created.document.edges).toEqual([expect.objectContaining({ source: anchor.id, target: pendingNodeId })])
@@ -1283,9 +1289,20 @@ describe("canvas resource business service", () => {
       ...createMediaNode({
         id: "pending",
         position: { x: 0, y: 0 },
-        resource: { id: "pending", kind: "image" as const, url: "" },
+        resource: {
+          id: "pending",
+          kind: "image" as const,
+          metadata: {},
+          state: { status: "ready" as const, url: "" },
+        },
       }),
-      data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
+      data: {
+        kind: "image" as const,
+        label: "Image",
+        metadata: {},
+        resourceState: { status: "ready" as const, url: "" },
+        status: "pending" as const,
+      },
     }
     let saveCalls = 0
     const business = new CanvasResourceBusinessService(
@@ -1491,7 +1508,7 @@ describe("canvas resource business service", () => {
               nodes: [
                 {
                   ...owner,
-                  data: { ...owner.data, resourceState: { status: "ready", text: "User edit" } },
+                  data: { ...owner.data, label: "User edit" },
                 },
               ],
               revision: 1,

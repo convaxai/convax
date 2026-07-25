@@ -26,6 +26,7 @@ export interface ProjectResourceSnapshot {
 
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
+const pendingResourceNodeKinds = new Set(["text", "image", "video", "audio"])
 const legacyResourceKeys = ["format", "text", "richText", "url", "posterUrl", "path"] as const
 const baseDurableResourceDataKeys = ["kind", "label", "description", "status", "error", "metadata", "name"] as const
 const durableMediaDataKeys = new Set([
@@ -201,6 +202,16 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         }
       }
 
+      if (isUnbackedPendingResourceNode(node, resourceMetadata)) {
+        return {
+          ...node,
+          data: {
+            ...persistedData,
+            metadata: {},
+          },
+        }
+      }
+
       const reference = getProjectResourceReference(metadata)
       if (!reference) throw new Error(`Canvas resource node ${node.id} requires a valid Project resource reference`)
       if (node.data.kind === "folder" && reference.kind !== "project-directory") {
@@ -296,6 +307,7 @@ async function hydrateProjectCanvasResources(
   const nodes = await Promise.all(
     document.nodes.map(async (node) => {
       if (!resourceNodeKinds.has(node.data.kind) || !shouldInspect(node)) return node
+      if (isUnbackedPendingResourceNode(node, node.data.metadata)) return node
       const reference = getProjectResourceReference(node.data.metadata)
       if (!reference) {
         return {
@@ -327,6 +339,15 @@ async function hydrateProjectCanvasResources(
     }),
   )
   return { ...document, nodes }
+}
+
+function isUnbackedPendingResourceNode(node: CanvasDocument["nodes"][number], metadata: unknown) {
+  return (
+    pendingResourceNodeKinds.has(node.data.kind) &&
+    (node.data.status === "pending" || node.data.status === "error") &&
+    isRecord(metadata) &&
+    Object.keys(metadata).length === 0
+  )
 }
 
 function requireProjectResourceSnapshot(value: ProjectResourceSnapshot): ProjectResourceSnapshot {

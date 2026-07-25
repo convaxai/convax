@@ -832,6 +832,8 @@ function CanvasEditorContent(
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
+  const reactFlowRef = useRef(reactFlow)
+  reactFlowRef.current = reactFlow
   const mutationService = useCanvasService("mutation")
   const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
@@ -1248,8 +1250,11 @@ function CanvasEditorContent(
   const pointAtCenter = useCallback(() => {
     const bounds = rootRef.current?.getBoundingClientRect()
     if (!bounds) return { x: 0, y: 0 }
-    return reactFlow.screenToFlowPosition({ x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 })
-  }, [reactFlow])
+    return reactFlowRef.current.screenToFlowPosition({
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top + bounds.height / 2,
+    })
+  }, [])
   const fitCanvas = useCallback(() => void fitDocumentViewport(documentRef.current), [fitDocumentViewport])
   const nextInsertPoint = useCallback(
     (index = 0) => {

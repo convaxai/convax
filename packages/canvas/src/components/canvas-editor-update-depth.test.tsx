@@ -4,6 +4,7 @@ import {
   Component,
   type ComponentType,
   type ErrorInfo,
+  type ButtonHTMLAttributes,
   type ReactNode,
   act,
   createRef,
@@ -23,7 +24,17 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
-  Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  Button: ({
+    asChild: _asChild,
+    children,
+    size: _size,
+    variant: _variant,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement> & {
+    asChild?: boolean
+    size?: string
+    variant?: string
+  }) => <button {...props}>{children}</button>,
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: Passthrough,
@@ -47,10 +58,14 @@ mock.module("@xyflow/react", () => ({
   BackgroundVariant: { Dots: "dots" },
   BaseEdge: () => null,
   EdgeLabelRenderer: Passthrough,
-  Handle: () => null,
+  Handle: (props: { children?: ReactNode }) => <div>{props.children}</div>,
   MiniMap: () => null,
-  NodeResizer: () => null,
-  NodeToolbar: Passthrough,
+  NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
+  NodeToolbar: (props: { children?: ReactNode; isVisible?: boolean }) => (
+    <div data-node-toolbar data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}>
+      {props.children}
+    </div>
+  ),
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
   ReactFlow: (props: { children?: ReactNode }) => (
     <>
@@ -61,7 +76,22 @@ mock.module("@xyflow/react", () => ({
   ReactFlowProvider: Passthrough,
   SelectionMode: { Partial: "partial" },
   applyEdgeChanges: (_changes: unknown, edges: unknown) => edges,
-  applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
+  applyNodeChanges: (
+    changes: Array<{ id: string; position?: { x: number; y: number }; selected?: boolean; type: string }>,
+    nodes: Array<{ id: string; position: { x: number; y: number }; selected?: boolean }>,
+  ) =>
+    nodes.map((node) => {
+      const applicable = changes.filter((change) => change.id === node.id)
+      return applicable.reduce(
+        (current, change) =>
+          change.type === "position" && change.position
+            ? { ...current, position: change.position }
+            : change.type === "select"
+              ? { ...current, selected: change.selected }
+              : current,
+        node,
+      )
+    }),
   getBezierPath: () => ["", 0, 0, 0, 0],
   useConnection: (selector: (state: { inProgress: boolean }) => unknown) => selector({ inProgress: false }),
   useInternalNode: () => undefined,
@@ -303,7 +333,12 @@ test("imperative insertion reuses registered renderer placement, selection, and 
       onCaughtError: () => undefined,
       onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
     })
-    const existing = createTextNode({ id: "existing", position: { x: 0, y: 0 } })
+    const existing = createTextNode({
+      id: "existing",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
     const initialDocument = createCanvasDocument({
       id: "imperative-insertion",
       nodes: [existing],
@@ -312,7 +347,8 @@ test("imperative insertion reuses registered renderer placement, selection, and 
     const fileRendererRegistry = createCanvasFileRendererRegistry([
       {
         component: () => null,
-        create: ({ position }) => createTextNode({ id: "inserted", position }),
+        create: ({ position }) =>
+          createTextNode({ id: "inserted", metadata: {}, position, resourceState: { status: "ready" } }),
         id: "test.renderer",
         label: "Test renderer",
         matches: (data) => data.kind === "test.renderer",
@@ -387,7 +423,9 @@ test("imperative insertion fails safely when the editor is read-only", async () 
       onCaughtError: () => undefined,
       onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
     })
-    const create = mock(({ position }) => createTextNode({ id: "must-not-exist", position }))
+    const create = mock(({ position }) =>
+      createTextNode({ id: "must-not-exist", metadata: {}, position, resourceState: { status: "ready" } }),
+    )
     const fileRendererRegistry = createCanvasFileRendererRegistry([
       {
         component: () => null,

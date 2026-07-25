@@ -1161,7 +1161,7 @@ function textDocument(reference: unknown = { kind: "project-file", path: "Notes/
 }
 
 describe("Canvas document hydration IPC", () => {
-  test("opens GC scheduling only from Canvas document access and never from save", async () => {
+  test("opens GC scheduling from authoritative Canvas document access without exposing whole-document save", async () => {
     const document = textDocument()
     const completeProjectCanvasAccess = mock(() => undefined)
     const prepareProjectCanvasAccess = mock(() => completeProjectCanvasAccess)
@@ -1181,15 +1181,9 @@ describe("Canvas document hydration IPC", () => {
       { sender: { id: 2 } },
       { canvasId: "canvas-main", scopeId: "project-one" },
     )
-    await handlers.get("canvas:document-save")!(
-      { sender: { id: 2 } },
-      {
-        document,
-        expectedStorageVersion: "storage-4",
-        ref: { canvasId: "canvas-main", scopeId: "project-one" },
-      },
-    )
 
+    expect(handlers.has("canvas:document-save")).toBeFalse()
+    expect(save).not.toHaveBeenCalled()
     expect(prepareProjectCanvasAccess).toHaveBeenCalledTimes(1)
     expect(completeProjectCanvasAccess).toHaveBeenCalledTimes(1)
   })

@@ -60,7 +60,13 @@ function nestedGroupCanvasSnapshot() {
     width: 600,
   })
   const childA = {
-    ...createTextNode({ id: "child-a", label: "Child A", position: { x: 20, y: 20 } }),
+    ...createTextNode({
+      id: "child-a",
+      label: "Child A",
+      metadata: {},
+      position: { x: 20, y: 20 },
+      resourceState: { status: "ready" },
+    }),
     parentId: group.id,
   }
   const childB = {
@@ -74,10 +80,22 @@ function nestedGroupCanvasSnapshot() {
     parentId: group.id,
   }
   const nestedChild = {
-    ...createTextNode({ id: "nested-child", label: "Nested", position: { x: 10, y: 10 } }),
+    ...createTextNode({
+      id: "nested-child",
+      label: "Nested",
+      metadata: {},
+      position: { x: 10, y: 10 },
+      resourceState: { status: "ready" },
+    }),
     parentId: childB.id,
   }
-  const unrelated = createTextNode({ id: "unrelated", label: "Unrelated", position: { x: 800, y: 0 } })
+  const unrelated = createTextNode({
+    id: "unrelated",
+    label: "Unrelated",
+    metadata: {},
+    position: { x: 800, y: 0 },
+    resourceState: { status: "ready" },
+  })
   return JSON.stringify(
     createCanvasDocument({
       edges: [

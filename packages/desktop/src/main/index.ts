@@ -540,9 +540,8 @@ function startApplication() {
     const pluginCanvasImages = new PluginCanvasImageService({
       documents: canvasDocuments,
       plugins: pluginManager,
-      projects: projectManager,
+      projects: projectFilePublisher,
       resources: canvasResources,
-      temporaryRoot: join(userDataDirectory, "plugin-canvas-image-staging"),
     })
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({
@@ -734,7 +733,9 @@ function startApplication() {
       ipcMain,
       isTrustedMainSender: ipcSecurity.isTrustedSender,
       async openMainWindow() {
-        return mainWindow && !mainWindow.isDestroyed() ? mainWindow : createWindow(projectManager)
+        return mainWindow && !mainWindow.isDestroyed()
+          ? mainWindow
+          : createWindow(projectManager, projectAssetGcScheduler)
       },
       async pickCustomPetSource() {
         const options: OpenDialogOptions = {

@@ -14,6 +14,7 @@ import type {
   CanvasResourceRuntimeState,
   CanvasTextNodeData,
 } from "./types"
+import { getCanvasTextFileFormat } from "./file-import"
 import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
@@ -102,7 +103,10 @@ export function createTextNode(input: {
     type: "file",
     position: input.position,
     data,
-    style: { width: 360, height: 240 },
+    style:
+      getCanvasTextFileFormat({ mimeType: input.mimeType, name: input.name ?? "" }) === "markdown"
+        ? { width: 360, height: 240 }
+        : { width: 280, height: 160 },
   }
 }
 

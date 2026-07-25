@@ -379,10 +379,21 @@ describe("built-in node toolbar visibility", () => {
 
   test("marks image and video cards for aligned borderless media chrome", () => {
     const imageMarkup = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinMediaFileNode {...props} data={{ kind: "image", label: "Portrait", url: "asset://portrait" }} />
+      <BuiltinMediaFileNode
+        {...props}
+        data={{
+          kind: "image",
+          label: "Portrait",
+          metadata: {},
+          resourceState: { status: "ready", url: "asset://portrait" },
+        }}
+      />
     ))
     const videoMarkup = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinMediaFileNode {...props} data={{ kind: "video", label: "Clip", url: "asset://clip" }} />
+      <BuiltinMediaFileNode
+        {...props}
+        data={{ kind: "video", label: "Clip", metadata: {}, resourceState: { status: "ready", url: "asset://clip" } }}
+      />
     ))
 
     expect(imageMarkup).toContain("convax-node__surface--media")
@@ -650,7 +661,7 @@ describe("built-in node toolbar visibility", () => {
     expect(genericMarkup).not.toContain("data-assistant-toolbar")
 
     const imageNode: CanvasNode = {
-      data: { kind: "image", label: "Image", url: "" },
+      data: { kind: "image", label: "Image", metadata: {}, resourceState: { status: "ready", url: "" } },
       id: "node-image",
       position: { x: 0, y: 0 },
       type: "file",
@@ -718,7 +729,7 @@ describe("built-in node toolbar visibility", () => {
 
   test("gives a visual-media assistant only its owner's persisted generation-model setter", () => {
     const imageNode: CanvasNode = {
-      data: { kind: "image", label: "Image", url: "" },
+      data: { kind: "image", label: "Image", metadata: {}, resourceState: { status: "ready", url: "" } },
       id: "node-image",
       position: { x: 0, y: 0 },
       type: "file",
@@ -750,10 +761,20 @@ describe("built-in node toolbar visibility", () => {
   })
 
   test("defaults file and Agent conversations to direct incoming inputs only", () => {
-    const incoming = createTextNode({ id: "incoming", position: { x: -320, y: 0 }, text: "Input" })
-    const outgoing = createTextNode({ id: "outgoing", position: { x: 640, y: 0 }, text: "Output" })
+    const incoming = createTextNode({
+      id: "incoming",
+      metadata: {},
+      position: { x: -320, y: 0 },
+      resourceState: { status: "ready", text: "Input" },
+    })
+    const outgoing = createTextNode({
+      id: "outgoing",
+      metadata: {},
+      position: { x: 640, y: 0 },
+      resourceState: { status: "ready", text: "Output" },
+    })
     const imageOwner: CanvasNode = {
-      data: { kind: "image", label: "Image", url: "" },
+      data: { kind: "image", label: "Image", metadata: {}, resourceState: { status: "ready", url: "" } },
       id: "image-owner",
       position: { x: 0, y: 0 },
       type: "file",

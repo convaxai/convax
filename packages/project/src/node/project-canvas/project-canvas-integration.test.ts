@@ -7,6 +7,7 @@ import {
   CanvasResourceBusinessService,
   CanvasResourcePartialFailureError,
   CanvasStorageConflictError,
+  createCanvasNodeContentGuard,
 } from "@convax/canvas/application"
 import { getProjectResourceReference } from "../../canvas/project-resources"
 import { NodeProjectManager } from "../project-manager"
@@ -29,6 +30,127 @@ afterEach(async () => {
 })
 
 describe("project canvas persistence integration", () => {
+  test("persists a host-owned pending resource before a Project output exists and can mark it failed", async () => {
+    const projectRoot = path.join(temporaryRoot, "project")
+    await fs.mkdir(projectRoot)
+    const manager = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "user-data", "projects.json") })
+    const project = await manager.addProject(projectRoot)
+    const canvases = new NodeProjectCanvasManager(manager, manager)
+    const assets = new ProjectManagedAssetStore(manager)
+    const repository = new ProjectCanvasDocumentRepository(manager, canvases, assets)
+    const ref = { canvasId: "canvas-main", scopeId: project.id }
+    await new ProjectCanvasDocumentService(repository, canvases).load(ref)
+    const application = new CanvasApplicationService(repository)
+    const resources = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          throw new Error("Pending resources must not prepare a fake Project resource")
+        },
+      },
+      application,
+    )
+
+    const created = await resources.createPendingResource({
+      actor: { id: "plugin-host", kind: "host" },
+      anchor: { x: 10, y: 20 },
+      canvasId: ref.canvasId,
+      commandId: "pending-create",
+      expectedRevision: 0,
+      kind: "image",
+      label: "Generating image",
+      scopeId: ref.scopeId,
+    })
+    const pendingNodeId = created.createdNodeIds[0]
+    const pending = created.document.nodes.find((node) => node.id === pendingNodeId)
+    if (!pendingNodeId || !pending) throw new Error("Pending resource was not created")
+
+    const persistedPending = await repository.load(ref)
+    expect(persistedPending.document?.nodes[0]?.data).toEqual({
+      kind: "image",
+      label: "Generating image",
+      metadata: {},
+      status: "pending",
+    })
+    const reloadedPending = persistedPending.document?.nodes.find((node) => node.id === pendingNodeId)
+    if (!persistedPending.document || !reloadedPending) throw new Error("Pending resource was not reloaded")
+    expect(getProjectResourceReference(reloadedPending.data.metadata)).toBeNull()
+
+    await resources.failPendingResource({
+      actor: { id: "plugin-host", kind: "host" },
+      canvasId: ref.canvasId,
+      commandId: "pending-fail",
+      expectedRevision: persistedPending.document.revision,
+      expectedTarget: createCanvasNodeContentGuard(reloadedPending),
+      message: "Generation could not be completed",
+      scopeId: ref.scopeId,
+      targetNodeId: pendingNodeId,
+    })
+
+    const persistedFailure = await repository.load(ref)
+    expect(persistedFailure.document?.nodes[0]?.data).toEqual({
+      error: "Generation could not be completed",
+      kind: "image",
+      label: "Generating image",
+      metadata: {},
+      status: "error",
+    })
+  })
+
+  test("replaces a reloaded host-owned pending resource with a typed Project file", async () => {
+    const projectRoot = path.join(temporaryRoot, "project")
+    await fs.mkdir(path.join(projectRoot, "Generated"), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, "Generated", "result.png"), Buffer.from("generated image"))
+    const manager = new NodeProjectManager({ registryFile: path.join(temporaryRoot, "user-data", "projects.json") })
+    const project = await manager.addProject(projectRoot)
+    const canvases = new NodeProjectCanvasManager(manager, manager)
+    const assets = new ProjectManagedAssetStore(manager)
+    const repository = new ProjectCanvasDocumentRepository(manager, canvases, assets)
+    const ref = { canvasId: "canvas-main", scopeId: project.id }
+    await new ProjectCanvasDocumentService(repository, canvases).load(ref)
+    const application = new CanvasApplicationService(repository)
+    const resources = new CanvasResourceBusinessService(
+      new ProjectCanvasResourcePreparation(manager, new ProjectFilePublisher(manager, assets), assets),
+      application,
+    )
+
+    const created = await resources.createPendingResource({
+      actor: { id: "plugin-host", kind: "host" },
+      anchor: { x: 10, y: 20 },
+      canvasId: ref.canvasId,
+      commandId: "pending-create-replace",
+      expectedRevision: 0,
+      kind: "image",
+      label: "Generating image",
+      scopeId: ref.scopeId,
+    })
+    const pendingNodeId = created.createdNodeIds[0]
+    if (!pendingNodeId) throw new Error("Pending resource was not created")
+
+    const reloaded = await repository.load(ref)
+    const reloadedPending = reloaded.document?.nodes.find((node) => node.id === pendingNodeId)
+    if (!reloaded.document || !reloadedPending) throw new Error("Pending resource was not reloaded")
+    const replaced = await resources.replaceResource({
+      actor: { id: "plugin-host", kind: "host" },
+      canvasId: ref.canvasId,
+      commandId: "pending-replace",
+      expectedRevision: reloaded.document.revision,
+      expectedTarget: createCanvasNodeContentGuard(reloadedPending),
+      scopeId: ref.scopeId,
+      source: { kind: "host-file", path: "Generated/result.png", sourceId: "generated-result" },
+      targetNodeId: pendingNodeId,
+    })
+
+    expect(replaced.createdNodeIds).toEqual([])
+    const persistedReplacement = await repository.load(ref)
+    const replacement = persistedReplacement.document?.nodes.find((node) => node.id === pendingNodeId)
+    expect(getProjectResourceReference(replacement?.data.metadata)).toEqual({
+      kind: "project-file",
+      path: "Generated/result.png",
+    })
+    expect(replacement?.data).not.toHaveProperty("status")
+    expect(replacement?.data).not.toHaveProperty("error")
+  })
+
   test("creates an empty document and rejects stale whole-document saves", async () => {
     const projectRoot = path.join(temporaryRoot, "project")
     await fs.mkdir(projectRoot)

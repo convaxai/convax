@@ -120,6 +120,7 @@ export interface PluginCanvasHost {
     projectId: string
     signal: AbortSignal
   }): Promise<PluginConnectedImageResult>
+  waitForGenerationProjection(input: PluginNodeInvocationRef & { signal: AbortSignal }): Promise<void>
 }
 
 export interface PluginHostLimits {

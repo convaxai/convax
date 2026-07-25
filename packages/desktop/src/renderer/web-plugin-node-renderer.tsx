@@ -213,9 +213,11 @@ export async function waitForWebPluginCanvasStateWrite<Editor extends WebPluginC
     getActiveContext: PluginCanvasHost["getActiveContext"]
     getEditor: () => Editor
     signal: AbortSignal
+    waitForGenerationProjection: PluginCanvasHost["waitForGenerationProjection"]
   },
   waitForRender: (signal: AbortSignal) => Promise<void> = waitForRendererTask,
 ): Promise<Editor> {
+  await input.waitForGenerationProjection({ ...input.frame, signal: input.signal })
   while (true) {
     if (input.signal.aborted) throw input.signal.reason ?? new Error("Plugin frame was closed")
     const active = input.getActiveContext()
@@ -622,6 +624,7 @@ function WebPluginCanvasNode(
                   getActiveContext: () => props.options.host.getActiveContext(),
                   getEditor: () => editorRef.current,
                   signal: controller.signal,
+                  waitForGenerationProjection: (input) => props.options.host.waitForGenerationProjection(input),
                 })
                 const latestNode = latest.document.nodes.find((candidate) => candidate.id === frame.nodeId)
                 if (!latestNode || !matchesWebPluginCanvasNode(props.plugin, latestNode.data)) {

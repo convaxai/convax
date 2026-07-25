@@ -10,6 +10,7 @@ import {
   type DesktopPluginHostProtocol,
 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
+import { WebPluginGenerationProjectionCoordinator } from "./web-plugin-generation-projection"
 import {
   dispatchWebPluginHostRequest,
   connectedInputFingerprint,
@@ -265,6 +266,48 @@ function hostContext(
 }
 
 describe("Canvas Web Plugin contribution", () => {
+  test("waits for an immediate post-generation state write until the authoritative projection settles", async () => {
+    const frame = {
+      canvasId: "canvas-1",
+      nodeId: "node-1",
+      pluginId: "multi-angle",
+      projectId: "project-1",
+    }
+    const controller = new AbortController()
+    const coordinator = new WebPluginGenerationProjectionCoordinator()
+    let releaseProjection!: () => void
+    const projection = new Promise<void>((resolve) => {
+      releaseProjection = resolve
+    })
+    await coordinator.execute(
+      frame,
+      async () => ({ revision: 1 }),
+      () => projection,
+    )
+    const editor = {
+      document: createCanvasDocument({ id: "canvas-1" }),
+      hydrating: false,
+      readOnly: false,
+    }
+    let settled = false
+
+    const waiting = waitForWebPluginCanvasStateWrite({
+      frame,
+      getActiveContext: () => ({ canvasId: "canvas-1", projectId: "project-1" }),
+      getEditor: () => editor,
+      signal: controller.signal,
+      waitForGenerationProjection: (input) => coordinator.wait(input, input.signal),
+    }).then((result) => {
+      settled = true
+      return result
+    })
+    await Promise.resolve()
+
+    expect(settled).toBeFalse()
+    releaseProjection()
+    await expect(waiting).resolves.toBe(editor)
+  })
+
   test("waits for the hydrated renderer controller before allowing a Plugin state write", async () => {
     const controller = new AbortController()
     let editor = {
@@ -289,6 +332,7 @@ describe("Canvas Web Plugin contribution", () => {
         getActiveContext: () => ({ canvasId: "canvas-1", projectId: "project-1" }),
         getEditor: () => editor,
         signal: controller.signal,
+        waitForGenerationProjection: async () => undefined,
       },
       async () => render,
     ).then((result) => {
@@ -325,6 +369,7 @@ describe("Canvas Web Plugin contribution", () => {
           readOnly: true,
         }),
         signal: controller.signal,
+        waitForGenerationProjection: async () => undefined,
       },
       async () => render,
     )
@@ -824,16 +869,21 @@ describe("Canvas Web Plugin host requests", () => {
       nodes: [owner, video, image],
     })
 
-    expect(getIncomingConnectedInputNodes(document, owner.id).map((node) => node.id)).toEqual([
-      "video-1",
-      "image-1",
-    ])
+    expect(getIncomingConnectedInputNodes(document, owner.id).map((node) => node.id)).toEqual(["video-1", "image-1"])
     const initial = await connectedInputFingerprint(document, owner.id)
     const changed = await connectedInputFingerprint(
       {
         ...document,
         nodes: document.nodes.map((node) =>
-          node.id === video.id ? { ...node, data: { ...node.data, url: "convax-asset://project-1/replaced" } } : node,
+          node.id === video.id
+            ? {
+                ...node,
+                data: {
+                  ...node.data,
+                  resourceState: { contentRevision: "replaced", status: "ready" },
+                },
+              }
+            : node,
         ),
       },
       owner.id,

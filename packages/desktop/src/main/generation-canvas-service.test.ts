@@ -325,13 +325,18 @@ function setup(
   }
 }
 
-function setupPendingGeneration(
+async function setupPendingGeneration(
   result: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>),
   options: {
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
     roundTripPending?: boolean
   } = {},
 ) {
+  const projectRoot = await temporaryDirectory()
+  await writeProjectTextReferences(projectRoot, {
+    brief: "Stable brief",
+    "plugin-owner": "Plugin card",
+  })
   const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
   const owner = createTextNode({ id: "plugin-owner", position: { x: 360, y: 0 }, text: "Plugin card" })
   let currentDocument = createCanvasDocument({
@@ -351,6 +356,7 @@ function setupPendingGeneration(
     document: currentDocument,
     loadDocument: () => ({ document: currentDocument }),
     prepareTool: options.prepareTool,
+    project: projectPortFor(projectRoot),
     resource: {
       async addResources() {
         throw new Error("Pending generation must not add a second Canvas node")
@@ -361,7 +367,12 @@ function setupPendingGeneration(
           id: pendingNodeId,
           label: "Image",
           position: input.anchor,
-          resource: { id: pendingNodeId, kind: "image", url: "" },
+          resource: {
+            id: pendingNodeId,
+            kind: "image",
+            metadata: {},
+            state: { status: "ready", url: "" },
+          },
         })
         node.data.status = "pending"
         currentDocument = {
@@ -380,17 +391,7 @@ function setupPendingGeneration(
           revision: currentDocument.revision + 1,
         }
         if (options.roundTripPending) {
-          currentDocument = {
-            ...currentDocument,
-            nodes: currentDocument.nodes.map((current) =>
-              current.id === pendingNodeId
-                ? {
-                    ...current,
-                    data: { kind: "image" as const, label: "Image", status: "pending" as const, url: "" },
-                  }
-                : current,
-            ),
-          }
+          currentDocument = JSON.parse(JSON.stringify(currentDocument)) as CanvasDocument
         }
         return persistedCommandResult(
           currentDocument,
@@ -728,6 +729,8 @@ describe("GenerationCanvasService", () => {
   })
 
   test("rechecks return-operation references after the external side effect and never retries a stale attempt", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const selectedTool = tool({
@@ -739,9 +742,10 @@ describe("GenerationCanvasService", () => {
     const { calls, resourceRequests, service } = setup({
       document,
       async result() {
-        reference.data.text = "Changed while the operation was running"
+        await fs.writeFile(path.join(root, "References", "brief.md"), "Changed while the operation was running", "utf8")
         return { content: [{ text: "external-id", type: "text" }] }
       },
+      project: projectPortFor(root),
       selectedTool,
     })
     const actor = { id: "opencode:project-one", kind: "agent" as const }
@@ -762,6 +766,8 @@ describe("GenerationCanvasService", () => {
   })
 
   test("enforces a manifest-declared direct-incoming owner from the installed Plugin", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Import this" })
     const owner = pluginNode()
     owner.data.kind = "remote-editor"
     owner.data.metadata = { convaxPlugin: { id: "creative-tools" } }
@@ -782,6 +788,7 @@ describe("GenerationCanvasService", () => {
     })
     const harness = setup({
       document,
+      project: projectPortFor(root),
       result: { content: [{ text: "external-asset", type: "text" }] },
       selectedTool,
     })
@@ -882,6 +889,8 @@ describe("GenerationCanvasService", () => {
   })
 
   test("rechecks the exact Plugin owner identity after a direct-incoming side effect", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Import this" })
     const owner = pluginNode()
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Import this" })
     const document = createCanvasDocument({
@@ -904,6 +913,7 @@ describe("GenerationCanvasService", () => {
         owner.data.kind = "plugin.another-plugin"
         return { content: [{ text: "external-asset", type: "text" }] }
       },
+      project: projectPortFor(root),
       selectedTool,
     })
     const boundRequest = request({
@@ -937,7 +947,7 @@ describe("GenerationCanvasService", () => {
       release = resolve
     })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const harness = setupPendingGeneration(async () => {
+    const harness = await setupPendingGeneration(async () => {
       markStarted()
       await gate
       return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
@@ -1021,7 +1031,7 @@ describe("GenerationCanvasService", () => {
       release = resolve
     })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const harness = setupPendingGeneration(async () => {
+    const harness = await setupPendingGeneration(async () => {
       markStarted()
       await gate
       return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
@@ -1099,7 +1109,7 @@ describe("GenerationCanvasService", () => {
   })
 
   test("retains a failed pending node with a host-safe error instead of raw sidecar details", async () => {
-    const harness = setupPendingGeneration({
+    const harness = await setupPendingGeneration({
       content: [{ text: "Failed at /private/tmp/vendor-secret-output.png", type: "text" }],
       isError: true,
     })
@@ -1142,7 +1152,7 @@ describe("GenerationCanvasService", () => {
 
   test("does not let a delayed Renderer projection block pending creation or replacement", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const harness = setupPendingGeneration({
+    const harness = await setupPendingGeneration({
       content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }],
     })
     harness.renderer.reloadDocument = mock(() => new Promise<boolean>(() => undefined))
@@ -1167,7 +1177,7 @@ describe("GenerationCanvasService", () => {
 
   test("replaces a pending node after JSON persistence omits undefined media fields", async () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const harness = setupPendingGeneration(
+    const harness = await setupPendingGeneration(
       { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
       { roundTripPending: true },
     )
@@ -1189,7 +1199,7 @@ describe("GenerationCanvasService", () => {
   })
 
   test("marks a pending node error even when the Renderer never finishes synchronizing", async () => {
-    const harness = setupPendingGeneration({ content: [], isError: true })
+    const harness = await setupPendingGeneration({ content: [], isError: true })
     harness.renderer.reloadDocument = mock(() => new Promise<boolean>(() => undefined))
 
     await expect(
@@ -1213,7 +1223,7 @@ describe("GenerationCanvasService", () => {
   })
 
   test("does not create a second pending node when preparation fails after the first node commit", async () => {
-    const harness = setupPendingGeneration(
+    const harness = await setupPendingGeneration(
       { content: [{ text: "Unused output", type: "text" }] },
       {
         async prepareTool() {
@@ -1244,7 +1254,7 @@ describe("GenerationCanvasService", () => {
     const started = new Promise<void>((resolve) => {
       markStarted = resolve
     })
-    const harness = setupPendingGeneration(async (_input, signal) => {
+    const harness = await setupPendingGeneration(async (_input, signal) => {
       markStarted()
       return new Promise<McpToolCallResult>((_resolve, reject) => {
         signal?.addEventListener(
@@ -1292,7 +1302,7 @@ describe("GenerationCanvasService", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve
     })
-    const harness = setupPendingGeneration(async () => {
+    const harness = await setupPendingGeneration(async () => {
       markStarted()
       await gate
       return { content: [], isError: true }
@@ -2084,12 +2094,11 @@ describe("GenerationCanvasService", () => {
       viewport: { x: 0, y: 0, zoom: 1 },
     }))
 
-    await expect(
-      service.generate(
-        request({ references: [{ nodeId: image.id, role: "reference_image" }], toolId: "creative-tools/draw" }),
-        { id: "renderer:1", kind: "ui" },
-      ),
-    ).resolves.toMatchObject({ revision: 2, toolId: "creative-tools/draw" })
+    const generated = await service.generate(
+      request({ references: [{ nodeId: image.id, role: "reference_image" }], toolId: "creative-tools/draw" }),
+      { id: "renderer:1", kind: "ui" },
+    )
+    expect(generated).toMatchObject({ revision: document.revision + 1, toolId: "creative-tools/draw" })
     expect(calls).toHaveLength(1)
   })
 
@@ -2313,10 +2322,10 @@ describe("GenerationCanvasService", () => {
       kind: "ui",
     })
     await started
-    document.revision += 1
+    await fs.writeFile(path.join(root, "References", "brief.md"), "Changed while generation was running", "utf8")
     renderer.getViewSnapshot = mock(async () => ({
       documentId: "canvas-one",
-      revision: document.revision,
+      revision: document.revision + 1,
       scopeId: "project-one",
       selectedEdgeIds: [],
       selectedNodeIds: [],

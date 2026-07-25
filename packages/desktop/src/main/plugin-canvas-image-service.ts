@@ -1,18 +1,9 @@
 import { randomUUID } from "node:crypto"
-import fs from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
 
-import type {
-  CanvasAddResourceSourcesRequest,
-  CanvasApplicationCommandResult,
-} from "@convax/canvas/application"
+import type { CanvasAddResourceSourcesRequest, CanvasApplicationCommandResult } from "@convax/canvas/application"
 import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
-import { isManagedProjectAssetPath, managedProjectAssetDirectory } from "@convax/project/canvas"
-import type {
-  PluginCanvasImageCreateRequest,
-  PluginCanvasImageCreateResult,
-} from "../plugin-canvas-image-contracts"
+import type { PluginCanvasImageCreateRequest, PluginCanvasImageCreateResult } from "../plugin-canvas-image-contracts"
+import { requireProjectResourceReference } from "@convax/project/canvas"
 import { matchesWebPluginCanvasNode } from "../plugin-canvas-node"
 import {
   hasWebPluginCanvasSurface,
@@ -25,12 +16,13 @@ interface PluginCanvasImageDocumentPort {
 }
 
 interface PluginCanvasImageProjectPort {
-  deleteManagedAssets(input: { paths: string[]; projectId: string }): Promise<unknown>
-  importEntries(input: {
-    destinationPath?: string
+  publishGenerated(input: {
+    bytes?: Uint8Array
+    extension: string
+    name?: string
     projectId: string
-    sourcePaths: string[]
-  }): Promise<{ targetPaths?: string[] }>
+    sourcePath?: string
+  }): Promise<{ path: string }>
 }
 
 interface PluginCanvasImageResourcePort {
@@ -55,7 +47,6 @@ export interface PluginCanvasImageServiceOptions {
   plugins: PluginCanvasImagePluginPort
   projects: PluginCanvasImageProjectPort
   resources: PluginCanvasImageResourcePort
-  temporaryRoot?: string
 }
 
 const maximumImageBytes = 16 * 1024 * 1024
@@ -123,7 +114,9 @@ function requireDataUrl(value: unknown) {
     height > maximumImageDimension ||
     width * height > maximumImageDimension * maximumImageDimension
   ) {
-    throw new Error(`Plugin Canvas image dimensions must not exceed ${maximumImageDimension} × ${maximumImageDimension}`)
+    throw new Error(
+      `Plugin Canvas image dimensions must not exceed ${maximumImageDimension} × ${maximumImageDimension}`,
+    )
   }
   return bytes
 }
@@ -171,19 +164,39 @@ function validateRequest(request: PluginCanvasImageCreateRequest) {
   return { bytes: requireDataUrl(request.dataUrl), name: requireName(request.name) }
 }
 
+function requireGeneratedPublicationPath(value: string) {
+  const reference = requireProjectResourceReference({ kind: "project-file", path: value })
+  if (reference.kind !== "project-file" || !reference.path.startsWith("Generated/")) {
+    throw new Error("Plugin Canvas image publisher returned a path outside Generated")
+  }
+  if (reference.path.split("/").length !== 2 || reference.path.length > 320) {
+    throw new Error("Plugin Canvas image publisher returned an invalid Generated path")
+  }
+  return reference.path
+}
+
+export class PluginCanvasImagePublicationPartialSuccessError extends Error {
+  readonly publishedPaths: readonly string[]
+
+  constructor(publishedPath: string, cause: unknown) {
+    const path = requireGeneratedPublicationPath(publishedPath)
+    super(`Plugin screenshot was saved, but the Canvas update could not be confirmed. Saved file: ${path}`, { cause })
+    this.name = "PluginCanvasImagePublicationPartialSuccessError"
+    this.publishedPaths = Object.freeze([path])
+  }
+}
+
 export class PluginCanvasImageService {
   readonly #documents: PluginCanvasImageDocumentPort
   readonly #plugins: PluginCanvasImagePluginPort
   readonly #projects: PluginCanvasImageProjectPort
   readonly #resources: PluginCanvasImageResourcePort
-  readonly #temporaryRoot: string
 
   constructor(options: PluginCanvasImageServiceOptions) {
     this.#documents = options.documents
     this.#plugins = options.plugins
     this.#projects = options.projects
     this.#resources = options.resources
-    this.#temporaryRoot = options.temporaryRoot ?? os.tmpdir()
   }
 
   async create(request: PluginCanvasImageCreateRequest, signal?: AbortSignal): Promise<PluginCanvasImageCreateResult> {
@@ -200,23 +213,15 @@ export class PluginCanvasImageService {
       throw new Error("Plugin screenshot owner node is no longer available")
     }
 
-    await fs.mkdir(this.#temporaryRoot, { mode: 0o700, recursive: true })
-    const temporaryDirectory = await fs.mkdtemp(path.join(this.#temporaryRoot, "convax-plugin-canvas-image-"))
-    let canvasCommitted = false
-    let importedAssetPath: string | undefined
+    throwIfAborted(signal)
+    const published = await this.#projects.publishGenerated({
+      bytes,
+      extension: ".png",
+      name,
+      projectId: request.ref.scopeId,
+    })
+    const publishedPath = requireGeneratedPublicationPath(published.path)
     try {
-      throwIfAborted(signal)
-      const sourcePath = path.join(temporaryDirectory, name)
-      await fs.writeFile(sourcePath, bytes, { flag: "wx", mode: 0o600 })
-      const imported = await this.#projects.importEntries({
-        destinationPath: managedProjectAssetDirectory,
-        projectId: request.ref.scopeId,
-        sourcePaths: [sourcePath],
-      })
-      importedAssetPath = imported.targetPaths?.[0]
-      if (!importedAssetPath || imported.targetPaths?.length !== 1 || !isManagedProjectAssetPath(importedAssetPath)) {
-        throw new Error("Plugin screenshot could not be imported as a managed Project asset")
-      }
       throwIfAborted(signal)
       const currentIdentity = requireIdentity(
         await this.#plugins.resolveCapabilityIdentity(request.pluginId),
@@ -246,29 +251,15 @@ export class PluginCanvasImageService {
         },
         scopeId: request.ref.scopeId,
         ...(signal ? { signal } : {}),
-        sources: [{ kind: "host-file", path: importedAssetPath, sourceId: randomUUID() }],
+        sources: [{ kind: "host-file", path: publishedPath, sourceId: randomUUID() }],
       })
-      canvasCommitted = true
       const createdNodeId = result.createdNodeIds[0]
       if (!createdNodeId || result.createdNodeIds.length !== 1) {
         throw new Error("Plugin screenshot did not create exactly one Canvas image node")
       }
       return { createdNodeId, revision: result.document.revision }
     } catch (error) {
-      if (importedAssetPath && !canvasCommitted) {
-        try {
-          await this.#projects.deleteManagedAssets({ paths: [importedAssetPath], projectId: request.ref.scopeId })
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "Plugin screenshot failed and its managed asset could not be removed",
-            { cause: error },
-          )
-        }
-      }
-      throw error
-    } finally {
-      await fs.rm(temporaryDirectory, { force: true, recursive: true }).catch(() => undefined)
+      throw new PluginCanvasImagePublicationPartialSuccessError(publishedPath, error)
     }
   }
 }

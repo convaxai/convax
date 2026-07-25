@@ -225,12 +225,17 @@ export function createCanvasPendingResourceCommand(input: {
 }
 
 export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeContentGuard {
-  return structuredClone({ data: node.data, type: node.type })
+  return structuredClone(durableCanvasNodeContent(node))
 }
 
 /** Matches the portable content semantics used by Canvas persistence. */
 export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson({ data: node.data, type: node.type }) === stableJson(expected)
+  return stableJson(durableCanvasNodeContent(node)) === stableJson(expected)
+}
+
+function durableCanvasNodeContent(node: CanvasNode): CanvasNodeContentGuard {
+  const { resourceState: _resourceState, ...data } = node.data
+  return { data, type: node.type }
 }
 
 export function createCanvasDocumentPatchCommand(
@@ -744,8 +749,9 @@ function createPendingResourceNode(command: CanvasCreatePendingResourceCommand):
     const node = createTextNode({
       id: command.nodeId,
       label: command.label,
+      metadata: {},
       position: command.placement.anchor,
-      text: "",
+      resourceState: { status: "ready", text: "" },
     })
     return { ...node, data: { ...node.data, status: "pending" } }
   }
@@ -753,7 +759,12 @@ function createPendingResourceNode(command: CanvasCreatePendingResourceCommand):
     id: command.nodeId,
     label: command.label,
     position: command.placement.anchor,
-    resource: { id: command.nodeId, kind: command.kind, url: "" },
+    resource: {
+      id: command.nodeId,
+      kind: command.kind,
+      metadata: {},
+      state: { status: "ready", url: "" },
+    },
   })
   return { ...node, data: { ...node.data, status: "pending" } }
 }

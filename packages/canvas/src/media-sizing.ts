@@ -36,15 +36,12 @@ export function fitCanvasMediaNodeToIntrinsicSize(
   },
 ): CanvasDocument {
   const node = document.nodes.find((candidate) => candidate.id === input.nodeId)
-  if (
-    !node ||
-    (node.data.kind !== "image" && node.data.kind !== "video") ||
-    node.data.url !== input.sourceUrl
-  ) {
+  if (!node || (node.data.kind !== "image" && node.data.kind !== "video")) {
     return document
   }
 
   const data = node.data as CanvasMediaNodeData
+  if (data.resourceState?.url !== input.sourceUrl) return document
   if (!positiveDimension(input.width) || !positiveDimension(input.height)) return document
 
   const nextData = { ...data, height: input.height, width: input.width }

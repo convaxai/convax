@@ -43,8 +43,18 @@ describe("Renderer Canvas command persistence", () => {
     })
     const controller = new AbortController()
     await persistence.load("canvas-one", controller.signal)
-    const firstNode = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "First" })
-    const secondNode = createTextNode({ id: "second", position: { x: 20, y: 20 }, text: "Second" })
+    const firstNode = createTextNode({
+      id: "first",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "First" },
+    })
+    const secondNode = createTextNode({
+      id: "second",
+      metadata: {},
+      position: { x: 20, y: 20 },
+      resourceState: { status: "ready", text: "Second" },
+    })
     const firstProjection = { ...authoritative, nodes: [firstNode], revision: 1 }
     const secondProjection = { ...authoritative, nodes: [firstNode, secondNode], revision: 2 }
 

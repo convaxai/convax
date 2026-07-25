@@ -754,7 +754,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(0)
         },
@@ -828,7 +827,6 @@ describe("Canvas Agent tools", () => {
         },
       },
       renderer: {
-        ...passthroughDocumentLease,
         async getViewSnapshot() {
           return activeCanvasSnapshot(0)
         },

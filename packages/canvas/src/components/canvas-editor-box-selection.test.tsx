@@ -126,6 +126,23 @@ function SelectionProbeNode() {
 }
 
 test("box-selects connected nodes without feeding controlled selection back into React Flow", async () => {
+  // Test files are isolated at module scope, but another DOM suite can restore
+  // process globals after this file was loaded and before this test executes.
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
   const errors: Error[] = []
   observedSelection = { edgeIds: [], nodeIds: [] }
   const originalRect = HTMLElement.prototype.getBoundingClientRect
@@ -140,11 +157,21 @@ test("box-selects connected nodes without feeding controlled selection back into
 
   try {
     const first = {
-      ...createTextNode({ id: "first", position: { x: 80, y: 80 } }),
+      ...createTextNode({
+        id: "first",
+        metadata: {},
+        position: { x: 80, y: 80 },
+        resourceState: { status: "ready" },
+      }),
       measured: { height: 80, width: 120 },
     }
     const second = {
-      ...createTextNode({ id: "second", position: { x: 360, y: 80 } }),
+      ...createTextNode({
+        id: "second",
+        metadata: {},
+        position: { x: 360, y: 80 },
+        resourceState: { status: "ready" },
+      }),
       measured: { height: 80, width: 120 },
     }
     const initialDocument = createCanvasDocument({
@@ -155,7 +182,7 @@ test("box-selects connected nodes without feeding controlled selection back into
     const nodeRegistry = createCanvasNodeRegistry([
       {
         component: SelectionProbeNode,
-        create: ({ position }) => createTextNode({ position }),
+        create: ({ position }) => createTextNode({ metadata: {}, position, resourceState: { status: "ready" } }),
         label: "File",
         type: "file",
       },
@@ -181,8 +208,8 @@ test("box-selects connected nodes without feeding controlled selection back into
       )
     })
 
-    const pane = document.querySelector<HTMLElement>(".react-flow__pane")
-    const firstNode = document.querySelector<HTMLElement>('.react-flow__node[data-id="first"]')
+    const pane = container.querySelector<HTMLElement>(".react-flow__pane")
+    const firstNode = container.querySelector<HTMLElement>('.react-flow__node[data-id="first"]')
     expect(pane).not.toBeNull()
     expect(firstNode).not.toBeNull()
     expect(emitConnectedEdgeSelection).toBeFunction()
@@ -227,7 +254,7 @@ test("box-selects connected nodes without feeding controlled selection back into
     })
 
     expect(errors).toEqual([])
-    expect(document.querySelectorAll(".react-flow__node.selected")).toHaveLength(2)
+    expect(container.querySelectorAll(".react-flow__node.selected")).toHaveLength(2)
     expect(observedSelection).toEqual({ edgeIds: [], nodeIds: ["first", "second"] })
 
     await act(async () => {

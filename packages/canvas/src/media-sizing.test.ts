@@ -16,7 +16,12 @@ describe("Canvas media sizing", () => {
       ...createMediaNode({
         id: "image",
         position: { x: 10, y: 20 },
-        resource: { id: "image", kind: "image", url: "asset://portrait" },
+        resource: {
+          id: "image",
+          kind: "image",
+          metadata: {},
+          state: { status: "ready", url: "asset://portrait" },
+        },
       }),
       measured: { height: 240, width: 480 },
       style: { height: 300, width: 400 },
@@ -43,7 +48,14 @@ describe("Canvas media sizing", () => {
     const image = createMediaNode({
       id: "image",
       position: { x: 0, y: 0 },
-      resource: { height: 900, id: "image", kind: "image", url: "asset://current", width: 1_600 },
+      resource: {
+        height: 900,
+        id: "image",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "asset://current" },
+        width: 1_600,
+      },
     })
     const document = createCanvasDocument({ nodes: [image] })
 
@@ -69,7 +81,12 @@ describe("Canvas media sizing", () => {
     const image = createMediaNode({
       id: "image",
       position: { x: 0, y: 0 },
-      resource: { id: "image", kind: "image", url: "asset://cover" },
+      resource: {
+        id: "image",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "asset://cover" },
+      },
     })
     const document = createCanvasDocument({
       nodes: [{ ...image, data: { ...image.data, fit: "cover" }, style: { height: 260, width: 420 } }],
@@ -91,7 +108,12 @@ describe("Canvas media sizing", () => {
     const video = createMediaNode({
       id: "video",
       position: { x: 0, y: 0 },
-      resource: { id: "video", kind: "video", url: "asset://video" },
+      resource: {
+        id: "video",
+        kind: "video",
+        metadata: {},
+        state: { status: "ready", url: "asset://video" },
+      },
     })
     const fitted = fitCanvasMediaNodeToIntrinsicSize(createCanvasDocument({ nodes: [video] }), {
       height: 1_080,
