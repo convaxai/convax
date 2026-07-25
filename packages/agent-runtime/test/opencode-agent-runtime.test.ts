@@ -2,12 +2,13 @@ import { describe, expect, mock, test } from "bun:test"
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 import {
   OpenCodeAgentRuntime,
   isAgentSessionInDirectory,
   prepareAgentResourceParts,
+  withAgentHookModules,
   withProtectedPathGuard,
   withProtectedPathPermissions,
 } from "../src/node/opencode-agent-runtime"
@@ -303,6 +304,207 @@ describe("OpenCode agent runtime boundaries", () => {
     }
   })
 
+  test("lazily merges host-owned remote MCP servers without mutating resolver values", async () => {
+    const baseServer = {
+      oauth: false as const,
+      type: "remote" as const,
+      url: "https://base.example/mcp",
+    }
+    const resolvedServer = {
+      headers: { "X-Public-Client": "convax" },
+      oauth: { clientId: "public-client", scope: "video:edit" },
+      timeout: 12_345,
+      type: "remote" as const,
+      url: "https://editor.example/mcp",
+    }
+    const resolveMcpServers = mock(async () => ({ "plugin-remote-editor--main": resolvedServer }))
+    const runtime = new OpenCodeAgentRuntime({
+      config: { mcp: { base: baseServer } },
+      resolveMcpServers,
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<{ mcp?: Record<string, unknown> }>
+        }
+      ).serverConfig()
+
+    try {
+      expect(resolveMcpServers).not.toHaveBeenCalled()
+      await runtime.refreshConfiguration()
+      expect(resolveMcpServers).not.toHaveBeenCalled()
+
+      const config = await serverConfig()
+      expect(resolveMcpServers).toHaveBeenCalledTimes(1)
+      expect(config.mcp).toEqual({
+        base: baseServer,
+        "plugin-remote-editor--main": resolvedServer,
+      })
+      const configuredPlugin = config.mcp?.["plugin-remote-editor--main"]
+      expect(configuredPlugin).not.toBe(resolvedServer)
+      if (!configuredPlugin || typeof configuredPlugin !== "object") {
+        throw new Error("Resolved MCP server was not copied into OpenCode configuration")
+      }
+      expect("headers" in configuredPlugin ? configuredPlugin.headers : undefined).not.toBe(resolvedServer.headers)
+      expect("oauth" in configuredPlugin ? configuredPlugin.oauth : undefined).not.toBe(resolvedServer.oauth)
+      expect(resolvedServer).toEqual({
+        headers: { "X-Public-Client": "convax" },
+        oauth: { clientId: "public-client", scope: "video:edit" },
+        timeout: 12_345,
+        type: "remote",
+        url: "https://editor.example/mcp",
+      })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("rejects a resolved MCP server that conflicts with base OpenCode configuration", async () => {
+    const runtime = new OpenCodeAgentRuntime({
+      config: {
+        mcp: {
+          shared: {
+            oauth: false,
+            type: "remote",
+            url: "https://base.example/mcp",
+          },
+        },
+      },
+      resolveMcpServers: async () => ({
+        shared: {
+          type: "remote",
+          url: "https://resolved.example/mcp",
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+
+    try {
+      await expect(serverConfig()).rejects.toThrow("Resolved MCP server conflicts with base OpenCode config: shared")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("lazily appends immutable Hook modules before the strong path guard", async () => {
+    const base = pathToFileURL(join(tmpdir(), "host", "base-plugin.mjs")).href
+    const hook = pathToFileURL(join(tmpdir(), "host", "plugin-hooks", "example.mjs")).href
+    const modules = [{ fileUrl: hook }]
+    const resolveHookModules = mock(async () => modules)
+    const runtime = new OpenCodeAgentRuntime({
+      config: { plugin: [base] },
+      protectedPaths: [".convax"],
+      resolveHookModules,
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<{ plugin?: Array<string | [string, unknown]> }>
+        }
+      ).serverConfig()
+
+    try {
+      expect(resolveHookModules).not.toHaveBeenCalled()
+      const config = await serverConfig()
+      expect(resolveHookModules).toHaveBeenCalledTimes(1)
+      expect(config.plugin?.[0]).toBe(base)
+      expect(config.plugin?.[1]).toBe(hook)
+      const guard = config.plugin?.at(-1)
+      expect(Array.isArray(guard)).toBe(true)
+      if (!Array.isArray(guard)) throw new Error("Expected protected path guard")
+      expect(guard[0]).toContain("agent-runtime-protected-path-")
+      expect(modules).toEqual([{ fileUrl: hook }])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("accepts only unique absolute file URLs from the Hook resolver", () => {
+    const fileUrl = pathToFileURL(join(tmpdir(), "host", "plugin-hooks", "example.mjs")).href
+    const config = { plugin: ["base-plugin"] }
+    const merged = withAgentHookModules(config, [{ fileUrl }])
+
+    expect(config.plugin).toEqual(["base-plugin"])
+    expect(merged.plugin).toEqual(["base-plugin", fileUrl])
+    expect(() => withAgentHookModules({}, [{ fileUrl: "https://example.com/hook.mjs" }])).toThrow("absolute file URL")
+    expect(() => withAgentHookModules({}, [{ fileUrl: `${fileUrl}?changed=1` }])).toThrow(
+      "without credentials, query, or fragment",
+    )
+    expect(() => withAgentHookModules({}, [{ fileUrl }, { fileUrl }])).toThrow("duplicated")
+    expect(() => withAgentHookModules({ plugin: [fileUrl] }, [{ fileUrl }])).toThrow("duplicated")
+  })
+
+  test("gracefully disposes loaded Hook instances before a hard configuration refresh", async () => {
+    const dispose = mock(async () => ({ data: true }))
+    const close = mock(() => undefined)
+    const runtime = new OpenCodeAgentRuntime()
+    const state = runtime as unknown as {
+      client?: { global: { dispose(): Promise<unknown> } }
+      lifecycle: { state: string }
+      server?: { close(): void }
+    }
+    state.client = { global: { dispose } }
+    state.server = { close }
+    state.lifecycle = { state: "ready" }
+
+    await runtime.refreshConfiguration()
+
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(await runtime.getStatus()).toEqual({ state: "stopped" })
+    await runtime.dispose()
+  })
+
+  test("absorbs refreshes queued during a hard refresh without starting another OpenCode generation", async () => {
+    let releaseDispose!: () => void
+    let markDisposeStarted!: () => void
+    const disposeRelease = new Promise<void>((resolve) => {
+      releaseDispose = resolve
+    })
+    const disposeStarted = new Promise<void>((resolve) => {
+      markDisposeStarted = resolve
+    })
+    const dispose = mock(async () => {
+      markDisposeStarted()
+      await disposeRelease
+      return { data: true }
+    })
+    const getClient = mock(async () => {
+      throw new Error("A hard refresh must not eagerly start another OpenCode generation")
+    })
+    const close = mock(() => undefined)
+    const runtime = new OpenCodeAgentRuntime()
+    const state = runtime as unknown as {
+      client?: { global: { dispose(): Promise<unknown> } }
+      getClient(): Promise<unknown>
+      server?: { close(): void }
+    }
+    state.client = { global: { dispose } }
+    state.getClient = getClient
+    state.server = { close }
+
+    try {
+      const configurationRefresh = runtime.refreshConfiguration()
+      await disposeStarted
+      const skillRefresh = runtime.refreshSkills()
+      releaseDispose()
+      await Promise.all([configurationRefresh, skillRefresh])
+
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(getClient).not.toHaveBeenCalled()
+      expect(await runtime.getStatus()).toEqual({ state: "stopped" })
+    } finally {
+      releaseDispose()
+      await runtime.dispose()
+    }
+  })
+
   test("adds the explicit strong guard after caller plugins and disables unsafe built-ins", () => {
     const config = {
       permission: {
@@ -382,6 +584,70 @@ describe("OpenCode agent runtime boundaries", () => {
 
   test("validates the configurable tool server name", () => {
     expect(() => new OpenCodeAgentRuntime({ toolServerName: "not a name" })).toThrow("Tool server name")
+  })
+
+  test("delegates remote MCP status and authorization lifecycle to OpenCode", async () => {
+    const status = mock(async () => ({
+      data: {
+        connected: { status: "connected" as const },
+        registration: {
+          error: "A public client id is required",
+          status: "needs_client_registration" as const,
+        },
+      },
+    }))
+    const authenticate = mock(async () => ({ data: { status: "connected" as const } }))
+    const connect = mock(async () => ({ data: true }))
+    const disconnect = mock(async () => ({ data: true }))
+    const remove = mock(async () => ({ data: { success: true as const } }))
+    const runtime = new OpenCodeAgentRuntime()
+    ;(runtime as unknown as { client: unknown }).client = {
+      mcp: {
+        auth: { authenticate, remove },
+        connect,
+        disconnect,
+        status,
+      },
+    }
+
+    try {
+      await expect(runtime.listMcpStatuses({ directory: "/workspace" })).resolves.toEqual({
+        connected: { status: "connected" },
+        registration: {
+          error: "A public client id is required",
+          status: "needs_client_registration",
+        },
+      })
+      await expect(
+        runtime.authenticateMcp({ directory: "/workspace", name: "plugin-remote-editor--main" }),
+      ).resolves.toEqual({ status: "connected" })
+      await runtime.connectMcp({ directory: "/workspace", name: "plugin-remote-editor--main" })
+      await runtime.disconnectMcp({ directory: "/workspace", name: "plugin-remote-editor--main" })
+      await runtime.removeMcpAuth({ directory: "/workspace", name: "plugin-remote-editor--main" })
+
+      expect(status).toHaveBeenCalledWith({ directory: "/workspace" })
+      expect(authenticate).toHaveBeenCalledWith({
+        directory: "/workspace",
+        name: "plugin-remote-editor--main",
+      })
+      expect(connect).toHaveBeenCalledWith({
+        directory: "/workspace",
+        name: "plugin-remote-editor--main",
+      })
+      expect(disconnect).toHaveBeenCalledWith({
+        directory: "/workspace",
+        name: "plugin-remote-editor--main",
+      })
+      expect(remove).toHaveBeenCalledWith({
+        directory: "/workspace",
+        name: "plugin-remote-editor--main",
+      })
+      await expect(runtime.authenticateMcp({ directory: "/workspace", name: "not a name" })).rejects.toThrow(
+        "MCP server name",
+      )
+    } finally {
+      await runtime.dispose()
+    }
   })
 
   test("validates the host tool call timeout", () => {
@@ -569,6 +835,312 @@ describe("OpenCode agent runtime boundaries", () => {
       expect((await runtime.listSessions({ directory })).map((item) => item.id)).toEqual([session.id])
     } finally {
       releasePrompt()
+      await runtime.dispose()
+    }
+  })
+
+  test("blocks a new prompt behind a queued configuration refresh without interrupting the active prompt", async () => {
+    const directory = join(tmpdir(), "agent-runtime-configuration-refresh-prompt")
+    const runtime = new OpenCodeAgentRuntime()
+    let releaseActivePrompt!: () => void
+    let markActivePromptStarted!: () => void
+    const activePromptRelease = new Promise<void>((resolve) => {
+      releaseActivePrompt = resolve
+    })
+    const activePromptStarted = new Promise<void>((resolve) => {
+      markActivePromptStarted = resolve
+    })
+    let refreshedPromptStarted = false
+    const oldPrompt = mock(async () => {
+      markActivePromptStarted()
+      await activePromptRelease
+      return completedAssistantMessage("active-session")
+    })
+    const newPrompt = mock(async () => {
+      refreshedPromptStarted = true
+      return completedAssistantMessage("new-session")
+    })
+    const oldClient = { session: { prompt: oldPrompt } }
+    const newClient = { session: { prompt: newPrompt } }
+    let selectedClient: unknown = oldClient
+    let closeCalls = 0
+    const internals = runtime as unknown as {
+      client?: unknown
+      getClient(): Promise<unknown>
+      server?: { close(): void }
+    }
+    internals.client = oldClient
+    internals.getClient = async () => selectedClient
+    internals.server = {
+      close() {
+        closeCalls += 1
+        selectedClient = newClient
+      },
+    }
+
+    try {
+      const activePrompt = runtime.prompt({
+        directory,
+        sessionId: "active-session",
+        text: "Keep running",
+      })
+      await activePromptStarted
+
+      const refresh = runtime.refreshConfiguration()
+      const promptAfterRefresh = runtime.prompt({
+        directory,
+        sessionId: "new-session",
+        text: "Use the new configuration",
+      })
+      await Promise.resolve()
+      expect(refreshedPromptStarted).toBe(false)
+      expect(closeCalls).toBe(0)
+
+      releaseActivePrompt()
+      await activePrompt
+      await refresh
+      await promptAfterRefresh
+
+      expect(oldPrompt).toHaveBeenCalledTimes(1)
+      expect(newPrompt).toHaveBeenCalledTimes(1)
+      expect(closeCalls).toBe(1)
+    } finally {
+      releaseActivePrompt()
+      await runtime.dispose()
+    }
+  })
+
+  test("admits a same-tick prompt before a configuration refresh can dispose its client", async () => {
+    const directory = join(tmpdir(), "agent-runtime-same-tick-prompt-refresh")
+    const runtime = new OpenCodeAgentRuntime()
+    const events: string[] = []
+    const oldClient = {
+      global: {
+        dispose: mock(async () => {
+          events.push("dispose")
+        }),
+      },
+      session: {
+        prompt: mock(async () => {
+          events.push("prompt")
+          return completedAssistantMessage("same-tick-session")
+        }),
+      },
+    }
+    const internals = runtime as unknown as {
+      client?: unknown
+      getClient(): Promise<unknown>
+      server?: { close(): void }
+    }
+    internals.client = oldClient
+    internals.getClient = async () => oldClient
+    internals.server = {
+      close() {
+        events.push("close")
+      },
+    }
+
+    try {
+      const prompt = runtime.prompt({
+        directory,
+        sessionId: "same-tick-session",
+        text: "Start before refresh",
+      })
+      const refresh = runtime.refreshConfiguration()
+
+      await prompt
+      await refresh
+
+      expect(events).toEqual(["prompt", "dispose", "close"])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("holds a same-tick session creation lease until configuration refresh", async () => {
+    const directory = join(tmpdir(), "agent-runtime-same-tick-session-refresh")
+    const runtime = new OpenCodeAgentRuntime()
+    const events: string[] = []
+    let releaseCreate!: () => void
+    let markCreateStarted!: () => void
+    const createRelease = new Promise<void>((resolve) => {
+      releaseCreate = resolve
+    })
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve
+    })
+    const oldClient = {
+      session: {
+        create: mock(async () => {
+          events.push("create")
+          markCreateStarted()
+          await createRelease
+          return {
+            data: {
+              id: "same-tick-session",
+              title: "Same tick",
+              directory,
+              time: { created: 1, updated: 1 },
+            },
+          }
+        }),
+      },
+    }
+    const internals = runtime as unknown as {
+      getClient(): Promise<unknown>
+    }
+    internals.getClient = async () => oldClient
+
+    try {
+      const session = runtime.createSession({ directory, title: "Same tick" })
+      let refreshFinished = false
+      const refresh = runtime.refreshConfiguration().then(() => {
+        refreshFinished = true
+        events.push("refresh")
+      })
+      await createStarted
+
+      expect(refreshFinished).toBe(false)
+      releaseCreate()
+      await expect(session).resolves.toMatchObject({ id: "same-tick-session" })
+      await refresh
+
+      expect(events).toEqual(["create", "refresh"])
+    } finally {
+      releaseCreate()
+      await runtime.dispose()
+    }
+  })
+
+  test("blocks Skill, model, and capability discovery behind a queued configuration refresh", async () => {
+    const directory = join(tmpdir(), "agent-runtime-configuration-refresh-discovery")
+    const runtime = new OpenCodeAgentRuntime()
+    let releaseActivePrompt!: () => void
+    let markActivePromptStarted!: () => void
+    const activePromptRelease = new Promise<void>((resolve) => {
+      releaseActivePrompt = resolve
+    })
+    const activePromptStarted = new Promise<void>((resolve) => {
+      markActivePromptStarted = resolve
+    })
+    const oldSkills = mock(async () => ({ data: [{ name: "old-skill" }] }))
+    const oldModels = mock(async () => ({ data: { all: [], connected: [], default: {} } }))
+    const oldTools = mock(async () => ({ data: ["plugin_old_tool"] }))
+    const newSkills = mock(async () => ({
+      data: [{ description: "New Skill", location: "/skills/new/SKILL.md", name: "new-skill" }],
+    }))
+    const newModels = mock(async () => ({
+      data: {
+        all: [
+          {
+            env: [],
+            id: "new-provider",
+            models: {
+              main: {
+                id: "new-model",
+                name: "New model",
+                providerID: "new-provider",
+              },
+            },
+            name: "New provider",
+            options: {},
+            source: "api",
+          },
+        ],
+        connected: ["new-provider"],
+        default: { "new-provider": "new-model" },
+      },
+    }))
+    const newTools = mock(async () => ({ data: ["plugin_new_tool"] }))
+    const oldClient = {
+      app: { skills: oldSkills },
+      provider: { list: oldModels },
+      session: {
+        prompt: async () => {
+          markActivePromptStarted()
+          await activePromptRelease
+          return completedAssistantMessage("active-session")
+        },
+      },
+      tool: { ids: oldTools },
+    }
+    const newClient = {
+      app: { skills: newSkills },
+      provider: { list: newModels },
+      tool: { ids: newTools },
+    }
+    let selectedClient: unknown = oldClient
+    const internals = runtime as unknown as {
+      client?: unknown
+      getClient(): Promise<unknown>
+      server?: { close(): void }
+    }
+    internals.client = oldClient
+    internals.getClient = async () => selectedClient
+    internals.server = {
+      close() {
+        selectedClient = newClient
+      },
+    }
+
+    try {
+      const activePrompt = runtime.prompt({
+        directory,
+        sessionId: "active-session",
+        text: "Keep running",
+      })
+      await activePromptStarted
+
+      const refresh = runtime.refreshConfiguration()
+      const skills = runtime.listSkills({ directory })
+      const models = runtime.listModels({ directory })
+      const capabilities = runtime.listCapabilities({ directory })
+      await Promise.resolve()
+
+      expect(oldSkills).not.toHaveBeenCalled()
+      expect(oldModels).not.toHaveBeenCalled()
+      expect(oldTools).not.toHaveBeenCalled()
+      expect(newSkills).not.toHaveBeenCalled()
+      expect(newModels).not.toHaveBeenCalled()
+      expect(newTools).not.toHaveBeenCalled()
+
+      releaseActivePrompt()
+      await activePrompt
+      await refresh
+
+      await expect(skills).resolves.toEqual([
+        {
+          description: "New Skill",
+          location: "/skills/new/SKILL.md",
+          name: "new-skill",
+        },
+      ])
+      await expect(models).resolves.toEqual({
+        providers: [
+          {
+            connected: true,
+            defaultModelId: "new-model",
+            models: [{ default: true, modelId: "new-model", modelName: "New model" }],
+            providerId: "new-provider",
+            providerName: "New provider",
+          },
+        ],
+      })
+      await expect(capabilities).resolves.toEqual({
+        skills: [
+          {
+            description: "New Skill",
+            location: "/skills/new/SKILL.md",
+            name: "new-skill",
+          },
+        ],
+        toolIds: ["plugin_new_tool"],
+      })
+      expect(newSkills).toHaveBeenCalledTimes(2)
+      expect(newModels).toHaveBeenCalledTimes(1)
+      expect(newTools).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseActivePrompt()
       await runtime.dispose()
     }
   })

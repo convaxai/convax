@@ -20,6 +20,7 @@ import type {
   PluginGenerationResultMode,
   PluginGenerationReference,
   PluginGenerationToolSummary,
+  PluginConnectedInputDescriptor,
   PluginHostRequestContext,
 } from "./plugin-host-types"
 
@@ -406,6 +407,94 @@ async function sha256(value: string) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
+function optionalConnectedInputText(value: unknown, maximum: number) {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value !== value.trim() ||
+    value.length > maximum ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return undefined
+  }
+  return value
+}
+
+function optionalConnectedInputDimension(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function connectedInputDescriptor(node: CanvasNode): PluginConnectedInputDescriptor {
+  const kind = optionalConnectedInputText(node.data.kind, 80) ?? "file"
+  const label = optionalConnectedInputText(node.data.label, 512) ?? "Untitled"
+  const name = optionalConnectedInputText(node.data.name, 512)
+  const mimeType = optionalConnectedInputText(node.data.mimeType, 256)
+  const status =
+    node.data.status === "idle" || node.data.status === "pending" || node.data.status === "error"
+      ? node.data.status
+      : undefined
+  const width = optionalConnectedInputDimension(node.data.width)
+  const height = optionalConnectedInputDimension(node.data.height)
+  const durationMs = optionalConnectedInputDimension(node.data.durationMs)
+  return {
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(height === undefined ? {} : { height }),
+    id: node.id,
+    kind,
+    label,
+    ...(mimeType === undefined ? {} : { mimeType }),
+    ...(name === undefined ? {} : { name }),
+    ...(status === undefined ? {} : { status }),
+    ...(width === undefined ? {} : { width }),
+  }
+}
+
+export function getIncomingConnectedInputNodes(document: CanvasDocument, ownerNodeId: string) {
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  return getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId)
+    .map((id) => nodes.get(id))
+    .filter((node): node is CanvasNode => node !== undefined)
+}
+
+const connectedInputDataFingerprintCache = new WeakMap<
+  object,
+  {
+    fingerprint: Promise<string>
+    metadata: string
+    source: string
+  }
+>()
+
+function connectedInputDataFingerprint(data: CanvasNodeData) {
+  const source = typeof data.url === "string" ? data.url : ""
+  const metadata = JSON.stringify([
+    data.kind,
+    data.label,
+    data.name,
+    data.mimeType,
+    data.status,
+    data.width,
+    data.height,
+    data.durationMs,
+    getProjectFileReference(metadataOf(data))?.path,
+  ])
+  const cached = connectedInputDataFingerprintCache.get(data)
+  if (cached && cached.source === source && cached.metadata === metadata) return cached.fingerprint
+  const fingerprint = sha256(`${metadata}\u0000${source}`)
+  connectedInputDataFingerprintCache.set(data, { fingerprint, metadata, source })
+  return fingerprint
+}
+
+export async function connectedInputFingerprint(document: CanvasDocument, ownerNodeId: string) {
+  const parts = await Promise.all(
+    getIncomingConnectedInputNodes(document, ownerNodeId).map(async (node) => [
+      node.id,
+      await connectedInputDataFingerprint(node.data),
+    ]),
+  )
+  return sha256(JSON.stringify(parts))
+}
+
 function connectedImageDataFingerprint(data: CanvasNodeData) {
   const source = typeof data.url === "string" ? data.url : ""
   const metadata = JSON.stringify([
@@ -564,6 +653,11 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
     requireEmptyParams(request.params)
     requireCapability(context.plugin, "canvas.connectedImages.read")
     return { images: context.getConnectedImageNodes().map(connectedImageDescriptor) }
+  }
+  if (request.method === "canvas.connectedInputs.list") {
+    requireEmptyParams(request.params)
+    requireCapability(context.plugin, "canvas.connectedInputs.read")
+    return { inputs: context.getConnectedInputNodes().map(connectedInputDescriptor) }
   }
   if (request.method === "canvas.connectedImage.read") {
     requireCapability(context.plugin, "canvas.connectedImages.read")
@@ -737,9 +831,11 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
   if (request.method === "agent.prompt") {
     requireCapability(context.plugin, "agent.prompt")
     const params = exactRecord(request.params, ["text"], "Agent prompt request")
+    const ownedSkills = context.plugin.contributes.skills ?? []
     const result = await context.promptAgent({
       ...context.frame,
       pluginName: context.plugin.name,
+      ...(ownedSkills.length === 1 ? { skillName: ownedSkills[0]!.name } : {}),
       signal: context.signal,
       text: requirePromptText(params.text),
     })

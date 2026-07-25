@@ -71,7 +71,7 @@ export async function createToolPluginCanvasMcpBridge(
 ): Promise<ToolPluginCanvasMcpBridge | undefined> {
   if (
     !host ||
-    plugin.schema !== "convax.plugin/5" ||
+    (plugin.schema !== "convax.plugin/5" && plugin.schema !== "convax.plugin/6") ||
     plugin.runtime?.type !== "mcp-stdio" ||
     (!plugin.contributes.generation?.tools.length && plugin.contributes.service === undefined) ||
     !plugin.capabilities.includes("projects.read")

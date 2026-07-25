@@ -13,6 +13,7 @@ export const desktopPluginHostProtocolV5 = pluginCapabilityProtocolV1
 /** Backwards-compatible name for the original static Plugin protocol. */
 export const desktopPluginHostProtocol = desktopPluginHostProtocolV1
 export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
+export const desktopPluginConnectedInputsChangedCommand = "canvas.connectedInputs.changed"
 export const pluginCanvasDocumentChangedCommand = "canvas.document.changed"
 
 export type DesktopPluginHostProtocol =
@@ -26,6 +27,7 @@ export type DesktopPluginHostMethodV1 =
   | "host.context.get"
   | "canvas.connectedImages.list"
   | "canvas.connectedImage.read"
+  | "canvas.connectedInputs.list"
   | "canvas.node.get"
   | "canvas.node.updateState"
   | "canvas.image.create"
@@ -92,6 +94,7 @@ const methodsV1 = new Set<DesktopPluginHostMethodV1>([
   "host.context.get",
   "canvas.connectedImages.list",
   "canvas.connectedImage.read",
+  "canvas.connectedInputs.list",
   "canvas.node.get",
   "canvas.node.updateState",
   "canvas.image.create",
@@ -119,9 +122,15 @@ const methodsV5 = new Set<DesktopPluginHostMethodV5>([
 ])
 
 export function desktopPluginHostProtocolForManifestSchema(
-  schema: "convax.plugin/1" | "convax.plugin/2" | "convax.plugin/3" | "convax.plugin/4" | "convax.plugin/5",
+  schema:
+    | "convax.plugin/1"
+    | "convax.plugin/2"
+    | "convax.plugin/3"
+    | "convax.plugin/4"
+    | "convax.plugin/5"
+    | "convax.plugin/6",
 ): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/5"
+  return schema === "convax.plugin/5" || schema === "convax.plugin/6"
     ? desktopPluginHostProtocolV5
     : schema === "convax.plugin/4"
       ? desktopPluginHostProtocolV4

@@ -66,6 +66,19 @@ function generationManifest(id: string, version = "1.0.0", name = id): WebPlugin
   })
 }
 
+function hookManifest(id: string, version = "1.0.0"): WebPluginManifest {
+  return parseWebPluginManifest({
+    capabilities: [],
+    contributes: {},
+    description: `${id} hooks`,
+    hooks: "hooks/index.mjs",
+    id,
+    name: id,
+    schema: "convax.plugin/2",
+    version,
+  })
+}
+
 function companion(pluginId: string, pluginVersion = "1.0.0"): RemotePluginCompanion {
   return {
     command: "example-image-tool",
@@ -256,6 +269,13 @@ function setup(
     })),
     reconcileInstalled: mock(async () => {}),
   }
+  const hookAuthorizationStore = {
+    prepareInstall: mock(async () => ({
+      async commit() {},
+      async publish() {},
+      async rollback() {},
+    })),
+  }
   const installer = new RemoteCapabilityInstaller({
     arch: target.arch,
     authorizationStore,
@@ -263,6 +283,7 @@ function setup(
     builtinPlugins,
     builtinSkills,
     companionStore,
+    hookAuthorizationStore,
     platform: target.platform,
     pluginManager,
     pluginSkillLifecycle: resolvedPluginSkillLifecycle,
@@ -275,6 +296,7 @@ function setup(
     authorizationTransactions,
     companionStore,
     companionTransactions,
+    hookAuthorizationStore,
     installer,
     pluginManager,
     registry,
@@ -283,6 +305,31 @@ function setup(
 }
 
 describe("RemoteCapabilityInstaller", () => {
+  test("authorizes Hook bytes only for an explicit Registry install", async () => {
+    const pluginManifest = hookManifest("agent-lifecycle")
+    const item = pluginPackage(pluginManifest.id, pluginManifest.version, {
+      compatibility: { pluginHost: remotePluginHostSchemaV2, pluginSchema: "convax.plugin/2" },
+      manifest: pluginManifest,
+    })
+    const files = {
+      "hooks/index.mjs": encoder.encode("export default async () => ({})\n"),
+      "manifest.json": encoder.encode(JSON.stringify(pluginManifest)),
+    }
+    const automatic = setup([item], files)
+    await expect(automatic.installer.installPlugin(item.id)).rejects.toThrow("requires an explicit user action")
+    await expect(automatic.installer.installPlugin(item.id, { allowHooks: false })).rejects.toThrow(
+      "requires an explicit user action",
+    )
+    expect(automatic.registry.downloadBundle).not.toHaveBeenCalled()
+    expect(automatic.hookAuthorizationStore.prepareInstall).not.toHaveBeenCalled()
+
+    const explicit = setup([item], files)
+    await explicit.installer.installPlugin(item.id, { allowHooks: true })
+    expect(explicit.hookAuthorizationStore.prepareInstall).toHaveBeenCalledWith(pluginManifest, {
+      root: "/staging/plugin",
+    })
+  })
+
   test("lists non-yanked packages and derives managed installation state", async () => {
     const packages = [
       pluginPackage("remote-plugin", "1.1.0"),

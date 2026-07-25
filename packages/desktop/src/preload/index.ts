@@ -234,7 +234,9 @@ ipcRenderer.on(petSettingsIpcChannels.port, (event, envelope: unknown) => {
 })
 
 const pluginChannels = {
+  agentMcpStatuses: "plugin:agent-mcp-statuses",
   changed: "plugin:changed",
+  connectAgentMcp: "plugin:agent-mcp-connect",
   importPlugin: "plugin:import",
   installCatalogPlugin: "plugin:catalog-install",
   listPlugins: "plugin:list",
@@ -409,8 +411,10 @@ const canvasExternalMediaDragClient = {
 } satisfies CanvasExternalMediaDragRendererClient
 
 const pluginClient = {
+  connectAgentMcp: (input) => ipcRenderer.invoke(pluginChannels.connectAgentMcp, input),
   importPlugin: () => ipcRenderer.invoke(pluginChannels.importPlugin),
   installCatalogPlugin: (input) => ipcRenderer.invoke(pluginChannels.installCatalogPlugin, input),
+  listAgentMcpStatuses: () => ipcRenderer.invoke(pluginChannels.agentMcpStatuses),
   listPlugins: () => ipcRenderer.invoke(pluginChannels.listPlugins),
   onDidChange(listener) {
     const handleChange = () => listener()

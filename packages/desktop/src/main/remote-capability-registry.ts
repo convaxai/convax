@@ -9,6 +9,7 @@ import {
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
+  webPluginManifestSchemaV6,
 } from "../plugin-contracts"
 import { type SafeZipLimits, unpackSafeZip } from "./safe-zip"
 
@@ -45,6 +46,10 @@ export type RemotePluginCompatibility =
   | {
       pluginHost: typeof remotePluginCapabilitySchemaV1
       pluginSchema: typeof webPluginManifestSchemaV5
+    }
+  | {
+      pluginHost: typeof remotePluginCapabilitySchemaV1
+      pluginSchema: typeof webPluginManifestSchemaV6
     }
 
 const maxRegistryBytes = 2 * 1024 * 1024
@@ -589,7 +594,10 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
   const compatibleV5 =
     compatibility.pluginHost === remotePluginCapabilitySchemaV1 &&
     compatibility.pluginSchema === webPluginManifestSchemaV5
-  if (!compatibleV1 && !compatibleV2 && !compatibleV3 && !compatibleV4 && !compatibleV5) {
+  const compatibleV6 =
+    compatibility.pluginHost === remotePluginCapabilitySchemaV1 &&
+    compatibility.pluginSchema === webPluginManifestSchemaV6
+  if (!compatibleV1 && !compatibleV2 && !compatibleV3 && !compatibleV4 && !compatibleV5 && !compatibleV6) {
     validationError("Remote Plugin compatibility is not supported by this host")
   }
   const parsedCompatibility: RemotePluginCompatibility = compatibleV1
@@ -600,7 +608,9 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
         ? { pluginHost: remotePluginHostSchemaV3, pluginSchema: webPluginManifestSchemaV3 }
         : compatibleV4
           ? { pluginHost: remotePluginHostSchemaV4, pluginSchema: webPluginManifestSchemaV4 }
-          : { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV5 }
+          : compatibleV5
+            ? { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV5 }
+            : { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV6 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)
@@ -718,7 +728,9 @@ export function parseRemoteCapabilityRegistry(value: unknown): RemoteCapabilityR
   for (const item of packages) {
     if (
       item.kind !== "plugin" ||
-      (item.manifest.schema !== webPluginManifestSchemaV4 && item.manifest.schema !== webPluginManifestSchemaV5)
+      (item.manifest.schema !== webPluginManifestSchemaV4 &&
+        item.manifest.schema !== webPluginManifestSchemaV5 &&
+        item.manifest.schema !== webPluginManifestSchemaV6)
     )
       continue
     for (const skill of item.manifest.contributes.skills ?? []) {

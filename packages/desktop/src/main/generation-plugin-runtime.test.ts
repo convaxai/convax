@@ -10,6 +10,7 @@ import {
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
+  webPluginManifestSchemaV6,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
 } from "../plugin-contracts"
@@ -98,7 +99,8 @@ function declarativeGenerationPlugin(
   schema:
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
-    | typeof webPluginManifestSchemaV5 = webPluginManifestSchemaV3,
+    | typeof webPluginManifestSchemaV5
+    | typeof webPluginManifestSchemaV6 = webPluginManifestSchemaV3,
 ): InstalledWebPluginSummary {
   return {
     capabilities: [],
@@ -403,6 +405,32 @@ describe("GenerationPluginRuntime", () => {
         signal: undefined,
       },
     ])
+  })
+
+  test("preserves declarative generation and operation behavior for v6 Plugins", async () => {
+    const v3 = setup([declarativeGenerationPlugin()])
+    const v6 = setup([declarativeGenerationPlugin(webPluginManifestSchemaV6)])
+
+    expect(await v6.runtime.listTools()).toEqual(await v3.runtime.listTools())
+    expect(await v6.runtime.listServices()).toEqual(await v3.runtime.listServices())
+  })
+
+  test("projects a v6 direct-incoming operation binding into the stable tool summary", async () => {
+    const installed = declarativeGenerationPlugin(webPluginManifestSchemaV6)
+    installed.contributes.generation!.tools[1] = {
+      ...installed.contributes.generation!.tools[1]!,
+      inputBinding: "direct-incoming",
+    }
+    const { runtime } = setup([installed])
+
+    expect(await runtime.listTools()).toContainEqual(
+      expect.objectContaining({
+        id: "declarative-tools/transform.video",
+        inputBinding: "direct-incoming",
+        kind: "operation",
+        pluginId: "declarative-tools",
+      }),
+    )
   })
 
   test("injects the fixed reverse Canvas handler only for an all-bound v5 Tool principal", async () => {

@@ -310,7 +310,7 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/6" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/7" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
@@ -376,6 +376,33 @@ describe("parseWebPluginManifest", () => {
 })
 
 describe("WebPluginManager", () => {
+  test("requires a declared Hook module to be a real file inside the package", async () => {
+    const root = await temporaryRoot()
+    const manager = new WebPluginManager(path.join(root, "installed"))
+    const hookManifest = {
+      capabilities: [],
+      contributes: {},
+      description: "Agent lifecycle hooks",
+      hooks: "hooks/index.mjs",
+      id: "agent-lifecycle",
+      name: "Agent Lifecycle",
+      schema: "convax.plugin/2",
+      version: "1.0.0",
+    }
+
+    await expect(manager.installBundle({ files: { "manifest.json": JSON.stringify(hookManifest) } })).rejects.toThrow(
+      "Plugin hooks does not exist",
+    )
+    await expect(
+      manager.installBundle({
+        files: {
+          "hooks/index.mjs": "export const lifecycle = async () => ({})",
+          "manifest.json": JSON.stringify(hookManifest),
+        },
+      }),
+    ).resolves.toMatchObject({ hooks: "hooks/index.mjs", id: "agent-lifecycle" })
+  })
+
   test("installs, lists, resolves contained assets, and atomically uninstalls a package", async () => {
     const root = await temporaryRoot()
     const source = path.join(root, "source")
@@ -1176,6 +1203,30 @@ describe("WebPluginManager", () => {
 
     await fs.rm(path.join(installRoot, "director-stage", "web", "index.html"))
     expect(await manager.list()).toEqual([])
+  })
+
+  test("updates an explicitly re-imported local plugin only when its version is newer", async () => {
+    const root = await temporaryRoot()
+    const source = path.join(root, "source")
+    const installRoot = path.join(root, "installed")
+    const manager = new WebPluginManager(installRoot)
+    await writePackage(source, manifest({ version: "1.0.0" }))
+    await manager.install(source, { updateExisting: true })
+
+    await writePackage(source, manifest({ version: "1.1.0" }))
+    await fs.writeFile(path.join(source, "web", "index.html"), "new application")
+    await expect(manager.install(source, { updateExisting: true })).resolves.toMatchObject({ version: "1.1.0" })
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "web/index.html"), "utf8")).toBe(
+      "new application",
+    )
+
+    await expect(manager.install(source, { updateExisting: true })).rejects.toThrow("newer version")
+    await writePackage(source, manifest({ version: "1.0.0" }))
+    await fs.writeFile(path.join(source, "web", "index.html"), "old application")
+    await expect(manager.install(source, { updateExisting: true })).rejects.toThrow("newer version")
+    expect(await fs.readFile(await manager.resolveAsset("director-stage", "web/index.html"), "utf8")).toBe(
+      "new application",
+    )
   })
 
   test("atomically upgrades a validated bundle and rejects same-version or downgrade replacement", async () => {

@@ -74,14 +74,34 @@ async function provisionDefaultCapabilitiesOnce(
   input: DefaultCapabilityProvisioningInput,
 ): Promise<DefaultCapabilityProvisioningResult> {
   const state = await readState(input.stateFile)
+  const failures: DefaultCapabilityProvisioningFailure[] = []
+  const blockedPluginIds = new Set<string>()
+  const prepareDefaultPluginPublication: NonNullable<WebPluginPublicationOptions["beforePublish"]> = (
+    plugin,
+    candidate,
+  ) => {
+    if (plugin.hooks) {
+      throw new Error(`Default Plugin Hook update requires an explicit user action: ${plugin.id}`)
+    }
+    return input.preparePluginPublication(plugin, candidate)
+  }
   for (const item of input.catalog) {
     if (!item.defaultInstall) continue
     const provisionedBefore = state.plugins.includes(item.manifest.id)
     const installed = (await input.pluginManager.list()).find((plugin) => plugin.id === item.manifest.id)
     if (provisionedBefore && !installed) continue
     if (!(await input.pluginManager.isBuiltinBundleInstalled(item.bundle))) {
+      if (item.manifest.hooks) {
+        blockedPluginIds.add(item.manifest.id)
+        failures.push({
+          error: new Error(`Default Plugin Hook update requires an explicit user action: ${item.manifest.id}`),
+          id: item.manifest.id,
+          kind: "plugin",
+        })
+        continue
+      }
       await input.pluginManager.installOrUpdateBuiltinBundle(item.bundle, {
-        beforePublish: input.preparePluginPublication,
+        beforePublish: prepareDefaultPluginPublication,
         ...("legacyBundleDigests" in item ? { legacyBundleDigests: item.legacyBundleDigests } : {}),
       })
     }
@@ -92,6 +112,7 @@ async function provisionDefaultCapabilitiesOnce(
   }
 
   for (const item of input.catalog) {
+    if (blockedPluginIds.has(item.manifest.id)) continue
     if (!item.defaultInstallCompanionSkill || !item.manifest.skill) continue
     if (!item.companionSkillName) throw new Error(`Default Plugin companion Skill name is missing: ${item.manifest.id}`)
     const skillFile = await input.pluginManager.resolveAsset(item.manifest.id, item.manifest.skill).catch(() => null)
@@ -109,7 +130,6 @@ async function provisionDefaultCapabilitiesOnce(
     await writeState(input.stateFile, state)
   }
 
-  const failures: DefaultCapabilityProvisioningFailure[] = []
   const remote = input.remote
   if (!remote) return { failures }
   for (const item of remote.catalog) {
@@ -122,7 +142,7 @@ async function provisionDefaultCapabilitiesOnce(
       // for the ordinary network phase.
       if (state.plugins.includes(item.pluginId) || installed || !remote.bootstrapInstaller) continue
       try {
-        await remote.bootstrapInstaller.installPlugin(item.pluginId)
+        await remote.bootstrapInstaller.installPlugin(item.pluginId, { allowHooks: false })
       } catch (error) {
         if (error instanceof WebPluginPublicationDeferredError) throw error
         failures.push({ error, id: item.pluginId, kind: "plugin" })
@@ -140,7 +160,7 @@ async function provisionDefaultCapabilitiesOnce(
         // A receipted local package was verified by its original publication.
         // Refresh only Registry metadata and download bytes when a newer version
         // is available; the current package remains usable on update failure.
-        installed = await remote.installer.updatePlugin(item.pluginId)
+        installed = await remote.installer.updatePlugin(item.pluginId, { allowHooks: false })
       } catch (error) {
         if (error instanceof WebPluginPublicationDeferredError) throw error
         // Keep the already-installed version usable when an update check or
@@ -155,8 +175,8 @@ async function provisionDefaultCapabilitiesOnce(
         // package bytes and repairs companion/authorization/owned-Skill state
         // before this installation can be adopted as a managed default.
         installed = installed
-          ? await remote.installer.installPlugin(item.pluginId, { allowCurrent: true })
-          : await remote.installer.installPlugin(item.pluginId)
+          ? await remote.installer.installPlugin(item.pluginId, { allowCurrent: true, allowHooks: false })
+          : await remote.installer.installPlugin(item.pluginId, { allowHooks: false })
       } catch (error) {
         if (error instanceof WebPluginPublicationDeferredError) throw error
         failures.push({ error, id: item.pluginId, kind: "plugin" })

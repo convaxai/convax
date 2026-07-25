@@ -1,5 +1,7 @@
 export type GenerationOutputModality = "text" | "image" | "video" | "audio"
 export type GenerationToolKind = "model" | "operation"
+export type GenerationToolDelivery = "canvas" | "return"
+export type GenerationToolInputBinding = "direct-incoming"
 
 export const generationIpcChannels = {
   cancel: "generation:cancel",
@@ -27,6 +29,10 @@ export interface GenerationToolSummary {
   pluginName: string
   /** Plugin-local dedicated Agent tool id for v3 operations. */
   agentId?: string
+  /** Declarative result destination. Omission preserves the legacy Canvas result behavior. */
+  delivery?: GenerationToolDelivery
+  /** Optional host-enforced binding for Canvas reference inputs. */
+  inputBinding?: GenerationToolInputBinding
   toolId: string
   title: string
   description: string
@@ -95,10 +101,14 @@ export type GenerationResultMode =
   | { type: "add" }
   | { type: "create-pending-node" }
   | { nodeId: string; type: "replace-node" }
+  /** Trusted host-only mode for a text operation whose declared delivery is `return`. */
+  | { type: "return" }
 
 /** Host-derived relationship guard used by card/Plugin callers. */
 export interface GenerationReferenceConstraint {
   ownerNodeId: string
+  /** Present for manifest-declared bindings and derived from the installed tool, never from Agent input. */
+  ownerPluginId?: string
   type: "direct-incoming"
 }
 
@@ -131,6 +141,8 @@ export interface GenerationCanvasRequest {
 
 export interface GenerationCanvasResult {
   createdNodeIds: readonly string[]
+  /** Present only for a text operation whose declared delivery is `return`. */
+  outputText?: string
   revision: number
   toolId: string
   warnings: readonly string[]

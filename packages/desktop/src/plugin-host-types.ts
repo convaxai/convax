@@ -35,6 +35,19 @@ export interface PluginAgentPromptResult {
   text: string
 }
 
+/** Pathless metadata for one direct incoming Canvas file node. */
+export interface PluginConnectedInputDescriptor {
+  durationMs?: number
+  height?: number
+  id: string
+  kind: string
+  label: string
+  mimeType?: string
+  name?: string
+  status?: "error" | "idle" | "pending"
+  width?: number
+}
+
 export interface PluginGenerationToolSummary {
   acceptedInputs: readonly WebPluginGenerationInputRole[]
   description: string
@@ -94,6 +107,7 @@ export interface PluginCanvasHost {
   promptAgent(
     input: PluginNodeInvocationRef & {
       pluginName: string
+      skillName?: string
       signal: AbortSignal
       text: string
     },
@@ -127,6 +141,7 @@ export interface PluginHostRequestContext {
   nodeStateWriteGate: { active: boolean }
   getActiveContext(): PluginCanvasActiveContext | null
   getConnectedImageNodes(): CanvasNode[]
+  getConnectedInputNodes(): CanvasNode[]
   getDocument(): CanvasDocument | undefined
   getNode(): CanvasNode | undefined
   isCanvasWritable(): boolean
@@ -161,6 +176,7 @@ export interface PluginHostRequestContext {
   promptAgent(
     input: PluginNodeInvocationRef & {
       pluginName: string
+      skillName?: string
       signal: AbortSignal
       text: string
     },

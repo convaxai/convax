@@ -72,6 +72,18 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
   }
 }
 
+function pluginNode(id = "plugin-owner", pluginId = "creative-tools"): CanvasDocument["nodes"][number] {
+  return {
+    data: {
+      kind: `plugin.${pluginId}`,
+      label: "Plugin",
+    },
+    id,
+    position: { x: 320, y: 0 },
+    type: "file",
+  }
+}
+
 function commandResult(document: CanvasDocument, createdNodeIds = ["generated-one"]): CanvasApplicationCommandResult {
   return {
     affectedNodeIds: createdNodeIds,
@@ -443,6 +455,359 @@ describe("GenerationCanvasService", () => {
     expect(viewRequests[0]).toMatchObject({
       expectedRevision: 1,
     })
+  })
+
+  test("returns one bounded text operation result without creating or refreshing Canvas nodes", async () => {
+    let document = createCanvasDocument({ id: "canvas-one", title: "Canvas" })
+    const selectedTool = tool({
+      agentId: "import_media",
+      delivery: "return",
+      id: "media-import/import",
+      kind: "operation",
+      modelName: undefined,
+      toolId: "import",
+    })
+    const harness = setup({
+      document,
+      loadDocument: () => ({ document }),
+      async result() {
+        document = { ...document, revision: 3 }
+        return {
+          content: [
+            { text: "asset-one", type: "text" },
+            { text: "asset-two", type: "text" },
+          ],
+        }
+      },
+      selectedTool,
+    })
+    harness.renderer.reloadDocument = mock(async () => true)
+    const actor = { id: "opencode:project-one", kind: "agent" as const }
+    const returnRequest = request({
+      expectedOutputCount: 1,
+      resultMode: { type: "return" },
+      toolId: selectedTool.id,
+    })
+
+    const result = await harness.service.generate(returnRequest, actor)
+
+    expect(result).toEqual({
+      createdNodeIds: [],
+      outputText: "asset-one\n\nasset-two",
+      revision: 3,
+      toolId: "media-import/import",
+      warnings: [],
+    })
+    expect(harness.imported).toEqual([])
+    expect(harness.resourceRequests).toEqual([])
+    expect(harness.replacementRequests).toEqual([])
+    expect(harness.viewRequests).toEqual([])
+    expect(harness.renderer.reloadDocument).toHaveBeenCalledTimes(0)
+
+    await expect(harness.service.generate(returnRequest, actor)).resolves.toEqual(result)
+    expect(harness.calls).toHaveLength(1)
+  })
+
+  test("rejects malformed or mismatched return delivery before invoking the external tool", async () => {
+    const cases: Array<{
+      message: string
+      request: Partial<GenerationCanvasRequest>
+      selectedTool: GenerationToolSummary
+    }> = [
+      {
+        message: "must be text Plugin operations",
+        request: { resultMode: { type: "return" }, toolId: "creative-tools/write" },
+        selectedTool: tool({ delivery: "return" }),
+      },
+      {
+        message: "requires a Plugin operation declared with return delivery",
+        request: { resultMode: { type: "return" }, toolId: "creative-tools/write" },
+        selectedTool: tool({ kind: "operation", modelName: undefined }),
+      },
+      {
+        message: "must be text Plugin operations",
+        request: { output: "image", resultMode: { type: "return" }, toolId: "creative-tools/draw" },
+        selectedTool: tool({
+          delivery: "return",
+          id: "creative-tools/draw",
+          kind: "operation",
+          modelName: undefined,
+          output: "image",
+          toolId: "draw",
+        }),
+      },
+      {
+        message: "require the host-only return result mode",
+        request: { toolId: "creative-tools/write" },
+        selectedTool: tool({ delivery: "return", kind: "operation", modelName: undefined }),
+      },
+      {
+        message: "expect exactly one text output",
+        request: {
+          expectedOutputCount: 2,
+          resultMode: { type: "return" },
+          toolId: "creative-tools/write",
+        },
+        selectedTool: tool({ delivery: "return", kind: "operation", modelName: undefined }),
+      },
+      {
+        message: "require a Plugin operation with accepted inputs",
+        request: { toolId: "creative-tools/write" },
+        selectedTool: tool({ acceptedInputs: ["text"], inputBinding: "direct-incoming" }),
+      },
+      {
+        message: "require a Plugin operation with accepted inputs",
+        request: { toolId: "creative-tools/write" },
+        selectedTool: tool({ inputBinding: "direct-incoming", kind: "operation", modelName: undefined }),
+      },
+      {
+        message: "unsupported input binding",
+        request: { toolId: "creative-tools/write" },
+        selectedTool: tool({ inputBinding: "unsupported" as "direct-incoming" }),
+      },
+    ]
+
+    for (const input of cases) {
+      const harness = setup({ selectedTool: input.selectedTool })
+      await expect(
+        harness.service.generate(request(input.request), { id: "opencode:project-one", kind: "agent" }),
+      ).rejects.toThrow(input.message)
+      expect(harness.calls).toEqual([])
+    }
+
+    const relation = setup({
+      selectedTool: tool({ delivery: "return", kind: "operation", modelName: undefined }),
+    })
+    await expect(
+      relation.service.generate(
+        request({
+          relationAnchorNodeIds: ["unrelated"],
+          resultMode: { type: "return" },
+          toolId: "creative-tools/write",
+        }),
+        { id: "opencode:project-one", kind: "agent" },
+      ),
+    ).rejects.toThrow("cannot include Canvas relation anchors")
+    expect(relation.calls).toEqual([])
+  })
+
+  test("bounds returned operation text and retains the attempted side effect for at-most-once replay", async () => {
+    const selectedTool = tool({
+      delivery: "return",
+      kind: "operation",
+      modelName: undefined,
+    })
+    const { calls, resourceRequests, service } = setup({
+      result: { content: [{ text: "x".repeat(64 * 1024 + 1), type: "text" }] },
+      selectedTool,
+    })
+    const actor = { id: "opencode:project-one", kind: "agent" as const }
+    const returnRequest = request({ resultMode: { type: "return" }, toolId: selectedTool.id })
+
+    await expect(service.generate(returnRequest, actor)).rejects.toThrow("Agent result size limit")
+    await expect(service.generate(returnRequest, actor)).rejects.toThrow("Agent result size limit")
+    expect(calls).toHaveLength(1)
+    expect(resourceRequests).toEqual([])
+  })
+
+  test("rechecks return-operation references after the external side effect and never retries a stale attempt", async () => {
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
+    const selectedTool = tool({
+      acceptedInputs: ["text"],
+      delivery: "return",
+      kind: "operation",
+      modelName: undefined,
+    })
+    const { calls, resourceRequests, service } = setup({
+      document,
+      async result() {
+        reference.data.text = "Changed while the operation was running"
+        return { content: [{ text: "external-id", type: "text" }] }
+      },
+      selectedTool,
+    })
+    const actor = { id: "opencode:project-one", kind: "agent" as const }
+    const returnRequest = request({
+      references: [{ nodeId: reference.id, role: "text" }],
+      resultMode: { type: "return" },
+      toolId: selectedTool.id,
+    })
+
+    await expect(service.generate(returnRequest, actor)).rejects.toThrow(
+      "Generation references changed while the tool was running",
+    )
+    await expect(service.generate(returnRequest, actor)).rejects.toThrow(
+      "Generation references changed while the tool was running",
+    )
+    expect(calls).toHaveLength(1)
+    expect(resourceRequests).toEqual([])
+  })
+
+  test("enforces a manifest-declared direct-incoming owner from the installed Plugin", async () => {
+    const owner = pluginNode()
+    owner.data.kind = "remote-editor"
+    owner.data.metadata = { convaxPlugin: { id: "creative-tools" } }
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Import this" })
+    const document = createCanvasDocument({
+      edges: [{ id: "brief-to-plugin", source: reference.id, target: owner.id }],
+      id: "canvas-one",
+      nodes: [reference, owner],
+      title: "Canvas",
+    })
+    const selectedTool = tool({
+      acceptedInputs: ["text"],
+      agentId: "import_media",
+      delivery: "return",
+      inputBinding: "direct-incoming",
+      kind: "operation",
+      modelName: undefined,
+    })
+    const harness = setup({
+      document,
+      result: { content: [{ text: "external-asset", type: "text" }] },
+      selectedTool,
+    })
+    const boundRequest = request({
+      expectedOutputCount: 1,
+      referenceConstraint: {
+        ownerNodeId: owner.id,
+        ownerPluginId: selectedTool.pluginId,
+        type: "direct-incoming",
+      },
+      references: [{ nodeId: reference.id, role: "text" }],
+      resultMode: { type: "return" },
+      toolId: selectedTool.id,
+    })
+
+    await expect(
+      harness.service.generate(boundRequest, { id: "opencode:project-one", kind: "agent" }),
+    ).resolves.toMatchObject({
+      createdNodeIds: [],
+      outputText: "external-asset",
+      toolId: selectedTool.id,
+    })
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.resourceRequests).toEqual([])
+  })
+
+  test("rejects a missing, mismatched, or forged direct-incoming Plugin owner before external execution", async () => {
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Import this" })
+    const selectedTool = tool({
+      acceptedInputs: ["text"],
+      agentId: "import_media",
+      delivery: "return",
+      inputBinding: "direct-incoming",
+      kind: "operation",
+      modelName: undefined,
+    })
+    const actor = { id: "opencode:project-one", kind: "agent" as const }
+
+    const missing = setup({
+      document: createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" }),
+      selectedTool,
+    })
+    await expect(
+      missing.service.generate(
+        request({
+          references: [{ nodeId: reference.id, role: "text" }],
+          resultMode: { type: "return" },
+          toolId: selectedTool.id,
+        }),
+        actor,
+      ),
+    ).rejects.toThrow("requires a direct-incoming owner")
+    expect(missing.calls).toEqual([])
+
+    const owner = pluginNode("plugin-owner", "another-plugin")
+    owner.data.metadata = { convaxPlugin: { id: "creative-tools" } }
+    const document = createCanvasDocument({
+      edges: [{ id: "brief-to-plugin", source: reference.id, target: owner.id }],
+      id: "canvas-one",
+      nodes: [reference, owner],
+      title: "Canvas",
+    })
+    const forged = setup({ document, selectedTool })
+    await expect(
+      forged.service.generate(
+        request({
+          referenceConstraint: {
+            ownerNodeId: owner.id,
+            ownerPluginId: selectedTool.pluginId,
+            type: "direct-incoming",
+          },
+          references: [{ nodeId: reference.id, role: "text" }],
+          resultMode: { type: "return" },
+          toolId: selectedTool.id,
+        }),
+        actor,
+      ),
+    ).rejects.toThrow("declared Plugin Canvas node")
+    expect(forged.calls).toEqual([])
+
+    const mismatch = setup({ document, selectedTool })
+    await expect(
+      mismatch.service.generate(
+        request({
+          referenceConstraint: {
+            ownerNodeId: owner.id,
+            ownerPluginId: "another-plugin",
+            type: "direct-incoming",
+          },
+          references: [{ nodeId: reference.id, role: "text" }],
+          resultMode: { type: "return" },
+          toolId: selectedTool.id,
+        }),
+        actor,
+      ),
+    ).rejects.toThrow("bound to its installed Plugin")
+    expect(mismatch.calls).toEqual([])
+  })
+
+  test("rechecks the exact Plugin owner identity after a direct-incoming side effect", async () => {
+    const owner = pluginNode()
+    const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Import this" })
+    const document = createCanvasDocument({
+      edges: [{ id: "brief-to-plugin", source: reference.id, target: owner.id }],
+      id: "canvas-one",
+      nodes: [reference, owner],
+      title: "Canvas",
+    })
+    const selectedTool = tool({
+      acceptedInputs: ["text"],
+      agentId: "import_media",
+      delivery: "return",
+      inputBinding: "direct-incoming",
+      kind: "operation",
+      modelName: undefined,
+    })
+    const { calls, service } = setup({
+      document,
+      async result() {
+        owner.data.kind = "plugin.another-plugin"
+        return { content: [{ text: "external-asset", type: "text" }] }
+      },
+      selectedTool,
+    })
+    const boundRequest = request({
+      referenceConstraint: {
+        ownerNodeId: owner.id,
+        ownerPluginId: selectedTool.pluginId,
+        type: "direct-incoming",
+      },
+      references: [{ nodeId: reference.id, role: "text" }],
+      resultMode: { type: "return" },
+      toolId: selectedTool.id,
+    })
+    const actor = { id: "opencode:project-one", kind: "agent" as const }
+
+    await expect(service.generate(boundRequest, actor)).rejects.toThrow(
+      "direct incoming references changed while the tool was running",
+    )
+    await expect(service.generate(boundRequest, actor)).rejects.toThrow(
+      "direct incoming references changed while the tool was running",
+    )
+    expect(calls).toHaveLength(1)
   })
 
   test("creates and reveals a pending node before the external tool resolves, then replaces that same node", async () => {

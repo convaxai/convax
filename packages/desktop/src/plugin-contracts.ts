@@ -4,6 +4,7 @@ export const webPluginManifestSchemaV2 = "convax.plugin/2" as const
 export const webPluginManifestSchemaV3 = "convax.plugin/3" as const
 export const webPluginManifestSchemaV4 = "convax.plugin/4" as const
 export const webPluginManifestSchemaV5 = "convax.plugin/5" as const
+export const webPluginManifestSchemaV6 = "convax.plugin/6" as const
 
 export type WebPluginManifestSchema =
   | typeof webPluginManifestSchema
@@ -11,9 +12,11 @@ export type WebPluginManifestSchema =
   | typeof webPluginManifestSchemaV3
   | typeof webPluginManifestSchemaV4
   | typeof webPluginManifestSchemaV5
+  | typeof webPluginManifestSchemaV6
 
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
+  "canvas.connectedInputs.read",
   "canvas.node.read",
   "canvas.node.write",
   "canvas.image.write",
@@ -69,6 +72,8 @@ export const webPluginGenerationInputRoles = [
 
 export type WebPluginGenerationModality = (typeof webPluginGenerationModalities)[number]
 export type WebPluginGenerationInputRole = (typeof webPluginGenerationInputRoles)[number]
+export type WebPluginGenerationDelivery = "canvas" | "return"
+export type WebPluginGenerationInputBinding = "direct-incoming"
 
 export const webPluginServiceActions = ["authorize", "reauthorize", "authorization.cancel", "sign_out"] as const
 
@@ -83,8 +88,15 @@ export interface WebPluginGenerationModelContribution {
 
 export interface WebPluginGenerationToolContribution {
   acceptedInputs: WebPluginGenerationInputRole[]
+  /**
+   * `return` declares an external-effect operation whose bounded text result is
+   * returned to its caller without creating a Canvas resource.
+   */
+  delivery?: WebPluginGenerationDelivery
   description: string
   id: string
+  /** Host-enforced Canvas relationship from an exact Plugin owner node to every supplied reference. */
+  inputBinding?: WebPluginGenerationInputBinding
   output: WebPluginGenerationModality
   title: string
 }
@@ -101,8 +113,19 @@ export interface WebPluginAgentToolContribution {
   tool: string
 }
 
+export interface WebPluginAgentRemoteMcpContribution {
+  /** Static, non-secret HTTP headers forwarded to the remote MCP server. */
+  headers?: Record<string, string>
+  /** Whether OpenCode should perform standard MCP OAuth discovery. */
+  oauth: "auto" | "none"
+  type: "remote"
+  url: string
+}
+
 export interface WebPluginAgentContribution {
-  tools: WebPluginAgentToolContribution[]
+  /** A single standards-based remote MCP server, available to convax.plugin/6 and later. */
+  mcp?: WebPluginAgentRemoteMcpContribution
+  tools?: WebPluginAgentToolContribution[]
 }
 
 /**
@@ -210,7 +233,7 @@ export interface WebPluginCanvasContribution {
 export interface WebPluginManifest {
   capabilities: WebPluginCapability[]
   contributes: {
-    /** Present only in declarative convax.plugin/3 and later manifests and bound to declared operation tools. */
+    /** Declarative operation tools are available from v3; v6 may additionally declare one remote MCP server. */
     agent?: WebPluginAgentContribution
     canvas?: WebPluginCanvasContribution
     /** Present only in an executable convax.plugin/2 or later manifest with a matching MCP runtime. */
@@ -227,9 +250,15 @@ export interface WebPluginManifest {
   description: string
   /** Sandboxed HTML entry, relative to the plugin package; absent for a headless Tool Plugin. */
   entry?: string
+  /**
+   * Self-contained OpenCode Plugin module whose returned hooks run for every
+   * Agent workspace. Desktop snapshots and authorizes its exact bytes before
+   * the Agent runtime may load it.
+   */
+  hooks?: string
   id: string
   name: string
-  /** v1 remains static-only; executable and declarative capabilities are introduced by later schemas. */
+  /** v1 still requires a static surface; later schemas may be headless. */
   schema: WebPluginManifestSchema
   /** Legacy independently managed companion Skill; unavailable to convax.plugin/4 and later. */
   skill?: string
@@ -281,9 +310,22 @@ export interface WebPluginInventory {
   installed: InstalledWebPluginSummary[]
 }
 
+/** Renderer-safe product state for one installed Plugin's remote Agent MCP connection. */
+export type WebPluginAgentMcpConnectionStatus =
+  | "connected"
+  | "disabled"
+  | "failed"
+  | "needs_auth"
+  | "needs_client_registration"
+  | "unavailable"
+
+export type WebPluginAgentMcpConnectionStatuses = Record<string, WebPluginAgentMcpConnectionStatus>
+
 export interface WebPluginClient {
+  connectAgentMcp(input: { id: string }): Promise<void>
   importPlugin(): Promise<InstalledWebPluginSummary | null>
   installCatalogPlugin(input: { id: string }): Promise<InstalledWebPluginSummary>
+  listAgentMcpStatuses(): Promise<WebPluginAgentMcpConnectionStatuses>
   listPlugins(): Promise<WebPluginInventory>
   onDidChange(listener: () => void): () => void
   openCatalogPluginRelease(input: { id: string }): Promise<boolean>
@@ -620,11 +662,15 @@ function parseGeneration(
     | typeof webPluginManifestSchemaV2
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
-    | typeof webPluginManifestSchemaV5,
+    | typeof webPluginManifestSchemaV5
+    | typeof webPluginManifestSchemaV6,
 ): WebPluginGenerationContribution {
   const input = asRecord(value, "Generation contribution")
   const declarativeSchema =
-    schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
+    schema === webPluginManifestSchemaV3 ||
+    schema === webPluginManifestSchemaV4 ||
+    schema === webPluginManifestSchemaV5 ||
+    schema === webPluginManifestSchemaV6
   assertKeys(input, declarativeSchema ? ["models", "tools"] : ["tools"], "Generation contribution")
   if (declarativeSchema && !Object.prototype.hasOwnProperty.call(input, "models")) {
     throw new Error(`${schema} generation models must be declared explicitly`)
@@ -634,16 +680,44 @@ function parseGeneration(
   }
   const tools = input.tools.map((value, index) => {
     const tool = asRecord(value, `Generation tool ${index}`)
-    assertKeys(tool, ["acceptedInputs", "description", "id", "output", "title"], `Generation tool ${index}`)
+    assertKeys(
+      tool,
+      [
+        "acceptedInputs",
+        ...(schema === webPluginManifestSchemaV6 ? ["delivery"] : []),
+        "description",
+        "id",
+        ...(schema === webPluginManifestSchemaV6 ? ["inputBinding"] : []),
+        "output",
+        "title",
+      ],
+      `Generation tool ${index}`,
+    )
     const id = requireGenerationToolId(tool.id, `Generation tool ${index} id`)
     if (!isGenerationModality(tool.output)) {
       throw new Error(`Generation tool ${index} output is not supported`)
     }
+    if (tool.delivery !== undefined && tool.delivery !== "canvas" && tool.delivery !== "return") {
+      throw new Error(`Generation tool ${index} delivery is not supported`)
+    }
+    if (tool.delivery === "return" && tool.output !== "text") {
+      throw new Error(`Generation tool ${index} return delivery requires text output`)
+    }
     const acceptedInputs = parseGenerationInputRoles(tool.acceptedInputs, `Generation tool ${index} acceptedInputs`)
+    if (tool.inputBinding !== undefined && tool.inputBinding !== "direct-incoming") {
+      throw new Error(`Generation tool ${index} input binding is not supported`)
+    }
+    if (tool.inputBinding === "direct-incoming" && acceptedInputs.length === 0) {
+      throw new Error(`Generation tool ${index} direct-incoming input binding requires accepted inputs`)
+    }
     return {
       acceptedInputs,
+      ...(tool.delivery === undefined ? {} : { delivery: tool.delivery as WebPluginGenerationDelivery }),
       description: requireString(tool.description, `Generation tool ${index} description`, 2_000),
       id,
+      ...(tool.inputBinding === undefined
+        ? {}
+        : { inputBinding: tool.inputBinding as WebPluginGenerationInputBinding }),
       output: tool.output,
       title: requireString(tool.title, `Generation tool ${index} title`, 120),
     }
@@ -666,6 +740,15 @@ function parseGeneration(
   })
   if (new Set(models.map((model) => model.tool)).size !== models.length) {
     throw new Error("Generation models contain duplicate tool references")
+  }
+  const modelToolIds = new Set(models.map((model) => model.tool))
+  const returnedModel = tools.find((tool) => tool.delivery === "return" && modelToolIds.has(tool.id))
+  if (returnedModel) {
+    throw new Error(`Generation model cannot reference a return-delivery operation: ${returnedModel.id}`)
+  }
+  const boundModel = tools.find((tool) => tool.inputBinding !== undefined && modelToolIds.has(tool.id))
+  if (boundModel) {
+    throw new Error(`Generation model cannot reference an input-bound operation: ${boundModel.id}`)
   }
   return { models, tools }
 }
@@ -704,13 +787,11 @@ function parsePluginSkills(value: unknown): WebPluginSkillContribution[] | undef
   return skills
 }
 
-function parseAgent(value: unknown): WebPluginAgentContribution {
-  const input = asRecord(value, "Agent contribution")
-  assertKeys(input, ["tools"], "Agent contribution")
-  if (!Array.isArray(input.tools) || input.tools.length === 0 || input.tools.length > 32) {
+function parseAgentTools(value: unknown): WebPluginAgentToolContribution[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
     throw new Error("Agent tools must be a non-empty array with at most 32 items")
   }
-  const tools = input.tools.map((value, index) => {
+  const tools = value.map((value, index) => {
     const label = `Agent tool ${index}`
     const tool = asRecord(value, label)
     assertKeys(tool, ["id", "tool"], label)
@@ -724,7 +805,89 @@ function parseAgent(value: unknown): WebPluginAgentContribution {
   if (new Set(tools.map((tool) => tool.tool)).size !== tools.length) {
     throw new Error("Agent tools contain duplicate generation tool references")
   }
-  return { tools }
+  return tools
+}
+
+function parseAgentRemoteMcp(value: unknown): WebPluginAgentRemoteMcpContribution {
+  const input = asRecord(value, "Agent remote MCP contribution")
+  assertKeys(input, ["headers", "oauth", "type", "url"], "Agent remote MCP contribution")
+  if (input.type !== "remote") throw new Error("Agent MCP type must be remote")
+  const url = requireString(input.url, "Agent remote MCP URL", 2_048)
+  try {
+    const parsedUrl = new URL(url)
+    if (
+      parsedUrl.protocol !== "https:" ||
+      parsedUrl.username !== "" ||
+      parsedUrl.password !== "" ||
+      parsedUrl.hash !== ""
+    ) {
+      throw new Error()
+    }
+  } catch {
+    throw new Error("Agent remote MCP URL must be an absolute HTTPS URL without credentials or a fragment")
+  }
+  if (input.oauth !== undefined && input.oauth !== "auto" && input.oauth !== "none") {
+    throw new Error("Agent remote MCP oauth must be auto or none")
+  }
+  let headers: Record<string, string> | undefined
+  if (input.headers !== undefined) {
+    const headerInput = asRecord(input.headers, "Agent remote MCP headers")
+    const entries = Object.entries(headerInput)
+    if (entries.length > 16) throw new Error("Agent remote MCP headers must contain at most 16 entries")
+    const names = new Set<string>()
+    headers = {}
+    for (const [name, value] of entries) {
+      if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+        throw new Error(`Agent remote MCP header name is invalid: ${name}`)
+      }
+      const normalizedName = name.toLowerCase()
+      if (names.has(normalizedName)) throw new Error(`Agent remote MCP headers contain a duplicate name: ${name}`)
+      if (
+        normalizedName === "authorization" ||
+        normalizedName === "cookie" ||
+        normalizedName === "proxy-authorization"
+      ) {
+        throw new Error(`Agent remote MCP header is not allowed: ${name}`)
+      }
+      const literal = requireString(value, `Agent remote MCP header ${name}`, 2_048)
+      if (/\{(?:env|file):/i.test(literal) || /\$\{[^}]*\}/.test(literal)) {
+        throw new Error(`Agent remote MCP header ${name} must be a literal value`)
+      }
+      names.add(normalizedName)
+      headers[name] = literal
+    }
+  }
+  return {
+    ...(headers === undefined ? {} : { headers }),
+    oauth: input.oauth === "none" ? "none" : "auto",
+    type: "remote",
+    url,
+  }
+}
+
+function parseAgent(
+  value: unknown,
+  schema:
+    | typeof webPluginManifestSchemaV3
+    | typeof webPluginManifestSchemaV4
+    | typeof webPluginManifestSchemaV5
+    | typeof webPluginManifestSchemaV6,
+): WebPluginAgentContribution {
+  const input = asRecord(value, "Agent contribution")
+  const remoteSchema = schema === webPluginManifestSchemaV6
+  assertKeys(input, remoteSchema ? ["mcp", "tools"] : ["tools"], "Agent contribution")
+  const tools = input.tools === undefined ? undefined : parseAgentTools(input.tools)
+  const mcp = remoteSchema && input.mcp !== undefined ? parseAgentRemoteMcp(input.mcp) : undefined
+  if (!remoteSchema && tools === undefined) {
+    throw new Error("Agent tools must be a non-empty array with at most 32 items")
+  }
+  if (remoteSchema && tools === undefined && mcp === undefined) {
+    throw new Error("Agent contribution must declare tools or mcp")
+  }
+  return {
+    ...(mcp === undefined ? {} : { mcp }),
+    ...(tools === undefined ? {} : { tools }),
+  }
 }
 
 function parseService(value: unknown): WebPluginServiceContribution {
@@ -818,6 +981,12 @@ function validateDeclarativeToolReferences(input: {
       if (modelToolIds.has(step.tool)) {
         throw new Error(`Canvas selection action must reference an operation, not a generation model: ${step.tool}`)
       }
+      if (tool.delivery === "return") {
+        throw new Error(`Canvas selection action cannot reference a return-delivery operation: ${step.tool}`)
+      }
+      if (tool.inputBinding !== undefined) {
+        throw new Error(`Canvas selection action cannot reference an input-bound operation: ${step.tool}`)
+      }
       if (!tool.acceptedInputs.includes("reference_video")) {
         throw new Error(`Canvas video selection action tool must accept reference_video: ${step.tool}`)
       }
@@ -833,7 +1002,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     schema !== webPluginManifestSchemaV2 &&
     schema !== webPluginManifestSchemaV3 &&
     schema !== webPluginManifestSchemaV4 &&
-    schema !== webPluginManifestSchemaV5
+    schema !== webPluginManifestSchemaV5 &&
+    schema !== webPluginManifestSchemaV6
   ) {
     throw new Error("Plugin manifest schema is not supported")
   }
@@ -841,10 +1011,15 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     schema === webPluginManifestSchemaV2 ||
     schema === webPluginManifestSchemaV3 ||
     schema === webPluginManifestSchemaV4 ||
-    schema === webPluginManifestSchemaV5
+    schema === webPluginManifestSchemaV5 ||
+    schema === webPluginManifestSchemaV6
   const declarativeSchema =
-    schema === webPluginManifestSchemaV3 || schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
-  const ownsSkills = schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5
+    schema === webPluginManifestSchemaV3 ||
+    schema === webPluginManifestSchemaV4 ||
+    schema === webPluginManifestSchemaV5 ||
+    schema === webPluginManifestSchemaV6
+  const ownsSkills =
+    schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5 || schema === webPluginManifestSchemaV6
   assertKeys(
     input,
     [
@@ -852,6 +1027,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
       "contributes",
       "description",
       "entry",
+      "hooks",
       "id",
       "name",
       ...(executableSchema ? ["runtime"] : []),
@@ -865,6 +1041,10 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   const entry = hasEntry ? requireWebPluginRelativePath(input.entry, "Plugin entry") : undefined
   if (entry !== undefined && !entry.toLowerCase().endsWith(".html"))
     throw new Error("Plugin entry must be an HTML file")
+  const hooks = input.hooks === undefined ? undefined : requireWebPluginRelativePath(input.hooks, "Plugin hooks")
+  if (hooks !== undefined && !/\.(?:js|mjs)$/.test(hooks)) {
+    throw new Error("Plugin hooks must be a JavaScript ESM module")
+  }
   const version = requireString(input.version, "Plugin version", 128)
   if (!semverPattern.test(version)) throw new Error("Plugin version must be valid SemVer")
   const capabilities = input.capabilities === undefined ? [] : input.capabilities
@@ -879,21 +1059,30 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (schema === webPluginManifestSchema && capabilities.includes("generation.execute")) {
     throw new Error("generation.execute is available only to executable Plugin manifests")
   }
-  const v5Capabilities = new Set<WebPluginCapability>([
-    ...webPluginProjectCanvasCapabilities,
-    ...webPluginPetCapabilities,
-  ])
-  if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => v5Capabilities.has(capability))) {
-    throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5")
+  const projectCanvasCapabilities = new Set<WebPluginCapability>(webPluginProjectCanvasCapabilities)
+  if (
+    schema !== webPluginManifestSchemaV5 &&
+    schema !== webPluginManifestSchemaV6 &&
+    capabilities.some((capability) => projectCanvasCapabilities.has(capability))
+  ) {
+    throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5 and later")
   }
-  const hasProjectCanvasCapability = capabilities.some((capability) => v5Capabilities.has(capability))
+  const petCapabilities = new Set<WebPluginCapability>(webPluginPetCapabilities)
+  if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => petCapabilities.has(capability))) {
+    throw new Error("Pet capabilities are available only to convax.plugin/5")
+  }
+  if (schema !== webPluginManifestSchemaV6 && capabilities.includes("canvas.connectedInputs.read")) {
+    throw new Error("Connected-input metadata is available only to convax.plugin/6 and later")
+  }
+  const hasProjectCanvasCapability = capabilities.some((capability) => projectCanvasCapabilities.has(capability))
   const contributes = asRecord(input.contributes, "Plugin contributions")
   assertKeys(
     contributes,
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
-      ...(schema === webPluginManifestSchemaV5 ? ["llm", "pet"] : []),
+      ...(schema === webPluginManifestSchemaV5 || schema === webPluginManifestSchemaV6 ? ["llm"] : []),
+      ...(schema === webPluginManifestSchemaV5 ? ["pet"] : []),
       ...(declarativeSchema ? ["agent"] : []),
       ...(ownsSkills ? ["skills"] : []),
     ],
@@ -918,6 +1107,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     if (hasRuntime) throw new Error("Pet feature cannot declare an executable runtime")
   }
   const hasExecutableContribution = hasGenerationContribution || hasServiceContribution || hasLlmContribution
+  const hasHookContribution = hooks !== undefined
   const hasCanvasContribution = contributes.canvas !== undefined
   const canvas = hasCanvasContribution ? asRecord(contributes.canvas, "Canvas contributions") : undefined
   if (canvas) {
@@ -946,6 +1136,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     !ownsSkills &&
     !hasRuntime &&
     !hasExecutableContribution &&
+    !hasHookContribution &&
     !capabilities.includes("generation.execute")
   ) {
     throw new Error(`${schema} must declare an executable contribution or request generation.execute`)
@@ -956,14 +1147,27 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     throw new Error("Canvas contributions must declare a renderer or selection actions")
   }
   const skills = ownsSkills ? parsePluginSkills(contributes.skills) : undefined
+  const agent =
+    declarativeSchema && contributes.agent !== undefined
+      ? parseAgent(
+          contributes.agent,
+          schema as
+            | typeof webPluginManifestSchemaV3
+            | typeof webPluginManifestSchemaV4
+            | typeof webPluginManifestSchemaV5
+            | typeof webPluginManifestSchemaV6,
+        )
+      : undefined
   if (
     ownsSkills &&
     !hasRendererContribution &&
     !selectionActions?.length &&
     !hasExecutableContribution &&
+    !hasHookContribution &&
     !capabilities.includes("generation.execute") &&
     !hasProjectCanvasCapability &&
-    !hasPetContribution
+    !hasPetContribution &&
+    agent?.mcp === undefined
   ) {
     throw new Error(`${schema} must declare a Plugin capability beyond owned Skills`)
   }
@@ -974,10 +1178,10 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
           | typeof webPluginManifestSchemaV2
           | typeof webPluginManifestSchemaV3
           | typeof webPluginManifestSchemaV4
-          | typeof webPluginManifestSchemaV5,
+          | typeof webPluginManifestSchemaV5
+          | typeof webPluginManifestSchemaV6,
       )
     : undefined
-  const agent = declarativeSchema && contributes.agent !== undefined ? parseAgent(contributes.agent) : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined
   const llm = hasLlmContribution ? parseLlm(contributes.llm) : undefined
   const pet = hasPetContribution ? parsePet(contributes.pet) : undefined
@@ -1006,6 +1210,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     },
     description: requireString(input.description, "Plugin description", 2_000),
     ...(entry === undefined ? {} : { entry }),
+    ...(hooks === undefined ? {} : { hooks }),
     id: requireWebPluginId(input.id),
     name: requireString(input.name, "Plugin name", 120),
     schema,

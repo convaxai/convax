@@ -116,6 +116,11 @@ export interface WebPluginPublicationOptions {
   mutation?: WebPluginMutationContext
 }
 
+export interface WebPluginLocalInstallOptions extends WebPluginPublicationOptions {
+  /** Allows an explicit local import to transactionally publish a newer version. */
+  updateExisting?: boolean
+}
+
 export interface WebPluginUninstallOptions {
   beforeRemove?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
   /** Reuses an already-held per-Plugin lifecycle lock. */
@@ -402,6 +407,7 @@ async function validateInstalledPackage(
 ) {
   const manifest = await readManifest(directory, limits.maxFileBytes)
   if (manifest.entry) await assertRegularInstalledFile(directory, manifest.entry, "Plugin entry")
+  if (manifest.hooks) await assertRegularInstalledFile(directory, manifest.hooks, "Plugin hooks")
   if (manifest.skill) {
     const skillPath = await assertRegularInstalledFile(directory, manifest.skill, "Plugin skill")
     if (path.basename(skillPath).toLocaleLowerCase("en-US") !== "skill.md") {
@@ -1269,7 +1275,7 @@ export class WebPluginManager {
 
   async install(
     sourceDirectory: string,
-    options: WebPluginPublicationOptions = {},
+    options: WebPluginLocalInstallOptions = {},
   ): Promise<InstalledWebPluginSummary> {
     const installationRoot = await this.#ensureRoot()
     const sourcePath = path.resolve(sourceDirectory)
@@ -1285,7 +1291,10 @@ export class WebPluginManager {
       sourceManifest.id,
       async () => {
         const target = path.join(installationRoot, sourceManifest.id)
-        if (await exists(target)) throw new Error(`Plugin is already installed: ${sourceManifest.id}`)
+        const targetExists = await exists(target)
+        if (targetExists && !options.updateExisting) {
+          throw new Error(`Plugin is already installed: ${sourceManifest.id}`)
+        }
 
         const staging = path.join(installationRoot, `.staging-${sourceManifest.id}-${randomUUID()}`)
         const beforePublish = options.beforePublish?.bind(options)
@@ -1299,6 +1308,7 @@ export class WebPluginManager {
           return await this.#commitStaging(installationRoot, staging, {
             ...(beforePublish ? { beforePublish } : {}),
             expectedId: sourceManifest.id,
+            replaceExisting: targetExists,
           })
         } finally {
           // The package switch/error is authoritative. A host-named staging

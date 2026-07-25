@@ -11,8 +11,10 @@ import {
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import {
   dispatchWebPluginHostRequest,
+  connectedInputFingerprint,
   generationAnchorForPluginNode,
   getIncomingConnectedImageNodes,
+  getIncomingConnectedInputNodes,
 } from "../plugin-canvas-host"
 import type {
   WebPluginCanvasActiveContext,
@@ -206,6 +208,7 @@ function hostContext(
     nodeStateWriteGate: { active: false },
     getActiveContext: () => active,
     getConnectedImageNodes: () => [],
+    getConnectedInputNodes: () => [],
     getDocument: () => document,
     getNode: () => canvasNode(),
     isCanvasWritable: () => true,
@@ -724,6 +727,97 @@ describe("Canvas Web Plugin host requests", () => {
     expect(readManagedProjectImage).toHaveBeenCalledTimes(1)
   })
 
+  test("lists pathless direct incoming media metadata in edge order", async () => {
+    const video: CanvasNode = {
+      data: {
+        durationMs: 12_500,
+        kind: "video",
+        label: "Opening clip",
+        metadata: { projectFile: { path: ".convax/assets/opening.mp4" } },
+        mimeType: "video/mp4",
+        name: "opening.mp4",
+        url: "convax-asset://project-1/opening",
+      },
+      id: "video-1",
+      position: { x: -200, y: 0 },
+      type: "file",
+    }
+    const image = connectedImageNode()
+    const context = hostContext(plugin(["canvas.connectedInputs.read"]), {
+      getConnectedInputNodes: () => [video, image],
+    })
+
+    const listed = await dispatchWebPluginHostRequest(request("canvas.connectedInputs.list"), context)
+
+    expect(listed).toMatchObject({
+      ok: true,
+      result: {
+        inputs: [
+          {
+            durationMs: 12_500,
+            id: "video-1",
+            kind: "video",
+            label: "Opening clip",
+            mimeType: "video/mp4",
+            name: "opening.mp4",
+          },
+          {
+            height: 1024,
+            id: "image-1",
+            kind: "image",
+            label: "Reference image",
+            mimeType: "image/jpeg",
+            name: "reference.jpg",
+            width: 2048,
+          },
+        ],
+      },
+    })
+    expect(JSON.stringify(listed)).not.toContain(".convax/assets")
+    expect(JSON.stringify(listed)).not.toContain("convax-asset:")
+
+    const denied = await dispatchWebPluginHostRequest(
+      request("canvas.connectedInputs.list"),
+      hostContext(plugin(), { getConnectedInputNodes: () => [video] }),
+    )
+    expect(denied).toMatchObject({
+      error: "Plugin capability is not granted: canvas.connectedInputs.read",
+      ok: false,
+    })
+  })
+
+  test("derives connected-input order and fingerprints source changes without exposing source data", async () => {
+    const owner = canvasNode()
+    const video = generationInputNode("video", "video-1")
+    const image = connectedImageNode()
+    const document = createCanvasDocument({
+      edges: [
+        { id: "edge-video", source: video.id, target: owner.id },
+        { id: "edge-image", source: image.id, target: owner.id },
+        { id: "edge-duplicate", source: video.id, target: owner.id },
+      ],
+      id: "canvas-1",
+      nodes: [owner, video, image],
+    })
+
+    expect(getIncomingConnectedInputNodes(document, owner.id).map((node) => node.id)).toEqual([
+      "video-1",
+      "image-1",
+    ])
+    const initial = await connectedInputFingerprint(document, owner.id)
+    const changed = await connectedInputFingerprint(
+      {
+        ...document,
+        nodes: document.nodes.map((node) =>
+          node.id === video.id ? { ...node, data: { ...node.data, url: "convax-asset://project-1/replaced" } } : node,
+        ),
+      },
+      owner.id,
+    )
+    expect(changed).not.toBe(initial)
+    expect(initial).not.toContain(".convax")
+  })
+
   test("denies missing connected-image capability and arbitrary node ids", async () => {
     const readManagedProjectImage = mock(async () => ({
       dataUrl: "data:image/jpeg;base64,",
@@ -996,8 +1090,19 @@ describe("Canvas Web Plugin host requests", () => {
 
   test("binds Agent prompts to the exact Project, Canvas, plugin, and own node", async () => {
     const promptAgent = mock(async () => ({ text: "Use a wide shot." }))
-    const context = hostContext(plugin(["agent.prompt"]), { promptAgent })
-    const response = await dispatchWebPluginHostRequest(request("agent.prompt", { text: "Suggest a shot" }), context)
+    const agentPlugin: InstalledWebPluginCanvasSurface = {
+      ...plugin(["agent.prompt"]),
+      contributes: {
+        ...plugin(["agent.prompt"]).contributes,
+        skills: [{ name: "director-stage", path: "skills/director-stage" }],
+      },
+      schema: "convax.plugin/6",
+    }
+    const context = hostContext(agentPlugin, { promptAgent })
+    const response = await dispatchWebPluginHostRequest(
+      request("agent.prompt", { text: "Suggest a shot" }, pluginCapabilityProtocolV1),
+      context,
+    )
     expect(response).toMatchObject({ ok: true, result: { text: "Use a wide shot." } })
     expect(promptAgent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1006,6 +1111,7 @@ describe("Canvas Web Plugin host requests", () => {
         pluginId: "director-stage",
         pluginName: "Director Stage",
         projectId: "project-1",
+        skillName: "director-stage",
         text: "Suggest a shot",
       }),
     )

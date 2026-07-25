@@ -79,7 +79,8 @@ mock.module("@xyflow/react", () => ({
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
-const { createCanvasDocument } = await import("../document")
+const { createCanvasDocument, createTextNode } = await import("../document")
+const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
 const { useCanvasEditor } = await import("../editor-context")
 const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
@@ -167,6 +168,10 @@ function IdentityFeedbackProbe() {
 function EditorStateProbe() {
   observedEditor = useCanvasEditor()
   return null
+}
+
+function getObservedEditor() {
+  return observedEditor
 }
 
 test("does not feed a selection-action refresh back into Canvas document updates", async () => {
@@ -275,6 +280,148 @@ test("authoritative reload clears a prior load error and resolves after the writ
     })
     expect(container.textContent).not.toContain(failure.message)
     expect(save).not.toHaveBeenCalled()
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("imperative insertion reuses registered renderer placement, selection, and persistence", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const existing = createTextNode({ id: "existing", position: { x: 0, y: 0 } })
+    const initialDocument = createCanvasDocument({
+      id: "imperative-insertion",
+      nodes: [existing],
+      title: "Insertion",
+    })
+    const fileRendererRegistry = createCanvasFileRendererRegistry([
+      {
+        component: () => null,
+        create: ({ position }) => createTextNode({ id: "inserted", position }),
+        id: "test.renderer",
+        label: "Test renderer",
+        matches: (data) => data.kind === "test.renderer",
+      },
+    ])
+    const load = mock(async () => initialDocument)
+    const save = mock(async (document) => document)
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            fileRendererRegistry={fileRendererRegistry}
+            initialDocument={initialDocument}
+            ref={editorRef}
+            services={createCanvasServices({ persistence: { load, save } })}
+          />
+        </TestErrorBoundary>,
+      )
+    })
+
+    let insertedNodeId: string | undefined
+    await act(async () => {
+      insertedNodeId = editorRef.current?.insertNode("test.renderer")
+    })
+    const editorAfterInsertion = getObservedEditor()
+    expect(insertedNodeId).toBe("inserted")
+    expect(editorAfterInsertion?.document.nodes).toHaveLength(2)
+    expect(editorAfterInsertion?.document.nodes.find((node) => node.id === "inserted")).toMatchObject({
+      data: { kind: "test.renderer" },
+      position: { x: 304, y: 0 },
+      type: "file",
+    })
+    expect([...(editorAfterInsertion?.selection.nodeIds ?? [])]).toEqual(["inserted"])
+
+    await act(async () => {
+      await editorRef.current?.flush()
+    })
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0]?.[0]).toMatchObject({
+      nodes: [{ id: "existing" }, { data: { kind: "test.renderer" }, id: "inserted", position: { x: 304, y: 0 } }],
+      revision: 1,
+    })
+
+    let missingNodeId: string | undefined = "unexpected"
+    await act(async () => {
+      missingNodeId = editorRef.current?.insertNode("missing.renderer")
+    })
+    expect(missingNodeId).toBeUndefined()
+    expect(getObservedEditor()?.document.nodes).toHaveLength(2)
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("imperative insertion fails safely when the editor is read-only", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const create = mock(({ position }) => createTextNode({ id: "must-not-exist", position }))
+    const fileRendererRegistry = createCanvasFileRendererRegistry([
+      {
+        component: () => null,
+        create,
+        id: "test.read-only-renderer",
+        label: "Read-only renderer",
+        matches: (data) => data.kind === "test.read-only-renderer",
+      },
+    ])
+    const initialDocument = createCanvasDocument({ id: "read-only-insertion" })
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            fileRendererRegistry={fileRendererRegistry}
+            initialDocument={initialDocument}
+            readOnly
+            ref={editorRef}
+            services={createCanvasServices()}
+          />
+        </TestErrorBoundary>,
+      )
+    })
+
+    let insertedNodeId: string | undefined = "unexpected"
+    await act(async () => {
+      insertedNodeId = editorRef.current?.insertNode("test.read-only-renderer")
+    })
+    expect(insertedNodeId).toBeUndefined()
+    expect(create).not.toHaveBeenCalled()
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+    expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined

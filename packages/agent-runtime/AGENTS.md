@@ -20,6 +20,25 @@ The store must not persist or interpret owner ids, decide whether a Skill is
 standalone or owned, or authorize replacement. Mismatched bytes and unjournaled
 backups fail closed.
 
+Remote MCP servers supplied by a host are likewise native OpenCode capabilities.
+Accept only host-generic configuration and expose thin OpenCode status/auth
+operations; never learn Plugin ids, implement OAuth/transport/tool proxying, or
+persist a second MCP configuration or credential store. A hard configuration refresh
+must block newer prompts until the previous connection is rebuilt, while allowing
+already-running prompts to finish.
+
+Host-verified Hook modules are also native OpenCode capabilities. Accept only
+generic absolute `file:` URLs to host-owned immutable snapshots; never receive a
+Convax Plugin id, manifest, authorization policy, npm package, HTTP URL, or mutable
+package path. Preserve deterministic load order after base OpenCode Plugins and
+before the strong protected-path guard. Reuse hard configuration refresh, wait
+behind a synchronous client-use admission lease for ordinary session, discovery,
+and MCP calls, and give loaded Hook instances one bounded graceful `global.dispose`
+opportunity before force-closing the old server. Prompt control replies remain on
+the admitted generation so refresh cannot deadlock an active prompt. A hard refresh
+must absorb Skill/configuration invalidations queued during disposal and leave the
+next generation lazy; it must not eagerly start a second OpenCode instance.
+
 Do not weaken the security boundary:
 
 - no workspace-discovered executable OpenCode extension/config behavior;

@@ -233,6 +233,14 @@ export class DesktopSkillManager {
     })
   }
 
+  /**
+   * Publishes an inventory change already committed by another lifecycle.
+   * The caller owns runtime invalidation; this method never starts OpenCode.
+   */
+  notifyInventoryChanged() {
+    this.emit()
+  }
+
   private async finishInstall(installed: ManagedAgentSkill, directory: string) {
     try {
       await this.assertStandaloneInstallAllowed(installed)

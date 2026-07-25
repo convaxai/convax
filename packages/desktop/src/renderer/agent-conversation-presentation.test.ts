@@ -76,7 +76,7 @@ describe("Agent conversation presentation", () => {
     })
   })
 
-  test("keeps a selected Skill visible in the user message instead of activity", () => {
+  test("keeps the selected Skill name visible without exposing its synthetic instruction", () => {
     const skill = { id: "skill-1", name: "release", type: "skill" } as AgentMessagePart
     const [turn] = buildAgentConversationTurns([
       message("user-1", "user", [skill]),
@@ -192,5 +192,16 @@ describe("Agent conversation presentation", () => {
       buildAgentConversationTurns([message("user-1", "user", [text("user-text", "Try it")]), completed])[0]
         ?.interrupted,
     ).toBeFalse()
+  })
+
+  test("derives a completed turn duration from persisted message timestamps", () => {
+    const user = { ...message("user-1000", "user", [text("user-text", "Time this")]), createdAt: 1_000 }
+    const assistant = {
+      ...message("assistant-2000", "assistant", [text("final-text", "Done")]),
+      completedAt: 859_000,
+      createdAt: 2_000,
+    }
+
+    expect(buildAgentConversationTurns([user, assistant])[0]?.durationMs).toBe(858_000)
   })
 })

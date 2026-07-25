@@ -3,6 +3,13 @@
 Desktop is the Electron composition root. It may depend on every domain package, but
 it must not become the permanent home of reusable domain rules.
 
+Desktop is also not the authoring repository for concrete Plugins, Skills, or
+companion tools. Their source belongs in the sibling `convax-plugins` repository.
+Do not add a new integration under `resources/plugins`; the existing directories
+there are legacy/bootstrap migration inputs. Desktop may consume verified Registry
+artifacts, mechanically generated bootstrap bytes, and clearly synthetic generic
+test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
+
 ## Process boundaries
 
 - `main`: Electron/native I/O, trusted IPC, Project Node adapters, repositories,
@@ -52,6 +59,33 @@ it must not become the permanent home of reusable domain rules.
   the Plugin but cannot be managed separately. No Skill grants Plugin or native
   permission, and `@convax/agent-runtime` must not learn Plugin identity. Do not
   create a generic extension framework.
+- A v6 remote Agent MCP is declared by the installed Plugin but connected by
+  OpenCode. Desktop validates and maps the declaration to a stable server key,
+  refreshes the lazy Agent configuration after Plugin publication, and exposes only
+  Plugin-id-based connect actions. Never send renderer-supplied URLs, headers,
+  server names, callbacks, or credentials to the Agent runtime, and never add a
+  provider-specific branch. Expose Agent MCP connection state to the renderer only as
+  a display-only Plugin-id status; preserve distinct authentication, client-setup,
+  failed, disabled, unavailable, and connected outcomes. After authorization,
+  invalidate directory-scoped OpenCode capabilities so existing Project instances
+  reconnect. “Use in Agent” only navigates/focuses and may attach the sole owned
+  Skill; it does not execute a tool or guess among multiple Skills.
+- A top-level `hooks` field declares one self-contained OpenCode Plugin module.
+  Treat it as executable Agent code, not a Web entry or Skill. During explicit
+  install/update, bind consent to the normalized manifest and exact `.js`/`.mjs`
+  bytes, publish a private immutable snapshot in the same package transaction, and
+  load only that snapshot through the generic Agent runtime resolver. Resolve under
+  the per-Plugin mutation lock, sort by Plugin id, skip changed/unauthorized modules,
+  and append the host protected-path guard last. Retain superseded snapshots until
+  the old OpenCode generation has disposed, then reconcile them. Only static
+  `node:`/`bun:` imports may remain; require valid ESM with an exported Plugin entry
+  and reject CommonJS globals, runtime module loaders, dynamic imports and every
+  unbundled dependency.
+  Never wait for Agent hard refresh while holding the per-Plugin mutation lock:
+  Agent startup resolves Hooks under that lock. Invalidate first without the lock,
+  then reacquire it to converge current receipts and remove obsolete snapshots.
+  Default/background provisioning must never authorize new Hook bytes and must
+  recheck the parsed publication candidate rather than catalog metadata alone.
 - Plugin-owned Skill publication has three ordered phases. Prepare validates and
   stages without exposing new bytes. `publish` rechecks external names and journals
   exact rollback receipts before the Plugin directory switch. `activate` publishes
@@ -78,9 +112,11 @@ it must not become the permanent home of reusable domain rules.
   must not roll a current Plugin back. Recover validated uninstall tombstones by
   finishing removal, never by restoring them. Refresh Agent Skill discovery once
   startup default provisioning has completed, including its failure path.
-- Install Plugins as validated static packages under `userData`. Render third-party
+- Install Plugins as validated packages under `userData`. Render third-party Web
   entries only in `sandbox="allow-scripts"` iframes served by the contained Plugin
-  asset protocol. Never use `webview`, import Plugin JS, or expose Electron/Node.
+  asset protocol. Never use `webview`, import Web Plugin JS, or expose Electron/Node.
+  The separately authorized Hook snapshot is main-owned Agent configuration and is
+  never imported by Desktop.
 - Fetch the official remote Plugin/Skill Registry only in main from its fixed
   origin. Renderer IPC carries a catalog id, never an arbitrary URL, path or digest.
   Verify monotonic catalog sequence, compatibility, size, SHA-256 and a bounded safe
@@ -171,6 +207,16 @@ it must not become the permanent home of reusable domain rules.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned managed-asset read, and reject stale or
   caller-selected paths.
+- A v6 connected-input metadata capability is pathless and read-only. Return only
+  bounded direct-incoming media descriptors, send edge/source changes as
+  invalidations, and never let an invalidation trigger upload or another external
+  effect. Bytes still cross only the verified Main-owned tool staging boundary
+  after explicit user intent.
+- A manifest-declared direct-incoming Agent operation must require its owning Plugin
+  node id, verify that node belongs to the same installed Plugin principal, and
+  constrain every reference to live direct incoming edges before staging and again
+  before execution. A return-delivery text operation reuses all normal execution
+  guards but creates no Canvas resource or node.
 - Grant fullscreen or any future iframe feature-policy exception only when the
   installed manifest declares it; keep all unrelated denials unchanged.
 - Trusted built-in native integrations stay in main and are never loaded from the

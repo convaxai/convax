@@ -45,6 +45,21 @@ describe("InstalledPluginPrincipalResolver", () => {
     expect(await resolver.resolve(principal)).toBeNull()
   })
 
+  test("reuses the capability protocol for v6 Plugin identities", async () => {
+    const plugin = manifest({ schema: "convax.plugin/6" })
+    const resolver = new InstalledPluginPrincipalResolver({
+      async resolveCapabilityIdentity() {
+        return { digest: "a".repeat(64), plugin }
+      },
+    })
+
+    const principal = await resolver.issue("canvas-tool", "web")
+    expect(await resolver.resolve(principal)).toMatchObject({
+      capabilities: ["canvas.document.read"],
+      pluginId: "canvas-tool",
+    })
+  })
+
   test("keeps Web, Tool, and built-in runtime identities distinct", async () => {
     let plugin = manifest()
     const resolver = new InstalledPluginPrincipalResolver({

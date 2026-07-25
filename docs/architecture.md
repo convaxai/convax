@@ -24,6 +24,21 @@ When a feature does not fit an existing owner, make the ownership decision expli
 Do not default it into Desktop, Project, a `shared` folder, or a new `workspace`
 package.
 
+Convax host/platform source and concrete capability-package source are intentionally
+split across repositories. This repository owns Plugin contracts, validation,
+installation, lifecycle, runtime composition, UI/IPC, and Registry consumption.
+The `microvoid/convax-plugins` repository owns every concrete Plugin, Skill, and
+companion tool, including official and default-catalog integrations. A new
+integration therefore adds generic host support here only when the ABI genuinely
+lacks it, while its manifest, assets, workflow instructions, and executable source
+are authored and released from `convax-plugins`.
+
+`packages/desktop/resources/plugins` is a legacy/bootstrap migration surface, not
+the canonical source tree for new Plugins. Long term, Desktop consumes immutable
+Registry/Release artifacts or mechanically generated and verified bootstrap bytes;
+it does not duplicate hand-maintained Plugin source. No runtime semantic may depend
+on a concrete package id merely because a package was historically bundled here.
+
 ## 2. Terms
 
 ### Project
@@ -76,7 +91,12 @@ independently managed companion. `convax.plugin/4` and later may own Skill direc
 through `contributes.skills`; those directories are atomically published and removed
 with the Plugin but remain ordinary OpenCode Skills at runtime. Skills describe Agent
 workflows and select tools; they never implement UI or native behavior, inherit
-Plugin authority, or turn Convax Plugins into OpenCode plugins.
+Plugin authority, or implicitly turn Convax Plugins into OpenCode plugins. The
+explicit exception is a manifest-declared `hooks` contribution: Desktop treats it
+as executable Agent code, binds installation consent to its exact self-contained
+JavaScript bytes, and gives OpenCode a private immutable snapshot. OpenCode still
+owns the native Hook API and events; `@convax/agent-runtime` sees only a generic
+file URL and never Plugin identity.
 
 `convax.plugin/5` introduces the transport-neutral
 `convax.plugin-capability/1` authority model. Project/Canvas access comes from an
@@ -84,6 +104,25 @@ exact installed Plugin principal plus explicit manifest grants, not from whether
 Plugin happens to render a Web node. A sandboxed iframe is one transport adapter;
 verified Tool and built-in adapters must use the same main-owned broker instead of
 growing another Canvas API.
+
+`convax.plugin/6` adds a headless Agent integration contribution for one standard
+remote MCP server. Desktop validates the installed declaration and derives a stable
+namespaced server key; `@convax/agent-runtime` passes that generic configuration to
+OpenCode. OpenCode remains the MCP client and owns Streamable HTTP/SSE negotiation,
+OAuth discovery and token refresh, tool discovery/prefixing, and connection
+lifecycle. Convax does not proxy the tools or implement provider-specific adapters.
+The first schema permits HTTPS remote MCP only. A raw local command would bypass the
+existing verified-companion receipt, launch-snapshot, and process-tree boundary, so
+it is not admitted as an Agent MCP transport.
+
+Capability Center reads a renderer-safe connection projection keyed only by the
+installed Plugin id. It never receives OpenCode server keys, URLs, headers, OAuth
+material, or raw diagnostics. OAuth credentials are OpenCode-owned and durable,
+while MCP clients are directory-instance scoped; after a successful connection,
+Desktop invalidates live OpenCode capability instances so every Project reconnects
+with the stored credential. A connected headless Plugin exposes a generic Agent
+entry: return to and focus the Agent composer, attaching its owned Skill only when
+exactly one workflow is unambiguous. Navigation never invokes a vendor API.
 
 ## 3. Packages and dependency graph
 
@@ -192,6 +231,8 @@ Electron userData/
                                         Registry-verified host-owned Tool executables
   plugin-authorizations/<plugin-id>/
                                         install-time exact Tool execution receipts
+  plugin-hook-authorizations/<plugin-id>/
+                                        exact Hook receipts and private executable snapshots
   plugin-service-authorization-checkpoints/<plugin-id>.json
                                         private crash-recovery Cookie handoff; never a browser profile
   canvas-external-drags/                short-lived host-owned native drag copies
@@ -320,11 +361,15 @@ OpenCode session. Successful media output is prepared through
 referenced by the existing Canvas `file` node flow.
 
 Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` through
-`/5`: a validated manifest declares generation tools and a separately installed bare
-`mcp-stdio` command. V3-v5 map pure model names and optional Agent/Canvas operation
+`/6`: a validated manifest declares generation tools and a separately installed bare
+`mcp-stdio` command. V3-v6 map pure model names and optional Agent/Canvas operation
 surfaces to those tools, so core code never identifies an operation by Plugin id. V4
 adds owned Skill lifecycle metadata without changing generation execution; v5 retains
-that behavior while adding the independent `convax.plugin-capability/1` boundary.
+that behavior while adding the independent `convax.plugin-capability/1` boundary; v6
+retains both while independently adding the remote Agent MCP contribution.
+V6 operations may also declare `delivery: "return"` for bounded text effects and
+`inputBinding: "direct-incoming"` for Canvas sink semantics. These are generic tool
+contracts: neither field changes behavior based on a concrete Plugin id.
 An official Registry entry may additionally bind that exact command to immutable executable
 companions for specific `platform`/`arch` targets. Desktop verifies the deterministic
 Release URL, 128 MiB ceiling, exact size and SHA-256 before atomically publishing the
@@ -374,6 +419,15 @@ tree. Scope, revision, placement, native Project paths, Canvas persistence and
 generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
+
+A return-delivery operation reuses the same verified executable, input staging,
+revision/source rechecks, cancellation, and at-most-once execution boundary, but
+returns one bounded text result to the Agent and performs no Canvas resource import
+or node mutation. It cannot be a model or selection action. A direct-incoming Agent
+operation requires an owning Canvas node id; Main verifies that the node belongs to
+the same installed Plugin principal and that every reference remains a direct
+incoming file node before staging and immediately before execution. This makes
+graph edges enforceable authority rather than prompt-only convention.
 
 A sandboxed Plugin may request the host-owned pending-result mode when the user
 expects immediate Canvas feedback. Canvas creates exactly one typed pending `file`
@@ -554,6 +608,13 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
   executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
   discovery state without replacing durable sessions.
+- Installed v6 Agent MCP declarations are another host-provided OpenCode
+  configuration input, not project discovery. The installed Plugin manifest is the
+  configuration authority; OpenCode's native credential store is the OAuth
+  authority. Install, update, and uninstall rebuild the lazy OpenCode configuration
+  after existing prompts finish without deleting durable sessions. Authentication
+  UI addresses a Plugin id only; renderer code never supplies a server name, URL,
+  headers, callback, or token.
 - Skill management may inspect a selected managed or globally discovered Skill as a
   bounded, non-executable directory for its file tree and text preview. Global Skills
   remain read-only, symlinks fail closed, and renderer IPC identifies the Skill but
@@ -576,7 +637,7 @@ Neither Project nor Workbench imports the other to implement this flow.
   bindings, and exact materialized bytes. The shared OpenCode discovery directory
   does not imply independent ownership.
 - Package rollback and dependent rollback are one ordered boundary. Desktop rolls
-  back Skills, executable authorization, and managed companions only after every
+  back Skills, Tool/Hook executable authorization, and managed companions only after every
   package rename has restored the old/absent state. If any rename fails, the
   capability transaction is deferred: durable receipts and partial Skill publication
   remain intact, its in-process lock is released, and a typed error requires a clean
@@ -615,6 +676,22 @@ Neither Project nor Workbench imports the other to implement this flow.
   `RemoteCapabilityInstaller`; it is not a checked-in bundle, built-in identity,
   executable search path or second publication mechanism. Missing/corrupt seed data
   fails closed and the post-window network phase may recover it.
+- A Plugin `hooks` path names one self-contained JavaScript ESM OpenCode Plugin
+  module. Explicit install/update snapshots and fingerprints the exact bytes in the
+  private Hook authorization store before package publication. OpenCode receives
+  only those immutable file URLs, in stable Plugin-id order after base Plugins and
+  before the strong protected-path guard. Changed bytes disable that Plugin Hook
+  and require reinstall without disabling other authorized Hooks. Authorization
+  parses but never executes the module; it requires valid ESM with an exported
+  OpenCode Plugin entry. Static `node:`/`bun:` built-ins are the only imports that
+  may remain, except runtime module-loader APIs such as `node:module`. CommonJS
+  globals and every other dependency must be bundled out of the declared file.
+  Default/background provisioning may check metadata but must recheck the parsed
+  candidate and cannot authorize new Hook bytes.
+  Post-publication Agent invalidation runs outside the per-Plugin mutation lock so
+  an in-flight Agent startup can finish Hook resolution. Desktop then reacquires
+  that lock, reads the latest installed identity, reconciles execution state, and
+  removes superseded snapshots only after the old generation has disposed.
 
 ## 8. Plugin host boundary
 
@@ -633,11 +710,21 @@ trusted integration such as JianYing. This is not a manifest
 function-call bridge: sandboxed Plugin frames cannot register or invoke selection
 actions, receive native paths, or select a native adapter by string.
 
-Third-party Plugin code is static HTML/JavaScript rendered in an iframe with exactly
+Third-party Web Plugin code is static HTML/JavaScript rendered in an iframe with exactly
 `sandbox="allow-scripts"`. It is never imported into the renderer bundle, loaded as
 an Electron `webview`, or given Node, Electron, same-origin, arbitrary network, or
 absolute-path access. A dedicated static protocol performs containment checks and
 fixed MIME/CSP handling.
+
+A declared Agent Hook is a separate executable boundary, not a Web surface. Desktop
+does not import it; OpenCode loads the authorized private snapshot as a native Plugin.
+The first ABI permits one self-contained `.js`/`.mjs` file with no dynamic or
+unbundled package imports, so dependencies cannot escape the authorized byte
+identity. Hook modules are user-global but OpenCode instantiates them per workspace
+directory. A synchronous client-use lease makes configuration refresh wait for
+admitted calls and blocks new calls before disposal begins. Superseded snapshots
+remain available until the old generation completes bounded disposal and server
+close; only then may reconciliation collect them.
 
 Each mounted node receives a fresh `MessageChannel`. Legacy node-scoped methods bind
 that port to the exact installed Plugin, active Project, active Canvas and owning
@@ -694,6 +781,15 @@ return a document projection; separately granted v5 document reads use the bound
 broker projections described above. Browser
 features such as fullscreen are likewise enabled per manifest; all other iframe
 feature-policy denials remain in force.
+
+V6 Web nodes may separately request `canvas.connectedInputs.read`. Its fixed
+`canvas.connectedInputs.list` method returns pathless, bounded metadata for direct
+incoming file nodes in edge order: node id, media kind, display label/name, MIME,
+status, and basic dimensions/duration. It never returns bytes, Project-relative or
+native paths, URLs, or credentials. The
+`canvas.connectedInputs.changed` command is only an invalidation signal; it does
+not authorize transfer or trigger a Tool/Agent call. External transfer requires an
+explicit user action and runs through the verified Main-owned operation boundary.
 
 A node-scoped Plugin may add one current-frame PNG only when its manifest declares
 `canvas.image.write` and calls `canvas.image.create`. The iframe supplies bounded
