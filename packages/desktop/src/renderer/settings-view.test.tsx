@@ -36,10 +36,12 @@ const skillClient: DesktopSkillClient = {
 }
 
 const pluginClient: WebPluginClient = {
+  connectAgentMcp: mock(async () => undefined),
   importPlugin: mock(async () => null),
   installCatalogPlugin: mock(async () => {
     throw new Error("not used")
   }),
+  listAgentMcpStatuses: mock(async () => ({})),
   listPlugins: mock(async () => ({ catalog: [], installed: [] })),
   onDidChange: mock(() => noop),
   openCatalogPluginRelease: mock(async () => true),

@@ -178,6 +178,27 @@ function projectCanvasOwnedSkillsPluginManifest(overrides: Partial<WebPluginMani
   })
 }
 
+function remoteMcpPluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  return {
+    capabilities: [],
+    contributes: {
+      agent: {
+        mcp: {
+          oauth: "auto",
+          type: "remote",
+          url: "https://editor.example.com/mcp",
+        },
+      },
+    },
+    description: "Remote MCP video editing",
+    id: "hello-convax",
+    name: "Hello Convax",
+    schema: "convax.plugin/6",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
 function companion(overrides: Record<string, unknown> = {}) {
   return {
     command: "example-image-tool",
@@ -403,7 +424,7 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
-  test("accepts strict Plugin host/schema compatibility pairs through Project/Canvas v5", () => {
+  test("accepts strict Plugin host/schema compatibility pairs through remote MCP v6", () => {
     const generationManifest = generationPluginManifest()
     const parsed = parseRemoteCapabilityRegistry(
       registry([
@@ -476,9 +497,33 @@ describe("parseRemoteCapabilityRegistry", () => {
         schema: "convax.plugin/5",
       },
     })
+
+    const remoteMcp = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/6" },
+          manifest: remoteMcpPluginManifest(),
+        }),
+      ]),
+    )
+    expect(remoteMcp.packages[0]).toMatchObject({
+      compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/6" },
+      manifest: {
+        contributes: {
+          agent: {
+            mcp: {
+              oauth: "auto",
+              type: "remote",
+              url: "https://editor.example.com/mcp",
+            },
+          },
+        },
+        schema: "convax.plugin/6",
+      },
+    })
   })
 
-  test("binds owned remote Skills to exactly one matching v4 or v5 Plugin contribution", () => {
+  test("binds owned remote Skills to exactly one matching v4-v6 Plugin contribution", () => {
     const owner = pluginPackage({
       compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/4" },
       manifest: ownedSkillsPluginManifest(),
@@ -519,6 +564,25 @@ describe("parseRemoteCapabilityRegistry", () => {
     })
     expect(() =>
       parseRemoteCapabilityRegistry(registry([projectCanvasOwner, skillPackage({ ownerPluginId: "hello-convax" })])),
+    ).not.toThrow()
+
+    const remoteMcpOwner = pluginPackage({
+      compatibility: { pluginHost: "convax.plugin-capability/1", pluginSchema: "convax.plugin/6" },
+      manifest: remoteMcpPluginManifest({
+        contributes: {
+          agent: {
+            mcp: {
+              oauth: "auto",
+              type: "remote",
+              url: "https://editor.example.com/mcp",
+            },
+          },
+          skills: [{ name: "hello-agent", path: "skills/hello-agent" }],
+        },
+      }),
+    })
+    expect(() =>
+      parseRemoteCapabilityRegistry(registry([remoteMcpOwner, skillPackage({ ownerPluginId: "hello-convax" })])),
     ).not.toThrow()
   })
 
@@ -638,6 +702,16 @@ describe("parseRemoteCapabilityRegistry", () => {
       parseRemoteCapabilityRegistry(
         registry([
           pluginPackage({ compatibility: { pluginHost: "convax.plugin-host/2", pluginSchema: "convax.plugin/1" } }),
+        ]),
+      ),
+    ).toThrow("compatibility")
+    expect(() =>
+      parseRemoteCapabilityRegistry(
+        registry([
+          pluginPackage({
+            compatibility: { pluginHost: "convax.plugin-host/4", pluginSchema: "convax.plugin/6" },
+            manifest: remoteMcpPluginManifest(),
+          }),
         ]),
       ),
     ).toThrow("compatibility")

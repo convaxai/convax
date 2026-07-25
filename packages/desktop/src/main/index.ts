@@ -92,6 +92,8 @@ import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
 import { registerPluginCanvasImageIpc } from "./plugin-canvas-image-ipc"
 import { PluginCanvasImageService } from "./plugin-canvas-image-service"
+import { installedPluginAgentMcpServers } from "./plugin-agent-mcp"
+import { PluginAgentMcpConnectionService } from "./plugin-agent-mcp-connection"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
@@ -131,6 +133,7 @@ import { createElectronRemoteCapabilityFetch } from "./electron-remote-capabilit
 import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
 import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
+import { PluginHookAuthorizationStore } from "./plugin-hook-authorizations"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
@@ -339,6 +342,12 @@ function startApplication() {
           companionStore.resolve(pluginId, pluginVersion, command),
       },
     )
+    const pluginHookAuthorizations = new PluginHookAuthorizationStore(
+      join(userDataDirectory, "plugin-hook-authorizations"),
+      {
+        resolveInstalledHook: (plugin) => pluginManager.resolveAsset(plugin.id, plugin.hooks!),
+      },
+    )
     const pluginServiceAuthorizationCheckpoints = new PluginServiceAuthorizationCheckpointStore(
       join(userDataDirectory, "plugin-service-authorization-checkpoints"),
     )
@@ -354,6 +363,11 @@ function startApplication() {
         await toolPluginAuthorizations.reconcile(installedPlugins)
       } catch (error) {
         console.warn("Could not reconcile installed Tool Plugin authorizations", error)
+      }
+      try {
+        await pluginHookAuthorizations.reconcile(installedPlugins)
+      } catch (error) {
+        console.warn("Could not reconcile installed Plugin Hook authorizations", error)
       }
 
       const identities: Array<{ pluginId: string; serviceIdentity: string }> = []
@@ -422,8 +436,7 @@ function startApplication() {
         canvasDocumentChanges.publish({
           ref: { canvasId: event.canvasId, projectId: event.scopeId },
           revision: event.revision,
-          source:
-            event.actor.kind === "plugin" ? "plugin" : event.actor.kind === "renderer" ? "renderer" : "host",
+          source: event.actor.kind === "plugin" ? "plugin" : event.actor.kind === "renderer" ? "renderer" : "host",
         })
       },
     })
@@ -531,6 +544,28 @@ function startApplication() {
         resourcesDirectory: process.resourcesPath,
       }),
       configDirectory: openCodeConfigDirectory,
+      async resolveMcpServers() {
+        return installedPluginAgentMcpServers(await pluginManager.list())
+      },
+      async resolveHookModules() {
+        const modules: Array<{ fileUrl: string }> = []
+        const ids = (await pluginManager.list())
+          .filter((plugin) => plugin.hooks !== undefined)
+          .map((plugin) => plugin.id)
+          .sort()
+        for (const pluginId of ids) {
+          try {
+            const fileUrl = await pluginManager.withPluginMutation(pluginId, async () => {
+              const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
+              return current ? pluginHookAuthorizations.resolve(current) : null
+            })
+            if (fileUrl) modules.push({ fileUrl })
+          } catch (error) {
+            console.warn(`Disabled changed or unauthorized Plugin Hook module: ${pluginId}`, error)
+          }
+        }
+        return modules
+      },
       async resolveProviders() {
         try {
           const providers = await generationRuntime.connectLlmProviders()
@@ -682,6 +717,7 @@ function startApplication() {
       restoreProvider: (pluginId) => pets.restoreProviderRuntime(pluginId),
     })
     connectPetOverlay = petIpc.connectOverlay
+    const pluginAgentMcpConnection = new PluginAgentMcpConnectionService(agentRuntime, userDataDirectory)
     const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
     const pluginSkillOwnership = new PluginSkillOwnershipStore(
       join(userDataDirectory, "plugin-skill-bindings", "index-v1.json"),
@@ -715,6 +751,7 @@ function startApplication() {
         builtinPlugins: desktopBuiltinPluginCatalog,
         builtinSkills: desktopBuiltinSkillCatalog,
         companionStore,
+        hookAuthorizationStore: pluginHookAuthorizations,
         pluginManager,
         pluginSkillLifecycle,
         preparePluginPublication: async (pluginId) => petIpc.prepareProviderChange(pluginId),
@@ -755,17 +792,20 @@ function startApplication() {
       candidate: WebPluginPublicationCandidate,
     ) => {
       const authorization = await toolPluginAuthorizations.prepareInstall(plugin)
+      let hookAuthorization
       try {
+        hookAuthorization = await pluginHookAuthorizations.prepareInstall(plugin, candidate)
         const ownedSkills = await pluginSkillLifecycle.prepareInstall(plugin, candidate)
-        // Pet capability revocation shares the package rollback boundary. The
-        // owned-Skill transaction records the only fallible forward decision;
-        // authorization cleanup is best-effort and follows it.
+        // Pet state, owned Skills, and exact execution authorization all share
+        // the package publication decision.
         return composePluginPublicationTransactions([
           petIpc.prepareProviderChange(plugin.id),
           ownedSkills,
+          hookAuthorization,
           authorization,
         ])
       } catch (error) {
+        await hookAuthorization?.rollback().catch(() => undefined)
         await authorization.rollback().catch(() => undefined)
         throw error
       }
@@ -890,22 +930,28 @@ function startApplication() {
         beforeChange: async (pluginId) => {
           pluginServices.discardPlugin(pluginId)
         },
+        connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
+        listAgentMcpStatuses: (plugins) => pluginAgentMcpConnection.listStatuses(plugins),
         prepareInstall: prepareLocalPluginPublication,
         prepareRemove: async (plugin) =>
           composePluginPublicationTransactions([
             petIpc.prepareProviderChange(plugin.id),
             await pluginSkillLifecycle.prepareUninstall(plugin),
           ]),
-        async onDidChange(pluginId, mutation) {
+        async onDidChange(pluginId) {
           generationRuntime.disposePlugin(pluginId)
+          skillManager.notifyInventoryChanged()
+          await agentRuntime.refreshConfiguration()
+        },
+        async reconcileAfterChange(pluginId, mutation) {
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
-          void agentRuntime.refreshProviders().catch((error) => {
-            console.warn("Could not immediately refresh OpenCode Plugin providers and tools", error)
-          })
-          void skillManager.refresh().catch((error) => {
-            console.warn("Could not immediately refresh OpenCode Plugin-owned Skills", error)
-          })
           await pets.refresh(mutation)
+          const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
+          try {
+            await pluginHookAuthorizations.reconcilePlugin(pluginId, current)
+          } catch (error) {
+            console.warn(`Could not reconcile changed Plugin Hook authorization: ${pluginId}`, error)
+          }
         },
       },
     )
@@ -1039,10 +1085,14 @@ function startApplication() {
       skillManager,
       stateFile: join(userDataDirectory, "default-capabilities.json"),
     }).then(
-      ({ failures }) => {
+      async ({ failures }) => {
         for (const failure of failures) {
           console.error(`Could not update default remote ${failure.kind} ${failure.id}`, failure.error)
         }
+        // Background Registry publication bypasses Plugin management IPC. Rebuild
+        // the lazy OpenCode configuration so provider and Agent MCP changes share
+        // the same post-publication convergence path.
+        await agentRuntime.refreshConfiguration()
       },
       (error) => console.error("Could not update default Convax capabilities", error),
     )

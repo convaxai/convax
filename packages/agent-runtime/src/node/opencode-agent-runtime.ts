@@ -10,6 +10,7 @@ import {
   createOpencodeServer,
   type FilePartInput,
   type Message,
+  type McpStatus,
   type Part,
   type PermissionRequest,
   type QuestionRequest,
@@ -64,6 +65,14 @@ export interface OpenCodeAgentRuntimeOptions {
   config?: ServerOptions["config"]
   /** Host-owned dynamic OpenCode providers, resolved only when a server connection is created. */
   resolveProviders?: () => Promise<NonNullable<ServerOptions["config"]>["provider"]>
+  /** Host-owned remote MCP servers, resolved only when a server connection is created. */
+  resolveMcpServers?: () => Promise<Readonly<Record<string, AgentRemoteMcpServerConfig>>>
+  /**
+   * Host-verified immutable OpenCode Plugin modules. The runtime owns only
+   * generic loading; package identity, authorization, and snapshots stay with
+   * the host.
+   */
+  resolveHookModules?: () => Promise<readonly AgentHookModule[]>
   /** Lexical OpenCode permission patterns. These are not a filesystem sandbox. */
   protectedPathPatterns?: readonly string[]
   /**
@@ -79,6 +88,41 @@ export interface OpenCodeAgentRuntimeOptions {
   toolCallTimeout?: number
   toolProvider?: AgentToolProvider
   toolServerName?: string
+}
+
+export interface AgentHookModule {
+  /** Absolute file URL inside a host-owned immutable execution snapshot. */
+  readonly fileUrl: string
+}
+
+export interface AgentRemoteMcpOAuthConfig {
+  callbackPort?: number
+  clientId?: string
+  clientSecret?: string
+  redirectUri?: string
+  scope?: string
+}
+
+/** A host-provided remote MCP server. OpenCode owns its transport and OAuth lifecycle. */
+export interface AgentRemoteMcpServerConfig {
+  enabled?: boolean
+  headers?: Readonly<Record<string, string>>
+  oauth?: AgentRemoteMcpOAuthConfig | false
+  timeout?: number
+  type: "remote"
+  url: string
+}
+
+export type AgentMcpServerStatus =
+  | { status: "connected" }
+  | { status: "disabled" }
+  | { status: "failed"; error: string }
+  | { status: "needs_auth" }
+  | { status: "needs_client_registration"; error: string }
+
+export interface AgentMcpServerInput {
+  directory: string
+  name: string
 }
 
 interface SdkResult<T> {
@@ -146,6 +190,7 @@ const textFileLimit = 5 * 1024 * 1024
 const binaryFileLimit = 20 * 1024 * 1024
 const skillPartMetadataKey = "convax.agent.skill"
 const defaultHostToolCallTimeout = 30_000
+const openCodeDisposeTimeout = 2_000
 
 type OpenCodeConfig = NonNullable<ServerOptions["config"]>
 type OpenCodePermission = NonNullable<OpenCodeConfig["permission"]>
@@ -317,6 +362,25 @@ function errorText(value: unknown): string {
   return String(value)
 }
 
+async function settleWithin(promise: Promise<unknown>, timeout: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settled = promise.then(
+    () => undefined,
+    () => undefined,
+  )
+  try {
+    await Promise.race([
+      settled,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeout)
+        timer.unref?.()
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 function unwrap<T>(result: SdkResult<T>, operation: string): T {
   if (result.error !== undefined) throw new Error(`${operation}: ${errorText(result.error)}`)
   if (result.data === undefined) {
@@ -329,6 +393,75 @@ function unwrap<T>(result: SdkResult<T>, operation: string): T {
 function workspaceDirectory(directory: string): string {
   if (!directory.trim()) throw new Error("Workspace directory is required")
   return resolve(directory)
+}
+
+function mcpServerName(name: string): string {
+  const value = name.trim()
+  if (!value || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("MCP server name may only contain letters, numbers, underscores, and hyphens")
+  }
+  return value
+}
+
+function copyRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
+  return {
+    ...config,
+    ...(config.headers === undefined ? {} : { headers: { ...config.headers } }),
+    ...(typeof config.oauth === "object" ? { oauth: { ...config.oauth } } : {}),
+  }
+}
+
+function copyMcpStatus(status: McpStatus): AgentMcpServerStatus {
+  return status.status === "failed" || status.status === "needs_client_registration"
+    ? { error: status.error, status: status.status }
+    : { status: status.status }
+}
+
+function normalizedHookModuleUrl(module: AgentHookModule) {
+  if (!module || typeof module.fileUrl !== "string" || module.fileUrl !== module.fileUrl.trim()) {
+    throw new Error("Agent Hook module must provide an absolute file URL")
+  }
+  let url: URL
+  try {
+    url = new URL(module.fileUrl)
+  } catch {
+    throw new Error("Agent Hook module must provide an absolute file URL")
+  }
+  if (url.protocol !== "file:" || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
+    throw new Error("Agent Hook module must provide an absolute file URL without credentials, query, or fragment")
+  }
+  const file = fileURLToPath(url)
+  if (!isAbsolute(file) || file.includes("\0")) {
+    throw new Error("Agent Hook module must provide an absolute file URL")
+  }
+  return pathToFileURL(resolve(file)).href
+}
+
+/** Append host-verified Hook modules without mutating caller-owned OpenCode config. */
+export function withAgentHookModules(
+  config: ServerOptions["config"] | undefined,
+  modules: readonly AgentHookModule[],
+): OpenCodeConfig {
+  const plugins = [...(config?.plugin ?? [])]
+  const seen = new Set<string>()
+  for (const plugin of plugins) {
+    const specifier = typeof plugin === "string" ? plugin : plugin[0]
+    try {
+      if (new URL(specifier).protocol === "file:") {
+        seen.add(normalizedHookModuleUrl({ fileUrl: specifier }))
+      }
+    } catch {
+      // Base host config may contain ordinary npm OpenCode Plugins. It is not
+      // part of this resolver's stricter immutable-file contract.
+    }
+  }
+  for (const module of modules) {
+    const fileUrl = normalizedHookModuleUrl(module)
+    if (seen.has(fileUrl)) throw new Error(`Agent Hook module is duplicated: ${fileUrl}`)
+    seen.add(fileUrl)
+    plugins.push(fileUrl)
+  }
+  return { ...config, ...(plugins.length === 0 ? {} : { plugin: plugins }) }
 }
 
 export function isAgentSessionInDirectory(sessionDirectory: string, directory: string) {
@@ -604,9 +737,9 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   private readonly toolRegistrations = new Map<string, Promise<void>>()
   private readonly protectedPathRegistrations = new Map<string, Promise<void>>()
   private protectedPathArtifact?: Promise<{ directory: string; marker: string; specifier: string }>
-  private activePromptCount = 0
+  private activeClientUseCount = 0
   private skillRefreshRequested = false
-  private providerRefreshRequested = false
+  private configurationRefreshRequested = false
   private skillRefreshInFlight?: Promise<void>
   private readonly skillRefreshWaiters: SkillRefreshWaiter[] = []
 
@@ -643,27 +776,67 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     return this.lifecycle
   }
 
-  private async enterPrompt() {
-    while (this.skillRefreshInFlight) await this.skillRefreshInFlight
-    if (this.disposed) throw new Error("OpenCode agent runtime has been disposed")
-    this.activePromptCount += 1
+  private async waitForPendingConfigurationRefresh() {
+    while (this.skillRefreshRequested || this.configurationRefreshRequested || this.skillRefreshInFlight) {
+      const inFlight = this.skillRefreshInFlight
+      if (inFlight) {
+        await inFlight
+        continue
+      }
+      await new Promise<void>((resolve, reject) => {
+        this.skillRefreshWaiters.push({ resolve, reject })
+        this.drainSkillRefresh()
+      })
+    }
   }
 
-  private leavePrompt() {
-    this.activePromptCount = Math.max(0, this.activePromptCount - 1)
-    if (this.activePromptCount === 0) this.drainSkillRefresh()
+  private async enterClientUse() {
+    while (true) {
+      if (this.disposed) throw new Error("OpenCode agent runtime has been disposed")
+      if (!this.skillRefreshRequested && !this.configurationRefreshRequested && !this.skillRefreshInFlight) {
+        // This check and increment run in one synchronous turn. A refresh marks
+        // itself pending before it can observe the count, so it cannot dispose
+        // a client between admission and the caller's first await.
+        this.activeClientUseCount += 1
+        return
+      }
+      await this.waitForPendingConfigurationRefresh()
+    }
+  }
+
+  private leaveClientUse() {
+    this.activeClientUseCount = Math.max(0, this.activeClientUseCount - 1)
+    if (this.activeClientUseCount === 0) this.drainSkillRefresh()
+  }
+
+  private async withClientUse<Result>(operation: () => Promise<Result>) {
+    await this.enterClientUse()
+    try {
+      return await operation()
+    } finally {
+      this.leaveClientUse()
+    }
+  }
+
+  private async disposeOpenCodeInstances() {
+    const global = (this.client as (OpenCodeClient & { global?: { dispose?: () => Promise<unknown> } }) | undefined)
+      ?.global
+    if (global?.dispose) await settleWithin(global.dispose(), openCodeDisposeTimeout)
   }
 
   private drainSkillRefresh() {
-    if (this.disposed || this.activePromptCount > 0 || this.skillRefreshInFlight || !this.skillRefreshRequested) return
+    if (this.disposed || this.activeClientUseCount > 0 || this.skillRefreshInFlight || !this.skillRefreshRequested)
+      return
 
     this.skillRefreshRequested = false
     const waiters = this.skillRefreshWaiters.splice(0)
-    const refresh = (async () => {
+    const hardRefresh = this.configurationRefreshRequested
+    const operation = (async () => {
       try {
-        if (this.providerRefreshRequested) {
-          this.providerRefreshRequested = false
+        if (hardRefresh) {
+          this.configurationRefreshRequested = false
           await this.startup?.catch(() => undefined)
+          await this.disposeOpenCodeInstances()
           this.connectionGeneration += 1
           this.server?.close()
           this.server = undefined
@@ -675,22 +848,31 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
           unwrap(await client.global.dispose(), "Refresh OpenCode skills")
         }
       } finally {
+        if (hardRefresh) {
+          // A hard refresh leaves no live per-directory OpenCode instance. Any
+          // Skill or configuration invalidation queued while disposal was in
+          // flight is therefore already covered by the next lazy startup.
+          // Absorb those waiters here instead of starting a second generation.
+          this.configurationRefreshRequested = false
+          this.skillRefreshRequested = false
+          waiters.push(...this.skillRefreshWaiters.splice(0))
+        }
         // Global disposal invalidates per-directory instances, including their
         // MCP tool and strong path-guard initialization.
         this.toolRegistrations.clear()
         this.protectedPathRegistrations.clear()
       }
     })()
+    let refresh!: Promise<void>
+    refresh = operation.finally(() => {
+      if (this.skillRefreshInFlight === refresh) this.skillRefreshInFlight = undefined
+      this.drainSkillRefresh()
+    })
     this.skillRefreshInFlight = refresh
-    void refresh
-      .then(
-        () => waiters.forEach((waiter) => waiter.resolve()),
-        (error) => waiters.forEach((waiter) => waiter.reject(error)),
-      )
-      .finally(() => {
-        if (this.skillRefreshInFlight === refresh) this.skillRefreshInFlight = undefined
-        this.drainSkillRefresh()
-      })
+    void refresh.then(
+      () => waiters.forEach((waiter) => waiter.resolve()),
+      (error) => waiters.forEach((waiter) => waiter.reject(error)),
+    )
   }
 
   /** Rebuild OpenCode's discovered Skills and host-tool connections without replacing durable sessions. */
@@ -717,15 +899,20 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     return this.refreshCapabilities()
   }
 
-  /** Recreate the lazy OpenCode connection so host-provided provider configuration is re-resolved. */
-  refreshProviders(): Promise<void> {
+  /** Recreate the lazy OpenCode connection so host-provided configuration is re-resolved. */
+  refreshConfiguration(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error("OpenCode agent runtime has been disposed"))
-    this.providerRefreshRequested = true
-    if (!this.client && !this.startup && !this.server) {
-      this.providerRefreshRequested = false
+    this.configurationRefreshRequested = true
+    if (!this.client && !this.startup && !this.server && this.activeClientUseCount === 0) {
+      this.configurationRefreshRequested = false
       return Promise.resolve()
     }
     return this.refreshCapabilities()
+  }
+
+  /** Backward-compatible name for callers that refresh only dynamic providers. */
+  refreshProviders(): Promise<void> {
+    return this.refreshConfiguration()
   }
 
   private materializeProtectedPathPlugin() {
@@ -753,14 +940,38 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   }
 
   private async serverConfig() {
-    const providers = await this.options.resolveProviders?.()
-    const baseConfig: OpenCodeConfig =
-      providers === undefined
+    const [providers, resolvedMcpServers, hookModules] = await Promise.all([
+      this.options.resolveProviders?.(),
+      this.options.resolveMcpServers?.(),
+      this.options.resolveHookModules?.(),
+    ])
+    const configuredMcpServers = this.options.config?.mcp ?? {}
+    const resolvedEntries = Object.entries(resolvedMcpServers ?? {})
+    const conflicts = resolvedEntries
+      .map(([name]) => mcpServerName(name))
+      .filter((name) => Object.prototype.hasOwnProperty.call(configuredMcpServers, name))
+      .sort()
+    if (conflicts.length > 0) {
+      throw new Error(`Resolved MCP server conflicts with base OpenCode config: ${conflicts.join(", ")}`)
+    }
+    const mcp =
+      resolvedEntries.length === 0
+        ? this.options.config?.mcp
+        : {
+            ...configuredMcpServers,
+            ...Object.fromEntries(
+              resolvedEntries.map(([name, config]) => [mcpServerName(name), copyRemoteMcpServerConfig(config)]),
+            ),
+          }
+    const resolvedConfig: OpenCodeConfig =
+      providers === undefined && mcp === this.options.config?.mcp
         ? { ...this.options.config }
         : {
             ...this.options.config,
-            provider: { ...this.options.config?.provider, ...providers },
+            ...(providers === undefined ? {} : { provider: { ...this.options.config?.provider, ...providers } }),
+            ...(mcp === undefined ? {} : { mcp }),
           }
+    const baseConfig = withAgentHookModules(resolvedConfig, hookModules ?? [])
     const paths = this.options.protectedPaths ?? []
     if (paths.length === 0) return baseConfig
     const plugin = await this.materializeProtectedPathPlugin()
@@ -914,48 +1125,54 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
 
   async listSessions(input: AgentRuntimeListSessionsInput): Promise<AgentSession[]> {
     const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
-    const sessions = unwrap(
-      await client.session.list({ directory, scope: "project", roots: true, limit: input.limit }),
-      "List OpenCode sessions",
-    )
-    return sessions
-      .filter((session) => !session.time.archived && isAgentSessionInDirectory(session.directory, directory))
-      .map(mapSession)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      const sessions = unwrap(
+        await client.session.list({ directory, scope: "project", roots: true, limit: input.limit }),
+        "List OpenCode sessions",
+      )
+      return sessions
+        .filter((session) => !session.time.archived && isAgentSessionInDirectory(session.directory, directory))
+        .map(mapSession)
+    })
   }
 
   async createSession(input: AgentRuntimeCreateSessionInput): Promise<AgentSession> {
     const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
-    await this.ensureProtectedPathGuard(client, directory)
-    const session = unwrap(await client.session.create({ directory, title: input.title }), "Create OpenCode session")
-    return mapSession(session)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      await this.ensureProtectedPathGuard(client, directory)
+      const session = unwrap(await client.session.create({ directory, title: input.title }), "Create OpenCode session")
+      return mapSession(session)
+    })
   }
 
   async getSessionState(input: AgentRuntimeGetSessionStateInput): Promise<AgentSessionState> {
     const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
-    const [sessionResult, statusResult, messagesResult, permissionsResult, questionsResult] = await Promise.all([
-      client.session.get({ directory, sessionID: input.sessionId }),
-      client.session.status({ directory }),
-      client.session.messages({ directory, sessionID: input.sessionId, limit: input.limit }),
-      client.permission.list({ directory }),
-      client.question.list({ directory }),
-    ])
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      const [sessionResult, statusResult, messagesResult, permissionsResult, questionsResult] = await Promise.all([
+        client.session.get({ directory, sessionID: input.sessionId }),
+        client.session.status({ directory }),
+        client.session.messages({ directory, sessionID: input.sessionId, limit: input.limit }),
+        client.permission.list({ directory }),
+        client.question.list({ directory }),
+      ])
 
-    const session = unwrap(sessionResult, "Get OpenCode session")
-    const statuses = unwrap(statusResult, "Get OpenCode session status")
-    const messages = unwrap(messagesResult, "Get OpenCode messages")
-    const permissions = unwrap(permissionsResult, "List OpenCode permissions")
-    const questions = unwrap(questionsResult, "List OpenCode questions")
+      const session = unwrap(sessionResult, "Get OpenCode session")
+      const statuses = unwrap(statusResult, "Get OpenCode session status")
+      const messages = unwrap(messagesResult, "Get OpenCode messages")
+      const permissions = unwrap(permissionsResult, "List OpenCode permissions")
+      const questions = unwrap(questionsResult, "List OpenCode questions")
 
-    return {
-      session: mapSession(session),
-      status: mapSessionStatus(statuses[input.sessionId]),
-      messages: messages.map(mapMessage),
-      pendingPermissions: permissions.filter((item) => item.sessionID === input.sessionId).map(mapPermission),
-      pendingQuestions: questions.filter((item) => item.sessionID === input.sessionId).map(mapQuestion),
-    }
+      return {
+        session: mapSession(session),
+        status: mapSessionStatus(statuses[input.sessionId]),
+        messages: messages.map(mapMessage),
+        pendingPermissions: permissions.filter((item) => item.sessionID === input.sessionId).map(mapPermission),
+        pendingQuestions: questions.filter((item) => item.sessionID === input.sessionId).map(mapQuestion),
+      }
+    })
   }
 
   async prompt(input: AgentRuntimePromptInput): Promise<AgentMessage> {
@@ -968,7 +1185,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       throw new Error("A message or resource is required")
     }
 
-    await this.enterPrompt()
+    await this.enterClientUse()
     try {
       const client = await this.getClient()
       await this.ensureProtectedPathGuard(client, directory)
@@ -1016,7 +1233,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
       )
       return mapMessage(response)
     } finally {
-      this.leavePrompt()
+      this.leaveClientUse()
     }
   }
 
@@ -1026,9 +1243,7 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     unwrap(await client.session.abort({ directory, sessionID: input.sessionId }), "Abort OpenCode session")
   }
 
-  async listSkills(input: AgentRuntimeDirectoryInput): Promise<AgentSkill[]> {
-    const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
+  private async listSkillsWithClient(client: OpenCodeClient, directory: string): Promise<AgentSkill[]> {
     const skills = unwrap(await client.app.skills({ directory }), "List OpenCode skills")
     return skills.map((skill) => ({
       name: skill.name,
@@ -1037,51 +1252,110 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     }))
   }
 
+  async listSkills(input: AgentRuntimeDirectoryInput): Promise<AgentSkill[]> {
+    const directory = workspaceDirectory(input.directory)
+    return this.withClientUse(async () => this.listSkillsWithClient(await this.getClient(), directory))
+  }
+
   async listModels(input: AgentRuntimeDirectoryInput): Promise<AgentModelCatalog> {
     const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
-    const catalog = unwrap(await client.provider.list({ directory }), "List OpenCode models")
-    const connectedProviderIds = new Set(catalog.connected)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      const catalog = unwrap(await client.provider.list({ directory }), "List OpenCode models")
+      const connectedProviderIds = new Set(catalog.connected)
 
-    return {
-      providers: catalog.all.map((provider) => {
-        const defaultModelId = catalog.default[provider.id]
-        return {
-          connected: connectedProviderIds.has(provider.id),
-          defaultModelId,
-          models: Object.values(provider.models).map((model) => ({
-            default: model.id === defaultModelId,
-            modelId: model.id,
-            modelName: model.name,
-          })),
-          providerId: provider.id,
-          providerName: provider.name,
-        }
-      }),
-    }
+      return {
+        providers: catalog.all.map((provider) => {
+          const defaultModelId = catalog.default[provider.id]
+          return {
+            connected: connectedProviderIds.has(provider.id),
+            defaultModelId,
+            models: Object.values(provider.models).map((model) => ({
+              default: model.id === defaultModelId,
+              modelId: model.id,
+              modelName: model.name,
+            })),
+            providerId: provider.id,
+            providerName: provider.name,
+          }
+        }),
+      }
+    })
   }
 
   async listCapabilities(input: AgentRuntimeDirectoryInput): Promise<AgentCapabilities> {
     const directory = workspaceDirectory(input.directory)
-    const client = await this.getClient()
-    await this.ensureProtectedPathGuard(client, directory)
-    await this.ensureToolScope(client, directory, input.scopeId)
-    const [skills, toolsResult] = await Promise.all([this.listSkills({ directory }), client.tool.ids({ directory })])
-    const toolIds = unwrap(toolsResult, "List OpenCode tools")
-    const visibleToolIds =
-      (this.options.protectedPaths?.length ?? 0) > 0
-        ? toolIds.filter((tool) => tool !== "bash" && tool !== "shell" && tool !== "lsp")
-        : toolIds
-    const hostToolIds =
-      this.options.toolProvider && input.scopeId
-        ? (await this.options.toolProvider.listTools({ directory, scopeId: input.scopeId })).map(
-            (tool) => `${this.toolServerName}_${tool.name}`,
-          )
-        : []
-    return {
-      skills,
-      toolIds: [...new Set([...visibleToolIds, ...hostToolIds])],
-    }
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      await this.ensureProtectedPathGuard(client, directory)
+      await this.ensureToolScope(client, directory, input.scopeId)
+      const [skills, toolsResult] = await Promise.all([
+        this.listSkillsWithClient(client, directory),
+        client.tool.ids({ directory }),
+      ])
+      const toolIds = unwrap(toolsResult, "List OpenCode tools")
+      const visibleToolIds =
+        (this.options.protectedPaths?.length ?? 0) > 0
+          ? toolIds.filter((tool) => tool !== "bash" && tool !== "shell" && tool !== "lsp")
+          : toolIds
+      const hostToolIds =
+        this.options.toolProvider && input.scopeId
+          ? (await this.options.toolProvider.listTools({ directory, scopeId: input.scopeId })).map(
+              (tool) => `${this.toolServerName}_${tool.name}`,
+            )
+          : []
+      return {
+        skills,
+        toolIds: [...new Set([...visibleToolIds, ...hostToolIds])],
+      }
+    })
+  }
+
+  async listMcpStatuses(input: AgentRuntimeDirectoryInput): Promise<Record<string, AgentMcpServerStatus>> {
+    const directory = workspaceDirectory(input.directory)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      const statuses = unwrap(await client.mcp.status({ directory }), "List OpenCode MCP server status")
+      return Object.fromEntries(Object.entries(statuses).map(([name, status]) => [name, copyMcpStatus(status)]))
+    })
+  }
+
+  async authenticateMcp(input: AgentMcpServerInput): Promise<AgentMcpServerStatus> {
+    const directory = workspaceDirectory(input.directory)
+    const name = mcpServerName(input.name)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      return copyMcpStatus(
+        unwrap(await client.mcp.auth.authenticate({ directory, name }), `Authenticate OpenCode MCP server ${name}`),
+      )
+    })
+  }
+
+  async connectMcp(input: AgentMcpServerInput): Promise<void> {
+    const directory = workspaceDirectory(input.directory)
+    const name = mcpServerName(input.name)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      unwrap(await client.mcp.connect({ directory, name }), `Connect OpenCode MCP server ${name}`)
+    })
+  }
+
+  async disconnectMcp(input: AgentMcpServerInput): Promise<void> {
+    const directory = workspaceDirectory(input.directory)
+    const name = mcpServerName(input.name)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      unwrap(await client.mcp.disconnect({ directory, name }), `Disconnect OpenCode MCP server ${name}`)
+    })
+  }
+
+  async removeMcpAuth(input: AgentMcpServerInput): Promise<void> {
+    const directory = workspaceDirectory(input.directory)
+    const name = mcpServerName(input.name)
+    return this.withClientUse(async () => {
+      const client = await this.getClient()
+      unwrap(await client.mcp.auth.remove({ directory, name }), `Remove OpenCode MCP server authentication ${name}`)
+    })
   }
 
   async replyPermission(input: AgentRuntimeReplyPermissionInput): Promise<void> {
@@ -1118,10 +1392,11 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     this.disposed = true
     const disposalError = new Error("OpenCode agent runtime disposed")
     this.skillRefreshRequested = false
-    this.providerRefreshRequested = false
+    this.configurationRefreshRequested = false
     for (const waiter of this.skillRefreshWaiters.splice(0)) waiter.reject(disposalError)
-    this.controller.abort(disposalError)
     await this.startup?.catch(() => undefined)
+    await this.disposeOpenCodeInstances()
+    this.controller.abort(disposalError)
     this.server?.close()
     this.server = undefined
     this.client = undefined

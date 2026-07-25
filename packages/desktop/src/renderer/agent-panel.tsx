@@ -22,15 +22,14 @@ import type {
 } from "../generation-contracts"
 import {
   AtSign,
+  BookOpen,
   Bot,
-  Check,
   ChevronDown,
   ChevronRight,
   ExternalLink,
   FileText,
   Folder,
   History,
-  ListTree,
   LoaderCircle,
   MessageSquare,
   PanelsTopLeft,
@@ -39,7 +38,7 @@ import {
   ShieldAlert,
   Sparkles,
   Square,
-  Wrench,
+  SquareTerminal,
   X,
 } from "lucide-react"
 import {
@@ -213,13 +212,28 @@ export interface AgentPanelProps {
   generationCatalogVersion?: string
   onSessionDisplayed?: (input: PetDisplayedSession) => void
   layout?: AgentPanelLayout
+  onOpenSkillDetails?: (name: string) => boolean | Promise<boolean>
   projectId?: string
   projectName?: string
 }
 
 export interface AgentPanelHandle {
   addResources(resources: readonly AgentResource[]): void
+  finishSession(input: { scopeId: string; sessionId: string }): void
+  focusComposer(): void
   openSession(sessionId: string): Promise<void>
+  showSession(input: { scopeId: string; session: AgentSession }): boolean
+}
+
+export async function routeAgentSkillOpen(
+  name: string,
+  scopeId: string,
+  onOpenDetails: AgentPanelProps["onOpenSkillDetails"],
+  openLocal: (input: { name: string; scopeId: string }) => Promise<void>,
+) {
+  if (await onOpenDetails?.(name)) return "details" as const
+  await openLocal({ name, scopeId })
+  return "local" as const
 }
 
 export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(props, ref) {
@@ -240,7 +254,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const contextResources = mergeAgentResources(props.contextResources ?? [])
   const open = embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
-  const [showActivity, setShowActivity] = useState(false)
   const [suggestion, setSuggestion] = useState<AgentComposerSuggestionState>({ open: false })
   const [suggestionQuery, setSuggestionQuery] = useState("")
   const [referenceTab, setReferenceTab] = useState<"canvas" | "project">("project")
@@ -783,7 +796,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       viewport.scrollTop = viewport.scrollHeight
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [historyVisible, open, runtimeBusy, sessionContentKey, showActivity])
+  }, [historyVisible, open, runtimeBusy, sessionContentKey])
 
   useEffect(() => {
     const viewport = scrollViewportRef.current
@@ -1179,12 +1192,17 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     async (name: string) => {
       if (!props.projectId) return
       try {
-        await window.convax.agent.skills.openSkill({ name, scopeId: props.projectId })
+        await routeAgentSkillOpen(
+          name,
+          props.projectId,
+          props.onOpenSkillDetails,
+          (input) => window.convax.agent.skills.openSkill(input),
+        )
       } catch (cause) {
         if (mountedRef.current) setError(errorMessage(cause))
       }
     },
-    [props.projectId],
+    [props.onOpenSkillDetails, props.projectId],
   )
 
   const addResources = useCallback(
@@ -1230,15 +1248,72 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         setFollowingLatest(true)
         await refreshSessionState(targetSessionId)
       },
+      finishSession(input) {
+        if (props.projectId !== input.scopeId) return
+        setSessionPrompting(input.sessionId, false)
+        if (activeSessionIdRef.current === input.sessionId) {
+          void Promise.all([
+            refreshSessionState(input.sessionId),
+            refreshSessions(input.sessionId),
+          ]).catch((cause) => {
+            if (
+              mountedRef.current &&
+              activeProjectRef.current === input.scopeId &&
+              activeScopeRef.current === conversationScope &&
+              activeSessionIdRef.current === input.sessionId
+            ) {
+              setError(errorMessage(cause))
+            }
+          })
+        } else {
+          void refreshSessions().catch(() => undefined)
+        }
+      },
+      focusComposer() {
+        if (!props.projectId) return
+        pendingComposerFocusRef.current = true
+        props.layout?.onOpenChange(true)
+        setComposerFocusRequest((request) => request + 1)
+      },
+      showSession(input) {
+        if (props.projectId !== input.scopeId) return false
+        sessionProjectRef.current = input.scopeId
+        sessionScopeRef.current = conversationScope
+        restoredSessionRef.current = undefined
+        setSessions((current) => [
+          input.session,
+          ...current.filter((session) => session.id !== input.session.id),
+        ])
+        selectSession(input.session.id)
+        setSessionState(undefined)
+        setHistoryVisible(false)
+        setSessionPrompting(input.session.id, true)
+        stickToBottomRef.current = true
+        setFollowingLatest(true)
+        props.layout?.onOpenChange(true)
+        void refreshSessionState(input.session.id).catch((cause) => {
+          if (
+            mountedRef.current &&
+            activeProjectRef.current === input.scopeId &&
+            activeScopeRef.current === conversationScope &&
+            activeSessionIdRef.current === input.session.id
+          ) {
+            setError(errorMessage(cause))
+          }
+        })
+        return true
+      },
     }),
     [
       addResources,
+      conversationScope,
       embedded,
       props.layout?.onOpenChange,
       props.projectId,
       refreshSessions,
       refreshSessionState,
       selectSession,
+      setSessionPrompting,
     ],
   )
 
@@ -1686,16 +1761,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
             {capabilities ? (
               <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span>
             ) : null}
-            <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
-              <Button
-                aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
-                onClick={() => setShowActivity((value) => !value)}
-                size="icon-sm"
-                variant={showActivity ? "secondary" : "ghost"}
-              >
-                <ListTree />
-              </Button>
-            </Tooltip>
             {!embedded ? (
               <Tooltip content="Conversation history">
                 <Button
@@ -1788,8 +1853,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         busy={runtimeBusy && index === conversationTurns.length - 1}
                         key={turn.id}
                         onOpenSkill={openSkill}
-                        onShowActivity={() => setShowActivity(true)}
-                        showActivity={showActivity}
                         turn={turn}
                       />
                     ))}
@@ -2248,16 +2311,6 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     </button>
                     {compactEmbeddedChrome ? (
                       <>
-                        <Tooltip content={showActivity ? "Hide activity" : "Show activity"}>
-                          <Button
-                            aria-label={showActivity ? "Hide agent activity" : "Show agent activity"}
-                            onClick={() => setShowActivity((value) => !value)}
-                            size="icon-sm"
-                            variant={showActivity ? "secondary" : "ghost"}
-                          >
-                            <ListTree />
-                          </Button>
-                        </Tooltip>
                         <Tooltip content="Restart conversation for this context">
                           <Button
                             aria-label="Restart embedded conversation"
@@ -2375,14 +2428,12 @@ export function ConversationTurnView(props: {
   awaitingInput?: boolean
   busy: boolean
   onOpenSkill: (name: string) => Promise<void>
-  onShowActivity: () => void
-  showActivity: boolean
   turn: AgentConversationTurn
 }) {
   return (
     <section className="space-y-3">
       {props.turn.user ? <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.user} user /> : null}
-      {props.showActivity && props.turn.activity.length ? (
+      {props.turn.activity.length ? (
         <AgentActivity
           awaitingInput={props.awaitingInput}
           busy={props.busy}
@@ -2392,16 +2443,6 @@ export function ConversationTurnView(props: {
       ) : null}
       {props.turn.delivery && !props.busy ? (
         <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.delivery} />
-      ) : null}
-      {!props.awaitingInput &&
-      !props.busy &&
-      !props.showActivity &&
-      (props.turn.interrupted || props.turn.tools.failed > 0) ? (
-        <AgentActivityNotice
-          failed={props.turn.tools.failed}
-          interrupted={props.turn.interrupted}
-          onShowActivity={props.onShowActivity}
-        />
       ) : null}
       {props.turn.errors.map((entry) => (
         <div
@@ -2415,24 +2456,50 @@ export function ConversationTurnView(props: {
   )
 }
 
-export function AgentActivityNotice(props: { failed: number; interrupted?: boolean; onShowActivity: () => void }) {
-  return (
-    <button
-      className={cn(
-        "w-full rounded-md border p-2 text-left text-xs",
-        props.interrupted
-          ? "border-amber-500/30 bg-amber-500/5 text-amber-800 hover:bg-amber-500/10 dark:text-amber-300"
-          : "border-destructive/25 bg-destructive/5 text-destructive hover:bg-destructive/10",
-      )}
-      onClick={props.onShowActivity}
-      type="button"
-    >
-      {props.interrupted ? "Earlier run was interrupted" : null}
-      {props.interrupted && props.failed ? " · " : null}
-      {props.failed ? `${props.failed} tool ${props.failed === 1 ? "call failed" : "calls failed"}` : null}. Show
-      activity for details.
-    </button>
-  )
+export function formatAgentActivityDuration(durationMs: number | undefined) {
+  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined
+  if (durationMs < 1_000) return "<1s"
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1_000))
+  const hours = Math.floor(totalSeconds / 3_600)
+  const minutes = Math.floor((totalSeconds % 3_600) / 60)
+  const seconds = totalSeconds % 60
+  return [
+    hours ? `${hours}h` : undefined,
+    minutes ? `${minutes}m` : undefined,
+    seconds || (!hours && !minutes) ? `${seconds}s` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ")
+}
+
+function agentActivityDescription(turn: AgentConversationTurn) {
+  const reasoning = turn.activity.some((slice) => slice.parts.some((part) => part.type === "reasoning"))
+  const tools = turn.tools.count
+  if (reasoning && tools > 1) return `Thought and ran ${tools} tool calls`
+  if (reasoning && tools === 1) return "Thought and ran a tool call"
+  if (reasoning) return "Thought through the task"
+  if (tools > 1) return `Ran ${tools} tool calls`
+  if (tools === 1) return "Ran a tool call"
+  return "Agent activity"
+}
+
+function agentActivitySummary(
+  turn: AgentConversationTurn,
+  options: { awaitingInput: boolean; busy: boolean; open: boolean },
+) {
+  if (options.awaitingInput) return "Waiting for your response"
+  if (options.busy && !options.open) return "Working"
+  if (options.open) return agentActivityDescription(turn)
+  if (turn.interrupted) {
+    return turn.tools.failed
+      ? `Interrupted · ${turn.tools.failed} failed tool ${turn.tools.failed === 1 ? "call" : "calls"}`
+      : "Interrupted"
+  }
+  if (turn.tools.failed) {
+    return `Completed with errors · ${turn.tools.failed} failed tool ${turn.tools.failed === 1 ? "call" : "calls"}`
+  }
+  const duration = formatAgentActivityDuration(turn.durationMs)
+  return duration ? `Worked for ${duration}` : "Worked"
 }
 
 function MessageSliceView(props: {
@@ -2445,7 +2512,7 @@ function MessageSliceView(props: {
       <div
         className={cn(
           "min-w-0 max-w-[92%] space-y-2 text-sm",
-          props.user ? "rounded-xl bg-accent px-3 py-2 text-accent-foreground" : "w-full",
+          props.user ? "rounded-xl bg-accent px-3 py-2 text-accent-foreground" : "w-full text-foreground",
         )}
       >
         {!props.user ? (
@@ -2462,25 +2529,43 @@ function MessageSliceView(props: {
   )
 }
 
-function AgentActivity(props: {
+export function AgentActivity(props: {
   awaitingInput?: boolean
   busy: boolean
   onOpenSkill: (name: string) => Promise<void>
   turn: AgentConversationTurn
 }) {
-  const tools = props.turn.tools.count
-  const label = props.busy
-    ? "Working"
-    : props.awaitingInput
-      ? "Waiting for your response"
-      : props.turn.interrupted
-        ? "Interrupted activity"
-        : props.turn.tools.failed
-          ? "Activity completed with errors"
-          : "Activity"
+  const active = props.busy || Boolean(props.awaitingInput)
+  const [open, setOpen] = useState(active)
+  const wasActiveRef = useRef(active)
+  useEffect(() => {
+    if (active !== wasActiveRef.current) setOpen(active)
+    wasActiveRef.current = active
+  }, [active])
+  const expanded = open
+  const label = agentActivitySummary(props.turn, {
+    awaitingInput: Boolean(props.awaitingInput),
+    busy: props.busy,
+    open: expanded,
+  })
+  const hasTool = props.turn.tools.count > 0
+  const hasReadActivity = props.turn.activity.some((slice) =>
+    slice.parts.some(
+      (part) => part.type === "reasoning" || (part.type === "tool" && agentToolLooksLikeRead(part)),
+    ),
+  )
+  const ActivityIcon = hasReadActivity || !hasTool ? BookOpen : SquareTerminal
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/25 px-2.5 py-2 text-xs" data-agent-activity>
-      <div className="flex items-center gap-2 text-muted-foreground">
+    <section
+      className={cn("text-xs", !expanded && "border-b border-border/60 pb-2")}
+      data-agent-activity
+    >
+      <button
+        aria-expanded={expanded}
+        className="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-left text-muted-foreground outline-none hover:bg-muted/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
         {props.busy ? (
           <LoaderCircle className="size-3.5 animate-spin text-primary motion-reduce:animate-none" />
         ) : props.awaitingInput || props.turn.interrupted ? (
@@ -2488,22 +2573,46 @@ function AgentActivity(props: {
         ) : props.turn.tools.outcome === "failure" ? (
           <X className="size-3.5 text-destructive" />
         ) : (
-          <Check className="size-3.5 text-emerald-600" />
+          <ActivityIcon className="size-3.5" />
         )}
-        <span className="min-w-0 flex-1">
-          {label}
-          {tools ? ` · ${tools} tool${tools === 1 ? "" : "s"}` : ""}
-        </span>
-      </div>
-      <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
-        {props.turn.activity.flatMap((slice) =>
-          slice.parts.map((part) => (
-            <MessagePartView key={`${slice.message.id}:${part.id}`} onOpenSkill={props.onOpenSkill} part={part} />
-          )),
-        )}
-      </div>
-    </div>
+        <span className="min-w-0 truncate">{label}</span>
+        {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+      </button>
+      {expanded ? (
+        <div className="mt-1 space-y-0.5 text-muted-foreground" data-agent-activity-content>
+          {props.turn.activity.flatMap((slice) =>
+            slice.parts.map((part) => (
+              <MessagePartView
+                key={`${slice.message.id}:${part.id}`}
+                onOpenSkill={props.onOpenSkill}
+                part={part}
+              />
+            )),
+          )}
+        </div>
+      ) : null}
+    </section>
   )
+}
+
+type AgentToolPart = Extract<AgentMessage["parts"][number], { type: "tool" }>
+
+function agentToolTitle(part: AgentToolPart) {
+  return "title" in part.state && part.state.title ? part.state.title : part.tool
+}
+
+function agentToolLooksLikeRead(part: AgentToolPart) {
+  return /\b(read|find|glob|grep|list|search)\b/i.test(`${part.tool} ${agentToolTitle(part)}`)
+}
+
+function agentToolDetail(part: AgentToolPart, resultDetail: string | undefined) {
+  if (resultDetail?.trim()) return resultDetail
+  if (Object.keys(part.state.input).length === 0) return undefined
+  try {
+    return JSON.stringify(part.state.input, null, 2)
+  } catch {
+    return "Tool input could not be displayed"
+  }
 }
 
 export function MessagePartView({
@@ -2517,10 +2626,10 @@ export function MessagePartView({
   if (part.type === "text") return part.synthetic ? null : <AgentMarkdown text={part.text} />
   if (part.type === "reasoning")
     return (
-      <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs">
-        <summary className="cursor-pointer text-muted-foreground">Reasoning</summary>
-        <div className="mt-2 whitespace-pre-wrap leading-5">{part.text}</div>
-      </details>
+      <div className="flex items-start gap-2 px-1 py-1">
+        <BookOpen className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 whitespace-pre-wrap leading-5">{part.text}</div>
+      </div>
     )
   if (part.type === "file")
     return (
@@ -2530,26 +2639,29 @@ export function MessagePartView({
       </div>
     )
   if (part.type === "tool") {
-    const state = part.state
     const presentation = getAgentToolPresentation(part)
     const pending = presentation.outcome === "pending" || presentation.outcome === "running"
+    const title = agentToolTitle(part)
+    const detail = agentToolDetail(part, presentation.detail)
+    const ToolIcon = agentToolLooksLikeRead(part) ? BookOpen : SquareTerminal
     return (
-      <details className="rounded-md border border-border bg-muted/35 px-2.5 py-2 text-xs" data-agent-tool-call>
-        <summary className="flex cursor-pointer list-none items-center gap-2">
+      <details className="group/tool rounded-md px-1 py-1 hover:bg-muted/45" data-agent-tool-call>
+        <summary className="flex cursor-pointer list-none items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-details-marker]:hidden">
           {pending ? (
             <LoaderCircle className="size-3.5 animate-spin text-primary" />
-          ) : presentation.outcome === "success" ? (
-            <Check className="size-3.5 text-emerald-600" />
-          ) : (
+          ) : presentation.outcome === "failure" ? (
             <X className="size-3.5 text-destructive" />
+          ) : (
+            <ToolIcon className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <Wrench className="size-3.5 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate">{"title" in state && state.title ? state.title : part.tool}</span>
-          <ChevronDown className="size-3.5 text-muted-foreground" />
+          <span className="min-w-0 truncate">{title}</span>
+          {detail ? (
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90" />
+          ) : null}
         </summary>
-        {presentation.detail ? (
-          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words border-t border-border pt-2 font-mono text-[11px] leading-4">
-            {presentation.detail}
+        {detail ? (
+          <pre className="ml-5 mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/65 px-2 py-1.5 font-mono text-[11px] leading-4">
+            {detail}
           </pre>
         ) : null}
       </details>

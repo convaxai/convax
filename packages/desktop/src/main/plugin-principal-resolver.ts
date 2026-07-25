@@ -3,7 +3,7 @@ import type {
   PluginPrincipal,
   ResolvedPluginPrincipal,
 } from "../plugin-capability-contracts"
-import { pluginManifestSchemaV5, type InstalledPlugin } from "../plugin-api"
+import { pluginManifestSchemaV5, pluginManifestSchemaV6, type InstalledPlugin } from "../plugin-api"
 import type { PluginPrincipalResolver } from "./plugin-canvas-capability-service"
 
 export interface InstalledPluginCapabilityIdentity {
@@ -24,8 +24,11 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     expected?: InstalledPlugin,
   ): Promise<PluginPrincipal> {
     const identity = await this.plugins.resolveCapabilityIdentity(pluginId)
-    if (!identity || identity.plugin.schema !== pluginManifestSchemaV5) {
-      throw new Error(`Plugin does not expose the v5 capability API: ${pluginId}`)
+    if (
+      !identity ||
+      (identity.plugin.schema !== pluginManifestSchemaV5 && identity.plugin.schema !== pluginManifestSchemaV6)
+    ) {
+      throw new Error(`Plugin does not expose the capability API: ${pluginId}`)
     }
     if (expected && JSON.stringify(identity.plugin) !== JSON.stringify(expected)) {
       throw new Error(`Plugin changed before its capability principal was issued: ${pluginId}`)
@@ -51,7 +54,7 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     const identity = await this.plugins.resolveCapabilityIdentity(principal.pluginId)
     if (
       !identity ||
-      identity.plugin.schema !== pluginManifestSchemaV5 ||
+      (identity.plugin.schema !== pluginManifestSchemaV5 && identity.plugin.schema !== pluginManifestSchemaV6) ||
       identity.plugin.id !== principal.pluginId ||
       identity.plugin.version !== principal.pluginVersion ||
       identity.digest !== principal.manifestDigest ||

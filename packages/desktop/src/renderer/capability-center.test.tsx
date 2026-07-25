@@ -23,10 +23,14 @@ const skillDetails: DesktopSkillDetails = {
 }
 
 const baseDialogProps = {
+  agentMcpStatuses: {},
   busy: null,
+  canUseCanvas: true,
+  canUseAgent: true,
   error: null,
   loading: false,
   onClose: noop,
+  onConnectPlugin: noop,
   onImportPlugin: noop,
   onImportSkill: noop,
   onInstallPlugin: noop,
@@ -38,6 +42,8 @@ const baseDialogProps = {
   onTabChange: noop,
   onUninstallPlugin: noop,
   onUninstallSkill: noop,
+  onUsePluginOnCanvas: noop,
+  onUsePluginInAgent: noop,
   plugins: { catalog: [], installed: [] },
   skills: { catalog: [], skills: [] },
   tab: "skills",
@@ -115,8 +121,10 @@ const skillClient: DesktopSkillClient = {
 }
 
 const pluginClient: WebPluginClient = {
+  connectAgentMcp: mock(async () => undefined),
   importPlugin: mock(async () => null),
   installCatalogPlugin: mock(async () => pluginInventory.installed[0]!),
+  listAgentMcpStatuses: mock(async () => ({})),
   listPlugins: mock(async () => pluginInventory),
   onDidChange: mock(() => noop),
   openCatalogPluginRelease: mock(async () => true),
@@ -279,10 +287,69 @@ describe("CapabilityCenter", () => {
     expect(markup).toContain("Install companion Skill")
     expect(markup).toContain("Plugin installed")
     expect(markup).toContain("Global · this device")
-    expect(markup).toContain(
-      "Ready on Canvas · Return to Canvas, then right-click or press Tab to add 3D Director Stage.",
-    )
+    expect(markup).toContain("Ready to add 3D Director Stage to the current Canvas.")
+    expect(markup).toContain(">Add to Canvas<")
     expect(markup).toContain(appMessage("en", "capabilities.pluginsDescription"))
+  })
+
+  test("keeps a creatable Plugin visible but disables insertion until a Canvas is active", () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityCenterDialog {...baseDialogProps} canUseCanvas={false} plugins={pluginInventory} tab="plugins" />,
+    )
+
+    expect(markup).toContain(">Add to Canvas<")
+    expect(markup).toContain('title="Open or create a Canvas before adding this Plugin."')
+    expect(markup).toContain("disabled")
+  })
+
+  test("keeps the Canvas entry while switching a connected MCP Plugin from Connect to its Agent entry", () => {
+    const remoteEditor = {
+      capabilities: ["agent.prompt" as const],
+      contributes: {
+        agent: {
+          mcp: {
+            headers: { "x-client-surface": "convax" },
+            oauth: "auto" as const,
+            type: "remote" as const,
+            url: "https://editor.example/mcp",
+          },
+        },
+        canvas: { renderer: { create: true } },
+        skills: [{ name: "remote-editor", path: "skills/remote-editor" }],
+      },
+      description: "Edit remote media projects.",
+      entry: "index.html",
+      id: "remote-editor",
+      installed: true,
+      name: "Remote Editor",
+      schema: "convax.plugin/6" as const,
+      version: "1.0.0",
+    }
+    const english = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        agentMcpStatuses={{ "remote-editor": "needs_auth" }}
+        plugins={{ catalog: [remoteEditor], installed: [remoteEditor] }}
+        tab="plugins"
+      />,
+    )
+    const chinese = renderToStaticMarkup(
+      <CapabilityCenterDialog
+        {...baseDialogProps}
+        agentMcpStatuses={{ "remote-editor": "connected" }}
+        locale="zh-CN"
+        plugins={{ catalog: [remoteEditor], installed: [remoteEditor] }}
+        tab="plugins"
+      />,
+    )
+
+    expect(english).toContain(">Connect<")
+    expect(english).toContain(">Add to Canvas<")
+    expect(chinese).toContain(">添加到画布<")
+    expect(chinese).toContain(">在 Agent 中使用<")
+    expect(chinese).toContain("$remote-editor")
+    expect(chinese).not.toContain(">连接账号<")
+    expect(english).not.toContain("Install companion Skill")
   })
 
   test("describes Plugin-owned Skill lifecycle while preserving explicit Plugin imports", () => {

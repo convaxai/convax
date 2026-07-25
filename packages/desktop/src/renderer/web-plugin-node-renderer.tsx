@@ -16,13 +16,16 @@ import {
   requireWebPluginId,
   requireWebPluginRelativePath,
   webPluginManifestSchemaV5,
+  webPluginManifestSchemaV6,
   type InstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 import {
+  connectedInputFingerprint,
   connectedImageFingerprint,
   dispatchPluginHostRequest,
   getIncomingConnectedImageNodes,
+  getIncomingConnectedInputNodes,
 } from "../plugin-canvas-host"
 import {
   matchesWebPluginCanvasNode,
@@ -34,6 +37,7 @@ import {
 import type { PluginCanvasHost, PluginHostLimits, PluginNodeInvocationRef } from "../plugin-host-types"
 import {
   desktopPluginConnectedImagesChangedCommand,
+  desktopPluginConnectedInputsChangedCommand,
   desktopPluginHostProtocolForManifestSchema,
   type DesktopPluginHostConnect,
 } from "../plugin-host-protocol"
@@ -320,6 +324,7 @@ function WebPluginCanvasNode(
   const generationGateRef = useRef({ active: false })
   const nodeStateWriteGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
+  const connectedInputFingerprintRef = useRef<string | null>(null)
   const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
   const pointerReleaseFrameRef = useRef<number | null>(null)
   const pointerReleaseListenersRef = useRef<(() => void) | null>(null)
@@ -334,6 +339,7 @@ function WebPluginCanvasNode(
   editorRef.current = editor
 
   const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
+  const canReadConnectedInputs = props.plugin.capabilities.includes("canvas.connectedInputs.read")
   const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
 
   useEffect(
@@ -447,6 +453,49 @@ function WebPluginCanvasNode(
     hostProtocol,
   ])
 
+  useEffect(() => {
+    if (!canReadConnectedInputs) return () => undefined
+    let canceled = false
+    const document = editor.document
+    void connectedInputFingerprint(document, props.id)
+      .then((fingerprint) => {
+        if (canceled || connectedInputFingerprintRef.current === fingerprint) return
+        connectedInputFingerprintRef.current = fingerprint
+        const active = props.options.host.getActiveContext()
+        if (!active || active.canvasId !== document.id) return
+        const frame = {
+          canvasId: active.canvasId,
+          nodeId: props.id,
+          pluginId: props.plugin.id,
+          projectId: active.projectId,
+        }
+        if (!props.options.frameRegistry.has(frame)) return
+        try {
+          props.options.frameRegistry.send(frame, {
+            command: desktopPluginConnectedInputsChangedCommand,
+            protocol: hostProtocol,
+            type: "command",
+          })
+        } catch {
+          // The frame may unmount between the digest and this command.
+        }
+      })
+      .catch(() => {
+        // Metadata listing remains available even when Web Crypto is unavailable.
+      })
+    return () => {
+      canceled = true
+    }
+  }, [
+    canReadConnectedInputs,
+    editor.document,
+    props.id,
+    props.options.frameRegistry,
+    props.options.host,
+    props.plugin.id,
+    hostProtocol,
+  ])
+
   const connectFrame = () => {
     cleanupRef.current?.()
     cleanupRef.current = null
@@ -503,7 +552,7 @@ function WebPluginCanvasNode(
       channel.port2.close()
       return
     }
-    if (props.plugin.schema === webPluginManifestSchemaV5) {
+    if (props.plugin.schema === webPluginManifestSchemaV5 || props.plugin.schema === webPluginManifestSchemaV6) {
       capabilityConnection = new RendererPluginHostConnection(
         window.convax.pluginCapabilities,
         {
@@ -540,6 +589,11 @@ function WebPluginCanvasNode(
                 const latest = editorRef.current
                 if (latest.document.id !== frame.canvasId) return []
                 return getIncomingConnectedImageNodes(latest.document, frame.nodeId)
+              },
+              getConnectedInputNodes: () => {
+                const latest = editorRef.current
+                if (latest.document.id !== frame.canvasId) return []
+                return getIncomingConnectedInputNodes(latest.document, frame.nodeId)
               },
               getNode: () => {
                 const latest = editorRef.current

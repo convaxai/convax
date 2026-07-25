@@ -33,6 +33,7 @@ import type {
   GenerationToolInputValue,
   GenerationToolSummary,
 } from "../generation-contracts"
+import { matchesWebPluginCanvasNodeIdentity } from "../plugin-canvas-node"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 import { validateGenerationToolInputShape } from "./generation-tool-input-schema"
 import { copyStableFile } from "./stable-file-copy"
@@ -154,6 +155,7 @@ const defaultMaxInlineOutputFileBytes = 64 * 1024 * 1024
 const defaultMaxOutputFileBytes = 2 * 1024 * 1024 * 1024
 const defaultMaxOutputFiles = 16
 const maxGenerationExecutions = 1_000
+const maxReturnedOutputTextBytes = 64 * 1024
 const maxGenerationWarnings = 32
 const maxGenerationWarningLength = 2_000
 const maxGenerationFailureDiagnosticLength = 512
@@ -504,9 +506,16 @@ function validateRequest(request: GenerationCanvasRequest) {
   if (request.resultMode !== undefined) {
     if (request.resultMode.type === "replace-node") {
       requireIdentifier(request.resultMode.nodeId, "Generation replacement node id")
-    } else if (request.resultMode.type !== "add" && request.resultMode.type !== "create-pending-node") {
+    } else if (
+      request.resultMode.type !== "add" &&
+      request.resultMode.type !== "create-pending-node" &&
+      request.resultMode.type !== "return"
+    ) {
       throw new Error("Generation result mode is not supported")
     }
+  }
+  if (request.resultMode?.type === "return" && (request.relationAnchorNodeIds?.length ?? 0) > 0) {
+    throw new Error("Returned Plugin operations cannot include Canvas relation anchors")
   }
   validateGenerationToolInputShape(request.toolInput)
   if (request.referenceConstraint !== undefined) {
@@ -514,6 +523,9 @@ function validateRequest(request: GenerationCanvasRequest) {
       throw new Error("Generation reference constraint is not supported")
     }
     requireIdentifier(request.referenceConstraint.ownerNodeId, "Generation reference owner node id")
+    if (request.referenceConstraint.ownerPluginId !== undefined) {
+      requireIdentifier(request.referenceConstraint.ownerPluginId, "Generation reference owner Plugin id")
+    }
     if (request.relationAnchorNodeIds !== undefined) {
       throw new Error("Constrained generation cannot include relation anchors")
     }
@@ -543,6 +555,49 @@ function selectTool(tools: readonly GenerationToolSummary[], request: Generation
     )
   }
   return candidates[0]
+}
+
+function assertToolResultMode(
+  tool: GenerationToolSummary,
+  resultMode: NonNullable<GenerationCanvasRequest["resultMode"]>,
+) {
+  const delivery = tool.delivery ?? "canvas"
+  if (delivery !== "canvas" && delivery !== "return") {
+    throw new Error(`Generation tool has an unsupported delivery mode: ${tool.id}`)
+  }
+  if (delivery === "return" && (tool.kind !== "operation" || tool.output !== "text")) {
+    throw new Error("Returned generation tools must be text Plugin operations")
+  }
+  if (resultMode.type === "return" && delivery !== "return") {
+    throw new Error("Generation return mode requires a Plugin operation declared with return delivery")
+  }
+  if (resultMode.type !== "return" && delivery === "return") {
+    throw new Error("Returned Plugin operations require the host-only return result mode")
+  }
+}
+
+function assertToolInputBinding(
+  tool: GenerationToolSummary,
+  constraint: GenerationCanvasRequest["referenceConstraint"],
+) {
+  if (tool.inputBinding !== undefined && tool.inputBinding !== "direct-incoming") {
+    throw new Error(`Generation tool has an unsupported input binding: ${tool.id}`)
+  }
+  if (tool.inputBinding === "direct-incoming") {
+    if (tool.kind !== "operation" || tool.acceptedInputs.length === 0) {
+      throw new Error("Direct-incoming generation bindings require a Plugin operation with accepted inputs")
+    }
+    if (
+      constraint?.type !== "direct-incoming" ||
+      constraint.ownerPluginId === undefined ||
+      constraint.ownerPluginId !== tool.pluginId
+    ) {
+      throw new Error("Generation tool requires a direct-incoming owner bound to its installed Plugin")
+    }
+  }
+  if (constraint?.ownerPluginId !== undefined && constraint.ownerPluginId !== tool.pluginId) {
+    throw new Error("Generation reference owner Plugin does not match the installed tool")
+  }
 }
 
 function nodeMetadata(node: CanvasNode) {
@@ -697,6 +752,12 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
   if (constraint) {
     const owner = document.nodes.find((node) => node.id === constraint.ownerNodeId)
     if (!owner || owner.type !== "file") throw new Error("Generation reference owner is no longer a Canvas file node")
+    if (
+      constraint.ownerPluginId !== undefined &&
+      !matchesWebPluginCanvasNodeIdentity(constraint.ownerPluginId, owner.data)
+    ) {
+      throw new Error("Generation reference owner is no longer the declared Plugin Canvas node")
+    }
     incomingNodeIds = getIncomingConnectedCanvasFileNodeIds(document, constraint.ownerNodeId)
   }
   const incoming = incomingNodeIds ? new Set(incomingNodeIds) : undefined
@@ -722,6 +783,7 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
       ? {
           incomingNodeIds,
           ownerNodeId: constraint.ownerNodeId,
+          ownerPluginId: constraint.ownerPluginId ?? null,
           type: constraint.type,
         }
       : null,
@@ -750,7 +812,9 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
 /**
  * Shared application service used by toolbar, Agent tools, and narrow Plugin
  * calls. It stages inputs, executes an installed Tool Plugin, admits outputs as
- * managed Project assets, and commits normal Canvas file nodes.
+ * managed Project assets, and commits normal Canvas file nodes. A declarative
+ * return operation reuses the same staging and execution boundary but returns
+ * one bounded text result without mutating the Canvas.
  */
 export class GenerationCanvasService {
   readonly #documents: GenerationCanvasDocumentPort
@@ -866,6 +930,15 @@ export class GenerationCanvasService {
     let workingRequest = request
     let workingDocument = snapshot.document
     let resultMode = request.resultMode ?? { type: "add" as const }
+    assertToolResultMode(tool, resultMode)
+    assertToolInputBinding(tool, request.referenceConstraint)
+    if (
+      resultMode.type === "return" &&
+      request.expectedOutputCount !== undefined &&
+      request.expectedOutputCount !== 1
+    ) {
+      throw new Error("Returned Plugin operations must expect exactly one text output")
+    }
     const replacementNodeId = resultMode.type === "replace-node" ? resultMode.nodeId : undefined
     const replacementTarget = replacementNodeId
       ? workingDocument.nodes.find((node) => node.id === replacementNodeId)
@@ -1001,7 +1074,7 @@ export class GenerationCanvasService {
         outputDirectoryRealPath,
         materializedDirectory,
         signal,
-        resultMode.type === "replace-node" ? 1 : this.#maxOutputFiles,
+        resultMode.type === "replace-node" || resultMode.type === "return" ? 1 : this.#maxOutputFiles,
       )
       const admittedOutputCount = admitted.files.length + admitted.texts.length
       if (
@@ -1012,9 +1085,34 @@ export class GenerationCanvasService {
           `Generation tool returned ${admittedOutputCount} outputs; expected exactly ${workingRequest.expectedOutputCount}`,
         )
       }
-      await this.#assertStableReferences(workingRequest, referenceSnapshot, references, requiresStableRevision)
+      const stableDocument = await this.#assertStableReferences(
+        workingRequest,
+        referenceSnapshot,
+        references,
+        requiresStableRevision,
+      )
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
       assertNotAborted(signal)
+
+      if (resultMode.type === "return") {
+        if (admitted.files.length || admitted.texts.length !== 1) {
+          throw new Error("Returned Plugin operation must return exactly one MCP text result")
+        }
+        const outputText = admitted.texts[0]!
+        if (Buffer.byteLength(outputText, "utf8") > maxReturnedOutputTextBytes) {
+          throw new Error("Returned Plugin operation text exceeds the Agent result size limit")
+        }
+        const currentDocument = stableDocument ?? (await this.#documents.load(workingRequest.ref)).document
+        if (!currentDocument) throw new Error(`Canvas document was not found: ${workingRequest.ref.canvasId}`)
+        assertNotAborted(signal)
+        return {
+          createdNodeIds: [],
+          outputText,
+          revision: currentDocument.revision,
+          toolId: tool.id,
+          warnings: admitted.warnings,
+        }
+      }
 
       const importedOutputs = admitted.files.length
         ? await this.#importOutputFiles(workingRequest.ref.scopeId, admitted.files, signal)
@@ -1166,7 +1264,7 @@ export class GenerationCanvasService {
     expectedReferenceSnapshot: string | undefined,
     required: boolean,
   ) {
-    if (!required) return
+    if (!required) return undefined
     let document: CanvasDocument | null
     try {
       const snapshot = await this.#documents.load(request.ref)
@@ -1188,7 +1286,9 @@ export class GenerationCanvasService {
     } catch {
       currentReferenceSnapshot = ""
     }
-    if (expectedReferenceSnapshot === undefined || currentReferenceSnapshot === expectedReferenceSnapshot) return
+    if (expectedReferenceSnapshot === undefined || currentReferenceSnapshot === expectedReferenceSnapshot) {
+      return document
+    }
     if (request.referenceConstraint !== undefined) {
       throw new Error("Generation direct incoming references changed while the tool was running")
     }
@@ -1201,7 +1301,7 @@ export class GenerationCanvasService {
     references: readonly StagedReference[],
     required: boolean,
   ) {
-    await this.#assertStableCanvasDocument(request, expectedReferenceSnapshot, required)
+    const document = await this.#assertStableCanvasDocument(request, expectedReferenceSnapshot, required)
     try {
       await Promise.all(
         references.map((reference) =>
@@ -1215,6 +1315,7 @@ export class GenerationCanvasService {
           : "Generation references changed while the tool was running",
       )
     }
+    return document
   }
 
   async #stageReferences(

@@ -41,6 +41,14 @@ describe("desktop plugin host protocol", () => {
     expect(
       isDesktopPluginHostRequest({
         id: "request-1",
+        method: "canvas.connectedInputs.list",
+        protocol: desktopPluginHostProtocol,
+        type: "request",
+      }),
+    ).toBe(true)
+    expect(
+      isDesktopPluginHostRequest({
+        id: "request-1",
         method: "canvas.document.writeJson",
         protocol: desktopPluginHostProtocol,
         type: "request",
@@ -143,6 +151,7 @@ describe("desktop plugin host protocol", () => {
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/3")).toBe(desktopPluginHostProtocolV3)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/4")).toBe(desktopPluginHostProtocolV4)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/5")).toBe(pluginCapabilityProtocolV1)
+    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/6")).toBe(pluginCapabilityProtocolV1)
     expect(pluginHostSuccess("request-v2", {}, desktopPluginHostProtocolV2)).toMatchObject({
       protocol: desktopPluginHostProtocolV2,
     })

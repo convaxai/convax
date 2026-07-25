@@ -142,6 +142,25 @@ function petManifest(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function remoteMcpManifest(
+  mcp: Record<string, unknown> = {
+    type: "remote",
+    url: "https://editor.example.com/mcp",
+  },
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    capabilities: [],
+    contributes: { agent: { mcp } },
+    description: "Remote video editing tools",
+    id: "remote-editor",
+    name: "Remote Editor",
+    schema: "convax.plugin/6",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
 describe("versioned Plugin manifest generation declarations", () => {
   test("keeps convax.plugin/1 static-only", () => {
     const parsed = parseWebPluginManifest(staticManifest())
@@ -185,6 +204,25 @@ describe("versioned Plugin manifest generation declarations", () => {
     })
     expect(parsed.contributes.generation?.tools).toEqual(generationContribution().tools)
     expect(parsed.contributes.generation?.tools[1]?.acceptedInputs).toEqual(["reference_video", "audio", "text"])
+  })
+
+  test("accepts one self-contained OpenCode Hook module without a parallel Hook schema", () => {
+    const parsed = parseWebPluginManifest({
+      capabilities: [],
+      contributes: {},
+      description: "Agent lifecycle hooks",
+      hooks: "hooks/index.mjs",
+      id: "agent-lifecycle",
+      name: "Agent Lifecycle",
+      schema: "convax.plugin/2",
+      version: "1.0.0",
+    })
+
+    expect(parsed.hooks).toBe("hooks/index.mjs")
+    expect(parsed.entry).toBeUndefined()
+    expect(parsed.runtime).toBeUndefined()
+    expect(() => parseWebPluginManifest({ ...parsed, hooks: "../outside.mjs" })).toThrow("portable relative path")
+    expect(() => parseWebPluginManifest({ ...parsed, hooks: "hooks/index.ts" })).toThrow("JavaScript ESM module")
   })
 
   test("parses explicit v3 models, Agent operations, and host-rendered selection actions", () => {
@@ -390,6 +428,285 @@ describe("versioned Plugin manifest generation declarations", () => {
         capabilities: [...manifest.capabilities, "canvas.document.read"],
       }),
     ).toThrow()
+  })
+
+  test("parses a v6 remote MCP as a headless capability with automatic OAuth by default", () => {
+    const parsed = parseWebPluginManifest(
+      remoteMcpManifest({
+        headers: { "X-Client": "convax desktop" },
+        type: "remote",
+        url: "https://editor.example.com/mcp",
+      }),
+    )
+
+    expect(parsed).toMatchObject({
+      capabilities: [],
+      contributes: {
+        agent: {
+          mcp: {
+            headers: { "X-Client": "convax desktop" },
+            oauth: "auto",
+            type: "remote",
+            url: "https://editor.example.com/mcp",
+          },
+        },
+      },
+      schema: "convax.plugin/6",
+    })
+    expect(parsed.entry).toBeUndefined()
+    expect(parsed.runtime).toBeUndefined()
+  })
+
+  test("lets v6 combine remote MCP with inherited owned Skills and Project/Canvas grants", () => {
+    const parsed = parseWebPluginManifest(
+      remoteMcpManifest(
+        {
+          oauth: "none",
+          type: "remote",
+          url: "https://editor.example.com/mcp",
+        },
+        {
+          capabilities: ["projects.read", "canvas.document.read"],
+          contributes: {
+            agent: {
+              mcp: {
+                oauth: "none",
+                type: "remote",
+                url: "https://editor.example.com/mcp",
+              },
+            },
+            skills: [{ name: "remote-editor", path: "skills/remote-editor" }],
+          },
+        },
+      ),
+    )
+
+    expect(parsed.contributes.agent?.mcp?.oauth).toBe("none")
+    expect(parsed.contributes.skills).toEqual([{ name: "remote-editor", path: "skills/remote-editor" }])
+    expect(parsed.capabilities).toEqual(["projects.read", "canvas.document.read"])
+  })
+
+  test("lets v6 combine a remote MCP with a verified return-delivery media operation", () => {
+    const manifest = {
+      capabilities: ["agent.prompt", "canvas.connectedInputs.read"],
+      contributes: {
+        agent: {
+          mcp: {
+            type: "remote",
+            url: "https://editor.example.com/mcp",
+          },
+          tools: [{ id: "import_connected_media", tool: "media.import" }],
+        },
+        canvas: { renderer: { create: true } },
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: ["reference_image", "reference_video", "audio"],
+              delivery: "return",
+              description: "Import host-staged media into the authenticated remote editor.",
+              id: "media.import",
+              inputBinding: "direct-incoming",
+              output: "text",
+              title: "Import connected media",
+            },
+          ],
+        },
+      },
+      description: "Remote editor with local media ingestion",
+      entry: "index.html",
+      id: "remote-media-editor",
+      name: "Remote Media Editor",
+      runtime: { command: "remote-media-import-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/6",
+      version: "1.0.0",
+    }
+
+    const parsed = parseWebPluginManifest(manifest)
+
+    expect(parsed.capabilities).toEqual(["agent.prompt", "canvas.connectedInputs.read"])
+    expect(parsed.contributes.generation?.tools[0]).toMatchObject({
+      delivery: "return",
+      id: "media.import",
+      inputBinding: "direct-incoming",
+      output: "text",
+    })
+    expect(parsed.contributes.agent).toMatchObject({
+      mcp: { oauth: "auto", type: "remote" },
+      tools: [{ id: "import_connected_media", tool: "media.import" }],
+    })
+
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [{ name: "Not a model", tool: "media.import" }],
+            tools: manifest.contributes.generation.tools,
+          },
+        },
+      }),
+    ).toThrow("cannot reference a return-delivery operation")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [],
+            tools: [{ ...manifest.contributes.generation.tools[0], output: "video" }],
+          },
+        },
+      }),
+    ).toThrow("requires text output")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [],
+            tools: [
+              {
+                ...manifest.contributes.generation.tools[0],
+                acceptedInputs: [],
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow("requires accepted inputs")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [{ name: "Not an operation", tool: "media.import" }],
+            tools: [{ ...manifest.contributes.generation.tools[0], delivery: "canvas" }],
+          },
+        },
+      }),
+    ).toThrow("cannot reference an input-bound operation")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [],
+            tools: [{ ...manifest.contributes.generation.tools[0], inputBinding: "selected-nodes" }],
+          },
+        },
+      }),
+    ).toThrow("input binding is not supported")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        schema: "convax.plugin/5",
+      }),
+    ).toThrow("only to convax.plugin/6")
+    expect(() => {
+      const legacy = executableManifestV3()
+      return parseWebPluginManifest({
+        ...legacy,
+        schema: "convax.plugin/5",
+        contributes: {
+          ...legacy.contributes,
+          generation: {
+            ...legacy.contributes.generation,
+            tools: [
+              {
+                ...legacy.contributes.generation.tools[0],
+                inputBinding: "direct-incoming",
+              },
+              ...legacy.contributes.generation.tools.slice(1),
+            ],
+          },
+        },
+      })
+    }).toThrow("unsupported field")
+  })
+
+  test("keeps remote MCP declarations out of v1-v5 manifests", () => {
+    const mcp = { type: "remote", url: "https://editor.example.com/mcp" }
+    const manifests = [
+      staticManifest({
+        contributes: { ...staticManifest().contributes, agent: { mcp } },
+      }),
+      (() => {
+        const manifest = executableManifest()
+        return { ...manifest, contributes: { ...manifest.contributes, agent: { mcp } } }
+      })(),
+      (() => {
+        const manifest = executableManifestV3()
+        return { ...manifest, contributes: { ...manifest.contributes, agent: { ...manifest.contributes.agent, mcp } } }
+      })(),
+      (() => {
+        const manifest = ownedSkillsManifest()
+        return {
+          ...manifest,
+          contributes: {
+            ...manifest.contributes,
+            agent: { mcp, tools: [{ id: "transform_video", tool: "video.generate" }] },
+          },
+        }
+      })(),
+      {
+        capabilities: ["canvas.document.read"],
+        contributes: { agent: { mcp, tools: [{ id: "transform_video", tool: "video.generate" }] } },
+        description: "Canvas automation",
+        id: "canvas-automation",
+        name: "Canvas Automation",
+        schema: "convax.plugin/5",
+        version: "1.0.0",
+      },
+    ]
+
+    for (const manifest of manifests) {
+      expect(() => parseWebPluginManifest(manifest)).toThrow("unsupported field")
+    }
+  })
+
+  test("requires a v6 Agent contribution to declare tools or one valid remote MCP", () => {
+    expect(() => parseWebPluginManifest(remoteMcpManifest({}, { contributes: { agent: {} } }))).toThrow("tools or mcp")
+    expect(() => parseWebPluginManifest(remoteMcpManifest({ type: "stdio", url: "https://example.com/mcp" }))).toThrow(
+      "type must be remote",
+    )
+    expect(() => parseWebPluginManifest(remoteMcpManifest({ type: "remote", url: "http://example.com/mcp" }))).toThrow(
+      "absolute HTTPS URL",
+    )
+    expect(() => parseWebPluginManifest(remoteMcpManifest({ type: "remote", url: "/mcp" }))).toThrow(
+      "absolute HTTPS URL",
+    )
+    for (const url of ["https://user@example.com/mcp", "https://example.com/mcp#fragment"]) {
+      expect(() => parseWebPluginManifest(remoteMcpManifest({ type: "remote", url }))).toThrow(
+        "without credentials or a fragment",
+      )
+    }
+    expect(() =>
+      parseWebPluginManifest(remoteMcpManifest({ oauth: "manual", type: "remote", url: "https://example.com/mcp" })),
+    ).toThrow("oauth must be auto or none")
+  })
+
+  test("accepts only bounded literal non-credential v6 remote MCP headers", () => {
+    const withHeaders = (headers: Record<string, unknown>) =>
+      remoteMcpManifest({ headers, type: "remote", url: "https://editor.example.com/mcp" })
+
+    for (const name of ["Authorization", "cookie", "PROXY-AUTHORIZATION"]) {
+      expect(() => parseWebPluginManifest(withHeaders({ [name]: "secret" }))).toThrow("not allowed")
+    }
+    for (const value of ["{env:TOKEN}", "{file:/tmp/token}", "${TOKEN}"]) {
+      expect(() => parseWebPluginManifest(withHeaders({ "X-Token": value }))).toThrow("literal value")
+    }
+    expect(() => parseWebPluginManifest(withHeaders({ "Bad Header": "value" }))).toThrow("name is invalid")
+    expect(() => parseWebPluginManifest(withHeaders({ "X-Test": "line\nbreak" }))).toThrow("trimmed string")
+    expect(() =>
+      parseWebPluginManifest(
+        withHeaders(Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`X-Header-${index}`, "value"]))),
+      ),
+    ).toThrow("at most 16")
   })
 
   test("rejects ambiguous, unsafe, or standalone v4 Skill contributions", () => {

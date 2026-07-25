@@ -39,7 +39,6 @@ const inputRoles = [
 
 const inputRoleSet = new Set<string>(inputRoles)
 const outputModalities = new Set<string>(["text", "image", "video", "audio"] satisfies GenerationOutputModality[])
-const topLevelFields = new Set(["anchor", "references", "relationNodeIds", "toolInput"])
 const canvasNodeIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/u
 const pluginIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u
 const pluginToolIdPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u
@@ -69,6 +68,7 @@ export function createPluginOperationAgentToolProvider(
       const parsed = parseInput(input, operation.tool)
       const active = await requireActiveCanvas(scope, options)
       assertNotAborted(context?.signal)
+      const returnsToAgent = operation.tool.delivery === "return"
       const request: GenerationCanvasRequest = {
         anchor: parsed.anchor,
         expectedOutputCount: 1,
@@ -77,8 +77,18 @@ export function createPluginOperationAgentToolProvider(
         output: operation.tool.output,
         prompt: `Run installed Plugin operation ${operation.tool.id}.`,
         ref: { canvasId: active.canvasId, scopeId: active.scopeId },
+        ...(parsed.ownerNodeId === undefined
+          ? {}
+          : {
+              referenceConstraint: {
+                ownerNodeId: parsed.ownerNodeId,
+                ownerPluginId: operation.tool.pluginId,
+                type: "direct-incoming" as const,
+              },
+            }),
         references: parsed.references,
-        ...(parsed.relationNodeIds.length ? { relationAnchorNodeIds: parsed.relationNodeIds } : {}),
+        ...(returnsToAgent ? { resultMode: { type: "return" as const } } : {}),
+        ...(!returnsToAgent && parsed.relationNodeIds.length ? { relationAnchorNodeIds: parsed.relationNodeIds } : {}),
         toolId: operation.tool.id,
         ...(parsed.toolInput === undefined ? {} : { toolInput: parsed.toolInput }),
       }
@@ -94,9 +104,16 @@ export function createPluginOperationAgentToolProvider(
         if (error instanceof GenerationToolReportedError) throw error
         throw sanitizedOperationFailure()
       }
+      if (
+        returnsToAgent &&
+        (typeof result.outputText !== "string" || !result.outputText.trim() || result.createdNodeIds.length !== 0)
+      ) {
+        throw sanitizedOperationFailure()
+      }
       return {
         changed: result.createdNodeIds.length > 0,
         createdNodeIds: result.createdNodeIds,
+        ...(returnsToAgent ? { outputText: result.outputText } : {}),
         revision: result.revision,
         toolId: result.toolId,
         warnings: result.warnings,
@@ -106,9 +123,13 @@ export function createPluginOperationAgentToolProvider(
 }
 
 function definition(name: string, tool: GenerationToolSummary): AgentToolDefinition {
+  const returnsToAgent = tool.delivery === "return"
+  const bindsDirectIncoming = tool.inputBinding === "direct-incoming"
   const references = tool.acceptedInputs.length
     ? {
-        description: "Canvas nodes supplied as typed inputs to this operation. Native paths are never accepted.",
+        description: bindsDirectIncoming
+          ? "Canvas nodes supplied as typed inputs. Every node must remain a direct incoming connection to ownerNodeId."
+          : "Canvas nodes supplied as typed inputs to this operation. Native paths are never accepted.",
         items: {
           additionalProperties: false,
           properties: {
@@ -130,25 +151,46 @@ function definition(name: string, tool: GenerationToolSummary): AgentToolDefinit
     name,
     description:
       `${tool.description} ` +
-      `Runs installed Plugin operation ${tool.id} and creates one managed Canvas ${tool.output} result in the active Project and Canvas.`,
+      (returnsToAgent
+        ? `Runs installed Plugin operation ${tool.id} and returns one bounded text result without creating a Canvas node.`
+        : `Runs installed Plugin operation ${tool.id} and creates one managed Canvas ${tool.output} result in the active Project and Canvas.`),
     inputSchema: {
       additionalProperties: false,
       properties: {
-        anchor: {
-          additionalProperties: false,
-          description: "Optional preferred Canvas position for the result.",
-          properties: { x: { type: "number" }, y: { type: "number" } },
-          required: ["x", "y"],
-          type: "object",
-        },
+        ...(returnsToAgent
+          ? {}
+          : {
+              anchor: {
+                additionalProperties: false,
+                description: "Optional preferred Canvas position for the result.",
+                properties: { x: { type: "number" }, y: { type: "number" } },
+                required: ["x", "y"],
+                type: "object",
+              },
+            }),
+        ...(bindsDirectIncoming
+          ? {
+              ownerNodeId: {
+                description: "The Canvas file node owned by this installed Plugin and receiving every reference.",
+                minLength: 1,
+                pattern: canvasNodeIdPattern.source,
+                type: "string",
+              },
+            }
+          : {}),
         references,
-        relationNodeIds: {
-          description: "Optional Canvas nodes to connect to the result without exposing them as operation inputs.",
-          items: { minLength: 1, pattern: canvasNodeIdPattern.source, type: "string" },
-          maxItems: maximumRelationNodeIds,
-          type: "array",
-          uniqueItems: true,
-        },
+        ...(returnsToAgent || bindsDirectIncoming
+          ? {}
+          : {
+              relationNodeIds: {
+                description:
+                  "Optional Canvas nodes to connect to the result without exposing them as operation inputs.",
+                items: { minLength: 1, pattern: canvasNodeIdPattern.source, type: "string" },
+                maxItems: maximumRelationNodeIds,
+                type: "array",
+                uniqueItems: true,
+              },
+            }),
         toolInput: {
           additionalProperties: {
             oneOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
@@ -158,7 +200,7 @@ function definition(name: string, tool: GenerationToolSummary): AgentToolDefinit
           type: "object",
         },
       },
-      required: ["references"],
+      required: [...(bindsDirectIncoming ? ["ownerNodeId"] : []), "references"],
       type: "object",
     },
   }
@@ -181,12 +223,25 @@ async function installedAgentOperations(service: GenerationCanvasAgentPort): Pro
     ids.add(id)
     const agentId = boundedPattern(tool.agentId, `${label} agentId`, agentIdPattern, 64)
     if (!outputModalities.has(tool.output)) throw new Error(`${label} has an unsupported output modality`)
+    const delivery = tool.delivery ?? "canvas"
+    if (delivery !== "canvas" && delivery !== "return") {
+      throw new Error(`${label} has an unsupported delivery mode`)
+    }
+    if (delivery === "return" && tool.output !== "text") {
+      throw new Error(`${label} return delivery requires text output`)
+    }
+    if (tool.inputBinding !== undefined && tool.inputBinding !== "direct-incoming") {
+      throw new Error(`${label} has an unsupported input binding`)
+    }
     if (!Array.isArray(tool.acceptedInputs)) throw new Error(`${label} acceptedInputs must be an array`)
     const roles = new Set<string>()
     for (const role of tool.acceptedInputs) {
       if (!inputRoleSet.has(role)) throw new Error(`${label} has an unsupported input role`)
       if (roles.has(role)) throw new Error(`${label} contains a duplicate input role`)
       roles.add(role)
+    }
+    if (tool.inputBinding === "direct-incoming" && roles.size === 0) {
+      throw new Error(`${label} direct-incoming input binding requires accepted inputs`)
     }
     boundedManifestText(tool.description, `${label} description`, 2_000)
     const name = `plugin_${pluginId.replaceAll("-", "_")}_${agentId}`
@@ -198,13 +253,24 @@ async function installedAgentOperations(service: GenerationCanvasAgentPort): Pro
 }
 
 function parseInput(value: Record<string, unknown>, tool: GenerationToolSummary) {
-  rejectUnknownFields(value, topLevelFields, "Plugin operation input")
+  const returnsToAgent = tool.delivery === "return"
+  const bindsDirectIncoming = tool.inputBinding === "direct-incoming"
+  rejectUnknownFields(value, operationInputFields(tool), "Plugin operation input")
   return {
-    anchor: value.anchor === undefined ? { x: 0, y: 0 } : point(value.anchor, "anchor"),
+    anchor: returnsToAgent || value.anchor === undefined ? { x: 0, y: 0 } : point(value.anchor, "anchor"),
+    ownerNodeId: bindsDirectIncoming ? canvasNodeId(value.ownerNodeId, "ownerNodeId") : undefined,
     references: references(value.references, tool.acceptedInputs),
-    relationNodeIds: relationNodeIds(value.relationNodeIds),
+    relationNodeIds: returnsToAgent || bindsDirectIncoming ? [] : relationNodeIds(value.relationNodeIds),
     toolInput: value.toolInput === undefined ? undefined : validateGenerationToolInputShape(value.toolInput),
   }
+}
+
+function operationInputFields(tool: GenerationToolSummary) {
+  const fields = new Set(["references", "toolInput"])
+  if (tool.delivery !== "return") fields.add("anchor")
+  if (tool.delivery !== "return" && tool.inputBinding !== "direct-incoming") fields.add("relationNodeIds")
+  if (tool.inputBinding === "direct-incoming") fields.add("ownerNodeId")
+  return fields
 }
 
 function references(value: unknown, acceptedRoles: readonly GenerationInputRole[]) {

@@ -1,7 +1,7 @@
 import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
 import { ArrowLeft, Cloud, Languages, PawPrint, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useState } from "react"
-import type { WebPluginClient, WebPluginServiceAction } from "../plugin-contracts"
+import type { WebPluginClient, WebPluginManifest, WebPluginServiceAction } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { CapabilityManagementSurface } from "./capability-center"
@@ -18,15 +18,20 @@ import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 export type SettingsSection = "general" | "services" | "capabilities" | "pets"
 
 export interface SettingsViewProps {
+  activeCanvasId?: string
+  activeProjectId?: string
   className?: string
   featureFlags?: DesktopFeatureFlags
   initialSection?: SettingsSection
+  initialSkillName?: string
   languagePreference: AppLanguagePreference
   locale: AppLocale
   onClose(): void
   onLanguageChange(preference: AppLanguagePreference): void
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
+  onUsePluginOnCanvas?(plugin: WebPluginManifest): void
+  onUsePluginInAgent?(plugin: WebPluginManifest): void
   petClient: PetSettingsHostClient
   petProviderSnapshot?: PetSettingsProviderSnapshot
   pluginClient: WebPluginClient
@@ -105,15 +110,20 @@ function LanguageSettings({
 }
 
 export function SettingsView({
+  activeCanvasId,
+  activeProjectId,
   className,
   featureFlags = desktopFeatureFlags,
   initialSection = "general",
+  initialSkillName,
   languagePreference,
   locale,
   onClose,
   onLanguageChange,
   onRefreshServices,
   onServiceAction,
+  onUsePluginOnCanvas,
+  onUsePluginInAgent,
   petClient,
   petProviderSnapshot: injectedPetProviderSnapshot,
   pluginClient,
@@ -240,8 +250,13 @@ export function SettingsView({
             />
           ) : section === "capabilities" ? (
             <CapabilityManagementSurface
+              activeCanvasId={activeCanvasId}
+              activeProjectId={activeProjectId}
               className="min-h-[32rem]"
+              initialSkillName={initialSkillName}
               locale={locale}
+              onUsePluginOnCanvas={onUsePluginOnCanvas}
+              onUsePluginInAgent={onUsePluginInAgent}
               pluginClient={pluginClient}
               skillClient={skillClient}
             />

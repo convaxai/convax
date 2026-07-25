@@ -39,7 +39,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { createAgentCanvasInstructions, createAgentCanvasNodeResource } from "../agent-canvas-context"
-import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary } from "../plugin-contracts"
+import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary, type WebPluginManifest } from "../plugin-contracts"
 import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
@@ -83,6 +83,7 @@ import {
   runMediaOperationSequence,
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
+import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
@@ -94,6 +95,7 @@ import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from 
 import { migrateLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import { createWebPluginCanvasContribution, type WebPluginCanvasHost } from "./web-plugin-canvas"
 import { WebPluginGenerationProjectionCoordinator } from "./web-plugin-generation-projection"
+import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 
 const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
@@ -194,6 +196,7 @@ function App() {
     readAppLanguagePreference(localStorage),
   )
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null)
+  const [settingsSkillName, setSettingsSkillName] = useState<string>()
   const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
   const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
@@ -360,6 +363,7 @@ function App() {
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
       event.preventDefault()
       closeMediaOperationDialog()
+      setSettingsSkillName(undefined)
       setSettingsSection("general")
     }
     window.addEventListener("keydown", openSettingsShortcut)
@@ -368,7 +372,10 @@ function App() {
   useEffect(() => {
     if (!settingsSection) return
     const closeSettings = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSettingsSection(null)
+      if (event.key === "Escape") {
+        setSettingsSkillName(undefined)
+        setSettingsSection(null)
+      }
     }
     window.addEventListener("keydown", closeSettings)
     return () => window.removeEventListener("keydown", closeSettings)
@@ -539,6 +546,10 @@ function App() {
           scopeId: input.projectId,
           title: `Plugin: ${input.pluginName}`,
         })
+        const finishAgentSession = showPluginAgentSession(agentPanelRef.current, {
+          scopeId: input.projectId,
+          session,
+        })
         const abortSession = () => {
           void window.convax.agent
             .abort({
@@ -552,15 +563,16 @@ function App() {
           throwIfAborted(input.signal)
           currentScope(input.projectId, input.canvasId)
           const resource = createAgentCanvasNodeResource(input.canvasId, input.nodeId, `${input.pluginName} node`)
+          const resources = input.skillName ? [resource, { kind: "skill" as const, name: input.skillName }] : [resource]
           const message = await window.convax.agent.prompt({
             instructions: [
               ...createAgentCanvasInstructions({
                 activeCanvas: initial.activeCanvas,
-                resources: [resource],
+                resources,
               }),
               `A sandboxed Convax Plugin named ${JSON.stringify(input.pluginName)} requested this response through its declared Agent capability. Keep every tool call in the authoritative active Project and Canvas scope.`,
             ],
-            resources: [resource],
+            resources,
             scopeId: input.projectId,
             sessionId: session.id,
             text: input.text,
@@ -576,6 +588,7 @@ function App() {
           }
         } finally {
           input.signal.removeEventListener("abort", abortSession)
+          finishAgentSession()
         }
       },
       async readProjectText(input) {
@@ -682,12 +695,24 @@ function App() {
   useEffect(() => {
     if (activeProjectId && activeCanvas) writeLastCanvasPreference(localStorage, activeProjectId, activeCanvas.id)
   }, [activeCanvas, activeProjectId])
+  const openSkillDetails = useCallback(
+    async (name: string) => {
+      if (!activeProjectId) return false
+      const inventory = await window.convax.agent.skills.listSkills({ scopeId: activeProjectId })
+      if (!inventory.skills.some((skill) => skill.name === name && skill.managed)) return false
+      setSettingsSkillName(name)
+      setSettingsSection("capabilities")
+      return true
+    },
+    [activeProjectId],
+  )
   const assistantHostRef = useRef({
     activeCanvas,
     activeProject,
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
     generationCatalogVersion: generationToolCatalogVersionRef.current,
+    onOpenSkillDetails: openSkillDetails,
   })
   assistantHostRef.current = {
     activeCanvas,
@@ -695,6 +720,7 @@ function App() {
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
     generationCatalogVersion: generationToolCatalogVersionRef.current,
+    onOpenSkillDetails: openSkillDetails,
   }
   const canvasRendererRequestHandler = useMemo(
     () =>
@@ -815,6 +841,7 @@ function App() {
               embedded
               embeddedHeader={request.mode !== "file"}
               generationCatalogVersion={host.generationCatalogVersion}
+              onOpenSkillDetails={host.onOpenSkillDetails}
               projectId={host.activeProject?.id}
               projectName={host.activeProject?.name}
             />
@@ -1190,10 +1217,27 @@ function App() {
   const openSettings = useCallback(
     (target: ApplicationMenuTarget) => {
       closeMediaOperationDialog()
+      setSettingsSkillName(undefined)
       setSettingsSection(target)
     },
     [closeMediaOperationDialog],
   )
+  const usePluginInAgent = useCallback((plugin: WebPluginManifest) => {
+    setSettingsSkillName(undefined)
+    setSettingsSection(null)
+    requestAnimationFrame(() => {
+      const panel = agentPanelRef.current
+      if (panel) openPluginInAgent(plugin, panel)
+    })
+  }, [])
+  const usePluginOnCanvas = useCallback((plugin: WebPluginManifest) => {
+    if (!hasWebPluginCanvasSurface(plugin) || plugin.contributes.canvas.renderer.create !== true) return
+    const nodeId = canvasEditorRef.current?.insertNode(webPluginCanvasRendererId(plugin.id))
+    if (nodeId) {
+      setSettingsSkillName(undefined)
+      setSettingsSection(null)
+    }
+  }, [])
   const changeLanguage = useCallback((preference: AppLanguagePreference) => {
     setLanguagePreference(preference)
     writeAppLanguagePreference(localStorage, preference)
@@ -1392,9 +1436,7 @@ function App() {
                 initialDocument={initialDocument}
                 nodeRegistry={canvasNodeRegistry}
                 readOnly={
-                  workbenchSnapshot.changingInput ||
-                  projectCanvasSnapshot.busy ||
-                  projectSnapshot.changingActiveProject
+                  workbenchSnapshot.changingInput || projectCanvasSnapshot.busy || projectSnapshot.changingActiveProject
                 }
                 ref={canvasEditorRef}
                 selectionActions={selectionActions}
@@ -1422,9 +1464,7 @@ function App() {
               {secondarySidebar.visible ? (
                 <div>
                   <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
-                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                    {rendererFailureCopy.agentDescription}
-                  </p>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">{rendererFailureCopy.agentDescription}</p>
                   <button
                     className="mt-4 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                     onClick={retry}
@@ -1463,10 +1503,7 @@ function App() {
               onResizeKeyDown: (keyEvent) => {
                 if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
                 keyEvent.preventDefault()
-                resizeWorkbenchPartBy(
-                  WorkbenchLayoutParts.SecondarySidebar,
-                  keyEvent.key === "ArrowLeft" ? 24 : -24,
-                )
+                resizeWorkbenchPartBy(WorkbenchLayoutParts.SecondarySidebar, keyEvent.key === "ArrowLeft" ? 24 : -24)
               },
               onResizeStart: (pointerEvent) =>
                 startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent),
@@ -1474,6 +1511,7 @@ function App() {
               resizing: resizingSecondarySidebar,
               width: secondarySidebar.size,
             }}
+            onOpenSkillDetails={openSkillDetails}
             projectId={activeProjectId}
             projectName={activeProject?.name}
             ref={agentPanelRef}
@@ -1493,14 +1531,22 @@ function App() {
       ) : null}
       {settingsSection ? (
         <SettingsView
+          activeCanvasId={activeCanvasId}
+          activeProjectId={activeProjectId}
           className="fixed inset-0 z-[100]"
           initialSection={settingsSection}
+          initialSkillName={settingsSkillName}
           languagePreference={languagePreference}
           locale={locale}
-          onClose={() => setSettingsSection(null)}
+          onClose={() => {
+            setSettingsSkillName(undefined)
+            setSettingsSection(null)
+          }}
           onLanguageChange={changeLanguage}
           onRefreshServices={() => void serviceCatalogController.refresh()}
           onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
+          onUsePluginOnCanvas={usePluginOnCanvas}
+          onUsePluginInAgent={usePluginInAgent}
           petClient={window.convax.pets}
           pluginClient={window.convax.plugins}
           serviceSnapshot={serviceCatalogSnapshot}

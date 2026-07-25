@@ -3,10 +3,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
 import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
-import { WebPluginPublicationDeferredError } from "./plugin-manager"
+import { WebPluginPublicationDeferredError, type WebPluginManager } from "./plugin-manager"
 
 const temporaryRoots: string[] = []
 
@@ -49,13 +50,20 @@ async function setup() {
   ] satisfies readonly DesktopBuiltinPluginBundle[]
   let installed = false
   let skillInstalled = false
+  let publicationManifest: InstalledWebPluginSummary = { ...manifest, trustedBuiltin: true }
   const pluginManager = {
-    installOrUpdateBuiltinBundle: mock(async () => {
-      installed = true
-      return { ...manifest, trustedBuiltin: true as const }
-    }),
+    installOrUpdateBuiltinBundle: mock(
+      async (...args: Parameters<WebPluginManager["installOrUpdateBuiltinBundle"]>) => {
+        const publication = await args[1]?.beforePublish?.(publicationManifest, { root })
+        await publication?.publish()
+        await publication?.activate?.()
+        await publication?.commit()
+        installed = true
+        return publicationManifest
+      },
+    ),
     isBuiltinBundleInstalled: mock(async () => installed),
-    list: mock(async () => (installed ? [{ ...manifest, trustedBuiltin: true as const }] : [])),
+    list: mock(async () => (installed ? [publicationManifest] : [])),
     resolveAsset: mock(async () => skillFile),
   }
   const skillManager = {
@@ -95,6 +103,13 @@ async function setup() {
       skillInstalled = false
     },
     root,
+    setPublicationHooks(hooks?: string) {
+      publicationManifest = {
+        ...manifest,
+        ...(hooks === undefined ? {} : { hooks }),
+        trustedBuiltin: true,
+      }
+    },
     skillManager,
     stateFile: path.join(root, "default-capabilities.json"),
   }
@@ -239,13 +254,53 @@ describe("provisionDefaultCapabilities", () => {
     expect(input.skillManager.refresh).toHaveBeenCalledTimes(1)
   })
 
+  test("does not silently authorize Hook bytes during default provisioning", async () => {
+    const input = await setup()
+    const item = input.catalog[0]!
+    const result = await provisionDefaultCapabilities({
+      ...input,
+      catalog: [
+        {
+          ...item,
+          manifest: { ...item.manifest, hooks: "hooks/index.mjs" },
+        },
+      ],
+    })
+
+    expect(result.failures).toEqual([
+      {
+        error: expect.objectContaining({ message: expect.stringContaining("explicit user action") }),
+        id: "jianying-editor",
+        kind: "plugin",
+      },
+    ])
+    expect(input.pluginManager.installOrUpdateBuiltinBundle).not.toHaveBeenCalled()
+    expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
+  })
+
+  test("checks the parsed built-in candidate instead of trusting Hook-free catalog metadata", async () => {
+    const input = await setup()
+    input.setPublicationHooks("hooks/index.mjs")
+    const prepare = mock(preparePluginPublication)
+
+    await expect(
+      provisionDefaultCapabilities({
+        ...input,
+        preparePluginPublication: prepare,
+      }),
+    ).rejects.toThrow("requires an explicit user action")
+
+    expect(prepare).not.toHaveBeenCalled()
+    expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
+  })
+
   test("installs the default remote Plugin without separately provisioning an owned Skill", async () => {
     const input = await setupRemote()
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
 
     expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools", { allowHooks: false })
     expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(input.pluginManager.resolveAsset).not.toHaveBeenCalled()
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
@@ -269,7 +324,7 @@ describe("provisionDefaultCapabilities", () => {
     ).toEqual({ failures: [] })
 
     expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledTimes(1)
-    expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.bootstrapInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools", { allowHooks: false })
     expect(input.remoteInstaller.installPlugin).not.toHaveBeenCalled()
     expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(input.pluginManager.resolveAsset).not.toHaveBeenCalled()
@@ -367,7 +422,7 @@ describe("provisionDefaultCapabilities", () => {
 
     expect(input.remoteInstaller.installPlugin).toHaveBeenCalledTimes(1)
     expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledTimes(1)
-    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledWith("ffmpeg-tools")
+    expect(input.remoteInstaller.updatePlugin).toHaveBeenCalledWith("ffmpeg-tools", { allowHooks: false })
     expect(input.skillManager.installManagedAtStartup).not.toHaveBeenCalled()
   })
 
@@ -377,7 +432,10 @@ describe("provisionDefaultCapabilities", () => {
 
     expect(await provisionDefaultCapabilities(input)).toEqual({ failures: [] })
 
-    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools", { allowCurrent: true })
+    expect(input.remoteInstaller.installPlugin).toHaveBeenCalledWith("ffmpeg-tools", {
+      allowCurrent: true,
+      allowHooks: false,
+    })
     expect(input.remoteInstaller.updatePlugin).not.toHaveBeenCalled()
     expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toMatchObject({ plugins: ["ffmpeg-tools"] })
   })

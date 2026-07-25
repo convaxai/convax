@@ -1,10 +1,13 @@
 import { Button, cn } from "@convax/ui"
 import {
+  Bot,
   ChevronRight,
   Download,
   ExternalLink,
   FolderInput,
   LoaderCircle,
+  LogIn,
+  PanelsTopLeft,
   Plug,
   RefreshCw,
   Sparkles,
@@ -12,7 +15,14 @@ import {
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { WebPluginCatalogItem, WebPluginClient, WebPluginInventory, WebPluginManifest } from "../plugin-contracts"
+import type {
+  WebPluginAgentMcpConnectionStatus,
+  WebPluginAgentMcpConnectionStatuses,
+  WebPluginCatalogItem,
+  WebPluginClient,
+  WebPluginInventory,
+  WebPluginManifest,
+} from "../plugin-contracts"
 import type {
   DesktopSkillCatalogItem,
   DesktopSkillClient,
@@ -29,20 +39,28 @@ import { SkillDetailDialog, SkillShowcaseMedia } from "./skill-catalog-preview"
 export type CapabilityCenterTab = "skills" | "plugins"
 
 export interface CapabilityCenterProps {
+  activeCanvasId?: string
   activeProjectId?: string
   className?: string
   defaultOpen?: boolean
+  initialSkillName?: string
   initialTab?: CapabilityCenterTab
   locale?: AppLocale
+  onUsePluginOnCanvas?(plugin: WebPluginManifest): void
+  onUsePluginInAgent?(plugin: WebPluginManifest): void
   pluginClient: WebPluginClient
   skillClient: DesktopSkillClient
 }
 
 export interface CapabilityManagementSurfaceProps {
+  activeCanvasId?: string
   activeProjectId?: string
   className?: string
+  initialSkillName?: string
   initialTab?: CapabilityCenterTab
   locale?: AppLocale
+  onUsePluginOnCanvas?(plugin: WebPluginManifest): void
+  onUsePluginInAgent?(plugin: WebPluginManifest): void
   pluginClient: WebPluginClient
   skillClient: DesktopSkillClient
 }
@@ -50,6 +68,7 @@ export interface CapabilityManagementSurfaceProps {
 type CapabilityAction =
   | "plugin.import"
   | "skill.import"
+  | `plugin.connect:${string}`
   | `plugin.install:${string}`
   | `plugin.release:${string}`
   | `plugin.skill:${string}`
@@ -58,11 +77,16 @@ type CapabilityAction =
   | `skill.uninstall:${string}`
 
 export interface CapabilityCenterDialogProps {
+  agentMcpStatuses: WebPluginAgentMcpConnectionStatuses
   busy: CapabilityAction | null
+  canUseCanvas: boolean
+  canUseAgent: boolean
   error: string | null
+  initialSkillName?: string
   loading: boolean
   locale?: AppLocale
   onClose(): void
+  onConnectPlugin(id: string): void
   onImportPlugin(): void
   onImportSkill(): void
   onInstallPlugin(id: string): void
@@ -77,6 +101,8 @@ export interface CapabilityCenterDialogProps {
   onTabChange(tab: CapabilityCenterTab): void
   onUninstallPlugin(id: string): void
   onUninstallSkill(name: string): void
+  onUsePluginOnCanvas(plugin: WebPluginManifest): void
+  onUsePluginInAgent(plugin: WebPluginManifest): void
   plugins: WebPluginInventory | null
   skills: DesktopSkillInventory | null
   tab: CapabilityCenterTab
@@ -128,27 +154,38 @@ export function formatPluginDownloadBytes(bytes: number, locale: AppLocale) {
   }).format(value)} ${unit}`
 }
 
-type PluginCardItem = WebPluginManifest &
-  Partial<Pick<WebPluginCatalogItem, "download" | "releaseAvailable">>
+type PluginCardItem = WebPluginManifest & Partial<Pick<WebPluginCatalogItem, "download" | "releaseAvailable">>
 
 function PluginActions({
+  agentMcpStatus,
   busy,
+  canUseCanvas,
+  canUseAgent,
   companionSkillInstalled,
   installed,
   locale,
+  onConnect,
   onInstall,
   onInstallSkill,
   onUninstall,
+  onUseOnCanvas,
+  onUseInAgent,
   plugin,
   updateAvailable,
 }: {
+  agentMcpStatus?: WebPluginAgentMcpConnectionStatus
   busy: CapabilityAction | null
+  canUseCanvas: boolean
+  canUseAgent: boolean
   companionSkillInstalled: boolean
   installed: boolean
   locale: AppLocale
+  onConnect(): void
   onInstall(): void
   onInstallSkill(): void
   onUninstall(): void
+  onUseOnCanvas(): void
+  onUseInAgent(): void
   plugin: WebPluginManifest
   updateAvailable?: boolean
 }) {
@@ -181,6 +218,44 @@ function PluginActions({
           )}
         </Button>
       ) : null}
+      {plugin.entry && plugin.contributes.canvas?.renderer?.create === true ? (
+        <Button
+          disabled={disabled || !canUseCanvas}
+          onClick={onUseOnCanvas}
+          size="sm"
+          title={canUseCanvas ? undefined : appMessage(locale, "capabilities.openCanvasToUsePlugin")}
+        >
+          <PanelsTopLeft />
+          {appMessage(locale, "capabilities.useOnCanvas")}
+        </Button>
+      ) : null}
+      {plugin.contributes.agent?.mcp ? (
+        agentMcpStatus === "connected" ? (
+          <Button
+            disabled={disabled || !canUseAgent}
+            onClick={onUseInAgent}
+            size="sm"
+            title={canUseAgent ? undefined : appMessage(locale, "capabilities.openProjectToUseAgent")}
+            variant="outline"
+          >
+            <Bot />
+            {appMessage(locale, "capabilities.useInAgent")}
+          </Button>
+        ) : agentMcpStatus === "disabled" || agentMcpStatus === "needs_client_registration" ? null : (
+          <Button disabled={disabled} onClick={onConnect} size="sm" variant="outline">
+            <BusyIcon active={busy === `plugin.connect:${plugin.id}`} />
+            <LogIn />
+            {busy === `plugin.connect:${plugin.id}`
+              ? appMessage(locale, "capabilities.connectingPlugin")
+              : appMessage(
+                  locale,
+                  agentMcpStatus === "failed" || agentMcpStatus === "unavailable"
+                    ? "capabilities.reconnectPlugin"
+                    : "capabilities.connectPlugin",
+                )}
+          </Button>
+        )
+      ) : null}
       <Button
         aria-label={`${appMessage(locale, "capabilities.uninstall")} ${plugin.name}`}
         disabled={disabled}
@@ -195,30 +270,59 @@ function PluginActions({
 }
 
 function PluginCard({
+  agentMcpStatus,
   busy,
+  canUseCanvas,
+  canUseAgent,
   companionSkillInstalled,
   installed,
+  installedPlugin,
   installedVersion,
   locale,
+  onConnect,
   onInstall,
   onInstallSkill,
   onOpenRelease,
   onUninstall,
+  onUseOnCanvas,
+  onUseInAgent,
   plugin,
   updateAvailable,
 }: {
+  agentMcpStatus?: WebPluginAgentMcpConnectionStatus
   busy: CapabilityAction | null
+  canUseCanvas: boolean
+  canUseAgent: boolean
   companionSkillInstalled: boolean
   installed: boolean
+  installedPlugin?: WebPluginManifest
   installedVersion?: string
   locale: AppLocale
+  onConnect(): void
   onInstall(): void
   onInstallSkill(): void
   onOpenRelease(): void
   onUninstall(): void
+  onUseOnCanvas(): void
+  onUseInAgent(): void
   plugin: PluginCardItem
   updateAvailable?: boolean
 }) {
+  const runtimePlugin = installedPlugin ?? plugin
+  const agentMcpMessage = (() => {
+    if (!installed || !runtimePlugin.contributes.agent?.mcp) return null
+    if (agentMcpStatus === "connected") {
+      const [skill] = runtimePlugin.contributes.skills ?? []
+      return skill && runtimePlugin.contributes.skills?.length === 1
+        ? appMessage(locale, "capabilities.agentMcpConnectedSkill", { skill: `$${skill.name}` })
+        : appMessage(locale, "capabilities.agentMcpConnected")
+    }
+    if (agentMcpStatus === "disabled") return appMessage(locale, "capabilities.agentMcpDisabled")
+    if (agentMcpStatus === "needs_client_registration") return appMessage(locale, "capabilities.agentMcpClientSetup")
+    if (agentMcpStatus === "failed") return appMessage(locale, "capabilities.agentMcpFailed")
+    if (agentMcpStatus === "unavailable") return appMessage(locale, "capabilities.agentMcpUnavailable")
+    return appMessage(locale, "capabilities.agentMcpNeedsConnection")
+  })()
   return (
     <article className="flex min-h-40 flex-col rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm">
       <div className="flex items-start gap-3">
@@ -290,6 +394,24 @@ function PluginCard({
           {appMessage(locale, "capabilities.pluginReady", { name: plugin.name })}
         </p>
       ) : null}
+      {agentMcpMessage ? (
+        <p
+          className={cn(
+            "mt-3 rounded-lg border px-3 py-2 text-xs font-medium",
+            agentMcpStatus === "connected"
+              ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-border bg-muted/40 text-foreground",
+          )}
+          role="status"
+        >
+          {agentMcpMessage}
+          {agentMcpStatus === "connected" && !canUseAgent ? (
+            <span className="mt-1 block text-muted-foreground">
+              {appMessage(locale, "capabilities.openProjectToUseAgent")}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       <div className="mt-auto flex items-end justify-between gap-3 pt-4">
         <div className="flex min-w-0 flex-wrap gap-1.5">
           {plugin.capabilities.map((capability) => (
@@ -297,14 +419,20 @@ function PluginCard({
           ))}
         </div>
         <PluginActions
+          agentMcpStatus={agentMcpStatus}
           busy={busy}
+          canUseCanvas={canUseCanvas}
+          canUseAgent={canUseAgent}
           companionSkillInstalled={companionSkillInstalled}
           installed={installed}
           locale={locale}
+          onConnect={onConnect}
           onInstall={onInstall}
           onInstallSkill={onInstallSkill}
           onUninstall={onUninstall}
-          plugin={plugin}
+          onUseOnCanvas={onUseOnCanvas}
+          onUseInAgent={onUseInAgent}
+          plugin={runtimePlugin}
           updateAvailable={updateAvailable}
         />
       </div>
@@ -420,8 +548,52 @@ export function catalogSkillDetailsTarget(
   return managed ? { kind: "installed", name: managed.name, source: managed.source } : { id, kind: "catalog" }
 }
 
+function selectedSkillDetailsByName(
+  inventory: DesktopSkillInventory,
+  name: string,
+  locale: AppLocale,
+): SelectedSkillDetails | undefined {
+  const installed = inventory.skills.find((skill) => skill.name === name)
+  if (installed) {
+    const catalog = inventory.catalog.find((candidate) => candidate.id === installed.name)
+    const card: DesktopSkillCatalogItem = {
+      description: installed.description ?? catalog?.description ?? "",
+      id: installed.name,
+      installed: installed.managed,
+      name: installed.displayName ?? catalog?.name ?? installed.name,
+      ...(installed.management.kind === "plugin"
+        ? {
+            ownerPluginId: installed.management.pluginId,
+            ownerPluginName: installed.management.pluginName,
+          }
+        : {}),
+    }
+    return {
+      managedName: installed.managed ? installed.name : undefined,
+      readOnly: installed.source === "global" || installed.management.kind === "plugin",
+      readOnlyLabel:
+        installed.management.kind === "plugin"
+          ? appMessage(locale, "capabilities.providedByPlugin", { name: installed.management.pluginName })
+          : undefined,
+      skill: card,
+      target: { kind: "installed", name: installed.name, source: installed.source },
+    }
+  }
+
+  const catalog = inventory.catalog.find((skill) => skill.id === name)
+  if (!catalog) return undefined
+  return {
+    installLabel: catalog.ownerPluginId ? appMessage(locale, "capabilities.installProvidingPlugin") : undefined,
+    ownerPluginId: catalog.ownerPluginId,
+    readOnly: false,
+    skill: catalog,
+    target: { id: catalog.id, kind: "catalog" },
+  }
+}
+
 function SkillsPanel({
   busy,
+  initialSkillName,
   inventory,
   locale,
   onImport,
@@ -432,6 +604,7 @@ function SkillsPanel({
   onUninstall,
 }: {
   busy: CapabilityAction | null
+  initialSkillName?: string
   inventory: DesktopSkillInventory
   locale: AppLocale
   onImport(): void
@@ -446,6 +619,7 @@ function SkillsPanel({
   const [detailError, setDetailError] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const detailRequest = useRef(0)
+  const openedInitialSkill = useRef<string | undefined>(undefined)
   const openDetails = useCallback(
     async (next: SelectedSkillDetails) => {
       const current = ++detailRequest.current
@@ -464,6 +638,13 @@ function SkillsPanel({
     },
     [onLoadDetails],
   )
+  useEffect(() => {
+    if (!initialSkillName || openedInitialSkill.current === initialSkillName) return
+    const selection = selectedSkillDetailsByName(inventory, initialSkillName, locale)
+    if (!selection) return
+    openedInitialSkill.current = initialSkillName
+    void openDetails(selection)
+  }, [initialSkillName, inventory, locale, openDetails])
   const closeDetails = useCallback(() => {
     detailRequest.current += 1
     setSelected(undefined)
@@ -622,27 +803,40 @@ function SkillsPanel({
 }
 
 function PluginsPanel({
+  agentMcpStatuses,
   busy,
+  canUseCanvas,
+  canUseAgent,
   inventory,
   locale,
+  onConnect,
   onImport,
   onInstall,
   onInstallSkill,
   onOpenRelease,
   onUninstall,
+  onUseOnCanvas,
+  onUseInAgent,
   skills,
 }: {
+  agentMcpStatuses: WebPluginAgentMcpConnectionStatuses
   busy: CapabilityAction | null
+  canUseCanvas: boolean
+  canUseAgent: boolean
   inventory: WebPluginInventory
   locale: AppLocale
+  onConnect(id: string): void
   onImport(): void
   onInstall(id: string): void
   onInstallSkill(id: string): void
   onOpenRelease(id: string): void
   onUninstall(id: string): void
+  onUseOnCanvas(plugin: WebPluginManifest): void
+  onUseInAgent(plugin: WebPluginManifest): void
   skills: DesktopSkillInventory | null
 }) {
   const catalogIds = new Set(inventory.catalog.map((plugin) => plugin.id))
+  const installedById = new Map(inventory.installed.map((plugin) => [plugin.id, plugin]))
   const imported = inventory.installed.filter((plugin) => !catalogIds.has(plugin.id))
   const installedSkillNames = new Set(skills?.skills.filter((skill) => skill.managed).map((skill) => skill.name))
   const hasCompanionSkill = (plugin: WebPluginManifest | WebPluginCatalogItem) => {
@@ -672,16 +866,23 @@ function PluginsPanel({
           <div className="grid gap-3 lg:grid-cols-2">
             {inventory.catalog.map((plugin) => (
               <PluginCard
+                agentMcpStatus={agentMcpStatuses[plugin.id]}
                 busy={busy}
+                canUseCanvas={canUseCanvas}
+                canUseAgent={canUseAgent}
                 companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed={plugin.installed}
+                installedPlugin={installedById.get(plugin.id)}
                 installedVersion={plugin.installedVersion}
                 key={plugin.id}
                 locale={locale}
+                onConnect={() => onConnect(plugin.id)}
                 onInstall={() => onInstall(plugin.id)}
                 onInstallSkill={() => onInstallSkill(plugin.id)}
                 onOpenRelease={() => onOpenRelease(plugin.id)}
                 onUninstall={() => onUninstall(plugin.id)}
+                onUseOnCanvas={() => onUseOnCanvas(installedById.get(plugin.id) ?? plugin)}
+                onUseInAgent={() => onUseInAgent(installedById.get(plugin.id) ?? plugin)}
                 plugin={plugin}
                 updateAvailable={plugin.updateAvailable}
               />
@@ -698,15 +899,22 @@ function PluginsPanel({
           <div className="grid gap-3 lg:grid-cols-2">
             {imported.map((plugin) => (
               <PluginCard
+                agentMcpStatus={agentMcpStatuses[plugin.id]}
                 busy={busy}
+                canUseCanvas={canUseCanvas}
+                canUseAgent={canUseAgent}
                 companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed
+                installedPlugin={plugin}
                 key={plugin.id}
                 locale={locale}
+                onConnect={() => onConnect(plugin.id)}
                 onInstall={() => undefined}
                 onInstallSkill={() => onInstallSkill(plugin.id)}
                 onOpenRelease={() => undefined}
                 onUninstall={() => onUninstall(plugin.id)}
+                onUseOnCanvas={() => onUseOnCanvas(plugin)}
+                onUseInAgent={() => onUseInAgent(plugin)}
                 plugin={plugin}
               />
             ))}
@@ -759,6 +967,7 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
         ) : props.tab === "skills" && props.skills ? (
           <SkillsPanel
             busy={props.busy}
+            initialSkillName={props.initialSkillName}
             inventory={props.skills}
             locale={locale}
             onImport={props.onImportSkill}
@@ -770,14 +979,20 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
           />
         ) : props.tab === "plugins" && props.plugins ? (
           <PluginsPanel
+            agentMcpStatuses={props.agentMcpStatuses}
             busy={props.busy}
+            canUseCanvas={props.canUseCanvas}
+            canUseAgent={props.canUseAgent}
             inventory={props.plugins}
             locale={locale}
+            onConnect={props.onConnectPlugin}
             onImport={props.onImportPlugin}
             onInstall={props.onInstallPlugin}
             onInstallSkill={props.onInstallPluginSkill}
             onOpenRelease={props.onOpenPluginRelease}
             onUninstall={props.onUninstallPlugin}
+            onUseOnCanvas={props.onUsePluginOnCanvas}
+            onUseInAgent={props.onUsePluginInAgent}
             skills={props.skills}
           />
         ) : (
@@ -834,15 +1049,19 @@ export function CapabilityCenterDialog(props: CapabilityCenterDialogProps) {
 }
 
 function useCapabilityManagement({
+  activeCanvasId,
   activeProjectId,
   enabled,
   initialTab,
+  onUsePluginOnCanvas,
+  onUsePluginInAgent,
   pluginClient,
   skillClient,
 }: CapabilityManagementSurfaceProps & { enabled: boolean }): CapabilityManagementController {
   const [tab, setTab] = useState<CapabilityCenterTab>(initialTab ?? "skills")
   const [skills, setSkills] = useState<DesktopSkillInventory | null>(null)
   const [plugins, setPlugins] = useState<WebPluginInventory | null>(null)
+  const [agentMcpStatuses, setAgentMcpStatuses] = useState<WebPluginAgentMcpConnectionStatuses>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<CapabilityAction | null>(null)
@@ -852,16 +1071,20 @@ function useCapabilityManagement({
     const current = ++request.current
     setLoading(true)
     try {
-      const [nextSkills, nextPlugins] = await Promise.all([
+      const [skillsResult, pluginsResult, agentMcpStatusesResult] = await Promise.allSettled([
         skillClient.listSkills(activeProjectId ? { scopeId: activeProjectId } : undefined),
         pluginClient.listPlugins(),
+        pluginClient.listAgentMcpStatuses(),
       ])
       if (current !== request.current) return
-      setSkills(nextSkills)
-      setPlugins(nextPlugins)
-      setError(null)
-    } catch (loadError) {
-      if (current === request.current) setError(errorMessage(loadError))
+      const failures: unknown[] = []
+      if (skillsResult.status === "fulfilled") setSkills(skillsResult.value)
+      else failures.push(skillsResult.reason)
+      if (pluginsResult.status === "fulfilled") setPlugins(pluginsResult.value)
+      else failures.push(pluginsResult.reason)
+      if (agentMcpStatusesResult.status === "fulfilled") setAgentMcpStatuses(agentMcpStatusesResult.value)
+      else failures.push(agentMcpStatusesResult.reason)
+      setError(failures.length ? errorMessage(failures[0]) : null)
     } finally {
       if (current === request.current) setLoading(false)
     }
@@ -884,12 +1107,17 @@ function useCapabilityManagement({
       if (busy) return
       setBusy(action)
       setError(null)
+      let mutationError: string | null = null
       try {
         await operation()
-        if (refreshAfter) await refresh()
-      } catch (mutationError) {
-        setError(errorMessage(mutationError))
+      } catch (cause) {
+        mutationError = errorMessage(cause)
       } finally {
+        // A failed or partially successful mutation may still change an external
+        // connection state. Always reconcile the read model before releasing the
+        // busy state, then preserve the host-authored mutation error if there was one.
+        if (refreshAfter) await refresh()
+        if (mutationError) setError(mutationError)
         setBusy(null)
       }
     },
@@ -905,10 +1133,14 @@ function useCapabilityManagement({
   )
 
   return {
+    agentMcpStatuses,
     busy,
+    canUseCanvas: Boolean(activeProjectId && activeCanvasId),
+    canUseAgent: Boolean(activeProjectId),
     error,
     loading,
     onImportPlugin: () => void mutate("plugin.import", () => pluginClient.importPlugin()),
+    onConnectPlugin: (id) => void mutate(`plugin.connect:${id}`, () => pluginClient.connectAgentMcp({ id })),
     onImportSkill: () => void mutate("skill.import", () => skillClient.importSkill()),
     onInstallPlugin: (id) => void mutate(`plugin.install:${id}`, () => pluginClient.installCatalogPlugin({ id })),
     onInstallPluginSkill: (pluginId) =>
@@ -921,6 +1153,8 @@ function useCapabilityManagement({
     onTabChange: setTab,
     onUninstallPlugin: (id) => void mutate(`plugin.uninstall:${id}`, () => pluginClient.uninstallPlugin({ id })),
     onUninstallSkill: (name) => void mutate(`skill.uninstall:${name}`, () => skillClient.uninstallSkill({ name })),
+    onUsePluginOnCanvas: (plugin) => onUsePluginOnCanvas?.(plugin),
+    onUsePluginInAgent: (plugin) => onUsePluginInAgent?.(plugin),
     plugins,
     skills,
     tab,
@@ -928,17 +1162,24 @@ function useCapabilityManagement({
 }
 
 export function CapabilityManagementSurface({
+  activeCanvasId,
   activeProjectId,
   className,
+  initialSkillName,
   initialTab = "skills",
   locale = "en",
+  onUsePluginOnCanvas,
+  onUsePluginInAgent,
   pluginClient,
   skillClient,
 }: CapabilityManagementSurfaceProps) {
   const management = useCapabilityManagement({
+    activeCanvasId,
     activeProjectId,
     enabled: true,
     initialTab,
+    onUsePluginOnCanvas,
+    onUsePluginInAgent,
     pluginClient,
     skillClient,
   })
@@ -947,25 +1188,32 @@ export function CapabilityManagementSurface({
       aria-label={appMessage(locale, "capabilities.title")}
       className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card", className)}
     >
-      <CapabilityManagementView {...management} locale={locale} />
+      <CapabilityManagementView {...management} initialSkillName={initialSkillName} locale={locale} />
     </section>
   )
 }
 
 export function CapabilityCenter({
+  activeCanvasId,
   activeProjectId,
   className,
   defaultOpen = false,
+  initialSkillName,
   initialTab = "skills",
   locale = "en",
+  onUsePluginOnCanvas,
+  onUsePluginInAgent,
   pluginClient,
   skillClient,
 }: CapabilityCenterProps) {
   const [open, setOpen] = useState(defaultOpen)
   const management = useCapabilityManagement({
+    activeCanvasId,
     activeProjectId,
     enabled: open,
     initialTab,
+    onUsePluginOnCanvas,
+    onUsePluginInAgent,
     pluginClient,
     skillClient,
   })
@@ -985,7 +1233,14 @@ export function CapabilityCenter({
         <Sparkles />
         {appMessage(locale, "capabilities.title")}
       </Button>
-      {open ? <CapabilityCenterDialog {...management} locale={locale} onClose={() => setOpen(false)} /> : null}
+      {open ? (
+        <CapabilityCenterDialog
+          {...management}
+          initialSkillName={initialSkillName}
+          locale={locale}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </>
   )
 }

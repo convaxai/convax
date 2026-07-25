@@ -9,6 +9,14 @@ const desktopBuildFeatureFlags = resolveDesktopBuildFeatureFlags(process.env)
 const dependencyPathPattern = /[\\/]node_modules[\\/]/
 const workspaceDistPathPattern = /[\\/]packages[\\/][^\\/]+[\\/]dist(?:[\\/]|$)/
 
+const desktopMainBundledDependencies = [
+  "@convax/agent-runtime",
+  "@convax/canvas",
+  "@convax/project",
+  "@opencode-ai/sdk",
+  "acorn",
+] as const
+
 export function isWorkspaceDistPath(file: string) {
   return workspaceDistPathPattern.test(file)
 }
@@ -71,7 +79,7 @@ export default defineConfig({
   main: {
     build: {
       externalizeDeps: {
-        exclude: ["@convax/agent-runtime", "@convax/canvas", "@convax/project", "@opencode-ai/sdk"],
+        exclude: [...desktopMainBundledDependencies],
       },
       rollupOptions: {
         input: "src/main/index.ts",

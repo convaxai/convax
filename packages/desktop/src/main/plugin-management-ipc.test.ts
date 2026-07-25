@@ -69,6 +69,24 @@ const manifest = (id: string): WebPluginManifest => ({
   version: "1.0.0",
 })
 
+const agentMcpManifest = (id: string): WebPluginManifest => ({
+  capabilities: [],
+  contributes: {
+    agent: {
+      mcp: {
+        oauth: "auto",
+        type: "remote",
+        url: "https://example.com/mcp",
+      },
+    },
+  },
+  description: `${id} remote Agent MCP`,
+  id,
+  name: id,
+  schema: "convax.plugin/6",
+  version: "1.0.0",
+})
+
 const catalogEntry = (id: string, version = "1.0.0"): DesktopBuiltinPluginBundle => ({
   bundle: { files: { "index.html": "<!doctype html>", "manifest.json": "{}" } },
   manifest: { ...manifest(id), version },
@@ -91,8 +109,8 @@ function createRemoteCatalog() {
   let changeListener: (() => void) | undefined
   const unsubscribe = mock(() => undefined)
   const catalog = {
-    getPluginReleaseUrl: mock(async (id: string) =>
-      `https://github.com/microvoid/convax-plugins/releases/tag/plugin-${id}-v1.0.0`,
+    getPluginReleaseUrl: mock(
+      async (id: string) => `https://github.com/microvoid/convax-plugins/releases/tag/plugin-${id}-v1.0.0`,
     ),
     installPlugin: mock(async (id: string) => manifest(id)),
     listPluginCatalog: mock(async (installedIds: ReadonlySet<string>) => [
@@ -133,7 +151,9 @@ describe("registerPluginManagementIpc", () => {
   test("keeps the preload client channel contract stable", async () => {
     const { pluginManagementIpcChannels } = await import("./plugin-management-ipc")
     expect(pluginManagementIpcChannels).toEqual({
+      agentMcpStatuses: "plugin:agent-mcp-statuses",
       changed: "plugin:changed",
+      connectAgentMcp: "plugin:agent-mcp-connect",
       importPlugin: "plugin:import",
       installCatalogPlugin: "plugin:catalog-install",
       listPlugins: "plugin:list",
@@ -152,6 +172,8 @@ describe("registerPluginManagementIpc", () => {
     )
 
     for (const channel of [
+      pluginManagementIpcChannels.agentMcpStatuses,
+      pluginManagementIpcChannels.connectAgentMcp,
       pluginManagementIpcChannels.listPlugins,
       pluginManagementIpcChannels.importPlugin,
       pluginManagementIpcChannels.installCatalogPlugin,
@@ -164,6 +186,72 @@ describe("registerPluginManagementIpc", () => {
     }
     expect(manager.list).not.toHaveBeenCalled()
     expect(manager.install).not.toHaveBeenCalled()
+    dispose()
+  })
+
+  test("lists display-only Agent MCP status by installed Plugin id", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const plugin = agentMcpManifest("remote-editor")
+    const manager = createManager([plugin])
+    const listAgentMcpStatuses = mock(async (_plugins: readonly InstalledWebPluginSummary[]) => ({
+      "remote-editor": "connected" as const,
+    }))
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      listAgentMcpStatuses,
+      onDidChange: async () => undefined,
+    })
+
+    await expect(invoke(pluginManagementIpcChannels.agentMcpStatuses)).resolves.toEqual({
+      "remote-editor": "connected",
+    })
+    expect(listAgentMcpStatuses).toHaveBeenCalledWith([plugin])
+    dispose()
+  })
+
+  test("serializes Agent MCP connection with Plugin mutations and publishes every real attempt", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const plugin = agentMcpManifest("remote-editor")
+    const updatedPlugin = { ...plugin, version: "2.0.0" }
+    const manager = createManager()
+    const mutationOrder: string[] = []
+    manager.list = mock(async () => {
+      mutationOrder.push("list")
+      return [updatedPlugin]
+    })
+    manager.withPluginMutation = mock(async (pluginId, operation) => {
+      mutationOrder.push(`lock:${pluginId}`)
+      return operation({ pluginId })
+    }) as WebPluginManager["withPluginMutation"]
+    const connectAgentMcp = mock(async (_plugin: InstalledWebPluginSummary) => undefined)
+    const target = testWindow()
+    windows.push(target)
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      connectAgentMcp,
+      onDidChange: async () => undefined,
+    })
+
+    await expect(invoke(pluginManagementIpcChannels.connectAgentMcp, { id: "remote-editor" })).resolves.toBeUndefined()
+    expect(manager.withPluginMutation).toHaveBeenCalledWith("remote-editor", expect.any(Function))
+    expect(mutationOrder).toEqual(["lock:remote-editor", "list"])
+    expect(connectAgentMcp).toHaveBeenCalledWith(updatedPlugin)
+    expect(target.webContents.send).toHaveBeenCalledTimes(1)
+    expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+
+    connectAgentMcp.mockRejectedValueOnce(new Error("authorization failed"))
+    await expect(invoke(pluginManagementIpcChannels.connectAgentMcp, { id: "remote-editor" })).rejects.toThrow(
+      "authorization failed",
+    )
+    expect(target.webContents.send).toHaveBeenCalledTimes(2)
+
+    await expect(
+      Promise.resolve().then(() => invoke(pluginManagementIpcChannels.connectAgentMcp, { id: "../remote-editor" })),
+    ).rejects.toThrow("Plugin id")
+    manager.list = mock(async () => [])
+    await expect(
+      Promise.resolve().then(() => invoke(pluginManagementIpcChannels.connectAgentMcp, { id: "missing" })),
+    ).rejects.toThrow("Installed Plugin was not found")
+    expect(connectAgentMcp).toHaveBeenCalledTimes(2)
+    expect(target.webContents.send).toHaveBeenCalledTimes(2)
     dispose()
   })
 
@@ -194,7 +282,7 @@ describe("registerPluginManagementIpc", () => {
 
     dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
     await expect(invoke(pluginManagementIpcChannels.importPlugin)).resolves.toMatchObject({ id: "imported-plugin" })
-    expect(manager.install).toHaveBeenCalledWith("/portable/plugin-source")
+    expect(manager.install).toHaveBeenCalledWith("/portable/plugin-source", { updateExisting: true })
     expect(dialogCalls[0]).toEqual([sent, expect.objectContaining({ properties: ["openDirectory"] })])
 
     await expect(
@@ -306,7 +394,7 @@ describe("registerPluginManagementIpc", () => {
 
     const registered = [...handlers.keys()]
     dispose()
-    expect(registered).toHaveLength(5)
+    expect(registered).toHaveLength(7)
     expect(removedHandlers.sort()).toEqual(registered.sort())
     expect(handlers).toHaveLength(0)
   })
@@ -370,13 +458,14 @@ describe("registerPluginManagementIpc", () => {
     await invoke(pluginManagementIpcChannels.importPlugin)
     expect(manager.install).toHaveBeenCalledWith("/portable/plugin-source", {
       beforePublish: expect.any(Function),
+      updateExisting: true,
     })
     await invoke(pluginManagementIpcChannels.installCatalogPlugin, { id: item.manifest.id })
     expect(manager.installOrUpdateBuiltinBundle).toHaveBeenCalledWith(item.bundle, {
       beforePublish: expect.any(Function),
     })
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })
-    expect(onDidChange).toHaveBeenCalledWith("installed-plugin", { pluginId: "installed-plugin" })
+    expect(onDidChange).toHaveBeenCalledWith("installed-plugin")
 
     manager.uninstall = mock(async () => false) as WebPluginManager["uninstall"]
     await invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "missing-plugin" })
@@ -442,18 +531,57 @@ describe("registerPluginManagementIpc", () => {
     const target = testWindow()
     windows.push(target)
     const warning = spyOn(console, "warn").mockImplementation(() => undefined)
+    const reconcileAfterChange = mock(async () => undefined)
     const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
       onDidChange: async () => {
         throw new Error("temporary cleanup failure")
       },
+      reconcileAfterChange,
     })
     try {
       await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
       expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+      expect(reconcileAfterChange).not.toHaveBeenCalled()
       expect(warning).toHaveBeenCalledTimes(1)
     } finally {
       dispose()
       warning.mockRestore()
+    }
+  })
+
+  test("invalidates outside the Plugin mutation lock and reconciles under the latest package lock", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    const phases: string[] = []
+    let locked = false
+    manager.withPluginMutation = mock(async (pluginId, operation) => {
+      expect(locked).toBe(false)
+      locked = true
+      phases.push(`lock:${pluginId}`)
+      try {
+        return await operation({ pluginId })
+      } finally {
+        locked = false
+      }
+    }) as WebPluginManager["withPluginMutation"]
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, {
+      onDidChange: async (pluginId) => {
+        phases.push(`invalidate:${pluginId}:${locked}`)
+      },
+      reconcileAfterChange: async (pluginId) => {
+        phases.push(`reconcile:${pluginId}:${locked}`)
+      },
+    })
+
+    try {
+      await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
+      expect(phases).toEqual([
+        "invalidate:installed-plugin:false",
+        "lock:installed-plugin",
+        "reconcile:installed-plugin:true",
+      ])
+    } finally {
+      dispose()
     }
   })
 
@@ -485,7 +613,7 @@ describe("registerPluginManagementIpc", () => {
         url: "https://attacker.invalid/plugin.zip",
       }),
     ).resolves.toMatchObject({ id: "remote-plugin" })
-    expect(remote.installPlugin).toHaveBeenCalledWith("remote-plugin")
+    expect(remote.installPlugin).toHaveBeenCalledWith("remote-plugin", { allowHooks: true })
     expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
 
     await expect(

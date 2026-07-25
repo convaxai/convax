@@ -1,5 +1,10 @@
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
-import { compareWebPluginVersions, type InstalledWebPluginSummary, type WebPluginClient } from "../plugin-contracts"
+import {
+  compareWebPluginVersions,
+  requireWebPluginId,
+  type InstalledWebPluginSummary,
+  type WebPluginClient,
+} from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type {
   WebPluginManager,
@@ -14,7 +19,9 @@ type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChang
 >[0]
 
 export const pluginManagementIpcChannels = {
+  agentMcpStatuses: "plugin:agent-mcp-statuses",
   changed: "plugin:changed",
+  connectAgentMcp: "plugin:agent-mcp-connect",
   importPlugin: "plugin:import",
   installCatalogPlugin: "plugin:catalog-install",
   listPlugins: "plugin:list",
@@ -34,12 +41,19 @@ export function registerPluginManagementIpc(
   remoteCatalog?: RemotePluginCatalogPort,
   lifecycle?: {
     beforeChange?(pluginId: string): Promise<void> | void
-    onDidChange(pluginId: string, mutation: WebPluginMutationContext): Promise<void> | void
+    connectAgentMcp?(plugin: InstalledWebPluginSummary): Promise<void>
+    listAgentMcpStatuses?(
+      plugins: readonly InstalledWebPluginSummary[],
+    ): ReturnType<WebPluginClient["listAgentMcpStatuses"]>
+    /** Lock-free invalidation. This may wait for Agent work that resolves Plugin state. */
+    onDidChange?(pluginId: string): Promise<void> | void
     prepareInstall?(
       plugin: InstalledWebPluginSummary,
       candidate: WebPluginPublicationCandidate,
     ): Promise<WebPluginPublicationTransaction>
     prepareRemove?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
+    /** Final convergence against the latest package while holding its mutation lock. */
+    reconcileAfterChange?(pluginId: string, mutation: WebPluginMutationContext): Promise<void> | void
   },
 ) {
   const prepareInstall = lifecycle?.prepareInstall?.bind(lifecycle)
@@ -173,14 +187,18 @@ export function registerPluginManagementIpc(
     const changedPluginId = pluginId(result)
     if (changedPluginId) {
       try {
-        await runChangedLifecycle(() =>
-          manager.withPluginMutation(changedPluginId, (mutation) =>
-            Promise.resolve(lifecycle?.onDidChange(changedPluginId, mutation)),
-          ),
-        )
+        await runChangedLifecycle(async () => {
+          await lifecycle?.onDidChange?.(changedPluginId)
+          if (lifecycle?.reconcileAfterChange) {
+            await manager.withPluginMutation(changedPluginId, (mutation) =>
+              Promise.resolve(lifecycle.reconcileAfterChange?.(changedPluginId, mutation)),
+            )
+          }
+        })
       } catch (error) {
         // The package mutation is already committed. Startup reconciliation
-        // retries cleanup; never report a successful install as a failure.
+        // retries cleanup. Invalidation failure must also retain superseded
+        // Hook snapshots because the old Agent generation may still need them.
         console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
       }
     }
@@ -188,6 +206,28 @@ export function registerPluginManagementIpc(
     return result
   }
   const disposers = [
+    register<undefined, Awaited<ReturnType<WebPluginClient["listAgentMcpStatuses"]>>>(
+      pluginManagementIpcChannels.agentMcpStatuses,
+      async () => lifecycle?.listAgentMcpStatuses?.(await manager.list()) ?? {},
+    ),
+    register<PluginClientInput<"connectAgentMcp">, Awaited<ReturnType<WebPluginClient["connectAgentMcp"]>>>(
+      pluginManagementIpcChannels.connectAgentMcp,
+      async (_event, input) => {
+        const pluginId = requireWebPluginId(input?.id)
+        let attempted = false
+        try {
+          await manager.withPluginMutation(pluginId, async () => {
+            const plugin = (await manager.list()).find((candidate) => candidate.id === pluginId)
+            if (!plugin) throw new Error(`Installed Plugin was not found: ${pluginId}`)
+            if (!lifecycle?.connectAgentMcp) throw new Error("Plugin Agent MCP connection is unavailable")
+            attempted = true
+            await lifecycle.connectAgentMcp(plugin)
+          })
+        } finally {
+          if (attempted) publishChange()
+        }
+      },
+    ),
     register<undefined, Awaited<ReturnType<WebPluginClient["listPlugins"]>>>(
       pluginManagementIpcChannels.listPlugins,
       () => listPlugins(),
@@ -207,8 +247,9 @@ export function registerPluginManagementIpc(
             preparePublication
               ? manager.install(sourceDirectory, {
                   beforePublish: preparePublication,
+                  updateExisting: true,
                 })
-              : manager.install(sourceDirectory),
+              : manager.install(sourceDirectory, { updateExisting: true }),
           (plugin) => plugin.id,
         )
       },
@@ -240,7 +281,7 @@ export function registerPluginManagementIpc(
         }
         if (remoteCatalog)
           return changed(
-            () => remoteCatalog.installPlugin(input.id),
+            () => remoteCatalog.installPlugin(input.id, { allowHooks: true }),
             (plugin) => plugin.id,
           )
         throw new Error(`Plugin catalog item was not found: ${input.id}`)

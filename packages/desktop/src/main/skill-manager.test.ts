@@ -67,6 +67,21 @@ async function fixture(
 }
 
 describe("DesktopSkillManager", () => {
+  test("publishes an externally committed inventory change without refreshing OpenCode", async () => {
+    const setup = await fixture()
+    const listener = mock(() => undefined)
+    const unsubscribe = setup.manager.subscribe(listener)
+    try {
+      setup.manager.notifyInventoryChanged()
+
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(setup.refreshSkills).not.toHaveBeenCalled()
+    } finally {
+      unsubscribe()
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
   test("lists global Skills read-only and installs/uninstalls a catalog Skill", async () => {
     const setup = await fixture([{ description: "Global", location: "/global/SKILL.md", name: "global-skill" }])
     try {

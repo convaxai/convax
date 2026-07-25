@@ -12,7 +12,10 @@ import {
   toolPluginCanvasMcpNotifications,
 } from "./tool-plugin-canvas-capabilities"
 
-function plugin(capabilities: InstalledPlugin["capabilities"]): InstalledPlugin {
+function plugin(
+  capabilities: InstalledPlugin["capabilities"],
+  schema: "convax.plugin/5" | "convax.plugin/6" = "convax.plugin/5",
+): InstalledPlugin {
   return {
     capabilities,
     contributes: { service: { actions: [] } },
@@ -20,7 +23,7 @@ function plugin(capabilities: InstalledPlugin["capabilities"]): InstalledPlugin 
     id: "canvas-sidecar",
     name: "Canvas Sidecar",
     runtime: { command: "canvas-sidecar-mcp", type: "mcp-stdio" },
-    schema: "convax.plugin/5",
+    schema,
     version: "1.0.0",
   }
 }
@@ -115,6 +118,19 @@ describe("Tool Plugin Canvas reverse MCP adapter", () => {
     ).toBeUndefined()
     expect(issue).not.toHaveBeenCalled()
     expect(connect).not.toHaveBeenCalled()
+  })
+
+  test("reuses the reverse Canvas adapter for a v6 Tool runtime", async () => {
+    const { connect, issue } = fixture(["projects.read", "canvas.document.read"])
+    const installed = plugin(["projects.read", "canvas.document.read"], "convax.plugin/6")
+    const bridge = await createToolPluginCanvasMcpBridge(installed, {
+      broker: { connect },
+      principals: { issue },
+    })
+
+    expect(issue).toHaveBeenCalledWith("canvas-sidecar", "tool", installed)
+    expect(bridge?.handler.methods).toContain(toolPluginCanvasMcpMethods.getDocument)
+    bridge?.close()
   })
 
   test("passes reverse-MCP cancellation into the capability client", async () => {

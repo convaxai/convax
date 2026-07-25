@@ -371,6 +371,8 @@ export interface CanvasEditorProps {
 export interface CanvasEditorHandle {
   /** Persists pending commands and returns Main's authoritative document projection. */
   flush: () => Promise<CanvasDocument>
+  /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
+  insertNode: (type: string) => string | undefined
   prepareToLeave: () => Promise<void>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
@@ -530,12 +532,7 @@ function CanvasEditorContent(
     props.fileRendererRegistry.getVersion,
   )
 
-  const readOnly =
-    (props.readOnly ?? false) ||
-    leaving ||
-    hydrating ||
-    Boolean(loadError) ||
-    Boolean(saveError)
+  const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
   const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
   const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
@@ -1324,41 +1321,6 @@ function CanvasEditorContent(
       await rendered
     })
   }, [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender])
-  useImperativeHandle(
-    props.editorRef,
-    () => ({
-      async flush() {
-        await waitForStableLoad()
-        return startSave(historyRef.current.document)
-      },
-      async prepareToLeave() {
-        await waitForStableLoad()
-        leavingRef.current = true
-        setLeaving(true)
-        abortPendingOperations()
-        await finalizeGestureAndSave()
-      },
-      async reload() {
-        await reloadDocument()
-      },
-      async reloadAuthoritative() {
-        await reloadAuthoritativeDocument()
-      },
-      resumeAfterLeaveCanceled() {
-        leavingRef.current = false
-        setLeaving(false)
-      },
-    }),
-    [
-      abortPendingOperations,
-      finalizeGestureAndSave,
-      props.editorRef,
-      reloadDocument,
-      reloadAuthoritativeDocument,
-      startSave,
-      waitForStableLoad,
-    ],
-  )
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
@@ -1487,10 +1449,10 @@ function CanvasEditorContent(
   )
   const addNode = useCallback(
     (type: string, position?: CanvasPoint) => {
-      if (readOnly) return
+      if (readOnly || leavingRef.current || hydratingRef.current || saveErrorRef.current) return undefined
       const preferredPosition = position ?? insertPoint ?? pointerRef.current ?? pointAtCenter()
       const created = createNodeForType(type, preferredPosition)
-      if (!created) return
+      if (!created) return undefined
       const node = {
         ...created,
         position: findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
@@ -1501,8 +1463,48 @@ function CanvasEditorContent(
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type } })
+      return node.id
     },
     [createNodeForType, history.document, insertPoint, pointAtCenter, readOnly, selectNodes, telemetryService],
+  )
+  useImperativeHandle(
+    props.editorRef,
+    () => ({
+      async flush() {
+        await waitForStableLoad()
+        return startSave(historyRef.current.document)
+      },
+      insertNode(type) {
+        return addNode(type)
+      },
+      async prepareToLeave() {
+        await waitForStableLoad()
+        leavingRef.current = true
+        setLeaving(true)
+        abortPendingOperations()
+        await finalizeGestureAndSave()
+      },
+      async reload() {
+        await reloadDocument()
+      },
+      async reloadAuthoritative() {
+        await reloadAuthoritativeDocument()
+      },
+      resumeAfterLeaveCanceled() {
+        leavingRef.current = false
+        setLeaving(false)
+      },
+    }),
+    [
+      abortPendingOperations,
+      addNode,
+      finalizeGestureAndSave,
+      props.editorRef,
+      reloadDocument,
+      reloadAuthoritativeDocument,
+      startSave,
+      waitForStableLoad,
+    ],
   )
   const duplicate = useCallback(() => {
     if (!hasNodeOnlySelection) return

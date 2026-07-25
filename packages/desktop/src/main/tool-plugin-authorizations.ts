@@ -8,6 +8,7 @@ import {
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
+  webPluginManifestSchemaV6,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 
@@ -83,6 +84,7 @@ export function toolPluginManifestSha256(plugin: InstalledWebPluginSummary) {
       contributes: plugin.contributes,
       description: plugin.description,
       entry: plugin.entry,
+      hooks: plugin.hooks,
       id: plugin.id,
       name: plugin.name,
       runtime: plugin.runtime,
@@ -98,7 +100,8 @@ export function isExecutableToolPlugin(plugin: InstalledWebPluginSummary) {
     (plugin.schema === webPluginManifestSchemaV2 ||
       plugin.schema === webPluginManifestSchemaV3 ||
       plugin.schema === webPluginManifestSchemaV4 ||
-      plugin.schema === webPluginManifestSchemaV5) &&
+      plugin.schema === webPluginManifestSchemaV5 ||
+      plugin.schema === webPluginManifestSchemaV6) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )

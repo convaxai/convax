@@ -25,6 +25,8 @@ export interface AgentConversationToolSummary {
 export interface AgentConversationTurn {
   activity: AgentConversationMessageSlice[]
   delivery?: AgentConversationMessageSlice
+  /** Best available persisted wall-clock duration for a completed turn. */
+  durationMs?: number
   /** Render independently from the activity disclosure so failures stay visible. */
   errors: AgentConversationError[]
   id: string
@@ -124,15 +126,24 @@ function presentTurn(user: AgentMessage | undefined, assistants: AgentMessage[])
 
   const firstMessage = user ?? assistants[0]
   if (!firstMessage) throw new Error("An Agent conversation turn requires at least one message")
+  const completedAt = assistants.reduce<number | undefined>(
+    (latest, message) =>
+      message.completedAt === undefined ? latest : Math.max(latest ?? message.completedAt, message.completedAt),
+    undefined,
+  )
+  const durationMs =
+    completedAt !== undefined && completedAt >= firstMessage.createdAt ? completedAt - firstMessage.createdAt : undefined
+  const userParts = user?.parts.filter(isVisibleConversationPart) ?? []
 
   return {
     activity,
     delivery,
+    durationMs,
     errors: assistants.flatMap((message) => (message.error ? [{ message, text: message.error }] : [])),
     id: firstMessage.id,
     interrupted: Boolean(assistants.at(-1) && assistants.at(-1)?.completedAt === undefined && !delivery && activity.length),
     tools: summarizeTools(activity),
-    user: user ? { message: user, parts: user.parts.filter(isVisibleConversationPart) } : undefined,
+    user: user && userParts.length > 0 ? { message: user, parts: userParts } : undefined,
   }
 }
 

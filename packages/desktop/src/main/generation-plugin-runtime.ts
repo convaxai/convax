@@ -17,6 +17,7 @@ import {
   webPluginManifestSchemaV3,
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
+  webPluginManifestSchemaV6,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
   type WebPluginServiceAction,
@@ -353,12 +354,14 @@ function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is Instal
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
     | typeof webPluginManifestSchemaV5
+    | typeof webPluginManifestSchemaV6
 } {
   return (
     (plugin.schema === webPluginManifestSchemaV2 ||
       plugin.schema === webPluginManifestSchemaV3 ||
       plugin.schema === webPluginManifestSchemaV4 ||
-      plugin.schema === webPluginManifestSchemaV5) &&
+      plugin.schema === webPluginManifestSchemaV5 ||
+      plugin.schema === webPluginManifestSchemaV6) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) ||
       plugin.contributes.service !== undefined ||
@@ -373,20 +376,24 @@ function toolSummary(
   const model =
     plugin.schema === webPluginManifestSchemaV3 ||
     plugin.schema === webPluginManifestSchemaV4 ||
-    plugin.schema === webPluginManifestSchemaV5
+    plugin.schema === webPluginManifestSchemaV5 ||
+    plugin.schema === webPluginManifestSchemaV6
       ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
       : { name: tool.title, tool: tool.id }
   const agent =
     plugin.schema === webPluginManifestSchemaV3 ||
     plugin.schema === webPluginManifestSchemaV4 ||
-    plugin.schema === webPluginManifestSchemaV5
-      ? plugin.contributes.agent?.tools.find((candidate) => candidate.tool === tool.id)
+    plugin.schema === webPluginManifestSchemaV5 ||
+    plugin.schema === webPluginManifestSchemaV6
+      ? plugin.contributes.agent?.tools?.find((candidate) => candidate.tool === tool.id)
       : undefined
   return {
     acceptedInputs: [...tool.acceptedInputs],
     ...(agent === undefined ? {} : { agentId: agent.id }),
+    ...(tool.delivery === undefined ? {} : { delivery: tool.delivery }),
     description: tool.description,
     id: generationPluginToolHostId(plugin.id, tool.id),
+    ...(tool.inputBinding === undefined ? {} : { inputBinding: tool.inputBinding }),
     kind: model ? "model" : "operation",
     ...(model === undefined ? {} : { modelName: model.name }),
     output: tool.output,
@@ -401,8 +408,10 @@ function toolContractFingerprint(tool: GenerationToolSummary) {
   return JSON.stringify({
     acceptedInputs: [...tool.acceptedInputs],
     agentId: tool.agentId,
+    delivery: tool.delivery,
     description: tool.description,
     id: tool.id,
+    inputBinding: tool.inputBinding,
     kind: tool.kind,
     modelName: tool.modelName,
     output: tool.output,
@@ -576,7 +585,11 @@ export class GenerationPluginRuntime {
           throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.gateway.start`)
         }
         const current = (await this.#discover()).get(selected.manifest.id)
-        if (!current || current.fingerprint !== selected.fingerprint || this.#cache.get(selected.manifest.id) !== runtime) {
+        if (
+          !current ||
+          current.fingerprint !== selected.fingerprint ||
+          this.#cache.get(selected.manifest.id) !== runtime
+        ) {
           throw new Error(`Plugin LLM provider changed before its gateway started: ${selected.manifest.id}`)
         }
         const result = await runtime.client.callTool("llm.gateway.start", {}, signal)
@@ -594,7 +607,9 @@ export class GenerationPluginRuntime {
         throw error
       }
     }
-    return connections.sort((left, right) => left.name.localeCompare(right.name) || left.providerId.localeCompare(right.providerId))
+    return connections.sort(
+      (left, right) => left.name.localeCompare(right.name) || left.providerId.localeCompare(right.providerId),
+    )
   }
 
   /** Lists installed service contributions without resolving or starting their sidecars. */

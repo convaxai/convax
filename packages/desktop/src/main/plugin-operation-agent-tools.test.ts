@@ -43,6 +43,21 @@ function modelTool(): GenerationToolSummary {
   }
 }
 
+function returnOperationTool(input: Partial<GenerationToolSummary> = {}): GenerationToolSummary {
+  return operationTool({
+    acceptedInputs: ["reference_video", "reference_image"],
+    agentId: "import_media",
+    delivery: "return",
+    description: "Import connected media into an external editing project.",
+    id: "media-operations/import.media",
+    inputBinding: "direct-incoming",
+    output: "text",
+    title: "Import media",
+    toolId: "import.media",
+    ...input,
+  })
+}
+
 class FakeGenerationService implements GenerationCanvasAgentPort {
   calls: Array<{
     actor: { id: string; kind: "agent" }
@@ -62,6 +77,15 @@ class FakeGenerationService implements GenerationCanvasAgentPort {
     signal?: AbortSignal,
   ): Promise<GenerationCanvasResult> {
     this.calls.push({ actor, request, signal })
+    if (request.resultMode?.type === "return") {
+      return {
+        createdNodeIds: [],
+        outputText: '{"assetIds":["asset-one"]}',
+        revision: request.expectedRevision,
+        toolId: request.toolId ?? "missing",
+        warnings: [],
+      }
+    }
     return {
       createdNodeIds: ["operation-result"],
       revision: request.expectedRevision + 1,
@@ -143,6 +167,94 @@ describe("Plugin operation Agent tools", () => {
     expect(schema.properties.relationNodeIds).toMatchObject({ maxItems: 32, uniqueItems: true })
     expect(schema.properties.toolInput.maxProperties).toBe(32)
     expect(schema.required).toEqual(["references"])
+  })
+
+  test("publishes a sink schema and returns operation text without exposing Canvas output controls", async () => {
+    const service = new FakeGenerationService([returnOperationTool()])
+    const operationProvider = provider(service)
+    const [definition] = await operationProvider.listTools(scope)
+    const schema = definition?.inputSchema as {
+      additionalProperties: boolean
+      properties: {
+        ownerNodeId: { type: string }
+        references: { items: { properties: { role: { enum: string[] } } } }
+        toolInput: { maxProperties: number }
+      }
+      required: string[]
+    }
+
+    expect(definition?.description).toContain("without creating a Canvas node")
+    expect(schema.additionalProperties).toBeFalse()
+    expect(Object.keys(schema.properties)).toEqual(["ownerNodeId", "references", "toolInput"])
+    expect(schema.properties.references.items.properties.role.enum).toEqual(["reference_video", "reference_image"])
+    expect(schema.required).toEqual(["ownerNodeId", "references"])
+
+    await expect(
+      operationProvider.callTool(
+        scope,
+        "plugin_media_operations_import_media",
+        {
+          ownerNodeId: "plugin-card",
+          references: [{ nodeId: "video-source", role: "reference_video" }],
+          toolInput: { endpoint: "https://upload.invalid", token: "short-lived" },
+        },
+        {},
+      ),
+    ).resolves.toEqual({
+      changed: false,
+      createdNodeIds: [],
+      outputText: '{"assetIds":["asset-one"]}',
+      revision: 7,
+      toolId: "media-operations/import.media",
+      warnings: [],
+    })
+
+    expect(service.calls[0]?.request).toMatchObject({
+      anchor: { x: 0, y: 0 },
+      expectedOutputCount: 1,
+      expectedRevision: 7,
+      output: "text",
+      referenceConstraint: {
+        ownerNodeId: "plugin-card",
+        ownerPluginId: "media-operations",
+        type: "direct-incoming",
+      },
+      references: [{ nodeId: "video-source", role: "reference_video" }],
+      resultMode: { type: "return" },
+      toolId: "media-operations/import.media",
+      toolInput: { endpoint: "https://upload.invalid", token: "short-lived" },
+    })
+    expect(service.calls[0]?.request).not.toHaveProperty("relationAnchorNodeIds")
+
+    for (const input of [
+      {
+        anchor: { x: 10, y: 20 },
+        ownerNodeId: "plugin-card",
+        references: [{ nodeId: "video-source", role: "reference_video" }],
+      },
+      {
+        ownerNodeId: "plugin-card",
+        references: [{ nodeId: "video-source", role: "reference_video" }],
+        relationNodeIds: ["video-source"],
+      },
+      {
+        ownerNodeId: "plugin-card",
+        ownerPluginId: "caller-selected",
+        references: [{ nodeId: "video-source", role: "reference_video" }],
+      },
+    ]) {
+      await expect(operationProvider.callTool(scope, "plugin_media_operations_import_media", input)).rejects.toThrow(
+        "unsupported field",
+      )
+    }
+    expect(service.calls).toHaveLength(1)
+
+    await expect(
+      operationProvider.callTool(scope, "plugin_media_operations_import_media", {
+        references: [{ nodeId: "video-source", role: "reference_video" }],
+      }),
+    ).rejects.toThrow("ownerNodeId")
+    expect(service.calls).toHaveLength(1)
   })
 
   test("derives Canvas authority and operation identity from the host", async () => {
@@ -258,6 +370,10 @@ describe("Plugin operation Agent tools", () => {
       operationTool({ agentId: "Transform-Media" }),
       operationTool({ id: "other/transform.media" }),
       operationTool({ acceptedInputs: ["reference_video", "reference_video"] }),
+      returnOperationTool({ delivery: "unsupported" as "return" }),
+      returnOperationTool({ inputBinding: "unsupported" as "direct-incoming" }),
+      returnOperationTool({ acceptedInputs: [] }),
+      returnOperationTool({ output: "video" }),
     ]
     for (const tool of malformed) {
       await expect(provider(new FakeGenerationService([tool])).listTools(scope)).rejects.toThrow()
@@ -308,5 +424,22 @@ describe("Plugin operation Agent tools", () => {
     })
     expect(error.message).not.toContain("secret")
     expect(error.message).not.toContain("/private/tmp")
+  })
+
+  test("fails closed when a return operation violates the service result contract", async () => {
+    const service = new FakeGenerationService([returnOperationTool()])
+    service.generate = async (request) => ({
+      createdNodeIds: ["unexpected-node"],
+      revision: request.expectedRevision + 1,
+      toolId: request.toolId ?? "missing",
+      warnings: [],
+    })
+
+    await expect(
+      provider(service).callTool(scope, "plugin_media_operations_import_media", {
+        ownerNodeId: "plugin-card",
+        references: [{ nodeId: "video-source", role: "reference_video" }],
+      }),
+    ).rejects.toThrow("Plugin operation could not be completed")
   })
 })

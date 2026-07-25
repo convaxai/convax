@@ -83,7 +83,8 @@ export function listInstalledMediaOperationActions(
     if (
       (plugin.schema !== "convax.plugin/3" &&
         plugin.schema !== "convax.plugin/4" &&
-        plugin.schema !== "convax.plugin/5") ||
+        plugin.schema !== "convax.plugin/5" &&
+        plugin.schema !== "convax.plugin/6") ||
       plugin.runtime?.type !== "mcp-stdio"
     )
       return []

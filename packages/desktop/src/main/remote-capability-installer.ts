@@ -22,6 +22,7 @@ import {
   type WebPluginPublicationTransaction,
 } from "./plugin-manager"
 import type { ManagedPluginCompanionStore } from "./managed-plugin-companions"
+import type { PluginHookAuthorizationStore } from "./plugin-hook-authorizations"
 import type { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import {
   type RemoteCapabilityPackage,
@@ -43,7 +44,10 @@ export interface RemoteCapabilityRegistryPort {
 
 export interface RemotePluginCatalogPort {
   getPluginReleaseUrl(id: string): Promise<string>
-  installPlugin(id: string, options?: { allowCurrent?: boolean }): Promise<InstalledWebPluginSummary>
+  installPlugin(
+    id: string,
+    options?: { allowCurrent?: boolean; allowHooks?: boolean },
+  ): Promise<InstalledWebPluginSummary>
   listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]>
 }
 
@@ -63,6 +67,7 @@ export interface RemoteCapabilityInstallerOptions {
   builtinPlugins: readonly DesktopBuiltinPluginBundle[]
   builtinSkills: readonly DesktopBuiltinSkillBundle[]
   companionStore: Pick<ManagedPluginCompanionStore, "install" | "reconcilePlugin">
+  hookAuthorizationStore: Pick<PluginHookAuthorizationStore, "prepareInstall">
   platform?: NodeJS.Platform
   pluginManager: Pick<
     WebPluginManager,
@@ -144,6 +149,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   readonly #authorizationStore: RemoteCapabilityInstallerOptions["authorizationStore"]
   readonly #beforePluginPublish?: RemoteCapabilityInstallerOptions["beforePluginPublish"]
   readonly #companionStore: RemoteCapabilityInstallerOptions["companionStore"]
+  readonly #hookAuthorizationStore: RemoteCapabilityInstallerOptions["hookAuthorizationStore"]
   readonly #platform: NodeJS.Platform
   readonly #pluginManager: RemoteCapabilityInstallerOptions["pluginManager"]
   readonly #pluginSkillLifecycle: RemoteCapabilityInstallerOptions["pluginSkillLifecycle"]
@@ -159,6 +165,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     this.#pluginSkillLifecycle = options.pluginSkillLifecycle
     this.#prepareHostPublication = options.preparePluginPublication
     this.#companionStore = options.companionStore
+    this.#hookAuthorizationStore = options.hookAuthorizationStore
     this.#platform = options.platform ?? process.platform
     this.#arch = options.arch ?? process.arch
     this.#skillManager = options.skillManager
@@ -256,8 +263,11 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     return { bundle, companionArtifacts }
   }
 
-  async installPlugin(id: string, options: { allowCurrent?: boolean } = {}) {
+  async installPlugin(id: string, options: { allowCurrent?: boolean; allowHooks?: boolean } = {}) {
     const item = await this.#pluginPackage(id)
+    if (item.manifest.hooks && options.allowHooks !== true) {
+      throw new Error(`Plugin Hook installation requires an explicit user action: ${item.id}`)
+    }
     const { bundle, companionArtifacts } = await this.#downloadPlugin(item)
 
     return this.#pluginManager.withPluginMutation(item.id, async (mutation) => {
@@ -276,7 +286,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     })
   }
 
-  async updatePlugin(id: string) {
+  async updatePlugin(id: string, options: { allowHooks?: boolean } = {}) {
     const item = await this.#pluginPackage(id)
     return this.#pluginManager.withPluginMutation(item.id, async (mutation) => {
       const current = (await this.#pluginManager.list()).find((plugin) => plugin.id === item.id)
@@ -286,6 +296,9 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         throw new Error(`Installed Plugin is newer than the remote Registry package: ${item.id}`)
       }
       if (comparison === 0) return current
+      if (item.manifest.hooks && options.allowHooks !== true) {
+        throw new Error(`Plugin Hook update requires an explicit user action: ${item.id}`)
+      }
       const { bundle, companionArtifacts } = await this.#downloadPlugin(item)
       return this.#publishPlugin(item, bundle, companionArtifacts, current, mutation)
     })
@@ -379,10 +392,13 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
       plugin,
       managed ? { binding: managed, kind: "managed" } : undefined,
     )
+    let hookAuthorization
     let ownedSkills
     try {
+      hookAuthorization = await this.#hookAuthorizationStore.prepareInstall(plugin, candidate)
       ownedSkills = await this.#pluginSkillLifecycle.prepareInstall(plugin, candidate)
     } catch (error) {
+      await hookAuthorization?.rollback().catch(() => undefined)
       await authorization.rollback().catch(() => undefined)
       throw error
     }
@@ -401,6 +417,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
       },
       async commit() {
         await ownedSkills?.commit()
+        await hookAuthorization?.commit()
         await authorization.commit()
       },
       async publish() {
@@ -408,8 +425,10 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         await revalidateCurrent?.()
         await authorization.publish()
         try {
+          await hookAuthorization?.publish()
           await ownedSkills?.publish()
         } catch (error) {
+          await hookAuthorization?.rollback().catch(() => undefined)
           await authorization.rollback().catch(() => undefined)
           throw error
         }
@@ -422,6 +441,11 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
           failures.push(error)
         }
         try {
+          await hookAuthorization?.rollback()
+        } catch (error) {
+          failures.push(error)
+        }
+        try {
           await authorization.rollback()
         } catch (error) {
           failures.push(error)
@@ -429,6 +453,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         if (failures.length) throw new AggregateError(failures, "Plugin publication rollback failed")
       },
       async deferToRecovery() {
+        await hookAuthorization?.deferToRecovery?.()
         await ownedSkills?.deferToRecovery?.()
       },
     }
