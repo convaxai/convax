@@ -2,7 +2,10 @@ import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents }
 
 import {
   generationIpcChannels,
+  type GenerationCancelRequest,
   type GenerationCanvasRequest,
+  type GenerationCanvasReconcileRequest,
+  type GenerationCanvasReconcileResult,
   type GenerationCanvasResult,
   type GenerationDescribeToolRequest,
   type GenerationInputRole,
@@ -17,9 +20,11 @@ import { validateGenerationToolInputShape } from "./generation-tool-input-schema
 export { generationIpcChannels } from "../generation-contracts"
 
 export interface GenerationExecutor {
+  cancel?(request: GenerationCancelRequest): Promise<void>
   describeTool(request: GenerationDescribeToolRequest, signal?: AbortSignal): Promise<GenerationToolDescription>
   generate(request: GenerationCanvasRequest, signal?: AbortSignal): Promise<GenerationCanvasResult>
   listTools(request: GenerationListToolsRequest): Promise<readonly GenerationToolSummary[]>
+  reconcileCanvas?(request: GenerationCanvasReconcileRequest): Promise<GenerationCanvasReconcileResult>
 }
 
 export interface GenerationIpcOptions {
@@ -138,6 +143,19 @@ export function parseGenerationDescribeToolRequest(input: unknown): GenerationDe
   return {
     scopeId: requireOpaqueId(value.scopeId, "Generation scope id"),
     toolId: requireHostToolId(value.toolId),
+  }
+}
+
+export function parseGenerationCanvasReconcileRequest(input: unknown): GenerationCanvasReconcileRequest {
+  const value = requireRecord(input, "Generation Canvas reconciliation request")
+  requireExactKeys(value, ["ref"], ["ref"], "Generation Canvas reconciliation request")
+  const ref = requireRecord(value.ref, "Generation Canvas reconciliation reference")
+  requireExactKeys(ref, ["canvasId", "scopeId"], ["canvasId", "scopeId"], "Generation Canvas reconciliation reference")
+  return {
+    ref: {
+      canvasId: requireOpaqueId(ref.canvasId, "Generation Canvas id"),
+      scopeId: requireOpaqueId(ref.scopeId, "Generation scope id"),
+    },
   }
 }
 
@@ -294,21 +312,18 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
     return state
   }
 
-  const cancel = (event: IpcMainEvent, input: unknown) => {
-    if (!options.isTrustedSender(event)) return
-    let operationId: string
-    try {
-      operationId = requireOperationId(input)
-    } catch {
+  ipcMain.handle(generationIpcChannels.cancel, async (event, input: unknown) => {
+    if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
+    if (disposed) throw new Error("Generation IPC is disposed")
+    const operationId = requireOperationId(input)
+    const controller = senders.get(event.sender.id)?.controllers.get(operationId)
+    if (controller) {
+      controller.abort(abortError("The generation operation was canceled"))
       return
     }
-    senders
-      .get(event.sender.id)
-      ?.controllers.get(operationId)
-      ?.abort(abortError("The generation operation was canceled"))
-  }
-
-  ipcMain.on(generationIpcChannels.cancel, cancel)
+    if ([...senders.values()].some((state) => state.controllers.has(operationId))) return
+    await executor.cancel?.({ operationId })
+  })
   ipcMain.handle(generationIpcChannels.listTools, (event, input: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Generation IPC is disposed")
@@ -318,6 +333,12 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Generation IPC is disposed")
     return executor.describeTool(parseGenerationDescribeToolRequest(input))
+  })
+  ipcMain.handle(generationIpcChannels.reconcileCanvas, (event, input: unknown) => {
+    if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
+    if (disposed) throw new Error("Generation IPC is disposed")
+    if (!executor.reconcileCanvas) throw new Error("Generation Canvas reconciliation is unavailable")
+    return executor.reconcileCanvas(parseGenerationCanvasReconcileRequest(input))
   })
   ipcMain.handle(generationIpcChannels.generate, async (event, input: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
@@ -338,10 +359,11 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
   return () => {
     if (disposed) return
     disposed = true
-    ipcMain.removeListener(generationIpcChannels.cancel, cancel)
+    ipcMain.removeHandler(generationIpcChannels.cancel)
     ipcMain.removeHandler(generationIpcChannels.generate)
     ipcMain.removeHandler(generationIpcChannels.describeTool)
     ipcMain.removeHandler(generationIpcChannels.listTools)
+    ipcMain.removeHandler(generationIpcChannels.reconcileCanvas)
     for (const state of senders.values()) {
       state.sender.removeListener("destroyed", state.destroyed)
       for (const controller of state.controllers.values()) {

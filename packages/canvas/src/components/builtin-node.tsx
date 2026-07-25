@@ -69,15 +69,17 @@ import {
 import { useCanvasEditor } from "../editor-context"
 import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import {
+  getCanvasNodeGenerationRun,
+  isCanvasNodeGenerationRunActive,
+  type CanvasNodeGenerationRun,
+} from "../generation-run"
 import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
 import type { CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import {
-  CanvasFileGenerationActivityOwner,
   CanvasTextResourceConflictError,
   useCanvasService,
-  type CanvasAssistantGenerationActivity,
-  type CanvasFileGenerationActivity,
   type CanvasTextResourceService,
 } from "../services"
 import type {
@@ -1328,46 +1330,76 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 }
 
 function FileGenerationActivityOverlay(props: {
-  activity: Exclude<CanvasFileGenerationActivity, { status: "idle" }>
+  onCancel: () => void
   onRecover: () => void
+  run: CanvasNodeGenerationRun
 }) {
-  if (props.activity.status === "pending") {
+  if (isCanvasNodeGenerationRunActive(props.run)) {
     return (
       <div
         aria-busy="true"
         aria-live="polite"
-        className="nodrag nowheel pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
-        data-canvas-file-generation-activity="pending"
+        className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/85 p-4 text-center backdrop-blur-sm"
+        data-canvas-file-generation-activity={props.run.status}
+        data-canvas-generation-run-tool-id={props.run.toolId}
         role="status"
       >
         <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
           <LoaderCircle className="size-6 animate-spin text-primary motion-reduce:animate-none" />
-          <span>正在生成…</span>
+          <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
+          <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">{props.run.toolId}</span>
+          <Button
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onCancel()
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            取消
+          </Button>
         </div>
       </div>
     )
   }
+  const title =
+    props.run.status === "failed" ? "生成失败" : props.run.status === "cancelled" ? "生成已取消" : "生成已中断"
+  const retryIsSafe = props.run.retrySafety === "safe"
   return (
     <div
       className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
-      data-canvas-file-generation-activity="error"
+      data-canvas-file-generation-activity={props.run.status}
+      data-canvas-generation-run-tool-id={props.run.toolId}
       role="alert"
     >
       <div className="flex max-w-full flex-col items-center gap-2">
-        <span className="text-sm font-medium text-destructive">生成失败</span>
-        <span className="line-clamp-3 max-w-full text-xs text-muted-foreground">{props.activity.message}</span>
-        <Button
-          onClick={(event) => {
-            event.stopPropagation()
-            props.onRecover()
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          修改并重试
-        </Button>
+        <span className="text-sm font-medium text-destructive">{title}</span>
+        <span className="max-w-full truncate text-[11px] text-muted-foreground">{props.run.toolId}</span>
+        {retryIsSafe ? (
+          <Button
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onRecover()
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            修改并重试
+          </Button>
+        ) : (
+          <>
+            <span className="max-w-64 text-[11px] leading-4 text-muted-foreground">
+              外部任务结果未知。为避免重复计费，暂不能发起新任务。
+            </span>
+            <Button disabled size="sm" type="button" variant="outline">
+              暂不可重试
+            </Button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1410,8 +1442,6 @@ function FileAssistantAccessory(
   props: NodeProps<CanvasNode> & {
     initialGenerationPrompt?: string
     open: boolean
-    onGenerationActivityChange: (activity: CanvasAssistantGenerationActivity) => void
-    onInitialGenerationPromptConsumed: () => void
   },
 ) {
   const editor = useCanvasEditor()
@@ -1438,8 +1468,6 @@ function FileAssistantAccessory(
                     ...(props.initialGenerationPrompt === undefined
                       ? {}
                       : { initialPrompt: props.initialGenerationPrompt }),
-                    onActivityChange: props.onGenerationActivityChange,
-                    onInitialPromptConsumed: props.onInitialGenerationPromptConsumed,
                     onOwnerToolIdChange: (toolId?: string) => {
                       editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
                     },
@@ -1572,9 +1600,6 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
   const telemetry = useCanvasService("telemetry")
-  const [generationOwner] = useState(() => new CanvasFileGenerationActivityOwner())
-  const [generationActivity, setGenerationActivity] = useState<CanvasFileGenerationActivity>(generationOwner.activity)
-  const [recoveryPrompt, setRecoveryPrompt] = useState<string>()
   const [assistantOpen, setAssistantOpen] = useState(false)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const visualMediaAssistant = props.data.kind === "image" || props.data.kind === "video"
@@ -1590,20 +1615,17 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           toggle: () => setAssistantOpen((current) => !current),
         }
       : null
-  const onGenerationActivityChange = useCallback(
-    (activity: CanvasAssistantGenerationActivity) => {
-      const transition = generationOwner.apply(activity)
-      setGenerationActivity(transition.activity)
-      if (transition.dismissComposer) {
-        setRecoveryPrompt(undefined)
-        setAssistantOpen(false)
-        editor.selectNodes([])
-      }
-    },
-    [editor, generationOwner],
+  const generation = useCanvasService("generate")
+  const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
+  const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
+  const [dismissedTerminalOperationId, setDismissedTerminalOperationId] = useState<string>()
+  const activeGeneration = Boolean(generationRun && isCanvasNodeGenerationRunActive(generationRun))
+  const dismissedTerminal = Boolean(
+    generationRun &&
+      !activeGeneration &&
+      generationRun.status !== "succeeded" &&
+      dismissedTerminalOperationId === generationRun.operationId,
   )
-  const onInitialGenerationPromptConsumed = useCallback(() => setRecoveryPrompt(undefined), [])
-  useEffect(() => () => generationOwner.dispose(), [generationOwner])
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
   const ContributedToolbar = definition?.toolbar
@@ -1634,7 +1656,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
     </FileRendererBoundary>
   ) : null
   const persistedResourceStatus =
-    props.data.status === "pending" || props.data.status === "error" ? props.data.status : null
+    !generationRun && (props.data.status === "pending" || props.data.status === "error") ? props.data.status : null
   return (
     <>
       <FileAssistantTriggerContext.Provider value={assistantTrigger}>
@@ -1670,26 +1692,36 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           )}
         </NodeToolbar>
       ) : null}
-      {generationActivity.status === "idle" && !persistedResourceStatus ? (
+      {!persistedResourceStatus &&
+      !activeGeneration &&
+      (!generationRun || generationRun.status === "succeeded" || dismissedTerminal) ? (
         <FileAssistantAccessory
           {...props}
-          initialGenerationPrompt={recoveryPrompt}
           open={visualMediaAssistant || assistantOpen}
-          onGenerationActivityChange={onGenerationActivityChange}
-          onInitialGenerationPromptConsumed={onInitialGenerationPromptConsumed}
+          initialGenerationPrompt={
+            generationRun?.status === "succeeded" || dismissedTerminal ? generationRun?.prompt : undefined
+          }
         />
       ) : null}
-      {generationActivity.status === "pending" || generationActivity.status === "error" ? (
+      {generationRun && generationRun.status !== "succeeded" && !dismissedTerminal ? (
         <FileGenerationActivityOverlay
-          activity={generationActivity}
+          onCancel={() => generation?.cancel?.(generationRun.operationId)}
           onRecover={() => {
-            const prompt = generationActivity.status === "error" ? generationActivity.prompt : undefined
-            const transition = generationOwner.apply({ status: "complete" })
-            setGenerationActivity(transition.activity)
-            setRecoveryPrompt(prompt)
+            setDismissedTerminalOperationId(generationRun.operationId)
             editor.selectNodes([props.id])
           }}
+          run={generationRun}
         />
+      ) : null}
+      {generationRun?.status === "succeeded" ? (
+        <div
+          className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border bg-card/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm"
+          data-canvas-file-generation-activity="succeeded"
+          data-canvas-generation-run-tool-id={generationRun.toolId}
+          title={`Generated with ${generationRun.toolId}`}
+        >
+          已生成
+        </div>
       ) : null}
     </>
   )

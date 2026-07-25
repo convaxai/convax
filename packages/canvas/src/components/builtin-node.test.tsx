@@ -6,6 +6,12 @@ import { createAgentNode, createCanvasDocument, createGroupNode, createTextNode 
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import {
+  finishCanvasNodeGenerationRun,
+  markCanvasNodeGenerationRunRunning,
+  startCanvasNodeGenerationRun,
+  succeedCanvasNodeGenerationRun,
+} from "../generation-run"
 import type { CanvasSelectionAction } from "../selection-actions"
 import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "../selection-drag-source"
 import { deriveCanvasSelectionContext } from "../selection-context"
@@ -704,7 +710,6 @@ describe("built-in node toolbar visibility", () => {
       )
 
       expect(request?.generation?.output).toBe(output)
-      expect(request?.generation?.onActivityChange).toBeFunction()
       expect(markup).toContain("data-assistant-toolbar")
       expect(markup).not.toContain('aria-label="Open Agent"')
     }
@@ -755,7 +760,6 @@ describe("built-in node toolbar visibility", () => {
 
     expect(request?.generation?.ownerToolId).toBe("plugin.example:image.generate")
     expect(request?.mentionedNodeIds).toEqual([])
-    expect(request?.generation?.onActivityChange).toBeFunction()
     request?.generation?.onOwnerToolIdChange?.("plugin.example:image.alternate")
     expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
   })
@@ -819,5 +823,84 @@ describe("built-in node toolbar visibility", () => {
     })
     expect(agentRequest?.mode).toBe("agent")
     expect(agentRequest?.mentionedNodeIds).toEqual([incoming.id])
+  })
+
+  test("hydrates active and terminal generation surfaces from persisted node metadata", () => {
+    const imageNode: CanvasNode = {
+      data: { kind: "image", label: "Image", url: "" },
+      id: "node-image",
+      position: { x: 0, y: 0 },
+      type: "file",
+    }
+    const submitting = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-test", nodes: [imageNode] }),
+      imageNode.id,
+      {
+        operationId: "operation-one",
+        prompt: "Persisted prompt",
+        toolId: "plugin.example:image.actual",
+      },
+    )
+    const running = markCanvasNodeGenerationRunRunning(submitting, imageNode.id, "operation-one", "task_safe_123")
+    const activeMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      document: running,
+      node: running.nodes[0],
+    })
+    expect(activeMarkup).toContain('data-canvas-file-generation-activity="running"')
+    expect(activeMarkup).toContain('data-canvas-generation-run-tool-id="plugin.example:image.actual"')
+    expect(activeMarkup).toContain("正在生成")
+    expect(activeMarkup).toContain("取消")
+    expect(activeMarkup).not.toContain("data-assistant-toolbar")
+
+    const failed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one", "failed", "safe")
+    const failedMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      document: failed,
+      node: failed.nodes[0],
+    })
+    expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
+    expect(failedMarkup).toContain("修改并重试")
+
+    const indeterminate = finishCanvasNodeGenerationRun(
+      running,
+      imageNode.id,
+      "operation-one",
+      "interrupted",
+      "unknown",
+    )
+    const indeterminateMarkup = renderWithEditor(
+      selection([]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        document: indeterminate,
+        node: indeterminate.nodes[0],
+      },
+    )
+    expect(indeterminateMarkup).toContain('data-canvas-file-generation-activity="interrupted"')
+    expect(indeterminateMarkup).toContain("暂不可重试")
+    expect(indeterminateMarkup).toContain("避免重复计费")
+    expect(indeterminateMarkup).not.toContain("修改并重试")
+    expect(indeterminateMarkup).not.toContain("data-assistant-toolbar")
+
+    const succeeded = succeedCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
+    let request: CanvasAssistantRequest | undefined
+    const succeededMarkup = renderWithEditor(
+      selection([imageNode.id]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        assistantRender: (next) => {
+          request = next
+          return <div data-assistant-toolbar />
+        },
+        document: succeeded,
+        node: succeeded.nodes[0],
+      },
+    )
+    expect(succeededMarkup).toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(request?.generation?.initialPrompt).toBe("Persisted prompt")
+    expect(request?.generation?.ownerToolId).toBeUndefined()
   })
 })

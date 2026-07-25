@@ -9,6 +9,7 @@ import {
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
   webPluginManifestSchemaV6,
+  webPluginManifestSchemaV7,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 
@@ -101,7 +102,8 @@ export function isExecutableToolPlugin(plugin: InstalledWebPluginSummary) {
       plugin.schema === webPluginManifestSchemaV3 ||
       plugin.schema === webPluginManifestSchemaV4 ||
       plugin.schema === webPluginManifestSchemaV5 ||
-      plugin.schema === webPluginManifestSchemaV6) &&
+      plugin.schema === webPluginManifestSchemaV6 ||
+      plugin.schema === webPluginManifestSchemaV7) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) || plugin.contributes.service !== undefined)
   )

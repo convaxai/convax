@@ -470,10 +470,11 @@ const jianyingClient = {
 } satisfies JianyingRendererClient
 
 const generationClient = {
-  cancel: (input) => ipcRenderer.send(generationIpcChannels.cancel, input),
+  cancel: (input) => ipcRenderer.invoke(generationIpcChannels.cancel, input),
   describeTool: (input) => ipcRenderer.invoke(generationIpcChannels.describeTool, input),
   generate: (input) => ipcRenderer.invoke(generationIpcChannels.generate, input),
   listTools: (input) => ipcRenderer.invoke(generationIpcChannels.listTools, input),
+  reconcileCanvas: (input) => ipcRenderer.invoke(generationIpcChannels.reconcileCanvas, input),
 } satisfies GenerationClient
 
 const petSettingsClient = {

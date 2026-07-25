@@ -32,6 +32,12 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - The Agent generation-tool preference is the host default for new file-card
   conversations. A card may persist its own opaque tool-id override, but card
   changes never write back to the Agent preference or create a second catalog.
+- Main owns live generation coordination and writes node-targeted run state only
+  through Canvas application services. Main never asks renderer to flush, lock,
+  approve, or arbitrate a Main mutation; committed revision invalidation and reload
+  are fallible projection work. Renderer components hydrate and display that state;
+  mounting, selection and panel lifetime must never become task ownership or
+  implicit cancellation.
 - Agent tools are thin adapters over Canvas application/business and view ports.
   Host Project scope is authoritative; document tools may select only a Canvas in
   that Project's live catalog, while view tools resolve the mounted active Canvas.
@@ -159,6 +165,11 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   cancellation and sidecar failures keep a safe visible error and never revive a
   removed or edited placeholder. Renderer refresh/reveal runs asynchronously and
   cannot delay the paid call, replacement, failure mark, or returned domain result.
+- Keep host `operationId` and sidecar `taskId` distinct. Task creation receipts use
+  the validated, per-call structured generation lifecycle notification; never parse
+  logs, progress text or stderr. Persist only a bounded host-safe opaque task handle.
+  Legacy tools may omit it. Without a generic resume/query contract, startup changes
+  orphaned submitting/running node runs to `interrupted` and never repeats the call.
 - Tool-custom generation controls come from only the explicitly selected MCP tool's
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before

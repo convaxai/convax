@@ -4,7 +4,7 @@ import type { CanvasDocument, CanvasNode } from "./types"
 export const canvasNodeGenerationPreferenceKey = "convaxGenerationPreference"
 export const canvasNodeGenerationPreferenceSchema = "convax.node-generation-preference/1"
 
-const maximumGenerationToolIdLength = 512
+export const maximumCanvasGenerationToolIdLength = 512
 
 interface StoredCanvasNodeGenerationPreference {
   schema: typeof canvasNodeGenerationPreferenceSchema
@@ -15,11 +15,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
-function isGenerationToolId(value: unknown): value is string {
+export function isCanvasGenerationToolId(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&
-    value.length <= maximumGenerationToolIdLength &&
+    value.length <= maximumCanvasGenerationToolIdLength &&
     value === value.trim() &&
     !/[\u0000-\u001f\u007f]/.test(value)
   )
@@ -31,7 +31,7 @@ export function getCanvasNodeGenerationToolId(node: CanvasNode): string | undefi
   if (!isRecord(metadata)) return undefined
   const preference = metadata[canvasNodeGenerationPreferenceKey]
   if (!isRecord(preference)) return undefined
-  if (preference.schema !== canvasNodeGenerationPreferenceSchema || !isGenerationToolId(preference.toolId)) {
+  if (preference.schema !== canvasNodeGenerationPreferenceSchema || !isCanvasGenerationToolId(preference.toolId)) {
     return undefined
   }
   return preference.toolId
@@ -46,7 +46,7 @@ export function setCanvasNodeGenerationToolId(
   nodeId: string,
   toolId?: string,
 ): CanvasDocument {
-  if (toolId !== undefined && !isGenerationToolId(toolId)) {
+  if (toolId !== undefined && !isCanvasGenerationToolId(toolId)) {
     throw new Error("Canvas generation tool id must be a bounded printable identifier")
   }
   const node = document.nodes.find((candidate) => candidate.id === nodeId)

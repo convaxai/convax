@@ -408,7 +408,9 @@ function App() {
           throw new Error("Canvas generation could not resolve Main's authoritative document")
         }
         const operationId = globalThis.crypto.randomUUID()
-        const cancel = () => window.convax.generation.cancel({ operationId })
+        const cancel = () => {
+          void window.convax.generation.cancel({ operationId }).catch(() => undefined)
+        }
         input.signal.addEventListener("abort", cancel, { once: true })
         try {
           const result = await webPluginGenerationProjection.execute(
@@ -676,6 +678,9 @@ function App() {
   }, [activeCanvas, activeProject])
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
+      cancel(operationId) {
+        return window.convax.generation.cancel({ operationId })
+      },
       get catalogVersion() {
         return generationToolCatalogVersionRef.current
       },
@@ -724,8 +729,10 @@ function App() {
         if (!authoritativeDocument || authoritativeDocument.id !== activeCanvasId) {
           throw new Error("Generation could not resolve Main's authoritative Canvas document")
         }
-        const operationId = globalThis.crypto.randomUUID()
-        const cancel = () => window.convax.generation.cancel({ operationId })
+        const operationId = request.operationId ?? globalThis.crypto.randomUUID()
+        const cancel = () => {
+          void window.convax.generation.cancel({ operationId }).catch(() => undefined)
+        }
         request.signal.addEventListener("abort", cancel, { once: true })
         try {
           const result = await window.convax.generation.generate({
@@ -869,7 +876,13 @@ function App() {
       persistence:
         activeProjectId && activeCanvasId
           ? createRendererCanvasPersistence({
-              client: window.convax.canvas.documents,
+              client: {
+                execute: (request) => window.convax.canvas.documents.execute(request),
+                async load(ref) {
+                  await window.convax.generation.reconcileCanvas({ ref })
+                  return window.convax.canvas.documents.load(ref)
+                },
+              },
               commandId: () => `renderer-${globalThis.crypto.randomUUID()}`,
               dehydrate: dehydrateProjectCanvasDocument,
               hydrate: (document) => ({

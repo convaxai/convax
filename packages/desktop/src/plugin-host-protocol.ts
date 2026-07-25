@@ -128,9 +128,10 @@ export function desktopPluginHostProtocolForManifestSchema(
     | "convax.plugin/3"
     | "convax.plugin/4"
     | "convax.plugin/5"
-    | "convax.plugin/6",
+    | "convax.plugin/6"
+    | "convax.plugin/7",
 ): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/5" || schema === "convax.plugin/6"
+  return schema === "convax.plugin/5" || schema === "convax.plugin/6" || schema === "convax.plugin/7"
     ? desktopPluginHostProtocolV5
     : schema === "convax.plugin/4"
       ? desktopPluginHostProtocolV4

@@ -32,6 +32,17 @@ import type {
   CanvasSize,
   CanvasUploadItem,
 } from "../types"
+import { canvasNodeGenerationPreferenceKey } from "../generation-preference"
+import {
+  CanvasNodeGenerationRunValidationError,
+  canvasNodeGenerationRunKey,
+  finishCanvasNodeGenerationRun,
+  interruptInactiveCanvasNodeGenerationRuns,
+  markCanvasNodeGenerationRunRunning,
+  omitCanvasNodeGenerationRunFromData,
+  startCanvasNodeGenerationRun,
+  succeedCanvasNodeGenerationRun,
+} from "../generation-run"
 import {
   applyCanvasAutoLayoutPlan,
   CanvasLayoutValidationError,
@@ -88,6 +99,50 @@ export interface CanvasReplaceResourceCommand {
   targetNodeId: string
 }
 
+/**
+ * Generation-specific target guard. Only the Canvas-owned run namespace is
+ * omitted; preference, resource content and every other metadata value remain
+ * protected against concurrent replacement.
+ */
+export interface CanvasGenerationTargetGuard {
+  data: CanvasNode["data"]
+  type: CanvasNode["type"]
+}
+
+export interface CanvasReplaceGeneratedResourceCommand {
+  type: "resources.replace-generated"
+  expectedTarget: CanvasGenerationTargetGuard
+  item: CanvasUploadItem
+  operationId: string
+  targetNodeId: string
+}
+
+export type CanvasNodeGenerationRunCommand =
+  | {
+      type: "generation.run.start"
+      nodeId: string
+      operationId: string
+      prompt: string
+      toolId: string
+    }
+  | {
+      type: "generation.run.mark-running"
+      nodeId: string
+      operationId: string
+      taskId?: string
+    }
+  | {
+      type: "generation.run.finish"
+      nodeId: string
+      operationId: string
+      retrySafety: "safe" | "unknown"
+      status: "failed" | "cancelled" | "interrupted"
+    }
+  | {
+      type: "generation.runs.interrupt-inactive"
+      liveRuns: readonly { nodeId: string; operationId: string }[]
+    }
+
 export interface CanvasAutoLayoutCommand {
   type: "canvas.auto-layout"
   nodeIds?: readonly string[]
@@ -96,6 +151,20 @@ export interface CanvasAutoLayoutCommand {
 
 export interface CanvasCreatePendingResourceCommand {
   type: "resources.pending.create"
+  kind: CanvasPendingResourceKind
+  label: string
+  nodeId: string
+  placement: CanvasAddResourcesCommand["placement"]
+  relation?: CanvasAddResourcesCommand["relation"]
+}
+
+export interface CanvasCreatePendingGenerationResourceCommand {
+  type: "resources.pending-generation.create"
+  generation: {
+    operationId: string
+    prompt: string
+    toolId: string
+  }
   kind: CanvasPendingResourceKind
   label: string
   nodeId: string
@@ -133,8 +202,11 @@ export interface CanvasDocumentPatchCommand {
  */
 export type CanvasBusinessCommand =
   | CanvasAddResourcesCommand
+  | CanvasCreatePendingGenerationResourceCommand
   | CanvasCreatePendingResourceCommand
   | CanvasFailPendingResourceCommand
+  | CanvasReplaceGeneratedResourceCommand
+  | CanvasNodeGenerationRunCommand
   | CanvasAutoLayoutCommand
   | CanvasRelinkResourceCommand
   | CanvasReplaceResourceCommand
@@ -224,6 +296,28 @@ export function createCanvasPendingResourceCommand(input: {
   }
 }
 
+export function createCanvasPendingGenerationResourceCommand(input: {
+  anchor: CanvasPoint
+  generation: {
+    operationId: string
+    prompt: string
+    toolId: string
+  }
+  kind: CanvasPendingResourceKind
+  label: string
+  relation?: CanvasAddResourcesCommand["relation"]
+}): CanvasCreatePendingGenerationResourceCommand {
+  return {
+    type: "resources.pending-generation.create",
+    generation: structuredClone(input.generation),
+    kind: input.kind,
+    label: input.label,
+    nodeId: createCanvasId("node"),
+    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    relation: input.relation,
+  }
+}
+
 export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeContentGuard {
   return structuredClone(durableCanvasNodeContent(node))
 }
@@ -282,6 +376,10 @@ export function createRelinkCanvasResourceCommand(input: {
   }
 }
 
+export function createCanvasGenerationTargetGuard(node: CanvasNode): CanvasGenerationTargetGuard {
+  return structuredClone({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type })
+}
+
 export function findOpenCanvasPoint(
   document: CanvasDocument,
   preferred: CanvasPoint,
@@ -336,6 +434,48 @@ export function applyCanvasApplicationCommand(
   if (command.type === "document.patch") return applyDocumentPatch(document, command)
   if (command.type === "resources.add") return addResources(document, command)
   if (command.type === "resources.replace") return replaceResource(document, command)
+  if (command.type === "resources.replace-generated") return replaceGeneratedResource(document, command)
+  if (command.type === "generation.run.start") {
+    return applyGenerationRunMutation(document, command.nodeId, () =>
+      startCanvasNodeGenerationRun(document, command.nodeId, {
+        operationId: command.operationId,
+        prompt: command.prompt,
+        toolId: command.toolId,
+      }),
+    )
+  }
+  if (command.type === "generation.run.mark-running") {
+    return applyGenerationRunMutation(document, command.nodeId, () =>
+      markCanvasNodeGenerationRunRunning(document, command.nodeId, command.operationId, command.taskId),
+    )
+  }
+  if (command.type === "generation.run.finish") {
+    return applyGenerationRunMutation(document, command.nodeId, () =>
+      finishCanvasNodeGenerationRun(
+        document,
+        command.nodeId,
+        command.operationId,
+        command.status,
+        command.retrySafety,
+      ),
+    )
+  }
+  if (command.type === "generation.runs.interrupt-inactive") {
+    if (command.liveRuns.length > 1_000) {
+      throw new CanvasCommandValidationError("Canvas generation reconciliation contains too many live runs")
+    }
+    const keys = command.liveRuns.map((run) => `${run.nodeId}\0${run.operationId}`)
+    if (new Set(keys).size !== keys.length) {
+      throw new CanvasCommandValidationError("Canvas generation reconciliation contains duplicate live runs")
+    }
+    try {
+      const next = interruptInactiveCanvasNodeGenerationRuns(document, command.liveRuns)
+      const affectedNodeIds = next.nodes.filter((node, index) => node !== document.nodes[index]).map((node) => node.id)
+      return result(document, next, affectedNodeIds)
+    } catch (error) {
+      throwGenerationRunValidation(error)
+    }
+  }
   if (command.type === "canvas.auto-layout") {
     if (command.nodeIds) requireNodeIds(document, command.nodeIds)
     if (command.nodeIds?.length === 0) return result(document, document)
@@ -352,7 +492,9 @@ export function applyCanvasApplicationCommand(
       throw error
     }
   }
-  if (command.type === "resources.pending.create") return createPendingResource(document, command)
+  if (command.type === "resources.pending.create" || command.type === "resources.pending-generation.create") {
+    return createPendingResource(document, command)
+  }
   if (command.type === "resources.pending.fail") return failPendingResource(document, command)
   if (command.type === "resources.relink") return relinkResource(document, command)
 
@@ -622,7 +764,7 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
   if (command.items.length === 0) return result(document, document)
 
   const nodes = command.items.map(({ item, nodeId }) => createNodeFromResource(item, nodeId, command.placement.anchor))
-  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(nodes[0]!))
+  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(nodes[0]))
   let next = addCanvasNodes(
     document,
     nodes.map((node, index) => ({
@@ -685,7 +827,7 @@ function replaceResource(document: CanvasDocument, command: CanvasReplaceResourc
 
 function createPendingResource(
   document: CanvasDocument,
-  command: CanvasCreatePendingResourceCommand,
+  command: CanvasCreatePendingGenerationResourceCommand | CanvasCreatePendingResourceCommand,
 ): CanvasBusinessCommandResult {
   requireFinitePoint(command.placement.anchor, "Placement anchor")
   requirePendingResourceKind(command.kind)
@@ -711,6 +853,13 @@ function createPendingResource(
           ? { source: anchorNodeId, target: command.nodeId }
           : { source: command.nodeId, target: anchorNodeId },
       )
+    }
+  }
+  if (command.type === "resources.pending-generation.create") {
+    try {
+      next = startCanvasNodeGenerationRun(next, command.nodeId, command.generation)
+    } catch (error) {
+      return throwGenerationRunValidation(error)
     }
   }
   return result(document, next, [...new Set([...anchorNodeIds, command.nodeId])], [command.nodeId])
@@ -744,7 +893,9 @@ function failPendingResource(
   return result(document, next, [target.id])
 }
 
-function createPendingResourceNode(command: CanvasCreatePendingResourceCommand): CanvasNode {
+function createPendingResourceNode(
+  command: CanvasCreatePendingGenerationResourceCommand | CanvasCreatePendingResourceCommand,
+): CanvasNode {
   if (command.kind === "text") {
     const node = createTextNode({
       id: command.nodeId,
@@ -777,6 +928,56 @@ function isPendingResourceNode(node: CanvasNode) {
       node.data.kind === "video" ||
       node.data.kind === "audio")
   )
+}
+
+function replaceGeneratedResource(
+  document: CanvasDocument,
+  command: CanvasReplaceGeneratedResourceCommand,
+): CanvasBusinessCommandResult {
+  const target = document.nodes.find((node) => node.id === command.targetNodeId)
+  if (!target) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.targetNodeId}`)
+  if (target.type !== "file" || target.data.kind === "group") {
+    throw new CanvasCommandValidationError(`Canvas generated resource replacement requires a file node: ${target.id}`)
+  }
+  if (!sameGenerationTargetContent(target, command.expectedTarget)) {
+    throw new CanvasCommandValidationError(`Canvas generation target changed before resource replacement: ${target.id}`)
+  }
+
+  const replacement = createNodeFromResource(command.item, target.id, target.position)
+  const targetMetadata = isRecord(target.data.metadata) ? target.data.metadata : {}
+  const replacementMetadata = isRecord(replacement.data.metadata) ? structuredClone(replacement.data.metadata) : {}
+  delete replacementMetadata[canvasNodeGenerationPreferenceKey]
+  delete replacementMetadata[canvasNodeGenerationRunKey]
+  if (Object.prototype.hasOwnProperty.call(targetMetadata, canvasNodeGenerationPreferenceKey)) {
+    replacementMetadata[canvasNodeGenerationPreferenceKey] = structuredClone(
+      targetMetadata[canvasNodeGenerationPreferenceKey],
+    )
+  }
+  if (Object.prototype.hasOwnProperty.call(targetMetadata, canvasNodeGenerationRunKey)) {
+    replacementMetadata[canvasNodeGenerationRunKey] = structuredClone(targetMetadata[canvasNodeGenerationRunKey])
+  }
+  const data = {
+    ...replacement.data,
+    ...(Object.keys(replacementMetadata).length ? { metadata: replacementMetadata } : {}),
+  }
+  const replaced = {
+    ...document,
+    nodes: document.nodes.map((node) =>
+      node.id === target.id
+        ? {
+            ...node,
+            data,
+            type: replacement.type,
+          }
+        : node,
+    ),
+  }
+  try {
+    const next = succeedCanvasNodeGenerationRun(replaced, target.id, command.operationId)
+    return result(document, next, [target.id])
+  } catch (error) {
+    return throwGenerationRunValidation(error)
+  }
 }
 
 function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position: CanvasPoint): CanvasNode {
@@ -832,12 +1033,52 @@ function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: read
   if (overlap) throw new CanvasCommandValidationError(`${label} cannot be removed and updated: ${overlap}`)
 }
 
+function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGenerationTargetGuard) {
+  return stableJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }) === stableJson(expected)
+}
+
+function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
+  const withoutRun = omitCanvasNodeGenerationRunFromData(data)
+  const metadata = withoutRun.metadata
+  if (!isRecord(metadata) || !Object.prototype.hasOwnProperty.call(metadata, canvasNodeGenerationPreferenceKey)) {
+    return withoutRun
+  }
+  const nextMetadata = { ...structuredClone(metadata) }
+  delete nextMetadata[canvasNodeGenerationPreferenceKey]
+  if (Object.keys(nextMetadata).length === 0) {
+    const { metadata: _metadata, ...withoutMetadata } = withoutRun
+    return withoutMetadata as CanvasNode["data"]
+  }
+  return { ...withoutRun, metadata: nextMetadata }
+}
+
+function applyGenerationRunMutation(
+  document: CanvasDocument,
+  nodeId: string,
+  mutate: () => CanvasDocument,
+): CanvasBusinessCommandResult {
+  try {
+    const next = mutate()
+    return result(document, next, next === document ? [] : [nodeId])
+  } catch (error) {
+    return throwGenerationRunValidation(error)
+  }
+}
+
+function throwGenerationRunValidation(error: unknown): never {
+  if (error instanceof CanvasNodeGenerationRunValidationError) {
+    throw new CanvasCommandValidationError(error.message)
+  }
+  throw error
+}
+
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map((item) => (item === undefined ? "null" : stableJson(item))).join(",")}]`
   }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
+  if (isRecord(value)) {
+    const record = value
     return `{${Object.keys(record)
       .sort()
       .filter((key) => record[key] !== undefined)

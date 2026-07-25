@@ -8,6 +8,7 @@ export const generationIpcChannels = {
   describeTool: "generation:describe-tool",
   generate: "generation:generate",
   listTools: "generation:list-tools",
+  reconcileCanvas: "generation:reconcile-canvas",
 } as const
 
 export type GenerationInputRole =
@@ -37,6 +38,8 @@ export interface GenerationToolSummary {
   title: string
   description: string
   output: GenerationOutputModality
+  /** Present only when manifest and runtime satisfy the complete generic recovery contract. */
+  recovery?: "operation-exactly-once"
   acceptedInputs: readonly GenerationInputRole[]
 }
 
@@ -148,6 +151,18 @@ export interface GenerationCanvasResult {
   warnings: readonly string[]
 }
 
+export interface GenerationCanvasReconcileRequest {
+  ref: {
+    canvasId: string
+    scopeId: string
+  }
+}
+
+export interface GenerationCanvasReconcileResult {
+  interruptedNodeIds: readonly string[]
+  revision: number
+}
+
 export interface GenerationListToolsRequest {
   output?: GenerationOutputModality
   scopeId: string
@@ -163,8 +178,9 @@ export interface GenerationCancelRequest {
 }
 
 export interface GenerationClient {
-  cancel(input: GenerationCancelRequest): void
+  cancel(input: GenerationCancelRequest): Promise<void>
   describeTool(input: GenerationDescribeToolRequest): Promise<GenerationToolDescription>
   generate(input: GenerationCanvasRequest): Promise<GenerationCanvasResult>
   listTools(input: GenerationListToolsRequest): Promise<readonly GenerationToolSummary[]>
+  reconcileCanvas(input: GenerationCanvasReconcileRequest): Promise<GenerationCanvasReconcileResult>
 }

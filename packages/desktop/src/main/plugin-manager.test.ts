@@ -310,11 +310,63 @@ describe("parseWebPluginManifest", () => {
   })
 
   test("requires a supported schema, kebab id, SemVer, and HTML entry", () => {
-    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/7" }))).toThrow("schema")
+    expect(() => parseWebPluginManifest(manifest({ schema: "convax.plugin/8" }))).toThrow("schema")
     expect(() => parseWebPluginManifest(manifest({ id: "DirectorStage" }))).toThrow("kebab-case")
     expect(() => parseWebPluginManifest(manifest({ id: "con" }))).toThrow("Windows filename")
     expect(() => parseWebPluginManifest(manifest({ version: "01.2.3" }))).toThrow("SemVer")
     expect(() => parseWebPluginManifest(manifest({ entry: "web/index.js" }))).toThrow("HTML")
+  })
+
+  test("admits full recovery only as one exact v7 per-tool contract", () => {
+    const recoverable = {
+      capabilities: [],
+      contributes: {
+        generation: {
+          models: [{ name: "Image model", tool: "generate.image" }],
+          tools: [{
+            acceptedInputs: [],
+            description: "Generate an image",
+            id: "generate.image",
+            output: "image",
+            recovery: {
+              mode: "operation-exactly-once",
+              schema: "convax.generation-recovery/1",
+            },
+            title: "Image",
+          }],
+        },
+      },
+      description: "Recoverable generation",
+      id: "recoverable-tools",
+      name: "Recoverable Tools",
+      runtime: { command: "recoverable-tools", type: "mcp-stdio" },
+      schema: "convax.plugin/7",
+      version: "1.0.0",
+    }
+    expect(parseWebPluginManifest(recoverable).contributes.generation?.tools[0]?.recovery).toEqual({
+      mode: "operation-exactly-once",
+      schema: "convax.generation-recovery/1",
+    })
+    expect(() =>
+      parseWebPluginManifest({
+        ...recoverable,
+        schema: "convax.plugin/6",
+      }),
+    ).toThrow("unsupported field")
+    expect(() =>
+      parseWebPluginManifest({
+        ...recoverable,
+        contributes: {
+          generation: {
+            ...recoverable.contributes.generation,
+            tools: [{
+              ...recoverable.contributes.generation.tools[0],
+              recovery: { mode: "best-effort", schema: "convax.generation-recovery/1" },
+            }],
+          },
+        },
+      }),
+    ).toThrow("recovery contract")
   })
 
   test("parses a headless v5 Project/Canvas Plugin while preserving its owned Skills", () => {

@@ -3,13 +3,16 @@ import {
   CanvasCommandValidationError,
   CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
+  createCanvasPendingGenerationResourceCommand,
   createCanvasPendingResourceCommand,
   createRelinkCanvasResourceCommand,
   type CanvasNodeContentGuard,
+  type CanvasGenerationTargetGuard,
   type CanvasAddResourcesCommand,
   type CanvasBusinessCommand,
   type CanvasCommandActor,
   type CanvasFailPendingResourceCommand,
+  type CanvasReplaceGeneratedResourceCommand,
   type CanvasReplaceResourceCommand,
 } from "./commands"
 import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
@@ -114,6 +117,23 @@ export interface CanvasCreatePendingResourceRequest extends CanvasDocumentRef {
   kind: CanvasPendingResourceKind
   label?: string
   relation?: CanvasAddResourcesCommand["relation"]
+  signal?: AbortSignal
+}
+
+export interface CanvasCreatePendingGenerationResourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  anchor: CanvasPoint
+  commandId: string
+  /** Defaults to retry and reuses the same generated node id across replays. */
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+  kind: CanvasPendingResourceKind
+  label?: string
+  operationId: string
+  prompt: string
+  relation?: CanvasAddResourcesCommand["relation"]
+  signal?: AbortSignal
+  toolId: string
 }
 
 export interface CanvasFailPendingResourceRequest extends CanvasDocumentRef {
@@ -133,6 +153,18 @@ export interface CanvasRelinkPreparedResourceRequest extends CanvasDocumentRef {
   expectedRevision: number
   metadataKeysToRemove?: readonly string[]
   nodeId: string
+}
+
+export interface CanvasReplaceGeneratedResourceSourceRequest extends CanvasDocumentRef {
+  actor: CanvasCommandActor
+  commandId: string
+  conflictPolicy?: "reject" | "retry"
+  expectedRevision: number
+  expectedTarget: CanvasGenerationTargetGuard
+  operationId: string
+  signal?: AbortSignal
+  source: CanvasResourceSource
+  targetNodeId: string
 }
 
 type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
@@ -177,6 +209,35 @@ export class CanvasResourceBusinessService {
     }
 
     const result = this.createPendingResourceOnce(request)
+    this.rememberExecution(key, fingerprint, result)
+    return result
+  }
+
+  createPendingGenerationResource(
+    request: CanvasCreatePendingGenerationResourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    const key = resourceExecutionKey(request)
+    const fingerprint = stableJson({
+      operation: "pending-generation-create",
+      anchor: request.anchor,
+      conflictPolicy: request.conflictPolicy ?? "retry",
+      expectedRevision: request.expectedRevision,
+      kind: request.kind,
+      label: request.label,
+      operationId: request.operationId,
+      prompt: request.prompt,
+      relation: request.relation,
+      toolId: request.toolId,
+    })
+    const existing = this.executions.get(key)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+      }
+      return existing.result
+    }
+
+    const result = this.createPendingGenerationResourceOnce(request)
     this.rememberExecution(key, fingerprint, result)
     return result
   }
@@ -320,6 +381,38 @@ export class CanvasResourceBusinessService {
     return result
   }
 
+  replaceGeneratedResource(
+    request: CanvasReplaceGeneratedResourceSourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    const key = JSON.stringify([
+      request.scopeId,
+      request.canvasId,
+      request.actor.kind,
+      request.actor.id,
+      request.commandId,
+    ])
+    const fingerprint = stableJson({
+      operation: "replace-generated",
+      conflictPolicy: request.conflictPolicy ?? "retry",
+      expectedRevision: request.expectedRevision,
+      expectedTarget: request.expectedTarget,
+      operationId: request.operationId,
+      source: request.source,
+      targetNodeId: request.targetNodeId,
+    })
+    const existing = this.executions.get(key)
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) {
+        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+      }
+      return existing.result
+    }
+
+    const result = this.replaceGeneratedResourceOnce(request)
+    this.rememberExecution(key, fingerprint, result)
+    return result
+  }
+
   private rememberExecution(key: string, fingerprint: string, result: Promise<CanvasApplicationCommandResult>): void {
     const execution = { fingerprint, result }
     this.executions.set(key, execution)
@@ -341,6 +434,31 @@ export class CanvasResourceBusinessService {
 
     const command = createCanvasPendingResourceCommand({
       anchor: request.anchor,
+      kind: request.kind,
+      label: request.label ?? pendingResourceLabel(request.kind),
+      relation: request.relation,
+    })
+    return this.executeWithConflictPolicy(request, command, [])
+  }
+
+  private async createPendingGenerationResourceOnce(
+    request: CanvasCreatePendingGenerationResourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    throwIfAborted(request.signal)
+    validateResourceOperation(request)
+    if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
+      throw new CanvasCommandValidationError("Placement anchor must contain finite coordinates")
+    }
+    validatePendingResourceKind(request.kind)
+    if (request.label !== undefined) requireBoundedString(request.label, "Pending resource label", 200)
+
+    const command = createCanvasPendingGenerationResourceCommand({
+      anchor: request.anchor,
+      generation: {
+        operationId: request.operationId,
+        prompt: request.prompt,
+        toolId: request.toolId,
+      },
       kind: request.kind,
       label: request.label ?? pendingResourceLabel(request.kind),
       relation: request.relation,
@@ -512,19 +630,110 @@ export class CanvasResourceBusinessService {
       const command: CanvasReplaceResourceCommand = {
         type: "resources.replace",
         expectedTarget: structuredClone(request.expectedTarget),
-        item: prepared.items[0]!,
+        item: prepared.items[0],
         targetNodeId: request.targetNodeId,
       }
 
       return await this.executeWithConflictPolicy(request, command, prepared.warnings ?? [])
     } catch (error) {
-      throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
+      return throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
+    }
+  }
+
+  private async replaceGeneratedResourceOnce(
+    request: CanvasReplaceGeneratedResourceSourceRequest,
+  ): Promise<CanvasApplicationCommandResult> {
+    throwIfAborted(request.signal)
+    validateResourceOperation(request)
+    requireNonEmptyString(request.targetNodeId, "Canvas replacement target node id")
+    requireNonEmptyString(request.operationId, "Canvas generation operation id")
+    if (
+      !isRecord(request.expectedTarget) ||
+      !isRecord(request.expectedTarget.data) ||
+      typeof request.expectedTarget.data.kind !== "string" ||
+      typeof request.expectedTarget.data.label !== "string" ||
+      request.expectedTarget.type !== "file"
+    ) {
+      throw new CanvasCommandValidationError("Canvas generation replacement target guard is invalid")
+    }
+    validateCanvasResourceSources([request.source])
+
+    const prepared = await this.preparation.prepare({
+      canvasId: request.canvasId,
+      ...(request.signal ? { signal: request.signal } : {}),
+      scopeId: request.scopeId,
+      sources: [request.source],
+    })
+    throwIfAborted(request.signal)
+    validatePreparedCanvasResources(prepared)
+    if (prepared.items.length !== 1) {
+      throw new CanvasCommandValidationError("Canvas generated resource replacement must prepare exactly one item")
+    }
+    const command: CanvasReplaceGeneratedResourceCommand = {
+      type: "resources.replace-generated",
+      expectedTarget: structuredClone(request.expectedTarget),
+      item: prepared.items[0],
+      operationId: request.operationId,
+      targetNodeId: request.targetNodeId,
+    }
+    return this.executeGeneratedReplacementWithConflictPolicy(request, command, prepared.warnings ?? [])
+  }
+
+  private async executeGeneratedReplacementWithConflictPolicy(
+    request: CanvasReplaceGeneratedResourceSourceRequest,
+    command: CanvasReplaceGeneratedResourceCommand,
+    preparationWarnings: readonly string[],
+  ): Promise<CanvasApplicationCommandResult> {
+    let expectedRevision = request.expectedRevision
+    let conflictRetries = 0
+    while (true) {
+      try {
+        throwIfAborted(request.signal)
+        const result = await this.application.execute({
+          canvasId: request.canvasId,
+          envelope: {
+            actor: request.actor,
+            command,
+            commandId: request.commandId,
+            expectedRevision,
+          },
+          ...(request.signal ? { signal: request.signal } : {}),
+          scopeId: request.scopeId,
+        })
+        const replayWarning =
+          conflictRetries > 0
+            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
+            : []
+        return {
+          ...result,
+          warnings: [...preparationWarnings, ...result.warnings, ...replayWarning],
+        }
+      } catch (error) {
+        if (
+          !isCanvasResourceConflict(error) ||
+          request.conflictPolicy === "reject" ||
+          conflictRetries >= maxCanvasResourceConflictRetries
+        ) {
+          throw error
+        }
+        conflictRetries += 1
+        throwIfAborted(request.signal)
+        const latest = await this.application.query(
+          { canvasId: request.canvasId, scopeId: request.scopeId },
+          { limit: 0 },
+        )
+        throwIfAborted(request.signal)
+        expectedRevision = latest.revision
+      }
     }
   }
 
   private async executeWithConflictPolicy(
     request: Pick<
-      CanvasReplaceResourceSourceRequest | CanvasCreatePendingResourceRequest | CanvasFailPendingResourceRequest,
+      | CanvasReplaceResourceSourceRequest
+      | CanvasCreatePendingGenerationResourceRequest
+      | CanvasCreatePendingResourceRequest
+      | CanvasFailPendingResourceRequest,
       "actor" | "canvasId" | "commandId" | "conflictPolicy" | "expectedRevision" | "scopeId"
     > & { signal?: AbortSignal },
     command: CanvasBusinessCommand,
@@ -817,8 +1026,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
+  if (isRecord(value)) {
+    const record = value
     return `{${Object.keys(record)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)

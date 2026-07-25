@@ -2,11 +2,12 @@ import { afterEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 import {
   CanvasCommandIdConflictError,
   CanvasRevisionConflictError,
-  createCanvasNodeContentGuard,
+  createCanvasGenerationTargetGuard,
   type CanvasApplicationCommandResult,
 } from "@convax/canvas/application"
 import {
@@ -14,6 +15,12 @@ import {
   createCanvasDocument,
   createMediaNode,
   createTextNode as createCanvasTextNode,
+  finishCanvasNodeGenerationRun,
+  getCanvasNodeGenerationRun,
+  interruptInactiveCanvasNodeGenerationRuns,
+  markCanvasNodeGenerationRunRunning,
+  startCanvasNodeGenerationRun,
+  succeedCanvasNodeGenerationRun,
   type CanvasDocument,
 } from "@convax/canvas/core"
 import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
@@ -25,6 +32,7 @@ import {
   type GenerationCanvasProjectPort,
   type GenerationCanvasResourcePort,
   type GenerationCanvasServiceOptions,
+  type GenerationCanvasRunPort,
   type PreparedGenerationToolExecution,
   type GenerationToolExecutionPort,
 } from "./generation-canvas-service"
@@ -32,6 +40,11 @@ import { copyStableFile } from "./stable-file-copy"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 import type { McpToolCallResult } from "./stdio-mcp-client"
 import { validateGenerationToolInput } from "./generation-tool-input-schema"
+import type { PreparedGenerationRecovery } from "./generation-plugin-runtime"
+import { GenerationInputSnapshotStore } from "./generation-input-snapshot-store"
+import { GenerationOperationStore, generationOperationRequestDigest } from "./generation-operation-store"
+import { generationRecoveryResultDigest } from "./generation-recovery-result-digest"
+import type { GenerationToolOperationMetadata } from "./stdio-mcp-client"
 
 const temporaryDirectories: string[] = []
 
@@ -186,17 +199,25 @@ function setup(
     project?: Partial<GenerationCanvasProjectPort>
     resource?: Partial<GenerationCanvasResourcePort>
     result?: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>)
+    recovery?: PreparedGenerationRecovery
+    inputSnapshots?: GenerationInputSnapshotStore
+    operations?: GenerationOperationStore
+    run?: Partial<GenerationCanvasRunPort>
     scopeId?: string
     selectedTool?: GenerationToolSummary
+    taskId?: string
     toolDescription?: GenerationToolDescription
   } & GenerationLimitOverrides,
 ) {
   const document = options.document ?? createCanvasDocument({ id: "canvas-one", title: "Canvas" })
   const selectedTool = options.selectedTool ?? tool()
   const calls: Record<string, unknown>[] = []
-  const call: PreparedGenerationToolExecution["call"] = async (input, signal, onExternalStart) => {
+  const operationMetadata: Array<GenerationToolOperationMetadata | undefined> = []
+  const call: PreparedGenerationToolExecution["call"] = async (input, signal, lifecycleObserver, operation) => {
+    await lifecycleObserver?.({ type: "external-started" })
     calls.push(input)
-    onExternalStart?.()
+    operationMetadata.push(operation)
+    if (options.taskId) await lifecycleObserver?.({ taskId: options.taskId, type: "submitted" })
     return typeof options.result === "function"
       ? options.result(input, signal)
       : (options.result ?? { content: [{ text: "A generated paragraph", type: "text" }] })
@@ -211,7 +232,11 @@ function setup(
     async prepareTool(selected, signal) {
       await options.prepareTool?.(selected, signal)
       const description = options.toolDescription ?? { fields: [], toolId: selectedTool.id }
-      return { call, validateInput: (input) => validateGenerationToolInput(description, input) }
+      return {
+        call,
+        ...(options.recovery === undefined ? {} : { recovery: options.recovery }),
+        validateInput: (input) => validateGenerationToolInput(description, input),
+      }
     },
   }
   const published: Array<{
@@ -249,6 +274,9 @@ function setup(
       resourceRequests.push(input)
       return commandResult(document)
     },
+    async createPendingGenerationResource() {
+      throw new Error("Unexpected createPendingGenerationResource")
+    },
     async createPendingResource() {
       throw new Error("Unexpected createPendingResource")
     },
@@ -256,6 +284,13 @@ function setup(
       throw new Error("Unexpected failPendingResource")
     },
     async replaceResource(input) {
+      replacementRequests.push(input)
+      return {
+        ...commandResult(document, []),
+        affectedNodeIds: [input.targetNodeId],
+      }
+    },
+    async replaceGeneratedResource(input) {
       replacementRequests.push(input)
       return {
         ...commandResult(document, []),
@@ -290,11 +325,43 @@ function setup(
       return true
     },
   }
+  const runRequests = {
+    finish: [] as Parameters<GenerationCanvasRunPort["finish"]>[0][],
+    interruptInactive: [] as Parameters<GenerationCanvasRunPort["interruptInactive"]>[0][],
+    markRunning: [] as Parameters<GenerationCanvasRunPort["markRunning"]>[0][],
+    start: [] as Parameters<GenerationCanvasRunPort["start"]>[0][],
+  }
+  const runs: GenerationCanvasRunPort = {
+    async finish(input) {
+      runRequests.finish.push(input)
+      if (options.run?.finish) return options.run.finish(input)
+      return { ...commandResult(document, []), affectedNodeIds: [input.nodeId] }
+    },
+    async interruptInactive(input) {
+      runRequests.interruptInactive.push(input)
+      if (options.run?.interruptInactive) return options.run.interruptInactive(input)
+      const affectedNodeIds = document.nodes.flatMap((node) =>
+        (node.data.metadata as Record<string, unknown> | undefined)?.convaxGenerationRun ? [node.id] : [],
+      )
+      return { ...commandResult(document, []), affectedNodeIds }
+    },
+    async markRunning(input) {
+      runRequests.markRunning.push(input)
+      if (options.run?.markRunning) return options.run.markRunning(input)
+      return { ...commandResult(document, []), affectedNodeIds: [input.nodeId] }
+    },
+    async start(input) {
+      runRequests.start.push(input)
+      if (options.run?.start) return options.run.start(input)
+      return { ...commandResult(document, []), affectedNodeIds: [input.nodeId] }
+    },
+  }
   return {
     calls,
     renderer,
     replacementRequests,
     resourceRequests,
+    runRequests,
     service: new GenerationCanvasService({
       assets: options.assets ?? {
         async resolve() {
@@ -306,6 +373,7 @@ function setup(
           return options.loadDocument ? options.loadDocument() : { document }
         },
       },
+      ...(options.inputSnapshots === undefined ? {} : { inputSnapshots: options.inputSnapshots }),
       ...(options.maxInputBytes === undefined ? {} : { maxInputBytes: options.maxInputBytes }),
       ...(options.maxInputFileBytes === undefined ? {} : { maxInputFileBytes: options.maxInputFileBytes }),
       ...(options.maxInlineOutputFileBytes === undefined
@@ -313,14 +381,17 @@ function setup(
         : { maxInlineOutputFileBytes: options.maxInlineOutputFileBytes }),
       ...(options.maxOutputFileBytes === undefined ? {} : { maxOutputFileBytes: options.maxOutputFileBytes }),
       ...(options.maxOutputFiles === undefined ? {} : { maxOutputFiles: options.maxOutputFiles }),
+      ...(options.operations === undefined ? {} : { operations: options.operations }),
       publisher,
       projects: project,
       renderer,
       resources,
+      runs,
       temporaryRoot: os.tmpdir(),
       tools,
     }),
     published,
+    operationMetadata,
     viewRequests,
   }
 }
@@ -328,8 +399,12 @@ function setup(
 async function setupPendingGeneration(
   result: McpToolCallResult | ((input: Record<string, unknown>, signal?: AbortSignal) => Promise<McpToolCallResult>),
   options: {
+    inputSnapshots?: GenerationInputSnapshotStore
+    operations?: GenerationOperationStore
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
+    recovery?: PreparedGenerationRecovery
     roundTripPending?: boolean
+    taskId?: string
   } = {},
 ) {
   const projectRoot = await temporaryDirectory()
@@ -346,9 +421,8 @@ async function setupPendingGeneration(
     title: "Canvas",
   })
   let liveRevision = currentDocument.revision
-  const createRequests: Parameters<GenerationCanvasResourcePort["createPendingResource"]>[0][] = []
-  const failureRequests: Parameters<GenerationCanvasResourcePort["failPendingResource"]>[0][] = []
-  const replacementRequests: Parameters<GenerationCanvasResourcePort["replaceResource"]>[0][] = []
+  const createRequests: Parameters<GenerationCanvasResourcePort["createPendingGenerationResource"]>[0][] = []
+  const replacementRequests: Parameters<GenerationCanvasResourcePort["replaceGeneratedResource"]>[0][] = []
   const reloadRevisions: number[] = []
   const pendingNodeId = "pending-one"
 
@@ -356,26 +430,37 @@ async function setupPendingGeneration(
     document: currentDocument,
     loadDocument: () => ({ document: currentDocument }),
     prepareTool: options.prepareTool,
+    inputSnapshots: options.inputSnapshots,
+    operations: options.operations,
     project: projectPortFor(projectRoot),
     resource: {
       async addResources() {
         throw new Error("Pending generation must not add a second Canvas node")
       },
-      async createPendingResource(input) {
+      async createPendingGenerationResource(input) {
         createRequests.push(input)
-        const node = createMediaNode({
-          id: pendingNodeId,
-          label: "Image",
-          position: input.anchor,
-          resource: {
-            id: pendingNodeId,
-            kind: "image",
-            metadata: {},
-            state: { status: "ready", url: "" },
-          },
-        })
+        const node =
+          input.kind === "text"
+            ? createCanvasTextNode({
+                id: pendingNodeId,
+                label: input.label ?? "Text",
+                metadata: {},
+                position: input.anchor,
+                resourceState: { status: "ready", text: "" },
+              })
+            : createMediaNode({
+                id: pendingNodeId,
+                label: input.label ?? "Image",
+                position: input.anchor,
+                resource: {
+                  id: pendingNodeId,
+                  kind: input.kind,
+                  metadata: {},
+                  state: { status: "ready", url: "" },
+                },
+              })
         node.data.status = "pending"
-        currentDocument = {
+        const withPending = {
           ...currentDocument,
           edges: [
             ...currentDocument.edges,
@@ -388,8 +473,13 @@ async function setupPendingGeneration(
               : []),
           ],
           nodes: [...currentDocument.nodes, node],
-          revision: currentDocument.revision + 1,
         }
+        currentDocument = startCanvasNodeGenerationRun(withPending, pendingNodeId, {
+          operationId: input.operationId,
+          prompt: input.prompt,
+          toolId: input.toolId,
+        })
+        currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
         if (options.roundTripPending) {
           currentDocument = JSON.parse(JSON.stringify(currentDocument)) as CanvasDocument
         }
@@ -399,46 +489,69 @@ async function setupPendingGeneration(
           [...(input.relation?.mode === "connect" ? input.relation.anchorNodeIds : []), pendingNodeId],
         )
       },
-      async failPendingResource(input) {
-        failureRequests.push(input)
+      async replaceGeneratedResource(input) {
         const target = currentDocument.nodes.find((node) => node.id === input.targetNodeId)
-        if (
-          !target ||
-          target.data.status !== "pending" ||
-          JSON.stringify(createCanvasNodeContentGuard(target)) !== JSON.stringify(input.expectedTarget)
-        ) {
+        if (!target) {
           throw new Error("Pending target changed")
         }
-        currentDocument = {
+        const replaced = {
           ...currentDocument,
           nodes: currentDocument.nodes.map((node) =>
             node.id === input.targetNodeId
-              ? { ...node, data: { ...node.data, error: input.message, status: "error" as const } }
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    error: undefined,
+                    resourceState: { status: "ready" as const, url: "managed" },
+                    status: "idle" as const,
+                  },
+                }
               : node,
           ),
-          revision: currentDocument.revision + 1,
         }
-        return persistedCommandResult(currentDocument, [], [input.targetNodeId])
-      },
-      async replaceResource(input) {
         replacementRequests.push(input)
-        currentDocument = {
-          ...currentDocument,
-          nodes: currentDocument.nodes.map((node) =>
-            node.id === input.targetNodeId
-              ? { ...node, data: { ...node.data, error: undefined, status: "idle" as const, url: "managed" } }
-              : node,
-          ),
-          revision: currentDocument.revision + 1,
-        }
+        currentDocument = succeedCanvasNodeGenerationRun(replaced, input.targetNodeId, input.operationId)
+        currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
         return persistedCommandResult(currentDocument, [], [input.targetNodeId])
       },
     },
     result,
+    recovery: options.recovery,
+    taskId: options.taskId,
+    run: {
+      async finish(input) {
+        currentDocument = finishCanvasNodeGenerationRun(
+          currentDocument,
+          input.nodeId,
+          input.operationId,
+          input.status,
+          input.retrySafety,
+        )
+        currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
+        return persistedCommandResult(currentDocument, [], [input.nodeId])
+      },
+      async markRunning(input) {
+        const next = markCanvasNodeGenerationRunRunning(
+          currentDocument,
+          input.nodeId,
+          input.operationId,
+          input.taskId,
+        )
+        if (next !== currentDocument) {
+          currentDocument = { ...next, revision: currentDocument.revision + 1 }
+        }
+        return persistedCommandResult(currentDocument, [], [input.nodeId])
+      },
+      async start() {
+        throw new Error("Pending generation run must start with pending node creation")
+      },
+    },
     selectedTool: tool({
       acceptedInputs: ["text"],
       id: "creative-tools/draw",
       output: "image",
+      ...(options.recovery ? { recovery: "operation-exactly-once" as const } : {}),
       toolId: "draw",
     }),
   })
@@ -460,7 +573,6 @@ async function setupPendingGeneration(
   return {
     ...harness,
     createRequests,
-    failureRequests,
     getDocument: () => currentDocument,
     mutateDocument(mutate: (document: CanvasDocument) => CanvasDocument) {
       currentDocument = mutate(currentDocument)
@@ -972,17 +1084,26 @@ describe("GenerationCanvasService", () => {
       conflictPolicy: "reject",
       expectedRevision: 0,
       kind: "image",
+      operationId: "operation-one",
+      prompt: "Draw a small fox",
       relation: {
         anchorNodeIds: [harness.reference.id],
         direction: "from-anchor",
         mode: "connect",
       },
       scopeId: "project-one",
+      toolId: "creative-tools/draw",
     })
-    expect(harness.getDocument().revision).toBe(1)
-    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
+    expect(harness.getDocument().revision).toBe(2)
+    const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
+    expect(pending.data).toMatchObject({
       kind: "image",
       status: "pending",
+    })
+    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({
+      operationId: "operation-one",
+      status: "running",
+      toolId: "creative-tools/draw",
     })
     expect(harness.reloadRevisions).toEqual([1])
     expect(harness.viewRequests).toHaveLength(1)
@@ -1001,7 +1122,7 @@ describe("GenerationCanvasService", () => {
     const generated = await generation
     expect(generated).toEqual({
       createdNodeIds: [harness.pendingNodeId],
-      revision: 2,
+      revision: 3,
       toolId: "creative-tools/draw",
       warnings: [],
     })
@@ -1010,7 +1131,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests[0]).toMatchObject({
       commandId: "generation:operation-one",
       conflictPolicy: "retry",
-      expectedRevision: 1,
+      expectedRevision: 2,
       expectedTarget: expect.objectContaining({
         data: expect.objectContaining({ kind: "image", status: "pending" }),
         type: "file",
@@ -1018,7 +1139,12 @@ describe("GenerationCanvasService", () => {
       targetNodeId: harness.pendingNodeId,
     })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
-    expect(harness.reloadRevisions).toEqual([1, 2])
+    expect(
+      getCanvasNodeGenerationRun(
+        harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!,
+      )?.status,
+    ).toBe("succeeded")
+    expect(harness.reloadRevisions).toEqual([1, 3])
   })
 
   test("connects a constrained Plugin owner to its pending generation node", async () => {
@@ -1061,6 +1187,117 @@ describe("GenerationCanvasService", () => {
     await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
   })
 
+  test("persists a structured task receipt on a host-created pending owner", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = await setupPendingGeneration(
+      { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
+      { taskId: "task_safe_pending_123" },
+    )
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 4 })
+
+    expect(
+      harness.runRequests.markRunning.map(({ taskId }) => taskId),
+    ).toEqual([undefined, "task_safe_pending_123"])
+    const completed = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
+    expect(getCanvasNodeGenerationRun(completed)).toMatchObject({
+      status: "succeeded",
+      taskId: "task_safe_pending_123",
+    })
+  })
+
+  test("persists recoverable input and ledger boundaries before the paid call and acknowledges after Canvas commit", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const pngResult: McpToolCallResult = {
+      content: [{
+        data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+        mimeType: "image/png",
+        type: "image",
+      }],
+    }
+    const digestDirectory = path.join(privateRoot, "digest-output")
+    await fs.mkdir(digestDirectory, { mode: 0o700 })
+    const resultDigest = await generationRecoveryResultDigest(pngResult, digestDirectory)
+    const acknowledgements: unknown[] = []
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge(input) {
+        acknowledgements.push(input)
+      },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        return { schema: "convax.generation-recovery-snapshot/1", status: "cancelled" }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async lookup() {
+        return {
+          resultDigest,
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "succeeded",
+          taskId: "task_recoverable_123",
+        }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async query() {
+        return {
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "running",
+          taskId: "task_recoverable_123",
+        }
+      },
+      async result() {
+        return { result: pngResult, resultDigest }
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        return {
+          resultDigest,
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "succeeded",
+          taskId: "task_recoverable_123",
+        }
+      },
+    }
+    const harness = await setupPendingGeneration(pngResult, {
+      inputSnapshots,
+      operations,
+      recovery,
+      taskId: "task_recoverable_123",
+    })
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
+
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
+    expect(harness.operationMetadata[0]).toEqual({
+      operationId: "operation-one",
+      recovery: "required",
+      requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(acknowledgements).toHaveLength(1)
+  })
+
   test("does not create a pending node when cancellation wins during preflight", async () => {
     let markLoadStarted!: () => void
     let releaseLoad!: () => void
@@ -1080,7 +1317,7 @@ describe("GenerationCanvasService", () => {
         return { document }
       },
       resource: {
-        async createPendingResource() {
+        async createPendingGenerationResource() {
           createPendingCalls += 1
           throw new Error("Pending generation must not start after cancellation")
         },
@@ -1130,24 +1367,20 @@ describe("GenerationCanvasService", () => {
     })
 
     expect(harness.replacementRequests).toEqual([])
-    expect(harness.failureRequests).toHaveLength(1)
-    expect(harness.failureRequests[0]).toMatchObject({
-      commandId: "generation-pending-fail:operation-one",
+    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.runRequests.finish[0]).toMatchObject({
+      commandId: "generation:operation-one:terminal",
       conflictPolicy: "retry",
-      expectedRevision: 1,
-      expectedTarget: expect.objectContaining({
-        data: expect.objectContaining({ kind: "image", status: "pending" }),
-        type: "file",
-      }),
-      message: "Generation could not be completed",
-      targetNodeId: harness.pendingNodeId,
+      expectedRevision: 2,
+      nodeId: harness.pendingNodeId,
+      operationId: "operation-one",
+      status: "failed",
     })
-    expect(harness.failureRequests[0]?.message).not.toContain("vendor-secret")
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
       error: "Generation could not be completed",
       status: "error",
     })
-    expect(harness.reloadRevisions).toEqual([1, 2])
+    expect(harness.reloadRevisions).toEqual([1, 3])
   })
 
   test("does not let a delayed Renderer projection block pending creation or replacement", async () => {
@@ -1167,7 +1400,7 @@ describe("GenerationCanvasService", () => {
         }),
         { id: "renderer:1", kind: "ui" },
       ),
-    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 2 })
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 3 })
 
     expect(harness.calls).toHaveLength(1)
     expect(harness.createRequests).toHaveLength(1)
@@ -1192,7 +1425,7 @@ describe("GenerationCanvasService", () => {
         }),
         { id: "renderer:1", kind: "ui" },
       ),
-    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 2 })
+    ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 3 })
 
     expect(harness.replacementRequests).toHaveLength(1)
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
@@ -1215,7 +1448,7 @@ describe("GenerationCanvasService", () => {
     ).rejects.toMatchObject({ name: "GenerationToolReportedError" })
 
     expect(harness.calls).toHaveLength(1)
-    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.runRequests.finish).toHaveLength(1)
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
       error: "Generation could not be completed",
       status: "error",
@@ -1243,7 +1476,7 @@ describe("GenerationCanvasService", () => {
     await expect(harness.service.generate(generationRequest, actor)).rejects.toThrow("authorization was denied")
 
     expect(harness.createRequests).toHaveLength(1)
-    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.runRequests.finish).toHaveLength(1)
     expect(harness.calls).toEqual([])
     expect(harness.getDocument().nodes.filter((node) => node.id === harness.pendingNodeId)).toHaveLength(1)
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
@@ -1284,10 +1517,13 @@ describe("GenerationCanvasService", () => {
     controller.abort("user canceled")
     await expect(generation).rejects.toMatchObject({ name: "AbortError" })
     await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(harness.failureRequests).toHaveLength(1)
-    expect(harness.failureRequests[0]?.message).toBe("Generation was canceled")
+    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.runRequests.finish[0]).toMatchObject({
+      retrySafety: "unknown",
+      status: "interrupted",
+    })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
-      error: "Generation was canceled",
+      error: "Generation was interrupted",
       status: "error",
     })
     expect(harness.replacementRequests).toEqual([])
@@ -1329,7 +1565,7 @@ describe("GenerationCanvasService", () => {
     release()
 
     await expect(generation).rejects.toThrow("Generation replacement target changed while the tool was running")
-    expect(harness.failureRequests).toHaveLength(1)
+    expect(harness.runRequests.finish).toHaveLength(1)
     expect(harness.getDocument().nodes.some((node) => node.id === harness.pendingNodeId)).toBe(false)
     expect(harness.replacementRequests).toEqual([])
   })
@@ -1431,14 +1667,541 @@ describe("GenerationCanvasService", () => {
       actor: { id: "renderer:1", kind: "ui" },
       canvasId: "canvas-one",
       commandId: "generation:operation-one",
-      expectedRevision: 0,
-      expectedTarget: createCanvasNodeContentGuard(owner),
+      expectedRevision: 1,
+      expectedTarget: createCanvasGenerationTargetGuard(owner),
+      operationId: "operation-one",
       scopeId: "project-one",
       source: { kind: "host-file", path: "Generated/generated-1.md" },
       targetNodeId: owner.id,
     })
     expect(replacementRequests[0]?.conflictPolicy).toBe("retry")
     expect(viewRequests).toEqual([])
+  })
+
+  test("persists submitting, running, structured task receipt, and atomic generated replacement in order", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const { calls, replacementRequests, runRequests, service } = setup({ document, taskId: "task_safe_123" })
+
+    await service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+      id: "renderer:1",
+      kind: "ui",
+    })
+
+    expect(runRequests.start).toHaveLength(1)
+    expect(runRequests.start[0]).toMatchObject({
+      expectedRevision: 0,
+      nodeId: owner.id,
+      operationId: "operation-one",
+      prompt: "Draw a small fox",
+      toolId: "creative-tools/write",
+    })
+    expect(runRequests.markRunning.map(({ nodeId, operationId, taskId }) => ({ nodeId, operationId, taskId }))).toEqual(
+      [
+        { nodeId: owner.id, operationId: "operation-one", taskId: undefined },
+        { nodeId: owner.id, operationId: "operation-one", taskId: "task_safe_123" },
+      ],
+    )
+    expect(calls).toHaveLength(1)
+    expect(replacementRequests[0]).toMatchObject({
+      operationId: "operation-one",
+      targetNodeId: owner.id,
+    })
+    expect(runRequests.finish).toEqual([])
+  })
+
+  test("rechecks the replacement target after running is persisted and before the paid tool call", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    let currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const { calls, runRequests, service } = setup({
+      document: currentDocument,
+      loadDocument: () => ({ document: currentDocument }),
+      run: {
+        async markRunning(input) {
+          currentDocument = {
+            ...currentDocument,
+            nodes: currentDocument.nodes.map((node) =>
+              node.id === owner.id ? { ...node, data: { ...node.data, text: "Edited before external start" } } : node,
+            ),
+            revision: input.expectedRevision + 1,
+          }
+          return persistedCommandResult(currentDocument, [], [owner.id])
+        },
+      },
+    })
+
+    await expect(
+      service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("replacement target changed")
+    expect(runRequests.markRunning).toHaveLength(1)
+    expect(calls).toEqual([])
+  })
+
+  test("keeps legacy tools compatible without a task receipt and persists failed terminal state", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const legacy = setup({
+      document,
+      result: { content: [{ text: "safe failure", type: "text" }], isError: true },
+    })
+
+    await expect(
+      legacy.service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("safe failure")
+    expect(legacy.runRequests.markRunning.map(({ operationId, taskId }) => ({ operationId, taskId }))).toEqual([
+      { operationId: "operation-one", taskId: undefined },
+    ])
+    expect(legacy.runRequests.finish).toEqual([
+      expect.objectContaining({ operationId: "operation-one", status: "failed" }),
+    ])
+    expect(legacy.replacementRequests).toEqual([])
+  })
+
+  test("persists explicit node-generation cancellation without replacing the prior resource", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    let externalStarted!: () => void
+    const started = new Promise<void>((resolve) => (externalStarted = resolve))
+    const canceled = setup({
+      document,
+      result: (_input, signal) =>
+        new Promise<McpToolCallResult>((_resolve, reject) => {
+          externalStarted()
+          const abort = () => {
+            const error = new Error("Explicit cancel")
+            error.name = "AbortError"
+            reject(error)
+          }
+          if (signal?.aborted) abort()
+          else signal?.addEventListener("abort", abort, { once: true })
+        }),
+    })
+    const controller = new AbortController()
+    const pending = canceled.service.generate(
+      request({ resultMode: { nodeId: owner.id, type: "replace-node" } }),
+      { id: "renderer:1", kind: "ui" },
+      controller.signal,
+    )
+    await started
+    controller.abort(new DOMException("Canceled by the user", "AbortError"))
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    for (let index = 0; index < 10 && canceled.runRequests.finish.length === 0; index += 1) {
+      await Bun.sleep(0)
+    }
+    expect(canceled.runRequests.finish.map(({ operationId, status }) => ({ operationId, status }))).toEqual([
+      { operationId: "operation-one", status: "interrupted" },
+    ])
+    expect(canceled.replacementRequests).toEqual([])
+  })
+
+  test("reconciles restart-left active runs to interrupted without invoking a tool", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    const active = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
+      owner.id,
+      {
+        operationId: "operation-before-restart",
+        prompt: "Do not submit again",
+        toolId: "creative-tools/write",
+      },
+    )
+    const { calls, runRequests, service } = setup({ document: active })
+
+    await expect(
+      service.reconcileCanvas(
+        { canvasId: "canvas-one", scopeId: "project-one" },
+        { id: "desktop:renderer", kind: "ui" },
+      ),
+    ).resolves.toEqual({ interruptedNodeIds: [owner.id], revision: 1 })
+    expect(runRequests.interruptInactive).toEqual([expect.objectContaining({ expectedRevision: 0, liveRuns: [] })])
+    expect(calls).toEqual([])
+  })
+
+  test("reattaches a persisted recoverable task on restart and commits its replayed result without resubmission", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const owner = createMediaNode({
+      id: "owner",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "old",
+        kind: "image",
+        metadata: {},
+        mimeType: "image/png",
+        name: "old.png",
+        state: { status: "ready", url: "convax://old" },
+      },
+    })
+    const active = markCanvasNodeGenerationRunRunning(
+      startCanvasNodeGenerationRun(
+        createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
+        owner.id,
+        {
+          operationId: "operation-recover",
+          prompt: "Recover this image",
+          toolId: "creative-tools/draw",
+        },
+      ),
+      owner.id,
+      "operation-recover",
+      "task_recover_123",
+    )
+    const guard = createCanvasGenerationTargetGuard(active.nodes[0]!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-recover",
+        output: "image",
+        prompt: "Recover this image",
+        references: [],
+        schema: "convax.generation-recovery-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/draw",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: owner.id,
+      operationId: "operation-recover",
+      phase: "accepted",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      taskId: "task_recover_123",
+      toolId: "creative-tools/draw",
+      updatedAt: 0,
+    })
+    const pngResult: McpToolCallResult = {
+      content: [{
+        data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+        mimeType: "image/png",
+        type: "image",
+      }],
+    }
+    const replayedBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])
+    const digestOutputDirectory = path.join(privateRoot, "replay-digest-output")
+    await fs.mkdir(digestOutputDirectory, { mode: 0o700 })
+    const digestReplayPath = path.join(digestOutputDirectory, "replayed.png")
+    await fs.writeFile(digestReplayPath, replayedBytes)
+    const resultDigest = await generationRecoveryResultDigest(
+      {
+        content: [
+          {
+            mimeType: "image/png",
+            name: "replayed.png",
+            type: "resource_link",
+            uri: pathToFileURL(digestReplayPath).toString(),
+          },
+        ],
+      },
+      digestOutputDirectory,
+    )
+    const acknowledgements: unknown[] = []
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge(input) { acknowledgements.push(input) },
+      bindingDigest: "f".repeat(64),
+      async cancel() { return { schema: "convax.generation-recovery-snapshot/1", status: "cancelled" } },
+      executionBindingDigest: "a".repeat(64),
+      async lookup() {
+        return {
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "running",
+          taskId: "task_recover_123",
+        }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async query() {
+        return {
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "running",
+          taskId: "task_recover_123",
+        }
+      },
+      async result(input) {
+        const replayedPath = path.join(input.outputDirectory, "replayed.png")
+        await fs.writeFile(replayedPath, replayedBytes)
+        return {
+          result: {
+            content: [
+              {
+                mimeType: "image/png",
+                name: "replayed.png",
+                type: "resource_link",
+                uri: pathToFileURL(replayedPath).toString(),
+              },
+            ],
+          },
+          resultDigest,
+        }
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        return {
+          resultDigest,
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "succeeded",
+          taskId: "task_recover_123",
+        }
+      },
+    }
+    const harness = setup({
+      document: active,
+      inputSnapshots: inputs,
+      loadDocument: () => ({ document: active }),
+      operations,
+      recovery,
+      result: pngResult,
+      run: {
+        async interruptInactive() {
+          return { ...commandResult(active, []), affectedNodeIds: [] }
+        },
+      },
+      selectedTool: tool({
+        id: "creative-tools/draw",
+        output: "image",
+        recovery: "operation-exactly-once",
+        toolId: "draw",
+      }),
+    })
+
+    await expect(
+      harness.service.reconcileCanvas(
+        { canvasId: "canvas-one", scopeId: "project-one" },
+        { id: "desktop:startup", kind: "system" },
+      ),
+    ).resolves.toMatchObject({ interruptedNodeIds: [] })
+    for (let index = 0; index < 100; index += 1) {
+      if ((await operations.list()).length === 0) break
+      await Bun.sleep(1)
+    }
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
+    expect(harness.calls).toHaveLength(0)
+    expect(harness.replacementRequests).toHaveLength(1)
+    expect(acknowledgements).toHaveLength(1)
+  })
+
+  test("explicitly cancels a persisted task after restart through the same pinned recovery operation", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Before" })
+    const active = markCanvasNodeGenerationRunRunning(
+      startCanvasNodeGenerationRun(
+        createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
+        owner.id,
+        {
+          operationId: "operation-cancel-after-restart",
+          prompt: "Cancel this safely",
+          toolId: "creative-tools/write",
+        },
+      ),
+      owner.id,
+      "operation-cancel-after-restart",
+      "task_cancel_123",
+    )
+    const guard = createCanvasGenerationTargetGuard(active.nodes[0]!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-cancel-after-restart",
+        output: "text",
+        prompt: "Cancel this safely",
+        references: [],
+        schema: "convax.generation-recovery-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/write",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: owner.id,
+      operationId: "operation-cancel-after-restart",
+      phase: "accepted",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      taskId: "task_cancel_123",
+      toolId: "creative-tools/write",
+      updatedAt: 0,
+    })
+    const acknowledgements: unknown[] = []
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge(input) { acknowledgements.push(input) },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        return {
+          schema: "convax.generation-recovery-snapshot/1",
+          status: "cancelled",
+          taskId: "task_cancel_123",
+        }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async lookup() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
+      pluginPackageDigest: "c".repeat(64),
+      async query() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
+      async result() { throw new Error("Result replay must not run during cancellation") },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
+    }
+    const harness = setup({
+      document: active,
+      inputSnapshots: inputs,
+      operations,
+      recovery,
+      selectedTool: tool({
+        id: "creative-tools/write",
+        output: "text",
+        recovery: "operation-exactly-once",
+        toolId: "write",
+      }),
+    })
+
+    await harness.service.cancel("operation-cancel-after-restart", {
+      id: "desktop:renderer",
+      kind: "ui",
+    })
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
+    expect(harness.runRequests.finish).toEqual([
+      expect.objectContaining({
+        operationId: "operation-cancel-after-restart",
+        retrySafety: "safe",
+        status: "cancelled",
+      }),
+    ])
+    expect(acknowledgements).toEqual([
+      expect.objectContaining({
+        operationId: "operation-cancel-after-restart",
+        taskId: "task_cancel_123",
+      }),
+    ])
+  })
+
+  test("reloads both the document and live executions after a reconciliation conflict", async () => {
+    const staleOwner = createTextNode({ id: "stale-owner", position: { x: 0, y: 0 }, text: "Before restart" })
+    const liveOwner = createTextNode({ id: "live-owner", position: { x: 320, y: 0 }, text: "New request" })
+    let currentDocument = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [staleOwner, liveOwner], title: "Canvas" }),
+      staleOwner.id,
+      {
+        operationId: "operation-before-restart",
+        prompt: "Do not submit again",
+        toolId: "creative-tools/write",
+      },
+    )
+    let releasePreparation!: () => void
+    const preparationRelease = new Promise<void>((resolve) => {
+      releasePreparation = resolve
+    })
+    let reportPrepared!: () => void
+    const prepared = new Promise<void>((resolve) => {
+      reportPrepared = resolve
+    })
+    const controller = new AbortController()
+    let liveGeneration: Promise<unknown> | undefined
+    let service!: GenerationCanvasService
+    let interruptAttempts = 0
+    const configured = setup({
+      document: currentDocument,
+      loadDocument: () => ({ document: currentDocument }),
+      async prepareTool() {
+        reportPrepared()
+        await preparationRelease
+      },
+      run: {
+        async start(input) {
+          currentDocument = {
+            ...startCanvasNodeGenerationRun(currentDocument, input.nodeId, {
+              operationId: input.operationId,
+              prompt: input.prompt,
+              toolId: input.toolId,
+            }),
+            revision: currentDocument.revision + 1,
+          }
+          return persistedCommandResult(currentDocument, [], [input.nodeId])
+        },
+        async interruptInactive(input) {
+          interruptAttempts += 1
+          if (interruptAttempts === 1) {
+            liveGeneration = service.generate(
+              request({
+                operationId: "operation-after-restart",
+                prompt: "Keep this request live",
+                resultMode: { nodeId: liveOwner.id, type: "replace-node" },
+                toolId: "creative-tools/write",
+              }),
+              { id: "desktop:renderer", kind: "ui" },
+              controller.signal,
+            )
+            await prepared
+            throw new CanvasRevisionConflictError(input.expectedRevision, currentDocument.revision)
+          }
+          expect(input).toMatchObject({
+            conflictPolicy: "reject",
+            expectedRevision: 1,
+            liveRuns: [{ nodeId: liveOwner.id, operationId: "operation-after-restart" }],
+          })
+          currentDocument = {
+            ...interruptInactiveCanvasNodeGenerationRuns(currentDocument, input.liveRuns),
+            revision: currentDocument.revision + 1,
+          }
+          return persistedCommandResult(currentDocument, [], [staleOwner.id])
+        },
+      },
+    })
+    service = configured.service
+
+    await expect(
+      service.reconcileCanvas(
+        { canvasId: "canvas-one", scopeId: "project-one" },
+        { id: "desktop:renderer", kind: "ui" },
+      ),
+    ).resolves.toEqual({ interruptedNodeIds: [staleOwner.id], revision: 2 })
+    expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === staleOwner.id)!)).toMatchObject({
+      status: "interrupted",
+    })
+    expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === liveOwner.id)!)).toMatchObject({
+      operationId: "operation-after-restart",
+      status: "submitting",
+    })
+
+    controller.abort("Test cleanup")
+    releasePreparation()
+    await expect(liveGeneration!).rejects.toMatchObject({ name: "AbortError" })
   })
 
   test("admits only the first media output when one card is the generation result owner", async () => {

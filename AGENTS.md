@@ -284,6 +284,13 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   requests, and keep non-terminal work alive until success, explicit terminal
   failure, or caller cancellation. Host/Agent transports must not turn a healthy
   pending state into an absolute tool-call timeout.
+- Node-targeted generation state is Canvas-owned portable metadata, distinct from
+  the next-run tool preference and Plugin-owned state. Main persists submitting
+  before the external call—including atomically with a host-created pending
+  placeholder—accepts only structured bounded task receipts, and uses the Canvas
+  application service for every transition. Without a generic resume or query
+  contract, restart marks orphaned active runs interrupted and never repeats a
+  potentially billable call.
 - A Tool Plugin may expose a user-global service surface through the same verified
   sidecar lifecycle. Service status and mutations use fixed host tool names and a
   strict display-only contract; renderer code never selects an MCP method or receives

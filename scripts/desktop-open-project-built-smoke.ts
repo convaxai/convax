@@ -318,6 +318,11 @@ try {
         name: "Storyboard Builder",
       }
     })
+    // This smoke verifies the built renderer's real composer input, picker
+    // geometry, and Canvas/Plugin flows. Keep those assertions independent from
+    // the machine's OpenCode session database and startup latency.
+    electron.ipcMain.removeHandler("agent:session-list")
+    electron.ipcMain.handle("agent:session-list", () => [])
     return true
   })()`,
   )
@@ -600,7 +605,20 @@ try {
         if (composer) break
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
-      if (!composer) throw new Error("The Agent composer is missing")
+      if (!composer) {
+        const openAgent = document.querySelector('button[aria-label="Open agent"]')
+        const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
+        const alerts = [...document.querySelectorAll('[role="alert"]')]
+          .map((alert) => alert.textContent?.trim())
+          .filter(Boolean)
+        throw new Error("The Agent composer is missing: " + JSON.stringify({
+          agentStatus: await window.convax.agent.getStatus().catch((cause) => ({ error: String(cause) })),
+          alerts,
+          bodyText: document.body.innerText.slice(-2_000),
+          composerContentEditable: disabledComposer?.getAttribute("contenteditable"),
+          openAgentVisible: openAgent instanceof HTMLElement && openAgent.offsetParent !== null,
+        }))
+      }
       composer.replaceChildren()
       composer.focus()
       const range = document.createRange()

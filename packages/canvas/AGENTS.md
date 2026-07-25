@@ -48,6 +48,17 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.
+- Canvas owns the separate versioned node-generation run namespace, its bounded
+  parser and legal transitions. Keep the next-run preference separate from the
+  resolved historical tool, never persist raw diagnostics or vendor state, and mark
+  generated resource replacement plus `succeeded` in one guarded Canvas command.
+- A host-created pending generation node and its `submitting` run are one Canvas
+  business command/CAS. Pending owners use the same transitions, target guard,
+  terminal presentation and restart interruption as existing replacement targets.
+- Generation target guards may omit only the host-owned run namespace. They must
+  still protect real resource content and every other metadata namespace. Generated
+  replacement preserves only explicitly admitted node-local namespaces rather than
+  blindly merging old metadata.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
 - Plugins are disposable, deterministic and failure-isolated.

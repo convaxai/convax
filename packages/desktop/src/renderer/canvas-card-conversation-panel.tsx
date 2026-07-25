@@ -3,7 +3,6 @@ import {
   inferCanvasGenerationReferences,
   type CanvasAssistantGenerationCapability,
   type CanvasAssistantRequest,
-  type CanvasAssistantGenerationActivity,
   type CanvasGenerateRequest,
   type CanvasGenerateResult,
   type CanvasGenerateService,
@@ -127,6 +126,7 @@ export function validateCanvasCardGenerationToolInput(
 
 export function createCanvasCardGenerationRequest(input: {
   description: CanvasGenerationToolDescription
+  operationId?: string
   prompt: string
   request: CanvasAssistantRequest
   signal: AbortSignal
@@ -156,6 +156,7 @@ export function createCanvasCardGenerationRequest(input: {
       source: "canvas-card",
     },
     expectedRevision: input.request.document.revision,
+    operationId: input.operationId ?? globalThis.crypto.randomUUID(),
     output: ownerOutput,
     prompt,
     references: canvasCardGenerationReferences(input.request),
@@ -188,7 +189,7 @@ function abortError(message: string) {
   return error
 }
 
-function generationErrorMessage(error: unknown) {
+export function generationErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   return message.replace(
     /^Error invoking remote method ['"]generation:generate['"]:\s*GenerationToolReportedError:\s*/,
@@ -197,29 +198,14 @@ function generationErrorMessage(error: unknown) {
 }
 
 export async function executeCanvasCardGeneration(input: {
-  cancel: () => void
   generate: CanvasGenerateService["generate"]
-  onActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
   request: CanvasGenerateRequest
 }): Promise<CanvasGenerateResult> {
-  input.onActivityChange?.({ cancel: input.cancel, prompt: input.request.prompt, status: "pending" })
-  try {
-    const result = await input.generate(input.request)
-    if (input.request.signal.aborted) {
-      throw input.request.signal.reason ?? abortError("The card generation request was cancelled")
-    }
-    input.onActivityChange?.({ status: "complete" })
-    return result
-  } catch (error) {
-    if (!input.request.signal.aborted) {
-      input.onActivityChange?.({
-        message: generationErrorMessage(error),
-        prompt: input.request.prompt,
-        status: "error",
-      })
-    }
-    throw error
+  const result = await input.generate(input.request)
+  if (input.request.signal.aborted) {
+    throw input.request.signal.reason ?? abortError("The card generation request was cancelled")
   }
+  return result
 }
 
 type ScopedLoad<T> =
@@ -305,12 +291,6 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   }, [])
 
   useEffect(() => {
-    if (props.generation.initialPrompt !== undefined) {
-      props.generation.onInitialPromptConsumed?.()
-    }
-  }, [props.generation.initialPrompt, props.generation.onInitialPromptConsumed])
-
-  useEffect(() => {
     setToolInput({})
     setOperationError(undefined)
     setOperationMessage(undefined)
@@ -383,6 +363,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     try {
       request = createCanvasCardGenerationRequest({
         description: currentDescription.value,
+        operationId: globalThis.crypto.randomUUID(),
         prompt,
         request: props.request,
         signal: controller.signal,
@@ -398,9 +379,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     setOperationMessage(undefined)
     promptRef.current?.blur()
     void executeCanvasCardGeneration({
-      cancel: () => controller.abort(abortError("The card generation owner was disposed")),
       generate: props.service.generate,
-      onActivityChange: props.generation.onActivityChange,
       request,
     })
       .then(

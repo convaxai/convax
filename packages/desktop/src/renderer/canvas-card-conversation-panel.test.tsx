@@ -5,7 +5,6 @@ import {
   createMediaNode,
   createTextNode,
   type CanvasAssistantRequest,
-  type CanvasAssistantGenerationActivity,
   type CanvasGenerateRequest,
   type CanvasGenerateResult,
   type CanvasGenerateService,
@@ -25,6 +24,7 @@ import {
   compatibleCanvasCardGenerationTools,
   createCanvasCardGenerationRequest,
   executeCanvasCardGeneration,
+  generationErrorMessage,
   resolveCanvasCardGenerationTool,
   validateCanvasCardGenerationToolInput,
 } from "./canvas-card-conversation-panel"
@@ -234,6 +234,7 @@ describe("Canvas card generation request", () => {
     expect(
       createCanvasCardGenerationRequest({
         description,
+        operationId: "operation-one",
         prompt: "  Turn this into a poster  ",
         request,
         signal: controller.signal,
@@ -248,6 +249,7 @@ describe("Canvas card generation request", () => {
         source: "canvas-card",
       },
       expectedRevision: 7,
+      operationId: "operation-one",
       output: "image",
       prompt: "Turn this into a poster",
       references: [{ nodeId: "image-card", role: "reference_image" }],
@@ -256,6 +258,25 @@ describe("Canvas card generation request", () => {
       toolId: "creative-tools/image.generate",
       toolInput: { aspect_ratio: "16:9", steps: 24 },
     })
+  })
+
+  test("creates a fresh host operation id for every retry request", () => {
+    const node = imageNode()
+    const request = assistantRequest(node, [node])
+    const create = () =>
+      createCanvasCardGenerationRequest({
+        description,
+        prompt: "Retry this prompt",
+        request,
+        signal: new AbortController().signal,
+        tool: tool(),
+        toolInput: { aspect_ratio: "16:9", steps: 24 },
+      })
+
+    const first = create()
+    const second = create()
+    expect(first.operationId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(second.operationId).not.toBe(first.operationId)
   })
 
   test("rejects direct generation for generic and non-visual media cards", () => {
@@ -484,26 +505,17 @@ describe("Canvas card generation lifecycle", () => {
     }
   }
 
-  test("closes the composer into card pending state immediately and completes it only after generation", async () => {
-    const activities: CanvasAssistantGenerationActivity[] = []
-    let cancelled = false
+  test("keeps accepted generation alive until the Main-owned operation completes", async () => {
     let resolveGeneration!: (result: CanvasGenerateResult) => void
     const generate: CanvasGenerateService["generate"] = () =>
       new Promise((resolve) => {
         resolveGeneration = resolve
       })
     const pending = executeCanvasCardGeneration({
-      cancel: () => {
-        cancelled = true
-      },
       generate,
-      onActivityChange: (activity) => activities.push(activity),
       request: generationRequest(),
     })
 
-    expect(activities.map((activity) => activity.status)).toEqual(["pending"])
-    expect(activities[0]?.status === "pending" && activities[0].cancel).toBeFunction()
-    expect(activities[0]?.status === "pending" && activities[0].prompt).toBe("A small rabbit")
     resolveGeneration({
       createdNodeIds: ["generated"],
       revision: 8,
@@ -511,85 +523,46 @@ describe("Canvas card generation lifecycle", () => {
       warnings: [],
     })
     await expect(pending).resolves.toMatchObject({ createdNodeIds: ["generated"] })
-    expect(activities.map((activity) => activity.status)).toEqual(["pending", "complete"])
-    expect(cancelled).toBeFalse()
   })
 
-  test("turns a terminal failure into a recoverable card error but does not surface cancellation as failure", async () => {
-    const failureActivities: CanvasAssistantGenerationActivity[] = []
+  test("propagates terminal failure and explicit cancellation without creating renderer-owned task state", async () => {
     await expect(
       executeCanvasCardGeneration({
-        cancel: () => undefined,
         generate: async () => {
           throw new Error("Generation service unavailable")
         },
-        onActivityChange: (activity) => failureActivities.push(activity),
         request: generationRequest(),
       }),
     ).rejects.toThrow("Generation service unavailable")
-    expect(
-      failureActivities.map((activity) => (activity.status === "error" ? activity : { status: activity.status })),
-    ).toEqual([
-      { status: "pending" },
-      { message: "Generation service unavailable", prompt: "A small rabbit", status: "error" },
-    ])
 
     const controller = new AbortController()
-    const cancellationActivities: CanvasAssistantGenerationActivity[] = []
     await expect(
       executeCanvasCardGeneration({
-        cancel: () => controller.abort(new DOMException("Disposed", "AbortError")),
         generate: async () => {
           controller.abort(new DOMException("Cancelled", "AbortError"))
           throw controller.signal.reason
         },
-        onActivityChange: (activity) => cancellationActivities.push(activity),
         request: generationRequest(controller.signal),
       }),
     ).rejects.toThrow("Cancelled")
-    expect(cancellationActivities.map((activity) => activity.status)).toEqual(["pending"])
   })
 
-  test("shows the bounded tool diagnostic before Electron's generation IPC wrapper", async () => {
-    const activities: CanvasAssistantGenerationActivity[] = []
+  test("shows the bounded tool diagnostic before Electron's generation IPC wrapper", () => {
     const wrapped = new Error(
       "Error invoking remote method 'generation:generate': GenerationToolReportedError: Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
     )
 
-    await expect(
-      executeCanvasCardGeneration({
-        cancel: () => undefined,
-        generate: async () => {
-          throw wrapped
-        },
-        onActivityChange: (activity) => activities.push(activity),
-        request: generationRequest(),
-      }),
-    ).rejects.toBe(wrapped)
-    expect(activities.at(-1)).toEqual({
-      message: "Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
-      prompt: "A small rabbit",
-      status: "error",
-    })
+    expect(generationErrorMessage(wrapped)).toBe(
+      "Generation tool failed: XiaoYunque accepted the generation, but repeated status checks were rejected.",
+    )
   })
 
-  test("does not rewrite ordinary errors or errors from another IPC channel", async () => {
+  test("does not rewrite ordinary errors or errors from another IPC channel", () => {
     for (const message of [
       "Error invoking remote method 'generation:generate': Error: Generation service unavailable",
       "Error invoking remote method 'plugin-service:status': GenerationToolReportedError: Generation tool failed",
     ]) {
-      const activities: CanvasAssistantGenerationActivity[] = []
-      await expect(
-        executeCanvasCardGeneration({
-          cancel: () => undefined,
-          generate: async () => {
-            throw new Error(message)
-          },
-          onActivityChange: (activity) => activities.push(activity),
-          request: generationRequest(),
-        }),
-      ).rejects.toThrow(message)
-      expect(activities.at(-1)).toMatchObject({ message, status: "error" })
+      expect(generationErrorMessage(new Error(message))).toBe(message)
     }
   })
 
