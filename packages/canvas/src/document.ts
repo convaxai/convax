@@ -14,6 +14,7 @@ import type {
   CanvasTextFormat,
   CanvasTextNodeData,
 } from "./types"
+import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
 type PersistedCanvasNode = Node<CanvasNodeData, string>
@@ -117,14 +118,17 @@ export function createMediaNode(input: {
     durationMs: input.resource.durationMs,
     metadata: input.resource.metadata,
   }
-  const ratio = input.resource.width && input.resource.height ? input.resource.width / input.resource.height : 4 / 3
-  const width = 320
+  const boundedMedia =
+    input.resource.kind === "image" || input.resource.kind === "video"
+      ? fitCanvasMediaSizeWithinBounds(input.resource.width, input.resource.height)
+      : null
+  const size = boundedMedia ?? { height: 240, width: 320 }
   return {
     id: input.id ?? createCanvasId("node"),
     type: "file",
     position: input.position,
     data,
-    style: { width, height: Math.max(180, Math.round(width / ratio)) },
+    style: { width: size.width, height: size.height },
   }
 }
 

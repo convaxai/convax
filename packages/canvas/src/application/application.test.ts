@@ -155,7 +155,7 @@ describe("canvas application commands", () => {
     expect(applied.createdNodeIds).toEqual(["image_node", "text_node"])
     expect(applied.document.nodes.find((node) => node.id === "image_node")).toMatchObject({
       position: { x: 344, y: 0 },
-      style: { height: 180, width: 320 },
+      style: { height: 160, width: 320 },
     })
     expect(applied.document.nodes.find((node) => node.id === "text_node")).toMatchObject({
       data: { metadata: { source: "docs/brief.md" } },
@@ -319,7 +319,13 @@ describe("canvas application commands", () => {
     const replaced = applyCanvasBusinessCommand(failed.document, {
       type: "resources.replace",
       expectedTarget: createCanvasNodeContentGuard(replacementTarget),
-      item: { id: "generated", kind: "image", url: "asset://generated" },
+      item: {
+        height: 1_600,
+        id: "generated",
+        kind: "image",
+        url: "asset://generated",
+        width: 800,
+      },
       targetNodeId: replacementTarget.id,
     })
     const finalNode = replaced.document.nodes.find((node) => node.id === pending.id)!
@@ -327,6 +333,7 @@ describe("canvas application commands", () => {
     expect(finalNode.position).toEqual(pending.position)
     expect(replaced.document.edges).toEqual(failed.document.edges)
     expect(finalNode.data).toMatchObject({ kind: "image", url: "asset://generated" })
+    expect(finalNode.style).toEqual({ height: 320, width: 160 })
     expect(finalNode.data).not.toHaveProperty("status")
     expect(finalNode.data).not.toHaveProperty("error")
   })

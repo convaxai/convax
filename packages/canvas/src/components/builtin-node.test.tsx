@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import type { NodeProps } from "@xyflow/react"
 import type { ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { createCanvasDocument, createGroupNode } from "../document"
+import { createAgentNode, createCanvasDocument, createGroupNode, createTextNode } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
@@ -30,6 +30,7 @@ const {
   BuiltinMediaFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
+  ExpandedTextEditorDialog,
   startCanvasSelectionDragFromNode,
 } = await import("./builtin-node")
 
@@ -147,6 +148,26 @@ function toolbarCount(markup: string) {
 }
 
 describe("built-in node toolbar visibility", () => {
+  test("renders an almost full-screen editor dialog for text nodes", () => {
+    const markup = renderToStaticMarkup(
+      <ExpandedTextEditorDialog
+        editor={null}
+        label="Story outline"
+        onClose={() => {}}
+        toolbar={<div data-text-formatting />}
+      />,
+    )
+
+    expect(markup).toContain('role="dialog"')
+    expect(markup).toContain('aria-modal="true"')
+    expect(markup).toContain("Story outline")
+    expect(markup).toContain("h-[calc(100vh-32px)]")
+    expect(markup).toContain("w-[calc(100vw-32px)]")
+    expect(markup).toContain("convax-text-editor-dialog__toolbar-inner")
+    expect(markup).toContain("data-text-formatting")
+    expect(markup).toContain('aria-label="Close expanded editor"')
+  })
+
   test("can show a compact visible label for commands without a meaningful icon", () => {
     const markup = renderToStaticMarkup(<CanvasNodeToolbarButton label="刷新图片" onClick={() => {}} visibleLabel />)
 
@@ -164,6 +185,26 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain("Use the toolbar to add content")
     expect(markup).toContain('aria-label="Add image"')
     expect(markup).not.toContain("convax-media-empty__action")
+  })
+
+  test("marks image and video cards for aligned borderless media chrome", () => {
+    const imageMarkup = renderWithEditor(selection([]), false, (props) => (
+      <BuiltinMediaFileNode
+        {...props}
+        data={{ kind: "image", label: "Portrait", url: "asset://portrait" }}
+      />
+    ))
+    const videoMarkup = renderWithEditor(selection([]), false, (props) => (
+      <BuiltinMediaFileNode
+        {...props}
+        data={{ kind: "video", label: "Clip", url: "asset://clip" }}
+      />
+    ))
+
+    expect(imageMarkup).toContain("convax-node__surface--media")
+    expect(imageMarkup).toContain('src="asset://portrait"')
+    expect(videoMarkup).toContain("convax-node__surface--media")
+    expect(videoMarkup).toContain('src="asset://clip"')
   })
 
   test("renders persisted pending and error resource lifecycle overlays", () => {
@@ -394,10 +435,11 @@ describe("built-in node toolbar visibility", () => {
     }
   })
 
-  test("applies the same boundary to contributed and assistant toolbars", () => {
-    expect(
-      toolbarCount(renderWithEditor(selection(["node-a"]), false, (props) => <BuiltinCanvasNode {...props} />)),
-    ).toBe(2)
+  test("keeps a non-media Agent entry inside the single-card toolbar boundary", () => {
+    const selected = renderWithEditor(selection(["node-a"]), false, (props) => <BuiltinCanvasNode {...props} />)
+    expect(toolbarCount(selected)).toBe(1)
+    expect(selected).toContain('aria-label="Open Agent"')
+    expect(selected).not.toContain("data-assistant-toolbar")
     expect(
       toolbarCount(
         renderWithEditor(selection(["node-a", "node-b"]), false, (props) => <BuiltinCanvasNode {...props} />),
@@ -413,11 +455,30 @@ describe("built-in node toolbar visibility", () => {
     ).toBe(0)
   })
 
-  test("keeps the selected card assistant mounted but disabled during document hydration", () => {
-    const markup = renderWithEditor(selection(["node-a"]), true, (props) => <BuiltinCanvasNode {...props} />, true)
+  test("keeps only visual-media assistants mounted but disabled during document hydration", () => {
+    const genericMarkup = renderWithEditor(
+      selection(["node-a"]),
+      true,
+      (props) => <BuiltinCanvasNode {...props} />,
+      true,
+    )
+    expect(toolbarCount(genericMarkup)).toBe(0)
+    expect(genericMarkup).not.toContain("data-assistant-toolbar")
 
+    const imageNode: CanvasNode = {
+      data: { kind: "image", label: "Image", url: "" },
+      id: "node-image",
+      position: { x: 0, y: 0 },
+      type: "file",
+    }
+    const markup = renderWithEditor(
+      selection([imageNode.id]),
+      true,
+      (props) => <BuiltinCanvasNode {...props} />,
+      true,
+      { node: imageNode },
+    )
     expect(toolbarCount(markup)).toBe(1)
-    expect(markup).not.toContain("data-contributed-toolbar")
     expect(markup).toContain('aria-busy="true"')
     expect(markup).toContain('disabled=""')
     expect(markup).toContain('inert=""')
@@ -433,7 +494,7 @@ describe("built-in node toolbar visibility", () => {
         type: "file",
       }
       let request: CanvasAssistantRequest | undefined
-      renderWithEditor(selection([mediaNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      const markup = renderWithEditor(selection([mediaNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
         assistantRender: (next) => {
           request = next
           return <div data-assistant-toolbar />
@@ -443,17 +504,26 @@ describe("built-in node toolbar visibility", () => {
 
       expect(request?.generation?.output).toBe(output)
       expect(request?.generation?.onActivityChange).toBeFunction()
+      expect(markup).toContain("data-assistant-toolbar")
+      expect(markup).not.toContain('aria-label="Open Agent"')
     }
 
     let genericRequest: CanvasAssistantRequest | undefined
-    renderWithEditor(selection([node.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
-      assistantRender: (next) => {
-        genericRequest = next
-        return <div data-assistant-toolbar />
+    const genericMarkup = renderWithEditor(
+      selection([node.id]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        assistantRender: (next) => {
+          genericRequest = next
+          return <div data-assistant-toolbar />
+        },
       },
-    })
-    expect(genericRequest?.mode).toBe("file")
-    expect(genericRequest?.generation).toBeUndefined()
+    )
+    expect(genericRequest).toBeUndefined()
+    expect(genericMarkup).toContain('aria-label="Open Agent"')
+    expect(genericMarkup).not.toContain("data-assistant-toolbar")
   })
 
   test("gives a visual-media assistant only its owner's persisted generation-model setter", () => {
@@ -487,5 +557,68 @@ describe("built-in node toolbar visibility", () => {
     expect(request?.generation?.onActivityChange).toBeFunction()
     request?.generation?.onOwnerToolIdChange?.("plugin.example:image.alternate")
     expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
+  })
+
+  test("defaults file and Agent conversations to direct incoming inputs only", () => {
+    const incoming = createTextNode({ id: "incoming", position: { x: -320, y: 0 }, text: "Input" })
+    const outgoing = createTextNode({ id: "outgoing", position: { x: 640, y: 0 }, text: "Output" })
+    const imageOwner: CanvasNode = {
+      data: { kind: "image", label: "Image", url: "" },
+      id: "image-owner",
+      position: { x: 0, y: 0 },
+      type: "file",
+    }
+    const imageDocument = createCanvasDocument({
+      edges: [
+        { id: "incoming-edge", source: incoming.id, target: imageOwner.id },
+        { id: "duplicate-input", source: incoming.id, target: imageOwner.id },
+        { id: "outgoing-edge", source: imageOwner.id, target: outgoing.id },
+      ],
+      id: "canvas-test",
+      nodes: [imageOwner, incoming, outgoing],
+    })
+    let fileRequest: CanvasAssistantRequest | undefined
+    renderWithEditor(
+      selection([imageOwner.id]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        assistantRender: (request) => {
+          fileRequest = request
+          return <div data-assistant-toolbar />
+        },
+        document: imageDocument,
+        node: imageOwner,
+      },
+    )
+    expect(fileRequest?.mentionedNodeIds).toEqual([incoming.id])
+
+    const agentOwner = createAgentNode({ id: "agent-owner", position: { x: 0, y: 0 } })
+    const agentDocument = createCanvasDocument({
+      edges: [
+        { id: "agent-input", source: incoming.id, target: agentOwner.id },
+        { id: "agent-output", source: agentOwner.id, target: outgoing.id },
+      ],
+      id: "canvas-test",
+      nodes: [agentOwner, incoming, outgoing],
+    })
+    let agentRequest: CanvasAssistantRequest | undefined
+    renderWithEditor(
+      selection([agentOwner.id]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        assistantRender: (request) => {
+          agentRequest = request
+          return <div data-assistant-toolbar />
+        },
+        document: agentDocument,
+        node: agentOwner,
+      },
+    )
+    expect(agentRequest?.mode).toBe("agent")
+    expect(agentRequest?.mentionedNodeIds).toEqual([incoming.id])
   })
 })
