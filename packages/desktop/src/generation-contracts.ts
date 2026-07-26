@@ -39,7 +39,7 @@ export interface GenerationToolSummary {
   description: string
   output: GenerationOutputModality
   /** Present only when manifest and runtime satisfy the complete generic recovery contract. */
-  recovery?: "operation-exactly-once"
+  recovery?: "long-running-operation"
   acceptedInputs: readonly GenerationInputRole[]
 }
 

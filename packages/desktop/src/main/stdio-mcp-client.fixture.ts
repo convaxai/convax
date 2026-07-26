@@ -108,10 +108,10 @@ async function handle(request: JsonRpcRequest) {
             ...(generationRecovery
               ? {
                   experimental: {
-                    "convax/generation-recovery": {
+                    "convax/generation-lro": {
                       binding: "fixture-binding",
-                      mode: "operation-exactly-once",
-                      schema: "convax.generation-recovery/1",
+                      mode: "long-running-operation",
+                      schema: "convax.generation-lro/1",
                     },
                   },
                 }
@@ -192,11 +192,11 @@ async function handle(request: JsonRpcRequest) {
     return
   }
   if (generationRecovery && request.method?.startsWith("convax/generation/")) {
-    if (request.method === "convax/generation/operation/acknowledge") {
+    if (request.method === "convax/generation/operations/acknowledge") {
       send({
         id: request.id,
         jsonrpc: "2.0",
-        result: { acknowledged: true, schema: "convax.generation-recovery-acknowledgement/1" },
+        result: { acknowledged: true, schema: "convax.generation-lro-acknowledgement/1" },
       })
       return
     }
@@ -204,7 +204,7 @@ async function handle(request: JsonRpcRequest) {
       id: request.id,
       jsonrpc: "2.0",
       result: {
-        schema: "convax.generation-recovery-snapshot/1",
+        schema: "convax.generation-lro-snapshot/1",
         status: "running",
         taskId: "fixture_task",
       },

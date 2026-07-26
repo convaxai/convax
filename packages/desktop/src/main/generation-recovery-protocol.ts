@@ -1,29 +1,29 @@
-import {
-  isCanvasGenerationOperationId,
-  isCanvasGenerationTaskId,
-} from "@convax/canvas/core"
+import { isCanvasGenerationOperationId, isCanvasGenerationTaskId } from "@convax/canvas/core"
 import path from "node:path"
 
-export const generationRecoveryCapabilitySchema = "convax.generation-recovery/1" as const
-export const generationRecoveryRequestSchema = "convax.generation-recovery-request/1" as const
-export const generationRecoverySnapshotSchema = "convax.generation-recovery-snapshot/1" as const
+export const generationLroCapabilitySchema = "convax.generation-lro/1" as const
+export const generationLroRequestSchema = "convax.generation-lro-request/1" as const
+export const generationLroSnapshotSchema = "convax.generation-lro-snapshot/1" as const
 
-export const generationRecoveryMethods = {
-  lookup: "convax/generation/operation/lookup",
-  query: "convax/generation/task/query",
-  await: "convax/generation/task/await",
-  cancel: "convax/generation/operation/cancel",
-  result: "convax/generation/task/result",
-  acknowledge: "convax/generation/operation/acknowledge",
+/**
+ * Google-style Long-Running Operation surface. `get` accepts the host operation
+ * identity with an optional downstream task receipt, so the protocol does not
+ * invent separate lookup and query method families for the same operation.
+ */
+export const generationLroMethods = {
+  get: "convax/generation/operations/get",
+  wait: "convax/generation/operations/wait",
+  cancel: "convax/generation/operations/cancel",
+  result: "convax/generation/operations/result",
+  acknowledge: "convax/generation/operations/acknowledge",
 } as const
 
-export type GenerationRecoveryMethod =
-  (typeof generationRecoveryMethods)[keyof typeof generationRecoveryMethods]
+export type GenerationRecoveryMethod = (typeof generationLroMethods)[keyof typeof generationLroMethods]
 
 export interface GenerationRecoveryCapability {
   binding: string
-  mode: "operation-exactly-once"
-  schema: typeof generationRecoveryCapabilitySchema
+  mode: "long-running-operation"
+  schema: typeof generationLroCapabilitySchema
 }
 
 export interface GenerationRecoveryRequest {
@@ -31,31 +31,31 @@ export interface GenerationRecoveryRequest {
   outputDirectory?: string
   requestDigest: string
   resultDigest?: string
-  schema: typeof generationRecoveryRequestSchema
+  schema: typeof generationLroRequestSchema
   taskId?: string
 }
 
 export type GenerationRecoverySnapshot =
-  | { schema: typeof generationRecoverySnapshotSchema; status: "absent" | "prepared" | "unknown" }
+  | { schema: typeof generationLroSnapshotSchema; status: "absent" | "prepared" | "unknown" }
   | {
-      schema: typeof generationRecoverySnapshotSchema
+      schema: typeof generationLroSnapshotSchema
       status: "submitted" | "running"
       taskId: string
     }
   | {
       resultDigest: string
-      schema: typeof generationRecoverySnapshotSchema
+      schema: typeof generationLroSnapshotSchema
       status: "succeeded"
       taskId: string
     }
   | {
       error: { code: string; message: string }
-      schema: typeof generationRecoverySnapshotSchema
+      schema: typeof generationLroSnapshotSchema
       status: "failed"
       taskId?: string
     }
   | {
-      schema: typeof generationRecoverySnapshotSchema
+      schema: typeof generationLroSnapshotSchema
       status: "cancelled"
       taskId?: string
     }
@@ -72,16 +72,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function exactKeys(input: Record<string, unknown>, allowed: readonly string[], required: readonly string[]) {
   const permitted = new Set(allowed)
-  return Object.keys(input).every((key) => permitted.has(key)) &&
+  return (
+    Object.keys(input).every((key) => permitted.has(key)) &&
     required.every((key) => Object.prototype.hasOwnProperty.call(input, key))
+  )
 }
 
 export function normalizeGenerationRecoveryCapability(value: unknown): GenerationRecoveryCapability {
   if (
     !isRecord(value) ||
     !exactKeys(value, ["binding", "mode", "schema"], ["binding", "mode", "schema"]) ||
-    value.schema !== generationRecoveryCapabilitySchema ||
-    value.mode !== "operation-exactly-once" ||
+    value.schema !== generationLroCapabilitySchema ||
+    value.mode !== "long-running-operation" ||
     typeof value.binding !== "string" ||
     !bindingPattern.test(value.binding) ||
     unsafeText.test(value.binding)
@@ -90,8 +92,8 @@ export function normalizeGenerationRecoveryCapability(value: unknown): Generatio
   }
   return {
     binding: value.binding,
-    mode: "operation-exactly-once",
-    schema: generationRecoveryCapabilitySchema,
+    mode: "long-running-operation",
+    schema: generationLroCapabilitySchema,
   }
 }
 
@@ -116,7 +118,7 @@ export function requireGenerationRecoveryRequest(
     operationId: value.operationId,
     ...(value.outputDirectory === undefined ? {} : { outputDirectory: value.outputDirectory }),
     requestDigest: value.requestDigest,
-    schema: generationRecoveryRequestSchema,
+    schema: generationLroRequestSchema,
     ...(value.resultDigest === undefined ? {} : { resultDigest: value.resultDigest }),
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
   }
@@ -142,10 +144,10 @@ function safeError(value: unknown) {
 }
 
 export function normalizeGenerationRecoverySnapshot(value: unknown): GenerationRecoverySnapshot {
-  if (!isRecord(value) || value.schema !== generationRecoverySnapshotSchema || typeof value.status !== "string") {
+  if (!isRecord(value) || value.schema !== generationLroSnapshotSchema || typeof value.status !== "string") {
     throw new Error("Generation recovery snapshot is invalid")
   }
-  const base = { schema: generationRecoverySnapshotSchema }
+  const base = { schema: generationLroSnapshotSchema }
   if (value.status === "absent" || value.status === "prepared" || value.status === "unknown") {
     if (!exactKeys(value, ["schema", "status"], ["schema", "status"])) {
       throw new Error("Generation recovery snapshot is invalid")

@@ -37,7 +37,7 @@ import {
   type GenerationRecoveryMethod,
   type GenerationRecoveryRequest,
   type GenerationRecoverySnapshot,
-  generationRecoveryMethods,
+  generationLroMethods,
   normalizeGenerationRecoverySnapshot,
 } from "./generation-recovery-protocol"
 import {
@@ -205,9 +205,8 @@ export interface PreparedGenerationRecovery {
   bindingDigest: string
   cancel(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
   executionBindingDigest: string
-  lookup(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
+  get(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
   pluginPackageDigest: string
-  query(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
   result(
     input: Omit<GenerationRecoveryRequest, "schema"> & { outputDirectory: string; resultDigest: string },
     signal?: AbortSignal,
@@ -334,10 +333,7 @@ async function ensureGenerationRecoveryStateDirectory(
   pluginFingerprint: string,
   runtimeAuthorizationDigest: string,
 ) {
-  const parent = await ensurePlainPrivateDirectory(
-    path.dirname(rootPath),
-    "Generation recovery state parent",
-  )
+  const parent = await ensurePlainPrivateDirectory(path.dirname(rootPath), "Generation recovery state parent")
   const root = await ensurePlainPrivateDirectory(
     path.join(parent, path.basename(rootPath)),
     "Generation recovery state root",
@@ -345,10 +341,7 @@ async function ensureGenerationRecoveryStateDirectory(
   const bindingKey = createHash("sha256")
     .update(JSON.stringify([pluginId, pluginFingerprint, runtimeAuthorizationDigest]))
     .digest("hex")
-  return ensurePlainPrivateDirectory(
-    path.join(root, bindingKey),
-    "Generation recovery binding directory",
-  )
+  return ensurePlainPrivateDirectory(path.join(root, bindingKey), "Generation recovery binding directory")
 }
 
 /**
@@ -886,7 +879,7 @@ export class GenerationPluginRuntime {
     }
     const runtime = await this.#pinnedRecoveryRuntime(record, signal)
     const capability = await runtime.client.generationRecoveryCapability?.(signal)
-    if (!capability || capability.mode !== "operation-exactly-once") {
+    if (!capability || capability.mode !== "long-running-operation") {
       throw new Error("Pinned generation recovery capability is unavailable")
     }
     const bindingDigest = createHash("sha256").update(capability.binding).digest("hex")
@@ -920,14 +913,7 @@ export class GenerationPluginRuntime {
           if (this.#recoveryRuntimes.get(record.executionBindingDigest) !== runtime) {
             throw new Error("Pinned generation recovery runtime changed")
           }
-          return runtime.client.callTool(
-            record.tool.toolId,
-            input,
-            callSignal,
-            lifecycleObserver,
-            false,
-            operation,
-          )
+          return runtime.client.callTool(record.tool.toolId, input, callSignal, lifecycleObserver, false, operation)
         },
         recovery,
         validateInput: (input?: GenerationToolInput) => ({ ...input }),
@@ -1039,7 +1025,7 @@ export class GenerationPluginRuntime {
   ): Promise<PreparedGenerationRecovery | undefined> {
     if (expected.recovery === undefined) return undefined
     if (
-      expected.recovery !== "operation-exactly-once" ||
+      expected.recovery !== "long-running-operation" ||
       !runtime.client.generationRecoveryCapability ||
       !runtime.client.callGenerationRecovery
     ) {
@@ -1117,11 +1103,11 @@ export class GenerationPluginRuntime {
     }
     return {
       async acknowledge(input, callSignal) {
-        const result = await call(generationRecoveryMethods.acknowledge, input, callSignal)
+        const result = await call(generationLroMethods.acknowledge, input, callSignal)
         if (
           !isUnknownRecord(result) ||
           Object.keys(result).length !== 2 ||
-          result.schema !== "convax.generation-recovery-acknowledgement/1" ||
+          result.schema !== "convax.generation-lro-acknowledgement/1" ||
           result.acknowledged !== true
         ) {
           throw new Error("Generation recovery acknowledgement is invalid")
@@ -1129,32 +1115,23 @@ export class GenerationPluginRuntime {
       },
       bindingDigest: input.bindingDigest,
       async cancel(input, callSignal) {
-        return normalizeGenerationRecoverySnapshot(
-          await call(generationRecoveryMethods.cancel, input, callSignal),
-        )
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.cancel, input, callSignal))
       },
       executionBindingDigest: input.executionBindingDigest,
-      async lookup(input, callSignal) {
-        return normalizeGenerationRecoverySnapshot(
-          await call(generationRecoveryMethods.lookup, input, callSignal),
-        )
+      async get(input, callSignal) {
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.get, input, callSignal))
       },
       pluginPackageDigest: input.pluginPackageDigest,
-      async query(input, callSignal) {
-        return normalizeGenerationRecoverySnapshot(
-          await call(generationRecoveryMethods.query, input, callSignal),
-        )
-      },
       runtimeAuthorizationDigest: input.runtimeAuthorizationDigest,
       async result(input, callSignal) {
         if (!/^[a-f0-9]{64}$/.test(input.resultDigest)) {
           throw new Error("Generation recovery result digest is invalid")
         }
-        const response = await call(generationRecoveryMethods.result, input, callSignal)
+        const response = await call(generationLroMethods.result, input, callSignal)
         if (
           !isUnknownRecord(response) ||
           Object.keys(response).some((key) => !["result", "resultDigest", "schema"].includes(key)) ||
-          response.schema !== "convax.generation-recovery-result/1" ||
+          response.schema !== "convax.generation-lro-result/1" ||
           response.resultDigest !== input.resultDigest
         ) {
           throw new Error("Generation recovery result is invalid")
@@ -1165,9 +1142,7 @@ export class GenerationPluginRuntime {
         }
       },
       async wait(input, callSignal) {
-        return normalizeGenerationRecoverySnapshot(
-          await call(generationRecoveryMethods.await, input, callSignal),
-        )
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.wait, input, callSignal))
       },
     }
   }
@@ -1217,9 +1192,7 @@ export class GenerationPluginRuntime {
       env: {
         ...this.#environment,
         ...(record.executableRuntime === "bun" ? this.#bunRuntime?.env : {}),
-        ...(recoveryStateDirectory
-          ? { CONVAX_GENERATION_RECOVERY_DIRECTORY: recoveryStateDirectory }
-          : {}),
+        ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
       },
     })
     const runtime: CachedPluginRuntime = {
@@ -1441,9 +1414,7 @@ export class GenerationPluginRuntime {
         env: {
           ...this.#environment,
           ...(executableSnapshot.runtime === "bun" ? this.#bunRuntime?.env : {}),
-          ...(recoveryStateDirectory
-            ? { CONVAX_GENERATION_RECOVERY_DIRECTORY: recoveryStateDirectory }
-            : {}),
+          ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
         },
         ...(canvasCapabilities ? { serverRequestHandler: canvasCapabilities.handler } : {}),
       })

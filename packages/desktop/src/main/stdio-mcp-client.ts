@@ -7,7 +7,7 @@ import { isCanvasGenerationTaskId } from "@convax/canvas/core"
 import {
   type GenerationRecoveryCapability,
   type GenerationRecoveryMethod,
-  generationRecoveryMethods,
+  generationLroMethods,
   normalizeGenerationRecoveryCapability,
   requireGenerationRecoveryRequest,
 } from "./generation-recovery-protocol"
@@ -341,7 +341,7 @@ export class StdioMcpClient {
         }
         const capabilities = requireRecord(response.capabilities, "MCP capabilities")
         if (isRecord(capabilities.experimental)) {
-          const advertised = capabilities.experimental["convax/generation-recovery"]
+          const advertised = capabilities.experimental["convax/generation-lro"]
           if (advertised !== undefined) {
             this.#generationRecoveryCapability = normalizeGenerationRecoveryCapability(advertised)
           }
@@ -442,7 +442,7 @@ export class StdioMcpClient {
     signal?: AbortSignal,
   ) {
     await this.connect(signal)
-    if (!Object.values(generationRecoveryMethods).includes(method)) {
+    if (!Object.values(generationLroMethods).includes(method)) {
       throw new Error("Generation recovery method is not supported")
     }
     if (!this.#generationRecoveryCapability) {
@@ -451,10 +451,10 @@ export class StdioMcpClient {
     return this.#request(
       method,
       requireGenerationRecoveryRequest(input, {
-        allowOutputDirectory: method === generationRecoveryMethods.result,
+        allowOutputDirectory: method === generationLroMethods.result,
       }),
       signal,
-      method === generationRecoveryMethods.await ? false : 30_000,
+      method === generationLroMethods.wait ? false : 30_000,
     )
   }
 

@@ -78,8 +78,8 @@ export type WebPluginGenerationDelivery = "canvas" | "return"
 export type WebPluginGenerationInputBinding = "direct-incoming"
 
 export interface WebPluginGenerationRecoveryContribution {
-  mode: "operation-exactly-once"
-  schema: "convax.generation-recovery/1"
+  mode: "long-running-operation"
+  schema: "convax.generation-lro/1"
 }
 
 export const webPluginServiceActions = ["authorize", "reauthorize", "authorization.cancel", "sign_out"] as const
@@ -105,7 +105,7 @@ export interface WebPluginGenerationToolContribution {
   /** Host-enforced Canvas relationship from an exact Plugin owner node to every supplied reference. */
   inputBinding?: WebPluginGenerationInputBinding
   output: WebPluginGenerationModality
-  /** Full generic recovery is admitted only by convax.plugin/7 and later. */
+  /** Durable LRO supervision is admitted only by convax.plugin/7 and later. */
   recovery?: WebPluginGenerationRecoveryContribution
   title: string
 }
@@ -698,9 +698,7 @@ function parseGeneration(
         ...(schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7 ? ["delivery"] : []),
         "description",
         "id",
-        ...(schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7
-          ? ["inputBinding"]
-          : []),
+        ...(schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7 ? ["inputBinding"] : []),
         "output",
         ...(schema === webPluginManifestSchemaV7 ? ["recovery"] : []),
         "title",
@@ -728,15 +726,12 @@ function parseGeneration(
     if (tool.recovery !== undefined) {
       const recoveryInput = asRecord(tool.recovery, `Generation tool ${index} recovery`)
       assertKeys(recoveryInput, ["mode", "schema"], `Generation tool ${index} recovery`)
-      if (
-        recoveryInput.schema !== "convax.generation-recovery/1" ||
-        recoveryInput.mode !== "operation-exactly-once"
-      ) {
+      if (recoveryInput.schema !== "convax.generation-lro/1" || recoveryInput.mode !== "long-running-operation") {
         throw new Error(`Generation tool ${index} recovery contract is not supported`)
       }
       recovery = {
-        mode: "operation-exactly-once",
-        schema: "convax.generation-recovery/1",
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
       }
     }
     return {

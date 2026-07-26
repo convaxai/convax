@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { StdioMcpClient, type StdioMcpClientOptions } from "./stdio-mcp-client"
-import { generationRecoveryMethods } from "./generation-recovery-protocol"
+import { generationLroMethods } from "./generation-recovery-protocol"
 
 const clients = new Set<StdioMcpClient>()
 
@@ -45,25 +45,18 @@ describe("StdioMcpClient", () => {
     expect(events).toEqual([{ type: "external-started" }, { taskId: "task_safe_123", type: "submitted" }])
   })
 
-  test("negotiates generic recovery, sends exact operation metadata, and calls fixed methods", async () => {
+  test("negotiates the durable LRO, sends exact operation metadata, and calls fixed methods", async () => {
     const client = createClient({ fixtureArgs: ["--generation-recovery"] })
     expect(await client.generationRecoveryCapability()).toEqual({
       binding: "fixture-binding",
-      mode: "operation-exactly-once",
-      schema: "convax.generation-recovery/1",
+      mode: "long-running-operation",
+      schema: "convax.generation-lro/1",
     })
-    const result = await client.callTool(
-      "echo",
-      { prompt: "hello" },
-      undefined,
-      undefined,
-      false,
-      {
-        operationId: "operation-one",
-        recovery: "required",
-        requestDigest: "a".repeat(64),
-      },
-    )
+    const result = await client.callTool("echo", { prompt: "hello" }, undefined, undefined, false, {
+      operationId: "operation-one",
+      recovery: "required",
+      requestDigest: "a".repeat(64),
+    })
     expect(result.structuredContent?.requestMeta).toEqual({
       convaxGeneration: {
         operationId: "operation-one",
@@ -73,7 +66,7 @@ describe("StdioMcpClient", () => {
       },
     })
     await expect(
-      client.callGenerationRecovery(generationRecoveryMethods.lookup, {
+      client.callGenerationRecovery(generationLroMethods.get, {
         operationId: "operation-one",
         requestDigest: "a".repeat(64),
       }),
@@ -85,13 +78,10 @@ describe("StdioMcpClient", () => {
     "/Users/owner/private-task",
     "cookie=secret-value",
     "token:secret-value",
-  ])(
-    "fails closed on an unsafe structured generation task receipt: %s",
-    async (taskId) => {
-      const client = createClient({ fixtureArgs: [`--generation-task-id=${taskId}`] })
-      await expect(client.callTool("echo", {}, undefined, () => undefined)).rejects.toThrow("task receipt is invalid")
-    },
-  )
+  ])("fails closed on an unsafe structured generation task receipt: %s", async (taskId) => {
+    const client = createClient({ fixtureArgs: [`--generation-task-id=${taskId}`] })
+    await expect(client.callTool("echo", {}, undefined, () => undefined)).rejects.toThrow("task receipt is invalid")
+  })
 
   test("initializes, discovers tools, and preserves structured MCP content", async () => {
     const client = createClient()

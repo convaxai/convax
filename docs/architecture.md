@@ -534,13 +534,28 @@ running, task-receipt, guarded replacement, terminal and restart-reconciliation
 state machine as an existing card; a restart cannot leave a placeholder permanently
 pending.
 
+The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
+Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is
+the execution Agent/Worker, and its Main-owned reconciliation phase is the
+Supervisor.
+Canvas run state plus the private Main operation ledger form the durable state
+store. The generic sidecar API is a Long-Running Operation resource with fixed
+get/wait/cancel/result/acknowledge methods. `operationId` is the idempotency key and
+host LRO identity; `taskId` is only an opaque downstream operation handle. Startup
+uses a reconciliation loop, while Canvas revision/CAS and the generation target
+guard provide optimistic concurrency control. The guarantee is stated as at-most-once
+provider task creation plus idempotent observation and result commit, never as an
+unqualified exactly-once architecture.
+
 The mounted node and composer are presentation surfaces, not task owners. Unmount,
 selection changes, and panel switches do not cancel accepted work; explicit cancel
 crosses queue, preparation and sidecar boundaries. Hydration derives active and
 terminal presentation from the persisted run. If startup finds `submitting` or
-`running` without a matching live Main execution, it marks the run `interrupted`
-and never repeats a potentially billable call. A persisted task id is not restart
-recovery; generic resume/query semantics would require a separate protocol.
+`running` without either a matching live Main execution or a complete admitted LRO
+binding, it marks the run `interrupted` and never repeats a potentially billable
+call. A persisted task id alone is not restart recovery. A recovery-capable v7 tool
+must provide the complete generic LRO contract and pinned immutable runtime binding;
+partial or legacy implementations remain fail-closed.
 
 The complete manifest, MCP call/result, cancellation and security contract is in
 [`generation-tool-plugins.md`](generation-tool-plugins.md). The concrete local media

@@ -12,7 +12,7 @@ import {
   type ToolPluginExecutableBindingKind,
 } from "./tool-plugin-authorizations"
 
-export const generationRecoveryRuntimeSchema = "convax.generation-recovery-runtime/1" as const
+export const generationRecoveryRuntimeSchema = "convax.generation-lro-runtime/1" as const
 
 export interface GenerationRecoveryRuntimeRecord {
   bindingKind: ToolPluginExecutableBindingKind
@@ -114,7 +114,7 @@ function parseRecord(value: unknown, executablePath: string): GenerationRecovery
   const sourceBinding = structuredClone(value.sourceBinding) as unknown as ToolPluginExecutableBinding
   const tool = structuredClone(value.tool) as unknown as GenerationToolSummary
   if (
-    tool.recovery !== "operation-exactly-once" ||
+    tool.recovery !== "long-running-operation" ||
     tool.pluginId !== plugin.id ||
     plugin.runtime?.type !== "mcp-stdio"
   ) {
@@ -126,8 +126,7 @@ function parseRecord(value: unknown, executablePath: string): GenerationRecovery
   if (
     createHash("sha256")
       .update(toolPluginAuthorizationIdentity(plugin, value.bindingKind, sourceBinding))
-      .digest("hex") !==
-    value.runtimeAuthorizationDigest
+      .digest("hex") !== value.runtimeAuthorizationDigest
   ) {
     throw new Error("Pinned generation recovery authorization changed")
   }

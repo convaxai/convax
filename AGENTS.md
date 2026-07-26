@@ -41,15 +41,15 @@ files under `packages/` add local rules and inherit this contract.
 
 ## Package ownership
 
-| Package                 | Owns                                                                                                                                                             | Must not own                                                                             |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
+| Package                 | Owns                                                                                                                                                                                                   | Must not own                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `@convax/project-files` | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                                                      | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
 | `@convax/project`       | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                       |
-| `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                    | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
-| `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                         | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
-| `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                  | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
-| `@convax/ui`            | Product-agnostic visual primitives and theme                                                                                                                     | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                     |
-| `@convax/desktop`       | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                         | New reusable domain semantics that belong in a published package                         |
+| `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
+| `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
+| `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
+| `@convax/ui`            | Product-agnostic visual primitives and theme                                                                                                                                                           | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                     |
+| `@convax/desktop`       | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                         |
 
 `Workspace` is intentionally not a current aggregate. Reserve that name for a
 future window/session that coordinates multiple Projects. Do not recreate a
@@ -288,9 +288,11 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   the next-run tool preference and Plugin-owned state. Main persists submitting
   before the external call—including atomically with a host-created pending
   placeholder—accepts only structured bounded task receipts, and uses the Canvas
-  application service for every transition. Without a generic resume or query
-  contract, restart marks orphaned active runs interrupted and never repeats a
-  potentially billable call.
+  application service for every transition. Recovery-capable tools use the standard
+  Scheduler–Agent–Supervisor pattern over a durable Long-Running Operation contract;
+  `operationId` is the idempotency/LRO identity and `taskId` is only an opaque
+  downstream handle. Without the complete admitted LRO contract, restart marks
+  orphaned active runs interrupted and never repeats a potentially billable call.
 - A Tool Plugin may expose a user-global service surface through the same verified
   sidecar lifecycle. Service status and mutations use fixed host tool names and a
   strict display-only contract; renderer code never selects an MCP method or receives

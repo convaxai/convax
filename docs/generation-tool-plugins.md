@@ -721,9 +721,13 @@ in the bounded session replay cache; authorization, executable resolution and to
 readiness failures remain retryable with the same id. A replay caller may stop
 waiting without canceling the already-owned shared execution; an explicit retry of
 an attempted call uses a fresh operation id. Node-targeted calls persist bounded
-Canvas run state, but the task receipt alone is not restart recovery. Until a
-generic resume/query contract exists, startup changes orphaned `submitting` or
-`running` runs to `interrupted` and never repeats the external call. On macOS/Linux,
+Canvas run state, but the task receipt alone is not restart recovery. A v7 tool may
+declare the complete generic Long-Running Operation contract
+`{ "schema": "convax.generation-lro/1", "mode": "long-running-operation" }`.
+That contract uses fixed get/wait/cancel/result/acknowledge methods, an immutable
+pinned runtime binding, and idempotent submission by host `operationId`. Legacy or
+partial implementations still change orphaned `submitting` or `running` runs to
+`interrupted` and never repeat the external call. On macOS/Linux,
 process shutdown is
 graceful for ordinary eviction and escalates to an immediate process-group kill
 when the MCP leader exits or the grace period expires. Windows execution stays

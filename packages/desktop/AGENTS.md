@@ -168,8 +168,12 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - Keep host `operationId` and sidecar `taskId` distinct. Task creation receipts use
   the validated, per-call structured generation lifecycle notification; never parse
   logs, progress text or stderr. Persist only a bounded host-safe opaque task handle.
-  Legacy tools may omit it. Without a generic resume/query contract, startup changes
-  orphaned submitting/running node runs to `interrupted` and never repeats the call.
+  The generic recovery contract is a durable Long-Running Operation surface with
+  fixed get/wait/cancel/result/acknowledge methods. Main implements the
+  Scheduler–Agent–Supervisor pattern: it schedules and persists, the verified
+  sidecar executes, and startup reconciliation supervises recovery. Legacy tools may
+  omit the task receipt or LRO contract; startup then changes orphaned
+  submitting/running node runs to `interrupted` and never repeats the call.
 - Tool-custom generation controls come from only the explicitly selected MCP tool's
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before

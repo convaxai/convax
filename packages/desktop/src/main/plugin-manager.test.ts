@@ -317,23 +317,25 @@ describe("parseWebPluginManifest", () => {
     expect(() => parseWebPluginManifest(manifest({ entry: "web/index.js" }))).toThrow("HTML")
   })
 
-  test("admits full recovery only as one exact v7 per-tool contract", () => {
+  test("admits durable LRO only as one exact v7 per-tool contract", () => {
     const recoverable = {
       capabilities: [],
       contributes: {
         generation: {
           models: [{ name: "Image model", tool: "generate.image" }],
-          tools: [{
-            acceptedInputs: [],
-            description: "Generate an image",
-            id: "generate.image",
-            output: "image",
-            recovery: {
-              mode: "operation-exactly-once",
-              schema: "convax.generation-recovery/1",
+          tools: [
+            {
+              acceptedInputs: [],
+              description: "Generate an image",
+              id: "generate.image",
+              output: "image",
+              recovery: {
+                mode: "long-running-operation",
+                schema: "convax.generation-lro/1",
+              },
+              title: "Image",
             },
-            title: "Image",
-          }],
+          ],
         },
       },
       description: "Recoverable generation",
@@ -344,8 +346,8 @@ describe("parseWebPluginManifest", () => {
       version: "1.0.0",
     }
     expect(parseWebPluginManifest(recoverable).contributes.generation?.tools[0]?.recovery).toEqual({
-      mode: "operation-exactly-once",
-      schema: "convax.generation-recovery/1",
+      mode: "long-running-operation",
+      schema: "convax.generation-lro/1",
     })
     expect(() =>
       parseWebPluginManifest({
@@ -359,10 +361,31 @@ describe("parseWebPluginManifest", () => {
         contributes: {
           generation: {
             ...recoverable.contributes.generation,
-            tools: [{
-              ...recoverable.contributes.generation.tools[0],
-              recovery: { mode: "best-effort", schema: "convax.generation-recovery/1" },
-            }],
+            tools: [
+              {
+                ...recoverable.contributes.generation.tools[0],
+                recovery: { mode: "best-effort", schema: "convax.generation-lro/1" },
+              },
+            ],
+          },
+        },
+      }),
+    ).toThrow("recovery contract")
+    expect(() =>
+      parseWebPluginManifest({
+        ...recoverable,
+        contributes: {
+          generation: {
+            ...recoverable.contributes.generation,
+            tools: [
+              {
+                ...recoverable.contributes.generation.tools[0],
+                recovery: {
+                  mode: "operation-exactly-once",
+                  schema: "convax.generation-recovery/1",
+                },
+              },
+            ],
           },
         },
       }),
@@ -1005,9 +1028,7 @@ describe("WebPluginManager", () => {
       petAssetInspector: validPetAssetInspector(),
     })
 
-    await expect(manager.list()).resolves.toEqual([
-      expect.objectContaining({ id: "convax-pet", version: "0.2.1" }),
-    ])
+    await expect(manager.list()).resolves.toEqual([expect.objectContaining({ id: "convax-pet", version: "0.2.1" })])
     await expect(
       manager.installBundle(petBundle({ manifest: { version: "0.2.2" } }), { replaceExisting: true }),
     ).resolves.toMatchObject({

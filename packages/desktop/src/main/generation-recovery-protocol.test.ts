@@ -1,29 +1,36 @@
 import { describe, expect, test } from "bun:test"
 
 import {
-  generationRecoveryMethods,
+  generationLroMethods,
   normalizeGenerationRecoveryCapability,
   normalizeGenerationRecoverySnapshot,
   requireGenerationRecoveryRequest,
 } from "./generation-recovery-protocol"
 
-describe("Generic generation recovery protocol", () => {
+describe("Generic generation long-running operation protocol", () => {
   test("normalizes the exact all-or-nothing capability handshake", () => {
     expect(
       normalizeGenerationRecoveryCapability({
         binding: "account-binding-7c9e",
-        mode: "operation-exactly-once",
-        schema: "convax.generation-recovery/1",
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
       }),
     ).toEqual({
       binding: "account-binding-7c9e",
-      mode: "operation-exactly-once",
-      schema: "convax.generation-recovery/1",
+      mode: "long-running-operation",
+      schema: "convax.generation-lro/1",
     })
     expect(() =>
       normalizeGenerationRecoveryCapability({
         binding: "account-binding",
         lookup: true,
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
+      }),
+    ).toThrow("capability")
+    expect(() =>
+      normalizeGenerationRecoveryCapability({
+        binding: "account-binding",
         mode: "operation-exactly-once",
         schema: "convax.generation-recovery/1",
       }),
@@ -40,7 +47,7 @@ describe("Generic generation recovery protocol", () => {
     ).toEqual({
       operationId: "operation-one",
       requestDigest: "a".repeat(64),
-      schema: "convax.generation-recovery-request/1",
+      schema: "convax.generation-lro-request/1",
       taskId: "task_123",
     })
     for (const taskId of ["https://provider.example/task/1", "/Users/me/task", "token:secret"]) {
@@ -76,13 +83,13 @@ describe("Generic generation recovery protocol", () => {
   test("normalizes terminal and non-terminal snapshots while rejecting unsafe diagnostics", () => {
     expect(
       normalizeGenerationRecoverySnapshot({
-        schema: "convax.generation-recovery-snapshot/1",
+        schema: "convax.generation-lro-snapshot/1",
         status: "succeeded",
         taskId: "task_123",
         resultDigest: "b".repeat(64),
       }),
     ).toEqual({
-      schema: "convax.generation-recovery-snapshot/1",
+      schema: "convax.generation-lro-snapshot/1",
       status: "succeeded",
       taskId: "task_123",
       resultDigest: "b".repeat(64),
@@ -90,27 +97,26 @@ describe("Generic generation recovery protocol", () => {
     expect(
       normalizeGenerationRecoverySnapshot({
         error: { code: "provider_unavailable", message: "The generation service is temporarily unavailable" },
-        schema: "convax.generation-recovery-snapshot/1",
+        schema: "convax.generation-lro-snapshot/1",
         status: "failed",
       }),
     ).toMatchObject({ status: "failed" })
     expect(() =>
       normalizeGenerationRecoverySnapshot({
         error: { code: "failed", message: "Authorization: Bearer secret" },
-        schema: "convax.generation-recovery-snapshot/1",
+        schema: "convax.generation-lro-snapshot/1",
         status: "failed",
       }),
     ).toThrow("safe")
   })
 
   test("keeps the extension surface fixed and provider-neutral", () => {
-    expect(Object.values(generationRecoveryMethods)).toEqual([
-      "convax/generation/operation/lookup",
-      "convax/generation/task/query",
-      "convax/generation/task/await",
-      "convax/generation/operation/cancel",
-      "convax/generation/task/result",
-      "convax/generation/operation/acknowledge",
+    expect(Object.values(generationLroMethods)).toEqual([
+      "convax/generation/operations/get",
+      "convax/generation/operations/wait",
+      "convax/generation/operations/cancel",
+      "convax/generation/operations/result",
+      "convax/generation/operations/acknowledge",
     ])
   })
 })

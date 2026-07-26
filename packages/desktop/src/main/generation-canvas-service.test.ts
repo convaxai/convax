@@ -532,12 +532,7 @@ async function setupPendingGeneration(
         return persistedCommandResult(currentDocument, [], [input.nodeId])
       },
       async markRunning(input) {
-        const next = markCanvasNodeGenerationRunRunning(
-          currentDocument,
-          input.nodeId,
-          input.operationId,
-          input.taskId,
-        )
+        const next = markCanvasNodeGenerationRunRunning(currentDocument, input.nodeId, input.operationId, input.taskId)
         if (next !== currentDocument) {
           currentDocument = { ...next, revision: currentDocument.revision + 1 }
         }
@@ -551,7 +546,7 @@ async function setupPendingGeneration(
       acceptedInputs: ["text"],
       id: "creative-tools/draw",
       output: "image",
-      ...(options.recovery ? { recovery: "operation-exactly-once" as const } : {}),
+      ...(options.recovery ? { recovery: "long-running-operation" as const } : {}),
       toolId: "draw",
     }),
   })
@@ -1140,9 +1135,8 @@ describe("GenerationCanvasService", () => {
     })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
     expect(
-      getCanvasNodeGenerationRun(
-        harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!,
-      )?.status,
+      getCanvasNodeGenerationRun(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!)
+        ?.status,
     ).toBe("succeeded")
     expect(harness.reloadRevisions).toEqual([1, 3])
   })
@@ -1206,9 +1200,7 @@ describe("GenerationCanvasService", () => {
       ),
     ).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId], revision: 4 })
 
-    expect(
-      harness.runRequests.markRunning.map(({ taskId }) => taskId),
-    ).toEqual([undefined, "task_safe_pending_123"])
+    expect(harness.runRequests.markRunning.map(({ taskId }) => taskId)).toEqual([undefined, "task_safe_pending_123"])
     const completed = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
     expect(getCanvasNodeGenerationRun(completed)).toMatchObject({
       status: "succeeded",
@@ -1221,11 +1213,13 @@ describe("GenerationCanvasService", () => {
     const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
     const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
     const pngResult: McpToolCallResult = {
-      content: [{
-        data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
-        mimeType: "image/png",
-        type: "image",
-      }],
+      content: [
+        {
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
     }
     const digestDirectory = path.join(privateRoot, "digest-output")
     await fs.mkdir(digestDirectory, { mode: 0o700 })
@@ -1237,25 +1231,18 @@ describe("GenerationCanvasService", () => {
       },
       bindingDigest: "f".repeat(64),
       async cancel() {
-        return { schema: "convax.generation-recovery-snapshot/1", status: "cancelled" }
+        return { schema: "convax.generation-lro-snapshot/1", status: "cancelled" }
       },
       executionBindingDigest: "a".repeat(64),
-      async lookup() {
+      async get() {
         return {
           resultDigest,
-          schema: "convax.generation-recovery-snapshot/1",
+          schema: "convax.generation-lro-snapshot/1",
           status: "succeeded",
           taskId: "task_recoverable_123",
         }
       },
       pluginPackageDigest: "c".repeat(64),
-      async query() {
-        return {
-          schema: "convax.generation-recovery-snapshot/1",
-          status: "running",
-          taskId: "task_recoverable_123",
-        }
-      },
       async result() {
         return { result: pngResult, resultDigest }
       },
@@ -1263,7 +1250,7 @@ describe("GenerationCanvasService", () => {
       async wait() {
         return {
           resultDigest,
-          schema: "convax.generation-recovery-snapshot/1",
+          schema: "convax.generation-lro-snapshot/1",
           status: "succeeded",
           taskId: "task_recoverable_123",
         }
@@ -1867,7 +1854,7 @@ describe("GenerationCanvasService", () => {
         output: "image",
         prompt: "Recover this image",
         references: [],
-        schema: "convax.generation-recovery-call/1",
+        schema: "convax.generation-lro-call/1",
         targetGuard: guard,
         toolId: "creative-tools/draw",
       },
@@ -1892,11 +1879,13 @@ describe("GenerationCanvasService", () => {
       updatedAt: 0,
     })
     const pngResult: McpToolCallResult = {
-      content: [{
-        data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
-        mimeType: "image/png",
-        type: "image",
-      }],
+      content: [
+        {
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
     }
     const replayedBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])
     const digestOutputDirectory = path.join(privateRoot, "replay-digest-output")
@@ -1918,25 +1907,22 @@ describe("GenerationCanvasService", () => {
     )
     const acknowledgements: unknown[] = []
     const recovery: PreparedGenerationRecovery = {
-      async acknowledge(input) { acknowledgements.push(input) },
+      async acknowledge(input) {
+        acknowledgements.push(input)
+      },
       bindingDigest: "f".repeat(64),
-      async cancel() { return { schema: "convax.generation-recovery-snapshot/1", status: "cancelled" } },
+      async cancel() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "cancelled" }
+      },
       executionBindingDigest: "a".repeat(64),
-      async lookup() {
+      async get() {
         return {
-          schema: "convax.generation-recovery-snapshot/1",
+          schema: "convax.generation-lro-snapshot/1",
           status: "running",
           taskId: "task_recover_123",
         }
       },
       pluginPackageDigest: "c".repeat(64),
-      async query() {
-        return {
-          schema: "convax.generation-recovery-snapshot/1",
-          status: "running",
-          taskId: "task_recover_123",
-        }
-      },
       async result(input) {
         const replayedPath = path.join(input.outputDirectory, "replayed.png")
         await fs.writeFile(replayedPath, replayedBytes)
@@ -1958,7 +1944,7 @@ describe("GenerationCanvasService", () => {
       async wait() {
         return {
           resultDigest,
-          schema: "convax.generation-recovery-snapshot/1",
+          schema: "convax.generation-lro-snapshot/1",
           status: "succeeded",
           taskId: "task_recover_123",
         }
@@ -1979,7 +1965,7 @@ describe("GenerationCanvasService", () => {
       selectedTool: tool({
         id: "creative-tools/draw",
         output: "image",
-        recovery: "operation-exactly-once",
+        recovery: "long-running-operation",
         toolId: "draw",
       }),
     })
@@ -2034,7 +2020,7 @@ describe("GenerationCanvasService", () => {
         output: "text",
         prompt: "Cancel this safely",
         references: [],
-        schema: "convax.generation-recovery-call/1",
+        schema: "convax.generation-lro-call/1",
         targetGuard: guard,
         toolId: "creative-tools/write",
       },
@@ -2060,22 +2046,29 @@ describe("GenerationCanvasService", () => {
     })
     const acknowledgements: unknown[] = []
     const recovery: PreparedGenerationRecovery = {
-      async acknowledge(input) { acknowledgements.push(input) },
+      async acknowledge(input) {
+        acknowledgements.push(input)
+      },
       bindingDigest: "f".repeat(64),
       async cancel() {
         return {
-          schema: "convax.generation-recovery-snapshot/1",
+          schema: "convax.generation-lro-snapshot/1",
           status: "cancelled",
           taskId: "task_cancel_123",
         }
       },
       executionBindingDigest: "a".repeat(64),
-      async lookup() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
+      async get() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "unknown" }
+      },
       pluginPackageDigest: "c".repeat(64),
-      async query() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
-      async result() { throw new Error("Result replay must not run during cancellation") },
+      async result() {
+        throw new Error("Result replay must not run during cancellation")
+      },
       runtimeAuthorizationDigest: "e".repeat(64),
-      async wait() { return { schema: "convax.generation-recovery-snapshot/1", status: "unknown" } },
+      async wait() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "unknown" }
+      },
     }
     const harness = setup({
       document: active,
@@ -2085,7 +2078,7 @@ describe("GenerationCanvasService", () => {
       selectedTool: tool({
         id: "creative-tools/write",
         output: "text",
-        recovery: "operation-exactly-once",
+        recovery: "long-running-operation",
         toolId: "write",
       }),
     })

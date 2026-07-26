@@ -24,8 +24,8 @@ const plugin: InstalledWebPluginSummary = {
           id: "generate.image",
           output: "image",
           recovery: {
-            mode: "operation-exactly-once",
-            schema: "convax.generation-recovery/1",
+            mode: "long-running-operation",
+            schema: "convax.generation-lro/1",
           },
           title: "Generate",
         },
@@ -48,7 +48,7 @@ const tool: GenerationToolSummary = {
   pluginId: "recovery-test",
   pluginName: "Recovery Test",
   output: "image",
-  recovery: "operation-exactly-once",
+  recovery: "long-running-operation",
   title: "Generate",
   toolId: "generate.image",
 }
@@ -133,9 +133,7 @@ describe("GenerationRecoveryRuntimeStore", () => {
       const tooSmall = new GenerationRecoveryRuntimeStore(path.join(directory, "small"), {
         maxExecutableBytes: 4,
       })
-      await expect(tooSmall.pin(await fixture(directory, "binding-three"))).rejects.toThrow(
-        "executable is invalid",
-      )
+      await expect(tooSmall.pin(await fixture(directory, "binding-three"))).rejects.toThrow("executable is invalid")
     } finally {
       await fs.rm(directory, { force: true, recursive: true })
     }

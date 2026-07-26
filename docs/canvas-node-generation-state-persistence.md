@@ -1,22 +1,25 @@
-# Canvas Node Generation Durable State and Exactly-Once Recovery
+# Canvas Node Generation: Scheduler–Agent–Supervisor and Long-Running Operations
 
 Status: normative ideal design implemented against `origin/convax-next` at
 `06f993e6dea3c3cff59ec7d335cf7ebc7b4a2e38`.
 
-This document is the normative design implemented by this change. It supersedes
-the earlier “persist now, resume later” proposal with an operation-centric
-at-most-once external submission contract, crash-safe task recovery, byte-verified
-result replay, and cancellation without a second billable call. Any runtime that
-cannot satisfy the complete recovery contract stays on the legacy fail-closed
-`interrupted(unknown)` path.
+This document is the normative design implemented by this change. It applies the
+industry-standard **Scheduler–Agent–Supervisor** pattern to a durable
+**Long-Running Operation (LRO)**: Desktop Main schedules and persists the operation,
+the verified Tool Plugin sidecar executes it, and the Main-owned supervision phase
+reconciles it after failures. Submission is idempotent, task recovery is
+crash-safe, result replay is byte-verified, and cancellation never requires a second
+billable call. Any runtime that cannot satisfy the complete LRO contract stays on
+the legacy fail-closed `interrupted(unknown)` path.
 
-![Canvas 节点生成状态持久化与 Exactly-Once 恢复架构](images/canvas-node-generation-exactly-once-recovery.png)
+![Canvas 节点生成的 Scheduler–Agent–Supervisor 与 LRO 架构](images/canvas-node-generation-scheduler-agent-supervisor-lro.png)
 
 ## 1. Decision
 
 Convax will not define `resume(operationId, taskId)` as “run the generation tool
-again.” The durable unit is a host-created **operation**, and recovery means
-querying or reattaching to that already accepted operation.
+again.” The durable unit is a host-created **Long-Running Operation**, and recovery
+means getting, waiting for, cancelling, or replaying the result of that already
+accepted operation.
 
 The protocol has two distinct identities:
 
@@ -24,7 +27,7 @@ The protocol has two distinct identities:
   is the idempotency key for submission and the recovery key for the window in
   which an external task exists but no `taskId` has reached Canvas.
 - `taskId` is a sidecar-issued, host-safe receipt for an already created external
-  task. It binds precise query, await, result, and cancellation requests. It is not
+  task. It binds precise get, wait, result, and cancellation requests. It is not
   a submission idempotency key and is not a bearer credential.
 
 The complete guarantee is:
@@ -35,10 +38,40 @@ The complete guarantee is:
 > reattached, cancelled, and have its terminal result replayed after host or
 > sidecar restart.
 
-Distributed systems cannot prove unconditional mathematical exactly-once execution
-across an arbitrary provider. In this document, “exactly-once recovery” means the
-enforceable engineering contract above: at-most-once provider task creation plus
-idempotent observation and result commit.
+This is not named an “exactly-once architecture.” Distributed systems cannot prove
+unconditional mathematical exactly-once execution across an arbitrary provider. The
+enforceable guarantee is stated directly: at-most-once provider task creation plus
+idempotent LRO observation and result commit.
+
+### Standard pattern vocabulary
+
+The design deliberately uses published architecture and API vocabulary rather than
+inventing a Convax-specific architecture name:
+
+| Convax component                     | Standard role                         |
+| ------------------------------------ | ------------------------------------- |
+| Desktop Main generation service      | Scheduler / Process Manager           |
+| verified Tool Plugin sidecar         | Agent / Worker                        |
+| Main-owned startup supervision phase | Supervisor / reconciler               |
+| Canvas run plus private Main ledger  | durable state store and checkpoints   |
+| `operationId`                        | idempotency key and host LRO identity |
+| `taskId`                             | opaque downstream LRO handle          |
+| revision, CAS, and target guard      | optimistic concurrency control        |
+
+“Agent” in Scheduler–Agent–Supervisor means an execution adapter, not the Convax
+product Agent. The protocol surface follows the approved
+[Google AIP-151 Long-running operations](https://google.aip.dev/151) shape. Stable
+request identities follow the idempotent-API practice documented by
+[AWS](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/),
+and startup convergence is a reconciliation loop in the sense documented by
+[Kubernetes controllers](https://kubernetes.io/docs/concepts/architecture/controller/).
+The overall pattern is the
+[Scheduler–Agent–Supervisor pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/scheduler-agent-supervisor).
+
+This design is not Saga, two-phase commit, Transactional Outbox, or Event Sourcing:
+the provider is not a transaction participant, no compensating distributed
+transaction is defined, no database-and-outbox atomic write exists, and Canvas state
+is not reconstructed from an append-only event stream.
 
 ## 2. Goals and non-goals
 
@@ -131,13 +164,13 @@ private receipts, or resubmit an indeterminate operation.
 
 The following values are related but not interchangeable:
 
-| Value | Creator | Durable owner | Purpose |
-| --- | --- | --- | --- |
-| `operationId` | Convax renderer/host | Canvas + Desktop + sidecar | submission idempotency and pre-receipt lookup |
-| `requestDigest` | Desktop Main | Desktop + sidecar | reject reuse of an operation with different inputs |
-| `taskId` | sidecar | Canvas + Desktop + sidecar | host-safe receipt for the accepted provider task |
-| raw provider task id | sidecar/provider | sidecar private journal only | provider query/cancel |
-| `executionBindingDigest` | Desktop Main | Desktop private ledger | pin the exact authorized runtime and contract |
+| Value                    | Creator              | Durable owner                | Purpose                                            |
+| ------------------------ | -------------------- | ---------------------------- | -------------------------------------------------- |
+| `operationId`            | Convax renderer/host | Canvas + Desktop + sidecar   | submission idempotency and pre-receipt lookup      |
+| `requestDigest`          | Desktop Main         | Desktop + sidecar            | reject reuse of an operation with different inputs |
+| `taskId`                 | sidecar              | Canvas + Desktop + sidecar   | host-safe receipt for the accepted provider task   |
+| raw provider task id     | sidecar/provider     | sidecar private journal only | provider query/cancel                              |
+| `executionBindingDigest` | Desktop Main         | Desktop private ledger       | pin the exact authorized runtime and contract      |
 
 `operationId` is unique inside a scoped `{ projectId, canvasId, nodeId }` operation
 owner. The request digest covers the canonical tool id, prompt, scalar input,
@@ -340,17 +373,17 @@ Snapshot storage is bounded per operation and globally. Terminal acknowledgement
 allows immediate reference-aware garbage collection. Crash cleanup never removes
 inputs belonging to a non-terminal ledger.
 
-## 9. Recovery capability admission
+## 9. Long-Running Operation capability admission
 
-Full recovery is an atomic capability, not a loose collection of optional booleans.
+Durable LRO support is an atomic capability, not a loose collection of optional booleans.
 It is introduced only in a new exact Plugin manifest schema, conceptually
 `convax.plugin/7`, on each generation tool:
 
 ```json
 {
   "recovery": {
-    "schema": "convax.generation-recovery/1",
-    "mode": "operation-exactly-once"
+    "schema": "convax.generation-lro/1",
+    "mode": "long-running-operation"
   }
 }
 ```
@@ -358,9 +391,9 @@ It is introduced only in a new exact Plugin manifest schema, conceptually
 Declaring this mode promises all of the following:
 
 - idempotent submit by `operationId` and `requestDigest`;
-- lookup by operation id before a task receipt exists;
+- `GetOperation`-style lookup by operation id before a task receipt exists;
 - stable safe task receipts;
-- query and long-lived await;
+- get and long-lived wait;
 - cancellation by operation, with task receipt confirmation when available;
 - durable/reproducible terminal result replay;
 - terminal acknowledgement and bounded journal cleanup;
@@ -376,9 +409,9 @@ to persist Canvas run state and task receipts when available, but restart marks 
 orphaned active run `interrupted(unknown)` and never invokes the tool.
 
 Convax contains no Plugin-id, provider, model, or vendor branches. A tool either
-satisfies the complete generic recovery contract or it does not.
+satisfies the complete durable LRO contract or it does not.
 
-## 10. Generic sidecar protocol
+## 10. Generic sidecar LRO protocol
 
 Normal generation remains an MCP `tools/call` to the declared generation tool. A
 recovery-capable call carries exact host metadata:
@@ -397,26 +430,25 @@ recovery-capable call carries exact host metadata:
 }
 ```
 
-The sidecar extension surface is versioned and host-neutral:
+The sidecar extension surface is versioned, host-neutral, and aligned with the LRO
+resource pattern:
 
 ```ts
-lookupOperation({ operationId, requestDigest })
-queryTask({ operationId, requestDigest, taskId })
-awaitTask({ operationId, requestDigest, taskId? })
+getOperation({ operationId, requestDigest, taskId? })
+waitOperation({ operationId, requestDigest, taskId? })
 cancelOperation({ operationId, requestDigest, taskId? })
-getTaskResult({ operationId, requestDigest, taskId, outputDirectory })
+getOperationResult({ operationId, requestDigest, taskId, outputDirectory })
 acknowledgeOperation({ operationId, requestDigest, taskId?, resultDigest? })
 ```
 
 The corresponding fixed JSON-RPC methods are:
 
 ```text
-convax/generation/operation/lookup
-convax/generation/task/query
-convax/generation/task/await
-convax/generation/operation/cancel
-convax/generation/task/result
-convax/generation/operation/acknowledge
+convax/generation/operations/get
+convax/generation/operations/wait
+convax/generation/operations/cancel
+convax/generation/operations/result
+convax/generation/operations/acknowledge
 ```
 
 They use exact request and response keys. Responses normalize to:
@@ -438,8 +470,8 @@ Semantics:
 - `absent` is returned only when the sidecar can durably prove that it never
   accepted or submitted the operation;
 - `unknown` means absence cannot be proven and forbids automatic resubmission;
-- lookup, query, await, result, cancel, and acknowledge never create a provider task;
-- `awaitTask` has no host overall timeout; sidecar bounds individual provider
+- get, wait, result, cancel, and acknowledge never create a provider task;
+- `waitOperation` has no host overall timeout; sidecar bounds individual provider
   requests and owns polling;
 - result replay is content-identical by `resultDigest`;
 - `outputDirectory` is a fresh Main-private directory accepted only by the result
@@ -451,9 +483,7 @@ Semantics:
 The existing structured lifecycle notification remains:
 
 ```ts
-type GenerationToolLifecycleEvent =
-  | { type: "external-started" }
-  | { type: "submitted"; taskId: string }
+type GenerationToolLifecycleEvent = { type: "external-started" } | { type: "submitted"; taskId: string }
 ```
 
 It is an optimization for immediate Canvas persistence, not the recovery source of
@@ -462,7 +492,7 @@ truth. Recovery always consults the sidecar journal.
 ## 11. Sidecar durable journal algorithm
 
 A recovery-capable runtime receives
-`CONVAX_GENERATION_RECOVERY_DIRECTORY`, a host-provisioned,
+`CONVAX_GENERATION_LRO_DIRECTORY`, a host-provisioned,
 Plugin-and-binding-scoped private state directory. The path never crosses preload
 or Canvas. Desktop validates the directory and pins it to the exact runtime
 authorization; the sidecar owns journal contents inside that scope. Runtime updates
@@ -519,7 +549,7 @@ For a node-owning recovery-capable generation:
 14. commit generated resource plus Canvas `succeeded` atomically;
 15. persist ledger `committed`;
 16. acknowledge the sidecar operation; cleanup is asynchronous and cannot turn the
-   Canvas success into failure.
+    Canvas success into failure.
 
 For host-created pending output, pending node creation and `submitting` remain one
 Canvas CAS. For existing-node replacement, failure or cancellation never alters the
@@ -598,7 +628,8 @@ runtime identity, and terminal Canvas state reject late mutation.
 Explicit cancellation is operation-scoped:
 
 - before external dispatch, Main cancels locally and records `cancelled(safe)`;
-- during dispatch without `taskId`, Main calls `cancelOperation` by operation id;
+- during dispatch without `taskId`, Main calls the LRO `cancel` method by operation
+  id;
 - after receipt, it includes both operation and task ids;
 - after restart, it uses the same pinned runtime and ledger;
 - cancellation acknowledgement is required before `retrySafety: "safe"`;
@@ -613,7 +644,7 @@ changes do not imply cancellation.
 A succeeded task is not complete from Convax’s perspective until its result is
 durably committed or explicitly retained as partial success.
 
-`getTaskResult`:
+The LRO `result` method:
 
 - returns the exact normalized result bound to `resultDigest`;
 - contains only bounded text or artifacts written below the supplied
@@ -629,7 +660,7 @@ any content byte. Main also verifies artifact size, type, containment, and stabl
 bytes before Project publication, then revalidates Canvas references and the target
 guard immediately before the atomic generated replacement.
 
-`acknowledgeOperation` is sent only after:
+The LRO `acknowledge` method is sent only after:
 
 - Canvas resource plus `succeeded` committed; or
 - a terminal failure/cancellation was durably represented; or
@@ -683,22 +714,22 @@ UI behavior:
 The implementation is incomplete until deterministic fault injection proves every
 boundary:
 
-| Crash point | Required recovery |
-| --- | --- |
-| before Canvas `submitting` | no operation exists |
-| after Canvas `submitting`, before ledger | interrupt unknown; no call |
-| after ledger/input snapshots, before dispatch | lookup, then same-operation replay |
-| after sidecar `prepared`, before provider call | lookup prepared; same-operation replay |
-| provider accepted, before sidecar task journal | provider idempotency lookup; never second task |
-| sidecar accepted, before lifecycle receipt | operation lookup returns stable task |
-| lifecycle receipt, before Desktop ledger CAS | operation lookup restores task |
-| ledger task CAS, before Canvas task CAS | ledger/query restores Canvas task |
-| task succeeds, before result journal | provider terminal lookup reconstructs result |
-| result journal, before Project publication | replay same result digest |
-| Project publication, before Canvas CAS | retain partial result; no regeneration |
-| Canvas success CAS, before ledger commit | detect Canvas success; do not republish |
-| ledger commit, before sidecar acknowledgement | idempotent acknowledgement |
-| cancellation request, before acknowledgement | query operation; safe only with terminal proof |
+| Crash point                                    | Required recovery                              |
+| ---------------------------------------------- | ---------------------------------------------- |
+| before Canvas `submitting`                     | no operation exists                            |
+| after Canvas `submitting`, before ledger       | interrupt unknown; no call                     |
+| after ledger/input snapshots, before dispatch  | get, then same-operation replay                |
+| after sidecar `prepared`, before provider call | get prepared; same-operation replay            |
+| provider accepted, before sidecar task journal | provider idempotency get; never second task    |
+| sidecar accepted, before lifecycle receipt     | operation get returns stable task              |
+| lifecycle receipt, before Desktop ledger CAS   | operation get restores task                    |
+| ledger task CAS, before Canvas task CAS        | ledger/get restores Canvas task                |
+| task succeeds, before result journal           | provider terminal get reconstructs result      |
+| result journal, before Project publication     | replay same result digest                      |
+| Project publication, before Canvas CAS         | retain partial result; no regeneration         |
+| Canvas success CAS, before ledger commit       | detect Canvas success; do not republish        |
+| ledger commit, before sidecar acknowledgement  | idempotent acknowledgement                     |
+| cancellation request, before acknowledgement   | get operation; safe only with terminal proof   |
 
 Every row asserts:
 
@@ -746,11 +777,11 @@ Desktop private storage:
 Sidecar protocol:
 
 - initialization capability agreement;
-- exact schemas for lookup/query/await/cancel/result/acknowledge;
+- exact schemas for get/wait/cancel/result/acknowledge;
 - idempotent repeated submit and task receipt;
 - old Plugin compatibility;
-- no overall await timeout;
-- provider-lookup and result-replay fixtures;
+- no overall wait timeout;
+- provider-get and result-replay fixtures;
 - malformed, oversized, credential-like, path-like, and raw-diagnostic rejection.
 
 Main orchestration:
@@ -772,5 +803,24 @@ Validation commands:
 - affected Canvas and Desktop `bun run test`;
 - root `bun check`;
 - package pack/declaration checks;
-- Desktop production build and Electron smoke;
+- Desktop production build and Electron smoke, including one real Canvas CAS race,
+  guarded replacement after an unrelated revision, late callback after target
+  deletion, and restart-style reconciliation of an active legacy run;
 - `git diff --check`.
+
+### Validation ownership
+
+The proof is intentionally layered instead of forcing every crash point into one
+UI scenario:
+
+| Evidence layer                   | Owned proof                                                                                                                                                                                     |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                       |
+| Desktop generation-service tests | durable ledger/input ordering, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication                       |
+| LRO protocol/runtime tests       | v7 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and legacy rejection                                            |
+| stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                        |
+| built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, deleted-target late callback rejection, legacy restart interruption and full renderer unmount/remount |
+
+The built smoke is representative end-to-end evidence; the deterministic package
+tests own the exhaustive crash-window matrix because they can inject each boundary
+without relying on timing.

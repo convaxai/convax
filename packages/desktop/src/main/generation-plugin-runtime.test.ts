@@ -120,8 +120,8 @@ function declarativeGenerationPlugin(
             ...(schema === webPluginManifestSchemaV7
               ? {
                   recovery: {
-                    mode: "operation-exactly-once" as const,
-                    schema: "convax.generation-recovery/1" as const,
+                    mode: "long-running-operation" as const,
+                    schema: "convax.generation-lro/1" as const,
                   },
                 }
               : {}),
@@ -241,21 +241,18 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   async generationRecoveryCapability() {
     return {
       binding: "test-account-binding",
-      mode: "operation-exactly-once" as const,
-      schema: "convax.generation-recovery/1" as const,
+      mode: "long-running-operation" as const,
+      schema: "convax.generation-lro/1" as const,
     }
   }
 
-  async callGenerationRecovery(
-    method: GenerationRecoveryMethod,
-    input: Omit<GenerationRecoveryRequest, "schema">,
-  ) {
+  async callGenerationRecovery(method: GenerationRecoveryMethod, input: Omit<GenerationRecoveryRequest, "schema">) {
     this.recoveryCalls.push({ input, method })
-    if (method === "convax/generation/operation/acknowledge") {
-      return { acknowledged: true, schema: "convax.generation-recovery-acknowledgement/1" }
+    if (method === "convax/generation/operations/acknowledge") {
+      return { acknowledged: true, schema: "convax.generation-lro-acknowledgement/1" }
     }
     return {
-      schema: "convax.generation-recovery-snapshot/1",
+      schema: "convax.generation-lro-snapshot/1",
       status: "running",
       taskId: "task_123",
     }
@@ -427,10 +424,10 @@ describe("GenerationPluginRuntime", () => {
     expect(clients).toHaveLength(0)
   })
 
-  test("admits v7 recovery only after the runtime handshake and binds fixed control calls", async () => {
+  test("admits a v7 LRO only after the runtime handshake and binds fixed control calls", async () => {
     const { clients, runtime } = setup([declarativeGenerationPlugin(webPluginManifestSchemaV7)])
     const summary = (await runtime.listTools()).find((tool) => tool.toolId === "generate.image")!
-    expect(summary.recovery).toBe("operation-exactly-once")
+    expect(summary.recovery).toBe("long-running-operation")
     const prepared = await runtime.prepareTool(summary)
     expect(prepared.recovery).toMatchObject({
       bindingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -439,7 +436,7 @@ describe("GenerationPluginRuntime", () => {
       runtimeAuthorizationDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
     expect(
-      await prepared.recovery!.lookup({
+      await prepared.recovery!.get({
         operationId: "operation-one",
         requestDigest: "a".repeat(64),
       }),
@@ -450,8 +447,8 @@ describe("GenerationPluginRuntime", () => {
       taskId: "task_123",
     })
     expect(clients[0]!.recoveryCalls.map((call) => call.method)).toEqual([
-      "convax/generation/operation/lookup",
-      "convax/generation/operation/acknowledge",
+      "convax/generation/operations/get",
+      "convax/generation/operations/acknowledge",
     ])
   })
 
@@ -493,7 +490,7 @@ describe("GenerationPluginRuntime", () => {
       const pinned = await setupResult.runtime.prepareRecoveryTool(binding)
       expect(pinned.tool).toEqual(summary)
       expect(
-        await pinned.execution.recovery!.lookup({
+        await pinned.execution.recovery!.get({
           operationId: "operation-one",
           requestDigest: "a".repeat(64),
         }),
@@ -1028,11 +1025,9 @@ describe("GenerationPluginRuntime", () => {
       )
       const [tool] = await runtime.listTools()
       await runtime.prepareTool(tool!)
-      const injected = options[0]?.env?.CONVAX_GENERATION_RECOVERY_DIRECTORY
+      const injected = options[0]?.env?.CONVAX_GENERATION_LRO_DIRECTORY
       const realRoot = await fs.realpath(root)
-      expect(injected).toMatch(
-        new RegExp(`^${realRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[a-f0-9]{64}$`),
-      )
+      expect(injected).toMatch(new RegExp(`^${realRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[a-f0-9]{64}$`))
       expect((await fs.stat(realRoot)).mode & 0o777).toBe(0o700)
       expect((await fs.stat(injected!)).mode & 0o777).toBe(0o700)
       expect(path.basename(injected!)).not.toContain("image-tools")
