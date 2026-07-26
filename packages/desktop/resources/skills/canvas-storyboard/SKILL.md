@@ -26,7 +26,7 @@ cards, not just advice in chat.
 6. Reveal, select, and fit the completed sequence with `canvas_view`, then summarize
    any continuity, coverage, or pacing risk that still needs a creative decision.
 
-If the request is specifically about spatial character/prop/camera blocking inside
-a `plugin.storyai-3d-director-desk` node, use that Plugin's companion Skill instead.
+If the request is specifically about semantics inside a Plugin node that provides
+its own companion Skill, use that Plugin's companion Skill instead.
 
 Do not edit `.convax` files, invent Canvas ids, or recreate Canvas business rules in the Skill.

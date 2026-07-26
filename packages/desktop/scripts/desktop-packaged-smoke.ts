@@ -14,7 +14,7 @@ const distRoot = path.join(desktopRoot, "dist")
 const startupTimeoutMs = 90_000
 const operationTimeoutMs = 120_000
 const pluginTimeoutMs = 45_000
-const pluginIds = ["storyai-3d-director-desk", "jianying-editor"] as const
+const pluginIds = ["jianying-editor"] as const
 const defaultRemotePluginId = "ffmpeg-tools"
 const jianyingDraftStatuses = new Set([
   "active",
@@ -648,20 +648,6 @@ try {
           addedNodes: [
             {
               data: {
-                kind: "plugin.storyai-3d-director-desk",
-                label: "3D Director Desk",
-                metadata: {
-                  convaxPlugin: identity("storyai-3d-director-desk"),
-                  convaxPluginState: {},
-                },
-              },
-              id: "packaged-smoke-storyai",
-              position: { x: 0, y: 0 },
-              style: { height: 460, width: 700 },
-              type: "file",
-            },
-            {
-              data: {
                 kind: "integration.jianying",
                 label: "JianYing Export",
                 metadata: {
@@ -670,7 +656,7 @@ try {
                 },
               },
               id: "packaged-smoke-jianying",
-              position: { x: 0, y: 500 },
+              position: { x: 0, y: 0 },
               style: { height: 260, width: 520 },
               type: "file",
             },
@@ -726,7 +712,6 @@ try {
       while (Date.now() < deadline) {
         if (window.convax) {
           const expected = [
-            ["storyai-3d-director-desk", "3D Director Desk plugin"],
             ["jianying-editor", "JianYing Export plugin"],
           ]
           const frames = expected.map(([id, title]) => {
@@ -757,47 +742,6 @@ try {
     if (frame?.sandbox !== "allow-scripts" || !frame.src?.startsWith(`convax-plugin://${pluginId}/`)) {
       throw new Error(`Unexpected packaged ${pluginId} iframe: ${JSON.stringify(frame)}`)
     }
-  }
-
-  const director = (await evaluatePluginFrame(
-    debuggerPort,
-    renderer,
-    "storyai-3d-director-desk",
-    `(async () => {
-      const deadline = Date.now() + ${pluginTimeoutMs - 5_000}
-      while (Date.now() < deadline) {
-        const canvas = document.querySelector("canvas")
-        const controls = document.querySelectorAll(".viewport-gizmo-hit-button")
-        const bounds = canvas?.getBoundingClientRect()
-        const webgl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"))
-        if (canvas && webgl && bounds.width > 0 && bounds.height > 0 && controls.length >= 6) {
-          return {
-            canvasHeight: bounds.height,
-            canvasWidth: bounds.width,
-            controlCount: controls.length,
-            title: document.title,
-            webgl: true,
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      throw new Error("3D Director Desk did not initialize its WebGL scene")
-    })()`,
-  )) as {
-    canvasHeight?: number
-    canvasWidth?: number
-    controlCount?: number
-    title?: string
-    webgl?: boolean
-  }
-  if (
-    director.title !== "3D Director Desk" ||
-    director.webgl !== true ||
-    !director.canvasWidth ||
-    !director.canvasHeight ||
-    (director.controlCount ?? 0) < 6
-  ) {
-    throw new Error(`Unexpected packaged 3D Director runtime: ${JSON.stringify(director)}`)
   }
 
   const jianying = (await evaluatePluginFrame(
@@ -846,26 +790,17 @@ try {
   const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
   type PersistedDocument = {
     nodes?: Array<{
-      data?: { kind?: string; metadata?: { convaxPluginState?: { schemaVersion?: number } } }
+      data?: { kind?: string }
       id?: string
     }>
   }
-  let persisted: PersistedDocument = {}
-  const persistenceDeadline = Date.now() + pluginTimeoutMs
-  while (Date.now() < persistenceDeadline) {
-    persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as PersistedDocument
-    const state = persisted.nodes?.find((node) => node.id === "packaged-smoke-storyai")?.data?.metadata
-      ?.convaxPluginState
-    if (state?.schemaVersion === 2) break
-    await Bun.sleep(100)
-  }
-  const directorNode = persisted.nodes?.find((node) => node.id === "packaged-smoke-storyai")
+  const persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as PersistedDocument
+  const jianyingNode = persisted.nodes?.find((node) => node.id === "packaged-smoke-jianying")
   if (
     persisted.nodes?.length !== pluginIds.length ||
-    directorNode?.data?.kind !== "plugin.storyai-3d-director-desk" ||
-    directorNode.data.metadata?.convaxPluginState?.schemaVersion !== 2
+    jianyingNode?.data?.kind !== "integration.jianying"
   ) {
-    throw new Error(`Packaged Plugin host did not persist 3D Director state: ${JSON.stringify(persisted)}`)
+    throw new Error(`Packaged Plugin node did not persist: ${JSON.stringify(persisted)}`)
   }
   for (const pluginId of pluginIds) {
     const manifest = JSON.parse(
