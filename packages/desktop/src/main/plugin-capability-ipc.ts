@@ -100,14 +100,15 @@ export function registerPluginCapabilityIpc(options: {
       const client = await options.broker.connect({ principal, scope })
       assertConnectionCanPublish(event)
       const connectionId = randomUUID()
+      const protocol = principal.capabilityProtocol ?? pluginCapabilityProtocolV1
       const connection = new PluginCapabilityConnection(client, {
         send(command) {
           if (!connections.has(connectionId) || event.sender.isDestroyed()) return
           event.sender.send(pluginCapabilityIpcChannels.changed, { command, connectionId })
         },
-      })
+      }, undefined, protocol)
       connections.set(connectionId, { connection, senderId: event.sender.id })
-      return { connectionId, protocol: pluginCapabilityProtocolV1 }
+      return { connectionId, protocol }
     } finally {
       const remaining = (pendingConnectionsBySender.get(event.sender.id) ?? 1) - 1
       if (remaining > 0) pendingConnectionsBySender.set(event.sender.id, remaining)

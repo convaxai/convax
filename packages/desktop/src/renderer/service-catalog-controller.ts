@@ -74,17 +74,39 @@ function pluginBilling(service: PluginServiceViewEntry): ServiceBilling {
     : { kind: "unknown" }
 }
 
-function pluginEntry(service: PluginServiceViewEntry): PluginServiceCatalogEntry {
+function pluginProviderPrefix(pluginId: string) {
+  return `plugin-${pluginId}-`
+}
+
+function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalog): PluginServiceCatalogEntry {
+  const connectedLlmProviders =
+    catalog?.providers.filter(
+      (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
+    ) ?? []
+  const models =
+    connectedLlmProviders.length === 0
+      ? service.models
+      : [
+          ...service.models.filter((model) => model.capability !== "llm"),
+          ...connectedLlmProviders.flatMap((provider) =>
+            provider.models.map((model) => ({
+              capability: "llm" as const,
+              default: model.default,
+              id: model.modelId,
+              name: model.modelName,
+            })),
+          ),
+        ]
   return {
     actions: service.actions,
     authentication: pluginAuthentication(service),
     billing: pluginBilling(service),
-    capabilities: service.capabilities,
+    capabilities: [...new Set(models.map((model) => model.capability))],
     description: service.description,
     error: service.error,
     kind: "plugin",
     loading: service.loading,
-    models: service.models,
+    models,
     name: service.pluginName,
     pluginId: service.pluginId,
     serviceId: `plugin:${service.pluginId}`,
@@ -99,7 +121,9 @@ function openCodeEntry(input: {
   error?: string
   loading: boolean
 }): BuiltinServiceCatalogEntry {
-  const connectedProviders = input.catalog?.providers.filter((provider) => provider.connected) ?? []
+  const connectedProviders =
+    input.catalog?.providers.filter((provider) => provider.connected && !provider.providerId.startsWith("plugin-")) ??
+    []
   return {
     authentication: "not-applicable",
     billing: { kind: "free" },
@@ -238,7 +262,7 @@ export class ServiceCatalogController {
       loading: this.#pluginSnapshot.loading || this.#agentLoading,
       services: [
         openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
-        ...this.#pluginSnapshot.services.map(pluginEntry),
+        ...this.#pluginSnapshot.services.map((service) => pluginEntry(service, this.#agentCatalog)),
       ],
     }
   }

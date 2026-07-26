@@ -60,6 +60,20 @@ describe("InstalledPluginPrincipalResolver", () => {
     })
   })
 
+  test("negotiates capability protocol v2 only for v7 identities", async () => {
+    const plugin = manifest({ schema: "convax.plugin/7" })
+    const resolver = new InstalledPluginPrincipalResolver({
+      async resolveCapabilityIdentity() {
+        return { digest: "a".repeat(64), plugin }
+      },
+    })
+    const principal = await resolver.issue("canvas-tool", "web")
+    expect(principal.capabilityProtocol).toBe("convax.plugin-capability/2")
+    expect(await resolver.resolve(principal)).toMatchObject({
+      capabilityProtocol: "convax.plugin-capability/2",
+    })
+  })
+
   test("keeps Web, Tool, and built-in runtime identities distinct", async () => {
     let plugin = manifest()
     const resolver = new InstalledPluginPrincipalResolver({

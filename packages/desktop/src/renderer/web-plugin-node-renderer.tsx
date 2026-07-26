@@ -2,13 +2,11 @@ import {
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
   CanvasNodeToolbarDivider,
-  createCanvasId,
   updateCanvasNodeData,
   useCanvasEditor,
   type CanvasDocument,
   type CanvasFileRendererDefinition,
   type CanvasFileRendererPlugin,
-  type CanvasNode,
 } from "@convax/canvas"
 import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
 import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore } from "react"
@@ -17,6 +15,7 @@ import {
   requireWebPluginRelativePath,
   webPluginManifestSchemaV5,
   webPluginManifestSchemaV6,
+  webPluginManifestSchemaV7,
   type InstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
@@ -29,6 +28,7 @@ import {
 } from "../plugin-canvas-host"
 import {
   matchesWebPluginCanvasNode,
+  createWebPluginCanvasNode,
   webPluginCanvasRendererId,
   webPluginIdentityMetadataKey,
   webPluginNodeMetadata,
@@ -39,6 +39,8 @@ import {
   desktopPluginConnectedImagesChangedCommand,
   desktopPluginConnectedInputsChangedCommand,
   desktopPluginHostProtocolForManifestSchema,
+  pluginCapabilityProtocolV1,
+  pluginCapabilityProtocolV2,
   type DesktopPluginHostConnect,
 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry, type DesktopPluginFrameRef } from "./plugin-frame-registry"
@@ -278,38 +280,6 @@ export function webPluginFrameKey(plugin: Pick<InstalledWebPluginCanvasSurface, 
   return `${requireWebPluginId(plugin.id)}:${plugin.version}:${requireWebPluginRelativePath(plugin.entry, "Plugin entry")}`
 }
 
-function createPluginNode(
-  plugin: InstalledWebPluginCanvasSurface,
-  input: Parameters<NonNullable<CanvasFileRendererDefinition["create"]>>[0],
-): CanvasNode {
-  const renderer = plugin.contributes.canvas.renderer
-  const inputData = input.data ?? {}
-  const inputMetadata = webPluginNodeMetadata(inputData) ?? {}
-  return {
-    data: {
-      ...inputData,
-      kind: webPluginCanvasRendererId(plugin.id),
-      label: typeof inputData.label === "string" ? inputData.label : plugin.name,
-      metadata: {
-        ...inputMetadata,
-        [webPluginIdentityMetadataKey]: {
-          entry: plugin.entry,
-          id: plugin.id,
-          version: plugin.version,
-        },
-        [webPluginStateMetadataKey]: {},
-      },
-    },
-    id: input.id ?? createCanvasId("plugin"),
-    position: input.position,
-    style: {
-      height: Math.max(96, renderer.height ?? 420),
-      width: Math.max(160, renderer.width ?? 640),
-    },
-    type: "file",
-  }
-}
-
 function WebPluginCanvasNode(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
@@ -323,6 +293,7 @@ function WebPluginCanvasNode(
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
   const canvasImageWriteGateRef = useRef({ active: false })
   const connectedImageReadGateRef = useRef({ active: false })
+  const connectedMediaOpenGateRef = useRef({ active: false })
   const generationGateRef = useRef({ active: false })
   const nodeStateWriteGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
@@ -517,6 +488,7 @@ function WebPluginCanvasNode(
     const controller = new AbortController()
     const channel = new MessageChannel()
     const connectedImageReadGate = connectedImageReadGateRef.current
+    const connectedMediaOpenGate = connectedMediaOpenGateRef.current
     const canvasImageWriteGate = canvasImageWriteGateRef.current
     const generationGate = generationGateRef.current
     const nodeStateWriteGate = nodeStateWriteGateRef.current
@@ -526,12 +498,20 @@ function WebPluginCanvasNode(
       pluginId: props.plugin.id,
       projectId: active.projectId,
     }
+    const connectedMediaFrame = {
+      ...frame,
+      frameId: globalThis.crypto.randomUUID(),
+      pluginVersion: props.plugin.version,
+    }
+    const connectedMediaSessions = new Set<string>()
     let unregister: () => void = () => undefined
     let capabilityConnection: RendererPluginHostConnection | null = null
     const cleanup = () => {
       if (controller.signal.aborted) return
       controller.abort(new Error("Plugin frame was closed"))
       capabilityConnection?.close()
+      connectedMediaSessions.clear()
+      void window.convax.canvas.pluginConnectedMedia.revokeFrame(connectedMediaFrame).catch(() => undefined)
       channel.port1.onmessage = null
       channel.port1.close()
       unregister()
@@ -554,7 +534,11 @@ function WebPluginCanvasNode(
       channel.port2.close()
       return
     }
-    if (props.plugin.schema === webPluginManifestSchemaV5 || props.plugin.schema === webPluginManifestSchemaV6) {
+    if (
+      props.plugin.schema === webPluginManifestSchemaV5 ||
+      props.plugin.schema === webPluginManifestSchemaV6 ||
+      props.plugin.schema === webPluginManifestSchemaV7
+    ) {
       capabilityConnection = new RendererPluginHostConnection(
         window.convax.pluginCapabilities,
         {
@@ -571,6 +555,9 @@ function WebPluginCanvasNode(
             cleanup()
           }
         },
+        props.plugin.schema === webPluginManifestSchemaV7
+          ? pluginCapabilityProtocolV2
+          : pluginCapabilityProtocolV1,
       )
     }
     cleanupRef.current = cleanup
@@ -581,6 +568,7 @@ function WebPluginCanvasNode(
           : dispatchPluginHostRequest(event.data, {
               canvasImageWriteGate,
               connectedImageReadGate,
+              connectedMediaOpenGate,
               createCanvasImage: (input) => props.options.host.createCanvasImage(input),
               executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
               frame,
@@ -612,6 +600,28 @@ function WebPluginCanvasNode(
               },
               limits: props.options.limits,
               listGenerationTools: (input) => props.options.host.listGenerationTools(input),
+              openConnectedMedia: async (input) => {
+                const result = await window.convax.canvas.pluginConnectedMedia.open({
+                  ...connectedMediaFrame,
+                  expectedRevision: input.expectedRevision,
+                  sourceNodeId: input.sourceNodeId,
+                })
+                if (controller.signal.aborted) {
+                  await window.convax.canvas.pluginConnectedMedia
+                    .close({ ...connectedMediaFrame, sessionId: result.sessionId })
+                    .catch(() => undefined)
+                  throw controller.signal.reason ?? new Error("Plugin frame was closed")
+                }
+                connectedMediaSessions.add(result.sessionId)
+                return result
+              },
+              closeConnectedMedia: async ({ sessionId }) => {
+                if (!connectedMediaSessions.delete(sessionId)) return false
+                return window.convax.canvas.pluginConnectedMedia.close({
+                  ...connectedMediaFrame,
+                  sessionId,
+                })
+              },
               ownsNode: (candidate) => matchesWebPluginCanvasNode(props.plugin, candidate.data),
               plugin: props.plugin,
               promptAgent: (input) => props.options.host.promptAgent(input),
@@ -786,7 +796,7 @@ export function createWebPluginCanvasContribution(
     renderers: [
       {
         component: Component,
-        ...(renderer.create ? { create: (input) => createPluginNode(plugin, input) } : {}),
+        ...(renderer.create ? { create: (input) => createWebPluginCanvasNode(plugin, input) } : {}),
         id: webPluginCanvasRendererId(plugin.id),
         label: plugin.name,
         matches: (data) => matchesWebPluginCanvasNode(plugin, data),

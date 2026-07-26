@@ -1,6 +1,7 @@
 import type { CanvasDocument, CanvasNode } from "@convax/canvas"
 import type { WebPluginGenerationInputRole, WebPluginGenerationModality } from "./plugin-contracts"
 import type { InstalledPlugin } from "./plugin-api"
+import type { PluginConnectedMediaOpenResult } from "./plugin-connected-media-contracts"
 
 /** Transport-neutral identity attached to one legacy node-scoped Plugin invocation. */
 export interface PluginNodeInvocationRef {
@@ -41,6 +42,7 @@ export interface PluginConnectedInputDescriptor {
   id: string
   kind: string
   label: string
+  mediaRevision?: string
   mimeType?: string
   name?: string
   status?: "error" | "idle" | "pending"
@@ -138,6 +140,7 @@ export interface PluginHostLimits {
 export interface PluginHostRequestContext {
   canvasImageWriteGate: { active: boolean }
   connectedImageReadGate: { active: boolean }
+  connectedMediaOpenGate: { active: boolean }
   frame: PluginNodeInvocationRef
   generationGate: { active: boolean }
   nodeStateWriteGate: { active: boolean }
@@ -175,6 +178,15 @@ export interface PluginHostRequestContext {
       signal: AbortSignal
     },
   ): Promise<readonly PluginGenerationToolSummary[]>
+  openConnectedMedia(
+    input: PluginNodeInvocationRef & {
+      expectedRevision: number
+      pluginVersion: string
+      signal: AbortSignal
+      sourceNodeId: string
+    },
+  ): Promise<PluginConnectedMediaOpenResult>
+  closeConnectedMedia(input: { sessionId: string; signal: AbortSignal }): Promise<boolean>
   promptAgent(
     input: PluginNodeInvocationRef & {
       pluginName: string

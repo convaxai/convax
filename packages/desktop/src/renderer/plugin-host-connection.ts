@@ -4,6 +4,7 @@ import {
   pluginHostFailure,
   type DesktopPluginHostCommand,
   type DesktopPluginHostResponse,
+  type PluginCapabilityProtocol,
 } from "../plugin-host-protocol"
 
 const maximumCapabilityRequestBytes = 1024 * 1024
@@ -22,13 +23,14 @@ export class RendererPluginHostConnection {
     private readonly client: PluginCapabilityRendererClient,
     input: PluginCapabilityConnectInput,
     private readonly onCommand: (command: DesktopPluginHostCommand) => void,
+    private readonly expectedProtocol: PluginCapabilityProtocol = pluginCapabilityProtocolV1,
   ) {
     this.unsubscribe = client.onEvent((event) => {
       if (this.closed || event.connectionId !== this.connectionId) return
       this.onCommand(event.command)
     })
     this.connectPromise = client.connect(input).then(({ connectionId, protocol }) => {
-      if (protocol !== pluginCapabilityProtocolV1) throw new Error("Plugin capability protocol mismatch")
+      if (protocol !== this.expectedProtocol) throw new Error("Plugin capability protocol mismatch")
       if (this.closed) {
         void client.disconnect({ connectionId }).catch(() => undefined)
         throw new Error("Plugin capability connection was closed")
@@ -48,7 +50,7 @@ export class RendererPluginHostConnection {
       return await this.client.call({ connectionId, request })
     } catch (error) {
       if (!id) return null
-      return pluginHostFailure(id, error, pluginCapabilityProtocolV1)
+      return pluginHostFailure(id, error, this.expectedProtocol)
     }
   }
 

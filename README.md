@@ -114,6 +114,12 @@ Only `true`, `false`, `1`, and `0` are accepted so a misspelled value fails the 
 
 ## Documentation
 
+Preview the documentation site locally:
+
+```bash
+bun run dev:docs
+```
+
 - [Architecture](docs/architecture.md)
 - [Plugin and Skill platform](docs/plugin-skill-platform.md)
 - [FFmpeg Tool Plugin](docs/ffmpeg-tool-plugin.md)

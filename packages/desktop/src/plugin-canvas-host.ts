@@ -409,7 +409,7 @@ function optionalConnectedInputDimension(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
-function connectedInputDescriptor(node: CanvasNode): PluginConnectedInputDescriptor {
+async function connectedInputDescriptor(node: CanvasNode): Promise<PluginConnectedInputDescriptor> {
   const kind = optionalConnectedInputText(node.data.kind, 80) ?? "file"
   const label = optionalConnectedInputText(node.data.label, 512) ?? "Untitled"
   const name = optionalConnectedInputText(node.data.name, 512)
@@ -427,6 +427,7 @@ function connectedInputDescriptor(node: CanvasNode): PluginConnectedInputDescrip
     id: node.id,
     kind,
     label,
+    mediaRevision: await connectedInputDataFingerprint(node.data),
     ...(mimeType === undefined ? {} : { mimeType }),
     ...(name === undefined ? {} : { name }),
     ...(status === undefined ? {} : { status }),
@@ -648,7 +649,54 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
   if (request.method === "canvas.connectedInputs.list") {
     requireEmptyParams(request.params)
     requireCapability(context.plugin, "canvas.connectedInputs.read")
-    return { inputs: context.getConnectedInputNodes().map(connectedInputDescriptor) }
+    return { inputs: await Promise.all(context.getConnectedInputNodes().map(connectedInputDescriptor)) }
+  }
+  if (request.method === "canvas.connectedMedia.open") {
+    requireCapability(context.plugin, "canvas.connectedMedia.stream")
+    if (context.connectedMediaOpenGate.active) {
+      throw new Error("A connected-media session is already opening for this Plugin frame")
+    }
+    context.connectedMediaOpenGate.active = true
+    try {
+      const params = exactRecord(request.params, ["nodeId"], "Connected-media open request")
+      const sourceNodeId = requireConnectedImageNodeId(params.nodeId)
+      if (!context.getConnectedInputNodes().some((node) => node.id === sourceNodeId)) {
+        throw new Error("Canvas media is not directly connected to this Plugin node")
+      }
+      const document = context.getDocument()
+      if (!document || document.id !== context.frame.canvasId) {
+        throw new Error("Plugin frame is no longer attached to its Canvas document")
+      }
+      const result = await context.openConnectedMedia({
+        ...context.frame,
+        expectedRevision: document.revision,
+        pluginVersion: context.plugin.version,
+        signal: context.signal,
+        sourceNodeId,
+      })
+      assertCurrentFrame(context)
+      if (
+        !result ||
+        typeof result.sessionId !== "string" ||
+        !result.sessionId ||
+        typeof result.url !== "string" ||
+        !result.url.startsWith("convax-connected-media://") ||
+        !isRecord(result.probe) ||
+        typeof result.probe.mediaRevision !== "string" ||
+        typeof result.probe.mimeType !== "string"
+      ) {
+        throw new Error("Connected-media provider returned an invalid session")
+      }
+      return result
+    } finally {
+      context.connectedMediaOpenGate.active = false
+    }
+  }
+  if (request.method === "canvas.connectedMedia.close") {
+    requireCapability(context.plugin, "canvas.connectedMedia.stream")
+    const params = exactRecord(request.params, ["sessionId"], "Connected-media close request")
+    const sessionId = requireGenerationIdentifier(params.sessionId, "Connected-media session id", 128)
+    return { closed: await context.closeConnectedMedia({ sessionId, signal: context.signal }) }
   }
   if (request.method === "canvas.connectedImage.read") {
     requireCapability(context.plugin, "canvas.connectedImages.read")

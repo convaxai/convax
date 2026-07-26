@@ -1,0 +1,44 @@
+---
+title: 从源码运行
+description: 安装 Convax 工作区依赖，启动桌面应用与文档站，并运行仓库检查。
+audience: human
+sidebar:
+  order: 1
+  badge: 开始
+---
+
+Convax 使用 Bun 管理依赖和工作区脚本。
+
+## 安装依赖
+
+```bash
+bun install
+```
+
+## 启动开发环境
+
+<Tabs>
+  <TabItem label="桌面应用">```bash bun dev ```</TabItem>
+  <TabItem label="文档站">```bash bun run dev:docs ```</TabItem>
+</Tabs>
+
+文档站默认使用 Astro 的本地地址。生产构建通过 `DOCS_SITE` 接收站点的 canonical origin；
+本地未设置时使用 `http://localhost:4321`。
+
+## 运行检查
+
+```bash
+bun check
+```
+
+完整检查包括 lint、类型检查、测试、包边界策略和可发布包的打包验证。只验证文档应用时：
+
+```bash
+bun --cwd apps/docs run typecheck
+bun --cwd apps/docs run test
+bun --cwd apps/docs run build
+```
+
+<Aside type="caution" title="保持包边界">
+  修改包依赖、状态所有权、持久化、IPC 或 Agent 能力之前，先阅读根目录的 `AGENTS.md` 和 `docs/architecture.md`。
+</Aside>

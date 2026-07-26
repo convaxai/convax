@@ -51,6 +51,7 @@ import {
   type ToolPluginExecutableBindingKind,
 } from "./tool-plugin-authorizations"
 import type { PluginServiceBrowserAuthorizationCompletion } from "./plugin-service-browser-authorization"
+import type { PluginServiceExternalAuthorizationCompletion } from "./plugin-service-external-authorization"
 import {
   createToolPluginCanvasMcpBridge,
   type ToolPluginCanvasCapabilityHost,
@@ -94,7 +95,7 @@ export interface PluginServiceMcpCallResult extends McpToolCallResult {
    * manifest that returned the browser request. It is never serialized.
    */
   completeAuthorization?: (
-    input: PluginServiceBrowserAuthorizationCompletion,
+    input: PluginServiceBrowserAuthorizationCompletion | PluginServiceExternalAuthorizationCompletion,
     signal?: AbortSignal,
   ) => Promise<McpToolCallResult>
 }
@@ -253,8 +254,10 @@ const generationToolEnvironmentKeys = [
 ] as const
 
 const generationToolIdPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/
+const llmModelIdPattern = /^~?[A-Za-z0-9]+(?:[._/:-][A-Za-z0-9]+)*$/
 const bareCommandPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const maximumExecutableBytes = 512 * 1024 * 1024
+const maximumRuntimeLlmModels = 2_048
 
 function abortError(reason?: unknown) {
   const message =
@@ -604,6 +607,45 @@ function llmGatewayDescriptor(value: unknown) {
   return { apiKey: input.api_key, baseUrl: url.toString().replace(/\/$/, "") }
 }
 
+function llmModelCatalog(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Plugin LLM model catalog returned an invalid descriptor")
+  }
+  const input = value as Record<string, unknown>
+  if (
+    Object.keys(input).length !== 2 ||
+    input.schema !== "convax.llm-model-catalog/1" ||
+    !Array.isArray(input.models) ||
+    input.models.length === 0 ||
+    input.models.length > maximumRuntimeLlmModels
+  ) {
+    throw new Error("Plugin LLM model catalog returned an invalid descriptor")
+  }
+  const models = input.models.map((value, index) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`Plugin LLM model catalog entry ${index} is invalid`)
+    }
+    const model = value as Record<string, unknown>
+    if (
+      Object.keys(model).length !== 2 ||
+      typeof model.id !== "string" ||
+      model.id.length > 191 ||
+      !llmModelIdPattern.test(model.id) ||
+      typeof model.name !== "string" ||
+      model.name.length === 0 ||
+      model.name.length > 160 ||
+      model.name.includes("\0")
+    ) {
+      throw new Error(`Plugin LLM model catalog entry ${index} is invalid`)
+    }
+    return { id: model.id, name: model.name }
+  })
+  if (new Set(models.map(({ id }) => id)).size !== models.length) {
+    throw new Error("Plugin LLM model catalog contains duplicate ids")
+  }
+  return models
+}
+
 /**
  * Discovers executable contributions from installed Plugin manifests and lazily
  * executes their matching MCP tools. Generation and service surfaces share this
@@ -695,6 +737,17 @@ export class GenerationPluginRuntime {
         if (!availableTools.has("llm.gateway.start")) {
           throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.gateway.start`)
         }
+        let models = contribution.models.map((model) => ({ ...model }))
+        if (contribution.modelCatalog === "runtime") {
+          if (!availableTools.has("llm.models.list")) {
+            throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.models.list`)
+          }
+          const catalogResult = await runtime.client.callTool("llm.models.list", {}, signal)
+          if (catalogResult.isError) {
+            throw new Error(`Plugin LLM model catalog failed to load: ${selected.manifest.id}`)
+          }
+          models = llmModelCatalog(catalogResult.structuredContent)
+        }
         const current = (await this.#discover()).get(selected.manifest.id)
         if (
           !current ||
@@ -708,7 +761,7 @@ export class GenerationPluginRuntime {
         const descriptor = llmGatewayDescriptor(result.structuredContent)
         connections.push({
           ...descriptor,
-          models: contribution.models.map((model) => ({ ...model })),
+          models,
           name: contribution.provider.name,
           pluginId: selected.manifest.id,
           providerId: pluginLlmProviderHostId(selected.manifest.id, contribution.provider.id),
@@ -729,7 +782,7 @@ export class GenerationPluginRuntime {
     return [...plugins.values()]
       .filter(({ manifest }) => manifest.contributes.service !== undefined)
       .map(({ manifest }) => {
-        const models = (manifest.contributes.generation?.tools ?? [])
+        const generationModels = (manifest.contributes.generation?.tools ?? [])
           .map((tool) => toolSummary(manifest, tool))
           .filter((tool) => tool.kind === "model")
           .map((tool) => ({
@@ -737,6 +790,12 @@ export class GenerationPluginRuntime {
             id: tool.toolId,
             name: tool.modelName!,
           }))
+        const llmModels = (manifest.contributes.llm?.models ?? []).map((model) => ({
+          capability: "llm" as const,
+          id: model.id,
+          name: model.name,
+        }))
+        const models = [...generationModels, ...llmModels]
         return {
           actions: [...manifest.contributes.service!.actions],
           capabilities: [...new Set(models.map((model) => model.capability))],
@@ -802,12 +861,18 @@ export class GenerationPluginRuntime {
             throw new Error(`Plugin service changed before browser authorization completed: ${pluginId}`)
           }
           try {
-            const completionInput: Record<string, unknown> = {
-              authorization_id: input.authorization_id,
-              cookie_origin: input.cookie_origin,
-              cookies: input.cookies.map(({ name, value }) => ({ name, value })),
-              schema: input.schema,
-            }
+            const completionInput: Record<string, unknown> =
+              "cookies" in input
+                ? {
+                    authorization_id: input.authorization_id,
+                    cookie_origin: input.cookie_origin,
+                    cookies: input.cookies.map(({ name, value }) => ({ name, value })),
+                    schema: input.schema,
+                  }
+                : {
+                    authorization_id: input.authorization_id,
+                    schema: input.schema,
+                  }
             return await runtime.client.callTool(
               pluginServiceMcpTools.completeAuthorization,
               completionInput,

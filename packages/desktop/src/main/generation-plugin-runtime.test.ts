@@ -230,6 +230,18 @@ class FakeMcpClient implements GenerationPluginMcpClient {
         },
       }
     }
+    if (name === "llm.models.list") {
+      return {
+        content: [{ text: "listed", type: "text" }],
+        structuredContent: {
+          models: [
+            { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+            { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+          ],
+          schema: "convax.llm-model-catalog/1",
+        },
+      }
+    }
     return this.result
   }
 
@@ -338,6 +350,27 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
+  })
+
+  test("loads a bounded runtime LLM model catalog before starting the provider gateway", async () => {
+    const dynamic = llmPlugin()
+    dynamic.contributes.llm!.modelCatalog = "runtime"
+    const { clients, runtime } = setup([dynamic], ["llm.models.list", "llm.gateway.start"])
+
+    expect(await runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [
+          { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+          { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+        ],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.models.list", "llm.gateway.start"])
   })
 
   test("discovers only v2 generation contributions without starting their commands", async () => {
@@ -883,6 +916,25 @@ describe("GenerationPluginRuntime", () => {
         pluginId: "creative-service",
         pluginName: "Creative Service",
         version: "1.0.0",
+      },
+    ])
+    expect(clients).toHaveLength(0)
+  })
+
+  test("derives LLM service capabilities and models from the LLM manifest", async () => {
+    const combined = llmPlugin()
+    combined.contributes.service = { actions: ["authorize"] }
+    const { clients, runtime } = setup([combined])
+
+    expect(await runtime.listServices()).toEqual([
+      {
+        actions: ["authorize"],
+        capabilities: ["llm"],
+        description: "External LLM provider",
+        models: [{ capability: "llm", id: "pippit-glm-main", name: "Pippit GLM Main" }],
+        pluginId: "xiaoyunque-generation",
+        pluginName: "XiaoYunque",
+        version: "0.4.0",
       },
     ])
     expect(clients).toHaveLength(0)

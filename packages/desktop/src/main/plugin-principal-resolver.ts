@@ -3,7 +3,13 @@ import type {
   PluginPrincipal,
   ResolvedPluginPrincipal,
 } from "../plugin-capability-contracts"
-import { pluginManifestSchemaV5, pluginManifestSchemaV6, type InstalledPlugin } from "../plugin-api"
+import {
+  pluginManifestSchemaV5,
+  pluginManifestSchemaV6,
+  pluginManifestSchemaV7,
+  type InstalledPlugin,
+} from "../plugin-api"
+import { pluginCapabilityProtocolV2 } from "../plugin-host-protocol"
 import type { PluginPrincipalResolver } from "./plugin-canvas-capability-service"
 
 export interface InstalledPluginCapabilityIdentity {
@@ -26,7 +32,9 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     const identity = await this.plugins.resolveCapabilityIdentity(pluginId)
     if (
       !identity ||
-      (identity.plugin.schema !== pluginManifestSchemaV5 && identity.plugin.schema !== pluginManifestSchemaV6)
+      (identity.plugin.schema !== pluginManifestSchemaV5 &&
+        identity.plugin.schema !== pluginManifestSchemaV6 &&
+        identity.plugin.schema !== pluginManifestSchemaV7)
     ) {
       throw new Error(`Plugin does not expose the capability API: ${pluginId}`)
     }
@@ -43,6 +51,9 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
       throw new Error(`Imported Plugin cannot create a built-in capability connection: ${pluginId}`)
     }
     return Object.freeze({
+      ...(identity.plugin.schema === pluginManifestSchemaV7
+        ? { capabilityProtocol: pluginCapabilityProtocolV2 }
+        : {}),
       manifestDigest: identity.digest,
       pluginId: identity.plugin.id,
       pluginVersion: identity.plugin.version,
@@ -54,7 +65,9 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     const identity = await this.plugins.resolveCapabilityIdentity(principal.pluginId)
     if (
       !identity ||
-      (identity.plugin.schema !== pluginManifestSchemaV5 && identity.plugin.schema !== pluginManifestSchemaV6) ||
+      (identity.plugin.schema !== pluginManifestSchemaV5 &&
+        identity.plugin.schema !== pluginManifestSchemaV6 &&
+        identity.plugin.schema !== pluginManifestSchemaV7) ||
       identity.plugin.id !== principal.pluginId ||
       identity.plugin.version !== principal.pluginVersion ||
       identity.digest !== principal.manifestDigest ||
@@ -66,6 +79,9 @@ export class InstalledPluginPrincipalResolver implements PluginPrincipalResolver
     }
     return {
       capabilities: [...identity.plugin.capabilities],
+      ...(identity.plugin.schema === pluginManifestSchemaV7
+        ? { capabilityProtocol: pluginCapabilityProtocolV2 }
+        : {}),
       manifestDigest: identity.digest,
       pluginId: identity.plugin.id,
       pluginVersion: identity.plugin.version,

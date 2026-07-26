@@ -1018,12 +1018,12 @@ try {
       let composer
       while (Date.now() < deadline) {
         composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
-        if (composer) break
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      if (!composer) {
-        const openAgent = document.querySelector('button[aria-label="Open agent"]')
-        const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
+          if (composer) break
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        if (!composer) {
+          const openAgent = document.querySelector('button[aria-label="Open agent"]')
+          const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
         const alerts = [...document.querySelectorAll('[role="alert"]')]
           .map((alert) => alert.textContent?.trim())
           .filter(Boolean)
@@ -1032,10 +1032,10 @@ try {
           alerts,
           bodyText: document.body.innerText.slice(-2_000),
           composerContentEditable: disabledComposer?.getAttribute("contenteditable"),
-          openAgentVisible: openAgent instanceof HTMLElement && openAgent.offsetParent !== null,
-        }))
-      }
-      composer.replaceChildren()
+            openAgentVisible: openAgent instanceof HTMLElement && openAgent.offsetParent !== null,
+          }))
+        }
+        composer.replaceChildren()
       composer.focus()
       const range = document.createRange()
       range.selectNodeContents(composer)

@@ -180,6 +180,18 @@ export interface CanvasFailPendingResourceCommand {
 }
 
 /**
+ * Generic host-owned materialization primitive for declarative integrations.
+ * The host supplies an already-authorized file node; Canvas owns placement,
+ * source validation, the direct edge, revision handling, and the atomic save.
+ */
+export interface CanvasMaterializeConnectedNodeCommand {
+  type: "nodes.materialize-connected"
+  node: CanvasNode
+  sourceKind: string
+  sourceNodeId: string
+}
+
+/**
  * Revision-bound renderer delta. The renderer may optimistically project a
  * complete document locally, but only this element-level command crosses the
  * host boundary. Main applies and persists it through the same application
@@ -210,6 +222,7 @@ export type CanvasBusinessCommand =
   | CanvasAutoLayoutCommand
   | CanvasRelinkResourceCommand
   | CanvasReplaceResourceCommand
+  | CanvasMaterializeConnectedNodeCommand
 
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
@@ -451,13 +464,7 @@ export function applyCanvasApplicationCommand(
   }
   if (command.type === "generation.run.finish") {
     return applyGenerationRunMutation(document, command.nodeId, () =>
-      finishCanvasNodeGenerationRun(
-        document,
-        command.nodeId,
-        command.operationId,
-        command.status,
-        command.retrySafety,
-      ),
+      finishCanvasNodeGenerationRun(document, command.nodeId, command.operationId, command.status, command.retrySafety),
     )
   }
   if (command.type === "generation.runs.interrupt-inactive") {
@@ -497,6 +504,7 @@ export function applyCanvasApplicationCommand(
   }
   if (command.type === "resources.pending.fail") return failPendingResource(document, command)
   if (command.type === "resources.relink") return relinkResource(document, command)
+  if (command.type === "nodes.materialize-connected") return materializeConnectedNode(document, command)
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -788,6 +796,35 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
   return result(document, next, [...new Set([...anchorNodeIds, ...nodeIds])], nodeIds)
 }
 
+function materializeConnectedNode(
+  document: CanvasDocument,
+  command: CanvasMaterializeConnectedNodeCommand,
+): CanvasBusinessCommandResult {
+  requireNonEmptyBoundedString(command.sourceNodeId, "Materialization source node id", 256)
+  requireNonEmptyBoundedString(command.sourceKind, "Materialization source kind", 80)
+  const source = document.nodes.find((node) => node.id === command.sourceNodeId)
+  if (!source) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.sourceNodeId}`)
+  if (source.type !== "file" || source.data.kind !== command.sourceKind) {
+    throw new CanvasCommandValidationError(
+      `Canvas materialization requires a ${command.sourceKind} file node: ${command.sourceNodeId}`,
+    )
+  }
+  const node = structuredClone(command.node)
+  requireNonEmptyBoundedString(node.id, "Materialized node id", 256)
+  if (document.nodes.some((candidate) => candidate.id === node.id)) {
+    throw new CanvasCommandValidationError(`Canvas node already exists: ${node.id}`)
+  }
+  if (node.type !== "file" || node.parentId !== undefined || node.id === source.id) {
+    throw new CanvasCommandValidationError("Materialized node must be an independent top-level file node")
+  }
+  const sourceSize = getCanvasNodeSize(source)
+  const preferred = { x: source.position.x + sourceSize.width + 24, y: source.position.y }
+  const position = findOpenCanvasPoint(document, preferred, getCanvasNodeSize(node))
+  let next = addCanvasNodes(document, [{ ...node, position }]).document
+  next = connectCanvasNodes(next, { source: source.id, target: node.id })
+  return result(document, next, [source.id, node.id], [node.id])
+}
+
 function replaceResource(document: CanvasDocument, command: CanvasReplaceResourceCommand): CanvasBusinessCommandResult {
   const target = document.nodes.find((node) => node.id === command.targetNodeId)
   if (!target) throw new CanvasCommandValidationError(`Canvas node was not found: ${command.targetNodeId}`)
@@ -1034,7 +1071,9 @@ function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: read
 }
 
 function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGenerationTargetGuard) {
-  return stableJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }) === stableJson(expected)
+  return (
+    stableJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }) === stableJson(expected)
+  )
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
@@ -1071,7 +1110,6 @@ function throwGenerationRunValidation(error: unknown): never {
   }
   throw error
 }
-
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) {

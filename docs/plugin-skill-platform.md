@@ -446,6 +446,14 @@ operations with `inputBinding: "direct-incoming"`. The former returns to the Age
 without creating a Canvas node; the latter requires an owning node of the same
 installed Plugin and constrains all references to its live incoming edges.
 
+`convax.plugin/7` preserves v6 and negotiates `convax.plugin-capability/2`. It adds a
+fixed declarative Canvas action that can materialize only the contributing Plugin's
+own renderer beside a selected video, plus the narrow
+`canvas.connectedMedia.stream` grant for revocable, range-capable previews of direct
+incoming managed audio/video. Both paths are principal-derived and revision-bound;
+neither grants arbitrary Canvas mutation, Project paths, filesystem access, network
+access, or a local executable.
+
 Plugin ids are kebab-case. All package paths are relative and validated inside the
 package root. Installation rejects symlinks/reparse-point escapes, traversal,
 Windows reserved names and alternate data stream syntax. Installation uses staging

@@ -100,6 +100,8 @@ import {
 } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
+import { registerPluginMaterializationIpc } from "./plugin-materialization-ipc"
+import { PluginMaterializationService } from "./plugin-materialization-service"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
 import { registerPluginCanvasImageIpc } from "./plugin-canvas-image-ipc"
 import { PluginCanvasImageService } from "./plugin-canvas-image-service"
@@ -107,6 +109,7 @@ import { installedPluginAgentMcpServers } from "./plugin-agent-mcp"
 import { PluginAgentMcpConnectionService } from "./plugin-agent-mcp-connection"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { pluginConnectedMediaPrivileges, pluginConnectedMediaScheme } from "../plugin-connected-media-contracts"
 import {
   WebPluginManager,
   WebPluginPublicationDeferredError,
@@ -115,6 +118,7 @@ import {
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
+import { createElectronPluginServiceExternalAuthorizationBroker } from "./electron-plugin-service-external-authorization"
 import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-authorization-checkpoints"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
@@ -147,6 +151,8 @@ import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { PluginHookAuthorizationStore } from "./plugin-hook-authorizations"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import { registerPluginConnectedMediaIpc } from "./plugin-connected-media-ipc"
+import { PluginConnectedMediaService } from "./plugin-connected-media-service"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
 import {
@@ -313,6 +319,7 @@ function startApplication() {
       privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
     },
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
+    { scheme: pluginConnectedMediaScheme, privileges: pluginConnectedMediaPrivileges },
     { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
   app.on("second-instance", () => {
@@ -533,6 +540,16 @@ function startApplication() {
         .catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
     })
     const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginManager)
+    const pluginConnectedMedia = new PluginConnectedMediaService({
+      changes: canvasDocumentChanges,
+      documents: canvasDocuments,
+      media: managedCanvasMedia,
+      plugins: pluginManager,
+    })
+    const pluginMaterialization = new PluginMaterializationService({
+      application: canvasApplication,
+      plugins: pluginManager,
+    })
     const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
       application: canvasApplication,
       canvases: projectCanvases,
@@ -568,7 +585,12 @@ function startApplication() {
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
     )
-    const pluginServices = new PluginServiceHost(generationRuntime, pluginServiceBrowserAuthorization)
+    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
+    const pluginServices = new PluginServiceHost(
+      generationRuntime,
+      pluginServiceBrowserAuthorization,
+      pluginServiceExternalAuthorization,
+    )
     const generationOperations = new GenerationOperationStore(
       join(userDataDirectory, "generation-operations", "operation-v1"),
     )
@@ -596,10 +618,7 @@ function startApplication() {
       const catalog = await projectCanvases.getCanvasCatalog({ projectId })
       for (const canvas of catalog.canvases) {
         try {
-          await generation.reconcileCanvas(
-            { canvasId: canvas.id, scopeId: projectId },
-            generationRecoveryActor,
-          )
+          await generation.reconcileCanvas({ canvasId: canvas.id, scopeId: projectId }, generationRecoveryActor)
         } catch (error) {
           logGenerationRecoveryFailure("Canvas reconciliation", error)
         }
@@ -615,9 +634,7 @@ function startApplication() {
     try {
       const projects = await projectManager.list()
       await Promise.all(
-        projects
-          .filter((project) => !project.missing)
-          .map((project) => reconcileProjectGenerationSafely(project.id)),
+        projects.filter((project) => !project.missing).map((project) => reconcileProjectGenerationSafely(project.id)),
       )
     } catch (error) {
       logGenerationRecoveryFailure("startup", error)
@@ -1031,13 +1048,39 @@ function startApplication() {
       },
       { isTrustedSender: ipcSecurity.isTrustedSender },
     )
-    const disposePluginServiceIpc = registerPluginServiceIpc(pluginServices, {
-      isTrustedSender: ipcSecurity.isTrustedSender,
-    })
+    const refreshAgentAfterServiceAction = async <T>(action: () => Promise<T>) => {
+      const result = await action()
+      await agentRuntime.refreshConfiguration()
+      return result
+    }
+    const disposePluginServiceIpc = registerPluginServiceIpc(
+      {
+        authorize: (pluginId, signal) =>
+          refreshAgentAfterServiceAction(() => pluginServices.authorize(pluginId, signal)),
+        cancelAuthorization: (pluginId, signal) =>
+          refreshAgentAfterServiceAction(() => pluginServices.cancelAuthorization(pluginId, signal)),
+        getStatus: (pluginId, signal) => pluginServices.getStatus(pluginId, signal),
+        listServices: () => pluginServices.listServices(),
+        reauthorize: (pluginId, signal) =>
+          refreshAgentAfterServiceAction(() => pluginServices.reauthorize(pluginId, signal)),
+        signOut: (pluginId, signal) => refreshAgentAfterServiceAction(() => pluginServices.signOut(pluginId, signal)),
+      },
+      {
+        isTrustedSender: ipcSecurity.isTrustedSender,
+      },
+    )
     const disposePluginCapabilityIpc = registerPluginCapabilityIpc({
       broker: pluginCanvasCapabilities,
       isTrustedSender: ipcSecurity.isTrustedSender,
       principals: pluginPrincipals,
+    })
+    const disposePluginConnectedMediaIpc = registerPluginConnectedMediaIpc({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      service: pluginConnectedMedia,
+    })
+    const disposePluginMaterializationIpc = registerPluginMaterializationIpc({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      service: pluginMaterialization,
     })
     const disposeJianyingIpc = registerJianyingIpc(jianying, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -1059,6 +1102,7 @@ function startApplication() {
       remoteCapabilities,
       {
         beforeChange: async (pluginId) => {
+          pluginConnectedMedia.revokePlugin(pluginId)
           pluginServices.discardPlugin(pluginId)
         },
         connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
@@ -1124,6 +1168,7 @@ function startApplication() {
         rendererUrl: trustedRendererUrl,
       }),
     )
+    protocol.handle(pluginConnectedMediaScheme, (request) => pluginConnectedMedia.handle(request))
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
@@ -1151,6 +1196,7 @@ function startApplication() {
         () => protocol.unhandle("convax-asset"),
         () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
+        () => protocol.unhandle(pluginConnectedMediaScheme),
         disposeDesktopProtocolIpc,
         disposeProjectIpc,
         disposeProjectCanvasIpc,
@@ -1162,6 +1208,8 @@ function startApplication() {
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
+        disposePluginConnectedMediaIpc,
+        disposePluginMaterializationIpc,
         disposeJianyingIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
@@ -1175,6 +1223,7 @@ function startApplication() {
         () => pluginServiceBrowserAuthorization.dispose(),
         () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
+        () => pluginConnectedMedia.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
       ],

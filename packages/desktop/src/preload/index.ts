@@ -15,6 +15,14 @@ import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolCli
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import type { JianyingRendererClient } from "../jianying-contracts"
 import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import {
+  pluginConnectedMediaIpcChannels,
+  type PluginConnectedMediaRendererClient,
+} from "../plugin-connected-media-contracts"
+import {
+  pluginMaterializationIpcChannels,
+  type PluginMaterializationRendererClient,
+} from "../plugin-materialization-contracts"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
@@ -449,6 +457,16 @@ const pluginCapabilityClient = {
   },
 } satisfies PluginCapabilityRendererClient
 
+const pluginMaterializationClient = {
+  materialize: (input) => ipcRenderer.invoke(pluginMaterializationIpcChannels.materialize, input),
+} satisfies PluginMaterializationRendererClient
+
+const pluginConnectedMediaClient = {
+  close: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.close, input),
+  open: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.open, input),
+  revokeFrame: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.revokeFrame, input),
+} satisfies PluginConnectedMediaRendererClient
+
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
@@ -548,6 +566,8 @@ contextBridge.exposeInMainWorld("convax", {
   canvas: {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
+    pluginConnectedMedia: pluginConnectedMediaClient,
+    pluginMaterialization: pluginMaterializationClient,
     pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
     resources: canvasResourceClient,

@@ -199,6 +199,33 @@ function remoteMcpPluginManifest(overrides: Partial<WebPluginManifest> = {}): We
   }
 }
 
+function connectedMediaPluginManifest(overrides: Partial<WebPluginManifest> = {}): WebPluginManifest {
+  return {
+    capabilities: ["canvas.connectedInputs.read", "canvas.connectedMedia.stream"],
+    contributes: {
+      canvas: {
+        renderer: { create: true },
+        selectionActions: [
+          {
+            action: { connect: "selection-to-created", type: "materialize-own-plugin-node" },
+            description: { default: "Create a timeline" },
+            id: "create-timeline",
+            target: "video",
+            title: { default: "Create Timeline" },
+          },
+        ],
+      },
+    },
+    description: "Connected-media timeline",
+    entry: "index.html",
+    id: "hello-convax",
+    name: "Hello Convax",
+    schema: "convax.plugin/7",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
 function companion(overrides: Record<string, unknown> = {}) {
   return {
     command: "example-image-tool",
@@ -424,7 +451,7 @@ describe("parseRemoteCapabilityRegistry", () => {
     expect(parsed.packages[0]?.kind === "plugin" && parsed.packages[0].manifest.entry).toBe("web/index.html")
   })
 
-  test("accepts strict Plugin host/schema compatibility pairs through remote MCP v6", () => {
+  test("accepts strict Plugin host/schema compatibility pairs through connected-media v7", () => {
     const generationManifest = generationPluginManifest()
     const parsed = parseRemoteCapabilityRegistry(
       registry([
@@ -519,6 +546,22 @@ describe("parseRemoteCapabilityRegistry", () => {
           },
         },
         schema: "convax.plugin/6",
+      },
+    })
+
+    const connectedMedia = parseRemoteCapabilityRegistry(
+      registry([
+        pluginPackage({
+          compatibility: { pluginHost: "convax.plugin-capability/2", pluginSchema: "convax.plugin/7" },
+          manifest: connectedMediaPluginManifest(),
+        }),
+      ]),
+    )
+    expect(connectedMedia.packages[0]).toMatchObject({
+      compatibility: { pluginHost: "convax.plugin-capability/2", pluginSchema: "convax.plugin/7" },
+      manifest: {
+        capabilities: expect.arrayContaining(["canvas.connectedMedia.stream"]),
+        schema: "convax.plugin/7",
       },
     })
   })

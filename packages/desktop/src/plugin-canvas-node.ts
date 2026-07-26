@@ -1,4 +1,4 @@
-import type { CanvasNodeData } from "@convax/canvas/core"
+import { createCanvasId, type CanvasNode, type CanvasNodeData, type CanvasPoint } from "@convax/canvas/core"
 import { getProjectResourceReference } from "@convax/project/canvas"
 import { requireWebPluginId, type InstalledWebPluginCanvasSurface } from "./plugin-contracts"
 
@@ -15,6 +15,47 @@ export function webPluginNodeMetadata(data: unknown) {
 
 export function webPluginCanvasRendererId(pluginId: string) {
   return `plugin.${requireWebPluginId(pluginId)}`
+}
+
+/**
+ * Creates the host-owned persisted shape for an installed Plugin renderer.
+ * Callers still choose how the node enters Canvas; business operations own
+ * placement, relations and revision/CAS semantics.
+ */
+export function createWebPluginCanvasNode(
+  plugin: InstalledWebPluginCanvasSurface,
+  input: {
+    data?: Record<string, unknown>
+    id?: string
+    position: CanvasPoint
+  },
+): CanvasNode {
+  const renderer = plugin.contributes.canvas.renderer
+  const inputData = input.data ?? {}
+  const inputMetadata = webPluginNodeMetadata(inputData) ?? {}
+  return {
+    data: {
+      ...inputData,
+      kind: webPluginCanvasRendererId(plugin.id),
+      label: typeof inputData.label === "string" ? inputData.label : plugin.name,
+      metadata: {
+        ...inputMetadata,
+        [webPluginIdentityMetadataKey]: {
+          entry: plugin.entry,
+          id: plugin.id,
+          version: plugin.version,
+        },
+        [webPluginStateMetadataKey]: {},
+      },
+    },
+    id: input.id ?? createCanvasId("plugin"),
+    position: input.position,
+    style: {
+      height: Math.max(96, renderer.height ?? 420),
+      width: Math.max(160, renderer.width ?? 640),
+    },
+    type: "file",
+  }
 }
 
 /**

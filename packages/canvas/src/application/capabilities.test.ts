@@ -10,6 +10,7 @@ describe("canvas command capability catalog", () => {
       "elements.remove",
       "nodes.align",
       "nodes.connect",
+      "nodes.materialize-connected",
       "nodes.distribute",
       "nodes.group",
       "nodes.layout",

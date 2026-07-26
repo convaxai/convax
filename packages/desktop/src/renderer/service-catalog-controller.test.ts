@@ -117,6 +117,72 @@ describe("ServiceCatalogController", () => {
     controller.dispose()
   })
 
+  test("projects connected Plugin LLM providers into their Service instead of the OpenCode card", async () => {
+    const client: PluginServiceClient = {
+      ...pluginClient(),
+      listServices: mock(
+        async (): Promise<readonly PluginServiceSummary[]> => [
+          {
+            actions: ["reauthorize", "sign_out"],
+            capabilities: ["llm"],
+            description: "Nexus OpenRouter",
+            models: [{ capability: "llm", id: "fallback", name: "Fallback" }],
+            pluginId: "nexus-service",
+            pluginName: "Nexus · OpenRouter",
+            version: "0.2.0",
+          },
+        ],
+      ),
+    }
+    const controller = new ServiceCatalogController(client, {
+      listModels: mock(async () => ({
+        providers: [
+          {
+            connected: true,
+            defaultModelId: "free-model",
+            models: [{ default: true, modelId: "free-model", modelName: "Free Model" }],
+            providerId: "opencode",
+            providerName: "OpenCode Zen",
+          },
+          {
+            connected: true,
+            models: [
+              { default: false, modelId: "anthropic/claude-sonnet-4", modelName: "Claude Sonnet 4" },
+              {
+                default: false,
+                modelId: "deepseek/deepseek-v4-flash:free",
+                modelName: "DeepSeek V4 Flash Free",
+              },
+            ],
+            providerId: "plugin-nexus-service-openrouter",
+            providerName: "Nexus · OpenRouter",
+          },
+        ],
+      })),
+    })
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+
+    expect(controller.getSnapshot().services[0]?.models).toEqual([
+      expect.objectContaining({ id: JSON.stringify(["opencode", "free-model"]), name: "Free Model" }),
+    ])
+    expect(controller.getSnapshot().services[1]).toMatchObject({
+      capabilities: ["llm"],
+      models: [
+        { capability: "llm", default: false, id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+        {
+          capability: "llm",
+          default: false,
+          id: "deepseek/deepseek-v4-flash:free",
+          name: "DeepSeek V4 Flash Free",
+        },
+      ],
+      name: "Nexus · OpenRouter",
+    })
+    controller.dispose()
+  })
+
   test("drops a late OpenCode model response after the active Project scope changes", async () => {
     const first = deferred<{ providers: [] }>()
     const second = deferred<{

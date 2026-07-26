@@ -2,12 +2,14 @@ import type { CanvasApplicationCommand, CanvasNodeQuery, CanvasNodeSummary } fro
 import type { CanvasEdge, CanvasPoint, CanvasSize } from "@convax/canvas/core"
 
 import type { PluginCapability } from "./plugin-api"
+import type { PluginCapabilityProtocol } from "./plugin-host-protocol"
 
 export const pluginCapabilityRuntimeKinds = ["web", "tool", "builtin"] as const
 export type PluginCapabilityRuntimeKind = (typeof pluginCapabilityRuntimeKinds)[number]
 
 /** Immutable identity captured when a host connection is established. */
 export interface PluginPrincipal {
+  capabilityProtocol?: PluginCapabilityProtocol
   manifestDigest: string
   pluginId: string
   pluginVersion: string
@@ -172,6 +174,7 @@ export interface PluginCanvasCapabilityClient {
 
 export interface ResolvedPluginPrincipal {
   capabilities: readonly PluginCapability[]
+  capabilityProtocol?: PluginCapabilityProtocol
   manifestDigest: string
   pluginId: string
   pluginVersion: string

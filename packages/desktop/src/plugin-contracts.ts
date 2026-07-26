@@ -19,6 +19,7 @@ export type WebPluginManifestSchema =
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
   "canvas.connectedInputs.read",
+  "canvas.connectedMedia.stream",
   "canvas.node.read",
   "canvas.node.write",
   "canvas.image.write",
@@ -162,6 +163,7 @@ export interface WebPluginLlmModelContribution {
 
 /** One OpenAI-compatible provider served by the Plugin's verified companion. */
 export interface WebPluginLlmContribution {
+  modelCatalog?: "runtime"
   models: WebPluginLlmModelContribution[]
   provider: { id: string; name: string }
 }
@@ -221,7 +223,7 @@ export interface WebPluginCanvasSelectionActionStep {
   tool: string
 }
 
-export interface WebPluginCanvasSelectionActionContribution {
+export interface WebPluginCanvasGenerationSelectionActionContribution {
   description: WebPluginLocalizedText
   editor: WebPluginCanvasSelectionActionEditor
   id: string
@@ -229,6 +231,21 @@ export interface WebPluginCanvasSelectionActionContribution {
   target: "video"
   title: WebPluginLocalizedText
 }
+
+export interface WebPluginCanvasMaterializeSelectionActionContribution {
+  action: {
+    connect: "selection-to-created"
+    type: "materialize-own-plugin-node"
+  }
+  description: WebPluginLocalizedText
+  id: string
+  target: "video"
+  title: WebPluginLocalizedText
+}
+
+export type WebPluginCanvasSelectionActionContribution =
+  | WebPluginCanvasGenerationSelectionActionContribution
+  | WebPluginCanvasMaterializeSelectionActionContribution
 
 export interface WebPluginCanvasContribution {
   /** A sandboxed Web surface. Entry and renderer must appear together. */
@@ -554,7 +571,10 @@ function parseLocalizedText(value: unknown, label: string, maxLength: number): W
   }
 }
 
-function parseSelectionActions(value: unknown): WebPluginCanvasSelectionActionContribution[] | undefined {
+function parseSelectionActions(
+  value: unknown,
+  allowMaterializeOwnPluginNode = false,
+): WebPluginCanvasSelectionActionContribution[] | undefined {
   if (value === undefined) return undefined
   if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
     throw new Error("Canvas selection actions must be a non-empty array with at most 32 items")
@@ -562,6 +582,26 @@ function parseSelectionActions(value: unknown): WebPluginCanvasSelectionActionCo
   const actions = value.map((item, index) => {
     const label = `Canvas selection action ${index}`
     const input = asRecord(item, label)
+    if (allowMaterializeOwnPluginNode && input.action !== undefined) {
+      assertKeys(input, ["action", "description", "id", "target", "title"], label)
+      const id = requireString(input.id, `${label} id`, 80)
+      if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) {
+        throw new Error(`Invalid Canvas selection action id: ${id}`)
+      }
+      if (input.target !== "video") throw new Error(`${label} target must be video`)
+      const action = asRecord(input.action, `${label} action`)
+      assertKeys(action, ["connect", "type"], `${label} action`)
+      if (action.type !== "materialize-own-plugin-node" || action.connect !== "selection-to-created") {
+        throw new Error(`${label} materialization action is not supported`)
+      }
+      return {
+        action: { connect: "selection-to-created" as const, type: "materialize-own-plugin-node" as const },
+        description: parseLocalizedText(input.description, `${label} description`, 2_000),
+        id,
+        target: "video" as const,
+        title: parseLocalizedText(input.title, `${label} title`, 120),
+      }
+    }
     assertKeys(input, ["description", "editor", "id", "steps", "target", "title"], label)
     const id = requireString(input.id, `${label} id`, 80)
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) {
@@ -936,12 +976,16 @@ function parseService(value: unknown): WebPluginServiceContribution {
 
 function parseLlm(value: unknown): WebPluginLlmContribution {
   const input = asRecord(value, "LLM contribution")
-  assertKeys(input, ["models", "provider"], "LLM contribution")
+  assertKeys(input, ["modelCatalog", "models", "provider"], "LLM contribution")
   const provider = asRecord(input.provider, "LLM provider")
   assertKeys(provider, ["id", "name"], "LLM provider")
   const providerId = requireString(provider.id, "LLM provider id", 80)
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(providerId)) {
     throw new Error("LLM provider id must use kebab-case")
+  }
+  const modelCatalog = input.modelCatalog
+  if (modelCatalog !== undefined && modelCatalog !== "runtime") {
+    throw new Error("LLM model catalog must be runtime")
   }
   if (!Array.isArray(input.models) || input.models.length === 0 || input.models.length > 32) {
     throw new Error("LLM models must be a non-empty array with at most 32 items")
@@ -951,13 +995,14 @@ function parseLlm(value: unknown): WebPluginLlmContribution {
     const model = asRecord(value, label)
     assertKeys(model, ["id", "name"], label)
     const id = requireString(model.id, `${label} id`, 128)
-    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) throw new Error(`${label} id is invalid`)
+    if (!/^~?[a-z0-9]+(?:[._/:-][a-z0-9]+)*$/.test(id)) throw new Error(`${label} id is invalid`)
     return { id, name: requireString(model.name, `${label} name`, 120) }
   })
   if (new Set(models.map((model) => model.id)).size !== models.length) {
     throw new Error("LLM models contain duplicate ids")
   }
   return {
+    ...(modelCatalog === undefined ? {} : { modelCatalog }),
     models,
     provider: { id: providerId, name: requireString(provider.name, "LLM provider name", 120) },
   }
@@ -1001,6 +1046,7 @@ function validateDeclarativeToolReferences(input: {
     }
   }
   for (const action of input.selectionActions ?? []) {
+    if (!("steps" in action)) continue
     for (const step of action.steps) {
       const tool = tools.get(step.tool)
       if (!tool) throw new Error(`Canvas selection action references an unknown generation tool: ${step.tool}`)
@@ -1111,6 +1157,9 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   ) {
     throw new Error("Connected-input metadata is available only to convax.plugin/6 and later")
   }
+  if (schema !== webPluginManifestSchemaV7 && capabilities.includes("canvas.connectedMedia.stream")) {
+    throw new Error("Connected-media streaming is available only to convax.plugin/7 and later")
+  }
   const hasProjectCanvasCapability = capabilities.some((capability) => projectCanvasCapabilities.has(capability))
   const contributes = asRecord(input.contributes, "Plugin contributions")
   assertKeys(
@@ -1183,7 +1232,15 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     throw new Error(`${schema} must declare an executable contribution or request generation.execute`)
   }
   const toolbar = parseToolbar(canvas?.toolbar)
-  const selectionActions = declarativeSchema ? parseSelectionActions(canvas?.selectionActions) : undefined
+  const selectionActions = declarativeSchema
+    ? parseSelectionActions(canvas?.selectionActions, schema === webPluginManifestSchemaV7)
+    : undefined
+  if (
+    selectionActions?.some((action) => "action" in action && action.action.type === "materialize-own-plugin-node") &&
+    !hasRendererContribution
+  ) {
+    throw new Error("materialize-own-plugin-node requires the contributing Plugin renderer")
+  }
   if (canvas && !hasRendererContribution && !selectionActions?.length) {
     throw new Error("Canvas contributions must declare a renderer or selection actions")
   }

@@ -124,6 +124,14 @@ with the stored credential. A connected headless Plugin exposes a generic Agent
 entry: return to and focus the Agent composer, attaching its owned Skill only when
 exactly one workflow is unambiguous. Navigation never invokes a vendor API.
 
+`convax.plugin/7` adds the independently negotiated
+`convax.plugin-capability/2` revision. Its own-node materialization contribution is
+projected into a host selection action and committed by a generic Canvas business
+command; its connected-media grant creates main-owned, frame-bound range streams
+whose URL contains no source path. Exact installed identity, Canvas topology,
+resource reference and file identity are rechecked at each boundary. Core runtime
+logic never branches on a concrete Plugin id.
+
 ## 3. Packages and dependency graph
 
 | Package                  | Responsibility                                                                  |
@@ -402,12 +410,13 @@ that Project file. A failed Canvas commit retains the published output and repor
 the partial success instead of deleting user data.
 
 Executable integrations use `convax.plugin/2` or declarative `convax.plugin/3` through
-`/6`: a validated manifest declares generation tools and a separately installed bare
-`mcp-stdio` command. V3-v6 map pure model names and optional Agent/Canvas operation
+`/7`: a validated manifest declares generation tools and a separately installed bare
+`mcp-stdio` command. V3-v7 map pure model names and optional Agent/Canvas operation
 surfaces to those tools, so core code never identifies an operation by Plugin id. V4
 adds owned Skill lifecycle metadata without changing generation execution; v5 retains
 that behavior while adding the independent `convax.plugin-capability/1` boundary; v6
-retains both while independently adding the remote Agent MCP contribution.
+retains both while independently adding the remote Agent MCP contribution; v7 adds
+generic materialization and connected-media contracts without changing generation.
 V6 operations may also declare `delivery: "return"` for bounded text effects and
 `inputBinding: "direct-incoming"` for Canvas sink semantics. These are generic tool
 contracts: neither field changes behavior based on a concrete Plugin id.
@@ -572,10 +581,13 @@ confirmed action. An authorization action may request the one fixed main-only
 browser-cookie exchange in a fresh non-persistent sandboxed Electron session.
 
 Desktop exposes one read-only service catalog to the application menu and Services
-settings. Plugin service capabilities and displayed model rows are derived from that
-same installed manifest's generation tools; dynamic account, credit and usage data
-still comes only from the bounded service status. The existing OpenCode Agent runtime
-contributes a safe display-only projection of its connected LLM model catalog through
+settings. Plugin generation capabilities and model rows are derived from the
+installed manifest. An LLM contribution may additionally opt into the fixed
+`llm.models.list` runtime catalog; Desktop validates that bounded catalog in Main and
+projects the resulting connected Plugin provider back into its owning Service card.
+Dynamic account, credit and usage data still comes only from the bounded service
+status. The existing OpenCode Agent runtime contributes a safe display-only
+projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
 select an OpenCode provider/model pair.
@@ -583,10 +595,13 @@ select an OpenCode provider/model pair.
 `convax.plugin/5` adds one generic LLM contribution without introducing a built-in
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
 Plugin manifest, verifies and starts the same authorized companion lifecycle, and
-calls only `llm.gateway.start`. The sidecar returns a Main-only, ephemeral
+calls only the fixed `llm.models.list` opt-in plus `llm.gateway.start`. The model
+catalog tool accepts no input and returns only bounded opaque model ids and display
+names; manifests retain a small static fallback catalog. The sidecar returns a Main-only, ephemeral
 `127.0.0.1` OpenAI-compatible base URL and random bearer key. OpenCode receives that
 connection material only in its in-memory host configuration; renderer, service
-status, manifests, and durable config never receive it. The sidecar retains upstream
+status, manifests, and durable config never receive it. Renderer receives only the
+validated display catalog. The sidecar retains upstream
 URLs, routing headers, vendor credentials and Cookies, and owns streaming,
 backpressure and cancellation. Plugin changes dispose the exact sidecar and cause the
 Agent runtime to rebuild its lazy OpenCode connection without deleting sessions.

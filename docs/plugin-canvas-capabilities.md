@@ -1,6 +1,6 @@
 # Plugin Canvas Capabilities
 
-Status: implemented core, Web adapter, and reverse-MCP adapter for verified v5
+Status: implemented core, Web adapter, and reverse-MCP adapter for verified v5-v7
 Tool sidecars already running through a generation or service contribution. A
 standalone Canvas-only Tool activation lifecycle and a direct built-in adapter are
 not implemented.
@@ -42,8 +42,10 @@ versioned independently from the manifest:
 }
 ```
 
-The protocol is `convax.plugin-capability/1`. Creating a later manifest schema does
-not imply creating a permanent `plugin-host/N` chain.
+V5 and v6 use `convax.plugin-capability/1`. V7 negotiates
+`convax.plugin-capability/2` for two new, narrow node-scoped capabilities while
+leaving the published v1 method set unchanged. Creating a later manifest schema
+does not imply creating a permanent `plugin-host/N` chain.
 
 The grants are independent:
 
@@ -53,6 +55,34 @@ The grants are independent:
 - `canvas.document.read` reads a document projection and queries nodes.
 - `canvas.document.write` executes an atomic document transaction.
 - `canvas.events.subscribe` receives revision-only invalidations.
+
+## Declarative own-node materialization
+
+`convax.plugin/7` may contribute a video selection action whose fixed action is
+`materialize-own-plugin-node` with `selection-to-created`. The renderer sends only
+the installed Plugin id/version, action id, source id and Canvas revision. Main
+re-resolves the exact installed manifest under its publication lock, derives the
+target renderer node from that principal, and executes the generic
+`nodes.materialize-connected` Canvas business command. Canvas validates the source
+kind, chooses open placement, creates the node and source-to-created edge in one CAS
+commit, and never modifies or removes the source. The manifest cannot name another
+Plugin as the target and the action grants no general document-write capability.
+
+## Connected-media preview
+
+`canvas.connectedMedia.stream` is v7-only. A live Plugin frame can open a short-lived
+session for one direct incoming managed audio/video node and explicitly close it.
+The response contains a pathless media URL and probe facts. The dedicated protocol
+supports GET/HEAD and single byte ranges; it never returns a native or Project path
+and never encodes the whole resource as a data URL.
+
+Main binds each session to the renderer sender, frame instance, exact Plugin digest,
+Project, Canvas revision, owner node, direct edge, source resource reference and file
+identity. Every request revalidates those facts. Canvas commits, edge/source changes,
+frame destruction, Plugin update/uninstall, explicit close and expiry revoke access.
+Session counts, idle/absolute lifetime and media size are bounded. The Plugin asset
+CSP admits `convax-connected-media:` only when the exact installed v7 surface has
+the stream grant.
 
 Without `projects.read`, a Web connection is limited to the Project that presented
 the frame. Every document call still carries `{ projectId, canvasId }`; the broker

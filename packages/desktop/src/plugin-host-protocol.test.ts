@@ -7,12 +7,29 @@ import {
   desktopPluginHostProtocolV4,
   isDesktopPluginHostRequest,
   pluginCapabilityProtocolV1,
+  pluginCapabilityProtocolV2,
   pluginHostFailure,
   pluginHostSuccess,
 } from "./plugin-host-protocol"
 
 describe("desktop plugin host protocol", () => {
   test("accepts only versioned, known host methods", () => {
+    expect(
+      isDesktopPluginHostRequest({
+        id: "request-media",
+        method: "canvas.connectedMedia.open",
+        protocol: pluginCapabilityProtocolV2,
+        type: "request",
+      }),
+    ).toBeTrue()
+    expect(
+      isDesktopPluginHostRequest({
+        id: "request-media",
+        method: "canvas.connectedMedia.open",
+        protocol: pluginCapabilityProtocolV1,
+        type: "request",
+      }),
+    ).toBeFalse()
     expect(
       isDesktopPluginHostRequest({
         id: "request-1",
@@ -152,6 +169,7 @@ describe("desktop plugin host protocol", () => {
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/4")).toBe(desktopPluginHostProtocolV4)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/5")).toBe(pluginCapabilityProtocolV1)
     expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/6")).toBe(pluginCapabilityProtocolV1)
+    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/7")).toBe(pluginCapabilityProtocolV2)
     expect(pluginHostSuccess("request-v2", {}, desktopPluginHostProtocolV2)).toMatchObject({
       protocol: desktopPluginHostProtocolV2,
     })

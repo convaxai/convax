@@ -391,6 +391,8 @@ export interface CanvasEditorHandle {
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
+  /** Selects existing nodes after a host-owned mutation has been reloaded. */
+  selectNodes: (nodeIds: readonly string[]) => void
 }
 
 export interface CanvasResourceMutationScopeToken {
@@ -1731,76 +1733,79 @@ function CanvasEditorContent(
     },
     [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad],
   )
-  const reloadAuthoritativeDocument = useCallback((signal?: AbortSignal) => {
-    if (!persistenceService) {
-      return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
-    }
-    selectionActionControllerRef.current?.abort()
-    return reloadQueueRef.current.request(async () => {
-      if (signal?.aborted) return
-      const reloadScope = resourceMutationScopeRef.current
-      const loadBarrier = createCanvasLoadBarrier()
-      loadBarrierRef.current = loadBarrier
-      hydratingRef.current = true
-      setHydrating(true)
-      setLoadError(null)
-      const controller = new AbortController()
-      abortCanvasReload(reloadControllerRef.current)
-      reloadControllerRef.current = controller
-      const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
-      operationControllersRef.current.add(controller)
-      let rendered: Promise<void> | undefined
-      try {
-        if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-        const documentId = documentRef.current.id
-        // Main has already committed the authoritative document. Never persist the stale renderer projection here.
-        const document = await persistenceService.load(documentId, controller.signal)
-        if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-        if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
-        if (
-          document.id !== documentId ||
-          documentRef.current.id !== documentId ||
-          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
-        ) {
-          throw new Error("Canvas changed while loading the authoritative document")
-        }
-        rendered = waitForAuthoritativeRender(document)
-        acceptHydratedDocument(document)
-        loadBarrier.resolve()
-      } catch (error) {
-        if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
-          loadBarrier.resolve()
-          return
-        }
-        loadBarrier.reject(error)
-        runCanvasReloadScopeEffect({
-          currentScope: () => resourceMutationScopeRef.current,
-          effect: () => {
-            setLoadError(error instanceof Error ? error.message : String(error))
-            notifyError("Could not load authoritative canvas", error)
-          },
-          reloadScope,
-        })
-        throw error
-      } finally {
-        unlinkAbortSignal()
-        if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
-        if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
-          loadBarrierRef.current = createCanvasLoadBarrier(true)
-        }
-        runCanvasReloadScopeEffect({
-          currentScope: () => resourceMutationScopeRef.current,
-          effect: () => {
-            hydratingRef.current = false
-            setHydrating(false)
-          },
-          reloadScope,
-        })
-        operationControllersRef.current.delete(controller)
+  const reloadAuthoritativeDocument = useCallback(
+    (signal?: AbortSignal) => {
+      if (!persistenceService) {
+        return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
       }
-      await rendered
-    })
-  }, [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender])
+      selectionActionControllerRef.current?.abort()
+      return reloadQueueRef.current.request(async () => {
+        if (signal?.aborted) return
+        const reloadScope = resourceMutationScopeRef.current
+        const loadBarrier = createCanvasLoadBarrier()
+        loadBarrierRef.current = loadBarrier
+        hydratingRef.current = true
+        setHydrating(true)
+        setLoadError(null)
+        const controller = new AbortController()
+        abortCanvasReload(reloadControllerRef.current)
+        reloadControllerRef.current = controller
+        const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
+        operationControllersRef.current.add(controller)
+        let rendered: Promise<void> | undefined
+        try {
+          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
+          const documentId = documentRef.current.id
+          // Main has already committed the authoritative document. Never persist the stale renderer projection here.
+          const document = await persistenceService.load(documentId, controller.signal)
+          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
+          if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
+          if (
+            document.id !== documentId ||
+            documentRef.current.id !== documentId ||
+            !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
+          ) {
+            throw new Error("Canvas changed while loading the authoritative document")
+          }
+          rendered = waitForAuthoritativeRender(document)
+          acceptHydratedDocument(document)
+          loadBarrier.resolve()
+        } catch (error) {
+          if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+            loadBarrier.resolve()
+            return
+          }
+          loadBarrier.reject(error)
+          runCanvasReloadScopeEffect({
+            currentScope: () => resourceMutationScopeRef.current,
+            effect: () => {
+              setLoadError(error instanceof Error ? error.message : String(error))
+              notifyError("Could not load authoritative canvas", error)
+            },
+            reloadScope,
+          })
+          throw error
+        } finally {
+          unlinkAbortSignal()
+          if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
+          if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
+            loadBarrierRef.current = createCanvasLoadBarrier(true)
+          }
+          runCanvasReloadScopeEffect({
+            currentScope: () => resourceMutationScopeRef.current,
+            effect: () => {
+              hydratingRef.current = false
+              setHydrating(false)
+            },
+            reloadScope,
+          })
+          operationControllersRef.current.delete(controller)
+        }
+        await rendered
+      })
+    },
+    [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender],
+  )
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
@@ -2144,6 +2149,9 @@ function CanvasEditorContent(
         leavingRef.current = false
         setLeaving(false)
       },
+      selectNodes(nodeIds) {
+        selectNodes(nodeIds)
+      },
     }),
     [
       abortPendingOperations,
@@ -2154,6 +2162,7 @@ function CanvasEditorContent(
       reloadDocument,
       reloadAuthoritativeDocument,
       resourceRefreshController,
+      selectNodes,
       startSave,
       waitForStableLoad,
     ],
