@@ -192,6 +192,7 @@ boundary checker fails closed until those admissions are complete.
 | Active Canvas/file                                       | `WorkbenchController.activeInput/surface`    | Sole source for the displayed primary content                            |
 | Canvas node selection                                    | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view                            |
 | Canvas document and revision                             | Main Canvas application service/repository   | Sole persistent writer; renderer is an optimistic projection             |
+| Node generation preference and latest run                | Owning Canvas `file` node                    | Separate bounded Canvas-owned namespaces; Main coordinates live work     |
 | Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage |
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence               |
 | Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
@@ -519,12 +520,42 @@ Agent default or persisted card override fails closed. This output constraint is
 independent from Agent-mode references, where an explicitly mentioned image may
 still be a valid input to a video tool.
 
-A direct file-card generation is transiently owned by that mounted file node, not by
-the selected-card composer. Submit dismisses the composer immediately while the file
-card keeps a pending surface for arbitrarily long non-terminal work. Selection
-changes do not cancel that work; removing the owner or leaving its Canvas disposes
-it. Terminal failures remain recoverable on the card, while success clears the
-transient activity after the normal Canvas business operation commits.
+A direct file-card generation persists a Canvas-owned, versioned run on the target
+node, separate from its next-run tool preference and from Plugin-owned state. The run
+retains the complete prompt, host operation id, resolved host-opaque tool id, bounded
+status, and an optional host-safe opaque sidecar task receipt. Main writes
+`submitting` before the external call, updates lifecycle state through Canvas
+application services, and commits generated resource replacement plus `succeeded`
+in one guarded Canvas CAS. The dedicated target guard omits only the host-owned run
+namespace; it continues to protect real resource content and all other metadata.
+For host-owned pending-result mode, Canvas creates the pending file node and the
+`submitting` run in one application command/CAS. That node then follows the same
+running, task-receipt, guarded replacement, terminal and restart-reconciliation
+state machine as an existing card; a restart cannot leave a placeholder permanently
+pending.
+
+The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
+Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is
+the execution Agent/Worker, and its Main-owned reconciliation phase is the
+Supervisor.
+Canvas run state plus the private Main operation ledger form the durable state
+store. The generic sidecar API is a Long-Running Operation resource with fixed
+get/wait/cancel/result/acknowledge methods. `operationId` is the idempotency key and
+host LRO identity; `taskId` is only an opaque downstream operation handle. Startup
+uses a reconciliation loop, while Canvas revision/CAS and the generation target
+guard provide optimistic concurrency control. The guarantee is stated as at-most-once
+provider task creation plus idempotent observation and result commit, never as an
+unqualified exactly-once architecture.
+
+The mounted node and composer are presentation surfaces, not task owners. Unmount,
+selection changes, and panel switches do not cancel accepted work; explicit cancel
+crosses queue, preparation and sidecar boundaries. Hydration derives active and
+terminal presentation from the persisted run. If startup finds `submitting` or
+`running` without either a matching live Main execution or a complete admitted LRO
+binding, it marks the run `interrupted` and never repeats a potentially billable
+call. A persisted task id alone is not restart recovery. A recovery-capable v7 tool
+must provide the complete generic LRO contract and pinned immutable runtime binding;
+partial or legacy implementations remain fail-closed.
 
 The complete manifest, MCP call/result, cancellation and security contract is in
 [`generation-tool-plugins.md`](generation-tool-plugins.md). The concrete local media

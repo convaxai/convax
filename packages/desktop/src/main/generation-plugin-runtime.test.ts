@@ -11,6 +11,7 @@ import {
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
   webPluginManifestSchemaV6,
+  webPluginManifestSchemaV7,
   type InstalledWebPluginSummary,
   type WebPluginGenerationModality,
 } from "../plugin-contracts"
@@ -29,6 +30,7 @@ import {
 } from "./generation-plugin-runtime"
 import type { McpToolCallResult, McpToolDefinition, StdioMcpClientOptions } from "./stdio-mcp-client"
 import { pluginServiceBrowserAuthorizationCompletionSchema } from "./plugin-service-browser-authorization"
+import type { GenerationRecoveryMethod, GenerationRecoveryRequest } from "./generation-recovery-protocol"
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { toolPluginAuthorizationIdentity } from "./tool-plugin-authorizations"
 import { toolPluginCanvasMcpMethods } from "./tool-plugin-canvas-capabilities"
@@ -100,7 +102,8 @@ function declarativeGenerationPlugin(
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
     | typeof webPluginManifestSchemaV5
-    | typeof webPluginManifestSchemaV6 = webPluginManifestSchemaV3,
+    | typeof webPluginManifestSchemaV6
+    | typeof webPluginManifestSchemaV7 = webPluginManifestSchemaV3,
 ): InstalledWebPluginSummary {
   return {
     capabilities: [],
@@ -114,6 +117,14 @@ function declarativeGenerationPlugin(
             description: "Generate image",
             id: "generate.image",
             output: "image",
+            ...(schema === webPluginManifestSchemaV7
+              ? {
+                  recovery: {
+                    mode: "long-running-operation" as const,
+                    schema: "convax.generation-lro/1" as const,
+                  },
+                }
+              : {}),
             title: "Image generation tool",
           },
           {
@@ -198,15 +209,16 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   readonly forcedCloses: boolean[] = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
+  readonly recoveryCalls: Array<{ input: unknown; method: string }> = []
 
   async callTool(
     name: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-    onRequestStart?: () => void,
+    lifecycleObserver?: import("./stdio-mcp-client").GenerationToolLifecycleObserver,
     requestTimeoutMs?: number | false,
   ): Promise<McpToolCallResult> {
-    onRequestStart?.()
+    await lifecycleObserver?.({ type: "external-started" })
     this.calls.push({ input, name, requestTimeoutMs, signal })
     if (name === "llm.gateway.start") {
       return {
@@ -224,6 +236,26 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   close(force = false) {
     this.closed += 1
     this.forcedCloses.push(force)
+  }
+
+  async generationRecoveryCapability() {
+    return {
+      binding: "test-account-binding",
+      mode: "long-running-operation" as const,
+      schema: "convax.generation-lro/1" as const,
+    }
+  }
+
+  async callGenerationRecovery(method: GenerationRecoveryMethod, input: Omit<GenerationRecoveryRequest, "schema">) {
+    this.recoveryCalls.push({ input, method })
+    if (method === "convax/generation/operations/acknowledge") {
+      return { acknowledged: true, schema: "convax.generation-lro-acknowledgement/1" }
+    }
+    return {
+      schema: "convax.generation-lro-snapshot/1",
+      status: "running",
+      taskId: "task_123",
+    }
   }
 
   async listTools(signal?: AbortSignal) {
@@ -250,7 +282,13 @@ function setup(
   }),
   runtimeOptions: Pick<
     GenerationPluginRuntimeOptions,
-    "bunRuntime" | "canvasCapabilities" | "materializeExecutable" | "platform" | "resolveManagedExecutable"
+    | "bunRuntime"
+    | "canvasCapabilities"
+    | "materializeExecutable"
+    | "platform"
+    | "recoveryRuntimeDirectory"
+    | "recoveryStateDirectory"
+    | "resolveManagedExecutable"
   > = {},
 ) {
   const plugins = new FakePluginSource()
@@ -384,6 +422,87 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients).toHaveLength(0)
+  })
+
+  test("admits a v7 LRO only after the runtime handshake and binds fixed control calls", async () => {
+    const { clients, runtime } = setup([declarativeGenerationPlugin(webPluginManifestSchemaV7)])
+    const summary = (await runtime.listTools()).find((tool) => tool.toolId === "generate.image")!
+    expect(summary.recovery).toBe("long-running-operation")
+    const prepared = await runtime.prepareTool(summary)
+    expect(prepared.recovery).toMatchObject({
+      bindingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      executionBindingDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      pluginPackageDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      runtimeAuthorizationDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(
+      await prepared.recovery!.get({
+        operationId: "operation-one",
+        requestDigest: "a".repeat(64),
+      }),
+    ).toMatchObject({ status: "running", taskId: "task_123" })
+    await prepared.recovery!.acknowledge({
+      operationId: "operation-one",
+      requestDigest: "a".repeat(64),
+      taskId: "task_123",
+    })
+    expect(clients[0]!.recoveryCalls.map((call) => call.method)).toEqual([
+      "convax/generation/operations/get",
+      "convax/generation/operations/acknowledge",
+    ])
+  })
+
+  test("recovers through pinned authorized bytes after the Plugin is removed and its source changes", async () => {
+    if (process.platform === "win32") return
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-pinned-recovery-runtime-test-"))
+    const executable = path.join(directory, "sidecar")
+    const original = Buffer.from("#!/bin/sh\nexit 0\n")
+    try {
+      await fs.writeFile(executable, original, { mode: 0o700 })
+      const setupResult = setup(
+        [declarativeGenerationPlugin(webPluginManifestSchemaV7)],
+        ["generate.image"],
+        async () => undefined,
+        async () => ({
+          path: executable,
+          sha256: createHash("sha256").update(original).digest("hex"),
+          size: original.byteLength,
+        }),
+        {
+          materializeExecutable: materializeGenerationPluginExecutable,
+          recoveryRuntimeDirectory: path.join(directory, "runtime-v1"),
+          recoveryStateDirectory: path.join(directory, "operation-v1"),
+        },
+      )
+      const summary = (await setupResult.runtime.listTools()).find((entry) => entry.recovery)!
+      const live = await setupResult.runtime.prepareTool(summary)
+      const binding = {
+        executionBindingDigest: live.recovery!.executionBindingDigest,
+        pluginPackageDigest: live.recovery!.pluginPackageDigest,
+        runtimeAuthorizationDigest: live.recovery!.runtimeAuthorizationDigest,
+        sidecarRecoveryBindingDigest: live.recovery!.bindingDigest,
+        toolId: summary.id,
+      }
+      setupResult.plugins.installed = []
+      await setupResult.runtime.listTools()
+      await fs.writeFile(executable, "#!/bin/sh\nexit 9\n", { mode: 0o700 })
+
+      const pinned = await setupResult.runtime.prepareRecoveryTool(binding)
+      expect(pinned.tool).toEqual(summary)
+      expect(
+        await pinned.execution.recovery!.get({
+          operationId: "operation-one",
+          requestDigest: "a".repeat(64),
+        }),
+      ).toMatchObject({ status: "running", taskId: "task_123" })
+      expect(setupResult.clients).toHaveLength(2)
+      expect(setupResult.options[1]!.command).not.toBe(executable)
+      expect(setupResult.options[1]!.command).toContain(path.join("runtime-v1", binding.executionBindingDigest))
+      setupResult.runtime.dispose()
+      runtimes.delete(setupResult.runtime)
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
   })
 
   test("preserves declarative generation, operation, and service behavior for v4 Plugins with owned Skills", async () => {
@@ -893,6 +1012,54 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0].calls).toHaveLength(2)
   })
 
+  test("injects one private binding-scoped recovery journal directory without exposing its identity", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-generation-recovery-state-test-"))
+    const root = path.join(parent, "operation-v1")
+    try {
+      const { options, runtime } = setup(
+        [declarativeGenerationPlugin(webPluginManifestSchemaV7)],
+        ["generate.image"],
+        async () => undefined,
+        undefined,
+        { recoveryStateDirectory: root },
+      )
+      const [tool] = await runtime.listTools()
+      await runtime.prepareTool(tool!)
+      const injected = options[0]?.env?.CONVAX_GENERATION_LRO_DIRECTORY
+      const realRoot = await fs.realpath(root)
+      expect(injected).toMatch(new RegExp(`^${realRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[a-f0-9]{64}$`))
+      expect((await fs.stat(realRoot)).mode & 0o777).toBe(0o700)
+      expect((await fs.stat(injected!)).mode & 0o777).toBe(0o700)
+      expect(path.basename(injected!)).not.toContain("image-tools")
+      expect(options[0]?.env).not.toHaveProperty("SECRET_API_KEY")
+    } finally {
+      await fs.rm(parent, { force: true, recursive: true })
+    }
+  })
+
+  test("rejects a symbolic recovery journal root before starting the sidecar", async () => {
+    if (process.platform === "win32") return
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "convax-generation-recovery-symlink-test-"))
+    const real = path.join(parent, "real")
+    const linked = path.join(parent, "linked")
+    try {
+      await fs.mkdir(real, { mode: 0o700 })
+      await fs.symlink(real, linked)
+      const { clients, runtime } = setup(
+        [declarativeGenerationPlugin(webPluginManifestSchemaV7)],
+        ["generate.image"],
+        async () => undefined,
+        undefined,
+        { recoveryStateDirectory: linked },
+      )
+      const [tool] = await runtime.listTools()
+      await expect(runtime.prepareTool(tool!)).rejects.toThrow("must be a real directory")
+      expect(clients).toHaveLength(0)
+    } finally {
+      await fs.rm(parent, { force: true, recursive: true })
+    }
+  })
+
   test("prefers the Plugin/version-scoped managed companion over the explicit PATH fallback", async () => {
     const managedCalls: Array<[string, string, string]> = []
     let pathCalls = 0
@@ -1141,6 +1308,21 @@ describe("GenerationPluginRuntime", () => {
     await expect(prepared.call({ prompt: "must not reach the replacement" })).rejects.toThrow(
       "changed while inputs were being staged",
     )
+    expect(clients[0].calls).toHaveLength(0)
+  })
+
+  test("revalidates a prepared execution after external-started before writing tools/call", async () => {
+    const { clients, plugins, runtime } = setup()
+    const [declared] = await runtime.listTools()
+    const prepared = await runtime.prepareTool(declared!)
+
+    await expect(
+      prepared.call({ prompt: "must remain unbilled" }, undefined, async (event) => {
+        if (event.type === "external-started") {
+          plugins.installed = [generationPlugin({ output: "video", version: "2.0.0" })]
+        }
+      }),
+    ).rejects.toThrow("changed before the external call")
     expect(clients[0].calls).toHaveLength(0)
   })
 

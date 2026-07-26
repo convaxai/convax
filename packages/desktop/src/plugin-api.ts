@@ -25,4 +25,5 @@ export {
   webPluginManifestSchemaV4 as pluginManifestSchemaV4,
   webPluginManifestSchemaV5 as pluginManifestSchemaV5,
   webPluginManifestSchemaV6 as pluginManifestSchemaV6,
+  webPluginManifestSchemaV7 as pluginManifestSchemaV7,
 } from "./plugin-contracts"

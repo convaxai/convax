@@ -10,7 +10,7 @@ import {
 
 describe("desktop IPC protocol compatibility", () => {
   test("tracks the Desktop preload bridge contract", () => {
-    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/21")
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/22")
     expect(canvasResourceIpcChannel).toBe("canvas:resource-add")
     expect(canvasResourceHydrateStaleIpcChannel).toBe("canvas:resource-hydrate-stale")
     expect(canvasResourceReadConnectedImageIpcChannel).toBe("canvas:resource-read-connected-image")

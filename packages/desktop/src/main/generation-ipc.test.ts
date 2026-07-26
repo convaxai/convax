@@ -124,12 +124,6 @@ function invoke(channel: string, input: unknown, source = new TestSender(1)) {
   return handler({ sender: source }, input)
 }
 
-function send(channel: string, input: unknown, source = new TestSender(1)) {
-  const listener = listeners.get(channel)
-  if (!listener) throw new Error(`Missing IPC listener: ${channel}`)
-  listener({ sender: source }, input)
-}
-
 function rejectWhenAborted(signal?: AbortSignal) {
   return new Promise<GenerationCanvasResult>((_resolve, reject) => {
     if (!signal) return reject(new Error("Missing AbortSignal"))
@@ -148,6 +142,40 @@ async function rejectionMessage(value: unknown) {
 }
 
 describe("generation IPC", () => {
+  test("reconciles one exact Canvas reference without exposing paths or resume controls", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const reconcileCanvas = mock(async () => ({ interruptedNodeIds: ["node-one"], revision: 8 }))
+    const dispose = registerGenerationIpc(
+      {
+        describeTool: async () => description,
+        generate: async () => result,
+        listTools: async () => [tool],
+        reconcileCanvas,
+      },
+      { isTrustedSender: (event) => event.sender.id === 1 },
+    )
+
+    await expect(
+      Promise.resolve(
+        invoke(generationIpcChannels.reconcileCanvas, {
+          ref: { canvasId: "canvas-one", scopeId: "project-one" },
+        }),
+      ),
+    ).resolves.toEqual({ interruptedNodeIds: ["node-one"], revision: 8 })
+    expect(reconcileCanvas).toHaveBeenCalledWith({ ref: { canvasId: "canvas-one", scopeId: "project-one" } })
+    await expect(
+      rejectionMessage(
+        Promise.resolve().then(() =>
+          invoke(generationIpcChannels.reconcileCanvas, {
+            ref: { canvasId: "canvas-one", scopeId: "project-one" },
+            resume: true,
+          }),
+        ),
+      ),
+    ).resolves.toContain("reconciliation request is invalid")
+    dispose()
+  })
+
   test("lists tools through a narrow, trusted and validated request", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const listTools = mock(async (_input: GenerationListToolsRequest) => [tool])
@@ -313,15 +341,48 @@ describe("generation IPC", () => {
     const otherOwner = new TestSender(2)
     const otherPending = Promise.resolve(invoke(generationIpcChannels.generate, request, otherOwner))
     const otherRejection = rejectionMessage(otherPending)
-    send(generationIpcChannels.cancel, { operationId: request.operationId }, otherOwner)
+    await invoke(generationIpcChannels.cancel, { operationId: request.operationId }, otherOwner)
     expect(await otherRejection).toContain("canceled")
     expect(capturedSignals[0]?.aborted).toBeFalse()
-    send(generationIpcChannels.cancel, { operationId: request.operationId }, owner)
+    await invoke(generationIpcChannels.cancel, { operationId: request.operationId }, owner)
     expect(await ownerRejection).toContain("canceled")
     expect(generate).toHaveBeenCalledTimes(2)
     expect(owner.listenerCount("destroyed")).toBe(0)
     expect(otherOwner.listenerCount("destroyed")).toBe(0)
 
+    dispose()
+  })
+
+  test("routes cancellation to Main recovery when no live renderer call owns the operation", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const cancel = mock(async () => undefined)
+    const dispose = registerGenerationIpc(
+      {
+        cancel,
+        describeTool: async () => description,
+        generate: async () => result,
+        listTools: async () => [],
+      },
+      { isTrustedSender: (event) => event.sender.id === 1 },
+    )
+
+    await expect(
+      Promise.resolve(
+        invoke(generationIpcChannels.cancel, {
+          operationId: "operation-after-restart",
+        }),
+      ),
+    ).resolves.toBeUndefined()
+    expect(cancel).toHaveBeenCalledWith({ operationId: "operation-after-restart" })
+    await expect(
+      Promise.resolve(
+        invoke(
+          generationIpcChannels.cancel,
+          { operationId: "operation-after-restart" },
+          new TestSender(2),
+        ),
+      ),
+    ).rejects.toThrow("untrusted")
     dispose()
   })
 
@@ -431,8 +492,14 @@ describe("generation IPC", () => {
     expect(await thirdOutcome).toMatchObject({ name: "AbortError" })
     expect(thirdOwner.listenerCount("destroyed")).toBe(0)
     expect(removedHandlers.sort()).toEqual(
-      [generationIpcChannels.describeTool, generationIpcChannels.generate, generationIpcChannels.listTools].sort(),
+      [
+        generationIpcChannels.cancel,
+        generationIpcChannels.describeTool,
+        generationIpcChannels.generate,
+        generationIpcChannels.listTools,
+        generationIpcChannels.reconcileCanvas,
+      ].sort(),
     )
-    expect(removedListeners).toEqual([generationIpcChannels.cancel])
+    expect(removedListeners).toEqual([])
   })
 })

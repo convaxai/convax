@@ -5,6 +5,7 @@ export const webPluginManifestSchemaV3 = "convax.plugin/3" as const
 export const webPluginManifestSchemaV4 = "convax.plugin/4" as const
 export const webPluginManifestSchemaV5 = "convax.plugin/5" as const
 export const webPluginManifestSchemaV6 = "convax.plugin/6" as const
+export const webPluginManifestSchemaV7 = "convax.plugin/7" as const
 
 export type WebPluginManifestSchema =
   | typeof webPluginManifestSchema
@@ -13,6 +14,7 @@ export type WebPluginManifestSchema =
   | typeof webPluginManifestSchemaV4
   | typeof webPluginManifestSchemaV5
   | typeof webPluginManifestSchemaV6
+  | typeof webPluginManifestSchemaV7
 
 export const webPluginCapabilities = [
   "canvas.connectedImages.read",
@@ -75,6 +77,11 @@ export type WebPluginGenerationInputRole = (typeof webPluginGenerationInputRoles
 export type WebPluginGenerationDelivery = "canvas" | "return"
 export type WebPluginGenerationInputBinding = "direct-incoming"
 
+export interface WebPluginGenerationRecoveryContribution {
+  mode: "long-running-operation"
+  schema: "convax.generation-lro/1"
+}
+
 export const webPluginServiceActions = ["authorize", "reauthorize", "authorization.cancel", "sign_out"] as const
 
 export type WebPluginServiceAction = (typeof webPluginServiceActions)[number]
@@ -98,6 +105,8 @@ export interface WebPluginGenerationToolContribution {
   /** Host-enforced Canvas relationship from an exact Plugin owner node to every supplied reference. */
   inputBinding?: WebPluginGenerationInputBinding
   output: WebPluginGenerationModality
+  /** Durable LRO supervision is admitted only by convax.plugin/7 and later. */
+  recovery?: WebPluginGenerationRecoveryContribution
   title: string
 }
 
@@ -663,14 +672,16 @@ function parseGeneration(
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
     | typeof webPluginManifestSchemaV5
-    | typeof webPluginManifestSchemaV6,
+    | typeof webPluginManifestSchemaV6
+    | typeof webPluginManifestSchemaV7,
 ): WebPluginGenerationContribution {
   const input = asRecord(value, "Generation contribution")
   const declarativeSchema =
     schema === webPluginManifestSchemaV3 ||
     schema === webPluginManifestSchemaV4 ||
     schema === webPluginManifestSchemaV5 ||
-    schema === webPluginManifestSchemaV6
+    schema === webPluginManifestSchemaV6 ||
+    schema === webPluginManifestSchemaV7
   assertKeys(input, declarativeSchema ? ["models", "tools"] : ["tools"], "Generation contribution")
   if (declarativeSchema && !Object.prototype.hasOwnProperty.call(input, "models")) {
     throw new Error(`${schema} generation models must be declared explicitly`)
@@ -684,11 +695,12 @@ function parseGeneration(
       tool,
       [
         "acceptedInputs",
-        ...(schema === webPluginManifestSchemaV6 ? ["delivery"] : []),
+        ...(schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7 ? ["delivery"] : []),
         "description",
         "id",
-        ...(schema === webPluginManifestSchemaV6 ? ["inputBinding"] : []),
+        ...(schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7 ? ["inputBinding"] : []),
         "output",
+        ...(schema === webPluginManifestSchemaV7 ? ["recovery"] : []),
         "title",
       ],
       `Generation tool ${index}`,
@@ -710,6 +722,18 @@ function parseGeneration(
     if (tool.inputBinding === "direct-incoming" && acceptedInputs.length === 0) {
       throw new Error(`Generation tool ${index} direct-incoming input binding requires accepted inputs`)
     }
+    let recovery: WebPluginGenerationRecoveryContribution | undefined
+    if (tool.recovery !== undefined) {
+      const recoveryInput = asRecord(tool.recovery, `Generation tool ${index} recovery`)
+      assertKeys(recoveryInput, ["mode", "schema"], `Generation tool ${index} recovery`)
+      if (recoveryInput.schema !== "convax.generation-lro/1" || recoveryInput.mode !== "long-running-operation") {
+        throw new Error(`Generation tool ${index} recovery contract is not supported`)
+      }
+      recovery = {
+        mode: "long-running-operation",
+        schema: "convax.generation-lro/1",
+      }
+    }
     return {
       acceptedInputs,
       ...(tool.delivery === undefined ? {} : { delivery: tool.delivery as WebPluginGenerationDelivery }),
@@ -719,6 +743,7 @@ function parseGeneration(
         ? {}
         : { inputBinding: tool.inputBinding as WebPluginGenerationInputBinding }),
       output: tool.output,
+      ...(recovery === undefined ? {} : { recovery }),
       title: requireString(tool.title, `Generation tool ${index} title`, 120),
     }
   })
@@ -871,10 +896,11 @@ function parseAgent(
     | typeof webPluginManifestSchemaV3
     | typeof webPluginManifestSchemaV4
     | typeof webPluginManifestSchemaV5
-    | typeof webPluginManifestSchemaV6,
+    | typeof webPluginManifestSchemaV6
+    | typeof webPluginManifestSchemaV7,
 ): WebPluginAgentContribution {
   const input = asRecord(value, "Agent contribution")
-  const remoteSchema = schema === webPluginManifestSchemaV6
+  const remoteSchema = schema === webPluginManifestSchemaV6 || schema === webPluginManifestSchemaV7
   assertKeys(input, remoteSchema ? ["mcp", "tools"] : ["tools"], "Agent contribution")
   const tools = input.tools === undefined ? undefined : parseAgentTools(input.tools)
   const mcp = remoteSchema && input.mcp !== undefined ? parseAgentRemoteMcp(input.mcp) : undefined
@@ -1003,7 +1029,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     schema !== webPluginManifestSchemaV3 &&
     schema !== webPluginManifestSchemaV4 &&
     schema !== webPluginManifestSchemaV5 &&
-    schema !== webPluginManifestSchemaV6
+    schema !== webPluginManifestSchemaV6 &&
+    schema !== webPluginManifestSchemaV7
   ) {
     throw new Error("Plugin manifest schema is not supported")
   }
@@ -1012,14 +1039,19 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     schema === webPluginManifestSchemaV3 ||
     schema === webPluginManifestSchemaV4 ||
     schema === webPluginManifestSchemaV5 ||
-    schema === webPluginManifestSchemaV6
+    schema === webPluginManifestSchemaV6 ||
+    schema === webPluginManifestSchemaV7
   const declarativeSchema =
     schema === webPluginManifestSchemaV3 ||
     schema === webPluginManifestSchemaV4 ||
     schema === webPluginManifestSchemaV5 ||
-    schema === webPluginManifestSchemaV6
+    schema === webPluginManifestSchemaV6 ||
+    schema === webPluginManifestSchemaV7
   const ownsSkills =
-    schema === webPluginManifestSchemaV4 || schema === webPluginManifestSchemaV5 || schema === webPluginManifestSchemaV6
+    schema === webPluginManifestSchemaV4 ||
+    schema === webPluginManifestSchemaV5 ||
+    schema === webPluginManifestSchemaV6 ||
+    schema === webPluginManifestSchemaV7
   assertKeys(
     input,
     [
@@ -1063,6 +1095,7 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (
     schema !== webPluginManifestSchemaV5 &&
     schema !== webPluginManifestSchemaV6 &&
+    schema !== webPluginManifestSchemaV7 &&
     capabilities.some((capability) => projectCanvasCapabilities.has(capability))
   ) {
     throw new Error("Project-wide Canvas capabilities are available only to convax.plugin/5 and later")
@@ -1071,7 +1104,11 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
   if (schema !== webPluginManifestSchemaV5 && capabilities.some((capability) => petCapabilities.has(capability))) {
     throw new Error("Pet capabilities are available only to convax.plugin/5")
   }
-  if (schema !== webPluginManifestSchemaV6 && capabilities.includes("canvas.connectedInputs.read")) {
+  if (
+    schema !== webPluginManifestSchemaV6 &&
+    schema !== webPluginManifestSchemaV7 &&
+    capabilities.includes("canvas.connectedInputs.read")
+  ) {
     throw new Error("Connected-input metadata is available only to convax.plugin/6 and later")
   }
   const hasProjectCanvasCapability = capabilities.some((capability) => projectCanvasCapabilities.has(capability))
@@ -1081,7 +1118,11 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
     [
       "canvas",
       ...(executableSchema ? ["generation", "service"] : []),
-      ...(schema === webPluginManifestSchemaV5 || schema === webPluginManifestSchemaV6 ? ["llm"] : []),
+      ...(schema === webPluginManifestSchemaV5 ||
+      schema === webPluginManifestSchemaV6 ||
+      schema === webPluginManifestSchemaV7
+        ? ["llm"]
+        : []),
       ...(schema === webPluginManifestSchemaV5 ? ["pet"] : []),
       ...(declarativeSchema ? ["agent"] : []),
       ...(ownsSkills ? ["skills"] : []),
@@ -1155,7 +1196,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
             | typeof webPluginManifestSchemaV3
             | typeof webPluginManifestSchemaV4
             | typeof webPluginManifestSchemaV5
-            | typeof webPluginManifestSchemaV6,
+            | typeof webPluginManifestSchemaV6
+            | typeof webPluginManifestSchemaV7,
         )
       : undefined
   if (
@@ -1179,7 +1221,8 @@ export function parseWebPluginManifest(value: unknown): WebPluginManifest {
           | typeof webPluginManifestSchemaV3
           | typeof webPluginManifestSchemaV4
           | typeof webPluginManifestSchemaV5
-          | typeof webPluginManifestSchemaV6,
+          | typeof webPluginManifestSchemaV6
+          | typeof webPluginManifestSchemaV7,
       )
     : undefined
   const service = hasServiceContribution ? parseService(contributes.service) : undefined

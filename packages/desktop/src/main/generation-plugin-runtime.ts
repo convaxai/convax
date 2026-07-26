@@ -18,16 +18,32 @@ import {
   webPluginManifestSchemaV4,
   webPluginManifestSchemaV5,
   webPluginManifestSchemaV6,
+  webPluginManifestSchemaV7,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
   type WebPluginServiceAction,
 } from "../plugin-contracts"
 import {
   StdioMcpClient,
+  type GenerationToolOperationMetadata,
+  type GenerationToolLifecycleObserver,
   type McpToolCallResult,
   type McpToolDefinition,
   type StdioMcpClientOptions,
+  normalizeMcpToolCallResult,
 } from "./stdio-mcp-client"
+import {
+  type GenerationRecoveryCapability,
+  type GenerationRecoveryMethod,
+  type GenerationRecoveryRequest,
+  type GenerationRecoverySnapshot,
+  generationLroMethods,
+  normalizeGenerationRecoverySnapshot,
+} from "./generation-recovery-protocol"
+import {
+  GenerationRecoveryRuntimeStore,
+  type GenerationRecoveryRuntimeRecord,
+} from "./generation-recovery-runtime-store"
 import {
   toolPluginAuthorizationIdentity,
   toolPluginManifestSha256,
@@ -52,10 +68,17 @@ export interface GenerationPluginMcpClient {
     name: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-    onRequestStart?: () => void,
+    lifecycleObserver?: GenerationToolLifecycleObserver,
     requestTimeoutMs?: number | false,
+    operation?: GenerationToolOperationMetadata,
   ): Promise<McpToolCallResult>
+  callGenerationRecovery?(
+    method: GenerationRecoveryMethod,
+    input: Omit<GenerationRecoveryRequest, "schema">,
+    signal?: AbortSignal,
+  ): Promise<unknown>
   close(force?: boolean): void
+  generationRecoveryCapability?(signal?: AbortSignal): Promise<GenerationRecoveryCapability | undefined>
   listTools(signal?: AbortSignal): Promise<readonly McpToolDefinition[]>
 }
 
@@ -130,6 +153,13 @@ export interface GenerationPluginRuntimeOptions {
   materializeExecutable?: GenerationPluginExecutableMaterializer
   /** Resolves a Registry-managed, host-owned companion before the explicit PATH fallback. */
   resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
+  /**
+   * Main-private root used by recovery-capable sidecars for durable operation
+   * journals. A binding-scoped child is injected only into the sidecar process.
+   */
+  recoveryStateDirectory?: string
+  /** Main-private immutable executable snapshots retained for active recovery ledgers. */
+  recoveryRuntimeDirectory?: string
   /** Test seam; Windows execution fails closed until the host owns a Job Object. */
   platform?: NodeJS.Platform
   /** Verifies installation-time consent for this exact declaration and executable. */
@@ -148,11 +178,14 @@ interface DiscoveredPlugin {
 interface CachedPluginRuntime {
   authorizationIdentity: string
   availableTools?: ReadonlyMap<string, McpToolDefinition>
+  bindingKind: ToolPluginExecutableBindingKind
   canvasCapabilities?: ToolPluginCanvasMcpBridge
   client: GenerationPluginMcpClient
   executableSnapshot: GenerationPluginExecutableSnapshot
   fingerprint: string
+  plugin: InstalledWebPluginSummary
   pluginId: string
+  sourceBinding: GenerationPluginExecutableBinding
 }
 
 interface PreparedPluginTool {
@@ -163,6 +196,30 @@ interface PreparedPluginTool {
   pluginFingerprint: string
   pluginId: string
   runtime: CachedPluginRuntime
+  recovery?: PreparedGenerationRecovery
+  toolId: string
+}
+
+export interface PreparedGenerationRecovery {
+  acknowledge(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<void>
+  bindingDigest: string
+  cancel(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
+  executionBindingDigest: string
+  get(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
+  pluginPackageDigest: string
+  result(
+    input: Omit<GenerationRecoveryRequest, "schema"> & { outputDirectory: string; resultDigest: string },
+    signal?: AbortSignal,
+  ): Promise<{ result: McpToolCallResult; resultDigest: string }>
+  runtimeAuthorizationDigest: string
+  wait(input: Omit<GenerationRecoveryRequest, "schema">, signal?: AbortSignal): Promise<GenerationRecoverySnapshot>
+}
+
+export interface GenerationRecoveryRuntimeBinding {
+  executionBindingDigest: string
+  pluginPackageDigest: string
+  runtimeAuthorizationDigest: string
+  sidecarRecoveryBindingDigest: string
   toolId: string
 }
 
@@ -254,6 +311,37 @@ async function sha256File(filePath: string) {
     stream.once("end", resolve)
   })
   return hash.digest("hex")
+}
+
+async function ensurePlainPrivateDirectory(directory: string, label: string) {
+  try {
+    const current = await fs.lstat(directory)
+    if (current.isSymbolicLink() || !current.isDirectory()) {
+      throw new Error(`${label} must be a real directory`)
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    await fs.mkdir(directory, { mode: 0o700 })
+  }
+  await fs.chmod(directory, 0o700)
+  return fs.realpath(directory)
+}
+
+async function ensureGenerationRecoveryStateDirectory(
+  rootPath: string,
+  pluginId: string,
+  pluginFingerprint: string,
+  runtimeAuthorizationDigest: string,
+) {
+  const parent = await ensurePlainPrivateDirectory(path.dirname(rootPath), "Generation recovery state parent")
+  const root = await ensurePlainPrivateDirectory(
+    path.join(parent, path.basename(rootPath)),
+    "Generation recovery state root",
+  )
+  const bindingKey = createHash("sha256")
+    .update(JSON.stringify([pluginId, pluginFingerprint, runtimeAuthorizationDigest]))
+    .digest("hex")
+  return ensurePlainPrivateDirectory(path.join(root, bindingKey), "Generation recovery binding directory")
 }
 
 /**
@@ -355,13 +443,15 @@ function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is Instal
     | typeof webPluginManifestSchemaV4
     | typeof webPluginManifestSchemaV5
     | typeof webPluginManifestSchemaV6
+    | typeof webPluginManifestSchemaV7
 } {
   return (
     (plugin.schema === webPluginManifestSchemaV2 ||
       plugin.schema === webPluginManifestSchemaV3 ||
       plugin.schema === webPluginManifestSchemaV4 ||
       plugin.schema === webPluginManifestSchemaV5 ||
-      plugin.schema === webPluginManifestSchemaV6) &&
+      plugin.schema === webPluginManifestSchemaV6 ||
+      plugin.schema === webPluginManifestSchemaV7) &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) ||
       plugin.contributes.service !== undefined ||
@@ -377,14 +467,16 @@ function toolSummary(
     plugin.schema === webPluginManifestSchemaV3 ||
     plugin.schema === webPluginManifestSchemaV4 ||
     plugin.schema === webPluginManifestSchemaV5 ||
-    plugin.schema === webPluginManifestSchemaV6
+    plugin.schema === webPluginManifestSchemaV6 ||
+    plugin.schema === webPluginManifestSchemaV7
       ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
       : { name: tool.title, tool: tool.id }
   const agent =
     plugin.schema === webPluginManifestSchemaV3 ||
     plugin.schema === webPluginManifestSchemaV4 ||
     plugin.schema === webPluginManifestSchemaV5 ||
-    plugin.schema === webPluginManifestSchemaV6
+    plugin.schema === webPluginManifestSchemaV6 ||
+    plugin.schema === webPluginManifestSchemaV7
       ? plugin.contributes.agent?.tools?.find((candidate) => candidate.tool === tool.id)
       : undefined
   return {
@@ -399,6 +491,7 @@ function toolSummary(
     output: tool.output,
     pluginId: plugin.id,
     pluginName: plugin.name,
+    ...(tool.recovery === undefined ? {} : { recovery: tool.recovery.mode }),
     title: tool.title,
     toolId: tool.id,
   }
@@ -417,6 +510,7 @@ function toolContractFingerprint(tool: GenerationToolSummary) {
     output: tool.output,
     pluginId: tool.pluginId,
     pluginName: tool.pluginName,
+    recovery: tool.recovery,
     title: tool.title,
     toolId: tool.toolId,
   })
@@ -470,11 +564,15 @@ export function pluginLlmProviderHostId(pluginId: string, providerId: string) {
   return `plugin-${pluginId}-${providerId}`
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
 function llmGatewayDescriptor(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isUnknownRecord(value)) {
     throw new Error("Plugin LLM gateway returned an invalid descriptor")
   }
-  const input = value as Record<string, unknown>
+  const input = value
   if (
     Object.keys(input).length !== 3 ||
     input.schema !== "convax.llm-gateway/1" ||
@@ -523,6 +621,9 @@ export class GenerationPluginRuntime {
   readonly #plugins: GenerationPluginSource
   readonly #resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
   readonly #resolveExecutable: GenerationPluginExecutableResolver
+  readonly #recoveryStateDirectory?: string
+  readonly #recoveryRuntimeStore?: GenerationRecoveryRuntimeStore
+  readonly #recoveryRuntimes = new Map<string, CachedPluginRuntime>()
   readonly #starting = new Map<string, StartingPluginRuntime>()
   readonly #verifyAuthorization: GenerationPluginRuntimeOptions["verifyAuthorization"]
   readonly #workingDirectory: string
@@ -544,6 +645,16 @@ export class GenerationPluginRuntime {
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
     this.#resolveManagedExecutable = options.resolveManagedExecutable
+    if (options.recoveryStateDirectory && !path.isAbsolute(options.recoveryStateDirectory)) {
+      throw new Error("Generation recovery state directory must be absolute")
+    }
+    this.#recoveryStateDirectory = options.recoveryStateDirectory
+    if (options.recoveryRuntimeDirectory && !path.isAbsolute(options.recoveryRuntimeDirectory)) {
+      throw new Error("Generation recovery runtime directory must be absolute")
+    }
+    this.#recoveryRuntimeStore = options.recoveryRuntimeDirectory
+      ? new GenerationRecoveryRuntimeStore(options.recoveryRuntimeDirectory)
+      : undefined
     this.#materializeExecutable = options.materializeExecutable ?? materializeGenerationPluginExecutable
     this.#platform = options.platform ?? process.platform
     this.#verifyAuthorization = (input) => options.verifyAuthorization(input)
@@ -724,6 +835,7 @@ export class GenerationPluginRuntime {
       this.#evict(ready.runtime)
       throw error
     }
+    const recovery = await this.#prepareRecovery(expected, ready.runtime, ready.selected.plugin, signal)
     const prepared: PreparedPluginTool = {
       contractFingerprint: toolContractFingerprint(expected),
       definitionFingerprint: toolDefinitionFingerprint(ready.definition),
@@ -732,13 +844,92 @@ export class GenerationPluginRuntime {
       pluginFingerprint: ready.selected.plugin.fingerprint,
       pluginId: ready.selected.plugin.manifest.id,
       runtime: ready.runtime,
+      ...(recovery === undefined ? {} : { recovery }),
       toolId: ready.selected.tool.id,
     }
     return {
-      call: (input: Record<string, unknown>, callSignal?: AbortSignal, onExternalStart?: () => void) =>
-        this.#callPrepared(prepared, input, callSignal, onExternalStart),
+      call: (
+        input: Record<string, unknown>,
+        callSignal?: AbortSignal,
+        lifecycleObserver?: GenerationToolLifecycleObserver,
+        operation?: GenerationToolOperationMetadata,
+      ) => this.#callPrepared(prepared, input, callSignal, lifecycleObserver, operation),
+      ...(recovery === undefined ? {} : { recovery }),
       validateInput: (input?: GenerationToolInput) => validateGenerationToolInput(description, input),
     }
+  }
+
+  /**
+   * Opens the immutable runtime that originally accepted an operation. This
+   * path deliberately does not consult the currently installed Plugin package.
+   */
+  async prepareRecoveryTool(binding: GenerationRecoveryRuntimeBinding, signal?: AbortSignal) {
+    if (!this.#recoveryRuntimeStore) {
+      throw new Error("Pinned generation recovery runtime storage is unavailable")
+    }
+    const record = await this.#recoveryRuntimeStore.open(binding.executionBindingDigest)
+    if (
+      record.executionBindingDigest !== binding.executionBindingDigest ||
+      record.pluginPackageDigest !== binding.pluginPackageDigest ||
+      record.runtimeAuthorizationDigest !== binding.runtimeAuthorizationDigest ||
+      record.recoveryBindingDigest !== binding.sidecarRecoveryBindingDigest ||
+      record.tool.id !== binding.toolId
+    ) {
+      throw new Error("Pinned generation recovery runtime binding changed")
+    }
+    const runtime = await this.#pinnedRecoveryRuntime(record, signal)
+    const capability = await runtime.client.generationRecoveryCapability?.(signal)
+    if (!capability || capability.mode !== "long-running-operation") {
+      throw new Error("Pinned generation recovery capability is unavailable")
+    }
+    const bindingDigest = createHash("sha256").update(capability.binding).digest("hex")
+    if (bindingDigest !== record.recoveryBindingDigest) {
+      throw new Error("Pinned generation recovery sidecar binding changed")
+    }
+    const recovery = this.#createRecoveryControls({
+      assertCurrent: async () => {
+        if (this.#recoveryRuntimes.get(record.executionBindingDigest) !== runtime) {
+          throw new Error("Pinned generation recovery runtime changed")
+        }
+      },
+      bindingDigest,
+      executionBindingDigest: record.executionBindingDigest,
+      pluginPackageDigest: record.pluginPackageDigest,
+      runtime,
+      runtimeAuthorizationDigest: record.runtimeAuthorizationDigest,
+    })
+    return {
+      execution: {
+        call: async (
+          input: Record<string, unknown>,
+          callSignal?: AbortSignal,
+          lifecycleObserver?: GenerationToolLifecycleObserver,
+          operation?: GenerationToolOperationMetadata,
+        ) => {
+          if (callSignal?.aborted) throw abortError(callSignal.reason)
+          if (operation?.recovery !== "required") {
+            throw new Error("Pinned generation replay requires exact operation metadata")
+          }
+          if (this.#recoveryRuntimes.get(record.executionBindingDigest) !== runtime) {
+            throw new Error("Pinned generation recovery runtime changed")
+          }
+          return runtime.client.callTool(record.tool.toolId, input, callSignal, lifecycleObserver, false, operation)
+        },
+        recovery,
+        validateInput: (input?: GenerationToolInput) => ({ ...input }),
+      },
+      tool: structuredClone(record.tool),
+    }
+  }
+
+  async releaseRecoveryTool(executionBindingDigest: string) {
+    if (!this.#recoveryRuntimeStore) return
+    const runtime = this.#recoveryRuntimes.get(executionBindingDigest)
+    if (runtime) {
+      this.#recoveryRuntimes.delete(executionBindingDigest)
+      this.#closeRuntime(runtime, true)
+    }
+    await this.#recoveryRuntimeStore.remove(executionBindingDigest)
   }
 
   /**
@@ -775,20 +966,188 @@ export class GenerationPluginRuntime {
     hostToolId: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-    onExternalStart?: () => void,
+    lifecycleObserver?: GenerationToolLifecycleObserver,
   ): Promise<McpToolCallResult> {
     const expected = (await this.listTools()).find((tool) => tool.id === hostToolId)
     if (!expected) throw new Error(`Generation tool is not installed: ${hostToolId}`)
-    return (await this.prepareTool(expected, signal)).call(input, signal, onExternalStart)
+    return (await this.prepareTool(expected, signal)).call(input, signal, lifecycleObserver)
   }
 
   async #callPrepared(
     prepared: PreparedPluginTool,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-    onExternalStart?: () => void,
+    lifecycleObserver?: GenerationToolLifecycleObserver,
+    operation?: GenerationToolOperationMetadata,
   ): Promise<McpToolCallResult> {
     if (signal?.aborted) throw abortError(signal.reason)
+    await this.#assertPreparedToolCurrent(prepared, "while inputs were being staged")
+    const guardedLifecycleObserver: GenerationToolLifecycleObserver | undefined = lifecycleObserver
+      ? async (event) => {
+          await lifecycleObserver(event)
+          if (event.type === "external-started") {
+            if (signal?.aborted) throw abortError(signal.reason)
+            await this.#assertPreparedToolCurrent(prepared, "before the external call")
+          }
+        }
+      : undefined
+    try {
+      if (signal?.aborted) throw abortError(signal.reason)
+      // Generation jobs may legitimately remain queued or running for hours. The
+      // sidecar owns the vendor state machine and resolves only on a terminal
+      // result; caller cancellation, Plugin disposal, and process exit still stop
+      // this request. Service/control-plane calls retain the bounded client timeout.
+      if (prepared.recovery && operation?.recovery !== "required") {
+        throw new Error("Recoverable generation requires exact operation metadata")
+      }
+      if (!prepared.recovery && operation) {
+        throw new Error("Generation operation metadata requires a recoverable tool")
+      }
+      return await prepared.runtime.client.callTool(
+        prepared.toolId,
+        input,
+        signal,
+        guardedLifecycleObserver,
+        false,
+        operation,
+      )
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(prepared.runtime)
+      throw error
+    }
+  }
+
+  async #prepareRecovery(
+    expected: GenerationToolSummary,
+    runtime: CachedPluginRuntime,
+    plugin: DiscoveredPlugin,
+    signal?: AbortSignal,
+  ): Promise<PreparedGenerationRecovery | undefined> {
+    if (expected.recovery === undefined) return undefined
+    if (
+      expected.recovery !== "long-running-operation" ||
+      !runtime.client.generationRecoveryCapability ||
+      !runtime.client.callGenerationRecovery
+    ) {
+      throw new Error(`Generation recovery capability is unavailable: ${expected.id}`)
+    }
+    const capability = await runtime.client.generationRecoveryCapability(signal)
+    if (!capability || capability.mode !== expected.recovery) {
+      throw new Error(`Generation recovery manifest and runtime disagree: ${expected.id}`)
+    }
+    const pluginPackageDigest = plugin.fingerprint
+    const bindingDigest = createHash("sha256").update(capability.binding).digest("hex")
+    const runtimeAuthorizationDigest = createHash("sha256").update(runtime.authorizationIdentity).digest("hex")
+    const executionBindingDigest = createHash("sha256")
+      .update(JSON.stringify([pluginPackageDigest, runtimeAuthorizationDigest, bindingDigest]))
+      .digest("hex")
+    const assertCurrent = () =>
+      this.#assertPreparedToolCurrent(
+        {
+          contractFingerprint: toolContractFingerprint(expected),
+          definitionFingerprint: toolDefinitionFingerprint(runtime.availableTools!.get(expected.toolId)!),
+          description: normalizeGenerationToolInputSchema(
+            expected.id,
+            runtime.availableTools!.get(expected.toolId)!.inputSchema,
+          ),
+          hostToolId: expected.id,
+          pluginFingerprint: pluginPackageDigest,
+          pluginId: expected.pluginId,
+          runtime,
+          toolId: expected.toolId,
+        },
+        "before recovery control",
+      )
+    const recovery = this.#createRecoveryControls({
+      assertCurrent,
+      bindingDigest,
+      executionBindingDigest,
+      pluginPackageDigest,
+      runtime,
+      runtimeAuthorizationDigest,
+    })
+    if (this.#recoveryRuntimeStore) {
+      await this.#recoveryRuntimeStore.pin({
+        bindingKind: runtime.bindingKind,
+        executablePath: runtime.executableSnapshot.path,
+        ...(runtime.executableSnapshot.runtime === undefined
+          ? {}
+          : { executableRuntime: runtime.executableSnapshot.runtime }),
+        executionBindingDigest,
+        plugin: plugin.manifest,
+        pluginPackageDigest,
+        recoveryBindingDigest: bindingDigest,
+        runtimeAuthorizationDigest,
+        sourceBinding: runtime.sourceBinding,
+        tool: expected,
+      })
+    }
+    return recovery
+  }
+
+  #createRecoveryControls(input: {
+    assertCurrent(): Promise<void>
+    bindingDigest: string
+    executionBindingDigest: string
+    pluginPackageDigest: string
+    runtime: CachedPluginRuntime
+    runtimeAuthorizationDigest: string
+  }): PreparedGenerationRecovery {
+    const call = async (
+      method: GenerationRecoveryMethod,
+      request: Omit<GenerationRecoveryRequest, "schema">,
+      callSignal?: AbortSignal,
+    ) => {
+      await input.assertCurrent()
+      return input.runtime.client.callGenerationRecovery!(method, request, callSignal)
+    }
+    return {
+      async acknowledge(input, callSignal) {
+        const result = await call(generationLroMethods.acknowledge, input, callSignal)
+        if (
+          !isUnknownRecord(result) ||
+          Object.keys(result).length !== 2 ||
+          result.schema !== "convax.generation-lro-acknowledgement/1" ||
+          result.acknowledged !== true
+        ) {
+          throw new Error("Generation recovery acknowledgement is invalid")
+        }
+      },
+      bindingDigest: input.bindingDigest,
+      async cancel(input, callSignal) {
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.cancel, input, callSignal))
+      },
+      executionBindingDigest: input.executionBindingDigest,
+      async get(input, callSignal) {
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.get, input, callSignal))
+      },
+      pluginPackageDigest: input.pluginPackageDigest,
+      runtimeAuthorizationDigest: input.runtimeAuthorizationDigest,
+      async result(input, callSignal) {
+        if (!/^[a-f0-9]{64}$/.test(input.resultDigest)) {
+          throw new Error("Generation recovery result digest is invalid")
+        }
+        const response = await call(generationLroMethods.result, input, callSignal)
+        if (
+          !isUnknownRecord(response) ||
+          Object.keys(response).some((key) => !["result", "resultDigest", "schema"].includes(key)) ||
+          response.schema !== "convax.generation-lro-result/1" ||
+          response.resultDigest !== input.resultDigest
+        ) {
+          throw new Error("Generation recovery result is invalid")
+        }
+        return {
+          result: normalizeMcpToolCallResult(response.result),
+          resultDigest: input.resultDigest,
+        }
+      },
+      async wait(input, callSignal) {
+        return normalizeGenerationRecoverySnapshot(await call(generationLroMethods.wait, input, callSignal))
+      },
+    }
+  }
+
+  async #assertPreparedToolCurrent(prepared: PreparedPluginTool, context: string): Promise<void> {
     const plugins = await this.#discover()
     const selected = this.#selectTool(plugins, prepared.hostToolId)
     const currentSummary = toolSummary(selected.plugin.manifest, selected.tool)
@@ -802,17 +1161,66 @@ export class GenerationPluginRuntime {
       toolDefinitionFingerprint(currentDefinition) !== prepared.definitionFingerprint ||
       this.#cache.get(prepared.pluginId) !== prepared.runtime
     ) {
-      throw new Error(`Generation Plugin changed while inputs were being staged: ${prepared.pluginId}`)
+      throw new Error(`Generation Plugin changed ${context}: ${prepared.pluginId}`)
     }
+  }
+
+  async #pinnedRecoveryRuntime(record: GenerationRecoveryRuntimeRecord, signal?: AbortSignal) {
+    if (signal?.aborted) throw abortError(signal.reason)
+    const cached = this.#recoveryRuntimes.get(record.executionBindingDigest)
+    if (cached) return cached
+    if (record.executableRuntime === "bun" && !this.#bunRuntime) {
+      throw new Error("Bundled Bun runtime is unavailable")
+    }
+    const declaredRuntime = record.plugin.runtime!
+    const recoveryStateDirectory = this.#recoveryStateDirectory
+      ? await ensureGenerationRecoveryStateDirectory(
+          this.#recoveryStateDirectory,
+          record.plugin.id,
+          record.pluginPackageDigest,
+          record.runtimeAuthorizationDigest,
+        )
+      : undefined
+    const client = this.#createClient({
+      ...(record.executableRuntime === "bun"
+        ? { args: [record.executablePath, ...(declaredRuntime.args ?? [])] }
+        : declaredRuntime.args
+          ? { args: [...declaredRuntime.args] }
+          : {}),
+      command: record.executableRuntime === "bun" ? this.#bunRuntime!.command : record.executablePath,
+      cwd: this.#workingDirectory,
+      env: {
+        ...this.#environment,
+        ...(record.executableRuntime === "bun" ? this.#bunRuntime?.env : {}),
+        ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
+      },
+    })
+    const runtime: CachedPluginRuntime = {
+      authorizationIdentity: record.runtimeAuthorizationDigest,
+      bindingKind: record.bindingKind,
+      client,
+      executableSnapshot: {
+        dispose() {},
+        path: record.executablePath,
+        ...(record.executableRuntime === undefined ? {} : { runtime: record.executableRuntime }),
+      },
+      fingerprint: record.pluginPackageDigest,
+      plugin: structuredClone(record.plugin),
+      pluginId: record.plugin.id,
+      sourceBinding: structuredClone(record.sourceBinding),
+    }
+    this.#recoveryRuntimes.set(record.executionBindingDigest, runtime)
     try {
-      if (signal?.aborted) throw abortError(signal.reason)
-      // Generation jobs may legitimately remain queued or running for hours. The
-      // sidecar owns the vendor state machine and resolves only on a terminal
-      // result; caller cancellation, Plugin disposal, and process exit still stop
-      // this request. Service/control-plane calls retain the bounded client timeout.
-      return await prepared.runtime.client.callTool(prepared.toolId, input, signal, onExternalStart, false)
+      const availableTools = await this.#availableTools(runtime, signal, true)
+      if (!availableTools.has(record.tool.toolId)) {
+        throw new Error("Pinned generation recovery runtime no longer exposes its exact tool")
+      }
+      return runtime
     } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(prepared.runtime)
+      if (this.#recoveryRuntimes.get(record.executionBindingDigest) === runtime) {
+        this.#recoveryRuntimes.delete(record.executionBindingDigest)
+      }
+      this.#closeRuntime(runtime)
       throw error
     }
   }
@@ -869,6 +1277,8 @@ export class GenerationPluginRuntime {
     this.#starting.clear()
     for (const runtime of this.#cache.values()) this.#closeRuntime(runtime, true)
     this.#cache.clear()
+    for (const runtime of this.#recoveryRuntimes.values()) this.#closeRuntime(runtime, true)
+    this.#recoveryRuntimes.clear()
     rmSync(this.#workingDirectory, { force: true, recursive: true })
   }
 
@@ -973,6 +1383,16 @@ export class GenerationPluginRuntime {
       )
     }
     const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
+    const authorizationIdentity = toolPluginAuthorizationIdentity(plugin.manifest, confirmed.kind, confirmed.binding)
+    const runtimeAuthorizationDigest = createHash("sha256").update(authorizationIdentity).digest("hex")
+    const recoveryStateDirectory = this.#recoveryStateDirectory
+      ? await ensureGenerationRecoveryStateDirectory(
+          this.#recoveryStateDirectory,
+          plugin.manifest.id,
+          plugin.fingerprint,
+          runtimeAuthorizationDigest,
+        )
+      : undefined
     let canvasCapabilities: ToolPluginCanvasMcpBridge | undefined
     try {
       canvasCapabilities = await createToolPluginCanvasMcpBridge(plugin.manifest, this.#canvasCapabilities)
@@ -994,6 +1414,7 @@ export class GenerationPluginRuntime {
         env: {
           ...this.#environment,
           ...(executableSnapshot.runtime === "bun" ? this.#bunRuntime?.env : {}),
+          ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
         },
         ...(canvasCapabilities ? { serverRequestHandler: canvasCapabilities.handler } : {}),
       })
@@ -1003,12 +1424,15 @@ export class GenerationPluginRuntime {
         throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
       }
       const cached: CachedPluginRuntime = {
-        authorizationIdentity: toolPluginAuthorizationIdentity(plugin.manifest, confirmed.kind, confirmed.binding),
+        authorizationIdentity,
+        bindingKind: confirmed.kind,
         ...(canvasCapabilities ? { canvasCapabilities } : {}),
         client,
         executableSnapshot,
         fingerprint: plugin.fingerprint,
+        plugin: structuredClone(plugin.manifest),
         pluginId: plugin.manifest.id,
+        sourceBinding: structuredClone(confirmed.binding),
       }
       const prior = this.#cache.get(plugin.manifest.id)
       if (prior) this.#closeRuntime(prior)

@@ -14,6 +14,10 @@ const invalidInitializeResponse = process.argv
   ?.slice("--invalid-initialize-response=".length)
 const stderrSecretAndExit = process.argv.includes("--stderr-secret-and-exit")
 const invalidUtf8Initialize = process.argv.includes("--invalid-utf8-in-initialize")
+const generationTaskId = process.argv
+  .find((argument) => argument.startsWith("--generation-task-id="))
+  ?.slice("--generation-task-id=".length)
+const generationRecovery = process.argv.includes("--generation-recovery")
 const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
   ?.slice("--fork-descendant=".length)
@@ -100,7 +104,20 @@ async function handle(request: JsonRpcRequest) {
         id: request.id,
         jsonrpc: "2.0",
         result: {
-          capabilities: { tools: {} },
+          capabilities: {
+            ...(generationRecovery
+              ? {
+                  experimental: {
+                    "convax/generation-lro": {
+                      binding: "fixture-binding",
+                      mode: "long-running-operation",
+                      schema: "convax.generation-lro/1",
+                    },
+                  },
+                }
+              : {}),
+            tools: {},
+          },
           protocolVersion,
           serverInfo: { name: "fixture", version: "1.0.0" },
         },
@@ -132,6 +149,23 @@ async function handle(request: JsonRpcRequest) {
   }
   if (request.method === "tools/call") {
     if (request.params?.name === "wait") return
+    const meta = request.params?._meta
+    const progressToken =
+      meta && typeof meta === "object" && !Array.isArray(meta)
+        ? (meta as Record<string, unknown>).progressToken
+        : undefined
+    if (generationTaskId && typeof progressToken === "string") {
+      send({
+        jsonrpc: "2.0",
+        method: "notifications/convax/generation-lifecycle",
+        params: {
+          event: "submitted",
+          progressToken,
+          schema: "convax.generation-lifecycle/1",
+          taskId: generationTaskId,
+        },
+      })
+    }
     const hostResponses = hostRequestMethod
       ? await Promise.all(
           Array.from(
@@ -148,7 +182,31 @@ async function handle(request: JsonRpcRequest) {
           { text: JSON.stringify(request.params?.arguments ?? null), type: "text" },
           { data: "iVBORw0KGgo=", mimeType: "image/png", type: "image" },
         ],
-        structuredContent: { artifacts: [], ...(hostResponses === undefined ? {} : { hostResponses }) },
+        structuredContent: {
+          artifacts: [],
+          requestMeta: request.params?._meta,
+          ...(hostResponses === undefined ? {} : { hostResponses }),
+        },
+      },
+    })
+    return
+  }
+  if (generationRecovery && request.method?.startsWith("convax/generation/")) {
+    if (request.method === "convax/generation/operations/acknowledge") {
+      send({
+        id: request.id,
+        jsonrpc: "2.0",
+        result: { acknowledged: true, schema: "convax.generation-lro-acknowledgement/1" },
+      })
+      return
+    }
+    send({
+      id: request.id,
+      jsonrpc: "2.0",
+      result: {
+        schema: "convax.generation-lro-snapshot/1",
+        status: "running",
+        taskId: "fixture_task",
       },
     })
     return

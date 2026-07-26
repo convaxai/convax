@@ -170,6 +170,7 @@ export async function registerProjectIpc(
     isTrustedSender: (event: IpcMainInvokeEvent) => boolean
     projectCreationDirectory: string
     onForgot?(projectId: string): void
+    onOpened?(project: ProjectRecord): Promise<void> | void
   },
 ) {
   const handlerDisposers: Array<() => void> = []
@@ -243,11 +244,13 @@ export async function registerProjectIpc(
       if (result.canceled || !result.filePaths[0]) return selectionResult(true)
       const project = await manager.add(result.filePaths[0])
       ensureWatching(project)
+      await options.onOpened?.(project)
       return selectionResult(false, project)
     }),
     registerHandler(projectIpcChannels.createProject, options.isTrustedSender, async (_event, input) => {
       const project = await manager.create(options.projectCreationDirectory, input.name)
       ensureWatching(project)
+      await options.onOpened?.(project)
       return selectionResult(false, project)
     }),
     registerHandler(projectIpcChannels.renameProject, options.isTrustedSender, async (_event, input) => {

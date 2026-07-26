@@ -5,6 +5,7 @@ import {
   createMediaNode,
   createTextNode as createCanvasTextNode,
 } from "../document"
+import { getCanvasNodeGenerationRun } from "../generation-run"
 import type { CanvasTextResource } from "../types"
 import { CanvasCommandValidationError, CanvasRevisionConflictError, createCanvasNodeContentGuard } from "./commands"
 import {
@@ -1282,6 +1283,57 @@ describe("canvas resource business service", () => {
     })
     expect(failed.warnings[0]).toContain("replayed from revision 1 on revision 2")
     expect(preparationCalls).toBe(0)
+  })
+
+  test("creates a pending generation owner and submitting run in one application save", async () => {
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main" }),
+      storageVersion: "v0",
+    }
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          throw new Error("Pending generation creation must not prepare a resource")
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          saveCalls += 1
+          snapshot = { document: request.document, storageVersion: `v${saveCalls}` }
+          return { storageVersion: `v${saveCalls}` }
+        },
+      }),
+    )
+
+    const result = await business.createPendingGenerationResource({
+      actor: { id: "plugin-host", kind: "host" },
+      anchor: { x: 20, y: 30 },
+      canvasId: "canvas-main",
+      commandId: "create-pending-generation",
+      conflictPolicy: "reject",
+      expectedRevision: 0,
+      kind: "video",
+      operationId: "operation-one",
+      prompt: "Create a short video",
+      scopeId: "project",
+      toolId: "creative-tools/video.generate",
+    })
+
+    expect(saveCalls).toBe(1)
+    expect(result.document.revision).toBe(1)
+    const pending = result.document.nodes.find((node) => node.id === result.createdNodeIds[0])!
+    expect(pending.data).toMatchObject({ kind: "video", status: "pending" })
+    expect(getCanvasNodeGenerationRun(pending)).toEqual({
+      operationId: "operation-one",
+      prompt: "Create a short video",
+      schema: "convax.node-generation-run/2",
+      status: "submitting",
+      toolId: "creative-tools/video.generate",
+    })
   })
 
   test("does not recreate a pending node removed before a guarded failure replay", async () => {

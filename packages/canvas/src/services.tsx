@@ -172,6 +172,8 @@ export type CanvasGenerationResultMode = { type: "add" } | { nodeId: string; typ
 export interface CanvasGenerateRequest {
   anchor: CanvasPoint
   expectedRevision: number
+  /** Fresh host operation correlation for this logical submission. */
+  operationId?: string
   /** Trusted host output cardinality guard; this is never sent to the generation tool. */
   expectedOutputCount?: number
   output?: CanvasGenerationOutput
@@ -199,6 +201,7 @@ export interface CanvasGenerateResult {
 export interface CanvasGenerateService {
   /** Host-owned token that changes when installed generation declarations change. */
   readonly catalogVersion?: string | number
+  cancel?: (operationId: string) => void | Promise<void>
   describeTool: (toolId: string, signal?: AbortSignal) => Promise<CanvasGenerationToolDescription>
   generate: (request: CanvasGenerateRequest) => Promise<CanvasGenerateResult>
   listTools: (query: CanvasGenerationToolQuery, signal?: AbortSignal) => Promise<readonly CanvasGenerationToolSummary[]>
@@ -293,58 +296,13 @@ export interface CanvasTelemetryService {
   track: (event: CanvasTelemetryEvent) => void
 }
 
-/** Transient presentation state for a direct generation launched from a file card. */
-export type CanvasAssistantGenerationActivity =
-  | { cancel: () => void; prompt: string; status: "pending" }
-  | { status: "complete" }
-  | { message: string; prompt: string; status: "error" }
-
-export type CanvasFileGenerationActivity =
-  | { status: "idle" }
-  | Exclude<CanvasAssistantGenerationActivity, { status: "complete" }>
-
-/** Owns a direct generation for exactly as long as its target file node remains mounted. */
-export class CanvasFileGenerationActivityOwner {
-  #activity: CanvasFileGenerationActivity = { status: "idle" }
-  #cancel: (() => void) | undefined
-
-  get activity() {
-    return this.#activity
-  }
-
-  apply(activity: CanvasAssistantGenerationActivity): {
-    activity: CanvasFileGenerationActivity
-    dismissComposer: boolean
-  } {
-    if (activity.status === "pending") {
-      this.#cancel?.()
-      this.#cancel = activity.cancel
-      this.#activity = activity
-      return { activity: this.#activity, dismissComposer: true }
-    }
-    this.#cancel = undefined
-    this.#activity = activity.status === "complete" ? { status: "idle" } : activity
-    return { activity: this.#activity, dismissComposer: false }
-  }
-
-  dispose() {
-    this.#cancel?.()
-    this.#cancel = undefined
-    this.#activity = { status: "idle" }
-  }
-}
-
 export interface CanvasAssistantGenerationCapability {
   /** Direct card generation is intentionally limited to visual media replacement. */
   output: "image" | "video"
-  /** One-shot in-memory draft restored after an explicit card-generation recovery action. */
+  /** One-shot composer draft hydrated from the Canvas-owned latest run. */
   initialPrompt?: string
   /** Persisted owner-node override. Missing means inherit the host's current default. */
   ownerToolId?: string
-  /** File-card-only activity notification; this never mutates or persists the Canvas document. */
-  onActivityChange?: (activity: CanvasAssistantGenerationActivity) => void
-  /** Acknowledges that the one-shot recovery draft was copied into the mounted composer. */
-  onInitialPromptConsumed?: () => void
   /** File-card-only mutation; clearing the id restores host-default inheritance. */
   onOwnerToolIdChange?: (toolId?: string) => void
 }

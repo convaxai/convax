@@ -531,6 +531,32 @@ payload, and passes the opaque id to the sidecar so it can use a remote idempote
 key when its service supports one. Sidecars must not infer authority or user-visible
 identity from this value.
 
+For a generation call that requests lifecycle observation, the host also adds an
+opaque per-call `_meta.progressToken`. After the external service has accepted a
+task, a compatible sidecar may publish exactly this notification:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/convax/generation-lifecycle",
+  "params": {
+    "schema": "convax.generation-lifecycle/1",
+    "progressToken": "<the per-call token>",
+    "event": "submitted",
+    "taskId": "<host-safe opaque handle>"
+  }
+}
+```
+
+`taskId` is distinct from `operation_id`: it is a bounded portable handle suitable
+for Canvas metadata, not a credential, credential-labelled envelope, URL, native
+path or raw provider diagnostic.
+A sidecar whose upstream identifier is unsafe must retain that value privately and
+return a safe handle. The host correlates only the exact live token and validates
+the exact schema, event and task-id alphabet. It never parses logs, progress text or
+stderr. Malformed notifications using this Convax method fail the call closed.
+Legacy Tool Plugins may ignore `_meta` and omit the notification.
+
 The host loads the authoritative live Canvas and validates every reference against
 its declared role. Media and text inputs must already be normal Canvas nodes backed
 by typed Project-file or managed-asset references. Desktop resolves them through the
@@ -694,7 +720,15 @@ Once `tools/call` was attempted, the operation id remains an at-most-once tombst
 in the bounded session replay cache; authorization, executable resolution and tool
 readiness failures remain retryable with the same id. A replay caller may stop
 waiting without canceling the already-owned shared execution; an explicit retry of
-an attempted call uses a fresh operation id. On macOS/Linux, process shutdown is
+an attempted call uses a fresh operation id. Node-targeted calls persist bounded
+Canvas run state, but the task receipt alone is not restart recovery. A v7 tool may
+declare the complete generic Long-Running Operation contract
+`{ "schema": "convax.generation-lro/1", "mode": "long-running-operation" }`.
+That contract uses fixed get/wait/cancel/result/acknowledge methods, an immutable
+pinned runtime binding, and idempotent submission by host `operationId`. Legacy or
+partial implementations still change orphaned `submitting` or `running` runs to
+`interrupted` and never repeat the external call. On macOS/Linux,
+process shutdown is
 graceful for ordinary eviction and escalates to an immediate process-group kill
 when the MCP leader exits or the grace period expires. Windows execution stays
 disabled until a Job Object can provide the equivalent owned-tree guarantee.

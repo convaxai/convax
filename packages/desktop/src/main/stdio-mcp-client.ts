@@ -1,6 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { TextDecoder } from "node:util"
+
+import { isCanvasGenerationTaskId } from "@convax/canvas/core"
+import {
+  type GenerationRecoveryCapability,
+  type GenerationRecoveryMethod,
+  generationLroMethods,
+  normalizeGenerationRecoveryCapability,
+  requireGenerationRecoveryRequest,
+} from "./generation-recovery-protocol"
 
 export interface McpToolDefinition {
   name: string
@@ -27,6 +37,12 @@ export interface McpToolCallResult {
   structuredContent?: Record<string, unknown>
 }
 
+export interface GenerationToolOperationMetadata {
+  operationId: string
+  recovery: "required"
+  requestDigest: string
+}
+
 interface JsonRpcMessage {
   id?: number | string | null
   jsonrpc?: string
@@ -44,6 +60,16 @@ interface PendingRequest {
   cleanup(): void
   reject(error: unknown): void
   resolve(value: unknown): void
+}
+
+export type GenerationToolLifecycleEvent = { type: "external-started" } | { taskId: string; type: "submitted" }
+
+export type GenerationToolLifecycleObserver = (event: GenerationToolLifecycleEvent) => void | Promise<void>
+
+interface GenerationLifecycleDelivery {
+  observer: GenerationToolLifecycleObserver
+  tail: Promise<void>
+  token: string
 }
 
 export interface StdioMcpServerRequest {
@@ -90,6 +116,8 @@ const supportedMcpProtocolVersion = "2025-03-26"
 const maximumServerRequestMethods = 64
 const maximumServerErrorBytes = 512
 const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true })
+const generationLifecycleNotification = "notifications/convax/generation-lifecycle"
+const generationLifecycleSchema = "convax.generation-lifecycle/1"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -172,7 +200,7 @@ function normalizeContent(value: unknown): McpToolContent {
   throw new Error(`Unsupported MCP tool content: ${String(input.type)}`)
 }
 
-function normalizeToolResult(value: unknown): McpToolCallResult {
+export function normalizeMcpToolCallResult(value: unknown): McpToolCallResult {
   const input = requireRecord(value, "MCP tool result")
   if (!Array.isArray(input.content)) throw new Error("MCP tool result content must be an array")
   if (input.content.length > maximumToolResultContentItems) {
@@ -254,10 +282,12 @@ export class StdioMcpClient {
   readonly #serverRequestMethods: ReadonlySet<string>
   readonly #serverRequests = new Map<string, { controller: AbortController; id: number | string }>()
   readonly #pending = new Map<number, PendingRequest>()
+  readonly #generationLifecycles = new Map<string, GenerationLifecycleDelivery>()
   #buffer = Buffer.alloc(0)
   #child?: ChildProcessWithoutNullStreams
   #closed = false
   #connecting?: Promise<void>
+  #generationRecoveryCapability?: GenerationRecoveryCapability
   #nextId = 1
   #shutdownChild?: ChildProcessWithoutNullStreams
   #serverRequestHandlerClosed = false
@@ -309,6 +339,13 @@ export class StdioMcpClient {
         if (requireString(response.protocolVersion, "MCP protocol version") !== supportedMcpProtocolVersion) {
           throw new Error(`MCP server selected an unsupported protocol version: ${String(response.protocolVersion)}`)
         }
+        const capabilities = requireRecord(response.capabilities, "MCP capabilities")
+        if (isRecord(capabilities.experimental)) {
+          const advertised = capabilities.experimental["convax/generation-lro"]
+          if (advertised !== undefined) {
+            this.#generationRecoveryCapability = normalizeGenerationRecoveryCapability(advertised)
+          }
+        }
         this.#notify("notifications/initialized", {})
       })().catch((error) => {
         this.close()
@@ -340,19 +377,84 @@ export class StdioMcpClient {
     name: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
-    onRequestStart?: () => void,
+    lifecycleObserver?: GenerationToolLifecycleObserver,
     requestTimeoutMs: number | false = this.#options.requestTimeoutMs,
+    operation?: GenerationToolOperationMetadata,
   ) {
     await this.connect(signal)
     if (signal?.aborted) throw abortError(signal.reason)
-    onRequestStart?.()
-    return normalizeToolResult(
-      await this.#request(
-        "tools/call",
-        { arguments: input, name: requireString(name, "MCP tool name") },
-        signal,
-        requestTimeoutMs,
-      ),
+    const lifecycle = lifecycleObserver
+      ? {
+          observer: lifecycleObserver,
+          tail: Promise.resolve(),
+          token: `convax-generation-${randomUUID()}`,
+        }
+      : undefined
+    const recoveryRequest = operation
+      ? requireGenerationRecoveryRequest({
+          operationId: operation.operationId,
+          requestDigest: operation.requestDigest,
+        })
+      : undefined
+    if (operation && operation.recovery !== "required") {
+      throw new Error("Generation operation recovery metadata is invalid")
+    }
+    if (lifecycle) await lifecycle.observer({ type: "external-started" })
+    const result = await this.#request(
+      "tools/call",
+      {
+        ...(lifecycle || recoveryRequest
+          ? {
+              _meta: {
+                ...(lifecycle ? { progressToken: lifecycle.token } : {}),
+                ...(recoveryRequest
+                  ? {
+                      convaxGeneration: {
+                        operationId: recoveryRequest.operationId,
+                        recovery: "required",
+                        requestDigest: recoveryRequest.requestDigest,
+                        schema: "convax.generation-operation/1",
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        arguments: input,
+        name: requireString(name, "MCP tool name"),
+      },
+      signal,
+      requestTimeoutMs,
+      lifecycle,
+    )
+    await lifecycle?.tail
+    return normalizeMcpToolCallResult(result)
+  }
+
+  async generationRecoveryCapability(signal?: AbortSignal) {
+    await this.connect(signal)
+    return this.#generationRecoveryCapability ? { ...this.#generationRecoveryCapability } : undefined
+  }
+
+  async callGenerationRecovery(
+    method: GenerationRecoveryMethod,
+    input: Omit<Parameters<typeof requireGenerationRecoveryRequest>[0], never>,
+    signal?: AbortSignal,
+  ) {
+    await this.connect(signal)
+    if (!Object.values(generationLroMethods).includes(method)) {
+      throw new Error("Generation recovery method is not supported")
+    }
+    if (!this.#generationRecoveryCapability) {
+      throw new Error("Generation recovery capability was not advertised")
+    }
+    return this.#request(
+      method,
+      requireGenerationRecoveryRequest(input, {
+        allowOutputDirectory: method === generationLroMethods.result,
+      }),
+      signal,
+      method === generationLroMethods.wait ? false : 30_000,
     )
   }
 
@@ -470,10 +572,44 @@ export class StdioMcpClient {
   }
 
   #handleServerNotification(method: string, params: unknown) {
+    if (method === generationLifecycleNotification) {
+      this.#handleGenerationLifecycleNotification(params)
+      return
+    }
     if (method !== "notifications/cancelled" || !isRecord(params)) return
     const requestId = params.requestId
     if (!validServerRequestId(requestId)) return
     this.#serverRequests.get(serverRequestKey(requestId))?.controller.abort("MCP server canceled the host request")
+  }
+
+  #handleGenerationLifecycleNotification(params: unknown) {
+    if (!isRecord(params)) {
+      if (this.#generationLifecycles.size) this.#fail(new Error("Generation lifecycle notification is invalid"), true)
+      return
+    }
+    const token = params.progressToken
+    if (typeof token !== "string") {
+      if (this.#generationLifecycles.size) this.#fail(new Error("Generation lifecycle progress token is invalid"), true)
+      return
+    }
+    const lifecycle = this.#generationLifecycles.get(token)
+    if (!lifecycle) return
+    const keys = Object.keys(params)
+    const taskId = params.taskId
+    if (
+      keys.length !== 4 ||
+      !keys.every((key) => ["event", "progressToken", "schema", "taskId"].includes(key)) ||
+      params.schema !== generationLifecycleSchema ||
+      params.event !== "submitted" ||
+      !isCanvasGenerationTaskId(taskId)
+    ) {
+      this.#fail(new Error("Generation lifecycle task receipt is invalid"), true)
+      return
+    }
+    lifecycle.tail = lifecycle.tail.then(() => lifecycle.observer({ taskId, type: "submitted" }))
+    void lifecycle.tail.catch((error) => {
+      if (this.#generationLifecycles.get(token) === lifecycle) this.#fail(error, true)
+    })
   }
 
   #handleServerRequest(message: JsonRpcMessage) {
@@ -541,6 +677,7 @@ export class StdioMcpClient {
     params: unknown,
     signal?: AbortSignal,
     timeoutMs: number | false = this.#options.requestTimeoutMs,
+    lifecycle?: GenerationLifecycleDelivery,
   ) {
     if (this.#closed || !this.#child) return Promise.reject(new Error("MCP client is not connected"))
     if (signal?.aborted) return Promise.reject(abortError(signal.reason))
@@ -567,8 +704,12 @@ export class StdioMcpClient {
       const cleanup = () => {
         if (timeout) clearTimeout(timeout)
         signal?.removeEventListener("abort", onAbort)
+        if (lifecycle && this.#generationLifecycles.get(lifecycle.token) === lifecycle) {
+          this.#generationLifecycles.delete(lifecycle.token)
+        }
       }
       this.#pending.set(id, { cleanup, reject, resolve })
+      if (lifecycle) this.#generationLifecycles.set(lifecycle.token, lifecycle)
       signal?.addEventListener("abort", onAbort, { once: true })
       try {
         this.#write({ id, jsonrpc: "2.0", method, params })
@@ -598,6 +739,7 @@ export class StdioMcpClient {
       pending.reject(failure)
     }
     this.#pending.clear()
+    this.#generationLifecycles.clear()
     this.close(forceTree)
   }
 
@@ -624,6 +766,7 @@ export class StdioMcpClient {
       pending.reject(new Error("MCP client was closed"))
     }
     this.#pending.clear()
+    this.#generationLifecycles.clear()
     child?.stdin.destroy()
     child?.stdout.destroy()
     child?.stderr.destroy()

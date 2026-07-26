@@ -1,4 +1,5 @@
 import { createCanvasId, createGroupNode, getCanvasNodeSize } from "./document"
+import { cloneCanvasNodeGenerationRunData } from "./generation-run"
 import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export type CanvasAlign = "left" | "center" | "right" | "top" | "middle" | "bottom"
@@ -187,6 +188,7 @@ export function duplicateCanvasSelection(
       const isNestedClone = Boolean(node.parentId && ids.has(node.parentId))
       return {
         ...structuredClone(node),
+        data: cloneCanvasNodeGenerationRunData(structuredClone(node.data)),
         id: ids.get(node.id) ?? createCanvasId("node"),
         parentId,
         position: isNestedClone ? node.position : { x: node.position.x + offset.x, y: node.position.y + offset.y },
