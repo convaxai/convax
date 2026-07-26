@@ -1,10 +1,11 @@
 import type { WebPluginServiceAction } from "./plugin-contracts"
 
-export const pluginServiceStatusSchema = "convax.plugin-service-status/1" as const
+export const pluginServiceStatusSchema = "convax.plugin-service-status/2" as const
 
 export const pluginServiceIpcChannels = {
   authorize: "plugin-service:authorize",
   cancelAuthorization: "plugin-service:authorization-cancel",
+  checkout: "plugin-service:checkout",
   getStatus: "plugin-service:status",
   listServices: "plugin-service:list",
   reauthorize: "plugin-service:reauthorize",
@@ -14,6 +15,7 @@ export const pluginServiceIpcChannels = {
 export const pluginServiceMcpTools = {
   authorize: "service.authorize",
   cancelAuthorization: "service.authorization.cancel",
+  checkout: "service.checkout",
   completeAuthorization: "service.authorization.complete",
   reauthorize: "service.reauthorize",
   signOut: "service.sign_out",
@@ -23,6 +25,14 @@ export const pluginServiceMcpTools = {
 export type PluginServiceState = "connected" | "disconnected" | "attention" | "unknown"
 export type PluginServiceCredentialVerification = "verified" | "unverified" | "failed" | "unknown"
 export type ServiceCapability = "llm" | "text" | "image" | "video" | "audio"
+export type PluginServiceBillingInterval = "month" | "year"
+export type PluginServiceCheckoutStatus = "created" | "processing" | "converted" | "failed" | "expired"
+
+export interface PluginServicePlanOffer {
+  billingInterval?: PluginServiceBillingInterval
+  key: string
+  name: string
+}
 
 export interface ServiceModelSummary {
   capability: ServiceCapability
@@ -47,6 +57,31 @@ export interface PluginServiceStatus {
     verification: PluginServiceCredentialVerification
   }
   credits: { availability: "available"; remaining: number; unit: string } | { availability: "unavailable" }
+  plan:
+    | {
+        availability: "available"
+        billingInterval?: PluginServiceBillingInterval
+        key: string
+        name: string
+      }
+    | { availability: "unavailable" }
+  billing:
+    | {
+        availability: "available"
+        checkout:
+          | {
+              availability: "available"
+              pending?: {
+                checkoutId: string
+                planKey: string
+                status: PluginServiceCheckoutStatus
+              }
+              plans: readonly PluginServicePlanOffer[]
+            }
+          | { availability: "unavailable" }
+        subscriptionStatus?: string
+      }
+    | { availability: "unavailable" }
   schema: typeof pluginServiceStatusSchema
   state: PluginServiceState
   usage:
@@ -58,10 +93,15 @@ export interface PluginServiceTarget {
   pluginId: string
 }
 
+export interface PluginServiceCheckoutTarget extends PluginServiceTarget {
+  planKey: string
+}
+
 /** Renderer-facing bridge with one fixed method per allowed sidecar action. */
 export interface PluginServiceClient {
   authorize(input: PluginServiceTarget): Promise<PluginServiceStatus>
   cancelAuthorization(input: PluginServiceTarget): Promise<PluginServiceStatus>
+  checkout(input: PluginServiceCheckoutTarget): Promise<PluginServiceStatus>
   getStatus(input: PluginServiceTarget): Promise<PluginServiceStatus>
   listServices(): Promise<readonly PluginServiceSummary[]>
   onDidChange(listener: () => void): () => void
@@ -71,6 +111,8 @@ export interface PluginServiceClient {
 
 const states = new Set<unknown>(["connected", "disconnected", "attention", "unknown"])
 const verifications = new Set<unknown>(["verified", "unverified", "failed", "unknown"])
+const billingIntervals = new Set<unknown>(["month", "year"])
+const checkoutStatuses = new Set<unknown>(["created", "processing", "converted", "failed", "expired"])
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`)
@@ -123,6 +165,29 @@ function requireMetric(value: unknown, label: string, field: "remaining" | "cons
   return { unit: requireDisplayString(metric.unit, `${label} unit`, 32), value: numericValue }
 }
 
+function requirePlanKey(value: unknown, label: string) {
+  const key = requireDisplayString(value, label, 80)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)) throw new Error(`${label} is invalid`)
+  return key
+}
+
+function parseBillingInterval(value: unknown, label: string): PluginServiceBillingInterval | undefined {
+  if (value === undefined) return undefined
+  if (!billingIntervals.has(value)) throw new Error(`${label} is invalid`)
+  return value as PluginServiceBillingInterval
+}
+
+function parsePlanOffer(value: unknown, label: string): PluginServicePlanOffer {
+  const offer = requireRecord(value, label)
+  requireExactKeys(offer, ["billingInterval", "key", "name"], ["key", "name"], label)
+  const billingInterval = parseBillingInterval(offer.billingInterval, `${label} billing interval`)
+  return {
+    ...(billingInterval === undefined ? {} : { billingInterval }),
+    key: requirePlanKey(offer.key, `${label} key`),
+    name: requireDisplayString(offer.name, `${label} name`, 120),
+  }
+}
+
 /**
  * Reduces an untrusted MCP result to a small display-only status. Unknown fields,
  * URLs, paths and arbitrary diagnostic strings fail closed before preload.
@@ -131,8 +196,8 @@ export function parsePluginServiceStatus(value: unknown): PluginServiceStatus {
   const status = requireRecord(value, "Plugin service status")
   requireExactKeys(
     status,
-    ["account", "credential", "credits", "schema", "state", "usage"],
-    ["account", "credential", "credits", "schema", "state", "usage"],
+    ["account", "billing", "credential", "credits", "plan", "schema", "state", "usage"],
+    ["account", "billing", "credential", "credits", "plan", "schema", "state", "usage"],
     "Plugin service status",
   )
   if (status.schema !== pluginServiceStatusSchema) throw new Error("Plugin service status schema is invalid")
@@ -178,6 +243,108 @@ export function parsePluginServiceStatus(value: unknown): PluginServiceStatus {
   const credits: PluginServiceStatus["credits"] = creditsMetric
     ? { availability: "available", remaining: creditsMetric.value, unit: creditsMetric.unit }
     : { availability: "unavailable" }
+
+  const planValue = requireRecord(status.plan, "Plugin service plan")
+  let plan: PluginServiceStatus["plan"]
+  if (planValue.availability === "unavailable") {
+    requireExactKeys(planValue, ["availability"], ["availability"], "Plugin service plan")
+    plan = { availability: "unavailable" }
+  } else {
+    requireExactKeys(
+      planValue,
+      ["availability", "billingInterval", "key", "name"],
+      ["availability", "key", "name"],
+      "Plugin service plan",
+    )
+    if (planValue.availability !== "available") throw new Error("Plugin service plan availability is invalid")
+    const billingInterval = parseBillingInterval(planValue.billingInterval, "Plugin service plan billing interval")
+    plan = {
+      availability: "available",
+      ...(billingInterval === undefined ? {} : { billingInterval }),
+      key: requirePlanKey(planValue.key, "Plugin service plan key"),
+      name: requireDisplayString(planValue.name, "Plugin service plan name", 120),
+    }
+  }
+
+  const billingValue = requireRecord(status.billing, "Plugin service billing")
+  let billing: PluginServiceStatus["billing"]
+  if (billingValue.availability === "unavailable") {
+    requireExactKeys(billingValue, ["availability"], ["availability"], "Plugin service billing")
+    billing = { availability: "unavailable" }
+  } else {
+    requireExactKeys(
+      billingValue,
+      ["availability", "checkout", "subscriptionStatus"],
+      ["availability", "checkout"],
+      "Plugin service billing",
+    )
+    if (billingValue.availability !== "available") throw new Error("Plugin service billing availability is invalid")
+    const checkoutValue = requireRecord(billingValue.checkout, "Plugin service checkout")
+    let checkout: Extract<PluginServiceStatus["billing"], { availability: "available" }>["checkout"]
+    if (checkoutValue.availability === "unavailable") {
+      requireExactKeys(checkoutValue, ["availability"], ["availability"], "Plugin service checkout")
+      checkout = { availability: "unavailable" }
+    } else {
+      requireExactKeys(
+        checkoutValue,
+        ["availability", "pending", "plans"],
+        ["availability", "plans"],
+        "Plugin service checkout",
+      )
+      if (checkoutValue.availability !== "available" || !Array.isArray(checkoutValue.plans)) {
+        throw new Error("Plugin service checkout is invalid")
+      }
+      if (checkoutValue.plans.length === 0 || checkoutValue.plans.length > 32) {
+        throw new Error("Plugin service checkout plans must contain between 1 and 32 items")
+      }
+      const plans = checkoutValue.plans.map((offer, index) =>
+        parsePlanOffer(offer, `Plugin service checkout plan ${index}`),
+      )
+      if (new Set(plans.map(({ key }) => key)).size !== plans.length) {
+        throw new Error("Plugin service checkout plans contain duplicate keys")
+      }
+      let pending:
+        | {
+            checkoutId: string
+            planKey: string
+            status: PluginServiceCheckoutStatus
+          }
+        | undefined
+      if (checkoutValue.pending !== undefined) {
+        const pendingValue = requireRecord(checkoutValue.pending, "Plugin service pending checkout")
+        requireExactKeys(
+          pendingValue,
+          ["checkoutId", "planKey", "status"],
+          ["checkoutId", "planKey", "status"],
+          "Plugin service pending checkout",
+        )
+        if (!checkoutStatuses.has(pendingValue.status)) throw new Error("Plugin service checkout status is invalid")
+        pending = {
+          checkoutId: requireDisplayString(pendingValue.checkoutId, "Plugin service pending checkout id", 191),
+          planKey: requirePlanKey(pendingValue.planKey, "Plugin service pending checkout Plan key"),
+          status: pendingValue.status as PluginServiceCheckoutStatus,
+        }
+      }
+      checkout = {
+        availability: "available",
+        ...(pending === undefined ? {} : { pending }),
+        plans,
+      }
+    }
+    billing = {
+      availability: "available",
+      checkout,
+      ...(billingValue.subscriptionStatus === undefined
+        ? {}
+        : {
+            subscriptionStatus: requireDisplayString(
+              billingValue.subscriptionStatus,
+              "Plugin service subscription status",
+              64,
+            ),
+          }),
+    }
+  }
   const usageValue = requireRecord(status.usage, "Plugin service usage")
   let usage: PluginServiceStatus["usage"]
   if (usageValue.availability === "unavailable") {
@@ -209,11 +376,13 @@ export function parsePluginServiceStatus(value: unknown): PluginServiceStatus {
 
   return {
     account: parsedAccount,
+    billing,
     credential: {
       configured: credential.configured,
       verification: credential.verification as PluginServiceCredentialVerification,
     },
     credits,
+    plan,
     schema: pluginServiceStatusSchema,
     state: status.state as PluginServiceState,
     usage,

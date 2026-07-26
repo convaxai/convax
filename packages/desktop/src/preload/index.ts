@@ -3,10 +3,7 @@ import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
-import {
-  canvasDocumentIpcChannels,
-  type CanvasRendererDocumentClient,
-} from "../canvas-document-contracts"
+import { canvasDocumentIpcChannels, type CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import {
   canvasExternalMediaDragIpcChannels,
   type CanvasExternalMediaDragRendererClient,
@@ -27,10 +24,7 @@ import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-se
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
-import {
-  pluginCanvasImageIpcChannels,
-  type PluginCanvasImageClient,
-} from "../plugin-canvas-image-contracts"
+import { pluginCanvasImageIpcChannels, type PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
@@ -470,6 +464,7 @@ const pluginConnectedMediaClient = {
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
+  checkout: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.checkout, input),
   getStatus: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.getStatus, input),
   listServices: () => ipcRenderer.invoke(pluginServiceIpcChannels.listServices),
   onDidChange(listener) {

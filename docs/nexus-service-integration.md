@@ -20,6 +20,8 @@ Nexus Service 负责：
 - 通过 Nexus Hosted Auth 登录用户；
 - 把 Nexus 支持的 LLM 模型目录接入现有 Agent 模型选择器；
 - 展示已连接账号、凭据状态、剩余额度和用量；
+- 展示 Nexus 返回的当前 Plan、订阅状态和允许购买的 Plan；
+- 通过宿主管理的固定 Checkout 操作在系统浏览器完成升级；
 - 运行一个仅 Main 进程可见的本地 OpenAI-compatible Gateway；
 - 获取短期 Nexus Data Token，并将其附加到 Gateway 请求；
 - 确保 Nexus 凭据和上游 Provider 凭据不会暴露给 Renderer、OpenCode、Canvas 文档、Project 文件或日志。
@@ -30,25 +32,32 @@ Nexus 始终是可选的已安装 Service。内置 OpenCode Service 继续独立
 
 现有的 Settings > Services 页面是该能力的唯一产品入口。安装 Nexus Plugin 后，Service 列表中新增一张 Nexus 卡片。
 
-首版连接成功后的布局沿用现有卡片结构：
+连接成功后的布局沿用现有卡片结构：
 
 ```text
-Nexus · OpenRouter                         Connected
+Nexus · OpenRouter               Connected        Free
 通过 Nexus 安全访问 OpenRouter 模型。
 
-BILLING                         AUTHENTICATION
-剩余 72 credits                 alice@example.com
+ACCOUNT                         CREDENTIAL
+Convax                          Configured · verified
+
+PLAN                            SUBSCRIPTION
+Free · monthly                  No active subscription
+
+CREDITS                         USAGE
+剩余 72 Nexus quota units       已用 28 Nexus quota units
 
 Capabilities
 LLM
 
 Models
-DeepSeek V4 Flash       Nexus · OpenRouter    LLM
+OpenRouter 当前可用模型…
 
-                                      [Sign out]
+                         [Upgrade to Pro] [Sign out]
 ```
 
-Plan 标签和 `Manage plan` 操作属于后续 Billing 契约阶段，不能通过额度单位或账号名称自行推断。
+Plan、订阅和可升级目录全部来自 Nexus 的权威 User API。Convax 不通过额度单位、账号名称或模型名称
+推断套餐，也不持有价格、Provider Product ID 或支付凭据。
 
 ### 2.1 未连接状态
 
@@ -70,17 +79,23 @@ https://nexus.microvoid.io/workspace/convax/auth/sign-in
 
 ### 2.2 已连接状态
 
-首版卡片复用现有的 `convax.plugin-service-status/1` 投影：
+卡片只接受破坏性升级后的 `convax.plugin-service-status/2` 投影：
 
 - `account.displayName`：Nexus 账号邮箱或显示名称；
 - `credential.configured`：本地是否存在可用的 Refresh Grant；
 - `credential.verification`：最近一次有界的验证结果；
 - `credits.remaining`：当前剩余额度及单位；
 - `usage.consumed`：当前周期已使用额度及单位；
+- `plan`：Nexus 当前有效 Plan 的 Key、名称和月付/年付周期；
+- `billing.subscriptionStatus`：可选的权威订阅状态；
+- `billing.checkout.plans`：当前 Workspace 配置允许购买的有界 Plan 目录；
+- `billing.checkout.pending`：当前 Checkout 的有界状态；
 - `state`：`connected`、`attention`、`disconnected` 或 `unknown`。
 
-MVP 卡片声明一个不透明模型 ID `deepseek/deepseek-v4-flash`，显示名为
-`DeepSeek V4 Flash`。Agent Runtime 刷新配置后，该模型同时出现在现有 Agent 模型选择器中。
+`service.status` v1 不再兼容；仍返回 v1 的旧插件会被宿主拒绝。Nexus Companion 从当前
+ProviderConnection 的 `/models` 读取 OpenRouter 运行时目录，模型 ID 保持不透明。Agent Runtime
+刷新配置后，同一目录同时出现在 Nexus Service 卡片和现有 Agent 模型选择器中。Manifest 中的
+`deepseek/deepseek-v4-flash` 仅作为运行时目录暂不可用时的静态回退项。
 
 ### 2.3 需要关注的状态
 
@@ -96,18 +111,19 @@ MVP 卡片声明一个不透明模型 ID `deepseek/deepseek-v4-flash`，显示�
 
 首版可以使用固定错误类别关联的宿主本地化文案表达具体原因。不能把 Sidecar 返回的任意错误文本直接传给 Renderer。
 
-### 2.4 后续 Billing 展示
+### 2.4 Plan 与 Hosted Checkout
 
-Plan 名称、Quota 重置时间、Checkout 和订阅管理都是需要的能力，但当前 Service Status 契约不表达这些信息。它们必须通过单独评审的通用 Service 契约版本增加。
+用户点击 `Upgrade to {Plan}` 后只把经过 v2 状态目录验证的 `planKey` 传给固定
+`service.checkout` Tool。Nexus 从 User Access Token 推导 Workspace、WorkspaceAccess、
+BillingConnection、Product Mapping 和固定 Success URL；客户端不能覆盖这些参数。
 
-后续可以增加：
+Sidecar 返回的 Checkout URL 仅进入 Desktop Main。Main 严格校验
+`convax.plugin-service-checkout/1`、Checkout ID 和规范 HTTPS URL，再用系统浏览器打开；
+Preload 和 Renderer 都看不到 URL。相同 Access/Plan 的未完成尝试持久化同一个
+Idempotency-Key，避免进程重启或网络重试产生重复 Checkout。
 
-- `Free`、`Pro` 等 Plan 名称；
-- Quota 上限、剩余额度和重置时间；
-- 固定的 `Manage plan` 操作；
-- 由宿主打开的 HTTPS Checkout 或账号管理流程。
-
-Renderer 不能直接接收或打开 Sidecar 返回的任意 URL。
+支付结果只能由 Nexus 的签名 Webhook 投影改变 Access/Plan。浏览器完成页和 Convax 返回前台后的
+刷新只读取状态，不能提前授予套餐。
 
 ## 3. 目标与非目标
 
@@ -175,7 +191,8 @@ Convax 只负责通用平台能力：
 - Data Token 获取；
 - 本地 OpenAI-compatible Gateway；
 - 将 Nexus 特有错误收敛为固定 Service 状态；
-- 首版精简模型目录。
+- OpenRouter 运行时模型目录与静态回退模型。
+- Service Status v2 的 Plan/Checkout 投影与可重试 Checkout 尝试。
 
 建议的包结构：
 
@@ -232,6 +249,8 @@ GET  /user/v1/me/access
 GET  /user/v1/me/quota
 GET  /user/v1/provider-connections
 POST /user/v1/data-tokens
+POST /user/v1/billing-checkouts
+GET  /user/v1/billing-checkouts/{checkoutId}
 ```
 
 Desktop 使用带 PKCE `S256` 的 Authorization Code。Callback 必须是精确注册的 Loopback Redirect，例如：
@@ -361,7 +380,7 @@ Plugin 同时贡献一个 Service 和一个 LLM Provider：
 
 ```text
 service:
-  actions: authorize, reauthorize, authorization.cancel, sign_out
+  actions: authorize, reauthorize, authorization.cancel, checkout, sign_out
 
 llm:
   provider: Nexus · OpenRouter
@@ -385,12 +404,27 @@ service.authorize
 service.reauthorize
 service.authorization.complete
 service.authorization.cancel
+service.checkout
 service.sign_out
 llm.models.list
 llm.gateway.start
 ```
 
-不能把任意 OAuth Method 或 Token Payload 暴露为 Renderer 操作。
+不能把任意 OAuth Method、Token Payload 或 Checkout URL 暴露为 Renderer 操作。
+
+`service.checkout` 只接受 `{ "plan_key": "..." }`，且该 Key 必须存在于最近一次 v2 Status
+公布的可购买 Plan 中。返回值固定为：
+
+```json
+{
+  "schema": "convax.plugin-service-checkout/1",
+  "checkout_id": "opaque-bounded-id",
+  "checkout_url": "https://checkout-provider.example/session/..."
+}
+```
+
+结果只由 Main 校验和消费。Main 打开系统浏览器后立即刷新 Status；应用重新获得焦点时再次刷新，
+从而观察 Webhook 投影后的当前 Plan。
 
 `llm.models.list` 无输入，返回：
 
@@ -484,12 +518,16 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - 接入 Status、Quota 和 Account 展示。
 - 已完成 Packaged Desktop 和真实 Provider 验证；跨平台 Credential Store 验证仍属于正式发布要求。
 
-### Phase 4：Billing 和动态目录
+### Phase 4：Billing 和动态目录（已完成代码）
 
-- 增加单独评审的通用 Plan/Quota Status 投影。
-- 增加固定、由宿主管理的 Plan Management 操作。
-- 实现 Hosted Checkout。
-- 评估用户作用域的 ProviderConnection 和动态模型发现。
+- Service Status 破坏性升级到 v2，所有 Service 插件必须显式返回 `plan` 和 `billing`。
+- 增加固定、由宿主管理的 `checkout` 操作；URL 只在 Main 中校验和打开。
+- Nexus Hosted Auth 配置选择 BillingConnection 和允许购买的 Plan。
+- User Checkout 只接受 Plan Key 和 Idempotency-Key，其他支付参数由 Nexus 推导。
+- Nexus Companion 动态读取当前 OpenRouter 模型目录。
+
+正式发布前仍需补充支付 Provider Test Mode 的完整人工验收、Webhook 延迟/乱序场景和跨平台
+系统浏览器回跳验证。
 
 ## 11. 验证
 
@@ -503,6 +541,9 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - `authorize`、`reauthorize` 和 `signOut` 会刷新 Agent 配置。
 - OpenCode 和 Nexus 是两个相互独立的 Service Catalog Entry。
 - Core Source 不根据 Nexus Plugin ID 进行分支。
+- Status v1 被明确拒绝；Status v2 缺少 Plan/Billing 或包含额外字段时失败关闭。
+- Renderer 只能选择 Status v2 公布的 Plan Key，不能传入 Checkout URL 或支付参数。
+- Checkout URL 只在 Main 中按固定 Schema 和规范 HTTPS 规则校验并打开。
 
 ### 11.2 Nexus Companion
 
@@ -515,6 +556,8 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - 认证过期最多重试一次。
 - Quota 和 Provider 失败不会被错误重试。
 - 日志中不包含 Prompt、Completion、Token、Cookie 或 Provider Secret。
+- Checkout 重试复用同一 Idempotency-Key，持久化记录不包含 Access Token 或 Checkout URL。
+- 当前 Plan 与可购买 Plan 只来自 Nexus 的复合 Access 响应。
 
 ### 11.3 Nexus
 
@@ -525,6 +568,9 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - Hosted Auth 被禁用或 Access 被暂停后，不能继续签发新 Token。
 - ProviderConnection 必须属于 Token 对应的 Workspace。
 - Gateway Reserve 和 Settlement 继续以 PostgreSQL 为权威来源。
+- Hosted Auth 配置中的 BillingConnection 和 Checkout Plan 必须属于同一 Workspace。
+- User Checkout 不能接收 WorkspaceAccess、BillingConnection、Product、金额或 Success URL。
+- Checkout 状态只能读取当前 User Access Token 所属 Access 的 Session。
 
 ### 11.4 端到端验收
 
@@ -534,6 +580,9 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - 用户可以完成一次 Streaming Agent 请求，也可以中途取消。
 - 第二个用户不能消耗第一个用户的 Quota 或读取其凭据。
 - Quota 耗尽后拒绝新推理，并显示可操作的 Service 状态。
+- Free 用户可以看到 Nexus 返回的 Pro Plan，点击 Upgrade 后由系统浏览器打开 Hosted Checkout。
+- 浏览器先返回时仍显示 Processing；只有签名 Webhook 投影完成后当前 Plan 才变更。
+- Checkout 失败、取消、过期或重复点击不破坏现有 Access，也不创建重复支付会话。
 - 退出登录会删除本地凭据，并使 Nexus 模型不可用。
 - 重启 Convax 后，可以恢复仍有效的登录状态，且凭据不会暴露给 Renderer；正式发布包还要验证
   OS Credential Vault 迁移。
@@ -544,26 +593,28 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 
 - Workspace Slug：`convax`；
 - 一个 Nexus OpenRouter ProviderConnection；
-- 一个静态模型 `deepseek/deepseek-v4-flash`；
+- OpenRouter 运行时模型目录，`deepseek/deepseek-v4-flash` 仅作为静态回退；
 - 系统浏览器 + Loopback Callback；
-- 首版账号和 Quota 展示复用现有 Service Status v1；
-- Hosted Checkout 完成前先提供 Free Access；
+- Service Status v2 是唯一受支持的状态契约，不兼容 v1；
+- Nexus User API 返回当前 Plan、Quota、订阅状态和允许购买的 Plan；
+- Checkout 由固定宿主操作打开系统浏览器，支付结果由 Nexus Webhook 投影；
 - 客户端不包含 Management Key，也不提供生产环境手工 API Key 输入框；
-- 首版不做动态模型目录；ProviderConnection 由 Nexus User API 按 Workspace 授权返回。
+- ProviderConnection 由 Nexus User API 按 Workspace 授权返回。
 
-Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权和 Nexus Companion 的核心代码均已
-实现。真实 OpenRouter 请求、全新用户注册和打包桌面环境已经完成本地验收。OS Credential Vault、
-跨平台构建，以及 Quota 耗尽、退出登录和多用户隔离等逆向场景仍是正式发布前的验收项。
+Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权、Service Status v2、
+Hosted User Checkout 和 Nexus Companion 的核心代码均已实现。真实 OpenRouter 请求、全新用户注册
+和打包桌面环境已经完成此前本地验收。Hosted Checkout 的支付 Provider Test Mode 人工流程、
+OS Credential Vault、跨平台构建，以及 Webhook 延迟/乱序、多用户隔离等逆向场景仍是正式发布前的验收项。
 
 ## 13. 当前实现落点
 
 三个仓库的职责和代码落点如下：
 
-| 仓库             | 实现                                                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ |
-| `nexus`          | Hosted Auth Controller/Runtime、User API、Data Token、Hosted Auth Prisma Migration、本地 Convax Bootstrap    |
-| `convax`         | 通用 External-browser Authorization Broker、Electron Adapter、授权完成后 Agent 配置刷新、不透明 LLM Model ID |
-| `convax-plugins` | `nexus-service` Manifest、`nexus-mcp` Companion、PKCE/Loopback、Token 轮换、本地 OpenAI-compatible Gateway   |
+| 仓库             | 实现                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `nexus`          | Hosted Auth、复合 Access/Plan API、User Checkout、配置 Allowlist、Data Token、Billing 投影            |
+| `convax`         | 通用 Status v2/Checkout Host、External-browser Broker、Electron Adapter、Service UI、Agent 配置刷新   |
+| `convax-plugins` | Nexus Manifest/Companion、PKCE/Loopback、Token 轮换、Plan 投影、Checkout 重试、本地 Gateway、模型目录 |
 
 本地联调时，由 Nexus Bootstrap 从标准输入读取 OpenRouter Provider Key，通过既有 Provider Secret
 加密路径保存，并创建或轮换 `convax` Workspace 的 OpenRouter ProviderConnection。Key 不写入命令行、
@@ -573,16 +624,18 @@ Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权�
 
 1. 启动空的本地 Nexus PostgreSQL/PGlite，并按顺序执行所有 Migration。
 2. 启动 Nexus API 与 Gateway。
-3. 通过标准输入运行本地 Bootstrap，创建 `convax` Workspace、Free Plan、Hosted Auth 配置和
-   OpenRouter ProviderConnection。
+3. 通过标准输入运行本地 Bootstrap，创建 `convax` Workspace、Free/Pro Plan、Hosted Auth 配置、
+   Hosted BillingConnection、Plan Mapping 和 OpenRouter ProviderConnection。
 4. 构建、校验并打包 `nexus-service` Plugin 与 `nexus-mcp` Companion。
 5. 启动 Convax，安装 Nexus Plugin，在 Settings > Services 选择 `Nexus · OpenRouter`。
 6. 使用系统浏览器完成一个全新用户注册和 PKCE Loopback 回调。
-7. 确认 Service 为 Connected，模型列表出现 `DeepSeek V4 Flash`。
+7. 确认 Service 为 Connected，显示当前 Free Plan、可升级 Pro Plan，并列出 OpenRouter 运行时模型。
 8. 选择该模型发起对话，确认请求路径为
    `Convax → 本地 Companion Gateway → Nexus Gateway → OpenRouter`，并收到流式响应。
 9. 检查 Nexus Invocation/Usage 记录中的模型 ID 保持
    `deepseek/deepseek-v4-flash`，且任何日志和仓库文件都不包含 Provider Key。
+10. 点击 Upgrade，确认系统浏览器打开 Hosted Checkout；完成支付后等待签名 Webhook 投影，
+    返回 Convax 确认当前 Plan 和 Quota 已刷新。
 
 ### 13.1 本地端到端验收结果
 
@@ -590,10 +643,13 @@ Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权�
 
 - 打包后的 Convax 可以安装 Nexus Service，并在重启后恢复登录状态；
 - 全新用户可以通过系统浏览器完成注册、PKCE 回调和 Token Exchange；
-- Services 页面显示 `Nexus · OpenRouter` 为 Connected，并列出一个
-  `DeepSeek V4 Flash` LLM 模型；
+- Services 页面显示 `Nexus · OpenRouter` 为 Connected；此前真实验收使用
+  `DeepSeek V4 Flash`，当前实现会优先列出 OpenRouter 运行时目录；
 - Agent 模型选择器可以明确选择该 Nexus 模型；
 - 一次真实 Agent 对话通过 Nexus Gateway 调用
   `deepseek/deepseek-v4-flash`，Nexus Invocation 结果为 `SUCCEEDED`；
 - 对应 Quota Reservation 为 `SETTLED`，Usage Event 已写入 PostgreSQL；
 - Provider Key 只存在于 Nexus 加密存储，三个仓库的凭据模式扫描均无命中。
+
+本次 Status v2 与 Hosted Checkout 变更完成自动化验证，但尚未声明已经完成真实支付 Provider 的
+人工购买；该步骤必须在 Test Mode 使用专门测试凭据执行。

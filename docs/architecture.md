@@ -573,20 +573,31 @@ composition is specified in [`ffmpeg-tool-plugin.md`](ffmpeg-tool-plugin.md).
 The same executable Tool Plugin may optionally contribute a user-global service
 surface. This does not create a second runtime or provider registry: Desktop reuses
 the already verified MCP sidecar and calls only fixed `service.status` and explicitly
-manifest-authorized `service.*` actions. Main reduces results to bounded account,
-credential-verification, credit and usage fields; unsupported data remains explicitly
-unavailable. Renderer settings receive no token, cookie, AK/SK, URL, native path,
-raw content or arbitrary MCP method. Destructive sign-out remains a host-rendered,
-confirmed action. An authorization action may request the one fixed main-only
-browser-cookie exchange in a fresh non-persistent sandboxed Electron session.
+manifest-authorized `service.*` actions. `convax.plugin-service-status/2` is the only
+accepted status version and requires bounded account, credential-verification,
+current Plan, Billing/Checkout, credit and usage projections; unsupported data
+remains explicitly unavailable. Status v1 is rejected rather than adapted.
+Renderer settings receive no token, cookie, AK/SK, URL, native path, raw content or
+arbitrary MCP method. Destructive sign-out remains a host-rendered, confirmed action.
+An authorization action may request the one fixed main-only browser-cookie exchange
+in a fresh non-persistent sandboxed Electron session.
+
+Checkout is also a fixed host operation, not a generic Plugin link. Renderer may
+select only a bounded Plan key advertised by the current v2 status. Preload forwards
+that exact Plugin/Plan target, the sidecar receives only `{ plan_key }`, and Main
+accepts only `convax.plugin-service-checkout/1` with a bounded opaque Checkout id and
+canonical HTTPS URL. Main opens the URL with the system browser and refreshes status;
+the URL never crosses preload. Returning focus to Desktop refreshes the service
+catalog so a provider webhook projection can become visible without granting any
+entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
 settings. Plugin generation capabilities and model rows are derived from the
 installed manifest. An LLM contribution may additionally opt into the fixed
 `llm.models.list` runtime catalog; Desktop validates that bounded catalog in Main and
 projects the resulting connected Plugin provider back into its owning Service card.
-Dynamic account, credit and usage data still comes only from the bounded service
-status. The existing OpenCode Agent runtime contributes a safe display-only
+Dynamic account, Plan, Billing, credit and usage data still comes only from the
+bounded service status. The existing OpenCode Agent runtime contributes a safe display-only
 projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
@@ -1027,7 +1038,8 @@ The public bridge keeps separate namespaces for Project lifecycle, Project Files
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
 capabilities, Plugin Services, and narrow trusted native integrations such as
 `jianying`. Plugin Services
-accept only an installed Plugin id through fixed actions. The JianYing bridge accepts only a Project/Canvas
+accept only an installed Plugin id through fixed actions; Checkout additionally
+accepts one validated Plan key and never returns its external URL. The JianYing bridge accepts only a Project/Canvas
 reference, revision, node ids and a constrained target; native paths remain in main.
 The Canvas native-drag bridge is a two-phase exception required by Electron: an
 async prepare call returns only an opaque sender-scoped ticket, then a synchronous

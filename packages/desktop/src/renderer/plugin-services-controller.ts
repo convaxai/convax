@@ -76,6 +76,15 @@ export class PluginServicesController {
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
     if (this.#disposed) return
+    if (action === "checkout") throw new Error("Plugin service Checkout requires a Plan")
+    const activeAction = this.#snapshot.action
+    const supersedesAuthorization =
+      action === "authorization.cancel" &&
+      activeAction?.pluginId === pluginId &&
+      (activeAction.action === "authorize" || activeAction.action === "reauthorize")
+    if (activeAction?.pluginId === pluginId && !supersedesAuthorization) {
+      throw new Error("Plugin service action is already active")
+    }
     const entry = this.#snapshot.services.find((service) => service.pluginId === pluginId)
     if (!entry || !entry.actions.includes(action)) throw new Error("Plugin service action is no longer available")
     const generation = this.#generation
@@ -92,6 +101,38 @@ export class PluginServicesController {
             : action === "authorization.cancel"
               ? await this.client.cancelAuthorization(target)
               : await this.client.signOut(target)
+      if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
+        this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
+      }
+    } catch (error) {
+      if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
+        this.#replace(pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+      }
+    } finally {
+      if (!this.#disposed && actionEpoch === this.#actionEpoch) {
+        const { action: _action, ...snapshot } = this.#snapshot
+        this.#setSnapshot(snapshot)
+      }
+    }
+  }
+
+  async checkout(pluginId: string, planKey: string) {
+    if (this.#disposed) return
+    if (this.#snapshot.action?.pluginId === pluginId) throw new Error("Plugin service action is already active")
+    const entry = this.#snapshot.services.find((service) => service.pluginId === pluginId)
+    if (!entry || !entry.actions.includes("checkout")) {
+      throw new Error("Plugin service Checkout is no longer available")
+    }
+    const checkout = entry.status?.billing.availability === "available" ? entry.status.billing.checkout : undefined
+    if (checkout?.availability !== "available" || !checkout.plans.some(({ key }) => key === planKey)) {
+      throw new Error("Plugin service Checkout Plan is no longer available")
+    }
+    const generation = this.#generation
+    const fingerprint = summaryFingerprint(entry)
+    const actionEpoch = ++this.#actionEpoch
+    this.#setSnapshot({ ...this.#snapshot, action: { action: "checkout", pluginId } })
+    try {
+      const status = await this.client.checkout({ planKey, pluginId })
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
       }

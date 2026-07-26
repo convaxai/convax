@@ -1003,6 +1003,24 @@ describe("GenerationPluginRuntime", () => {
     expect(missing.clients[0].calls).toHaveLength(0)
   })
 
+  test("passes only the selected Plan key to the fixed Checkout tool", async () => {
+    const { clients, runtime } = setup([servicePlugin(["checkout"])], ["service.checkout", "service.status"])
+
+    await runtime.callService("account-tools", "checkout", undefined, { planKey: "pro-monthly" })
+
+    expect(clients[0]?.calls).toEqual([
+      {
+        input: { plan_key: "pro-monthly" },
+        name: "service.checkout",
+        requestTimeoutMs: undefined,
+      },
+    ])
+    await expect(runtime.callService("account-tools", "checkout")).rejects.toThrow("input is invalid")
+    await expect(runtime.callService("account-tools", "status", undefined, { planKey: "pro-monthly" })).rejects.toThrow(
+      "input is invalid",
+    )
+  })
+
   test("reuses one verified sidecar for generation and service contributions", async () => {
     const generation = generationPlugin()
     const combined: InstalledWebPluginSummary = {

@@ -811,11 +811,12 @@ export class GenerationPluginRuntime {
       )
   }
 
-  /** Calls one host-defined service tool with an empty input; arbitrary MCP names never enter here. */
+  /** Calls one host-defined service tool with a fixed bounded input; arbitrary MCP names never enter here. */
   async callService(
     pluginId: string,
     call: "status" | WebPluginServiceAction,
     signal?: AbortSignal,
+    input?: { readonly planKey: string },
   ): Promise<PluginServiceMcpCallResult> {
     if (signal?.aborted) throw abortError(signal.reason)
     const plugins = await this.#discover()
@@ -833,7 +834,9 @@ export class GenerationPluginRuntime {
             ? pluginServiceMcpTools.reauthorize
             : call === "authorization.cancel"
               ? pluginServiceMcpTools.cancelAuthorization
-              : pluginServiceMcpTools.signOut
+              : call === "checkout"
+                ? pluginServiceMcpTools.checkout
+                : pluginServiceMcpTools.signOut
     try {
       const availableTools = await this.#availableTools(runtime, signal)
       if (!availableTools.has(toolName)) {
@@ -844,7 +847,14 @@ export class GenerationPluginRuntime {
       if (!current || current.fingerprint !== selected.fingerprint || this.#cache.get(pluginId) !== runtime) {
         throw new Error(`Plugin service changed before its action started: ${pluginId}`)
       }
-      const result: PluginServiceMcpCallResult = await runtime.client.callTool(toolName, {}, signal)
+      if ((call === "checkout") !== (input !== undefined)) {
+        throw new Error(`Plugin service ${call} input is invalid: ${pluginId}`)
+      }
+      const result: PluginServiceMcpCallResult = await runtime.client.callTool(
+        toolName,
+        input === undefined ? {} : { plan_key: input.planKey },
+        signal,
+      )
       result.authorizationIdentity = runtime.authorizationIdentity
       if (
         (call === "authorize" || call === "reauthorize") &&

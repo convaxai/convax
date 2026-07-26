@@ -68,6 +68,10 @@ function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentic
 }
 
 function pluginBilling(service: PluginServiceViewEntry): ServiceBilling {
+  const plan = service.status?.plan
+  if (plan?.availability === "available") {
+    return plan.key === "free" ? { kind: "free" } : { kind: "subscription", name: plan.name }
+  }
   const credits = service.status?.credits
   return credits?.availability === "available"
     ? { kind: "credits", remaining: credits.remaining, unit: credits.unit }
@@ -214,6 +218,10 @@ export class ServiceCatalogController {
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
     return this.#plugins.perform(pluginId, action)
+  }
+
+  async checkout(pluginId: string, planKey: string) {
+    return this.#plugins.checkout(pluginId, planKey)
   }
 
   dispose() {

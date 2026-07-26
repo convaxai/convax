@@ -118,6 +118,7 @@ import {
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
+import { createElectronPluginServiceCheckoutNavigation } from "./electron-plugin-service-checkout"
 import { createElectronPluginServiceExternalAuthorizationBroker } from "./electron-plugin-service-external-authorization"
 import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-authorization-checkpoints"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
@@ -590,6 +591,7 @@ function startApplication() {
       generationRuntime,
       pluginServiceBrowserAuthorization,
       pluginServiceExternalAuthorization,
+      createElectronPluginServiceCheckoutNavigation(),
     )
     const generationOperations = new GenerationOperationStore(
       join(userDataDirectory, "generation-operations", "operation-v1"),
@@ -1059,6 +1061,7 @@ function startApplication() {
           refreshAgentAfterServiceAction(() => pluginServices.authorize(pluginId, signal)),
         cancelAuthorization: (pluginId, signal) =>
           refreshAgentAfterServiceAction(() => pluginServices.cancelAuthorization(pluginId, signal)),
+        checkout: (pluginId, planKey, signal) => pluginServices.checkout(pluginId, planKey, signal),
         getStatus: (pluginId, signal) => pluginServices.getStatus(pluginId, signal),
         listServices: () => pluginServices.listServices(),
         reauthorize: (pluginId, signal) =>

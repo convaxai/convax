@@ -30,6 +30,7 @@ export interface SettingsViewProps {
   onLanguageChange(preference: AppLanguagePreference): void
   onRefreshServices(): void
   onServiceAction(pluginId: string, action: WebPluginServiceAction): void
+  onServiceCheckout?(pluginId: string, planKey: string): void
   onUsePluginOnCanvas?(plugin: WebPluginManifest): void
   onUsePluginInAgent?(plugin: WebPluginManifest): void
   petClient: PetSettingsHostClient
@@ -122,6 +123,7 @@ export function SettingsView({
   onLanguageChange,
   onRefreshServices,
   onServiceAction,
+  onServiceCheckout,
   onUsePluginOnCanvas,
   onUsePluginInAgent,
   petClient,
@@ -245,6 +247,7 @@ export function SettingsView({
             <ServicesSurface
               locale={locale}
               onAction={onServiceAction}
+              onCheckout={onServiceCheckout}
               onRefresh={onRefreshServices}
               snapshot={serviceSnapshot}
             />

@@ -27,6 +27,29 @@ export function parsePluginServiceTarget(input: unknown) {
   return { pluginId: requireWebPluginId(value.pluginId) }
 }
 
+export function parsePluginServiceCheckoutTarget(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  const prototype = Object.getPrototypeOf(input)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  const value = input as Record<string, unknown>
+  if (
+    Object.keys(value).length !== 2 ||
+    !("pluginId" in value) ||
+    !("planKey" in value) ||
+    typeof value.planKey !== "string" ||
+    value.planKey !== value.planKey.trim() ||
+    value.planKey.length > 80 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.planKey)
+  ) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  return { planKey: value.planKey, pluginId: requireWebPluginId(value.pluginId) }
+}
+
 /** Sender-scoped cancellation and duplicate suppression without an Electron dependency. */
 export class PluginServiceIpcOperations {
   readonly #senders = new Map<number, SenderState>()
@@ -59,7 +82,8 @@ export class PluginServiceIpcOperations {
     this.#disposed = true
     for (const state of this.#senders.values()) {
       state.sender.removeListener("destroyed", state.destroyed)
-      for (const controller of state.controllers.values()) controller.abort(abortError("Plugin service IPC was disposed"))
+      for (const controller of state.controllers.values())
+        controller.abort(abortError("Plugin service IPC was disposed"))
       state.controllers.clear()
     }
     this.#senders.clear()

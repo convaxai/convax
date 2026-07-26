@@ -373,15 +373,29 @@ missing declared tool fails the call. A single JSON message is currently limited
 
 ### Service status and actions
 
-Service calls receive exactly `{}`. A successful `service.status` or service action
-returns `structuredContent` using `convax.plugin-service-status/1`:
+Service calls receive exactly `{}` except for the fixed Checkout call described
+below. A successful `service.status` or ordinary service action returns
+`structuredContent` using the breaking `convax.plugin-service-status/2` contract:
 
 ```json
 {
-  "schema": "convax.plugin-service-status/1",
+  "schema": "convax.plugin-service-status/2",
   "state": "connected",
   "credential": { "configured": true, "verification": "verified" },
   "account": { "availability": "unavailable" },
+  "plan": {
+    "availability": "available",
+    "key": "free",
+    "name": "Free",
+    "billingInterval": "month"
+  },
+  "billing": {
+    "availability": "available",
+    "checkout": {
+      "availability": "available",
+      "plans": [{ "key": "pro", "name": "Pro", "billingInterval": "month" }]
+    }
+  },
   "credits": { "availability": "available", "remaining": 80, "unit": "credits" },
   "usage": { "availability": "unavailable" }
 }
@@ -389,13 +403,25 @@ returns `structuredContent` using `convax.plugin-service-status/1`:
 
 Account availability may instead include one bounded `displayName`. Usage
 availability may include bounded non-negative `consumed`, `unit`, and optional
-`period`. Missing or unsupported account, credit, or usage APIs must use
+`period`. Plan availability may contain one bounded Key, display name and optional
+billing interval. Available Billing contains one Checkout projection, optional
+subscription status, a bounded Plan catalog, and optional pending Checkout status.
+Missing or unsupported account, Plan, Billing, credit, or usage APIs must use
 `availability: "unavailable"`; the host does not infer or scrape those values.
+Status v1 is rejected rather than adapted.
+
+The manifest-authorized `checkout` action is the only service call with input. It
+receives exactly `{ "plan_key": "..." }` for a Plan advertised by the current
+status and returns `convax.plugin-service-checkout/1` with a bounded Checkout id
+and canonical HTTPS URL. Main validates and opens that URL in the system browser,
+then refreshes status. The URL never crosses preload or reaches renderer.
 
 Main rejects unknown fields, impossible credential/connection states, unbounded
 numbers, URLs, native paths and malformed display text. It discards normal MCP
 `content`, stderr, and raw errors rather than forwarding them to preload. The
 renderer can pass only a validated Plugin id to one fixed bridge method per action.
+Checkout is the sole exception and additionally passes one validated advertised
+Plan key; it cannot pass a URL, Product id, amount, or provider payload.
 Plugin updates or uninstalls invalidate in-flight results, and renderer destruction
 cancels outstanding calls. The Services settings page is host-rendered; it never
 loads Plugin HTML. `sign_out` requires an explicit host confirmation because it may

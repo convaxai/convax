@@ -7,6 +7,7 @@ import {
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import type { GenerationPluginRuntime } from "./generation-plugin-runtime"
+import { parsePluginServiceCheckoutResult, type PluginServiceCheckoutNavigation } from "./plugin-service-checkout"
 import {
   parsePluginServiceBrowserAuthorizationRequest,
   pluginServiceBrowserAuthorizationRequestSchema,
@@ -47,6 +48,7 @@ export interface PluginServiceToolRuntime {
     pluginId: string,
     call: "status" | WebPluginServiceAction,
     signal?: AbortSignal,
+    input?: { readonly planKey: string },
   ): Promise<PluginServiceToolCallResult>
   listServices(): Promise<readonly PluginServiceSummary[]>
 }
@@ -114,6 +116,7 @@ export class PluginServiceHost {
       | PluginServiceBrowserAuthorizationBroker
       | PluginServiceBrowserAuthorizationHost,
     private readonly externalAuthorization?: PluginServiceExternalAuthorizationBroker,
+    private readonly checkoutNavigation?: PluginServiceCheckoutNavigation,
   ) {}
 
   listServices() {
@@ -143,6 +146,28 @@ export class PluginServiceHost {
     return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
       await this.#discardPlugin(pluginId)
       return this.#call(pluginId, "sign_out", controlSignal)
+    })
+  }
+
+  async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {
+    return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+      if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
+      const before = await this.#installed(pluginId)
+      if (!before.actions.includes("checkout")) throw new Error(`Plugin service Checkout is not declared: ${pluginId}`)
+      const result = await this.runtime.callService(pluginId, "checkout", controlSignal, { planKey })
+      if (result.isError || !result.structuredContent) {
+        throw new Error(`Plugin service Checkout failed: ${pluginId}`)
+      }
+      await this.#assertCurrent(before)
+      let checkout: ReturnType<typeof parsePluginServiceCheckoutResult>
+      try {
+        checkout = parsePluginServiceCheckoutResult(result.structuredContent)
+      } catch {
+        throw new Error(`Plugin service returned an invalid Checkout result: ${pluginId}`)
+      }
+      await this.checkoutNavigation.open(checkout.checkoutUrl)
+      await this.#assertCurrent(before)
+      return this.#call(pluginId, "status", controlSignal)
     })
   }
 

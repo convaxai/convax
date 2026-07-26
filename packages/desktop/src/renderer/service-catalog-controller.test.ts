@@ -18,8 +18,10 @@ function deferred<T>() {
 
 const connected: PluginServiceStatus = {
   account: { availability: "available", displayName: "Creator" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "available", remaining: 88, unit: "credits" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -29,6 +31,7 @@ function pluginClient(): PluginServiceClient {
   return {
     authorize: mock(async () => connected),
     cancelAuthorization: mock(async () => connected),
+    checkout: mock(async () => connected),
     getStatus: mock(async () => connected),
     listServices: mock(
       async (): Promise<readonly PluginServiceSummary[]> => [

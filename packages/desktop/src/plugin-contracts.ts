@@ -83,7 +83,13 @@ export interface WebPluginGenerationRecoveryContribution {
   schema: "convax.generation-lro/1"
 }
 
-export const webPluginServiceActions = ["authorize", "reauthorize", "authorization.cancel", "sign_out"] as const
+export const webPluginServiceActions = [
+  "authorize",
+  "reauthorize",
+  "authorization.cancel",
+  "checkout",
+  "sign_out",
+] as const
 
 export type WebPluginServiceAction = (typeof webPluginServiceActions)[number]
 

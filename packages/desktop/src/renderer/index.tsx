@@ -280,6 +280,11 @@ function App() {
     return () => serviceCatalogController.dispose()
   }, [serviceCatalogController])
   useEffect(() => {
+    const refreshServicesAfterBrowserReturn = () => void serviceCatalogController.refresh()
+    window.addEventListener("focus", refreshServicesAfterBrowserReturn)
+    return () => window.removeEventListener("focus", refreshServicesAfterBrowserReturn)
+  }, [serviceCatalogController])
+  useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth)
     window.addEventListener("resize", updateViewportWidth)
     return () => window.removeEventListener("resize", updateViewportWidth)
@@ -387,11 +392,13 @@ function App() {
           flushAuthoritativeCanvas: async () => {
             await flushAuthoritativeCanvas()
             return (
-              await window.convax.canvas.documents.load({
-                canvasId: input.canvasId,
-                scopeId: input.projectId,
-              })
-            ).document ?? undefined
+              (
+                await window.convax.canvas.documents.load({
+                  canvasId: input.canvasId,
+                  scopeId: input.projectId,
+                })
+              ).document ?? undefined
+            )
           },
           write: (authoritativeDocument) =>
             window.convax.canvas.pluginImages.create({
@@ -1589,6 +1596,7 @@ function App() {
           onLanguageChange={changeLanguage}
           onRefreshServices={() => void serviceCatalogController.refresh()}
           onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
+          onServiceCheckout={(pluginId, planKey) => void serviceCatalogController.checkout(pluginId, planKey)}
           onUsePluginOnCanvas={usePluginOnCanvas}
           onUsePluginInAgent={usePluginInAgent}
           petClient={window.convax.pets}

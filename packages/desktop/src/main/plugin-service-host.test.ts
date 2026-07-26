@@ -26,8 +26,10 @@ const summary: PluginServiceSummary = {
 
 const status = {
   account: { availability: "unavailable" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "unavailable" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -42,6 +44,36 @@ function deferred<T>() {
 }
 
 describe("PluginServiceHost", () => {
+  test("opens only the fixed Checkout result and returns the refreshed bounded status", async () => {
+    const checkoutSummary = { ...summary, actions: ["checkout", "sign_out"] as WebPluginServiceAction[] }
+    const calls: Array<{ call: string; input?: { readonly planKey: string } }> = []
+    const runtime: PluginServiceToolRuntime = {
+      async callService(_pluginId, call, _signal, input) {
+        calls.push({ call, ...(input === undefined ? {} : { input }) })
+        return call === "checkout"
+          ? {
+              structuredContent: {
+                checkout_id: "checkout_12345678",
+                checkout_url: "https://checkout.example.test/session/123?provider=secure",
+                schema: "convax.plugin-service-checkout/1",
+              },
+            }
+          : { structuredContent: status }
+      },
+      listServices: async () => [checkoutSummary],
+    }
+    const opened: string[] = []
+    const host = new PluginServiceHost(runtime, undefined, undefined, {
+      open: async (url) => {
+        opened.push(url)
+      },
+    })
+
+    expect(await host.checkout("account-tools", "pro")).toEqual(status)
+    expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
+    expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
+  })
+
   test("returns only a validated structured status and ignores raw MCP text", async () => {
     const callService = mock(async () => ({
       content: [{ text: "Bearer secret-must-not-cross-preload", type: "text" }],

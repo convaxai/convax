@@ -1,15 +1,28 @@
 import { describe, expect, test } from "bun:test"
 
 import { pluginServiceIpcChannels } from "../plugin-service-contracts"
-import { parsePluginServiceTarget, PluginServiceIpcOperations } from "./plugin-service-ipc-core"
+import {
+  parsePluginServiceCheckoutTarget,
+  parsePluginServiceTarget,
+  PluginServiceIpcOperations,
+} from "./plugin-service-ipc-core"
 
 class TestSender {
   readonly #listeners = new Set<() => void>()
   constructor(readonly id: number) {}
-  once(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.add(listener) }
-  removeListener(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.delete(listener) }
-  destroy() { for (const listener of this.#listeners) listener(); this.#listeners.clear() }
-  listenerCount() { return this.#listeners.size }
+  once(event: "destroyed", listener: () => void) {
+    if (event === "destroyed") this.#listeners.add(listener)
+  }
+  removeListener(event: "destroyed", listener: () => void) {
+    if (event === "destroyed") this.#listeners.delete(listener)
+  }
+  destroy() {
+    for (const listener of this.#listeners) listener()
+    this.#listeners.clear()
+  }
+  listenerCount() {
+    return this.#listeners.size
+  }
 }
 
 function waitForAbort(signal: AbortSignal) {
@@ -29,11 +42,29 @@ describe("Plugin service IPC boundary", () => {
     expect(Object.values(pluginServiceIpcChannels)).toEqual([
       "plugin-service:authorize",
       "plugin-service:authorization-cancel",
+      "plugin-service:checkout",
       "plugin-service:status",
       "plugin-service:list",
       "plugin-service:reauthorize",
       "plugin-service:sign-out",
     ])
+  })
+
+  test("accepts only an exact Plugin id and Plan key for Checkout", () => {
+    expect(parsePluginServiceCheckoutTarget({ planKey: "pro-monthly", pluginId: "account-tools" })).toEqual({
+      planKey: "pro-monthly",
+      pluginId: "account-tools",
+    })
+    expect(() =>
+      parsePluginServiceCheckoutTarget({
+        checkoutUrl: "https://attacker.example/checkout",
+        planKey: "pro-monthly",
+        pluginId: "account-tools",
+      }),
+    ).toThrow("Checkout target is invalid")
+    expect(() => parsePluginServiceCheckoutTarget({ planKey: "Pro Monthly", pluginId: "account-tools" })).toThrow(
+      "Checkout target is invalid",
+    )
   })
 
   test("scopes duplicate operations and renderer destruction to one sender", async () => {
@@ -56,8 +87,14 @@ describe("Plugin service IPC boundary", () => {
     const owner = new TestSender(1)
     const first = operations.run(owner, "authorize\0one", waitForAbort)
     const second = operations.run(owner, "authorize\0two", waitForAbort)
-    const firstOutcome = first.then(() => null, (error: unknown) => error)
-    const secondOutcome = second.then(() => null, (error: unknown) => error)
+    const firstOutcome = first.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const secondOutcome = second.then(
+      () => null,
+      (error: unknown) => error,
+    )
     operations.dispose()
     operations.dispose()
     expect(await firstOutcome).toMatchObject({ name: "AbortError" })

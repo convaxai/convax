@@ -129,11 +129,13 @@ function ServiceCard({
   busy,
   locale,
   onAction,
+  onCheckout,
   service,
 }: {
   busy?: WebPluginServiceAction
   locale: AppLocale
   onAction(action: WebPluginServiceAction): void
+  onCheckout(planKey: string): void
   service: ServiceCatalogEntry
 }) {
   const [confirmSignOut, setConfirmSignOut] = useState(false)
@@ -144,6 +146,9 @@ function ServiceCard({
   const authorizationPending = busy === "authorize" || busy === "reauthorize"
   const canCancel = actions.includes("authorization.cancel") && (authorizationPending || status?.state === "attention")
   const canSignOut = actions.includes("sign_out") && Boolean(status?.credential.configured)
+  const checkout = status?.billing.availability === "available" ? status.billing.checkout : undefined
+  const checkoutPlans = actions.includes("checkout") && checkout?.availability === "available" ? checkout.plans : []
+  const checkoutPending = checkout?.availability === "available" ? checkout.pending : undefined
   const unavailable = appMessage(locale, "services.unavailableData")
   return (
     <article className="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm">
@@ -158,7 +163,9 @@ function ServiceCard({
               <StatusPill>{appMessage(locale, "services.version", { version: service.version })}</StatusPill>
             ) : null}
             <StatusPill state={service.state}>{stateLabel(locale, service.state)}</StatusPill>
-            {service.billing.kind === "free" ? <StatusPill>{appMessage(locale, "services.free")}</StatusPill> : null}
+            {service.billing.kind === "free" || service.billing.kind === "subscription" ? (
+              <StatusPill>{billingLabel(locale, service)}</StatusPill>
+            ) : null}
           </div>
           <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
             {service.kind === "builtin" ? appMessage(locale, "services.openCodeDescription") : service.description}
@@ -189,6 +196,26 @@ function ServiceCard({
             value={status.account.availability === "available" ? status.account.displayName : unavailable}
           />
           <Detail label={appMessage(locale, "services.credential")} value={credentialLabel(locale, status)} />
+          <Detail
+            label={appMessage(locale, "services.plan")}
+            value={
+              status.plan.availability === "available"
+                ? `${status.plan.name}${
+                    status.plan.billingInterval
+                      ? ` · ${appMessage(locale, `services.interval.${status.plan.billingInterval}`)}`
+                      : ""
+                  }`
+                : unavailable
+            }
+          />
+          <Detail
+            label={appMessage(locale, "services.subscriptionStatus")}
+            value={
+              status.billing.availability === "available"
+                ? (status.billing.subscriptionStatus ?? appMessage(locale, "services.noSubscription"))
+                : unavailable
+            }
+          />
           <Detail
             label={appMessage(locale, "services.credits")}
             value={
@@ -281,8 +308,28 @@ function ServiceCard({
         />
       ) : null}
 
-      {canAuthorize || canReauthorize || canCancel || canSignOut ? (
+      {checkoutPending ? (
+        <p className="mt-3 text-xs text-muted-foreground" role="status">
+          {appMessage(locale, "services.checkoutPending", {
+            plan: checkoutPending.planKey,
+            status: checkoutPending.status,
+          })}
+        </p>
+      ) : null}
+
+      {canAuthorize || canReauthorize || canCancel || canSignOut || checkoutPlans.length > 0 ? (
         <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+          {checkoutPlans.map((plan) => (
+            <Button
+              disabled={Boolean(busy) || Boolean(checkoutPending)}
+              key={plan.key}
+              onClick={() => onCheckout(plan.key)}
+              size="sm"
+            >
+              {busy === "checkout" ? <LoaderCircle className="animate-spin" /> : null}
+              {appMessage(locale, "services.upgrade", { plan: plan.name })}
+            </Button>
+          ))}
           {canCancel ? (
             <Button
               disabled={Boolean(busy) && !authorizationPending}
@@ -325,12 +372,14 @@ export function ServicesSurface({
   className,
   locale,
   onAction,
+  onCheckout,
   onRefresh,
   snapshot,
 }: {
   className?: string
   locale: AppLocale
   onAction(pluginId: string, action: WebPluginServiceAction): void
+  onCheckout?(pluginId: string, planKey: string): void
   onRefresh(): void
   snapshot: ServiceCatalogSnapshot
 }) {
@@ -378,6 +427,9 @@ export function ServicesSurface({
               locale={locale}
               onAction={(action) => {
                 if (service.kind === "plugin") onAction(service.pluginId, action)
+              }}
+              onCheckout={(planKey) => {
+                if (service.kind === "plugin") onCheckout?.(service.pluginId, planKey)
               }}
               service={service}
             />
