@@ -92,13 +92,14 @@ Goals:
   commit;
 - support old Tool Plugins without weakening safety or adding vendor branches;
 - cover host crash, sidecar crash, Canvas conflict, Plugin update/uninstall, target
-  deletion, and another-machine project opening.
+  deletion, active Canvas switching, and renderer unmount/remount.
 
 Non-goals:
 
 - Canvas does not understand provider names, provider job identifiers, accounts,
   credentials, URLs, native paths, or sidecar storage;
-- a portable Project does not transfer active task ownership to another computer;
+- cross-device active-task ownership and transfer are outside the current
+  single-machine product;
 - `taskId` alone never authorizes recovery;
 - recovery does not revive a deleted or edited Canvas target;
 - Convax does not simulate provider idempotency when neither the provider nor the
@@ -593,7 +594,7 @@ An active Canvas run without its exact private ledger is
 Main best-effort cancels or acknowledges the external operation and retains only
 private audit state until cleanup.
 
-## 14. Update, uninstall, multiple hosts, and late callbacks
+## 14. Update, uninstall, single-host lifecycle, and late callbacks
 
 An accepted operation pins an immutable recovery runtime snapshot and authorization
 identity. Plugin update or uninstall:
@@ -613,11 +614,10 @@ after those operations are terminal, or after the user accepts that unresolved
 operations will remain `interrupted(unknown)`. Sign-out never silently switches an
 operation to another account.
 
-A Project opened on another computer has portable Canvas state but not the original
-Desktop ledger, pinned runtime, or sidecar journal. It cannot claim task ownership
-from `taskId`; the run becomes `interrupted(unknown)` and retry remains disabled
-until the original host proves a terminal state or an explicit future ownership
-transfer protocol exists.
+The current product is single-machine. Recovery authority is scoped to the one local
+Desktop installation and its private ledger, pinned runtime, and sidecar journal.
+Cross-device Project opening, operation ownership transfer, and multi-host
+coordination are excluded from this design and its validation matrix.
 
 Late callbacks are accepted only by the live scoped operation whose Canvas and
 ledger still match. Deleted nodes, superseded operations, changed guards, changed
@@ -714,22 +714,22 @@ UI behavior:
 The implementation is incomplete until deterministic fault injection proves every
 boundary:
 
-| Crash point                                    | Required recovery                              |
-| ---------------------------------------------- | ---------------------------------------------- |
-| before Canvas `submitting`                     | no operation exists                            |
-| after Canvas `submitting`, before ledger       | interrupt unknown; no call                     |
-| after ledger/input snapshots, before dispatch  | get, then same-operation replay                |
-| after sidecar `prepared`, before provider call | get prepared; same-operation replay            |
-| provider accepted, before sidecar task journal | provider idempotency get; never second task    |
-| sidecar accepted, before lifecycle receipt     | operation get returns stable task              |
-| lifecycle receipt, before Desktop ledger CAS   | operation get restores task                    |
-| ledger task CAS, before Canvas task CAS        | ledger/get restores Canvas task                |
-| task succeeds, before result journal           | provider terminal get reconstructs result      |
-| result journal, before Project publication     | replay same result digest                      |
-| Project publication, before Canvas CAS         | retain partial result; no regeneration         |
-| Canvas success CAS, before ledger commit       | detect Canvas success; do not republish        |
-| ledger commit, before sidecar acknowledgement  | idempotent acknowledgement                     |
-| cancellation request, before acknowledgement   | get operation; safe only with terminal proof   |
+| Crash point                                    | Required recovery                            |
+| ---------------------------------------------- | -------------------------------------------- |
+| before Canvas `submitting`                     | no operation exists                          |
+| after Canvas `submitting`, before ledger       | interrupt unknown; no call                   |
+| after ledger/input snapshots, before dispatch  | get, then same-operation replay              |
+| after sidecar `prepared`, before provider call | get prepared; same-operation replay          |
+| provider accepted, before sidecar task journal | provider idempotency get; never second task  |
+| sidecar accepted, before lifecycle receipt     | operation get returns stable task            |
+| lifecycle receipt, before Desktop ledger CAS   | operation get restores task                  |
+| ledger task CAS, before Canvas task CAS        | ledger/get restores Canvas task              |
+| task succeeds, before result journal           | provider terminal get reconstructs result    |
+| result journal, before Project publication     | replay same result digest                    |
+| Project publication, before Canvas CAS         | retain partial result; no regeneration       |
+| Canvas success CAS, before ledger commit       | detect Canvas success; do not republish      |
+| ledger commit, before sidecar acknowledgement  | idempotent acknowledgement                   |
+| cancellation request, before acknowledgement   | get operation; safe only with terminal proof |
 
 Every row asserts:
 
@@ -792,8 +792,8 @@ Main orchestration:
 - result replay and Canvas atomic commit;
 - explicit cancel before/after receipt and after restart;
 - Plugin update/uninstall with pinned recovery runtime;
-- Canvas switch, unmount, late callback, target deletion, stale revision, and another
-  host opening the Project;
+- Canvas switch, renderer unmount/remount, late callback, target deletion, and stale
+  revision;
 - no native path, credentials, raw provider id, or raw diagnostics in Canvas, IPC,
   logs, or renderer.
 
@@ -805,7 +805,8 @@ Validation commands:
 - package pack/declaration checks;
 - Desktop production build and Electron smoke, including one real Canvas CAS race,
   guarded replacement after an unrelated revision, late callback after target
-  deletion, and restart-style reconciliation of an active legacy run;
+  deletion, restart-style reconciliation of an active legacy run, and terminal-state
+  renderer unmount/remount;
 - `git diff --check`.
 
 ### Validation ownership
@@ -813,13 +814,14 @@ Validation commands:
 The proof is intentionally layered instead of forcing every crash point into one
 UI scenario:
 
-| Evidence layer                   | Owned proof                                                                                                                                                                                     |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                       |
-| Desktop generation-service tests | durable ledger/input ordering, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication                       |
-| LRO protocol/runtime tests       | v7 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and legacy rejection                                            |
-| stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                        |
-| built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, deleted-target late callback rejection, legacy restart interruption and full renderer unmount/remount |
+| Evidence layer                   | Owned proof                                                                                                                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                         |
+| Desktop generation-service tests | durable ledger/input ordering, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication                         |
+| Renderer lifecycle tests         | an accepted Main-owned generation remains alive when switching Canvas unmounts the owning card; remount hydrates active and terminal state from Canvas metadata                                   |
+| LRO protocol/runtime tests       | v7 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and legacy rejection                                              |
+| stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                          |
+| built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, terminal-state renderer remount, deleted-target late callback rejection and legacy restart interruption |
 
 The built smoke is representative end-to-end evidence; the deterministic package
 tests own the exhaustive crash-window matrix because they can inject each boundary

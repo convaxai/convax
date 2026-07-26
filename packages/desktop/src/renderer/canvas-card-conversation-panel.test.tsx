@@ -13,7 +13,10 @@ import {
   type CanvasNode,
 } from "@convax/canvas"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
+import { Window } from "happy-dom"
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
   CanvasCardConversationPanel,
@@ -28,6 +31,40 @@ import {
   resolveCanvasCardGenerationTool,
   validateCanvasCardGenerationToolInput,
 } from "./canvas-card-conversation-panel"
+
+function installTestWindow() {
+  const testWindow = new Window({ url: "https://convax.test/" })
+  const globals = {
+    Element: testWindow.Element,
+    Event: testWindow.Event,
+    HTMLElement: testWindow.HTMLElement,
+    HTMLTextAreaElement: testWindow.HTMLTextAreaElement,
+    Node: testWindow.Node,
+    document: testWindow.document,
+    window: testWindow,
+  }
+  const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, value] of Object.entries(globals)) {
+    originalDescriptors.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  originalDescriptors.set(
+    "IS_REACT_ACT_ENVIRONMENT",
+    Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT"),
+  )
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  return async () => {
+    testWindow.close()
+    for (const [name, descriptor] of originalDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+}
 
 function imageNode(overrides: Partial<CanvasNode> = {}): CanvasNode {
   return {
@@ -523,6 +560,79 @@ describe("Canvas card generation lifecycle", () => {
       warnings: [],
     })
     await expect(pending).resolves.toMatchObject({ createdNodeIds: ["generated"] })
+  })
+
+  test("keeps an accepted generation alive when switching Canvas unmounts the card", async () => {
+    const restoreWindow = installTestWindow()
+    let root: Root | undefined
+    let acceptedSignal: AbortSignal | undefined
+    let resolveGeneration!: (result: CanvasGenerateResult) => void
+    const generate = mock(
+      (request: CanvasGenerateRequest) =>
+        new Promise<CanvasGenerateResult>((resolve) => {
+          acceptedSignal = request.signal
+          resolveGeneration = resolve
+        }),
+    )
+    const owner = imageNode()
+    const request = assistantRequest(owner)
+    const service: CanvasGenerateService = {
+      describeTool: async (toolId) => ({ fields: [], toolId }),
+      generate,
+      listTools: async () => [tool({ acceptedInputs: [] })],
+    }
+
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () => {
+        root?.render(
+          <CanvasCardConversationPanel
+            agent={<div>Agent conversation</div>}
+            request={{
+              ...request,
+              generation: { ...request.generation!, initialPrompt: "Keep generating while I switch Canvas" },
+            }}
+            service={service}
+          />,
+        )
+      })
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const button = document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')
+        if (button && !button.disabled) break
+        await act(async () => {
+          await Promise.resolve()
+        })
+      }
+      const generateButton = document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')
+      expect(generateButton?.disabled).toBeFalse()
+      await act(async () => {
+        generateButton?.click()
+      })
+      expect(generate).toHaveBeenCalledTimes(1)
+      expect(acceptedSignal?.aborted).toBeFalse()
+
+      await act(async () => {
+        root?.render(<div data-active-canvas-id="canvas-two">Another Canvas</div>)
+      })
+      expect(document.querySelector("[data-active-canvas-id='canvas-two']")).not.toBeNull()
+      expect(acceptedSignal?.aborted).toBeFalse()
+
+      resolveGeneration({
+        createdNodeIds: ["generated"],
+        revision: 8,
+        toolId: "creative-tools/image.generate",
+        warnings: [],
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(acceptedSignal?.aborted).toBeFalse()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      await restoreWindow()
+    }
   })
 
   test("propagates terminal failure and explicit cancellation without creating renderer-owned task state", async () => {
