@@ -408,45 +408,40 @@ function App() {
           throw new Error("Canvas generation could not resolve Main's authoritative document")
         }
         const operationId = globalThis.crypto.randomUUID()
-        const cancel = () => {
-          void window.convax.generation.cancel({ operationId }).catch(() => undefined)
-        }
-        input.signal.addEventListener("abort", cancel, { once: true })
-        try {
-          const result = await webPluginGenerationProjection.execute(
-            input,
-            () =>
-              window.convax.generation.generate({
-                anchor: input.anchor,
-                expectedRevision: authoritativeDocument.revision,
-                operationId,
-                ...(input.output ? { output: input.output } : {}),
-                prompt: input.prompt,
-                ref: { canvasId: input.canvasId, scopeId: input.projectId },
-                referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
-                references: input.references,
-                ...(input.resultMode ? { resultMode: { type: input.resultMode } } : {}),
-                ...(input.toolId ? { toolId: input.toolId } : {}),
-              }),
-            async () => {
-              const current = pluginHostContextRef.current
-              const editor = canvasEditorRef.current
-              if (
-                !editor ||
-                current.activeProject?.id !== input.projectId ||
-                current.activeCanvas?.id !== input.canvasId
-              ) {
-                return
-              }
-              await editor.reloadAuthoritative()
-            },
-          )
-          throwIfAborted(input.signal)
-          currentScope(input.projectId, input.canvasId)
-          return result
-        } finally {
-          input.signal.removeEventListener("abort", cancel)
-        }
+        // A closed Plugin frame stops waiting and projecting only. The accepted
+        // Main-owned operation remains visible and explicitly cancellable from
+        // its persisted Canvas owner.
+        const result = await webPluginGenerationProjection.execute(
+          input,
+          () =>
+            window.convax.generation.generate({
+              anchor: input.anchor,
+              expectedRevision: authoritativeDocument.revision,
+              operationId,
+              ...(input.output ? { output: input.output } : {}),
+              prompt: input.prompt,
+              ref: { canvasId: input.canvasId, scopeId: input.projectId },
+              referenceConstraint: { ownerNodeId: input.nodeId, type: "direct-incoming" },
+              references: input.references,
+              resultMode: { type: input.resultMode ?? "create-pending-node" },
+              ...(input.toolId ? { toolId: input.toolId } : {}),
+            }),
+          async () => {
+            const current = pluginHostContextRef.current
+            const editor = canvasEditorRef.current
+            if (
+              !editor ||
+              current.activeProject?.id !== input.projectId ||
+              current.activeCanvas?.id !== input.canvasId
+            ) {
+              return
+            }
+            await editor.reloadAuthoritative()
+          },
+        )
+        throwIfAborted(input.signal)
+        currentScope(input.projectId, input.canvasId)
+        return result
       },
       getActiveContext() {
         const current = pluginHostContextRef.current
@@ -730,30 +725,22 @@ function App() {
           throw new Error("Generation could not resolve Main's authoritative Canvas document")
         }
         const operationId = request.operationId ?? globalThis.crypto.randomUUID()
-        const cancel = () => {
-          void window.convax.generation.cancel({ operationId }).catch(() => undefined)
-        }
-        request.signal.addEventListener("abort", cancel, { once: true })
-        try {
-          const result = await window.convax.generation.generate({
-            anchor: request.anchor,
-            ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-            expectedRevision: authoritativeDocument.revision,
-            operationId,
-            ...(request.output ? { output: request.output } : {}),
-            prompt: request.prompt,
-            ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-            references: request.references,
-            ...(request.relationAnchorNodeIds ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
-            ...(request.resultMode ? { resultMode: request.resultMode } : {}),
-            ...(request.toolId ? { toolId: request.toolId } : {}),
-            ...(request.toolInput ? { toolInput: request.toolInput } : {}),
-          })
-          if (request.signal.aborted) throw request.signal.reason
-          return result
-        } finally {
-          request.signal.removeEventListener("abort", cancel)
-        }
+        const result = await window.convax.generation.generate({
+          anchor: request.anchor,
+          ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
+          expectedRevision: authoritativeDocument.revision,
+          operationId,
+          ...(request.output ? { output: request.output } : {}),
+          prompt: request.prompt,
+          ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
+          references: request.references,
+          ...(request.relationAnchorNodeIds ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
+          ...(request.resultMode ? { resultMode: request.resultMode } : {}),
+          ...(request.toolId ? { toolId: request.toolId } : {}),
+          ...(request.toolInput ? { toolInput: request.toolInput } : {}),
+        })
+        if (request.signal.aborted) throw request.signal.reason
+        return result
       },
     }
     return createCanvasServices({

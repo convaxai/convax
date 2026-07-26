@@ -250,7 +250,12 @@ test("creates a named project in the injected user workspace without opening a d
   } satisfies DesktopProjectManager
 
   const { projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
-  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
+  const onOpened = mock(async (_project: ProjectRecord) => undefined)
+  const dispose = await registerProjectIpc(manager, {
+    isTrustedSender: () => true,
+    onOpened,
+    projectCreationDirectory,
+  })
 
   const result = await invoke(projectIpcChannels.createProject, { name: "Storyboard" })
   await Bun.sleep(0)
@@ -259,6 +264,7 @@ test("creates a named project in the injected user workspace without opening a d
   expect(create).toHaveBeenCalledWith(projectCreationDirectory, "Storyboard")
   expect(showOpenDialog).not.toHaveBeenCalled()
   expect(watchProject).toHaveBeenCalledWith("storyboard", expect.any(Function))
+  expect(onOpened).toHaveBeenCalledWith(expect.objectContaining({ id: "storyboard" }))
   expect(result).toMatchObject({
     canceled: false,
     project: { name: "Storyboard", rootPath: `${projectCreationDirectory}/Storyboard` },

@@ -11,6 +11,7 @@ import { GenerationToolReportedError } from "./generation-canvas-service"
 import { validateGenerationToolInputShape } from "./generation-tool-input-schema"
 
 export interface GenerationCanvasAgentPort {
+  cancel(operationId: string, actor: { id: string; kind: "agent" }): Promise<void>
   generate(
     request: GenerationCanvasRequest,
     actor: { id: string; kind: "agent" },
@@ -64,19 +65,22 @@ export function createGenerationAgentToolProvider(service: GenerationCanvasAgent
       const installed = await installedTools()
       if (!installed.length) throw new Error("No generation Tool Plugin is installed")
       const request = generationRequest(scope, input, installed)
+      const actor = { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
+      const cancel = () => {
+        void service.cancel(request.operationId, actor).catch(() => undefined)
+      }
+      context?.signal?.addEventListener("abort", cancel, { once: true })
       let result: GenerationCanvasResult
       try {
-        result = await service.generate(
-          request,
-          { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" },
-          context?.signal,
-        )
+        result = await service.generate(request, actor, context?.signal)
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error
         if (error instanceof GenerationToolReportedError) throw error
         // Native filesystem paths, CLI diagnostics, cookies, and credentials
         // must never become model-visible MCP error text.
         throw sanitizedGenerationFailure()
+      } finally {
+        context?.signal?.removeEventListener("abort", cancel)
       }
       return {
         changed: result.createdNodeIds.length > 0,
@@ -209,6 +213,7 @@ function generationRequest(
 
   return {
     anchor,
+    expectedOutputCount: 1,
     expectedRevision,
     operationId: commandId,
     ...(output === undefined ? {} : { output }),
@@ -218,6 +223,7 @@ function generationRequest(
       scopeId: requiredIdentifier(scope.scopeId, "Agent scope id"),
     },
     references,
+    resultMode: { type: "create-pending-node" },
     ...(toolId === undefined ? {} : { toolId }),
     ...(toolInput === undefined ? {} : { toolInput }),
   }

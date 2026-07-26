@@ -205,7 +205,10 @@ interface ArtifactDeclaration {
 }
 
 interface GenerationExecution {
+  actor: CanvasCommandActor
+  controller: AbortController
   fingerprint: string
+  operationId: string
   result: Promise<GenerationCanvasResult>
   state: {
     mustRetain: boolean
@@ -396,6 +399,11 @@ function waitForCaller<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
       },
     )
   })
+}
+
+function waitForGenerationRecoveryObservation(observation: number) {
+  const delay = Math.min(250, 2 ** Math.min(observation, 8))
+  return new Promise<void>((resolve) => setTimeout(resolve, delay))
 }
 
 function requireIdentifier(value: string, label: string, maxLength = 256) {
@@ -1093,6 +1101,22 @@ export class GenerationCanvasService {
 
   async cancel(operationId: string, actor: CanvasCommandActor): Promise<void> {
     requireIdentifier(operationId, "Generation operation id")
+    requireIdentifier(actor.id, "Generation actor id")
+    requireIdentifier(actor.kind, "Generation actor kind")
+    const live = [...this.#executions.values()].filter(
+      (execution) =>
+        !execution.state.settled &&
+        execution.operationId === operationId &&
+        execution.actor.id === actor.id &&
+        execution.actor.kind === actor.kind,
+    )
+    if (live.length > 1) {
+      throw new Error("Generation cancellation operation identity is ambiguous")
+    }
+    if (live.length === 1) {
+      live[0]!.controller.abort(abortError("The generation operation was explicitly canceled"))
+      return
+    }
     if (!this.#operations || !this.#inputSnapshots) return
     const candidates = (await this.#operations.list()).filter(
       (ledger) =>
@@ -1124,10 +1148,17 @@ export class GenerationCanvasService {
       await this.#superviseStoredOperation(ledger, actor)
       return
     }
-    if (state.status === "submitted" || state.status === "running" || state.status === "unknown") {
+    if (state.status === "submitted" || state.status === "running") {
+      ledger = await this.#operations.transition(identity, {
+        phase: "accepted",
+        taskId: state.taskId,
+      })
+      this.#ensureStoredSupervision(ledger, actor, false)
+      return
+    }
+    if (state.status === "unknown") {
       ledger = await this.#operations.transition(identity, {
         phase: "indeterminate",
-        ...("taskId" in state && state.taskId ? { taskId: state.taskId } : {}),
       })
       await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor)
       return
@@ -1144,7 +1175,7 @@ export class GenerationCanvasService {
         requestDigest: ledger.requestDigest,
         ...("taskId" in state && state.taskId ? { taskId: state.taskId } : {}),
       }),
-    ).catch((error) => console.warn("Could not acknowledge a cancelled generation operation", error))
+    ).catch((error) => this.#logGenerationFailure("cancel acknowledgement", error))
   }
 
   async reconcileCanvas(
@@ -1205,6 +1236,24 @@ export class GenerationCanvasService {
     }
   }
 
+  async reconcileDeletedCanvas(
+    ref: { canvasId: string; scopeId: string },
+    actor: CanvasCommandActor,
+  ): Promise<void> {
+    requireIdentifier(ref.canvasId, "Generation Canvas id")
+    requireIdentifier(ref.scopeId, "Generation scope id")
+    requireIdentifier(actor.id, "Generation actor id")
+    requireIdentifier(actor.kind, "Generation actor kind")
+    await this.#cleanupAcknowledgedOperations()
+    if (!this.#operations || !this.#inputSnapshots) return
+    const ledgers = await this.#operations.list()
+    for (const ledger of ledgers) {
+      if (ledger.projectId === ref.scopeId && ledger.canvasId === ref.canvasId) {
+        this.#ensureStoredSupervision(ledger, actor, true)
+      }
+    }
+  }
+
   async #startStoredSupervisions(
     ref: { canvasId: string; scopeId: string },
     actor: CanvasCommandActor,
@@ -1219,12 +1268,14 @@ export class GenerationCanvasService {
     )
     const ledgers = await this.#operations.list()
     for (const ledger of ledgers) {
+      if (ledger.projectId !== ref.scopeId || ledger.canvasId !== ref.canvasId) continue
       const owner = owners.get(`${ledger.nodeId}\0${ledger.operationId}`)
       const ownerRun = owner ? getCanvasNodeGenerationRun(owner) : undefined
+      if (!ownerRun) {
+        this.#ensureStoredSupervision(ledger, actor, true)
+        continue
+      }
       if (
-        ledger.projectId !== ref.scopeId ||
-        ledger.canvasId !== ref.canvasId ||
-        !ownerRun ||
         (ledger.phase === "committed"
           ? ownerRun.status !== "succeeded"
           : ledger.phase === "failed"
@@ -1235,21 +1286,28 @@ export class GenerationCanvasService {
       ) {
         continue
       }
-      const key = stableJson([ledger.projectId, ledger.canvasId, ledger.nodeId, ledger.operationId])
-      if (this.#supervisions.has(key)) continue
-      const target = {
-        canvasId: ledger.canvasId,
-        nodeId: ledger.nodeId,
-        operationId: ledger.operationId,
-        scopeId: ledger.projectId,
-      }
-      const promise = this.#superviseStoredOperation(ledger, actor)
-        .catch((error) => console.warn("Could not supervise a Canvas generation operation", error))
-        .finally(() => {
-          if (this.#supervisions.get(key)?.promise === promise) this.#supervisions.delete(key)
-        })
-      this.#supervisions.set(key, { promise, target })
+      this.#ensureStoredSupervision(ledger, actor, false)
     }
+  }
+
+  #ensureStoredSupervision(ledger: GenerationOperationLedger, actor: CanvasCommandActor, orphaned: boolean) {
+    const key = stableJson([ledger.projectId, ledger.canvasId, ledger.nodeId, ledger.operationId])
+    if (this.#supervisions.has(key)) return
+    const target = {
+      canvasId: ledger.canvasId,
+      nodeId: ledger.nodeId,
+      operationId: ledger.operationId,
+      scopeId: ledger.projectId,
+    }
+    const promise = (orphaned
+      ? this.#superviseOrphanedStoredOperation(ledger)
+      : this.#superviseStoredOperation(ledger, actor)
+    )
+      .catch((error) => this.#logGenerationFailure("supervise", error))
+      .finally(() => {
+        if (this.#supervisions.get(key)?.promise === promise) this.#supervisions.delete(key)
+      })
+    this.#supervisions.set(key, { promise, target })
   }
 
   async #acknowledgeAndCleanup(ledger: GenerationOperationLedger, acknowledge: () => Promise<void>) {
@@ -1392,10 +1450,11 @@ export class GenerationCanvasService {
         ...(ledger.taskId === undefined ? {} : { taskId: ledger.taskId }),
       })
       let state = await recovery.get(recoveryRequest())
-      for (let step = 0; step < 8; step += 1) {
+      for (let observation = 0; ; observation += 1) {
         if (state.status === "absent" || state.status === "prepared") {
           ledger = await this.#operations.transition(identity, { phase: "dispatching" })
           state = await this.#replayStoredOperation(ledger, snapshot, stored, prepared, actor)
+          await waitForGenerationRecoveryObservation(observation)
           continue
         }
         if (state.status === "submitted" || state.status === "running") {
@@ -1405,6 +1464,7 @@ export class GenerationCanvasService {
           })
           await this.#persistRecoveredTask(ledger, state.taskId, actor)
           state = await recovery.wait(recoveryRequest())
+          await waitForGenerationRecoveryObservation(observation)
           continue
         }
         if (state.status === "succeeded") {
@@ -1446,7 +1506,7 @@ export class GenerationCanvasService {
                 ...recoveryRequest(),
                 resultDigest: replayed.resultDigest,
               }),
-            ).catch((error) => console.warn("Could not acknowledge a recovered generation result", error))
+            ).catch((error) => this.#logGenerationFailure("recovered result acknowledgement", error))
             return
           } finally {
             await fs.rm(replayDirectory, { force: true, recursive: true }).catch(() => undefined)
@@ -1459,7 +1519,7 @@ export class GenerationCanvasService {
             ...(state.taskId === undefined ? {} : { taskId: state.taskId }),
           })
           await this.#acknowledgeAndCleanup(ledger, () => recovery.acknowledge(recoveryRequest())).catch((error) =>
-            console.warn("Could not acknowledge a recovered generation terminal state", error),
+            this.#logGenerationFailure("recovered terminal acknowledgement", error),
           )
           return
         }
@@ -1467,11 +1527,101 @@ export class GenerationCanvasService {
         await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor)
         return
       }
-      throw new Error("Generation recovery did not converge")
     } catch (error) {
       if (ledger.phase === "committed" || ledger.phase === "acknowledged") throw error
       await this.#operations.transition(identity, { phase: "indeterminate" }).catch(() => undefined)
       await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor).catch(() => undefined)
+      throw error
+    }
+  }
+
+  async #superviseOrphanedStoredOperation(initial: GenerationOperationLedger) {
+    if (!this.#operations || !this.#inputSnapshots) return
+    let ledger = initial
+    const identity = {
+      canvasId: ledger.canvasId,
+      nodeId: ledger.nodeId,
+      operationId: ledger.operationId,
+      projectId: ledger.projectId,
+    }
+    try {
+      if (ledger.phase === "acknowledged") {
+        await this.#withRecoveryStoreLock(() => this.#cleanupAcknowledgedOperationUnlocked(ledger))
+        return
+      }
+      if (ledger.phase === "indeterminate") return
+      const { execution } = await this.#prepareStoredRecoveryRuntime(ledger)
+      const recovery = execution.recovery!
+      const request = () => ({
+        operationId: ledger.operationId,
+        requestDigest: ledger.requestDigest,
+        ...(ledger.taskId === undefined ? {} : { taskId: ledger.taskId }),
+      })
+      if (ledger.phase === "committed") {
+        if (!ledger.resultDigest) throw new Error("Committed generation recovery result digest is missing")
+        await this.#acknowledgeAndCleanup(ledger, () =>
+          recovery.acknowledge({ ...request(), resultDigest: ledger.resultDigest! }),
+        )
+        return
+      }
+      if (ledger.phase === "failed" || ledger.phase === "cancelled") {
+        await this.#acknowledgeAndCleanup(ledger, () => recovery.acknowledge(request()))
+        return
+      }
+
+      let state = await recovery.cancel(request())
+      for (let observation = 0; ; observation += 1) {
+        if (state.status === "submitted" || state.status === "running") {
+          ledger = await this.#operations.transition(identity, {
+            phase: "accepted",
+            taskId: state.taskId,
+          })
+          state = await recovery.wait(request())
+          await waitForGenerationRecoveryObservation(observation)
+          continue
+        }
+        if (state.status === "succeeded") {
+          const resultDigest = state.resultDigest
+          const taskId = state.taskId
+          ledger = await this.#operations.transition(identity, {
+            phase: "result-ready",
+            resultDigest,
+            taskId,
+          })
+          ledger = await this.#operations.transition(identity, {
+            phase: "committed",
+            resultDigest,
+            taskId,
+          })
+          await this.#acknowledgeAndCleanup(ledger, () =>
+            recovery.acknowledge({
+              ...request(),
+              resultDigest,
+            }),
+          )
+          return
+        }
+        if (
+          state.status === "absent" ||
+          state.status === "prepared" ||
+          state.status === "failed" ||
+          state.status === "cancelled"
+        ) {
+          const phase = state.status === "failed" ? "failed" : "cancelled"
+          ledger = await this.#operations.transition(identity, {
+            phase,
+            ...("taskId" in state && state.taskId ? { taskId: state.taskId } : {}),
+          })
+          await this.#acknowledgeAndCleanup(ledger, () => recovery.acknowledge(request()))
+          return
+        }
+        await this.#operations.transition(identity, { phase: "indeterminate" })
+        return
+      }
+    } catch (error) {
+      if (ledger.phase !== "committed" && ledger.phase !== "acknowledged") {
+        await this.#operations.transition(identity, { phase: "indeterminate" }).catch(() => undefined)
+      }
       throw error
     }
   }
@@ -1800,11 +1950,12 @@ export class GenerationCanvasService {
       this.#executions.delete(settled[0])
     }
 
+    const controller = new AbortController()
     const state: GenerationExecution["state"] = { mustRetain: false, settled: false }
     const result = this.#generateOnce(
       request,
       actor,
-      signal,
+      controller.signal,
       () => {
         state.mustRetain = true
       },
@@ -1812,8 +1963,22 @@ export class GenerationCanvasService {
         state.target = target
       },
     )
-    const execution = { fingerprint, result, state }
+    const execution = {
+      actor: structuredClone(actor),
+      controller,
+      fingerprint,
+      operationId: request.operationId,
+      result,
+      state,
+    }
     this.#executions.set(key, execution)
+    const stopUnacceptedExecution = () => {
+      if (!state.mustRetain && !state.settled) {
+        controller.abort(abortError(signal?.reason))
+      }
+    }
+    if (signal?.aborted) stopUnacceptedExecution()
+    else signal?.addEventListener("abort", stopUnacceptedExecution, { once: true })
     void result.then(
       () => {
         state.settled = true
@@ -1828,10 +1993,12 @@ export class GenerationCanvasService {
           this.#executions.delete(key)
         }
       },
-    )
-    // The first caller owns the execution signal. Wait for terminal Canvas
-    // persistence; replay callers above may stop waiting independently.
-    return result
+    ).finally(() => {
+      signal?.removeEventListener("abort", stopUnacceptedExecution)
+    })
+    // Callers only own their wait. Once the run or external execution has been
+    // accepted, renderer/frame/transport teardown must not cancel Main's task.
+    return waitForCaller(result, signal)
   }
 
   async #generateOnce(
@@ -2338,7 +2505,7 @@ export class GenerationCanvasService {
             }),
           )
         } catch (error) {
-          console.warn("Could not finalize the committed generation recovery receipt", error)
+          this.#logGenerationFailure("committed receipt finalization", error)
         }
       }
       this.#refreshRendererProjection(request.ref, result.document.revision, result.createdNodeIds)
@@ -2379,6 +2546,15 @@ export class GenerationCanvasService {
             if (recoveryTerminal.status === "succeeded") {
               // The exact terminal result remains replayable. Keep the Canvas run
               // active so startup recovery can finish the guarded commit.
+              this.#ensureStoredSupervision(operationLedger, actor, false)
+              throw error
+            }
+            if (recoveryTerminal.status === "submitted" || recoveryTerminal.status === "running") {
+              operationLedger = await this.#operations.transition(operationLedger, {
+                phase: "accepted",
+                taskId: recoveryTerminal.taskId,
+              })
+              this.#ensureStoredSupervision(operationLedger, actor, false)
               throw error
             }
             if (
@@ -2440,7 +2616,7 @@ export class GenerationCanvasService {
           }
         } catch (terminalError) {
           if (terminalError === error) throw error
-          console.warn("Could not persist the terminal Canvas generation run", terminalError)
+          this.#logGenerationFailure("terminal Canvas persistence", terminalError)
         }
       }
       throw error
@@ -2468,7 +2644,13 @@ export class GenerationCanvasService {
         expectedScopeId: ref.scopeId,
         viewId: "desktop-main",
       })
-    })().catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
+    })().catch((error) => this.#logGenerationFailure("renderer projection refresh", error))
+  }
+
+  #logGenerationFailure(stage: string, error: unknown) {
+    const errorType =
+      error instanceof Error && /^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(error.name) ? error.name : typeof error
+    console.warn(`Canvas generation ${stage} failed`, { errorType })
   }
 
   async #assertStableReplacementTarget(request: GenerationCanvasRequest, expected: GenerationReplacementGuard) {

@@ -804,7 +804,7 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
           ...(output === undefined ? {} : { output }),
           prompt: requireGenerationPrompt(params.prompt),
           references,
-          ...(resultMode === undefined ? {} : { resultMode }),
+          resultMode: resultMode ?? "create-pending-node",
           signal: context.signal,
           ...(toolId === undefined ? {} : { toolId }),
         })

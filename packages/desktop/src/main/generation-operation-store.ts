@@ -88,7 +88,7 @@ const phaseTransitions: Record<GenerationOperationPhase, ReadonlySet<GenerationO
   failed: new Set(["failed", "acknowledged"]),
   indeterminate: new Set(["indeterminate"]),
   prepared: new Set(["prepared", "dispatching", "accepted", "result-ready", "cancelled", "failed", "indeterminate"]),
-  "result-ready": new Set(["result-ready", "committed", "failed", "indeterminate"]),
+  "result-ready": new Set(["result-ready", "committed", "cancelled", "failed", "indeterminate"]),
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -272,7 +272,15 @@ export class GenerationOperationStore {
         if (entry.name.startsWith(".operation-") && entry.name.endsWith(".tmp")) continue
         throw new Error("Generation operation store contains invalid state")
       }
-      const bytes = await fs.readFile(path.join(this.root, entry.name), "utf8")
+      let bytes: string
+      try {
+        bytes = await fs.readFile(path.join(this.root, entry.name), "utf8")
+      } catch (error) {
+        // Acknowledgement cleanup may remove a valid entry after readdir. The
+        // next list is authoritative; every other read failure remains fatal.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue
+        throw error
+      }
       const parsed = parseLedger(JSON.parse(bytes) as unknown)
       if (`${scopedKey(parsed)}.json` !== entry.name) throw new Error("Generation operation ledger key is invalid")
       ledgers.push(parsed)

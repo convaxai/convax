@@ -59,6 +59,7 @@ function returnOperationTool(input: Partial<GenerationToolSummary> = {}): Genera
 }
 
 class FakeGenerationService implements GenerationCanvasAgentPort {
+  cancels: Array<{ actor: { id: string; kind: "agent" }; operationId: string }> = []
   calls: Array<{
     actor: { id: string; kind: "agent" }
     request: GenerationCanvasRequest
@@ -69,6 +70,10 @@ class FakeGenerationService implements GenerationCanvasAgentPort {
 
   async listTools() {
     return this.tools
+  }
+
+  async cancel(operationId: string, actor: { id: string; kind: "agent" }) {
+    this.cancels.push({ actor, operationId })
   }
 
   async generate(
@@ -286,6 +291,7 @@ describe("Plugin operation Agent tools", () => {
       ref: { canvasId: "canvas-main", scopeId: "project-a" },
       references: [{ nodeId: "video-source", role: "reference_video" }],
       relationAnchorNodeIds: ["related-card"],
+      resultMode: { type: "create-pending-node" },
       toolId: "media-operations/transform.media",
       toolInput: { mode: "fast", preserveAudio: true, quality: 80 },
     })
@@ -424,6 +430,36 @@ describe("Plugin operation Agent tools", () => {
     })
     expect(error.message).not.toContain("secret")
     expect(error.message).not.toContain("/private/tmp")
+  })
+
+  test("turns an OpenCode Stop into explicit cancellation for a Plugin operation", async () => {
+    const service = new FakeGenerationService()
+    const cancellation = new AbortController()
+    let reportEntered!: () => void
+    const entered = new Promise<void>((resolve) => {
+      reportEntered = resolve
+    })
+    service.generate = (_request, _actor, signal) =>
+      new Promise((_resolve, reject) => {
+        reportEntered()
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
+      })
+    const pending = provider(service).callTool(
+      scope,
+      "plugin_media_operations_transform_media",
+      validInput(),
+      { signal: cancellation.signal },
+    )
+    await entered
+    cancellation.abort(new DOMException("Stopped", "AbortError"))
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(service.cancels).toEqual([
+      {
+        actor: { id: "opencode:project-a", kind: "agent" },
+        operationId: expect.stringMatching(/^plugin-operation-/),
+      },
+    ])
   })
 
   test("fails closed when a return operation violates the service result contract", async () => {

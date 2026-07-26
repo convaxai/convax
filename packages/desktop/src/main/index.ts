@@ -587,6 +587,41 @@ function startApplication() {
       runs: canvasGenerationRuns,
       tools: generationRuntime,
     })
+    const generationRecoveryActor = { id: "desktop:main-supervisor", kind: "host" } as const
+    const logGenerationRecoveryFailure = (stage: string, error: unknown) => {
+      const errorType = error instanceof Error ? error.name : typeof error
+      console.warn(`Generation recovery ${stage} failed`, { errorType })
+    }
+    const reconcileProjectGeneration = async (projectId: string) => {
+      const catalog = await projectCanvases.getCanvasCatalog({ projectId })
+      for (const canvas of catalog.canvases) {
+        try {
+          await generation.reconcileCanvas(
+            { canvasId: canvas.id, scopeId: projectId },
+            generationRecoveryActor,
+          )
+        } catch (error) {
+          logGenerationRecoveryFailure("Canvas reconciliation", error)
+        }
+      }
+    }
+    const reconcileProjectGenerationSafely = async (projectId: string) => {
+      try {
+        await reconcileProjectGeneration(projectId)
+      } catch (error) {
+        logGenerationRecoveryFailure("Project reconciliation", error)
+      }
+    }
+    try {
+      const projects = await projectManager.list()
+      await Promise.all(
+        projects
+          .filter((project) => !project.missing)
+          .map((project) => reconcileProjectGenerationSafely(project.id)),
+      )
+    } catch (error) {
+      logGenerationRecoveryFailure("startup", error)
+    }
     const agentRuntime = new OpenCodeAgentRuntime({
       binaryDirectory: desktopOpenCodeBinaryDirectory({
         isPackaged: app.isPackaged,
@@ -917,8 +952,21 @@ function startApplication() {
       ...ipcSecurity,
       projectCreationDirectory,
       onForgot: (projectId) => projectAssetGcScheduler.close(projectId),
+      onOpened: (project) => reconcileProjectGenerationSafely(project.id),
     })
-    const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, ipcSecurity)
+    const disposeProjectCanvasIpc = registerProjectCanvasIpc(projectCanvases, {
+      ...ipcSecurity,
+      async onDeleted(input) {
+        try {
+          await generation.reconcileDeletedCanvas(
+            { canvasId: input.canvasId, scopeId: input.projectId },
+            generationRecoveryActor,
+          )
+        } catch (error) {
+          logGenerationRecoveryFailure("deleted Canvas reconciliation", error)
+        }
+      },
+    })
     const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
       const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
       return snapshot

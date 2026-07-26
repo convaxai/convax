@@ -55,8 +55,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.
-- Generation target guards may omit only the host-owned run namespace. They must
-  still protect real resource content and every other metadata namespace. Generated
+- Generation target guards may omit only the Canvas-owned current-run and next-run
+  preference namespaces. They must still protect real resource content and every
+  other metadata namespace. Generated
   replacement preserves only explicitly admitted node-local namespaces rather than
   blindly merging old metadata.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file

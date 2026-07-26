@@ -553,8 +553,13 @@ For a node-owning recovery-capable generation:
     Canvas success into failure.
 
 For host-created pending output, pending node creation and `submitting` remain one
-Canvas CAS. For existing-node replacement, failure or cancellation never alters the
-prior resource.
+Canvas CAS. Toolbar, Canvas-generating Agent tools, and Canvas-generating Plugin
+operations all use this owner-creating path; they do not add an ownerless generated
+node after the external call. For existing-node replacement, failure or cancellation
+never alters the prior resource. A declarative text operation with `delivery:
+"return"` creates no Canvas node and therefore has no node run namespace; it retains
+the same live at-most-once executor and explicit Agent cancellation boundary, but is
+outside node-result persistence and Canvas result replay.
 
 If publication succeeds but final Canvas CAS fails, the user-visible Generated file
 is retained under the existing partial-success contract. Recovery never silently
@@ -637,7 +642,9 @@ Explicit cancellation is operation-scoped:
   cancelled.
 
 Renderer destruction, node unmount, selection changes, Canvas switches, and panel
-changes do not imply cancellation.
+changes do not imply cancellation. OpenCode Stop is different: the Agent adapter
+turns it into an explicit operation-scoped Main cancellation before detaching its
+wait.
 
 ## 16. Result replay and acknowledgement
 

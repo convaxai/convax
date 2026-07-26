@@ -22,6 +22,7 @@ function generationTool(input: Partial<GenerationToolSummary> = {}): GenerationT
 }
 
 class FakeGenerationService implements GenerationCanvasAgentPort {
+  cancels: Array<{ actor: { id: string; kind: "agent" }; operationId: string }> = []
   calls: Array<{
     actor: { id: string; kind: "agent" }
     request: GenerationCanvasRequest
@@ -35,6 +36,10 @@ class FakeGenerationService implements GenerationCanvasAgentPort {
 
   async listTools() {
     return this.tools
+  }
+
+  async cancel(operationId: string, actor: { id: string; kind: "agent" }) {
+    this.cancels.push({ actor, operationId })
   }
 
   async generate(
@@ -179,12 +184,14 @@ describe("generation Agent tool", () => {
         actor: { id: "opencode:project-a", kind: "agent" },
         request: {
           anchor: { x: 320, y: 180 },
+          expectedOutputCount: 1,
           expectedRevision: 4,
           operationId: "generate-1",
           output: "image",
           prompt: "Create a quiet landscape",
           ref: { canvasId: "canvas-main", scopeId: "project-a" },
           references: [{ nodeId: "reference-1", role: "reference_image" }],
+          resultMode: { type: "create-pending-node" },
           toolId: "image-tools/generate.image",
         },
         signal: cancellation.signal,
@@ -199,6 +206,33 @@ describe("generation Agent tool", () => {
     await provider.callTool(scope, "canvas_generate", validInput({ commandId: "agent-command-2" }))
 
     expect(service.calls[0]?.request.operationId).toBe("agent-command-2")
+  })
+
+  test("turns an OpenCode Stop into explicit Main cancellation for the same operation", async () => {
+    const service = new FakeGenerationService()
+    const cancellation = new AbortController()
+    let reportEntered!: () => void
+    const entered = new Promise<void>((resolve) => {
+      reportEntered = resolve
+    })
+    service.generate = (_request, _actor, signal) =>
+      new Promise((_resolve, reject) => {
+        reportEntered()
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
+      })
+    const pending = providerCall()
+    await entered
+    cancellation.abort(new DOMException("Stopped", "AbortError"))
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(service.cancels).toEqual([
+      { actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" },
+    ])
+
+    function providerCall() {
+      return createGenerationAgentToolProvider(service).callTool(scope, "canvas_generate", validInput(), {
+        signal: cancellation.signal,
+      })
+    }
   })
 
   test("passes only bounded scalar tool input through for Main to validate against the selected sidecar schema", async () => {

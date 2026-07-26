@@ -87,22 +87,27 @@ export function createPluginOperationAgentToolProvider(
               },
             }),
         references: parsed.references,
-        ...(returnsToAgent ? { resultMode: { type: "return" as const } } : {}),
+        resultMode: returnsToAgent
+          ? { type: "return" as const }
+          : { type: "create-pending-node" as const },
         ...(!returnsToAgent && parsed.relationNodeIds.length ? { relationAnchorNodeIds: parsed.relationNodeIds } : {}),
         toolId: operation.tool.id,
         ...(parsed.toolInput === undefined ? {} : { toolInput: parsed.toolInput }),
       }
+      const actor = { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" } as const
+      const cancel = () => {
+        void service.cancel(request.operationId, actor).catch(() => undefined)
+      }
+      context?.signal?.addEventListener("abort", cancel, { once: true })
       let result: GenerationCanvasResult
       try {
-        result = await service.generate(
-          request,
-          { id: `opencode:${requiredIdentifier(scope.scopeId, "Agent scope id")}`, kind: "agent" },
-          context?.signal,
-        )
+        result = await service.generate(request, actor, context?.signal)
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error
         if (error instanceof GenerationToolReportedError) throw error
         throw sanitizedOperationFailure()
+      } finally {
+        context?.signal?.removeEventListener("abort", cancel)
       }
       if (
         returnsToAgent &&

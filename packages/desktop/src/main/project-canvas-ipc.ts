@@ -42,7 +42,10 @@ function registerHandler<Channel extends ProjectCanvasInvokeChannel>(
 
 export function registerProjectCanvasIpc(
   manager: DesktopProjectCanvasManager,
-  options: { isTrustedSender: (event: IpcMainInvokeEvent) => boolean },
+  options: {
+    isTrustedSender: (event: IpcMainInvokeEvent) => boolean
+    onDeleted?(input: ClientInput<"deleteCanvas">, result: ClientResult<"deleteCanvas">): Promise<void> | void
+  },
 ) {
   const publishChange = (projectId: string) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -55,9 +58,15 @@ export function registerProjectCanvasIpc(
     publishChange(input.projectId)
     return result
   }
+  const deleteCanvas = async (input: ClientInput<"deleteCanvas">) => {
+    const result = await manager.deleteCanvas(input)
+    if (result.deleted) await options.onDeleted?.(input, result)
+    publishChange(input.projectId)
+    return result
+  }
   const disposers = [
     registerHandler(projectCanvasIpcChannels.createCanvas, options.isTrustedSender, changed((input) => manager.createCanvas(input))),
-    registerHandler(projectCanvasIpcChannels.deleteCanvas, options.isTrustedSender, changed((input) => manager.deleteCanvas(input))),
+    registerHandler(projectCanvasIpcChannels.deleteCanvas, options.isTrustedSender, deleteCanvas),
     registerHandler(projectCanvasIpcChannels.getCanvasCatalog, options.isTrustedSender, (input) => manager.getCanvasCatalog(input)),
     registerHandler(projectCanvasIpcChannels.renameCanvas, options.isTrustedSender, changed((input) => manager.renameCanvas(input))),
   ]

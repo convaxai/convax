@@ -1447,6 +1447,7 @@ describe("Canvas Web Plugin host requests", () => {
           { nodeId: "video-1", role: "reference_video" },
           { nodeId: "audio-1", role: "audio" },
         ],
+        resultMode: "create-pending-node",
       }),
     )
   })

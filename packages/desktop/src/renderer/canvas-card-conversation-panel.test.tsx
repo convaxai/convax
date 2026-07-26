@@ -619,6 +619,27 @@ describe("Canvas card generation lifecycle", () => {
       expect(document.querySelector("[data-active-canvas-id='canvas-two']")).not.toBeNull()
       expect(acceptedSignal?.aborted).toBeFalse()
 
+      await act(async () => {
+        root?.render(
+          <CanvasCardConversationPanel
+            agent={<div>Agent conversation</div>}
+            request={{
+              ...request,
+              generation: {
+                ...request.generation!,
+                initialPrompt: "Keep generating while I switch Canvas",
+                ownerToolId: "creative-tools/image.generate",
+              },
+            }}
+            service={service}
+          />,
+        )
+      })
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+        "Keep generating while I switch Canvas",
+      )
+      expect(acceptedSignal?.aborted).toBeFalse()
+
       resolveGeneration({
         createdNodeIds: ["generated"],
         revision: 8,
@@ -629,6 +650,27 @@ describe("Canvas card generation lifecycle", () => {
         await Promise.resolve()
       })
       expect(acceptedSignal?.aborted).toBeFalse()
+
+      await act(async () => {
+        root?.render(<div data-active-canvas-id="canvas-two">Another Canvas</div>)
+        await Promise.resolve()
+        root?.render(
+          <CanvasCardConversationPanel
+            agent={<div>Agent conversation</div>}
+            request={{
+              ...request,
+              generation: {
+                ...request.generation!,
+                initialPrompt: "Keep generating while I switch Canvas",
+              },
+            }}
+            service={service}
+          />,
+        )
+      })
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+        "Keep generating while I switch Canvas",
+      )
     } finally {
       if (root) await act(async () => root?.unmount())
       await restoreWindow()

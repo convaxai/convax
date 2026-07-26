@@ -400,11 +400,60 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    if (initialDocument.document?.nodes.length !== 0) throw new Error("A new Canvas was not empty")
-
     const persistedGenerationRace = JSON.parse(
       sessionStorage.getItem("convax.smoke.generation-race.v1") ?? "null",
     )
+    if (!persistedGenerationRace && initialDocument.document?.nodes.length !== 0) {
+      throw new Error("A new Canvas was not empty")
+    }
+    if (persistedGenerationRace && !persistedGenerationRace.remountVerified) {
+      const remountedOwner = initialDocument.document?.nodes.find(
+        (node) => node.id === "generation-race-owner",
+      )
+      const remountedRun = remountedOwner?.data.metadata?.convaxGenerationRun
+      if (
+        remountedRun?.status !== "succeeded"
+        || remountedRun.prompt !== "Persist this prompt through a Canvas race"
+        || remountedRun.toolId !== "smoke-tools/text.generate"
+        || remountedRun.taskId !== "task_built_smoke_123"
+      ) {
+        throw new Error("Persisted terminal generation state did not hydrate after the real Renderer remount")
+      }
+      await waitFor(
+        () => document.querySelector(
+          '[data-canvas-file-generation-activity="succeeded"][data-canvas-generation-run-tool-id="smoke-tools/text.generate"]',
+        ),
+        "the persisted terminal generation surface after Renderer remount",
+      )
+      const cleanup = await window.convax.canvas.documents.execute({
+        command: {
+          nodeIds: [
+            "generation-race-owner",
+            "generation-race-unrelated",
+            "generation-restart-fallback-owner",
+          ],
+          type: "elements.remove",
+        },
+        commandId: "smoke-generation-cleanup-after-remount",
+        expectedRevision: initialDocument.document.revision,
+        ref: { canvasId: selectedCanvasId, scopeId: projectId },
+      })
+      if (cleanup.document.nodes.some((node) => node.id.startsWith("generation-"))) {
+        throw new Error("Generation smoke cleanup after remount was incomplete")
+      }
+      sessionStorage.setItem(
+        "convax.smoke.generation-race.v1",
+        JSON.stringify({ ...persistedGenerationRace, remountVerified: true }),
+      )
+      // The command above proves the authoritative cleanup. Reload once more
+      // instead of depending on a renderer projection request during a page
+      // navigation boundary.
+      location.reload()
+      await new Promise(() => {})
+    }
+    if (persistedGenerationRace?.remountVerified && initialDocument.document?.nodes.length !== 0) {
+      throw new Error("Generation smoke cleanup did not survive the second Renderer remount")
+    }
     if (!persistedGenerationRace) {
       // Exercise the built Main/IPC/Canvas persistence boundary with the two
       // generation races most likely to regress: an unrelated concurrent edit
@@ -724,19 +773,6 @@ try {
     ) {
       throw new Error("Restart reconciliation did not fail closed for an active run without an admitted LRO")
     }
-    const cleanupGenerationNodes = await window.convax.canvas.documents.load({
-      canvasId: selectedCanvasId,
-      scopeId: projectId,
-    })
-    await window.convax.canvas.documents.execute({
-      command: {
-        nodeIds: [generationOwner.id, concurrentNode.id, restartFallbackOwner.id],
-        type: "elements.remove",
-      },
-      commandId: "smoke-generation-cleanup",
-      expectedRevision: cleanupGenerationNodes.document?.revision ?? 0,
-      ref: { canvasId: selectedCanvasId, scopeId: projectId },
-    })
       sessionStorage.setItem("convax.smoke.generation-race.v1", JSON.stringify({
         concurrentConflict: true,
         lateCallbackRejected: lateReplacement.rejected,

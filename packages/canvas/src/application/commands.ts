@@ -100,9 +100,9 @@ export interface CanvasReplaceResourceCommand {
 }
 
 /**
- * Generation-specific target guard. Only the Canvas-owned run namespace is
- * omitted; preference, resource content and every other metadata value remain
- * protected against concurrent replacement.
+ * Generation-specific target guard. The Canvas-owned current-run and next-run
+ * preference namespaces are omitted; resource content and every other metadata
+ * value remain protected against concurrent replacement.
  */
 export interface CanvasGenerationTargetGuard {
   data: CanvasNode["data"]

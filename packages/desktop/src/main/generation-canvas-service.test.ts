@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -1332,6 +1332,38 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
   })
 
+  test("does not accept an already-aborted first caller", async () => {
+    let createPendingCalls = 0
+    const harness = setup({
+      document: createCanvasDocument({ id: "canvas-one", title: "Canvas" }),
+      resource: {
+        async createPendingGenerationResource() {
+          createPendingCalls += 1
+          throw new Error("An already-aborted request must not create a pending owner")
+        },
+      },
+      selectedTool: tool({ id: "creative-tools/draw", output: "image", toolId: "draw" }),
+    })
+    const controller = new AbortController()
+    controller.abort("caller was already closed")
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" })
+    await Bun.sleep(0)
+
+    expect(createPendingCalls).toBe(0)
+    expect(harness.calls).toEqual([])
+  })
+
   test("retains a failed pending node with a host-safe error instead of raw sidecar details", async () => {
     const harness = await setupPendingGeneration({
       content: [{ text: "Failed at /private/tmp/vendor-secret-output.png", type: "text" }],
@@ -1488,7 +1520,7 @@ describe("GenerationCanvasService", () => {
         )
       })
     })
-    const controller = new AbortController()
+    const actor = { id: "renderer:1", kind: "ui" as const }
     const generation = harness.service.generate(
       request({
         output: "image",
@@ -1496,12 +1528,11 @@ describe("GenerationCanvasService", () => {
         resultMode: { type: "create-pending-node" },
         toolId: "creative-tools/draw",
       }),
-      { id: "renderer:1", kind: "ui" },
-      controller.signal,
+      actor,
     )
 
     await started
-    controller.abort("user canceled")
+    await harness.service.cancel("operation-one", actor)
     await expect(generation).rejects.toMatchObject({ name: "AbortError" })
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(harness.runRequests.finish).toHaveLength(1)
@@ -1750,6 +1781,39 @@ describe("GenerationCanvasService", () => {
     expect(legacy.replacementRequests).toEqual([])
   })
 
+  test("logs only a bounded error category when terminal persistence exposes private diagnostics", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      const harness = setup({
+        document,
+        result: { content: [{ text: "safe failure", type: "text" }], isError: true },
+        run: {
+          async finish() {
+            throw new Error("token=private-value at /Users/example/private-operation.json")
+          },
+        },
+      })
+
+      await expect(
+        harness.service.generate(
+          request({ resultMode: { nodeId: owner.id, type: "replace-node" } }),
+          { id: "renderer:1", kind: "ui" },
+        ),
+      ).rejects.toThrow("safe failure")
+
+      const logged = JSON.stringify(warning.mock.calls)
+      expect(logged).toContain("terminal Canvas persistence")
+      expect(logged).toContain("Error")
+      expect(logged).not.toContain("private-value")
+      expect(logged).not.toContain("/Users/")
+      expect(logged).not.toContain("private-operation")
+    } finally {
+      warning.mockRestore()
+    }
+  })
+
   test("persists explicit node-generation cancellation without replacing the prior resource", async () => {
     const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
@@ -1769,14 +1833,13 @@ describe("GenerationCanvasService", () => {
           else signal?.addEventListener("abort", abort, { once: true })
         }),
     })
-    const controller = new AbortController()
+    const actor = { id: "renderer:1", kind: "ui" as const }
     const pending = canceled.service.generate(
       request({ resultMode: { nodeId: owner.id, type: "replace-node" } }),
-      { id: "renderer:1", kind: "ui" },
-      controller.signal,
+      actor,
     )
     await started
-    controller.abort(new DOMException("Canceled by the user", "AbortError"))
+    await canceled.service.cancel("operation-one", actor)
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
     for (let index = 0; index < 10 && canceled.runRequests.finish.length === 0; index += 1) {
       await Bun.sleep(0)
@@ -1810,7 +1873,7 @@ describe("GenerationCanvasService", () => {
     expect(calls).toEqual([])
   })
 
-  test("reattaches a persisted recoverable task on restart and commits its replayed result without resubmission", async () => {
+  test("recovers a provider task accepted before its task receipt reached Canvas without resubmission", async () => {
     const privateRoot = await temporaryDirectory()
     const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
     const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
@@ -1826,19 +1889,14 @@ describe("GenerationCanvasService", () => {
         state: { status: "ready", url: "convax://old" },
       },
     })
-    const active = markCanvasNodeGenerationRunRunning(
-      startCanvasNodeGenerationRun(
-        createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
-        owner.id,
-        {
-          operationId: "operation-recover",
-          prompt: "Recover this image",
-          toolId: "creative-tools/draw",
-        },
-      ),
+    const active = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
       owner.id,
-      "operation-recover",
-      "task_recover_123",
+      {
+        operationId: "operation-recover",
+        prompt: "Recover this image",
+        toolId: "creative-tools/draw",
+      },
     )
     const guard = createCanvasGenerationTargetGuard(active.nodes[0]!)
     const storedInput = await inputs.create({
@@ -1866,7 +1924,7 @@ describe("GenerationCanvasService", () => {
       inputSnapshotId: storedInput.id,
       nodeId: owner.id,
       operationId: "operation-recover",
-      phase: "accepted",
+      phase: "dispatching",
       pluginPackageDigest: "c".repeat(64),
       projectId: "project-one",
       requestDigest: storedInput.requestDigest,
@@ -1874,7 +1932,6 @@ describe("GenerationCanvasService", () => {
       schema: "convax.generation-operation-ledger/1",
       sidecarRecoveryBindingDigest: "f".repeat(64),
       targetGuardDigest: generationOperationRequestDigest(guard),
-      taskId: "task_recover_123",
       toolId: "creative-tools/draw",
       updatedAt: 0,
     })
@@ -1906,6 +1963,7 @@ describe("GenerationCanvasService", () => {
       digestOutputDirectory,
     )
     const acknowledgements: unknown[] = []
+    let recoveryWaitCalls = 0
     const recovery: PreparedGenerationRecovery = {
       async acknowledge(input) {
         acknowledgements.push(input)
@@ -1942,6 +2000,14 @@ describe("GenerationCanvasService", () => {
       },
       runtimeAuthorizationDigest: "e".repeat(64),
       async wait() {
+        recoveryWaitCalls += 1
+        if (recoveryWaitCalls <= 9) {
+          return {
+            schema: "convax.generation-lro-snapshot/1",
+            status: "running",
+            taskId: "task_recover_123",
+          }
+        }
         return {
           resultDigest,
           schema: "convax.generation-lro-snapshot/1",
@@ -1976,15 +2042,19 @@ describe("GenerationCanvasService", () => {
         { id: "desktop:startup", kind: "system" },
       ),
     ).resolves.toMatchObject({ interruptedNodeIds: [] })
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 2_000; index += 1) {
       if ((await operations.list()).length === 0) break
       await Bun.sleep(1)
     }
     expect(await operations.list()).toEqual([])
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
     expect(harness.calls).toHaveLength(0)
+    expect(harness.runRequests.markRunning).toContainEqual(
+      expect.objectContaining({ operationId: "operation-recover", taskId: "task_recover_123" }),
+    )
     expect(harness.replacementRequests).toHaveLength(1)
     expect(acknowledgements).toHaveLength(1)
+    expect(recoveryWaitCalls).toBe(10)
   })
 
   test("explicitly cancels a persisted task after restart through the same pinned recovery operation", async () => {
@@ -2053,13 +2123,17 @@ describe("GenerationCanvasService", () => {
       async cancel() {
         return {
           schema: "convax.generation-lro-snapshot/1",
-          status: "cancelled",
+          status: "running",
           taskId: "task_cancel_123",
         }
       },
       executionBindingDigest: "a".repeat(64),
       async get() {
-        return { schema: "convax.generation-lro-snapshot/1", status: "unknown" }
+        return {
+          schema: "convax.generation-lro-snapshot/1",
+          status: "running",
+          taskId: "task_cancel_123",
+        }
       },
       pluginPackageDigest: "c".repeat(64),
       async result() {
@@ -2067,7 +2141,11 @@ describe("GenerationCanvasService", () => {
       },
       runtimeAuthorizationDigest: "e".repeat(64),
       async wait() {
-        return { schema: "convax.generation-lro-snapshot/1", status: "unknown" }
+        return {
+          schema: "convax.generation-lro-snapshot/1",
+          status: "cancelled",
+          taskId: "task_cancel_123",
+        }
       },
     }
     const harness = setup({
@@ -2087,6 +2165,10 @@ describe("GenerationCanvasService", () => {
       id: "desktop:renderer",
       kind: "ui",
     })
+    for (let index = 0; index < 100; index += 1) {
+      if ((await operations.list()).length === 0) break
+      await Bun.sleep(1)
+    }
     expect(await operations.list()).toEqual([])
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
     expect(harness.runRequests.finish).toEqual([
@@ -2102,6 +2184,210 @@ describe("GenerationCanvasService", () => {
         taskId: "task_cancel_123",
       }),
     ])
+  })
+
+  test("cancels and acknowledges an orphaned persisted task without reviving its deleted node", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const deletedOwner = createTextNode({ id: "deleted-owner", position: { x: 0, y: 0 }, text: "Before" })
+    const guarded = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [deletedOwner], title: "Canvas" }),
+      deletedOwner.id,
+      {
+        operationId: "operation-orphaned",
+        prompt: "Do not revive this node",
+        toolId: "creative-tools/write",
+      },
+    )
+    const guard = createCanvasGenerationTargetGuard(guarded.nodes[0]!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: deletedOwner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-orphaned",
+        output: "text",
+        prompt: "Do not revive this node",
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/write",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: deletedOwner.id,
+      operationId: "operation-orphaned",
+      phase: "accepted",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      taskId: "task_orphaned_123",
+      toolId: "creative-tools/write",
+      updatedAt: 0,
+    })
+    let cancelCalls = 0
+    const acknowledgements: unknown[] = []
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge(input) {
+        acknowledgements.push(input)
+      },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        cancelCalls += 1
+        return {
+          schema: "convax.generation-lro-snapshot/1",
+          status: "running",
+          taskId: "task_orphaned_123",
+        }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        throw new Error("An orphan must request cancellation before observation")
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        throw new Error("An orphaned result must not be replayed into Canvas")
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        return {
+          schema: "convax.generation-lro-snapshot/1",
+          status: "cancelled",
+          taskId: "task_orphaned_123",
+        }
+      },
+    }
+    const document = createCanvasDocument({ id: "canvas-one", title: "Canvas" })
+    const harness = setup({
+      document,
+      inputSnapshots: inputs,
+      operations,
+      recovery,
+      selectedTool: tool({
+        id: "creative-tools/write",
+        output: "text",
+        recovery: "long-running-operation",
+        toolId: "write",
+      }),
+    })
+
+    await expect(
+      harness.service.reconcileDeletedCanvas(
+        { canvasId: "canvas-one", scopeId: "project-one" },
+        { id: "desktop:startup", kind: "system" },
+      ),
+    ).resolves.toBeUndefined()
+    for (let index = 0; index < 100; index += 1) {
+      if ((await operations.list()).length === 0) break
+      await Bun.sleep(1)
+    }
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
+    expect(cancelCalls).toBe(1)
+    expect(acknowledgements).toHaveLength(1)
+    expect(harness.calls).toEqual([])
+    expect(harness.replacementRequests).toEqual([])
+  })
+
+  test("retains an indeterminate orphan ledger when its exact recovery runtime is unavailable", async () => {
+    const report = spyOn(console, "warn").mockImplementation(() => undefined)
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const deletedOwner = createTextNode({ id: "deleted-legacy-owner", position: { x: 0, y: 0 }, text: "Before" })
+    const guarded = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [deletedOwner], title: "Canvas" }),
+      deletedOwner.id,
+      {
+        operationId: "operation-orphaned-without-runtime",
+        prompt: "Do not retry this orphan",
+        toolId: "creative-tools/write",
+      },
+    )
+    const guard = createCanvasGenerationTargetGuard(guarded.nodes[0]!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: deletedOwner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-orphaned-without-runtime",
+        output: "text",
+        prompt: "Do not retry this orphan",
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/write",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: deletedOwner.id,
+      operationId: "operation-orphaned-without-runtime",
+      phase: "accepted",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      taskId: "task_orphaned_without_runtime",
+      toolId: "creative-tools/write",
+      updatedAt: 0,
+    })
+    const harness = setup({
+      document: createCanvasDocument({ id: "canvas-one", title: "Canvas" }),
+      inputSnapshots: inputs,
+      operations,
+      selectedTool: tool({
+        id: "creative-tools/write",
+        output: "text",
+        recovery: "long-running-operation",
+        toolId: "write",
+      }),
+    })
+
+    await harness.service.reconcileDeletedCanvas(
+      { canvasId: "canvas-one", scopeId: "project-one" },
+      { id: "desktop:startup", kind: "system" },
+    )
+    for (let index = 0; index < 100; index += 1) {
+      if ((await operations.list())[0]?.phase === "indeterminate") break
+      await Bun.sleep(1)
+    }
+
+    expect(await operations.list()).toEqual([
+      expect.objectContaining({
+        operationId: "operation-orphaned-without-runtime",
+        phase: "indeterminate",
+        taskId: "task_orphaned_without_runtime",
+      }),
+    ])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([storedInput.id])
+    expect(harness.calls).toEqual([])
+    expect(harness.replacementRequests).toEqual([])
+    expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", { errorType: "Error" })
+    report.mockRestore()
   })
 
   test("reloads both the document and live executions after a reconciliation conflict", async () => {
@@ -2488,6 +2774,40 @@ describe("GenerationCanvasService", () => {
     await expect(replay).rejects.toMatchObject({ name: "AbortError" })
     release()
     await expect(first).resolves.toMatchObject({ createdNodeIds: ["generated-one"] })
+    expect(calls).toHaveLength(1)
+  })
+
+  test("detaches the first caller after acceptance without canceling Main's generation", async () => {
+    let markStarted!: () => void
+    let release!: () => void
+    let operationSignal: AbortSignal | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { calls, service } = setup({
+      async result(_input, signal) {
+        operationSignal = signal
+        markStarted()
+        await gate
+        return { content: [{ text: "Detached result", type: "text" }] }
+      },
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const caller = new AbortController()
+    const firstWaiter = service.generate(request(), actor, caller.signal)
+    await started
+    caller.abort("renderer switched Canvas")
+
+    await expect(firstWaiter).rejects.toMatchObject({ name: "AbortError" })
+    expect(operationSignal?.aborted).toBeFalse()
+
+    release()
+    await expect(service.generate(request(), actor)).resolves.toMatchObject({
+      createdNodeIds: ["generated-one"],
+    })
     expect(calls).toHaveLength(1)
   })
 
@@ -3181,36 +3501,37 @@ describe("GenerationCanvasService", () => {
   })
 
   test("reports partial success when cancellation arrives after Generated publication", async () => {
-    const controller = new AbortController()
     const root = await temporaryDirectory()
     await writeProjectTextReferences(root, { brief: "Stable brief" })
     const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [reference], title: "Canvas" })
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
-    const { resourceRequests, service } = setup({
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    let service!: GenerationCanvasService
+    const configured = setup({
       document,
       project: projectPortFor(root),
       publisher: {
         async publishGenerated(input) {
-          controller.abort("generation was canceled")
+          await service.cancel("operation-one", actor)
           return { path: `Generated/generated-1${input.extension}` }
         },
       },
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
       selectedTool: tool({ acceptedInputs: ["text"], id: "creative-tools/draw", output: "image", toolId: "draw" }),
     })
+    service = configured.service
 
     await expect(
       service.generate(
         request({ references: [{ nodeId: reference.id, role: "text" }], toolId: "creative-tools/draw" }),
-        { id: "renderer:1", kind: "ui" },
-        controller.signal,
+        actor,
       ),
     ).rejects.toMatchObject({
       name: "GenerationPublicationPartialSuccessError",
       publishedPaths: ["Generated/generated-1.png"],
     })
-    expect(resourceRequests).toHaveLength(0)
+    expect(configured.resourceRequests).toHaveLength(0)
   })
 
   test("commits referenced generation with Main-side guarded retry semantics", async () => {
@@ -3437,13 +3758,13 @@ describe("GenerationCanvasService", () => {
         })
       },
     })
-    const controller = new AbortController()
-    const result = service.generate(request(), { id: "renderer:1", kind: "ui" }, controller.signal)
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const result = service.generate(request(), actor)
     await started
-    controller.abort(new Error("canceled"))
+    await service.cancel("operation-one", actor)
 
-    await expect(result).rejects.toThrow("canceled")
-    expect(receivedSignal).toBe(controller.signal)
+    await expect(result).rejects.toThrow("explicitly canceled")
+    expect(receivedSignal?.aborted).toBeTrue()
     expect(resourceRequests).toHaveLength(0)
   })
 })
