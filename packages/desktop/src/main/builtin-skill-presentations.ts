@@ -2,8 +2,6 @@ import canvasStoryboardAnimation from "../../resources/skill-showcases/canvas-st
 import canvasStoryboardPoster from "../../resources/skill-showcases/canvas-storyboard/poster.png?asset"
 import jianyingEditorAnimation from "../../resources/skill-showcases/jianying-editor/animation.mp4?asset"
 import jianyingEditorPoster from "../../resources/skill-showcases/jianying-editor/poster.png?asset"
-import directorDeskAnimation from "../../resources/skill-showcases/storyai-3d-director-desk/animation.mp4?asset"
-import directorDeskPoster from "../../resources/skill-showcases/storyai-3d-director-desk/poster.png?asset"
 import type { DesktopBuiltinSkillPresentation } from "./builtin-skill-catalog"
 
 export const desktopBuiltinSkillPresentations = [
@@ -36,22 +34,6 @@ export const desktopBuiltinSkillPresentations = [
         altText: "JianYing Editor Canvas export workflow preview.",
         mimeType: "image/png",
         path: jianyingEditorPoster,
-      },
-    },
-  },
-  {
-    displayName: "3D Director Desk",
-    id: "storyai-3d-director-desk",
-    showcase: {
-      animation: {
-        altText: "3D Director Desk reads a stage, offers blocking guidance, and reviews the user's adjustments.",
-        mimeType: "video/mp4",
-        path: directorDeskAnimation,
-      },
-      poster: {
-        altText: "3D Director Desk read-only planning and review workflow preview.",
-        mimeType: "image/png",
-        path: directorDeskPoster,
       },
     },
   },
