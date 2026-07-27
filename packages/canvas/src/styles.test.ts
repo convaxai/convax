@@ -119,6 +119,16 @@ describe("Canvas-first visual hierarchy", () => {
 })
 
 describe("Canvas theme closure", () => {
+  test("keeps the pending connection overlay inside the Canvas coordinate space", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const overlayRule = cssRule(styles, ".convax-pending-connection")
+    const menuRule = cssRule(styles, ".convax-pending-connection__menu")
+
+    expect(overlayRule).toContain("position: absolute")
+    expect(menuRule).toContain("position: absolute")
+    expect(`${overlayRule}\n${menuRule}`).not.toContain("position: fixed")
+  })
+
   test("inherits host theme materials instead of pinning light defaults on the canvas element", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const defaultsRule = cssRule(styles, ":root")

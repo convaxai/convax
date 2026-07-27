@@ -197,9 +197,10 @@ import {
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { CanvasGenerationPanel } from "./canvas-generation-panel"
 import { bindCanvasSearchDismissal } from "./canvas-search-dismissal"
-import { createCanvasCardConnection, PendingConnectionMenu } from "./connection-node-menu"
+import { createCanvasCardConnection } from "./connection-node-menu"
 import { createCanvasDuplicateDragPlan, remapCanvasDuplicateDragChanges } from "./duplicate-drag"
 import { getCanvasNodeInsertionItems } from "./insertion-items"
+import { PendingConnectionMenu } from "./pending-connection-menu"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
 const CANVAS_FIT_DURATION = 220
@@ -311,12 +312,10 @@ function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
 interface PendingConnection {
   nodeId: string
   side: "left" | "right"
-  sourceScreen: CanvasPoint
   targetPosition: CanvasPoint
-  targetScreen: CanvasPoint
 }
 
-interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side" | "sourceScreen"> {
+interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side"> {
   pointerScreen: CanvasPoint
 }
 
@@ -2745,13 +2744,10 @@ function CanvasEditorContent(
         connectionStartRef.current = null
         return
       }
-      const handle = event.target instanceof Element ? event.target.closest(".react-flow__handle") : null
-      const bounds = handle?.getBoundingClientRect()
       connectionStartRef.current = {
         nodeId: params.nodeId,
         pointerScreen,
         side: params.handleId.includes("left") ? "left" : "right",
-        sourceScreen: bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : pointerScreen,
       }
     },
     [updateConnectionTargetNode],
@@ -2797,9 +2793,7 @@ function CanvasEditorContent(
       setPendingConnection({
         nodeId: start.nodeId,
         side: start.side,
-        sourceScreen: start.sourceScreen,
         targetPosition: reactFlow.screenToFlowPosition(targetScreen),
-        targetScreen,
       })
     },
     [commit, reactFlow, updateConnectionTargetNode],
@@ -3013,8 +3007,8 @@ function CanvasEditorContent(
                       quickConnect(connection.nodeId, connection.side, type, connection.targetPosition)
                     }}
                     side={pendingConnection.side}
-                    sourceScreen={pendingConnection.sourceScreen}
-                    targetScreen={pendingConnection.targetScreen}
+                    sourceNodeId={pendingConnection.nodeId}
+                    targetPosition={pendingConnection.targetPosition}
                   />
                 ) : null}
 

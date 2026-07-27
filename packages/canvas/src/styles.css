@@ -727,7 +727,7 @@
 }
 
 .convax-pending-connection {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 1000;
   pointer-events: none;
@@ -762,7 +762,7 @@
 }
 
 .convax-pending-connection__menu {
-  position: fixed;
+  position: absolute;
   z-index: 1;
   pointer-events: auto;
 }
