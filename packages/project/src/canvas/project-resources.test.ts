@@ -296,6 +296,60 @@ describe("Project managed asset reference collection", () => {
 })
 
 describe("Project Canvas document dehydration", () => {
+  test.each(["text", "image", "video", "audio"] as const)(
+    "round trips an idle empty %s placeholder without inventing a Project reference",
+    async (kind) => {
+      const placeholder: CanvasNode = {
+        id: `empty-${kind}`,
+        type: "file",
+        position: { x: 12, y: 24 },
+        data: {
+          kind,
+          label: kind[0]!.toUpperCase() + kind.slice(1),
+          metadata: {},
+          resourceState: { status: "ready" },
+          status: "idle",
+        },
+      }
+      const document = createCanvasDocument({ id: "canvas-empty", nodes: [placeholder] })
+
+      const persisted = dehydrateProjectCanvasDocument(document)
+      expect(persisted.nodes[0]!.data).toEqual({
+        kind,
+        label: kind[0]!.toUpperCase() + kind.slice(1),
+        metadata: {},
+        status: "idle",
+      })
+      expect(collectProjectManagedAssetReferences(persisted)).toEqual([])
+
+      let resolutions = 0
+      const hydrated = await hydrateProjectCanvasDocument(persisted, async () => {
+        resolutions += 1
+        throw new Error("Idle placeholders must not be resolved")
+      })
+      expect(hydrated).toEqual(persisted)
+      expect(resolutions).toBe(0)
+    },
+  )
+
+  test("still rejects an idle unbacked file and non-empty placeholder metadata", () => {
+    const idleFile: CanvasNode = {
+      id: "empty-file",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: { kind: "file", label: "File", metadata: {}, status: "idle" },
+    }
+    const forgedImage: CanvasNode = {
+      id: "forged-image",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: { kind: "image", label: "Image", metadata: { opaque: true }, status: "idle" },
+    }
+
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [idleFile] }))).toThrow("reference")
+    expect(() => dehydrateProjectCanvasDocument(createCanvasDocument({ nodes: [forgedImage] }))).toThrow("reference")
+  })
+
   test("dehydrates resource nodes to references and view state only", () => {
     const textReference = { kind: "project-file" as const, path: "Notes/brief.md" }
     const imageReference = {
