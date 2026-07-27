@@ -10,7 +10,6 @@ import {
 } from "../canvas-external-drag-contracts"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
-import type { JianyingRendererClient } from "../jianying-contracts"
 import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import {
   pluginConnectedMediaIpcChannels,
@@ -247,12 +246,6 @@ const pluginChannels = {
   uninstallPlugin: "plugin:uninstall",
 } as const
 
-const jianyingChannels = {
-  cancelCanvasMediaExport: "jianying:canvas-media-export-cancel",
-  exportCanvasMedia: "jianying:canvas-media-export",
-  getDraftStatus: "jianying:draft-status",
-} as const
-
 const desktopProtocolClient = {
   getVersion: () => ipcRenderer.invoke(desktopProtocolChannel),
   version: desktopProtocolVersion,
@@ -485,12 +478,6 @@ const pluginServiceClient = {
   signOut: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.signOut, input),
 } satisfies PluginServiceClient
 
-const jianyingClient = {
-  cancelCanvasMediaExport: (input) => ipcRenderer.send(jianyingChannels.cancelCanvasMediaExport, input),
-  exportCanvasMedia: (input) => ipcRenderer.invoke(jianyingChannels.exportCanvasMedia, input),
-  getDraftStatus: () => ipcRenderer.invoke(jianyingChannels.getDraftStatus),
-} satisfies JianyingRendererClient
-
 const generationClient = {
   cancel: (input) => ipcRenderer.invoke(generationIpcChannels.cancel, input),
   describeTool: (input) => ipcRenderer.invoke(generationIpcChannels.describeTool, input),
@@ -578,7 +565,6 @@ contextBridge.exposeInMainWorld("convax", {
     textResources: canvasTextResourceClient,
   },
   generation: generationClient,
-  jianying: jianyingClient,
   pets: petSettingsClient,
   platform: process.platform,
   pluginCapabilities: pluginCapabilityClient,

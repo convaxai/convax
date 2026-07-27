@@ -72,9 +72,6 @@ Electron userData/
   plugin-hook-authorizations/<plugin-id>/
                                             exact Hook receipts and private snapshots
 
-macOS user Movies directory/
-  JianyingPro/ConvaxImports/...             validated media staged for bounded JianYing transfer
-
 Project root/
   .convax/canvases/.../document.json        plugin node reference and portable state
 
@@ -308,9 +305,10 @@ surfaces:
   legacy independently managed companion Skill, which reviews the same snapshot
   through normal Canvas Agent resources. Desktop carries no second static bundle,
   Skill, or showcase copy.
-- **JianYing Editor** is default-provisioned as a trusted built-in Plugin plus a
-  separately receipted legacy companion Skill. The package controls lifecycle and
-  describes the workflow; its native implementation remains compiled into Desktop
+- **JianYing Editor** is released only from `microvoid/convax-plugins` as an
+  explicitly installed Tool Plugin with an owned Skill and Registry-verified
+  executable companion. Desktop contains no JianYing package, toolbar action,
+  native adapter, Agent provider, IPC, preload namespace, or default-install entry.
   main.
 
 The 3D surface keeps the strict Plugin CSP and `sandbox="allow-scripts"`. The
@@ -319,74 +317,19 @@ Local model import and browser downloads stay hidden until they have narrow host
 capabilities; the integration does not widen network or iframe permissions merely
 to preserve unsupported upstream buttons.
 
-## JianYing native integration
+## External editor Tool Plugins
 
-The current JianYing adapter is macOS-only. The default package may remain installed
-and visible in capability management on another platform, but Desktop must not show
-its Canvas action or advertise its Agent tools there. The native adapter keeps an
-explicit Windows WIP boundary whose implementation fails closed as unsupported; it
-must not fall back to UI automation. On macOS those entry points are enabled only
-while the exact trusted catalog bundle is installed; id and version matching alone
-are insufficient.
+Editor-specific behavior uses the same generic generation executor as Agent and
+direct Plugin actions. A schema-v6 Web surface may call its own return-delivery
+operation through `generation.canvas.execute`; Desktop binds the caller to the
+installed principal, owning Plugin node and direct incoming edges, stages only the
+declared image/video references, and returns bounded text without mutating Canvas.
 
-The direct toolbar flow is deliberately narrower than Plugin RPC:
-
-1. Canvas shows **Import to JianYing** for one or more selected Project-backed
-   image/video nodes whose portable references are below `.convax/assets`. A single
-   media node uses its node toolbar; multiple media nodes use the selection toolbar.
-   Selections containing remote-only resources, edges, mixed node kinds or private
-   `.convax` metadata are not eligible.
-2. Desktop flushes the Canvas, passes ids plus its expected revision, and main checks
-   that the reference still matches the host's live active Canvas. Main reloads the
-   document, validates every node, managed path, media MIME and regular native file,
-   then stages copies without exposing an absolute path to renderer or Plugin code.
-3. If one active draft is observed, the toolbar dispatches the batch to it. If
-   JianYing is not running or no draft is active, Desktop first sends the native
-   force-create route and proves a newly created draft became active. Only then does
-   it send the normal current-draft import. Ambiguous, unavailable or unsafe
-   observations fail instead of guessing, and media is never sent to an unverified
-   destination. Creating a new draft while another draft is open remains an explicit
-   macOS WIP and fails before any native mutation; the user can return JianYing to
-   its home screen and retry from a no-active observation.
-
-Main transports the validated staged batch through JianYing's macOS Deep Links; the
-product does not depend on Accessibility permission, Apple Events, JXA, `AXPress`,
-window state or localized UI. A new-draft export uses two ordered calls: force-create
-and verify, then material import. Before the import call, main starts a server bound
-only to `127.0.0.1` on a random port and assigns every media item an independent,
-unguessable opaque-token URL. The import payload contains only these loopback URLs;
-the server exposes no directory listing, caller-chosen path or other route. It
-remains alive while the bounded operation awaits every requested transfer, then
-closes after all items complete or when the bounded operation fails.
-
-JianYing's currently verified Deep Link behavior adds each imported image or video
-to both the material panel and the timeline. No panel-only parameter is available,
-so the toolbar and Agent tool must describe this exact behavior rather than claim a
-material-list-only import. The scheme also provides no positive completion
-acknowledgement: dispatch success is reported as dispatched unless an independent
-observation can prove the result.
-
-The Agent flow uses the same main service but not the toolbar's automatic target.
-The status tool returns a short-lived opaque observation token. When a draft is
-active, the legacy companion Skill tells the Agent to ask whether to use it or create a new
-draft. Current-draft export uses that explicit choice and token. If the user chooses
-new, the Agent explains the active-to-new WIP boundary, asks them to return JianYing
-home, and calls the status tool again; new-draft export proceeds only from a
-no-active/not-running observation. The export schema accepts node ids and an
-expected revision, not Project/Canvas ids. Desktop resolves and injects the mounted
-active Canvas, rejecting missing, switched or stale view scope.
-
-Canvas aborts the action signal when its immutable document/selection snapshot is
-replaced or unmounted. Renderer pairs that signal with a fresh `operationId` and
-sends only cloneable start/cancel values through preload; live `AbortSignal` objects
-never cross `contextBridge`. Main keys the controller by trusted sender plus
-operation id, remembers cancel-before-start races, rejects duplicate/stale
-operations, and aborts queued, validation and staging work when the renderer closes.
-Cancellation is checked immediately before Deep Link dispatch and is safe before
-that point. After dispatch may have produced a JianYing side effect, the bounded
-transfer finishes and returns its observable outcome; unknown or partial outcomes
-must not be retried automatically. An `operationId` is lifecycle correlation, not
-authority and not a way to select scope.
+The verified companion owns editor process inspection and transport. The Plugin
+owns user-facing workflow and its Skill. Neither receives Project paths, Canvas
+documents, renderer state, credentials, or ambient selected nodes. Platform gaps,
+ambiguous editor state, cancellation and partial native outcomes fail closed in the
+companion and must not trigger automatic retries.
 
 ## Plugin package
 
@@ -445,9 +388,11 @@ only the installed Plugin id. V6 does not admit local commands, secrets, callbac
 URLs, or arbitrary OpenCode configuration, and it continues to negotiate
 `convax.plugin-capability/1` because the Web/Canvas protocol did not change.
 V6 also permits bounded text operations with `delivery: "return"` and Canvas sink
-operations with `inputBinding: "direct-incoming"`. The former returns to the Agent
-without creating a Canvas node; the latter requires an owning node of the same
-installed Plugin and constrains all references to its live incoming edges.
+operations with `inputBinding: "direct-incoming"`. Return delivery is available to
+the Agent and to the owning sandboxed Web surface through
+`generation.canvas.execute` with `resultMode: "return"`; it creates no Canvas node.
+Direct-incoming operations require an owning node of the same installed Plugin and
+constrain all references to its live incoming edges.
 
 `convax.plugin/7` preserves v6 and negotiates `convax.plugin-capability/2`. It adds a
 fixed declarative Canvas action that can materialize only the contributing Plugin's

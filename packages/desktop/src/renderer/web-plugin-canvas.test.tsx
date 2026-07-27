@@ -1487,6 +1487,71 @@ describe("Canvas Web Plugin host requests", () => {
     expect(executeCanvasGeneration).toHaveBeenCalledTimes(1)
   })
 
+  test("returns bounded text from a Plugin-owned generation tool without mutating Canvas", async () => {
+    const owner = canvasNode()
+    const document = {
+      ...createCanvasDocument({
+        id: "canvas-1",
+        nodes: [owner],
+      }),
+      revision: 7,
+    }
+    const executeCanvasGeneration = mock(async () => ({
+      createdNodeIds: [],
+      outputText: '{"state":"active"}',
+      revision: 7,
+      toolId: "editor-tools/draft.status",
+      warnings: [],
+    }))
+    const context = hostContext(generationCallerPlugin(), {
+      executeCanvasGeneration,
+      getDocument: () => document,
+      getNode: () => owner,
+    })
+
+    const response = await dispatchWebPluginHostRequest(
+      request(
+        "generation.canvas.execute",
+        {
+          output: "text",
+          prompt: "Inspect the editor",
+          references: [],
+          resultMode: "return",
+          toolId: "editor-tools/draft.status",
+        },
+        desktopPluginHostProtocolV2,
+      ),
+      context,
+    )
+
+    expect(response).toEqual({
+      id: "request-1",
+      ok: true,
+      protocol: desktopPluginHostProtocolV2,
+      result: {
+        createdNodeIds: [],
+        outputText: '{"state":"active"}',
+        revision: 7,
+        toolId: "editor-tools/draft.status",
+        warnings: [],
+      },
+      type: "response",
+    })
+    expect(executeCanvasGeneration).toHaveBeenCalledWith({
+      anchor: { x: 394, y: 20 },
+      canvasId: "canvas-1",
+      nodeId: "node-1",
+      output: "text",
+      pluginId: "director-stage",
+      projectId: "project-1",
+      prompt: "Inspect the editor",
+      references: [],
+      resultMode: "return",
+      signal: expect.any(AbortSignal),
+      toolId: "editor-tools/draft.status",
+    })
+  })
+
   test("infers semantic references only from direct incoming file nodes in edge order", async () => {
     const owner = canvasNode()
     const image = connectedImageNode()

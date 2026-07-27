@@ -93,10 +93,6 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
       hardenedRuntime: true,
       gatekeeperAssess: false,
       notarize: release,
-      extendInfo: {
-        NSAppleMusicUsageDescription:
-          "Convax accesses the JianYing draft directory only when you export selected media to a JianYing draft.",
-      },
       target: ["dmg", "zip"],
     },
     dmg: {

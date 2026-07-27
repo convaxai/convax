@@ -375,8 +375,8 @@ describe("CapabilityCenter", () => {
           catalog: [
             {
               ...pluginInventory.catalog[0]!,
-              id: "jianying-editor",
-              skill: "skills/jianying-editor/SKILL.md",
+              id: "legacy-editor",
+              skill: "skills/legacy-editor/SKILL.md",
             },
           ],
           installed: [],
@@ -385,10 +385,10 @@ describe("CapabilityCenter", () => {
           catalog: [],
           skills: [
             {
-              location: "/managed/jianying-editor/SKILL.md",
+              location: "/managed/legacy-editor/SKILL.md",
               management: { kind: "standalone" },
               managed: true,
-              name: "jianying-editor",
+              name: "legacy-editor",
               source: "managed",
             },
           ],

@@ -28,7 +28,6 @@ import {
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
-  Clapperboard,
   Crop,
   FileOutput,
   ImageDown,
@@ -43,7 +42,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { createRoot } from "react-dom/client"
 import { createAgentCanvasInstructions, createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary, type WebPluginManifest } from "../plugin-contracts"
-import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
@@ -87,11 +85,6 @@ import {
   openDesktopWorkspace,
 } from "./desktop-surface-state"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
-import {
-  canExportSelectionToJianying,
-  exportCanvasMediaToJianying,
-  normalizeJianyingRendererError,
-} from "./jianying-selection-action"
 import {
   canResumeMediaOperation,
   canRunMediaOperation,
@@ -1202,48 +1195,6 @@ function App() {
         icon: <MessageSquarePlus />,
         label: locale === "zh-CN" ? "添加到对话" : "Add to conversation",
       }),
-      {
-        id: "jianying.import-media",
-        label: "导入到剪映",
-        icon: <Clapperboard />,
-        visible(context) {
-          const pluginEnabled = installedPlugins.some(
-            (plugin) =>
-              plugin.id === jianyingBuiltinPluginId &&
-              plugin.version === jianyingBuiltinPluginVersion &&
-              plugin.trustedBuiltin === true,
-          )
-          return window.convax.platform === "darwin" && pluginEnabled && canExportSelectionToJianying(context)
-        },
-        async execute(context) {
-          if (!activeProjectId || !activeCanvasId) {
-            throw new Error("Open a Project Canvas before exporting to JianYing")
-          }
-          try {
-            await flushCanvasForAgent()
-            if (context.signal.aborted) throw context.signal.reason ?? new DOMException("Canceled", "AbortError")
-            const result = await exportCanvasMediaToJianying(
-              window.convax.jianying,
-              {
-                expectedRevision: context.document.revision,
-                nodeIds: [...context.selectedNodeIds],
-                ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-                target: { kind: "current-or-new" },
-              },
-              context.signal,
-            )
-            if (context.signal.aborted) return
-            const confirmed = result.importStatus === "confirmed"
-            setNotification({
-              description: `${result.importedMediaCount} 个素材${confirmed ? "已导入" : "已发送"}到“${result.draftName}”${result.createdDraft ? "（新草稿）" : ""}`,
-              kind: "success",
-              title: confirmed ? "已导入到剪映" : "已发送到剪映",
-            })
-          } catch (error) {
-            throw normalizeJianyingRendererError(error)
-          }
-        },
-      },
       ...mediaOperationActions.map((action) => ({
         id: `plugin-selection-action:${action.pluginId}/${action.id}`,
         label: localizedMediaOperationText(action.title, locale),

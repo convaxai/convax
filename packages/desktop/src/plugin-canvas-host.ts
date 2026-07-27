@@ -184,7 +184,9 @@ function optionalGenerationOutput(value: unknown) {
 
 function optionalPluginGenerationResultMode(value: unknown): PluginGenerationResultMode | undefined {
   if (value === undefined) return undefined
-  if (value !== "create-pending-node") throw new Error("Generation result mode is not supported")
+  if (value !== "create-pending-node" && value !== "return") {
+    throw new Error("Generation result mode is not supported")
+  }
   return value
 }
 
@@ -197,6 +199,18 @@ function requireGenerationIdentifier(value: unknown, label: string, maximum = 2_
     /[\u0000-\u001f\u007f]/.test(value)
   ) {
     throw new Error(`${label} must be a non-empty, trimmed string`)
+  }
+  return value
+}
+
+function requireGenerationOutputText(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.includes("\0") ||
+    new TextEncoder().encode(value).byteLength > 64 * 1024
+  ) {
+    throw new Error("Generation returned text is invalid")
   }
   return value
 }
@@ -315,9 +329,16 @@ function sanitizeGenerationTools(value: readonly PluginGenerationToolSummary[], 
   })
 }
 
-function sanitizeGenerationResult(value: PluginGenerationCanvasResult): PluginGenerationCanvasResult {
+function sanitizeGenerationResult(
+  value: PluginGenerationCanvasResult,
+  resultMode: PluginGenerationResultMode,
+): PluginGenerationCanvasResult {
   if (!isRecord(value)) throw new Error("Generation executor returned an invalid result")
-  if (!Array.isArray(value.createdNodeIds) || value.createdNodeIds.length === 0 || value.createdNodeIds.length > 32) {
+  if (
+    !Array.isArray(value.createdNodeIds) ||
+    value.createdNodeIds.length > 32 ||
+    (resultMode === "return" ? value.createdNodeIds.length !== 0 : value.createdNodeIds.length === 0)
+  ) {
     throw new Error("Generation executor returned invalid created node ids")
   }
   const createdNodeIds = value.createdNodeIds.map((id, index) =>
@@ -335,8 +356,16 @@ function sanitizeGenerationResult(value: PluginGenerationCanvasResult): PluginGe
   const warnings = value.warnings.map((warning, index) =>
     requireGenerationIdentifier(warning, `Generation warning ${index}`, 2_000),
   )
+  const outputText =
+    value.outputText === undefined
+      ? undefined
+      : requireGenerationOutputText(value.outputText)
+  if (resultMode === "return" ? outputText === undefined : outputText !== undefined) {
+    throw new Error("Generation executor returned an invalid result destination")
+  }
   return {
     createdNodeIds,
+    ...(outputText === undefined ? {} : { outputText }),
     revision: value.revision,
     toolId: requireGenerationIdentifier(value.toolId, "Generation result tool id", 256),
     warnings,
@@ -861,7 +890,7 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
         throw new Error("Canvas generation could not be completed")
       }
       assertCurrentFrame(context)
-      return sanitizeGenerationResult(result)
+      return sanitizeGenerationResult(result, resultMode ?? "create-pending-node")
     } finally {
       context.generationGate.active = false
     }

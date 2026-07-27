@@ -202,7 +202,7 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         }
       }
 
-      if (isUnbackedPendingResourceNode(node, resourceMetadata)) {
+      if (isUnbackedResourcePlaceholder(node, resourceMetadata)) {
         return {
           ...node,
           data: {
@@ -307,7 +307,7 @@ async function hydrateProjectCanvasResources(
   const nodes = await Promise.all(
     document.nodes.map(async (node) => {
       if (!resourceNodeKinds.has(node.data.kind) || !shouldInspect(node)) return node
-      if (isUnbackedPendingResourceNode(node, node.data.metadata)) return node
+      if (isUnbackedResourcePlaceholder(node, node.data.metadata)) return node
       const reference = getProjectResourceReference(node.data.metadata)
       if (!reference) {
         return {
@@ -341,10 +341,10 @@ async function hydrateProjectCanvasResources(
   return { ...document, nodes }
 }
 
-function isUnbackedPendingResourceNode(node: CanvasDocument["nodes"][number], metadata: unknown) {
+function isUnbackedResourcePlaceholder(node: CanvasDocument["nodes"][number], metadata: unknown) {
   return (
     pendingResourceNodeKinds.has(node.data.kind) &&
-    (node.data.status === "pending" || node.data.status === "error") &&
+    (node.data.status === "idle" || node.data.status === "pending" || node.data.status === "error") &&
     isRecord(metadata) &&
     Object.keys(metadata).length === 0
   )

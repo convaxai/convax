@@ -25,24 +25,24 @@ afterEach(async () => {
 async function setup() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-default-capabilities-"))
   temporaryRoots.push(root)
-  const skillFile = path.join(root, "plugins", "jianying-editor", "skills", "jianying-editor", "SKILL.md")
+  const skillFile = path.join(root, "plugins", "director-stage", "skills", "director-workflow", "SKILL.md")
   await fs.mkdir(path.dirname(skillFile), { recursive: true })
-  await fs.writeFile(skillFile, "---\nname: jianying-editor\n---\n")
+  await fs.writeFile(skillFile, "---\nname: director-workflow\n---\n")
   const manifest = {
     capabilities: [],
-    contributes: { canvas: { renderer: { nodeKinds: ["integration.jianying"] } } },
-    description: "JianYing",
+    contributes: { canvas: { renderer: { nodeKinds: ["director.stage"] } } },
+    description: "Director Stage",
     entry: "index.html",
-    id: "jianying-editor",
-    name: "JianYing",
+    id: "director-stage",
+    name: "Director Stage",
     schema: "convax.plugin/1" as const,
-    skill: "skills/jianying-editor/SKILL.md",
+    skill: "skills/director-workflow/SKILL.md",
     version: "1.0.0",
   }
   const catalog = [
     {
       bundle: { files: { "index.html": "", "manifest.json": "{}", [manifest.skill]: "skill" } },
-      companionSkillName: "jianying-editor",
+      companionSkillName: "director-workflow",
       defaultInstall: true,
       defaultInstallCompanionSkill: true,
       manifest,
@@ -73,7 +73,7 @@ async function setup() {
         location: skillFile,
         management: { kind: "standalone" as const },
         managed: true,
-        name: "jianying-editor",
+        name: "director-workflow",
         source: "managed" as const,
       }
     }),
@@ -84,7 +84,7 @@ async function setup() {
               location: skillFile,
               management: { kind: "standalone" as const },
               managed: true,
-              name: "jianying-editor",
+              name: "director-workflow",
               source: "managed" as const,
             },
           ]
@@ -233,9 +233,9 @@ describe("provisionDefaultCapabilities", () => {
     expect(input.skillManager.installManagedAtStartup).toHaveBeenCalledTimes(1)
     expect(input.skillManager.refresh).toHaveBeenCalledTimes(1)
     expect(JSON.parse(await fs.readFile(input.stateFile, "utf8"))).toEqual({
-      plugins: ["jianying-editor"],
+      plugins: ["director-stage"],
       schema: "convax.default-capabilities/1",
-      skills: ["jianying-editor"],
+      skills: ["director-workflow"],
     })
 
     input.removeInstalledPlugin()
@@ -270,7 +270,7 @@ describe("provisionDefaultCapabilities", () => {
     expect(result.failures).toEqual([
       {
         error: expect.objectContaining({ message: expect.stringContaining("explicit user action") }),
-        id: "jianying-editor",
+        id: "director-stage",
         kind: "plugin",
       },
     ])

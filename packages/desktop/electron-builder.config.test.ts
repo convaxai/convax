@@ -107,10 +107,6 @@ describe("Desktop platform artifacts", () => {
       gatekeeperAssess: false,
       hardenedRuntime: true,
       icon: "resources/icon.svg",
-      extendInfo: {
-        NSAppleMusicUsageDescription:
-          "Convax accesses the JianYing draft directory only when you export selected media to a JianYing draft.",
-      },
     })
     expect(config.win?.icon).toBe("resources/icon.svg")
     expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.svg" })
