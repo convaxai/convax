@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createFolderNode, createMediaNode, createTextNode } from "@convax/canvas/core"
+import {
+  canvasNodeGenerationPreferenceKey,
+  canvasNodeGenerationRunKey,
+  createCanvasDocument,
+  createFolderNode,
+  createMediaNode,
+  createTextNode,
+  finishCanvasNodeGenerationRun,
+  getCanvasNodeGenerationToolId,
+  getCanvasNodeGenerationRun,
+  setCanvasNodeGenerationToolId,
+  startCanvasNodeGenerationRun,
+  succeedCanvasNodeGenerationRun,
+} from "@convax/canvas/core"
 import type { CanvasNode } from "@convax/canvas/core"
 import {
   collectProjectManagedAssetReferences,
@@ -332,7 +345,84 @@ describe("Project Canvas document dehydration", () => {
     },
   )
 
-  test("still rejects an idle unbacked file and non-empty placeholder metadata", () => {
+  test("round trips an unbacked media placeholder while its durable generation run is active or failed", async () => {
+    const placeholder: CanvasNode = {
+      id: "generated-image",
+      type: "file",
+      position: { x: 12, y: 24 },
+      data: {
+        kind: "image",
+        label: "Image",
+        metadata: {},
+        resourceState: { status: "ready", url: "" },
+        status: "idle",
+      },
+    }
+    const source = createCanvasDocument({ id: "canvas-generation", nodes: [placeholder] })
+    const preferred = setCanvasNodeGenerationToolId(source, placeholder.id, "creative-tools/draw")
+    const persistedPreference = dehydrateProjectCanvasDocument(preferred)
+    expect(getCanvasNodeGenerationToolId(persistedPreference.nodes[0]!)).toBe("creative-tools/draw")
+    expect(persistedPreference.nodes[0]!.data).not.toHaveProperty("resourceState")
+
+    const submitting = startCanvasNodeGenerationRun(preferred, placeholder.id, {
+      operationId: "operation-one",
+      prompt: "Prompt from a durable Project text file",
+      toolId: "creative-tools/draw",
+    })
+
+    const persistedSubmitting = dehydrateProjectCanvasDocument(submitting)
+    expect(persistedSubmitting.nodes[0]!.data).not.toHaveProperty("resourceState")
+    expect(getCanvasNodeGenerationRun(persistedSubmitting.nodes[0]!)).toMatchObject({
+      operationId: "operation-one",
+      status: "submitting",
+    })
+    let resolutions = 0
+    await expect(
+      hydrateProjectCanvasDocument(persistedSubmitting, async () => {
+        resolutions += 1
+        throw new Error("An unbacked generation placeholder must not be resolved")
+      }),
+    ).resolves.toEqual(persistedSubmitting)
+    expect(resolutions).toBe(0)
+
+    const failed = finishCanvasNodeGenerationRun(submitting, placeholder.id, "operation-one", "failed", "safe")
+    const persistedFailed = dehydrateProjectCanvasDocument(failed)
+    expect(getCanvasNodeGenerationRun(persistedFailed.nodes[0]!)).toMatchObject({
+      retrySafety: "safe",
+      status: "failed",
+    })
+
+    const succeededWithoutResource = succeedCanvasNodeGenerationRun(submitting, placeholder.id, "operation-one")
+    expect(() => dehydrateProjectCanvasDocument(succeededWithoutResource)).toThrow("reference")
+
+    const forged = structuredClone(submitting)
+    forged.nodes[0]!.data.metadata = {
+      ...(forged.nodes[0]!.data.metadata as Record<string, unknown>),
+      opaque: true,
+    }
+    expect(forged.nodes[0]!.data.metadata).toHaveProperty(canvasNodeGenerationRunKey)
+    expect(() => dehydrateProjectCanvasDocument(forged)).toThrow("reference")
+
+    const unreadablePreference = structuredClone(preferred)
+    unreadablePreference.nodes[0]!.data.metadata = {
+      [canvasNodeGenerationPreferenceKey]: { future: true, schema: "convax.node-generation-preference/99" },
+    }
+    const persistedUnreadablePreference = dehydrateProjectCanvasDocument(unreadablePreference)
+    expect(persistedUnreadablePreference.nodes[0]!.data.metadata).toEqual(
+      unreadablePreference.nodes[0]!.data.metadata,
+    )
+    expect(getCanvasNodeGenerationToolId(persistedUnreadablePreference.nodes[0]!)).toBeUndefined()
+
+    const unreadableRun = structuredClone(source)
+    unreadableRun.nodes[0]!.data.metadata = {
+      [canvasNodeGenerationRunKey]: { future: true, schema: "convax.node-generation-run/99" },
+    }
+    const persistedUnreadableRun = dehydrateProjectCanvasDocument(unreadableRun)
+    expect(persistedUnreadableRun.nodes[0]!.data.metadata).toEqual(unreadableRun.nodes[0]!.data.metadata)
+    expect(getCanvasNodeGenerationRun(persistedUnreadableRun.nodes[0]!)).toBeUndefined()
+  })
+
+  test("still rejects an idle unbacked file and unknown placeholder metadata", () => {
     const idleFile: CanvasNode = {
       id: "empty-file",
       type: "file",

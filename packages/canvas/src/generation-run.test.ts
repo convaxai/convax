@@ -19,6 +19,7 @@ import {
   canvasNodeGenerationRunKey,
   canvasNodeGenerationRunSchema,
   canvasNodeGenerationRunSchemaV1,
+  canvasNodeGenerationRunSchemaV2,
   finishCanvasNodeGenerationRun,
   getCanvasNodeGenerationRun,
   inspectCanvasNodeGenerationRun,
@@ -88,7 +89,7 @@ describe("Canvas node generation run", () => {
     }
   })
 
-  test("migrates readable v1 runs to v2 without overwriting unknown schemas", () => {
+  test("migrates readable v1 and v2 runs to v3 without overwriting unknown schemas", () => {
     const source = document({
       [canvasNodeGenerationRunKey]: {
         operationId: "legacy-operation",
@@ -122,6 +123,51 @@ describe("Canvas node generation run", () => {
       schema: canvasNodeGenerationRunSchema,
       status: "failed",
     })
+
+    const v2 = document({
+      [canvasNodeGenerationRunKey]: {
+        operationId: "version-two-operation",
+        prompt: "Version two prompt",
+        retrySafety: "safe",
+        schema: canvasNodeGenerationRunSchemaV2,
+        status: "failed",
+        toolId: "creative-tools/image.generate",
+      },
+    })
+    expect(getCanvasNodeGenerationRun(v2.nodes[0]!)).toEqual({
+      operationId: "version-two-operation",
+      prompt: "Version two prompt",
+      retrySafety: "safe",
+      schema: canvasNodeGenerationRunSchema,
+      status: "failed",
+      toolId: "creative-tools/image.generate",
+    })
+  })
+
+  test("persists an empty editable prompt for a prompt-context-only run", () => {
+    const running = startCanvasNodeGenerationRun(document(), "image-one", {
+      operationId: "context-only-operation",
+      prompt: "",
+      toolId: "creative-tools/image.generate",
+    })
+    expect(getCanvasNodeGenerationRun(running.nodes[0]!)).toEqual({
+      operationId: "context-only-operation",
+      prompt: "",
+      schema: canvasNodeGenerationRunSchema,
+      status: "submitting",
+      toolId: "creative-tools/image.generate",
+    })
+
+    const legacyEmpty = document({
+      [canvasNodeGenerationRunKey]: {
+        operationId: "legacy-empty-operation",
+        prompt: "",
+        schema: canvasNodeGenerationRunSchemaV2,
+        status: "running",
+        toolId: "creative-tools/image.generate",
+      },
+    })
+    expect(inspectCanvasNodeGenerationRun(legacyEmpty.nodes[0]!)).toMatchObject({ kind: "unreadable" })
   })
 
   test("keeps next-run preference separate from the resolved historical tool", () => {
@@ -274,6 +320,23 @@ describe("Canvas node generation run", () => {
         toolId: "creative-tools/image.generate",
       }),
     ).toThrow("requires a file node")
+  })
+
+  test("keeps an empty resource target guard stable while Canvas adds generation-owned metadata", () => {
+    const source = document()
+    const before = createCanvasGenerationTargetGuard(source.nodes[0]!)
+    const running = markCanvasNodeGenerationRunRunning(
+      startCanvasNodeGenerationRun(source, "image-one", {
+        operationId: "operation-one",
+        prompt: "Draw a fox",
+        toolId: "creative-tools/actual-model",
+      }),
+      "image-one",
+      "operation-one",
+    )
+
+    expect(before.data).not.toHaveProperty("metadata")
+    expect(createCanvasGenerationTargetGuard(running.nodes[0]!)).toEqual(before)
   })
 
   test("lets run and next-preference updates pass the generated guard and atomically succeeds replacement", () => {

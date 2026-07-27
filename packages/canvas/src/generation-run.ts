@@ -3,7 +3,8 @@ import { isCanvasGenerationToolId } from "./generation-preference"
 
 export const canvasNodeGenerationRunKey = "convaxGenerationRun"
 export const canvasNodeGenerationRunSchemaV1 = "convax.node-generation-run/1"
-export const canvasNodeGenerationRunSchema = "convax.node-generation-run/2"
+export const canvasNodeGenerationRunSchemaV2 = "convax.node-generation-run/2"
+export const canvasNodeGenerationRunSchema = "convax.node-generation-run/3"
 export const maximumCanvasGenerationPromptLength = 64 * 1024
 
 const maximumGenerationOperationIdLength = 128
@@ -24,6 +25,7 @@ export type CanvasNodeGenerationRunStatus =
 
 export interface CanvasNodeGenerationRun {
   operationId: string
+  /** Normalized user-editable draft; may be empty and never contains Main-composed prompt context. */
   prompt: string
   retrySafety?: "safe" | "unknown"
   schema: typeof canvasNodeGenerationRunSchema
@@ -99,11 +101,14 @@ export function isCanvasGenerationTaskId(value: unknown): value is string {
 export function isCanvasGenerationPrompt(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length > 0 &&
     value.length <= maximumCanvasGenerationPromptLength &&
     value === value.trim() &&
     !value.includes("\0")
   )
+}
+
+function isLegacyCanvasGenerationPrompt(value: unknown): value is string {
+  return isCanvasGenerationPrompt(value) && value.length > 0
 }
 
 export function isCanvasNodeGenerationRunActive(run: CanvasNodeGenerationRun) {
@@ -120,27 +125,31 @@ function isCanvasNodeGenerationRunStatus(value: unknown): value is CanvasNodeGen
 
 export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerationRun | undefined {
   if (!isRecord(value)) return undefined
-  const isLegacy = value.schema === canvasNodeGenerationRunSchemaV1
+  const isLegacyV1 = value.schema === canvasNodeGenerationRunSchemaV1
+  const isLegacyV2 = value.schema === canvasNodeGenerationRunSchemaV2
+  const isLegacy = isLegacyV1 || isLegacyV2
+  const prompt = typeof value.prompt === "string" ? value.prompt : undefined
   if (
     !hasExactKeys(
       value,
-      isLegacy
+      isLegacyV1
         ? ["operationId", "prompt", "schema", "status", "taskId", "toolId"]
         : ["operationId", "prompt", "retrySafety", "schema", "status", "taskId", "toolId"],
       ["operationId", "prompt", "schema", "status", "toolId"],
     ) ||
     (!isLegacy && value.schema !== canvasNodeGenerationRunSchema) ||
     !isCanvasGenerationOperationId(value.operationId) ||
-    !isCanvasGenerationPrompt(value.prompt) ||
+    prompt === undefined ||
+    (isLegacy ? !isLegacyCanvasGenerationPrompt(prompt) : !isCanvasGenerationPrompt(prompt)) ||
     !isCanvasGenerationToolId(value.toolId) ||
     !isCanvasNodeGenerationRunStatus(value.status) ||
     (value.taskId !== undefined && !isCanvasGenerationTaskId(value.taskId)) ||
-    (!isLegacy && value.retrySafety !== undefined && !isRetrySafety(value.retrySafety))
+    (!isLegacyV1 && value.retrySafety !== undefined && !isRetrySafety(value.retrySafety))
   ) {
     return undefined
   }
   const retrySafety: CanvasNodeGenerationRun["retrySafety"] =
-    isLegacy && value.status !== "succeeded" && terminalGenerationRunStatuses.has(value.status)
+    isLegacyV1 && value.status !== "succeeded" && terminalGenerationRunStatuses.has(value.status)
       ? "unknown"
       : isRetrySafety(value.retrySafety)
         ? value.retrySafety
@@ -159,7 +168,7 @@ export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerati
   }
   const run: CanvasNodeGenerationRun = {
     operationId: value.operationId,
-    prompt: value.prompt,
+    prompt,
     ...(retrySafety === undefined ? {} : { retrySafety }),
     schema: canvasNodeGenerationRunSchema,
     status: value.status,
