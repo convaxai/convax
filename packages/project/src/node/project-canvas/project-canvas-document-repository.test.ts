@@ -7,7 +7,16 @@ import {
   serializeCanvasDocument,
   UnsupportedCanvasDocumentVersionError,
 } from "@convax/canvas/application"
-import { createCanvasDocument, createMediaNode, createTextNode, type CanvasNode } from "@convax/canvas/core"
+import {
+  createCanvasDocument,
+  createMediaNode,
+  createTextNode,
+  getCanvasNodeGenerationRun,
+  getCanvasNodeGenerationToolId,
+  setCanvasNodeGenerationToolId,
+  startCanvasNodeGenerationRun,
+  type CanvasNode,
+} from "@convax/canvas/core"
 import {
   projectResourceBindingsKey,
   projectResourceReferenceKey,
@@ -395,6 +404,69 @@ describe("project canvas document repository", () => {
 
     await expect(repository.load({ canvasId: "canvas-main", scopeId: "project_one" })).rejects.toThrow()
     expect(getCounts()).toEqual({ removes: 0, touched: 0, writes: 0 })
+  })
+
+  test("saves and reloads existing and host-created unbacked Image generation targets", async () => {
+    const image = createMediaNode({
+      id: "image-target",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "image-target",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "" },
+      },
+    })
+    image.data.status = "idle"
+    const pending = createMediaNode({
+      id: "pending-image",
+      position: { x: 360, y: 0 },
+      resource: {
+        id: "pending-image",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "" },
+      },
+    })
+    pending.data.status = "pending"
+    let document = createCanvasDocument({ id: "canvas-main", nodes: [image, pending] })
+    document = setCanvasNodeGenerationToolId(document, image.id, "creative-tools/draw")
+    document = startCanvasNodeGenerationRun(document, image.id, {
+      operationId: "operation-one",
+      prompt: "Prompt from a directly connected Project text file",
+      toolId: "creative-tools/draw",
+    })
+    document = startCanvasNodeGenerationRun(document, pending.id, {
+      operationId: "operation-two",
+      prompt: "Create a new generated image",
+      toolId: "creative-tools/draw",
+    })
+    const { getCounts, getStored, repository } = harness()
+
+    await expect(
+      repository.save({
+        document,
+        expectedStorageVersion: null,
+        ref: { canvasId: "canvas-main", scopeId: "project_one" },
+      }),
+    ).resolves.toMatchObject({ storageVersion: expect.any(String) })
+
+    expect(getCounts()).toEqual({ removes: 0, touched: 1, writes: 1 })
+    expect(getStored().content).not.toContain("resourceState")
+    const loaded = await repository.load({ canvasId: "canvas-main", scopeId: "project_one" })
+    const loadedTarget = loaded.document?.nodes.find((node) => node.id === image.id)
+    expect(loadedTarget).toBeDefined()
+    expect(getCanvasNodeGenerationToolId(loadedTarget!)).toBe("creative-tools/draw")
+    expect(getCanvasNodeGenerationRun(loadedTarget!)).toMatchObject({
+      operationId: "operation-one",
+      status: "submitting",
+    })
+    const loadedPending = loaded.document?.nodes.find((node) => node.id === pending.id)
+    expect(loadedPending?.data.status).toBe("pending")
+    expect(getCanvasNodeGenerationRun(loadedPending!)).toMatchObject({
+      operationId: "operation-two",
+      status: "submitting",
+    })
   })
 
   test("verifies exact managed references while holding the asset lock through document write", async () => {

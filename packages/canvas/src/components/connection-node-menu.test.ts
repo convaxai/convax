@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
-import { createCanvasCardConnection } from "./connection-node-menu"
+import { ConnectionNodeMenu, createCanvasCardConnection } from "./connection-node-menu"
+import { getCanvasNodeInsertionItems } from "./insertion-items"
 
 describe("card-level canvas connections", () => {
   test("keeps the canonical card handle ids stable", () => {
@@ -21,5 +25,18 @@ describe("card-level canvas connections", () => {
       target: "target",
       targetHandle: "target-left",
     })
+  })
+
+  test("offers empty image and video cards from a connection endpoint", () => {
+    const items = [
+      { label: "Text", type: "text" },
+      ...getCanvasNodeInsertionItems(createDefaultCanvasFileRendererRegistry(), createDefaultCanvasNodeRegistry()),
+    ]
+    const markup = renderToStaticMarkup(createElement(ConnectionNodeMenu, { items, onSelect() {} }))
+
+    expect(markup).toContain("Text")
+    expect(markup).toContain("Image")
+    expect(markup).toContain("Video")
+    expect(markup).not.toContain("Audio")
   })
 })

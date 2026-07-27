@@ -201,11 +201,11 @@ metadata.convaxGenerationPreference = {
 }
 ```
 
-The ideal run schema is version 2:
+The current run schema is version 3:
 
 ```ts
 metadata.convaxGenerationRun = {
-  schema: "convax.node-generation-run/2",
+  schema: "convax.node-generation-run/3",
   operationId: string,
   toolId: string,
   prompt: string,
@@ -231,10 +231,15 @@ states:
 
 `interrupted` therefore does not automatically mean “retryable.”
 
+`prompt` is the normalized user-editable draft, not Main's effective model prompt.
+It may be empty when selected Canvas text nodes provide the complete prompt context.
+Main composes the exact effective prompt transiently and, when recovery is admitted,
+retains it only inside its private digest-bound recovery snapshot. Editing and
+retrying a run therefore cannot append the same Canvas text twice.
+
 Portable bounds:
 
-- `prompt`: non-empty after trimming, no NUL, at most the existing 64 Ki character
-  generation limit;
+- `prompt`: trimmed, no NUL, at most the existing 64 Ki character generation limit;
 - `operationId`: printable and at most 128 characters;
 - `toolId`: host-opaque and at most 512 characters;
 - `taskId`: at most 512 characters and restricted to the portable opaque identifier
@@ -246,7 +251,8 @@ stderr, or raw diagnostic may enter Canvas.
 
 An absent namespace stays absent. Unknown or malformed schemas remain unmodified
 and unreadable; commands do not overwrite them with defaults. Migration from
-`convax.node-generation-run/1` preserves every valid field. An active v1 run lacks
+`convax.node-generation-run/1` and `/2` preserve every valid field. Version 3
+permits the empty editable draft needed by prompt-context-only runs. An active v1 run lacks
 the proof required for automatic recovery and is reconciled conservatively unless
 a matching private ledger can upgrade it.
 
@@ -752,7 +758,7 @@ Every row asserts:
 - Full recovery is admitted only by the new exact manifest/runtime contract.
 - Old Tool Plugins keep structured task receipt compatibility where implemented but
   remain restart-interrupted.
-- `convax.node-generation-run/1` is read and explicitly migrated; unknown schemas
+- `convax.node-generation-run/1` and `/2` are read and explicitly migrated; unknown schemas
   remain untouched.
 - Desktop protocol and `@convax/canvas` public version must be bumped when the
   corresponding contracts land.

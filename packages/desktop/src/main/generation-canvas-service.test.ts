@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -23,7 +24,11 @@ import {
   succeedCanvasNodeGenerationRun,
   type CanvasDocument,
 } from "@convax/canvas/core"
-import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
+import {
+  dehydrateProjectCanvasDocument,
+  projectResourceReferenceKey,
+  type ProjectResourceReference,
+} from "@convax/project/canvas"
 import type { GenerationCanvasRequest, GenerationToolDescription, GenerationToolSummary } from "../generation-contracts"
 import {
   GenerationCanvasService,
@@ -60,16 +65,34 @@ function projectFileReference(path: string): Extract<ProjectResourceReference, {
   return { kind: "project-file", path }
 }
 
-function createTextNode(input: { id: string; label?: string; position: { x: number; y: number }; text?: string }) {
+function stableJsonForTest(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJsonForTest).join(",")}]`
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJsonForTest(item)}`)
+      .join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function createTextNode(input: {
+  id: string
+  label?: string
+  path?: string
+  position: { x: number; y: number }
+  text?: string
+}) {
   const text = input.text ?? ""
+  const resourcePath = input.path ?? `References/${input.id}.md`
   return createCanvasTextNode({
     id: input.id,
     label: input.label,
     metadata: {
-      [projectResourceReferenceKey]: projectFileReference(`References/${input.id}.md`),
+      [projectResourceReferenceKey]: projectFileReference(resourcePath),
     },
-    mimeType: "text/markdown",
-    name: `${input.id}.md`,
+    mimeType: resourcePath.endsWith(".txt") ? "text/plain" : "text/markdown",
+    name: path.posix.basename(resourcePath),
     position: input.position,
     resourceState: { contentRevision: "runtime-only", status: "ready", text },
   })
@@ -98,7 +121,11 @@ function projectPortFor(
       const target = nativePath(input.path)
       const stat = await fs.stat(target)
       return {
-        mimeType: "text/markdown",
+        mimeType: input.path.endsWith(".png")
+          ? "image/png"
+          : input.path.endsWith(".txt")
+            ? "text/plain"
+            : "text/markdown",
         name: path.basename(target),
         path: input.path,
         size: stat.size,
@@ -192,6 +219,7 @@ type GenerationLimitOverrides = Pick<
 function setup(
   options: {
     assets?: GenerationCanvasManagedAssetPort
+    beforeExternalStarted?: () => Promise<void> | void
     document?: CanvasDocument
     loadDocument?: () => Promise<{ document: CanvasDocument | null }> | { document: CanvasDocument | null }
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
@@ -214,6 +242,7 @@ function setup(
   const calls: Record<string, unknown>[] = []
   const operationMetadata: Array<GenerationToolOperationMetadata | undefined> = []
   const call: PreparedGenerationToolExecution["call"] = async (input, signal, lifecycleObserver, operation) => {
+    await options.beforeExternalStarted?.()
     await lifecycleObserver?.({ type: "external-started" })
     calls.push(input)
     operationMetadata.push(operation)
@@ -1020,19 +1049,40 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
   })
 
-  test("composes authoritative text prompt context without exposing it as a model reference", async () => {
-    const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "First scene detail" })
-    const second = createTextNode({ id: "second", position: { x: 0, y: 160 }, text: "Second scene detail" })
-    const owner = createTextNode({ id: "owner", position: { x: 360, y: 0 }, text: "Output card" })
-    const document = createCanvasDocument({
-      edges: [
-        { id: "first-to-owner", source: first.id, target: owner.id },
-        { id: "second-to-owner", source: second.id, target: owner.id },
-      ],
-      id: "canvas-one",
-      nodes: [first, second, owner],
-      title: "Canvas",
+  test("composes durable Project text prompt context without exposing it as a model reference", async () => {
+    const root = await temporaryDirectory()
+    await fs.mkdir(path.join(root, "Notes"), { recursive: true })
+    await writeProjectTextReferences(root, { second: "Second scene detail" })
+    await fs.writeFile(path.join(root, "Notes", "first.txt"), "First scene detail", "utf8")
+    const first = createTextNode({
+      id: "first",
+      path: "Notes/first.txt",
+      position: { x: 0, y: 0 },
+      text: "Stale renderer-only text",
     })
+    const second = createTextNode({ id: "second", position: { x: 0, y: 160 }, text: "Second scene detail" })
+    const owner = createMediaNode({
+      id: "owner",
+      position: { x: 360, y: 0 },
+      resource: {
+        id: "owner",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "" },
+      },
+    })
+    owner.data.status = "idle"
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({
+        edges: [
+          { id: "first-to-owner", source: first.id, target: owner.id },
+          { id: "second-to-owner", source: second.id, target: owner.id },
+        ],
+        id: "canvas-one",
+        nodes: [first, second, owner],
+        title: "Canvas",
+      }),
+    )
     const selectedTool = tool({
       acceptedInputs: [],
       id: "creative-tools/draw",
@@ -1042,30 +1092,36 @@ describe("GenerationCanvasService", () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
     const harness = setup({
       document,
+      project: projectPortFor(root),
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
       selectedTool,
     })
 
     await harness.service.generate(
       request({
-        prompt: "",
+        prompt: "test",
         promptContextNodeIds: [first.id, second.id],
         referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+        resultMode: { nodeId: owner.id, type: "replace-node" },
         output: "image",
         toolId: selectedTool.id,
       }),
       { id: "renderer:1", kind: "ui" },
     )
 
-    expect(harness.calls[0]?.prompt).toBe("First scene detail\n\nSecond scene detail")
+    expect(harness.calls[0]?.prompt).toBe("test\n\nFirst scene detail\n\nSecond scene detail")
     expect(harness.calls[0]?.references).toEqual([])
+    expect(harness.runRequests.start[0]?.prompt).toBe("test")
+    expect(harness.replacementRequests).toHaveLength(1)
   })
 
   test("combines text prompt context with media references without conflating their tool inputs", async () => {
     const root = await temporaryDirectory()
-    const referencePath = path.join(root, "reference.png")
+    const referencePath = path.join(root, "Media", "reference.png")
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await fs.mkdir(path.dirname(referencePath), { recursive: true })
     await fs.writeFile(referencePath, png)
+    await writeProjectTextReferences(root, { brief: "Scene detail" })
     const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Scene detail" })
     const image = createMediaNode({
       id: "image-one",
@@ -1081,22 +1137,12 @@ describe("GenerationCanvasService", () => {
         state: { status: "ready", url: "" },
       },
     })
-    const document = createCanvasDocument({ id: "canvas-one", nodes: [context, image], title: "Canvas" })
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({ id: "canvas-one", nodes: [context, image], title: "Canvas" }),
+    )
     const harness = setup({
       document,
-      project: {
-        async readFileInfo() {
-          return {
-            mimeType: "image/png",
-            name: "reference.png",
-            path: "Media/reference.png",
-            size: png.length,
-          }
-        },
-        async resolveEntryPath() {
-          return referencePath
-        },
-      },
+      project: projectPortFor(root),
       result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
       selectedTool: tool({
         acceptedInputs: ["reference_image"],
@@ -1126,12 +1172,14 @@ describe("GenerationCanvasService", () => {
   test("rejects forged or oversized prompt context before external execution", async () => {
     const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Owner" })
     const outgoing = createTextNode({ id: "outgoing", position: { x: 320, y: 0 }, text: "Not an input" })
-    const document = createCanvasDocument({
-      edges: [{ id: "owner-to-outgoing", source: owner.id, target: outgoing.id }],
-      id: "canvas-one",
-      nodes: [owner, outgoing],
-      title: "Canvas",
-    })
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({
+        edges: [{ id: "owner-to-outgoing", source: owner.id, target: outgoing.id }],
+        id: "canvas-one",
+        nodes: [owner, outgoing],
+        title: "Canvas",
+      }),
+    )
     const forged = setup({ document })
     await expect(
       forged.service.generate(
@@ -1145,13 +1193,21 @@ describe("GenerationCanvasService", () => {
     ).rejects.toThrow("must remain a direct incoming Canvas text node")
     expect(forged.calls).toEqual([])
 
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, {
+      empty: "   ",
+      oversized: "x".repeat(64 * 1024 + 1),
+    })
     const oversized = createTextNode({
       id: "oversized",
       position: { x: 0, y: 0 },
       text: "x".repeat(64 * 1024 + 1),
     })
     const oversizedHarness = setup({
-      document: createCanvasDocument({ id: "canvas-one", nodes: [oversized], title: "Canvas" }),
+      document: dehydrateProjectCanvasDocument(
+        createCanvasDocument({ id: "canvas-one", nodes: [oversized], title: "Canvas" }),
+      ),
+      project: projectPortFor(root),
     })
     await expect(
       oversizedHarness.service.generate(request({ prompt: "", promptContextNodeIds: [oversized.id] }), {
@@ -1163,7 +1219,10 @@ describe("GenerationCanvasService", () => {
 
     const empty = createTextNode({ id: "empty", position: { x: 0, y: 0 }, text: "   " })
     const emptyHarness = setup({
-      document: createCanvasDocument({ id: "canvas-one", nodes: [empty], title: "Canvas" }),
+      document: dehydrateProjectCanvasDocument(
+        createCanvasDocument({ id: "canvas-one", nodes: [empty], title: "Canvas" }),
+      ),
+      project: projectPortFor(root),
     })
     await expect(
       emptyHarness.service.generate(request({ prompt: "", promptContextNodeIds: [empty.id] }), {
@@ -1175,17 +1234,19 @@ describe("GenerationCanvasService", () => {
   })
 
   test("rejects prompt context text that changes while the model is running", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief" })
     const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
-    const document = createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" })
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" }),
+    )
     const harness = setup({
       document,
       async result() {
-        context.data.resourceState = {
-          status: "ready",
-          text: "Changed while the model was running",
-        }
+        await fs.writeFile(path.join(root, "References", "brief.md"), "Changed while the model was running", "utf8")
         return { content: [{ text: "Generated result", type: "text" }] }
       },
+      project: projectPortFor(root),
     })
 
     await expect(
@@ -1199,17 +1260,19 @@ describe("GenerationCanvasService", () => {
   })
 
   test("rejects prompt context whitespace edits while the model is running", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief" })
     const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
-    const document = createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" })
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" }),
+    )
     const harness = setup({
       document,
       async result() {
-        context.data.resourceState = {
-          status: "ready",
-          text: " Original brief ",
-        }
+        await fs.writeFile(path.join(root, "References", "brief.md"), " Original brief ", "utf8")
         return { content: [{ text: "Generated result", type: "text" }] }
       },
+      project: projectPortFor(root),
     })
 
     await expect(
@@ -1223,6 +1286,8 @@ describe("GenerationCanvasService", () => {
   })
 
   test("rejects a prompt context incoming edge removed while the model is running", async () => {
+    const root = await temporaryDirectory()
+    await writeProjectTextReferences(root, { brief: "Original brief" })
     const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
     const owner = createMediaNode({
       id: "image-output",
@@ -1234,18 +1299,22 @@ describe("GenerationCanvasService", () => {
         state: { status: "ready", url: "" },
       },
     })
-    const document = createCanvasDocument({
-      edges: [{ id: "brief-to-output", source: context.id, target: owner.id }],
-      id: "canvas-one",
-      nodes: [context, owner],
-      title: "Canvas",
-    })
+    owner.data.status = "idle"
+    const document = dehydrateProjectCanvasDocument(
+      createCanvasDocument({
+        edges: [{ id: "brief-to-output", source: context.id, target: owner.id }],
+        id: "canvas-one",
+        nodes: [context, owner],
+        title: "Canvas",
+      }),
+    )
     const harness = setup({
       document,
       async result() {
         document.edges = []
         return { content: [{ text: "Generated result", type: "text" }] }
       },
+      project: projectPortFor(root),
     })
 
     await expect(
@@ -1479,6 +1548,12 @@ describe("GenerationCanvasService", () => {
     const privateRoot = await temporaryDirectory()
     const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
     const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const storedRequests: unknown[] = []
+    const createInputSnapshot = inputSnapshots.create.bind(inputSnapshots)
+    spyOn(inputSnapshots, "create").mockImplementation(async (input) => {
+      storedRequests.push(structuredClone(input.request))
+      return createInputSnapshot(input)
+    })
     const pngResult: McpToolCallResult = {
       content: [
         {
@@ -1534,7 +1609,8 @@ describe("GenerationCanvasService", () => {
       harness.service.generate(
         request({
           output: "image",
-          references: [{ nodeId: harness.reference.id, role: "text" }],
+          prompt: "",
+          promptContextNodeIds: [harness.reference.id],
           resultMode: { type: "create-pending-node" },
           toolId: "creative-tools/draw",
         }),
@@ -1549,6 +1625,19 @@ describe("GenerationCanvasService", () => {
       recovery: "required",
       requestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
     })
+    expect(harness.createRequests[0]?.prompt).toBe("")
+    expect(harness.calls[0]?.prompt).toBe("Stable brief")
+    expect(harness.calls[0]?.references).toEqual([])
+    expect(storedRequests).toEqual([
+      expect.objectContaining({
+        canvasRequest: expect.objectContaining({
+          prompt: "",
+          promptContextNodeIds: [harness.reference.id],
+          references: [],
+        }),
+        prompt: "Stable brief",
+      }),
+    ])
     expect(acknowledgements).toHaveLength(1)
   })
 
@@ -2182,13 +2271,18 @@ describe("GenerationCanvasService", () => {
       request: {
         canvasRequest: {
           references: [],
-          relationAnchorNodeIds: [],
+          relationAnchorNodeIds: [owner.id],
           resultMode: { nodeId: owner.id, type: "replace-node" },
         },
         input: {},
         operationId: "operation-recover",
         output: "image",
         prompt: "Recover this image",
+        referenceSnapshot: stableJsonForTest({
+          constraint: null,
+          references: [],
+          relationAnchors: [{ kind: "image", nodeId: owner.id, type: "file" }],
+        }),
         references: [],
         schema: "convax.generation-lro-call/1",
         targetGuard: guard,
@@ -2333,6 +2427,379 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests).toHaveLength(1)
     expect(acknowledgements).toHaveLength(1)
     expect(recoveryWaitCalls).toBe(10)
+  })
+
+  test("replays the exact stored prompt context and rechecks it at external start", async () => {
+    const privateRoot = await temporaryDirectory()
+    const projectRoot = await temporaryDirectory()
+    await writeProjectTextReferences(projectRoot, { brief: "Stable brief" })
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Renderer-only text" })
+    delete context.data.resourceState
+    const owner = createMediaNode({
+      id: "owner",
+      position: { x: 360, y: 0 },
+      resource: {
+        id: "old",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "convax://old" },
+      },
+    })
+    const active = startCanvasNodeGenerationRun(
+      createCanvasDocument({
+        edges: [{ id: "brief-to-owner", source: context.id, target: owner.id }],
+        id: "canvas-one",
+        nodes: [context, owner],
+        title: "Canvas",
+      }),
+      owner.id,
+      {
+        operationId: "operation-context-recover",
+        prompt: "test",
+        toolId: "creative-tools/draw",
+      },
+    )
+    const guard = createCanvasGenerationTargetGuard(active.nodes.find((node) => node.id === owner.id)!)
+    const referenceSnapshot = stableJsonForTest({
+      constraint: null,
+      promptContexts: [
+        {
+          contentDigest: createHash("sha256").update("Stable brief", "utf8").digest("hex"),
+          nodeId: context.id,
+          source: {
+            kind: "text",
+            mimeType: "text/markdown",
+            reference: projectFileReference("References/brief.md"),
+            type: "file",
+          },
+        },
+      ],
+      references: [],
+      relationAnchors: [],
+    })
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          prompt: "test",
+          promptContextNodeIds: [context.id],
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-context-recover",
+        output: "image",
+        prompt: "test\n\nStable brief",
+        referenceSnapshot,
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/draw",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: owner.id,
+      operationId: "operation-context-recover",
+      phase: "prepared",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      toolId: "creative-tools/draw",
+      updatedAt: 0,
+    })
+    const pngResult: McpToolCallResult = {
+      content: [
+        {
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
+    }
+    const digestDirectory = path.join(privateRoot, "digest-output")
+    await fs.mkdir(digestDirectory, { mode: 0o700 })
+    const resultDigest = await generationRecoveryResultDigest(pngResult, digestDirectory)
+    const acknowledgements: unknown[] = []
+    let recoveryReads = 0
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge(input) {
+        acknowledgements.push(input)
+      },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "cancelled" }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        recoveryReads += 1
+        if (recoveryReads === 1) return { schema: "convax.generation-lro-snapshot/1", status: "prepared" }
+        return {
+          resultDigest,
+          schema: "convax.generation-lro-snapshot/1",
+          status: "succeeded",
+          taskId: "task_context_recover_123",
+        }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        return { result: pngResult, resultDigest }
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("Prompt-context replay should not wait after succeeding")
+      },
+    }
+    const harness = setup({
+      document: active,
+      inputSnapshots: inputs,
+      loadDocument: () => ({ document: active }),
+      operations,
+      project: projectPortFor(projectRoot),
+      recovery,
+      result: pngResult,
+      run: {
+        async interruptInactive() {
+          return { ...commandResult(active, []), affectedNodeIds: [] }
+        },
+      },
+      selectedTool: tool({
+        id: "creative-tools/draw",
+        output: "image",
+        recovery: "long-running-operation",
+        toolId: "draw",
+      }),
+    })
+
+    await harness.service.reconcileCanvas(
+      { canvasId: "canvas-one", scopeId: "project-one" },
+      { id: "desktop:startup", kind: "system" },
+    )
+    for (let index = 0; index < 2_000; index += 1) {
+      if ((await operations.list()).length === 0) break
+      await Bun.sleep(1)
+    }
+
+    expect(await operations.list()).toEqual([])
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.calls[0]?.prompt).toBe("test\n\nStable brief")
+    expect(harness.calls[0]?.references).toEqual([])
+    expect(harness.replacementRequests).toHaveLength(1)
+    expect(acknowledgements).toHaveLength(1)
+
+    const staleInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          prompt: "test",
+          promptContextNodeIds: [context.id],
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-context-recover",
+        output: "image",
+        prompt: "test\n\nStable brief",
+        referenceSnapshot,
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/draw",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: staleInput.id,
+      nodeId: owner.id,
+      operationId: "operation-context-recover",
+      phase: "prepared",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: staleInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      toolId: "creative-tools/draw",
+      updatedAt: 0,
+    })
+    recoveryReads = 0
+    const staleHarness = setup({
+      async beforeExternalStarted() {
+        await fs.writeFile(path.join(projectRoot, "References", "brief.md"), "Changed after restart", "utf8")
+      },
+      document: active,
+      inputSnapshots: inputs,
+      loadDocument: () => ({ document: active }),
+      operations,
+      project: projectPortFor(projectRoot),
+      recovery,
+      result: pngResult,
+      run: {
+        async interruptInactive() {
+          return { ...commandResult(active, []), affectedNodeIds: [] }
+        },
+      },
+      selectedTool: tool({
+        id: "creative-tools/draw",
+        output: "image",
+        recovery: "long-running-operation",
+        toolId: "draw",
+      }),
+    })
+
+    await staleHarness.service.reconcileCanvas(
+      { canvasId: "canvas-one", scopeId: "project-one" },
+      { id: "desktop:startup", kind: "system" },
+    )
+    for (let index = 0; index < 2_000; index += 1) {
+      if ((await operations.list())[0]?.phase === "indeterminate") break
+      await Bun.sleep(1)
+    }
+
+    expect(await operations.list()).toEqual([expect.objectContaining({ phase: "indeterminate" })])
+    expect(staleHarness.calls).toEqual([])
+    expect(staleHarness.replacementRequests).toEqual([])
+  })
+
+  test("never replays a legacy recovery snapshot that omitted its prompt-context ids", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Legacy brief" })
+    const owner = createMediaNode({
+      id: "owner",
+      position: { x: 360, y: 0 },
+      resource: {
+        id: "old",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "convax://old" },
+      },
+    })
+    const active = startCanvasNodeGenerationRun(
+      createCanvasDocument({
+        edges: [{ id: "brief-to-owner", source: context.id, target: owner.id }],
+        id: "canvas-one",
+        nodes: [context, owner],
+        title: "Canvas",
+      }),
+      owner.id,
+      {
+        operationId: "operation-legacy-context",
+        prompt: "test",
+        toolId: "creative-tools/draw",
+      },
+    )
+    const guard = createCanvasGenerationTargetGuard(active.nodes.find((node) => node.id === owner.id)!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-legacy-context",
+        output: "image",
+        prompt: "test",
+        referenceSnapshot: stableJsonForTest({
+          constraint: null,
+          promptContexts: [{ nodeId: context.id, text: "Legacy brief" }],
+          references: [],
+          relationAnchors: [],
+        }),
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/draw",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: owner.id,
+      operationId: "operation-legacy-context",
+      phase: "prepared",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      toolId: "creative-tools/draw",
+      updatedAt: 0,
+    })
+    let recoveryReads = 0
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {},
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "cancelled" }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        recoveryReads += 1
+        return { schema: "convax.generation-lro-snapshot/1", status: "prepared" }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        throw new Error("Legacy prompt context must not be recovered")
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("Legacy prompt context must not be recovered")
+      },
+    }
+    const harness = setup({
+      document: active,
+      inputSnapshots: inputs,
+      loadDocument: () => ({ document: active }),
+      operations,
+      recovery,
+      run: {
+        async interruptInactive() {
+          return { ...commandResult(active, []), affectedNodeIds: [] }
+        },
+      },
+      selectedTool: tool({
+        id: "creative-tools/draw",
+        output: "image",
+        recovery: "long-running-operation",
+        toolId: "draw",
+      }),
+    })
+
+    await harness.service.reconcileCanvas(
+      { canvasId: "canvas-one", scopeId: "project-one" },
+      { id: "desktop:startup", kind: "system" },
+    )
+    for (let index = 0; index < 2_000; index += 1) {
+      if ((await operations.list())[0]?.phase === "indeterminate") break
+      await Bun.sleep(1)
+    }
+
+    expect(await operations.list()).toEqual([expect.objectContaining({ phase: "indeterminate" })])
+    expect(recoveryReads).toBe(0)
+    expect(harness.calls).toEqual([])
+    expect(harness.replacementRequests).toEqual([])
   })
 
   test("explicitly cancels a persisted task after restart through the same pinned recovery operation", async () => {
