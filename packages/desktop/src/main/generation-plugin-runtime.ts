@@ -230,6 +230,8 @@ interface StartingPluginRuntime {
   promise?: Promise<CachedPluginRuntime>
 }
 
+class PluginRuntimeReportedError extends Error {}
+
 const generationToolEnvironmentKeys = [
   "PATH",
   "HOME",
@@ -744,7 +746,7 @@ export class GenerationPluginRuntime {
           }
           const catalogResult = await runtime.client.callTool("llm.models.list", {}, signal)
           if (catalogResult.isError) {
-            throw new Error(`Plugin LLM model catalog failed to load: ${selected.manifest.id}`)
+            throw new PluginRuntimeReportedError(`Plugin LLM model catalog failed to load: ${selected.manifest.id}`)
           }
           models = llmModelCatalog(catalogResult.structuredContent)
         }
@@ -757,7 +759,9 @@ export class GenerationPluginRuntime {
           throw new Error(`Plugin LLM provider changed before its gateway started: ${selected.manifest.id}`)
         }
         const result = await runtime.client.callTool("llm.gateway.start", {}, signal)
-        if (result.isError) throw new Error(`Plugin LLM gateway failed to start: ${selected.manifest.id}`)
+        if (result.isError) {
+          throw new PluginRuntimeReportedError(`Plugin LLM gateway failed to start: ${selected.manifest.id}`)
+        }
         const descriptor = llmGatewayDescriptor(result.structuredContent)
         connections.push({
           ...descriptor,
@@ -767,7 +771,15 @@ export class GenerationPluginRuntime {
           providerId: pluginLlmProviderHostId(selected.manifest.id, contribution.provider.id),
         })
       } catch (error) {
-        if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+        // A structured MCP tool error proves the shared sidecar transport is
+        // still alive. Keep it available to an in-flight service authorization
+        // instead of closing the exact client that owns its one-shot completion.
+        if (
+          !(error instanceof PluginRuntimeReportedError) &&
+          !(error instanceof Error && error.name === "AbortError")
+        ) {
+          this.#evict(runtime)
+        }
         throw error
       }
     }

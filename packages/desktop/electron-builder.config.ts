@@ -37,6 +37,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     appId: identity.appId,
     productName: identity.productName,
     artifactName: "convax-desktop-${os}-${arch}.${ext}",
+    protocols: [{ name: "Convax", schemes: ["convax"] }],
     directories: {
       buildResources: "resources",
       output: "dist",

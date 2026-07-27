@@ -209,6 +209,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   readonly forcedCloses: boolean[] = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
+  readonly toolResults = new Map<string, McpToolCallResult>()
   readonly recoveryCalls: Array<{ input: unknown; method: string }> = []
 
   async callTool(
@@ -220,6 +221,8 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   ): Promise<McpToolCallResult> {
     await lifecycleObserver?.({ type: "external-started" })
     this.calls.push({ input, name, requestTimeoutMs, signal })
+    const configuredResult = this.toolResults.get(name)
+    if (configuredResult) return configuredResult
     if (name === "llm.gateway.start") {
       return {
         content: [{ text: "started", type: "text" }],
@@ -371,6 +374,37 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.models.list", "llm.gateway.start"])
+  })
+
+  test("keeps a shared service authorization runtime alive when its LLM catalog reports an error", async () => {
+    const combined = llmPlugin()
+    combined.contributes.llm!.modelCatalog = "runtime"
+    combined.contributes.service = { actions: ["authorize"] }
+    const { clients, runtime } = setup(
+      [combined],
+      ["llm.models.list", "llm.gateway.start", "service.authorize", "service.authorization.complete"],
+    )
+    const authorization = await runtime.callService(combined.id, "authorize")
+    clients[0]!.toolResults.set("llm.models.list", {
+      content: [{ text: "Sign in before loading models", type: "text" }],
+      isError: true,
+    })
+
+    await expect(runtime.connectLlmProviders()).rejects.toThrow(
+      `Plugin LLM model catalog failed to load: ${combined.id}`,
+    )
+    expect(clients[0]!.closed).toBe(0)
+
+    await authorization.completeAuthorization!({
+      authorization_id: "request_0123456789abcdef",
+      schema: "convax.plugin-service-external-authorization-completion/1",
+    })
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
+      "service.authorize",
+      "llm.models.list",
+      "service.authorization.complete",
+    ])
+    expect(clients[0]!.closed).toBe(0)
   })
 
   test("discovers only v2 generation contributions without starting their commands", async () => {
