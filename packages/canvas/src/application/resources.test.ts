@@ -5,7 +5,7 @@ import {
   createMediaNode,
   createTextNode as createCanvasTextNode,
 } from "../document"
-import { getCanvasNodeGenerationRun } from "../generation-run"
+import { canvasNodeGenerationRunSchema, getCanvasNodeGenerationRun } from "../generation-run"
 import type { CanvasTextResource } from "../types"
 import { CanvasCommandValidationError, CanvasRevisionConflictError, createCanvasNodeContentGuard } from "./commands"
 import {
@@ -1330,7 +1330,7 @@ describe("canvas resource business service", () => {
     expect(getCanvasNodeGenerationRun(pending)).toEqual({
       operationId: "operation-one",
       prompt: "Create a short video",
-      schema: "convax.node-generation-run/2",
+      schema: canvasNodeGenerationRunSchema,
       status: "submitting",
       toolId: "creative-tools/video.generate",
     })

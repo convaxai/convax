@@ -545,8 +545,11 @@ still be a valid input to a video tool.
 
 A direct file-card generation persists a Canvas-owned, versioned run on the target
 node, separate from its next-run tool preference and from Plugin-owned state. The run
-retains the complete prompt, host operation id, resolved host-opaque tool id, bounded
-status, and an optional host-safe opaque sidecar task receipt. Main writes
+retains the normalized user-editable prompt draft, host operation id, resolved
+host-opaque tool id, bounded status, and an optional host-safe opaque sidecar task
+receipt. The draft may be empty when direct incoming text supplies the whole prompt;
+Main composes the effective model prompt transiently and, for admitted recoverable
+operations, retains it only in the private digest-bound execution snapshot. Main writes
 `submitting` before the external call, updates lifecycle state through Canvas
 application services, and commits generated resource replacement plus `succeeded`
 in one guarded Canvas CAS. The dedicated target guard omits only the host-owned run

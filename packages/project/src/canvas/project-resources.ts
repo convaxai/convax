@@ -1,4 +1,10 @@
-import type { CanvasDocument, CanvasResourceStatus } from "@convax/canvas/core"
+import {
+  canvasNodeGenerationPreferenceKey,
+  canvasNodeGenerationRunKey,
+  inspectCanvasNodeGenerationRun,
+  type CanvasDocument,
+  type CanvasResourceStatus,
+} from "@convax/canvas/core"
 
 export const projectResourceReferenceKey = "convaxProjectResource"
 export const projectResourceBindingsKey = "convaxProjectResourceBindings"
@@ -202,12 +208,13 @@ export function dehydrateProjectCanvasDocument(document: CanvasDocument): Canvas
         }
       }
 
-      if (isUnbackedResourcePlaceholder(node, resourceMetadata)) {
+      const placeholderMetadata = durableUnbackedResourcePlaceholderMetadata(node, resourceMetadata)
+      if (placeholderMetadata) {
         return {
           ...node,
           data: {
             ...persistedData,
-            metadata: {},
+            metadata: placeholderMetadata,
           },
         }
       }
@@ -307,7 +314,7 @@ async function hydrateProjectCanvasResources(
   const nodes = await Promise.all(
     document.nodes.map(async (node) => {
       if (!resourceNodeKinds.has(node.data.kind) || !shouldInspect(node)) return node
-      if (isUnbackedResourcePlaceholder(node, node.data.metadata)) return node
+      if (durableUnbackedResourcePlaceholderMetadata(node, node.data.metadata)) return node
       const reference = getProjectResourceReference(node.data.metadata)
       if (!reference) {
         return {
@@ -341,13 +348,33 @@ async function hydrateProjectCanvasResources(
   return { ...document, nodes }
 }
 
-function isUnbackedResourcePlaceholder(node: CanvasDocument["nodes"][number], metadata: unknown) {
-  return (
-    pendingResourceNodeKinds.has(node.data.kind) &&
-    (node.data.status === "idle" || node.data.status === "pending" || node.data.status === "error") &&
-    isRecord(metadata) &&
-    Object.keys(metadata).length === 0
-  )
+function durableUnbackedResourcePlaceholderMetadata(
+  node: CanvasDocument["nodes"][number],
+  metadata: unknown,
+): Record<string, unknown> | null {
+  if (
+    !pendingResourceNodeKinds.has(node.data.kind) ||
+    (node.data.status !== "idle" && node.data.status !== "pending" && node.data.status !== "error") ||
+    !isRecord(metadata)
+  ) {
+    return null
+  }
+
+  const durableMetadata: Record<string, unknown> = {}
+  for (const key of Object.keys(metadata)) {
+    if (key === canvasNodeGenerationPreferenceKey) {
+      durableMetadata[key] = structuredClone(metadata[key])
+      continue
+    }
+    if (key === canvasNodeGenerationRunKey) {
+      const inspected = inspectCanvasNodeGenerationRun(node)
+      if (inspected.kind === "valid" && inspected.run.status === "succeeded") return null
+      durableMetadata[key] = structuredClone(metadata[key])
+      continue
+    }
+    return null
+  }
+  return durableMetadata
 }
 
 function requireProjectResourceSnapshot(value: ProjectResourceSnapshot): ProjectResourceSnapshot {

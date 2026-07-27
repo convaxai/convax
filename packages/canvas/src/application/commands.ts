@@ -1044,9 +1044,7 @@ function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGeneratio
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
   const withoutRun = omitCanvasNodeGenerationRunFromData(data)
   const metadata = withoutRun.metadata
-  if (!isRecord(metadata) || !Object.prototype.hasOwnProperty.call(metadata, canvasNodeGenerationPreferenceKey)) {
-    return withoutRun
-  }
+  if (!isRecord(metadata)) return withoutRun
   const nextMetadata = { ...structuredClone(metadata) }
   delete nextMetadata[canvasNodeGenerationPreferenceKey]
   if (Object.keys(nextMetadata).length === 0) {

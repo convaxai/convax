@@ -338,7 +338,7 @@ export interface CanvasTelemetryService {
 export interface CanvasAssistantGenerationCapability {
   /** Direct card generation is intentionally limited to visual media replacement. */
   output: "image" | "video"
-  /** One-shot composer draft hydrated from the Canvas-owned latest run. */
+  /** One-shot raw composer draft hydrated from the Canvas-owned latest run. */
   initialPrompt?: string
   /** Persisted owner-node override. Missing means inherit the host's current default. */
   ownerToolId?: string
