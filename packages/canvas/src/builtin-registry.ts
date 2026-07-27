@@ -6,6 +6,7 @@ import {
 } from "./components/builtin-node"
 import { createAgentNode } from "./document"
 import { createCanvasFileRendererRegistry, type CanvasFileRendererDefinition } from "./file-renderer-registry"
+import { builtinCanvasInspectorContribution } from "./inspector"
 import { createCanvasNodeRegistry } from "./node-registry"
 import type { CanvasMediaKind } from "./types"
 
@@ -15,6 +16,7 @@ function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
     label: kind[0]!.toUpperCase() + kind.slice(1),
     component: BuiltinMediaFileNode,
     hidden: true,
+    inspector: builtinCanvasInspectorContribution,
     matches: (data) => data.kind === kind,
   }
 }
@@ -25,6 +27,7 @@ export function createDefaultCanvasFileRendererRegistry() {
       id: "text",
       label: "Text",
       component: BuiltinTextFileNode,
+      inspector: builtinCanvasInspectorContribution,
       matches: (data) => data.kind === "text",
     },
     mediaRenderer("image"),
@@ -35,6 +38,7 @@ export function createDefaultCanvasFileRendererRegistry() {
       id: "folder",
       label: "Folder",
       component: BuiltinFolderFileNode,
+      inspector: builtinCanvasInspectorContribution,
       matches: (data) => data.kind === "folder",
     },
   ])

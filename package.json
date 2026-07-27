@@ -32,6 +32,7 @@
       "@radix-ui/react-menu": "2.1.21",
       "@tailwindcss/vite": "4.3.2",
       "@tiptap/core": "3.27.4",
+      "@tiptap/extension-drag-handle-react": "3.27.4",
       "@tiptap/extension-placeholder": "3.27.4",
       "@tiptap/extension-table": "3.27.4",
       "@tiptap/extension-text-align": "3.27.4",

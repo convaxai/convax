@@ -39,6 +39,7 @@ export interface CanvasEditorController {
   quickConnect: (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => void
   relinkResource: (nodeId: string) => void
   relinkSelectedResource: (nodeId: string) => void
+  reloadAuthoritative?: () => Promise<void>
   replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) => void
   registerPendingDraft: (draft: CanvasPendingDraft) => () => void
   removeNode: (nodeId: string) => void
@@ -47,9 +48,18 @@ export interface CanvasEditorController {
 }
 
 const CanvasEditorContext = createContext<CanvasEditorController | null>(null)
+const CanvasOverlayRootContext = createContext<HTMLElement | null>(null)
 
 export function CanvasEditorProvider(props: { children: ReactNode; controller: CanvasEditorController }) {
   return <CanvasEditorContext value={props.controller}>{props.children}</CanvasEditorContext>
+}
+
+export function CanvasOverlayRootProvider(props: { children: ReactNode; root: HTMLElement | null }) {
+  return <CanvasOverlayRootContext value={props.root}>{props.children}</CanvasOverlayRootContext>
+}
+
+export function useCanvasOverlayRoot() {
+  return useContext(CanvasOverlayRootContext)
 }
 
 export function useCanvasEditor() {
