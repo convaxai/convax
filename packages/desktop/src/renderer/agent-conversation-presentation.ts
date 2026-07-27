@@ -36,6 +36,11 @@ export interface AgentConversationTurn {
   user?: AgentConversationMessageSlice
 }
 
+/** Uses the structured turn projection; never reparses tool output or display text. */
+export function agentConversationTurnHasFailure(turn: AgentConversationTurn) {
+  return turn.errors.length > 0 || turn.tools.failed > 0
+}
+
 function partType(part: AgentMessagePart) {
   // Keep this presentation layer compatible with newly admitted part kinds. In
   // particular, Skill parts are added by the runtime as visible rich content.
@@ -132,7 +137,9 @@ function presentTurn(user: AgentMessage | undefined, assistants: AgentMessage[])
     undefined,
   )
   const durationMs =
-    completedAt !== undefined && completedAt >= firstMessage.createdAt ? completedAt - firstMessage.createdAt : undefined
+    completedAt !== undefined && completedAt >= firstMessage.createdAt
+      ? completedAt - firstMessage.createdAt
+      : undefined
   const userParts = user?.parts.filter(isVisibleConversationPart) ?? []
 
   return {
@@ -141,7 +148,9 @@ function presentTurn(user: AgentMessage | undefined, assistants: AgentMessage[])
     durationMs,
     errors: assistants.flatMap((message) => (message.error ? [{ message, text: message.error }] : [])),
     id: firstMessage.id,
-    interrupted: Boolean(assistants.at(-1) && assistants.at(-1)?.completedAt === undefined && !delivery && activity.length),
+    interrupted: Boolean(
+      assistants.at(-1) && assistants.at(-1)?.completedAt === undefined && !delivery && activity.length,
+    ),
     tools: summarizeTools(activity),
     user: user && userParts.length > 0 ? { message: user, parts: userParts } : undefined,
   }

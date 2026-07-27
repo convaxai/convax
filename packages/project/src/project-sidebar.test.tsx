@@ -86,4 +86,76 @@ describe("ProjectSidebar", () => {
     expect(pathIndex).toBeLessThan(markup.indexOf('aria-label="Example files"'))
     expect(markup).toContain('aria-label="Project path: /project"')
   })
+
+  test("embeds the original file capability without Project switcher or host footer chrome", () => {
+    const activeController = {
+      getSnapshot: () => activeSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ProjectController
+    const activeFilesController = {
+      getSnapshot: () => activeFilesSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ProjectFilesController
+
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar
+        controller={activeController}
+        extension={{
+          content: <div>Should not be embedded</div>,
+          label: "Canvases",
+        }}
+        filesController={activeFilesController}
+        footerActions={<button type="button">Application settings</button>}
+        presentation="embedded-files"
+      />,
+    )
+
+    expect(markup).toContain('data-project-files-view="embedded"')
+    expect(markup).toContain('aria-label="Example files"')
+    expect(markup).toContain('aria-label="New file"')
+    expect(markup).toContain('aria-label="New folder"')
+    expect(markup).toContain('aria-label="Refresh files"')
+    expect(markup).not.toContain('data-project-header-path="/project"')
+    expect(markup).not.toContain("Application settings")
+    expect(markup).not.toContain("Should not be embedded")
+  })
+
+  test("does not expose a stale file projection after the active Project changes", () => {
+    const activeController = {
+      getSnapshot: () => activeSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ProjectController
+    const staleFilesController = {
+      getSnapshot: () => ({
+        ...activeFilesSnapshot,
+        listings: {
+          "": {
+            entries: [{
+              kind: "file",
+              modifiedAt: 1,
+              name: "stale.md",
+              parentPath: "",
+              path: "stale.md",
+              size: 10,
+            }],
+            path: "",
+            projectId: "old-project",
+          },
+        },
+        projectId: "old-project",
+      }),
+      subscribe: () => () => undefined,
+    } as unknown as ProjectFilesController
+
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar
+        controller={activeController}
+        filesController={staleFilesController}
+        presentation="embedded-files"
+      />,
+    )
+
+    expect(markup).toContain('aria-label="Example files"')
+    expect(markup).not.toContain("stale.md")
+  })
 })

@@ -1,25 +1,47 @@
-import type { ProjectController } from "@convax/project"
+import type { ProjectController, ProjectControllerSnapshot } from "@convax/project"
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 
-const controller = {} as ProjectController
+function controller(snapshot: ProjectControllerSnapshot): ProjectController {
+  return {
+    clearError: () => undefined,
+    getSnapshot: () => snapshot,
+    initialize: async () => undefined,
+    subscribe: () => () => undefined,
+  } as unknown as ProjectController
+}
+
+const emptySnapshot: ProjectControllerSnapshot = {
+  activeProjectId: null,
+  changingActiveProject: false,
+  error: null,
+  initialized: true,
+  projects: [],
+}
 
 describe("ProjectEmptyState", () => {
   test("shows a loading state while projects initialize", () => {
-    const markup = renderToStaticMarkup(<ProjectEmptyState controller={controller} initialized={false} />)
+    const markup = renderToStaticMarkup(
+      <ProjectEmptyState
+        controller={controller({ ...emptySnapshot, initialized: false })}
+        initialized={false}
+      />,
+    )
 
     expect(markup).toContain("Loading projects")
     expect(markup).not.toContain("Create project")
   })
 
   test("offers create and open actions when there is no active project", () => {
-    const markup = renderToStaticMarkup(<ProjectEmptyState controller={controller} initialized />)
+    const markup = renderToStaticMarkup(
+      <ProjectEmptyState controller={controller(emptySnapshot)} initialized />,
+    )
 
-    expect(markup).toContain("Create or open a project")
-    expect(markup).toContain("Create project")
+    expect(markup).toContain('data-project-home="true"')
+    expect(markup).toContain("Your next workspace starts here")
+    expect(markup).toContain("Create a project")
     expect(markup).toContain("Open project")
-    expect(markup).toContain("Documents/Convax")
     expect(markup).not.toContain("Choose a location")
   })
 })

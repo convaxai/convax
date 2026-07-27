@@ -7,10 +7,12 @@ import {
   checkDesktopProtocol,
   desktopProtocolVersion,
 } from "./desktop-protocol"
+import { workspaceSystemStatusIpcChannel } from "./workspace-system-status-contracts"
 
 describe("desktop IPC protocol compatibility", () => {
   test("tracks the Desktop preload bridge contract", () => {
-    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/22")
+    expect(desktopProtocolVersion).toBe("convax.desktop-ipc/23")
+    expect(workspaceSystemStatusIpcChannel).toBe("desktop:workspace-system-status")
     expect(canvasResourceIpcChannel).toBe("canvas:resource-add")
     expect(canvasResourceHydrateStaleIpcChannel).toBe("canvas:resource-hydrate-stale")
     expect(canvasResourceReadConnectedImageIpcChannel).toBe("canvas:resource-read-connected-image")

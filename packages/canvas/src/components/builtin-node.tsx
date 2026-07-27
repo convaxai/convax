@@ -1,23 +1,25 @@
 import { Button, Tooltip, cn } from "@convax/ui"
 import type { Editor, JSONContent } from "@tiptap/core"
+import DragHandle, { type DragHandleProps } from "@tiptap/extension-drag-handle-react"
 import Placeholder from "@tiptap/extension-placeholder"
 import { TableKit } from "@tiptap/extension-table"
 import TextAlign from "@tiptap/extension-text-align"
 import { Markdown } from "@tiptap/markdown"
-import { EditorContent, useEditor } from "@tiptap/react"
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react"
+import { BubbleMenu, type BubbleMenuProps } from "@tiptap/react/menus"
 import StarterKit from "@tiptap/starter-kit"
 import { Handle, NodeResizer, NodeToolbar, Position, useConnection, type NodeProps } from "@xyflow/react"
 import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
-  Bold,
   Copy,
+  Bold,
+  Code2,
   Download,
+  Ellipsis,
   Bot,
   File,
   FileUp,
   Folder,
+  GripVertical,
   Heading1,
   Heading2,
   Image as ImageIcon,
@@ -25,11 +27,9 @@ import {
   List,
   ListOrdered,
   LoaderCircle,
-  Maximize2,
   Music2,
+  PanelRightOpen,
   Pause,
-  Pencil,
-  Pilcrow,
   Play,
   Plus,
   Quote,
@@ -51,6 +51,7 @@ import {
   isValidElement,
   type DragEvent,
   type ErrorInfo,
+  type Ref,
   type ReactNode,
   useCallback,
   useContext,
@@ -66,7 +67,7 @@ import {
   CANVAS_NODE_OUTPUT_HANDLE_ID,
   getIncomingConnectedCanvasFileNodeIds,
 } from "../connections"
-import { useCanvasEditor } from "../editor-context"
+import { useCanvasEditor, useCanvasOverlayRoot } from "../editor-context"
 import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import {
@@ -75,13 +76,9 @@ import {
   type CanvasNodeGenerationRun,
 } from "../generation-run"
 import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
-import type { CanvasSelectionAction } from "../selection-actions"
+import { partitionCanvasSelectionActions, type CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
-import {
-  CanvasTextResourceConflictError,
-  useCanvasService,
-  type CanvasTextResourceService,
-} from "../services"
+import { CanvasTextResourceConflictError, useCanvasService, type CanvasTextResourceService } from "../services"
 import type {
   CanvasFolderNodeData,
   CanvasMediaKind,
@@ -148,18 +145,83 @@ const ContributedToolbarFileAssistantTriggerContext = createContext(false)
 
 function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAction[] }) {
   const editor = useCanvasEditor()
-  return props.actions.map((action) => {
-    const pending = editor.isSelectionActionPending(action.id)
-    return (
-      <ToolbarButton
-        key={action.id}
-        disabled={pending}
-        icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
-        label={action.label}
-        onClick={() => editor.executeSelectionAction(action)}
-      />
-    )
-  })
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const overflowRef = useRef<HTMLDivElement>(null)
+  const { overflow, primary } = partitionCanvasSelectionActions(props.actions)
+  useEffect(() => {
+    if (!overflowOpen) return
+    const close = (event: PointerEvent) => {
+      if (event.target instanceof Element && overflowRef.current?.contains(event.target)) return
+      setOverflowOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOverflowOpen(false)
+    }
+    window.addEventListener("pointerdown", close)
+    window.addEventListener("keydown", closeOnEscape)
+    return () => {
+      window.removeEventListener("pointerdown", close)
+      window.removeEventListener("keydown", closeOnEscape)
+    }
+  }, [overflowOpen])
+  return (
+    <>
+      {primary.map((action) => {
+        const pending = editor.isSelectionActionPending(action.id)
+        return (
+          <ToolbarButton
+            key={action.id}
+            disabled={pending}
+            icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+            label={action.label}
+            onClick={() => editor.executeSelectionAction(action)}
+          />
+        )
+      })}
+      {overflow.length > 0 ? (
+        <div className="relative" ref={overflowRef}>
+          <ToolbarButton
+            icon={<Ellipsis />}
+            label="More actions"
+            onClick={() => setOverflowOpen((open) => !open)}
+            pressed={overflowOpen}
+          />
+          {overflowOpen ? (
+            <div
+              className="absolute left-0 top-full z-50 mt-1 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+              data-canvas-shortcuts="ignore"
+              role="menu"
+            >
+              {overflow.map((action) => {
+                const pending = editor.isSelectionActionPending(action.id)
+                return (
+                  <button
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-50",
+                      action.presentation?.tone === "destructive" && "text-destructive",
+                    )}
+                    disabled={pending}
+                    key={action.id}
+                    onClick={() => {
+                      editor.executeSelectionAction(action)
+                      setOverflowOpen(false)
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <span className="[&>svg]:size-3.5">
+                      {pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+                    </span>
+                    <span>{action.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  )
 }
 
 function prependNodeToolbarContent(toolbar: ReactNode, leadingContent: ReactNode) {
@@ -206,6 +268,7 @@ function NodeChrome(props: {
   icon: ReactNode
   label: string
   node: NodeProps<CanvasNode>
+  nodeRef?: Ref<HTMLDivElement>
   toolbar?: ReactNode
 }) {
   const editor = useCanvasEditor()
@@ -235,6 +298,10 @@ function NodeChrome(props: {
         "convax-node group relative size-full text-card-foreground",
         ownsSingleNodeContext && "is-selected",
       )}
+      data-canvas-node-kind={props.node.data.kind}
+      data-canvas-node-status={props.node.data.status ?? "idle"}
+      ref={props.nodeRef}
+      tabIndex={props.nodeRef ? -1 : undefined}
     >
       <NodeResizer
         color="var(--ring)"
@@ -381,6 +448,20 @@ export function applyCanvasTextDraftBase(
   return state.dirty ? state : createCanvasTextDraftState(input)
 }
 
+export function rebaseCanvasTextDraft(
+  state: CanvasTextDraftState,
+  input: { contentRevision?: string; text?: string },
+): CanvasTextDraftState {
+  const baseContent = input.text ?? ""
+  return {
+    baseContent,
+    baseRevision: input.contentRevision ?? "",
+    content: state.content,
+    dirty: state.content !== baseContent,
+    error: null,
+  }
+}
+
 export function failCanvasTextDraftSave(state: CanvasTextDraftState, error: string): CanvasTextDraftState {
   return { ...state, dirty: true, error }
 }
@@ -470,64 +551,588 @@ function createTextEditorExtensions() {
   ]
 }
 
-export function ExpandedTextEditorDialog(props: {
+export function canOpenCanvasTextLineMenu(linePrefix: string) {
+  return linePrefix.trim().length === 0
+}
+
+export function moveCanvasTextLineMenuIndex(current: number, direction: 1 | -1, itemCount: number) {
+  if (itemCount <= 0) return 0
+  return (current + direction + itemCount) % itemCount
+}
+
+export function getCanvasTextMenuGeometry(surfaceHeight: number, anchorTop: number) {
+  const maxHeight = Math.min(204, Math.max(32, surfaceHeight - 16))
+  return {
+    gripTop: Math.max(16, Math.min(surfaceHeight - 48, anchorTop)),
+    maxHeight,
+    popupTop: Math.max(8, Math.min(anchorTop + 28, surfaceHeight - maxHeight - 8)),
+  }
+}
+
+export function isCanvasTextLineMenuSelectionValid(input: {
+  selectionFrom: number
+  slashCharacter: string
+  slashPosition: number | null
+}) {
+  return input.slashPosition !== null && input.slashCharacter === "/" && input.selectionFrom === input.slashPosition + 1
+}
+
+export function resolveCanvasTextHandleTarget(input: {
+  documentSize: number
+  hoverPosition: number | null
+  selectionFrom: number
+}) {
+  return Math.max(1, Math.min(input.documentSize, input.hoverPosition ?? input.selectionFrom))
+}
+
+const canvasTextBlockCommands = [
+  { command: "paragraph", icon: <Type />, label: "Text" },
+  { command: "heading-1", icon: <Heading1 />, label: "Heading 1" },
+  { command: "heading-2", icon: <Heading2 />, label: "Heading 2" },
+  { command: "bullet", icon: <List />, label: "Bullet list" },
+  { command: "ordered", icon: <ListOrdered />, label: "Numbered list" },
+  { command: "quote", icon: <Quote />, label: "Quote" },
+] as const
+
+type CanvasTextBlockCommand = (typeof canvasTextBlockCommands)[number]["command"]
+export type CanvasTextInlineCommand = "bold" | "code" | "italic" | "strike"
+
+const canvasTextInlineCommands = [
+  { command: "bold", icon: <Bold />, label: "Bold" },
+  { command: "italic", icon: <Italic />, label: "Italic" },
+  { command: "strike", icon: <Strikethrough />, label: "Strikethrough" },
+  { command: "code", icon: <Code2 />, label: "Inline code" },
+] as const satisfies readonly {
+  command: CanvasTextInlineCommand
+  icon: ReactNode
+  label: string
+}[]
+
+export function shouldShowCanvasTextInlineMenu(input: {
+  codeBlockActive: boolean
+  editable: boolean
+  selectionFrom: number
+  selectionTo: number
+  textSelection: boolean
+}) {
+  return input.editable && input.textSelection && !input.codeBlockActive && input.selectionFrom !== input.selectionTo
+}
+
+const canvasTextBubbleMenuOptions: NonNullable<BubbleMenuProps["options"]> = {
+  flip: true,
+  inline: true,
+  offset: 8,
+  placement: "top",
+  shift: true,
+}
+
+const shouldShowCanvasTextBubbleMenu: NonNullable<BubbleMenuProps["shouldShow"]> = ({ editor, from, to }) =>
+  shouldShowCanvasTextInlineMenu({
+    codeBlockActive: editor.isActive("codeBlock"),
+    editable: editor.isEditable,
+    selectionFrom: from,
+    selectionTo: to,
+    textSelection: editor.state.selection.$from.parent.inlineContent && editor.state.selection.$to.parent.inlineContent,
+  })
+
+export function runCanvasTextInlineCommand(editor: Editor, command: CanvasTextInlineCommand) {
+  const chain = editor.chain().focus()
+  if (command === "bold") return chain.toggleBold().run()
+  if (command === "italic") return chain.toggleItalic().run()
+  if (command === "strike") return chain.toggleStrike().run()
+  return chain.toggleCode().run()
+}
+
+function CanvasTextInlineToolbar({ editor }: { editor: Editor }) {
+  const active = useEditorState({
+    editor,
+    selector: ({ editor: currentEditor }) => ({
+      bold: currentEditor.isActive("bold"),
+      code: currentEditor.isActive("code"),
+      italic: currentEditor.isActive("italic"),
+      strike: currentEditor.isActive("strike"),
+    }),
+  })
+
+  return (
+    <div
+      aria-label="Text formatting"
+      className="convax-text-inline-menu flex items-center gap-0.5 rounded-lg bg-surface-raised/96 p-1 text-foreground shadow-[var(--ui-shadow-medium)] backdrop-blur"
+      data-canvas-text-inline-menu="true"
+      role="toolbar"
+    >
+      {canvasTextInlineCommands.map(({ command, icon, label }) => (
+        <Tooltip content={label} key={command} side="top">
+          <button
+            aria-label={label}
+            aria-pressed={active[command]}
+            className={cn(
+              "grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-[background-color,color,transform] duration-100 hover:bg-surface-inset hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-focus-ring [&>svg]:size-3.5",
+              active[command] && "bg-primary/12 text-primary",
+            )}
+            onClick={() => runCanvasTextInlineCommand(editor, command)}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+            type="button"
+          >
+            {icon}
+          </button>
+        </Tooltip>
+      ))}
+    </div>
+  )
+}
+
+function TextEditorContextMenus(props: { editor: Editor | null }) {
+  if (!props.editor) {
+    return (
+      <button
+        aria-label="Open block handle menu"
+        className="absolute left-2 top-7 grid size-7 place-items-center rounded-md text-muted-foreground opacity-0"
+        disabled
+        type="button"
+      >
+        <GripVertical className="size-4" />
+      </button>
+    )
+  }
+  return <ReadyTextEditorContextMenus editor={props.editor} />
+}
+
+function ReadyTextEditorContextMenus(props: { editor: Editor }) {
+  const commands = canvasTextBlockCommands
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const handleButtonRef = useRef<HTMLButtonElement>(null)
+  const handleRootRef = useRef<HTMLDivElement>(null)
+  const handleItemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const handleTargetPositionRef = useRef<number | null>(null)
+  const slashPositionRef = useRef<number | null>(null)
+  const lineMenuId = useId()
+  const [handleMenuOpen, setHandleMenuOpen] = useState(false)
+  const [handleMenuIndex, setHandleMenuIndex] = useState(0)
+  const [lineMenuOpen, setLineMenuOpen] = useState(false)
+  const [lineMenuIndex, setLineMenuIndex] = useState(0)
+  const [menuPopupTop, setMenuPopupTop] = useState(56)
+  const [menuMaxHeight, setMenuMaxHeight] = useState(192)
+
+  const syncMenuPositionAt = useCallback((clientTop: number) => {
+    const surface = surfaceRef.current
+    if (!surface) return
+    const bounds = surface.getBoundingClientRect()
+    const anchorTop = clientTop - bounds.top - 4
+    const geometry = getCanvasTextMenuGeometry(surface.clientHeight, anchorTop)
+    setMenuMaxHeight(geometry.maxHeight)
+    setMenuPopupTop(geometry.popupTop)
+  }, [])
+
+  const syncMenuPosition = useCallback(() => {
+    const editor = props.editor
+    if (!editor) return
+    try {
+      const caret = editor.view.coordsAtPos(editor.state.selection.from)
+      syncMenuPositionAt(caret.top)
+    } catch {}
+  }, [props.editor, syncMenuPositionAt])
+
+  const setHandleLocked = useCallback(
+    (locked: boolean) => {
+      if (!props.editor.isDestroyed) props.editor.commands.setMeta("lockDragHandle", locked)
+    },
+    [props.editor],
+  )
+
+  const closeHandleMenu = useCallback(() => {
+    setHandleLocked(false)
+    setHandleMenuOpen(false)
+    handleTargetPositionRef.current = null
+  }, [setHandleLocked])
+
+  const runBlockCommand = (command: CanvasTextBlockCommand, targetPosition: number | null = null) => {
+    const editor = props.editor
+    const chain = editor.chain().focus()
+    if (targetPosition !== null) {
+      chain.setTextSelection(
+        resolveCanvasTextHandleTarget({
+          documentSize: editor.state.doc.content.size,
+          hoverPosition: targetPosition,
+          selectionFrom: editor.state.selection.from,
+        }),
+      )
+    }
+    if (command === "paragraph") chain.setParagraph().run()
+    else if (command === "heading-1") chain.setHeading({ level: 1 }).run()
+    else if (command === "heading-2") chain.setHeading({ level: 2 }).run()
+    else if (command === "bullet") chain.toggleBulletList().run()
+    else if (command === "ordered") chain.toggleOrderedList().run()
+    else chain.toggleBlockquote().run()
+    closeHandleMenu()
+    setLineMenuOpen(false)
+  }
+
+  const runLineCommand = (command: Parameters<typeof runBlockCommand>[0]) => {
+    const editor = props.editor
+    const slashPosition = slashPositionRef.current
+    if (
+      slashPosition === null ||
+      !isCanvasTextLineMenuSelectionValid({
+        selectionFrom: editor.state.selection.from,
+        slashCharacter: editor.state.doc.textBetween(slashPosition, slashPosition + 1),
+        slashPosition,
+      })
+    ) {
+      slashPositionRef.current = null
+      setLineMenuOpen(false)
+      editor.commands.focus()
+      return
+    }
+    editor
+      .chain()
+      .focus()
+      .deleteRange({ from: slashPosition, to: slashPosition + 1 })
+      .run()
+    slashPositionRef.current = null
+    runBlockCommand(command)
+  }
+
+  const closeLineMenuIfInvalid = useCallback(() => {
+    const editor = props.editor
+    const slashPosition = slashPositionRef.current
+    if (
+      !isCanvasTextLineMenuSelectionValid({
+        selectionFrom: editor.state.selection.from,
+        slashCharacter: slashPosition === null ? "" : editor.state.doc.textBetween(slashPosition, slashPosition + 1),
+        slashPosition,
+      })
+    ) {
+      slashPositionRef.current = null
+      setLineMenuOpen(false)
+    }
+  }, [props.editor])
+
+  useEffect(() => {
+    const editor = props.editor
+    const handleSelectionUpdate = () => {
+      syncMenuPosition()
+      closeLineMenuIfInvalid()
+      if (!editor.state.selection.empty) closeHandleMenu()
+    }
+    const handleBlur = () => {
+      window.requestAnimationFrame(() => {
+        if (!surfaceRef.current?.contains(document.activeElement)) closeLineMenuIfInvalid()
+      })
+    }
+    editor.on("selectionUpdate", handleSelectionUpdate)
+    editor.on("focus", syncMenuPosition)
+    editor.on("blur", handleBlur)
+    return () => {
+      editor.off("selectionUpdate", handleSelectionUpdate)
+      editor.off("focus", syncMenuPosition)
+      editor.off("blur", handleBlur)
+    }
+  }, [closeHandleMenu, closeLineMenuIfInvalid, props.editor, syncMenuPosition])
+
+  useEffect(() => {
+    const editorDom = props.editor?.view.dom
+    if (!editorDom) return
+    if (lineMenuOpen) {
+      editorDom.setAttribute("aria-controls", lineMenuId)
+      editorDom.setAttribute("aria-expanded", "true")
+      editorDom.setAttribute("aria-haspopup", "listbox")
+      editorDom.setAttribute("aria-activedescendant", `${lineMenuId}-item-${lineMenuIndex}`)
+    } else {
+      editorDom.removeAttribute("aria-controls")
+      editorDom.removeAttribute("aria-expanded")
+      editorDom.removeAttribute("aria-haspopup")
+      editorDom.removeAttribute("aria-activedescendant")
+    }
+    return () => {
+      editorDom.removeAttribute("aria-controls")
+      editorDom.removeAttribute("aria-expanded")
+      editorDom.removeAttribute("aria-haspopup")
+      editorDom.removeAttribute("aria-activedescendant")
+    }
+  }, [lineMenuId, lineMenuIndex, lineMenuOpen, props.editor])
+
+  useEffect(() => {
+    if (!handleMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && handleRootRef.current?.contains(target)) return
+      closeHandleMenu()
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true)
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true)
+  }, [closeHandleMenu, handleMenuOpen])
+
+  useEffect(() => () => setHandleLocked(false), [setHandleLocked])
+
+  const handleDragStart = useCallback<NonNullable<DragHandleProps["onElementDragStart"]>>(() => {
+    closeHandleMenu()
+    setLineMenuOpen(false)
+  }, [closeHandleMenu])
+
+  const handleNodeChange = useCallback<NonNullable<DragHandleProps["onNodeChange"]>>(
+    ({ node, pos }) => {
+      handleTargetPositionRef.current = node
+        ? resolveCanvasTextHandleTarget({
+            documentSize: props.editor.state.doc.content.size,
+            hoverPosition: pos + 1,
+            selectionFrom: props.editor.state.selection.from,
+          })
+        : null
+    },
+    [props.editor],
+  )
+
+  const focusHandleMenuItem = (index: number) => {
+    const nextIndex = (index + commands.length) % commands.length
+    setHandleMenuIndex(nextIndex)
+    handleItemRefs.current[nextIndex]?.focus()
+  }
+
+  const menu = (line: boolean) => (
+    <div
+      aria-label={line ? "Line menu" : "Block handle menu"}
+      className={cn(
+        "z-30 grid w-40 gap-0.5 overflow-y-auto rounded-lg bg-surface-raised/98 p-1.5 text-xs text-foreground shadow-[var(--ui-shadow-medium)] backdrop-blur",
+        line ? "absolute" : "absolute left-9 top-0",
+      )}
+      data-ui-menu-surface=""
+      id={line ? lineMenuId : undefined}
+      onKeyDown={
+        line
+          ? undefined
+          : (event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault()
+                focusHandleMenuItem(handleMenuIndex + (event.key === "ArrowDown" ? 1 : -1))
+              } else if (event.key === "Home" || event.key === "End") {
+                event.preventDefault()
+                focusHandleMenuItem(event.key === "Home" ? 0 : commands.length - 1)
+              } else if (event.key === "Escape") {
+                event.preventDefault()
+                closeHandleMenu()
+                handleButtonRef.current?.focus()
+              } else if (event.key === "Tab") {
+                closeHandleMenu()
+              }
+            }
+      }
+      role={line ? "listbox" : "menu"}
+      style={line ? { left: 44, maxHeight: menuMaxHeight, top: menuPopupTop } : { maxHeight: menuMaxHeight }}
+    >
+      {commands.map(({ command, icon, label }, index) => (
+        <button
+          aria-selected={line ? lineMenuIndex === index : undefined}
+          className={cn(
+            "flex w-full items-center justify-start gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-surface-inset focus-visible:ring-2 focus-visible:ring-focus-ring [&>svg]:size-3.5 [&>svg]:shrink-0",
+            line && lineMenuIndex === index && "bg-surface-inset",
+          )}
+          id={line ? `${lineMenuId}-item-${index}` : undefined}
+          key={command}
+          onFocus={() => {
+            if (!line) setHandleMenuIndex(index)
+          }}
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={() => (line ? runLineCommand(command) : runBlockCommand(command, handleTargetPositionRef.current))}
+          ref={(element) => {
+            if (!line) handleItemRefs.current[index] = element
+          }}
+          role={line ? "option" : "menuitem"}
+          tabIndex={line ? -1 : handleMenuIndex === index ? 0 : -1}
+          type="button"
+        >
+          {icon}
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+
+  return (
+    <div className="group/text-editor relative min-h-0 flex-1 overflow-hidden" ref={surfaceRef}>
+      <DragHandle
+        className="convax-text-block-handle-anchor"
+        editor={props.editor}
+        nested
+        onElementDragStart={handleDragStart}
+        onNodeChange={handleNodeChange}
+      >
+        <div className="convax-text-block-handle relative" ref={handleRootRef}>
+          <button
+            aria-expanded={handleMenuOpen}
+            aria-haspopup="menu"
+            aria-label="Open block handle menu"
+            className={cn(
+              "grid size-7 place-items-center rounded-md text-muted-foreground outline-none transition-[background-color,color,transform] duration-100 hover:bg-surface-inset hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-focus-ring",
+              handleMenuOpen && "bg-surface-inset text-foreground",
+            )}
+            draggable
+            onClick={() => {
+              setLineMenuOpen(false)
+              slashPositionRef.current = null
+              if (handleMenuOpen) {
+                closeHandleMenu()
+                return
+              }
+              setHandleLocked(true)
+              setHandleMenuIndex(0)
+              setHandleMenuOpen(true)
+              window.requestAnimationFrame(() => handleItemRefs.current[0]?.focus())
+            }}
+            ref={handleButtonRef}
+            type="button"
+          >
+            <GripVertical className="size-4" />
+          </button>
+          {handleMenuOpen ? menu(false) : null}
+        </div>
+      </DragHandle>
+      <BubbleMenu
+        editor={props.editor}
+        options={canvasTextBubbleMenuOptions}
+        pluginKey="convaxTextInlineMenu"
+        shouldShow={shouldShowCanvasTextBubbleMenu}
+      >
+        <CanvasTextInlineToolbar editor={props.editor} />
+      </BubbleMenu>
+      {lineMenuOpen ? menu(true) : null}
+      <EditorContent
+        className="convax-text-editor convax-text-editor--drawer nodrag nowheel size-full overflow-auto"
+        data-canvas-shortcuts="ignore"
+        editor={props.editor}
+        onKeyDown={(event) => {
+          if (lineMenuOpen) {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault()
+              event.stopPropagation()
+              const direction = event.key === "ArrowDown" ? 1 : -1
+              setLineMenuIndex((index) => moveCanvasTextLineMenuIndex(index, direction, commands.length))
+              return
+            }
+            if (event.key === "Home" || event.key === "End") {
+              event.preventDefault()
+              event.stopPropagation()
+              setLineMenuIndex(event.key === "Home" ? 0 : commands.length - 1)
+              return
+            }
+            if (event.key === "Enter") {
+              event.preventDefault()
+              event.stopPropagation()
+              runLineCommand(commands[lineMenuIndex].command)
+              return
+            }
+          }
+          if (event.key === "/") {
+            const editor = props.editor
+            if (!editor) return
+            const { $from } = editor.state.selection
+            const linePrefix = $from.parent.textBetween(0, $from.parentOffset)
+            if (!canOpenCanvasTextLineMenu(linePrefix)) return
+            slashPositionRef.current = editor.state.selection.from
+            setHandleMenuOpen(false)
+            setLineMenuIndex(0)
+            window.requestAnimationFrame(() => {
+              syncMenuPosition()
+              setLineMenuOpen(true)
+            })
+          } else if (event.key === "Escape" && (lineMenuOpen || handleMenuOpen)) {
+            event.preventDefault()
+            event.stopPropagation()
+            setLineMenuOpen(false)
+            setHandleMenuOpen(false)
+            slashPositionRef.current = null
+          } else if (lineMenuOpen) {
+            window.requestAnimationFrame(closeLineMenuIfInvalid)
+          }
+        }}
+      />
+    </div>
+  )
+}
+
+export function TextEditorDrawer(props: {
   editor: Editor | null
   label: string
   onClose: () => void
-  toolbar: ReactNode
+  onSave?: () => void
+  error?: string | null
+  discardLabel?: string
+  onDiscard?: () => void
+  onReload?: () => void
+  reloading?: boolean
+  saving?: boolean
+  /** @deprecated Formatting now lives in contextual handle and line menus. */
+  toolbar?: ReactNode
 }) {
   const titleId = useId()
+  const overlayRoot = useCanvasOverlayRoot()
   const layer = (
     <div
-      className="convax-canvas fixed inset-0 z-[120] grid place-items-center bg-foreground/25 p-4 backdrop-blur-[2px]"
+      className="convax-text-editor-drawer-layer absolute inset-0 z-[120] flex justify-end p-3"
       data-canvas-shortcuts="ignore"
       onKeyDown={(event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault()
+          props.onSave?.()
+          return
+        }
         if (event.key !== "Escape") return
         event.preventDefault()
         event.stopPropagation()
         props.onClose()
       }}
-      onMouseDown={(event) => {
-        if (event.currentTarget === event.target) props.onClose()
-      }}
       role="presentation"
     >
-      <section
+      <aside
         aria-labelledby={titleId}
-        aria-modal="true"
-        className="convax-text-editor-dialog flex h-[calc(100vh-32px)] w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-2xl"
+        className="convax-text-editor-drawer relative flex h-full w-[min(520px,calc(100%-12px))] flex-col overflow-hidden rounded-xl bg-surface-panel text-foreground shadow-[var(--ui-shadow-high)]"
         role="dialog"
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold" id={titleId}>
-              {props.label}
-            </h2>
-            <p className="text-xs text-muted-foreground">Expanded text editor</p>
+        <h2 className="sr-only" id={titleId}>
+          {props.label}
+        </h2>
+        {props.error ? (
+          <div
+            className="absolute left-3 right-14 top-3 z-30 flex items-center gap-2 rounded-lg bg-surface-raised/95 px-3 py-2 text-xs shadow-[var(--ui-shadow-low)] backdrop-blur"
+            role="alert"
+          >
+            <span className="min-w-0 flex-1">{props.error}</span>
+            {props.onReload ? (
+              <Button disabled={props.reloading || props.saving} onClick={props.onReload} size="sm" variant="secondary">
+                {props.reloading ? "Reloading…" : "Reload latest"}
+              </Button>
+            ) : null}
+            <Button disabled={props.reloading || props.saving} onClick={props.onDiscard} size="sm" variant="ghost">
+              {props.discardLabel ?? "Discard draft"}
+            </Button>
           </div>
-          <Button aria-label="Close expanded editor" onClick={props.onClose} size="icon-sm" variant="ghost">
-            <X />
-          </Button>
-        </header>
-        <div
-          aria-label="Text formatting"
-          className="convax-text-editor-dialog__toolbar shrink-0 border-b border-border px-4 py-2"
-          role="toolbar"
+        ) : null}
+        <Button
+          aria-label={props.saving ? "Saving text" : "Close text editor"}
+          className="absolute right-3 top-3 z-30 rounded-full bg-surface-raised/85 shadow-[var(--ui-shadow-low)] backdrop-blur"
+          disabled={props.saving}
+          onClick={props.onClose}
+          size="icon-sm"
+          variant="ghost"
         >
-          <div className="convax-text-editor-dialog__toolbar-inner flex flex-wrap items-center gap-1">
-            {props.toolbar}
-          </div>
-        </div>
-        <EditorContent
-          className="convax-text-editor convax-text-editor--expanded nodrag nowheel min-h-0 flex-1 overflow-auto"
-          data-canvas-shortcuts="ignore"
-          editor={props.editor}
-        />
-      </section>
+          <X />
+        </Button>
+        <TextEditorContextMenus editor={props.editor} />
+      </aside>
     </div>
   )
-  return typeof document === "undefined" ? layer : createPortal(layer, document.body)
+  if (typeof document === "undefined") return layer
+  return overlayRoot ? createPortal(layer, overlayRoot) : layer
 }
+
+/** @deprecated Use TextEditorDrawer. */
+export const ExpandedTextEditorDialog = TextEditorDrawer
 
 export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const canvasEditor = useCanvasEditor()
@@ -538,11 +1143,15 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const appliedFingerprintRef = useRef(textDataFingerprint(data))
   const initialSourceRef = useRef(textEditorSource(data))
   const [editing, setEditing] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [reloading, setReloading] = useState(false)
   const [savingEditableCopy, setSavingEditableCopy] = useState(false)
   const [draft, setDraft] = useState(() => createCanvasTextDraftState(data.resourceState ?? {}))
   const draftRef = useRef(draft)
+  const returnFocusRef = useRef<HTMLElement | null>(null)
+  const nodeFocusRef = useRef<HTMLDivElement>(null)
+  const discardAfterReloadRef = useRef(false)
   const mountedRef = useRef(true)
   const saveControllerRef = useRef<AbortController | null>(null)
   const saveGenerationRef = useRef(0)
@@ -574,12 +1183,47 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     if (!textEditor) return
     const nextFingerprint = textDataFingerprint(data)
     if (nextFingerprint === appliedFingerprintRef.current) return
-    const nextDraft = applyCanvasTextDraftBase(draftRef.current, data.resourceState ?? {})
+    const incomingState = data.resourceState ?? {}
+    if (discardAfterReloadRef.current) {
+      discardAfterReloadRef.current = false
+      const authoritativeDraft = createCanvasTextDraftState(incomingState)
+      appliedFingerprintRef.current = nextFingerprint
+      draftRef.current = authoritativeDraft
+      setDraft(authoritativeDraft)
+      const authoritativeSource = textEditorSource(data)
+      textEditor.commands.setContent(authoritativeSource.content, {
+        contentType: authoritativeSource.contentType,
+        emitUpdate: false,
+      })
+      textEditor.setEditable(false)
+      setEditing(false)
+      setDrawerOpen(false)
+      const returnTarget = returnFocusRef.current
+      returnFocusRef.current = null
+      if (returnTarget) {
+        window.requestAnimationFrame(() => {
+          if (returnTarget.isConnected) returnTarget.focus()
+        })
+      }
+      return
+    }
+    const nextDraft =
+      draftRef.current.dirty &&
+      draftRef.current.error === "This file changed outside Convax. Your draft was kept." &&
+      data.resourceState?.contentRevision !== draftRef.current.baseRevision
+        ? rebaseCanvasTextDraft(draftRef.current, incomingState)
+        : applyCanvasTextDraftBase(draftRef.current, incomingState)
     if (nextDraft === draftRef.current) return
     appliedFingerprintRef.current = nextFingerprint
     draftRef.current = nextDraft
     setDraft(nextDraft)
-    const source = textEditorSource(data)
+    const source =
+      nextDraft.content === data.resourceState?.text
+        ? textEditorSource(data)
+        : textEditorSource({
+            ...data,
+            resourceState: { ...incomingState, text: nextDraft.content },
+          } as CanvasTextNodeData)
     textEditor.commands.setContent(source.content, {
       contentType: source.contentType,
       emitUpdate: false,
@@ -591,13 +1235,6 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   }, [canvasEditor.readOnly, editableResource, editing, saving, textEditor])
 
   useEffect(() => {
-    if (!editing || (ownsSingleNodeContext && !canvasEditor.readOnly && editableResource)) return
-    textEditor?.setEditable(false)
-    setEditing(false)
-    setExpanded(false)
-  }, [canvasEditor.readOnly, editableResource, editing, ownsSingleNodeContext, textEditor])
-
-  useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
@@ -607,10 +1244,10 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   }, [])
 
   useEffect(() => {
-    if (!expanded || !textEditor) return
+    if (!drawerOpen || !textEditor) return
     textEditor.setEditable(true)
     textEditor.commands.focus()
-  }, [expanded, textEditor])
+  }, [drawerOpen, textEditor])
 
   const beginEditing = (position: "start" | "end" = "end") => {
     if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
@@ -619,18 +1256,29 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     textEditor.commands.focus(position)
   }
 
-  const openExpandedEditor = () => {
+  const openExpandedEditor = (invoker?: HTMLElement) => {
     if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+    returnFocusRef.current =
+      nodeFocusRef.current ??
+      invoker ??
+      (typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null)
     if (editing) textEditor.setEditable(true)
     else beginEditing("start")
-    setExpanded(true)
+    setDrawerOpen(true)
   }
 
-  const closeExpandedEditor = () => {
-    setExpanded(false)
+  const closeExpandedEditor = useCallback(() => {
+    setDrawerOpen(false)
     textEditor?.setEditable(false)
     setEditing(false)
-  }
+    const returnTarget = returnFocusRef.current
+    returnFocusRef.current = null
+    if (returnTarget) {
+      window.requestAnimationFrame(() => {
+        if (returnTarget.isConnected) returnTarget.focus()
+      })
+    }
+  }, [textEditor])
 
   const discardDraft = useCallback(() => {
     if (!textEditor) return
@@ -646,10 +1294,8 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       contentType: source.contentType,
       emitUpdate: false,
     })
-    textEditor.setEditable(false)
-    setEditing(false)
-    setExpanded(false)
-  }, [textEditor])
+    closeExpandedEditor()
+  }, [closeExpandedEditor, textEditor])
 
   const saveDraft = useCallback(
     () =>
@@ -657,7 +1303,8 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
         const current = draftRef.current
         if (!current.dirty) {
           textEditor?.setEditable(false)
-          setEditing(false)
+          setEditing(drawerOpen)
+          if (drawerOpen) textEditor?.setEditable(true)
           return
         }
         if (!textResources || !current.baseRevision) throw new Error("Canvas text resource cannot be saved")
@@ -699,8 +1346,51 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           }
         }
       }),
-    [canvasEditor, editing, props.id, textEditor, textResources],
+    [canvasEditor, drawerOpen, editing, props.id, textEditor, textResources],
   )
+
+  const closeAndSaveTextEditor = useCallback(() => {
+    if (!draftRef.current.dirty) {
+      closeExpandedEditor()
+      return
+    }
+    void saveDraft()
+      .then(() => closeExpandedEditor())
+      .catch(() => {
+        textEditor?.setEditable(true)
+        textEditor?.commands.focus()
+      })
+  }, [closeExpandedEditor, saveDraft, textEditor])
+
+  useEffect(() => {
+    if (!drawerOpen || (ownsSingleNodeContext && !canvasEditor.readOnly && editableResource)) return
+    closeAndSaveTextEditor()
+  }, [canvasEditor.readOnly, closeAndSaveTextEditor, drawerOpen, editableResource, ownsSingleNodeContext])
+
+  const reloadLatestText = useCallback(() => {
+    if (!canvasEditor.reloadAuthoritative || reloading) return
+    setReloading(true)
+    void canvasEditor
+      .reloadAuthoritative()
+      .catch(() => undefined)
+      .finally(() => {
+        if (mountedRef.current) setReloading(false)
+      })
+  }, [canvasEditor, reloading])
+
+  const discardConflictAndReload = useCallback(() => {
+    if (!canvasEditor.reloadAuthoritative || reloading) return
+    discardAfterReloadRef.current = true
+    setReloading(true)
+    void canvasEditor
+      .reloadAuthoritative()
+      .catch(() => {
+        discardAfterReloadRef.current = false
+      })
+      .finally(() => {
+        if (mountedRef.current) setReloading(false)
+      })
+  }, [canvasEditor, reloading])
 
   useEffect(() => {
     if (!draft.dirty) return undefined
@@ -711,12 +1401,6 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       save: saveDraft,
     })
   }, [canvasEditor, discardDraft, draft.dirty, saveDraft])
-
-  const runTextCommand = (command: (editor: Editor) => void) => {
-    if (!textEditor || !editableResource || saving) return
-    beginEditing()
-    command(textEditor)
-  }
 
   const resourceActionToolbar =
     data.resourceState?.status === "missing" ? (
@@ -754,195 +1438,14 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       </div>
     ) : null
 
-  const formattingToolbar =
+  const textToolbar =
     textEditor && editableResource ? (
       <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
         <ToolbarButton
           disabled={saving}
-          icon={<Pencil />}
-          label={editing ? "Editing text" : "Edit text"}
-          onClick={() => beginEditing()}
-          pressed={editing}
-        />
-        <ToolbarButton
-          disabled={!draft.dirty || saving}
-          icon={<Save />}
-          label="Save text"
-          onClick={() => void saveDraft().catch(() => undefined)}
-        />
-        <ToolbarButton
-          disabled={(!draft.dirty && !editing) || saving}
-          icon={<X />}
-          label="Cancel text"
-          onClick={discardDraft}
-        />
-        <ToolbarDivider />
-        <div className="convax-node-toolbar__segment" role="group" aria-label="Text style">
-          <ToolbarButton
-            icon={<Pilcrow />}
-            label="Paragraph"
-            onClick={() =>
-              runTextCommand((editor) => {
-                editor.chain().focus().setParagraph().run()
-              })
-            }
-            preserveFocus
-            pressed={textEditor.isActive("paragraph")}
-          />
-          <ToolbarButton
-            icon={<Heading1 />}
-            label="Heading 1"
-            onClick={() =>
-              runTextCommand((editor) => {
-                editor.chain().focus().toggleHeading({ level: 1 }).run()
-              })
-            }
-            preserveFocus
-            pressed={textEditor.isActive("heading", { level: 1 })}
-          />
-          <ToolbarButton
-            icon={<Heading2 />}
-            label="Heading 2"
-            onClick={() =>
-              runTextCommand((editor) => {
-                editor.chain().focus().toggleHeading({ level: 2 }).run()
-              })
-            }
-            preserveFocus
-            pressed={textEditor.isActive("heading", { level: 2 })}
-          />
-        </div>
-        <ToolbarDivider />
-        <ToolbarButton
-          icon={<Bold />}
-          label="Bold"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleBold().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("bold")}
-        />
-        <ToolbarButton
-          icon={<Italic />}
-          label="Italic"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleItalic().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("italic")}
-        />
-        <ToolbarButton
-          icon={<Strikethrough />}
-          label="Strikethrough"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleStrike().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("strike")}
-        />
-        <ToolbarDivider />
-        <ToolbarButton
-          icon={<List />}
-          label="Bullet list"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleBulletList().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("bulletList")}
-        />
-        <ToolbarButton
-          icon={<ListOrdered />}
-          label="Numbered list"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleOrderedList().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("orderedList")}
-        />
-        <ToolbarButton
-          icon={<Quote />}
-          label="Quote"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().toggleBlockquote().run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive("blockquote")}
-        />
-        <ToolbarDivider />
-        <ToolbarButton
-          icon={<AlignLeft />}
-          label="Align left"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().setTextAlign("left").run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive({ textAlign: "left" })}
-        />
-        <ToolbarButton
-          icon={<AlignCenter />}
-          label="Align center"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().setTextAlign("center").run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive({ textAlign: "center" })}
-        />
-        <ToolbarButton
-          icon={<AlignRight />}
-          label="Align right"
-          onClick={() =>
-            runTextCommand((editor) => {
-              editor.chain().focus().setTextAlign("right").run()
-            })
-          }
-          preserveFocus
-          pressed={textEditor.isActive({ textAlign: "right" })}
-        />
-        <ToolbarDivider />
-        <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
-        <ToolbarButton
-          destructive
-          icon={<Trash2 />}
-          label="Delete"
-          onClick={() => {
-            discardDraft()
-            canvasEditor.removeNode(props.id)
-          }}
-        />
-      </div>
-    ) : null
-
-  const textToolbar =
-    textEditor && editableResource ? (
-      <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
-        <ToolbarButton disabled={saving} icon={<Maximize2 />} label="Expand editor" onClick={openExpandedEditor} />
-        <ToolbarButton
-          disabled={!draft.dirty || saving}
-          icon={<Save />}
-          label="Save text"
-          onClick={() => void saveDraft().catch(() => undefined)}
-        />
-        <ToolbarButton
-          disabled={(!draft.dirty && !editing) || saving}
-          icon={<X />}
-          label="Cancel text"
-          onClick={discardDraft}
+          icon={<PanelRightOpen />}
+          label="Edit text in side panel"
+          onClick={() => openExpandedEditor()}
         />
         <ToolbarDivider />
         <ToolbarButton icon={<Copy />} label="Duplicate" onClick={() => canvasEditor.duplicateNode(props.id)} />
@@ -962,13 +1465,13 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   return (
     <>
-      <NodeChrome icon={<Type />} label={data.label} node={props} toolbar={textToolbar}>
+      <NodeChrome icon={<Type />} label={data.label} node={props} nodeRef={nodeFocusRef} toolbar={textToolbar}>
         {draft.error ? (
           <div className="px-3 py-2 text-xs text-destructive" role="alert">
             {draft.error}
           </div>
         ) : null}
-        {expanded ? (
+        {drawerOpen ? (
           <div className="convax-text-editor__expanded-placeholder size-full overflow-hidden whitespace-pre-wrap p-4 text-sm text-muted-foreground">
             {draft.content}
           </div>
@@ -980,7 +1483,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
             editor={textEditor}
             onDoubleClick={(event) => {
               event.stopPropagation()
-              beginEditing()
+              openExpandedEditor(event.currentTarget)
             }}
             onKeyDown={(event) => {
               if (event.key !== "Escape") return
@@ -991,12 +1494,26 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           />
         )}
       </NodeChrome>
-      {expanded ? (
-        <ExpandedTextEditorDialog
+      {drawerOpen ? (
+        <TextEditorDrawer
           editor={textEditor}
+          error={draft.error}
+          discardLabel={
+            draft.error === "This file changed outside Convax. Your draft was kept." ? "Discard and reload" : undefined
+          }
           label={data.label}
-          onClose={closeExpandedEditor}
-          toolbar={formattingToolbar}
+          onClose={closeAndSaveTextEditor}
+          onDiscard={
+            draft.error === "This file changed outside Convax. Your draft was kept."
+              ? discardConflictAndReload
+              : discardDraft
+          }
+          onReload={
+            draft.error === "This file changed outside Convax. Your draft was kept." ? reloadLatestText : undefined
+          }
+          onSave={closeAndSaveTextEditor}
+          reloading={reloading}
+          saving={saving}
         />
       ) : null}
     </>

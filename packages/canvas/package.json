@@ -37,7 +37,9 @@
     "build:css": "bun scripts/build-css.ts",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:css && bun run build:types",
-    "test": "bun test --isolate --parallel=1",
+    "test": "bun run test:unit && bun run test:react-flow-integration",
+    "test:unit": "bun test --isolate --parallel=1 --path-ignore-patterns='**/canvas-editor-box-selection.test.tsx'",
+    "test:react-flow-integration": "bun test --isolate --parallel=1 src/components/canvas-editor-box-selection.test.tsx",
     "typecheck": "tsgo --noEmit",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test"
@@ -45,6 +47,7 @@
   "dependencies": {
     "@convax/ui": "workspace:^",
     "@tiptap/core": "catalog:",
+    "@tiptap/extension-drag-handle-react": "catalog:",
     "@tiptap/extension-placeholder": "catalog:",
     "@tiptap/extension-table": "catalog:",
     "@tiptap/extension-text-align": "catalog:",

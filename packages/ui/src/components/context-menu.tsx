@@ -23,6 +23,7 @@ export function ContextMenuContent({ className, ...props }: ComponentProps<typeo
     <Portal>
       <Content
         data-slot="context-menu-content"
+        data-ui-menu-surface=""
         className={cn(
           "z-50 min-w-56 overflow-hidden rounded-lg border border-border/90 bg-popover/95 p-2 text-popover-foreground shadow-xl backdrop-blur-xl",
           className,

@@ -13,6 +13,7 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { CanvasEditorController } from "../editor-context"
+import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let EditorProbe: ComponentType | undefined
@@ -460,6 +461,140 @@ test("imperative insertion fails safely when the editor is read-only", async () 
     expect(create).not.toHaveBeenCalled()
     expect(getObservedEditor()?.document.nodes).toEqual([])
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("imperative commands open Canvas-owned search and generation surfaces", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            initialDocument={createCanvasDocument({ id: "imperative-surfaces" })}
+            ref={editorRef}
+            services={createCanvasServices({
+              generate: {
+                describeTool: async (toolId) => ({ fields: [], toolId }),
+                generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+                listTools: async () => [],
+              },
+            })}
+          />
+        </TestErrorBoundary>,
+      )
+    })
+
+    expect(container.querySelector('[aria-label="Search nodes"]')).toBeNull()
+    expect(container.textContent).not.toContain("No supported reference nodes selected.")
+
+    await act(async () => editorRef.current?.openSearch())
+    expect(container.querySelector('[aria-label="Search nodes"]')).not.toBeNull()
+
+    await act(async () => {
+      editorRef.current?.openGenerate()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain("No supported reference nodes selected.")
+    expect(errors).toEqual([])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("publishes scope-safe selection and requests the read-only Inspector without a document commit", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const node = createTextNode({
+      id: "inspectable",
+      metadata: { privateValue: "hidden" },
+      position: { x: 20, y: 40 },
+      resourceState: { status: "ready", url: "asset://hidden" },
+    })
+    const initialDocument = { ...createCanvasDocument({ id: "projection", nodes: [node] }), revision: 5 }
+    const projections: CanvasSelectionProjection[] = []
+    const inspectorRequests: CanvasInspectorProjection[] = []
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            initialDocument={initialDocument}
+            onInspectorRequest={(projection) => inspectorRequests.push(projection)}
+            onSelectionProjectionChange={(projection) => projections.push(projection)}
+            services={createCanvasServices()}
+            viewId="primary"
+            viewScopeId="project-a/projection"
+          />
+        </TestErrorBoundary>,
+      )
+    })
+    expect(projections.at(-1)).toEqual({
+      documentId: "projection",
+      inspector: null,
+      kind: "none",
+      nodeIds: [],
+      revision: 5,
+      scopeId: "project-a/projection",
+      viewId: "primary",
+    })
+
+    await act(async () => getObservedEditor()?.selectNodes([node.id]))
+    expect(projections.at(-1)).toMatchObject({
+      inspector: { nodeId: node.id },
+      kind: "single-node",
+      nodeIds: [node.id],
+      scopeId: "project-a/projection",
+    })
+    const inspectorAction = getObservedEditor()?.visibleSelectionActions.find(
+      (action) => action.id === "canvas.inspector.open",
+    )
+    expect(inspectorAction).toBeDefined()
+
+    await act(async () => {
+      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
+      await Promise.resolve()
+    })
+    expect(inspectorRequests).toHaveLength(1)
+    expect(inspectorRequests[0]).toMatchObject({ nodeId: node.id, revision: 5 })
+
+    await act(async () => getObservedEditor()?.selectNodes([]))
+    expect(projections.at(-1)).toMatchObject({ inspector: null, kind: "none", nodeIds: [] })
+    await act(async () => {
+      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
+      await Promise.resolve()
+    })
+    expect(inspectorRequests).toHaveLength(1)
+    expect(getObservedEditor()?.document.revision).toBe(5)
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined

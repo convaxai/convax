@@ -1,4 +1,37 @@
 @theme inline {
+  --color-surface-canvas: var(--ui-surface-canvas);
+  --color-surface-panel: var(--ui-surface-panel);
+  --color-surface-raised: var(--ui-surface-raised);
+  --color-surface-inset: var(--ui-surface-inset);
+  --color-text-primary: var(--ui-text-primary);
+  --color-text-secondary: var(--ui-text-secondary);
+  --color-text-tertiary: var(--ui-text-tertiary);
+  --color-text-disabled: var(--ui-text-disabled);
+  --color-brand: var(--ui-brand);
+  --color-on-brand: var(--ui-on-brand);
+  --color-selection: var(--ui-selection);
+  --color-on-selection: var(--ui-on-selection);
+  --color-interactive-hover: var(--ui-interactive-hover);
+  --color-interactive-selected: var(--ui-interactive-selected);
+  --color-interactive-selected-border: var(--ui-interactive-selected-border);
+  --color-interactive-pressed: var(--ui-interactive-pressed);
+  --color-drop-target: var(--ui-drop-target);
+  --color-backdrop: var(--ui-backdrop);
+  --color-focus-ring: var(--ui-focus-ring);
+  --color-status-danger: var(--ui-status-danger);
+  --color-status-danger-surface: var(--ui-status-danger-surface);
+  --color-status-warning: var(--ui-status-warning);
+  --color-status-warning-surface: var(--ui-status-warning-surface);
+  --color-status-success: var(--ui-status-success);
+  --color-status-success-surface: var(--ui-status-success-surface);
+  --color-status-info: var(--ui-status-info);
+  --color-status-info-surface: var(--ui-status-info-surface);
+  --color-border-subtle: var(--ui-border-subtle);
+  --color-border-default: var(--ui-border-default);
+  --color-border-strong: var(--ui-border-strong);
+  --color-control-background: var(--ui-control-background);
+
+  /* Compatibility aliases for existing primitives. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -17,34 +50,175 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 2px);
+
+  --radius-xs: var(--ui-radius-xs);
+  --radius-sm: var(--ui-radius-sm);
+  --radius-md: var(--ui-radius-md);
+  --radius-lg: var(--ui-radius-lg);
+  --radius-xl: var(--ui-radius-xl);
+  --font-sans: var(--ui-font-sans);
+  --font-display: var(--ui-font-display);
+  --font-mono: var(--ui-font-mono);
+  --font-weight-normal: var(--ui-font-weight-normal);
+  --font-weight-medium: var(--ui-font-weight-medium);
+  --font-weight-semibold: var(--ui-font-weight-semibold);
+  --font-weight-bold: var(--ui-font-weight-bold);
 }
 
 :root {
-  --radius: 6px;
-  --background: #f7f8f7;
-  --foreground: #171a18;
-  --card: #ffffff;
-  --card-foreground: #171a18;
-  --popover: #ffffff;
-  --popover-foreground: #171a18;
-  --primary: #7657e8;
-  --primary-foreground: #ffffff;
-  --secondary: #e8eeeb;
-  --secondary-foreground: #24342d;
-  --muted: #edf0ee;
-  --muted-foreground: #68716c;
-  --accent: #efecfb;
-  --accent-foreground: #40346d;
-  --destructive: #c43d49;
-  --border: #d9ddda;
-  --input: #ccd2ce;
-  --ring: #7657e8;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: light;
+
+  /* Semantic surfaces and text. Paper is the package-safe default. */
+  --ui-surface-canvas: #f4f2ec;
+  --ui-surface-panel: #fbfaf7;
+  --ui-surface-raised: #ffffff;
+  --ui-surface-inset: #e8e5de;
+  --ui-text-primary: #1b1d1a;
+  --ui-text-secondary: #4d554f;
+  --ui-text-tertiary: #68716b;
+  --ui-text-disabled: #858c87;
+  --ui-brand: #6254c7;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #5267ca;
+  --ui-on-selection: #ffffff;
+  --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --ui-interactive-selected-border: color-mix(in oklab, var(--ui-brand) 56%, var(--ui-border-default));
+  --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
+  --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
+  --ui-backdrop: rgb(16 18 17 / 44%);
+  --ui-focus-ring: #5267ca;
+  --ui-status-danger: #b52f43;
+  --ui-status-danger-surface: #f9e4e7;
+  --ui-status-warning: #8b5a00;
+  --ui-status-warning-surface: #f7ead1;
+  --ui-status-success: #247147;
+  --ui-status-success-surface: #ddf0e4;
+  --ui-status-info: #3569b8;
+  --ui-status-info-surface: #e1eafa;
+  --ui-border-subtle: #dedbd4;
+  --ui-border-default: #cbc8c1;
+  --ui-border-strong: #a9ada8;
+  --ui-control-background: #ffffff;
+
+  /* Product-agnostic typography, geometry, depth, and motion. */
+  --ui-font-sans: "Inter Variable", Inter, "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-font-display:
+    "Inter Variable", Inter, "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ui-font-mono: "Berkeley Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --ui-font-weight-normal: 400;
+  --ui-font-weight-medium: 510;
+  --ui-font-weight-semibold: 590;
+  --ui-font-weight-bold: 680;
+  --ui-radius-xs: 4px;
+  --ui-radius-sm: 6px;
+  --ui-radius-md: 8px;
+  --ui-radius-lg: 12px;
+  --ui-radius-xl: 16px;
+  --ui-radius-pill: 9999px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+  --ui-shadow-low: 0 1px 1px rgb(24 26 25 / 8%), 0 3px 8px rgb(24 26 25 / 6%);
+  --ui-shadow-medium: 0 8px 28px rgb(24 26 25 / 14%);
+  --ui-shadow-high: 0 18px 56px rgb(24 26 25 / 20%);
+  --ui-motion-fast: 100ms;
+  --ui-motion-normal: 160ms;
+  --ui-motion-slow: 250ms;
+  --ui-ease-standard: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --ui-ease-reveal: cubic-bezier(0.23, 1, 0.32, 1);
+  --ui-focus-ring-width: 2px;
+  --ui-scrollbar-thumb: color-mix(in oklab, var(--ui-text-primary) 24%, transparent);
+  --ui-scrollbar-thumb-hover: color-mix(in oklab, var(--ui-text-primary) 42%, transparent);
+
+  /* Legacy names remain aliases until all consumers adopt semantic roles. */
+  --radius: var(--ui-radius-sm);
+  --background: var(--ui-surface-canvas);
+  --foreground: var(--ui-text-primary);
+  --card: var(--ui-surface-panel);
+  --card-foreground: var(--ui-text-primary);
+  --popover: var(--ui-surface-raised);
+  --popover-foreground: var(--ui-text-primary);
+  --primary: var(--ui-brand);
+  --primary-foreground: var(--ui-on-brand);
+  --secondary: var(--ui-surface-inset);
+  --secondary-foreground: var(--ui-text-primary);
+  --muted: var(--ui-surface-inset);
+  --muted-foreground: var(--ui-text-tertiary);
+  --accent: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --accent-foreground: var(--ui-text-primary);
+  --destructive: var(--ui-status-danger);
+  --border: var(--ui-border-default);
+  --input: var(--ui-border-strong);
+  --ring: var(--ui-focus-ring);
+
+  color: var(--ui-text-primary);
+  background: var(--ui-surface-canvas);
+  font-family: var(--ui-font-sans);
+  font-feature-settings: "cv01", "ss03";
+  font-variation-settings: "opsz" auto;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Menus often render through a portal under document.body instead of beneath
+ * their trigger. Keep their material tied directly to the semantic theme
+ * contract so product hosts can change presets without styling each portal.
+ * This unlayered rule intentionally wins over utility-class fallback colors.
+ */
+:where([data-ui-menu-surface], [data-ui-portal-surface]) {
+  color-scheme: inherit;
+  color: var(--ui-text-primary);
+  background-color: var(--ui-surface-raised);
+  border-color: var(--ui-border-subtle);
+  box-shadow: var(--ui-shadow-medium);
+}
+
+:root[data-high-contrast="true"] {
+  --ui-text-tertiary: var(--ui-text-secondary);
+  --ui-text-disabled: var(--ui-text-tertiary);
+  --ui-border-subtle: var(--ui-border-default);
+  --ui-border-default: var(--ui-border-strong);
+  --ui-interactive-selected-border: var(--ui-brand);
+  --ui-focus-ring-width: 3px;
+}
+
+:root[data-reduced-motion="true"] {
+  --ui-motion-fast: 0ms;
+  --ui-motion-normal: 0ms;
+  --ui-motion-slow: 0ms;
+}
+
+:root[data-reduced-motion="true"] *,
+:root[data-reduced-motion="true"] *::before,
+:root[data-reduced-motion="true"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0ms !important;
+}
+
+@media (prefers-contrast: more) {
+  :root:not([data-high-contrast="false"]) {
+    --ui-text-tertiary: var(--ui-text-secondary);
+    --ui-text-disabled: var(--ui-text-tertiary);
+    --ui-border-subtle: var(--ui-border-default);
+    --ui-border-default: var(--ui-border-strong);
+    --ui-interactive-selected-border: var(--ui-brand);
+    --ui-focus-ring-width: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) {
+    --ui-motion-fast: 0ms;
+    --ui-motion-normal: 0ms;
+    --ui-motion-slow: 0ms;
+  }
 }

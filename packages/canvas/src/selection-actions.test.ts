@@ -4,6 +4,7 @@ import {
   CanvasSelectionActionExecutor,
   createCanvasSelectionActionContext,
   getVisibleCanvasSelectionActions,
+  partitionCanvasSelectionActions,
   type CanvasSelectionAction,
 } from "./selection-actions"
 
@@ -16,6 +17,28 @@ function deferred() {
 }
 
 describe("Canvas selection actions", () => {
+  test("keeps frequent actions primary and routes overflow or destructive hints out of the main strip", () => {
+    const actions: CanvasSelectionAction[] = [
+      { execute: () => undefined, id: "inspect", label: "Inspect" },
+      {
+        execute: () => undefined,
+        id: "export",
+        label: "Export",
+        presentation: { placement: "overflow" },
+      },
+      {
+        execute: () => undefined,
+        id: "remove",
+        label: "Remove",
+        presentation: { tone: "destructive" },
+      },
+    ]
+
+    const partitioned = partitionCanvasSelectionActions(actions)
+    expect(partitioned.primary.map((action) => action.id)).toEqual(["inspect"])
+    expect(partitioned.overflow.map((action) => action.id)).toEqual(["export", "remove"])
+  })
+
   test("leaves media-only eligibility to a host predicate and isolates faulty predicates", () => {
     const image = createMediaNode({
       id: "image",
@@ -27,7 +50,12 @@ describe("Canvas selection actions", () => {
       position: { x: 20, y: 20 },
       resource: { id: "video", kind: "video", metadata: {}, state: { status: "ready", url: "asset://video" } },
     })
-    const text = createTextNode({ id: "text", metadata: {}, position: { x: 40, y: 40 }, resourceState: { status: "ready" } })
+    const text = createTextNode({
+      id: "text",
+      metadata: {},
+      position: { x: 40, y: 40 },
+      resourceState: { status: "ready" },
+    })
     const document = createCanvasDocument({ nodes: [image, video, text] })
     const controller = new AbortController()
     const mediaOnly: CanvasSelectionAction = {
