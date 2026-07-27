@@ -22,6 +22,7 @@ import {
   getCanvasNodeSize,
   parseCanvasDocument,
 } from "../document"
+import { isCanvasConnectableNode } from "../connections"
 import type {
   CanvasDocument,
   CanvasEdge,
@@ -507,7 +508,7 @@ export function applyCanvasApplicationCommand(
     return result(document, next, affectedNodeIds)
   }
   if (command.type === "nodes.connect") {
-    requireNodeIds(document, [command.connection.source, command.connection.target])
+    requireConnectableNodeIds(document, [command.connection.source, command.connection.target])
     const next = connectCanvasNodes(document, command.connection)
     return result(document, next, [command.connection.source, command.connection.target])
   }
@@ -732,6 +733,9 @@ function applyDocumentPatch(
   }
   const parsed = parseCanvasDocument(candidate, document.id)
   if (!parsed) throw new CanvasCommandValidationError("Canvas patch produced an invalid document")
+  for (const edge of [...command.addedEdges, ...command.updatedEdges]) {
+    requireConnectableNodeIds(parsed, [edge.source, edge.target])
+  }
   if (sameJson(document, parsed)) return result(document, document)
 
   const affectedNodeIds = new Set([...removedNodeIds, ...addedNodeIds, ...updatedNodeIds])
@@ -760,7 +764,7 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
 
   const relation = command.relation
   const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
-  requireNodeIds(document, anchorNodeIds)
+  requireConnectableNodeIds(document, anchorNodeIds)
   if (command.items.length === 0) return result(document, document)
 
   const nodes = command.items.map(({ item, nodeId }) => createNodeFromResource(item, nodeId, command.placement.anchor))
@@ -839,7 +843,7 @@ function createPendingResource(
 
   const relation = command.relation
   const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
-  requireNodeIds(document, anchorNodeIds)
+  requireConnectableNodeIds(document, anchorNodeIds)
 
   const node = createPendingResourceNode(command)
   const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(node))
@@ -1112,6 +1116,13 @@ function requireNodeIds(document: CanvasDocument, nodeIds: readonly string[]) {
   const existing = new Set(document.nodes.map((node) => node.id))
   const missing = nodeIds.find((nodeId) => !existing.has(nodeId))
   if (missing) throw new CanvasCommandValidationError(`Canvas node was not found: ${missing}`)
+}
+
+function requireConnectableNodeIds(document: CanvasDocument, nodeIds: readonly string[]) {
+  requireNodeIds(document, nodeIds)
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const structural = nodeIds.find((nodeId) => !isCanvasConnectableNode(nodes.get(nodeId)!))
+  if (structural) throw new CanvasCommandValidationError(`Canvas structural group is not connectable: ${structural}`)
 }
 
 function requireFinitePoint(point: CanvasPoint, label: string) {

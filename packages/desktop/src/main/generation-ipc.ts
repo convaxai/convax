@@ -170,6 +170,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       "operationId",
       "output",
       "prompt",
+      "promptContextNodeIds",
       "ref",
       "referenceConstraint",
       "references",
@@ -199,8 +200,25 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
   ) {
     throw new Error("Generation expected output count is invalid")
   }
+  let promptContextNodeIds: string[] | undefined
+  if (value.promptContextNodeIds !== undefined) {
+    if (!Array.isArray(value.promptContextNodeIds) || value.promptContextNodeIds.length > 32) {
+      throw new Error("Generation prompt context nodes are invalid")
+    }
+    promptContextNodeIds = value.promptContextNodeIds.map((nodeId) =>
+      requireOpaqueId(nodeId, "Generation prompt context node id"),
+    )
+    if (new Set(promptContextNodeIds).size !== promptContextNodeIds.length) {
+      throw new Error("Generation prompt context nodes contain a duplicate node id")
+    }
+  }
   const prompt = value.prompt
-  if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 64 * 1024 || prompt.includes("\0")) {
+  if (
+    typeof prompt !== "string" ||
+    (!prompt.trim() && !promptContextNodeIds?.length) ||
+    prompt.length > 64 * 1024 ||
+    prompt.includes("\0")
+  ) {
     throw new Error("Generation prompt is invalid")
   }
   const toolId = value.toolId === undefined ? undefined : requireHostToolId(value.toolId)
@@ -230,6 +248,12 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     referencePairs.add(key)
     return { nodeId, role }
   })
+  if ((promptContextNodeIds?.length ?? 0) + references.length > 32) {
+    throw new Error("Generation prompt context and references exceed the input limit")
+  }
+  if (promptContextNodeIds?.some((nodeId) => references.some((reference) => reference.nodeId === nodeId))) {
+    throw new Error("Generation prompt context and references contain the same node")
+  }
 
   let relationAnchorNodeIds: string[] | undefined
   if (value.relationAnchorNodeIds !== undefined) {
@@ -265,6 +289,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     operationId,
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
     prompt,
+    ...(promptContextNodeIds === undefined ? {} : { promptContextNodeIds }),
     ref: {
       canvasId: requireOpaqueId(ref.canvasId, "Generation Canvas id"),
       scopeId: requireOpaqueId(ref.scopeId, "Generation scope id"),

@@ -9,6 +9,12 @@ import {
 export const agentComposerResourceAttribute = "data-agent-composer-resource"
 export const agentComposerTokenAttribute = "data-agent-composer-token"
 export const agentComposerTokenActionAttribute = "data-agent-composer-token-action"
+export const agentComposerTokenClassName =
+  "mx-0.5 inline-flex max-w-56 select-none items-center overflow-hidden rounded-md border align-baseline text-xs font-medium"
+export const agentComposerTokenEditClassName =
+  "inline-flex min-w-0 items-center gap-1 truncate px-1.5 py-0.5 outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
+export const agentComposerTokenRemoveClassName =
+  "grid size-5 shrink-0 place-items-center border-l border-current/15 text-current/65 outline-none hover:bg-accent/70 hover:text-current focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
 
 export interface AgentComposerTokenPresentation {
   editLabel: string
@@ -99,6 +105,14 @@ export function agentComposerTokenPresentation(resource: AgentResource): AgentCo
   }
 }
 
+export function agentComposerTokenFamilyClassName(family: AgentComposerTokenPresentation["family"]) {
+  return family === "skill"
+    ? "border-primary/25 bg-primary/10 text-primary"
+    : family === "canvas"
+      ? "border-primary/20 bg-accent text-accent-foreground"
+      : "border-border bg-muted/70 text-foreground"
+}
+
 export function createAgentComposerToken(resource: AgentResource, disabled = false) {
   const presentation = agentComposerTokenPresentation(resource)
   const token = document.createElement("span")
@@ -106,22 +120,14 @@ export function createAgentComposerToken(resource: AgentResource, disabled = fal
   token.setAttribute(agentComposerResourceAttribute, serializeAgentComposerResource(resource))
   token.setAttribute("contenteditable", "false")
   token.title = presentation.title
-  token.className = [
-    "mx-0.5 inline-flex max-w-56 select-none items-center overflow-hidden rounded-md border align-baseline text-xs font-medium",
-    presentation.family === "skill"
-      ? "border-primary/25 bg-primary/10 text-primary"
-      : presentation.family === "canvas"
-        ? "border-primary/20 bg-accent text-accent-foreground"
-        : "border-border bg-muted/70 text-foreground",
-  ].join(" ")
+  token.className = [agentComposerTokenClassName, agentComposerTokenFamilyClassName(presentation.family)].join(" ")
 
   const edit = document.createElement("button")
   edit.type = "button"
   edit.disabled = disabled
   edit.setAttribute(agentComposerTokenActionAttribute, "edit")
   edit.setAttribute("aria-label", presentation.editLabel)
-  edit.className =
-    "inline-flex min-w-0 items-center gap-1 truncate px-1.5 py-0.5 outline-none hover:bg-accent/70 focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
+  edit.className = agentComposerTokenEditClassName
 
   const prefix = document.createElement("span")
   prefix.setAttribute("aria-hidden", "true")
@@ -137,8 +143,7 @@ export function createAgentComposerToken(resource: AgentResource, disabled = fal
   remove.disabled = disabled
   remove.setAttribute(agentComposerTokenActionAttribute, "remove")
   remove.setAttribute("aria-label", presentation.removeLabel)
-  remove.className =
-    "grid size-5 shrink-0 place-items-center border-l border-current/15 text-current/65 outline-none hover:bg-accent/70 hover:text-current focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
+  remove.className = agentComposerTokenRemoveClassName
   remove.textContent = "×"
 
   token.append(edit, remove)

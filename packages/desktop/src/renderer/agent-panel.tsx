@@ -55,6 +55,7 @@ import { isAgentCanvasResource, shouldFlushAgentCanvasContext } from "../agent-c
 import { AgentGenerationModelPicker, type AgentModelPickerTab } from "./agent-generation-model-picker"
 import {
   AgentGenerationCatalogRequestTracker,
+  agentGenerationModelSelectionTitle,
   createAgentPromptInstructions,
   findAgentGenerationTool,
   isAgentGenerationOutput,
@@ -81,6 +82,7 @@ import {
 import {
   AgentComposerCompositionController,
   AgentComposerRequestTracker,
+  agentComposerDraftWithResources,
   agentComposerResources,
   agentComposerText,
   closeAgentComposerSuggestion,
@@ -216,6 +218,7 @@ export interface AgentPanelProps {
   className?: string
   /** Set false when the workspace shell renders AgentDrawerTrigger itself. */
   collapsedEntry?: boolean
+  /** Host-owned context that is always submitted and cannot be removed from the composer. */
   contextResources?: readonly AgentResource[]
   conversationKey?: string
   embedded?: boolean
@@ -223,6 +226,9 @@ export interface AgentPanelProps {
   generationCatalogVersion?: string
   /** Render as content inside Desktop's persistent utility drawer region. */
   hosted?: boolean
+  /** Removable @ references inserted once when this conversation surface opens. */
+  initialResources?: readonly AgentResource[]
+  onOpenServices?: () => void
   onSessionDisplayed?: (input: PetDisplayedSession) => void
   onStatusChange?: (status: AgentCompactStatus) => void
   layout?: AgentPanelLayout
@@ -268,12 +274,15 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const setSharedLlmSelection = sharedGenerationPreference?.setLlmSelection
   const generationCatalogVersion = props.generationCatalogVersion ?? ""
   const generationCatalogScope = JSON.stringify([props.projectId ?? null, generationCatalogVersion])
+  const llmCatalogScope = JSON.stringify([props.projectId ?? null, generationCatalogVersion])
   const conversationScope = JSON.stringify([
     props.projectId ?? null,
     embedded ? "embedded" : "panel",
     embedded ? (props.conversationKey ?? null) : null,
   ])
   const contextResources = mergeAgentResources(props.contextResources ?? [])
+  const initialResourcesRef = useRef(mergeAgentResources(props.initialResources ?? []))
+  initialResourcesRef.current = mergeAgentResources(props.initialResources ?? [])
   const open = hosted || embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
   const [suggestion, setSuggestion] = useState<AgentComposerSuggestionState>({ open: false })
@@ -281,7 +290,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [referenceTab, setReferenceTab] = useState<"canvas" | "project">("project")
   const [suggestionAnchor, setSuggestionAnchor] = useState<AgentComposerPickerAnchor>()
   const [generationModelPickerOpen, setGenerationModelPickerOpen] = useState(false)
-  const [modelPickerTab, setModelPickerTab] = useState<AgentModelPickerTab>("image")
+  const [modelPickerTab, setModelPickerTab] = useState<AgentModelPickerTab>("llm")
   const [generationTools, setGenerationTools] = useState<readonly GenerationToolSummary[]>([])
   const [generationToolsLoading, setGenerationToolsLoading] = useState(false)
   const [generationToolsError, setGenerationToolsError] = useState<string>()
@@ -313,7 +322,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [generationToolInput, setGenerationToolInput] = useState<Record<string, GenerationToolInputValue>>({})
   const [composerFocused, setComposerFocused] = useState(false)
   const [dropActive, setDropActive] = useState(false)
-  const [composerDraft, setComposerDraft] = useState<AgentComposerDraft>(emptyAgentComposerDraft)
+  const [composerDraft, setComposerDraft] = useState<AgentComposerDraft>(() =>
+    agentComposerDraftWithResources(initialResourcesRef.current),
+  )
   const [projectListings, setProjectListings] = useState<Map<string, readonly ProjectEntry[]>>(() => new Map())
   const [expandedProjectPaths, setExpandedProjectPaths] = useState<Set<string>>(() => new Set())
   const [loadedCanvasDocuments, setLoadedCanvasDocuments] = useState<Map<string, CanvasDocument>>(() => new Map())
@@ -327,6 +338,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [capabilitiesError, setCapabilitiesError] = useState<string>()
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [sessionCatalogReadyScope, setSessionCatalogReadyScope] = useState("")
   const [promptingSessionIds, setPromptingSessionIds] = useState<Set<string>>(() => new Set())
   const [failedSubmissions, setFailedSubmissions] = useState<FailedAgentSubmission[]>([])
   const [creatingSession, setCreatingSession] = useState(false)
@@ -359,6 +371,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const generationCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const generationDescriptionRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const llmCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
+  const llmCatalogValueScopeRef = useRef("")
   const generationToolSelectionRef = useRef(generationToolSelection)
   const llmSelectionRef = useRef(llmSelection)
   const generationCatalogVersionRef = useRef(generationCatalogVersion)
@@ -403,16 +416,19 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const validatedLlmSelection = selectedLlmModel
     ? { modelId: selectedLlmModel.model.modelId, providerId: selectedLlmModel.provider.providerId }
     : undefined
+  const displayedModelTitle =
+    modelPickerTab === "llm"
+      ? selectedLlmModel?.model.modelName
+      : selectedGenerationTool?.output === modelPickerTab
+        ? agentGenerationModelSelectionTitle(selectedGenerationTool)
+        : undefined
+  const displayedModelLoading = modelPickerTab === "llm" ? llmCatalogLoading : generationToolsLoading
+  const displayedModelLabel = displayedModelTitle ?? (displayedModelLoading ? "Loading…" : "Choose a model")
 
   const selectSession = useCallback((nextSessionId?: string) => {
     activeSessionIdRef.current = nextSessionId
     setSessionId(nextSessionId)
   }, [])
-
-  useEffect(() => {
-    if (generationToolSelection) setModelPickerTab(generationToolSelection.output)
-    else if (llmSelection) setModelPickerTab("llm")
-  }, [generationToolSelection?.id, generationToolSelection?.output, llmSelection?.modelId, llmSelection?.providerId])
 
   const replaceComposerDraft = useCallback((next: AgentComposerDraft) => {
     const normalized = normalizeAgentComposerDraft(next)
@@ -482,10 +498,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 
   const loadLlmModels = useCallback(() => {
     const scopeId = props.projectId
-    const isLatest = llmCatalogRequestRef.current.begin(props.projectId ?? "")
-    setLlmCatalog(undefined)
+    const isLatest = llmCatalogRequestRef.current.begin(llmCatalogScope)
+    if (llmCatalogValueScopeRef.current !== llmCatalogScope) {
+      llmCatalogValueScopeRef.current = ""
+      setLlmCatalog(undefined)
+    }
     setLlmCatalogError(undefined)
     if (!scopeId) {
+      llmCatalogValueScopeRef.current = ""
       setLlmCatalogLoading(false)
       return Promise.resolve<AgentModelCatalog>({ providers: [] })
     }
@@ -494,6 +514,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       .listModels({ scopeId })
       .then((catalog) => {
         if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return catalog
+        llmCatalogValueScopeRef.current = llmCatalogScope
         setLlmCatalog(catalog)
         const current = llmSelectionRef.current
         const reconciled = reconcileAgentLlmModelSelection(current, catalog)
@@ -513,7 +534,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setLlmCatalogLoading(false)
         }
       })
-  }, [props.projectId, setLlmSelection])
+  }, [llmCatalogScope, props.projectId, setLlmSelection])
 
   useEffect(() => {
     void loadGenerationTools()
@@ -639,6 +660,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setInventoryLoadingKeys(new Set())
     setInventoryErrors(new Map())
     llmCatalogRequestRef.current.invalidate()
+    llmCatalogValueScopeRef.current = ""
     setLlmCatalog(undefined)
     setLlmCatalogError(undefined)
     setLlmCatalogLoading(false)
@@ -651,7 +673,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setComposerFocused(false)
     pendingComposerFocusRef.current = false
     setDropActive(false)
-    replaceComposerDraft(emptyAgentComposerDraft())
+    replaceComposerDraft(agentComposerDraftWithResources(initialResourcesRef.current))
     promptingSessionIdsRef.current = new Set()
     setPromptingSessionIds(new Set())
     setFailedSubmissions([])
@@ -660,11 +682,19 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setError(undefined)
     setCapabilitiesLoading(false)
     setLoading(false)
+    setSessionCatalogReadyScope(embedded && props.projectId ? conversationScope : "")
   }, [conversationScope, replaceComposerDraft, selectSession])
+
+  useEffect(() => {
+    if (sessionCatalogReadyScope !== conversationScope) return
+    void loadLlmModels()
+    return () => llmCatalogRequestRef.current.invalidate()
+  }, [conversationScope, loadLlmModels, sessionCatalogReadyScope])
 
   useEffect(() => {
     if (embedded || !open || !props.projectId) {
       setLoading(false)
+      setSessionCatalogReadyScope(embedded && props.projectId ? conversationScope : "")
       return
     }
     const scopeId = props.projectId
@@ -672,6 +702,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     let stale = false
     const request = ++sessionListRequestRef.current
     setLoading(true)
+    setSessionCatalogReadyScope("")
     void window.convax.agent
       .listSessions({ scopeId, limit: 60 })
       .then((listedSessions) => {
@@ -693,7 +724,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         if (!stale) setError(errorMessage(cause))
       })
       .finally(() => {
-        if (!stale) setLoading(false)
+        if (!stale) {
+          setLoading(false)
+          setSessionCatalogReadyScope(scope)
+        }
       })
     return () => {
       stale = true
@@ -1508,6 +1542,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const text = agentComposerText(submittedDraft).trim()
     const submittedResources = mergeAgentResources(contextResources, agentComposerResources(submittedDraft))
     if (!props.projectId || interactionDisabled || (!text && submittedResources.length === 0)) return
+    if (!validatedLlmSelection) {
+      setError("Connect an LLM service with an available model before sending.")
+      closeComposerSuggestion()
+      setModelPickerTab("llm")
+      setGenerationModelPickerOpen(true)
+      if (!llmCatalogLoading) void loadLlmModels()
+      return
+    }
     if (validatedGenerationToolSelection && !generationConfigurationReady) {
       setError("Complete the selected generation model's required options before sending.")
       closeComposerSuggestion()
@@ -1557,23 +1599,29 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setGenerationToolSelection(verifiedGenerationSelection)
         }
         if (!verifiedGenerationSelection) {
-          throw new Error("The selected generation model is no longer installed. Choose another model or Auto.")
+          throw new Error("The selected generation model is no longer installed. Choose another available model.")
         }
       }
-      if (submittedLlmSelection) {
-        const catalog = await window.convax.agent.listModels({ scopeId })
-        if (!isCurrentScope()) return
-        setLlmCatalog(catalog)
-        verifiedLlmSelection = reconcileAgentLlmModelSelection(submittedLlmSelection, catalog)
-        if (
-          llmSelectionRef.current?.providerId !== verifiedLlmSelection?.providerId ||
-          llmSelectionRef.current?.modelId !== verifiedLlmSelection?.modelId
-        ) {
-          setLlmSelection(verifiedLlmSelection)
-        }
-        if (!verifiedLlmSelection) {
-          throw new Error("The selected LLM model is no longer connected. Choose another model or Auto.")
-        }
+      if (!submittedLlmSelection) {
+        throw new Error("No LLM service provides an available model. Open Services to install or configure one.")
+      }
+      const catalog = await window.convax.agent.listModels({ scopeId })
+      if (!isCurrentScope()) return
+      setLlmCatalog(catalog)
+      const verifiedLlmModel = findAgentLlmModel(submittedLlmSelection, catalog)
+      verifiedLlmSelection = verifiedLlmModel
+        ? { modelId: verifiedLlmModel.model.modelId, providerId: verifiedLlmModel.provider.providerId }
+        : undefined
+      if (
+        llmSelectionRef.current?.providerId !== verifiedLlmSelection?.providerId ||
+        llmSelectionRef.current?.modelId !== verifiedLlmSelection?.modelId
+      ) {
+        setLlmSelection(verifiedLlmSelection)
+      }
+      if (!verifiedLlmSelection) {
+        setModelPickerTab("llm")
+        setGenerationModelPickerOpen(true)
+        throw new Error("The selected LLM model is no longer connected. Choose another available model.")
       }
       if (!targetSessionId && embedded) {
         targetSessionId = embeddedConversationSessions.get(scopeId, props.conversationKey)
@@ -1662,6 +1710,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     generationConfigurationReady,
     generationTools,
     interactionDisabled,
+    llmCatalogLoading,
+    loadLlmModels,
     props.activeCanvas,
     props.beforePrompt,
     props.conversationKey,
@@ -1676,6 +1726,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setSessionPrompting,
     validatedGenerationToolInput,
     validatedGenerationToolSelection,
+    validatedLlmSelection,
   ])
 
   const abort = useCallback(async () => {
@@ -1759,8 +1810,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           hosted
             ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-surface-panel text-text-primary"
             : embedded
-            ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card text-card-foreground"
-            : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
+              ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card text-card-foreground"
+              : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
           !embedded &&
             !hosted &&
             !props.layout?.resizing &&
@@ -2002,13 +2053,17 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     loading={generationToolsLoading}
                     onClose={closeGenerationModelPicker}
                     onLlmSelect={setLlmSelection}
+                    onOpenServices={() => {
+                      closeGenerationModelPicker()
+                      props.onOpenServices?.()
+                    }}
                     onSelect={(selection) => {
                       setGenerationToolSelection(selection)
                       setGenerationToolInput({})
                     }}
                     onTabChange={(tab) => {
                       setModelPickerTab(tab)
-                      if (tab === "llm" && (!llmCatalog || llmCatalogError)) void loadLlmModels()
+                      if (tab === "llm") void loadLlmModels()
                     }}
                     onToolInputChange={setGenerationToolInput}
                     selected={validatedGenerationToolSelection}
@@ -2288,7 +2343,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     <button
                       aria-expanded={generationModelPickerOpen}
                       aria-haspopup="dialog"
-                      aria-label={`Select models, ${selectedGenerationTool?.title ?? selectedLlmModel?.model.modelName ?? "Auto"}`}
+                      aria-label={`Select models, ${displayedModelLabel}`}
                       className="flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!props.projectId || interactionDisabled}
                       onClick={() => {
@@ -2299,15 +2354,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         closeComposerSuggestion()
                         setGenerationModelPickerOpen(true)
                         if (generationToolsError) void loadGenerationTools()
-                        if (modelPickerTab === "llm" && (!llmCatalog || llmCatalogError)) void loadLlmModels()
+                        if (modelPickerTab === "llm") void loadLlmModels()
                       }}
                       type="button"
                     >
                       <Sparkles className="size-3.5 shrink-0" />
                       <span className="shrink-0 font-medium text-foreground">Models</span>
-                      <span className="truncate">
-                        {selectedGenerationTool?.title ?? selectedLlmModel?.model.modelName ?? "Auto"}
-                      </span>
+                      <span className="truncate">{displayedModelLabel}</span>
                       <ChevronDown className="size-3 shrink-0" />
                     </button>
                     {compactEmbeddedChrome ? (
@@ -2338,7 +2391,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         </Button>
                       </Tooltip>
                     ) : (
-                      <Tooltip content="Send">
+                      <Tooltip content={validatedLlmSelection ? "Send" : "Choose an LLM model in Services"}>
                         <Button
                           aria-label="Send message"
                           disabled={

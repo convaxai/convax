@@ -69,7 +69,12 @@ import {
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
 import { createInitialCanvasDocument } from "./canvas-document"
-import { CanvasCardConversationPanel, canvasCardAgentContextNodeIds } from "./canvas-card-conversation-panel"
+import {
+  CanvasCardConversationPanel,
+  canvasCardAgentContextNodeIds,
+  canvasCardAgentInitialMentionNodeIds,
+  canvasCardGenerationReferenceConstraint,
+} from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
@@ -125,10 +130,7 @@ import { summarizeWorkspaceCanvasActivity } from "./workspace-activity-model"
 import { WorkspaceTaskIndicator } from "./workspace-task-indicator"
 import { resolveWorkspaceLayout } from "./workspace-layout-model"
 import { WorkspaceEntryCoordinator, waitForMountedWorkspaceTarget } from "./workspace-entry"
-import {
-  WorkspaceUtilityDrawer,
-  type WorkspaceUtilityActiveMode,
-} from "./workspace-utility-drawer"
+import { WorkspaceUtilityDrawer, type WorkspaceUtilityActiveMode } from "./workspace-utility-drawer"
 import {
   closedWorkspaceUtilityDrawer,
   openAgentUtility,
@@ -168,12 +170,11 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
   const [canvasGenerationRunning, setCanvasGenerationRunning] = useState(false)
-  const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() =>
-    resolveAgentCompactStatus({}),
-  )
+  const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() => resolveAgentCompactStatus({}))
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
   const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
+  const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0)
   const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const settingsSurface = desktopSurface.kind === "settings" ? desktopSurface : null
@@ -201,7 +202,8 @@ function App() {
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
   const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
   const generationToolCatalogVersionRef = useRef("")
-  generationToolCatalogVersionRef.current = JSON.stringify(
+  const generationToolCatalogVersion = JSON.stringify([
+    modelCatalogEpoch,
     installedPlugins.flatMap((plugin) =>
       plugin.contributes.generation
         ? [
@@ -214,7 +216,8 @@ function App() {
           ]
         : [],
     ),
-  )
+  ])
+  generationToolCatalogVersionRef.current = generationToolCatalogVersion
   const pluginHostContextRef = useRef<{
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
@@ -312,8 +315,7 @@ function App() {
         catalog: projectCanvasController,
         project: projectController,
         readLastCanvas: (projectId) => readLastCanvasPreference(localStorage, projectId),
-        reconcile: (projectId, preferredCanvasId) =>
-          projectCanvasWorkbench.reconcile(projectId, preferredCanvasId),
+        reconcile: (projectId, preferredCanvasId) => projectCanvasWorkbench.reconcile(projectId, preferredCanvasId),
         showWorkspace: () => setDesktopSurface(openDesktopWorkspace),
         workbench: workbenchController,
       }),
@@ -354,6 +356,7 @@ function App() {
     serviceCatalogController.start()
     return () => serviceCatalogController.dispose()
   }, [serviceCatalogController])
+  useEffect(() => window.convax.pluginServices.onDidChange(() => setModelCatalogEpoch((current) => current + 1)), [])
   useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth)
     window.addEventListener("resize", updateViewportWidth)
@@ -711,10 +714,8 @@ function App() {
   }, [flushAuthoritativeCanvas, webPluginGenerationProjection])
 
   useEffect(() => {
-    return subscribeInstalledPluginInventory(
-      window.convax.plugins,
-      setInstalledPlugins,
-      (error) => console.error("Could not load installed Canvas Plugins", error),
+    return subscribeInstalledPluginInventory(window.convax.plugins, setInstalledPlugins, (error) =>
+      console.error("Could not load installed Canvas Plugins", error),
     )
   }, [])
 
@@ -770,12 +771,17 @@ function App() {
     },
     [activeProjectId],
   )
+  const openServices = useCallback(() => {
+    closeMediaOperationDialog()
+    setDesktopSurface((current) => openDesktopSettings(current, "services"))
+  }, [closeMediaOperationDialog])
   const assistantHostRef = useRef({
     activeCanvas,
     activeProject,
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
     generationCatalogVersion: generationToolCatalogVersionRef.current,
+    onOpenServices: openServices,
     onOpenSkillDetails: openSkillDetails,
   })
   assistantHostRef.current = {
@@ -784,6 +790,7 @@ function App() {
     beforePrompt: flushCanvasForAgent,
     canvases: projectCanvasSnapshot.canvases,
     generationCatalogVersion: generationToolCatalogVersionRef.current,
+    onOpenServices: openServices,
     onOpenSkillDetails: openSkillDetails,
   }
   const canvasRendererRequestHandler = useMemo(
@@ -847,7 +854,10 @@ function App() {
           acceptedInputs: tool.acceptedInputs,
           description: tool.description,
           id: tool.id,
+          ...(tool.modelName ? { modelName: tool.modelName } : {}),
           output: tool.output,
+          serviceId: tool.pluginId,
+          serviceName: tool.pluginName,
           title: tool.title,
         }))
       },
@@ -869,6 +879,7 @@ function App() {
           throw new Error("Generation could not resolve Main's authoritative Canvas document")
         }
         const operationId = request.operationId ?? globalThis.crypto.randomUUID()
+        const referenceConstraint = canvasCardGenerationReferenceConstraint(request)
         const result = await window.convax.generation.generate({
           anchor: request.anchor,
           ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
@@ -876,7 +887,9 @@ function App() {
           operationId,
           ...(request.output ? { output: request.output } : {}),
           prompt: request.prompt,
+          ...(request.promptContextNodeIds?.length ? { promptContextNodeIds: request.promptContextNodeIds } : {}),
           ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
+          ...(referenceConstraint ? { referenceConstraint } : {}),
           references: request.references,
           ...(request.relationAnchorNodeIds ? { relationAnchorNodeIds: request.relationAnchorNodeIds } : {}),
           ...(request.resultMode ? { resultMode: request.resultMode } : {}),
@@ -903,6 +916,10 @@ function App() {
             const node = request.document.nodes.find((candidate) => candidate.id === nodeId)
             return node ? [createAgentCanvasNodeResource(request.document.id, node.id, node.data.label)] : []
           })
+          const initialResources = canvasCardAgentInitialMentionNodeIds(request).flatMap((nodeId) => {
+            const node = request.document.nodes.find((candidate) => candidate.id === nodeId)
+            return node ? [createAgentCanvasNodeResource(request.document.id, node.id, node.data.label)] : []
+          })
           const agent = (
             <AgentPanel
               activeCanvas={host.activeCanvas}
@@ -914,6 +931,8 @@ function App() {
               embedded
               embeddedHeader={request.mode !== "file"}
               generationCatalogVersion={host.generationCatalogVersion}
+              initialResources={initialResources}
+              onOpenServices={host.onOpenServices}
               onOpenSkillDetails={host.onOpenSkillDetails}
               projectId={host.activeProject?.id}
               projectName={host.activeProject?.name}
@@ -923,6 +942,7 @@ function App() {
             <CanvasCardConversationPanel
               agent={agent}
               catalogVersion={host.generationCatalogVersion}
+              onOpenServices={host.onOpenServices}
               request={request}
               service={generateService}
             />
@@ -1049,7 +1069,7 @@ function App() {
       },
       textResources: window.convax.canvas.textResources,
     })
-  }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas])
+  }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas, generationToolCatalogVersion])
 
   const runMediaOperation = useCallback(
     async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {
@@ -1348,9 +1368,7 @@ function App() {
   }, [activeCanvasId, activeProjectId, secondarySidebar.visible])
   useEffect(() => {
     if (workspaceUtilityDrawer.mode !== "inspector" || canvasInspector) return
-    setWorkspaceUtilityDrawer(
-      activeProjectId ? openAgentUtility(activeProjectId) : closedWorkspaceUtilityDrawer,
-    )
+    setWorkspaceUtilityDrawer(activeProjectId ? openAgentUtility(activeProjectId) : closedWorkspaceUtilityDrawer)
   }, [activeProjectId, canvasInspector, workspaceUtilityDrawer.mode])
   const workspaceLayout = resolveWorkspaceLayout({
     agentVisible: secondarySidebar.visible,
@@ -1623,8 +1641,7 @@ function App() {
       : workspaceLayout.agent === "overlay"
         ? "!absolute !inset-y-3 !right-3 !z-40 rounded-lg shadow-2xl"
         : undefined
-  const utilityDocument =
-    canvasOutlineDocument?.id === activeCanvasId ? canvasOutlineDocument : null
+  const utilityDocument = canvasOutlineDocument?.id === activeCanvasId ? canvasOutlineDocument : null
   const utilitySelectedNodeIds =
     workbenchSnapshot.selection?.input.kind === "canvas" &&
     workbenchSnapshot.selection.input.projectId === activeProjectId &&
@@ -1634,12 +1651,8 @@ function App() {
       : []
   const utilityModes = [
     { label: locale === "zh-CN" ? "助手" : "Agent", value: "agent" as const },
-    ...(utilityDocument
-      ? [{ label: locale === "zh-CN" ? "生成" : "Generate", value: "generate" as const }]
-      : []),
-    ...(canvasInspector
-      ? [{ label: locale === "zh-CN" ? "检查器" : "Inspector", value: "inspector" as const }]
-      : []),
+    ...(utilityDocument ? [{ label: locale === "zh-CN" ? "生成" : "Generate", value: "generate" as const }] : []),
+    ...(canvasInspector ? [{ label: locale === "zh-CN" ? "检查器" : "Inspector", value: "inspector" as const }] : []),
   ]
   const closeWorkspaceUtility = () => {
     setWorkspaceUtilityDrawer(closedWorkspaceUtilityDrawer)
@@ -1950,6 +1963,7 @@ function App() {
                         resizing: resizingSecondarySidebar,
                         width: agentPanelWidth,
                       }}
+                      onOpenServices={openServices}
                       onOpenSkillDetails={openSkillDetails}
                       onSessionDisplayed={reportDisplayedPetSession}
                       onStatusChange={setAgentCompactStatus}
@@ -1969,10 +1983,7 @@ function App() {
                 closeLabel={locale === "zh-CN" ? "关闭工具抽屉" : "Close utility drawer"}
                 collapsedEntry={
                   activeProjectId ? (
-                    <aside
-                      aria-label="Agent status"
-                      className="pointer-events-none absolute right-3 top-3 z-40"
-                    >
+                    <aside aria-label="Agent status" className="pointer-events-none absolute right-3 top-3 z-40">
                       <AgentDrawerTrigger onOpen={openAgentDrawer} status={agentCompactStatus} />
                     </aside>
                   ) : null
@@ -1985,6 +1996,7 @@ function App() {
                       disabled={workbenchSnapshot.changingInput || projectSnapshot.changingActiveProject}
                       document={utilityDocument}
                       generateService={services.require("generate")}
+                      onOpenServices={openServices}
                       onSubmit={(submission) => canvasEditorRef.current?.submitGeneration(submission)}
                       scopeId={activeProjectId}
                       selectedNodeIds={utilitySelectedNodeIds}
@@ -1992,9 +2004,7 @@ function App() {
                     />
                   ) : null
                 }
-                inspector={
-                  canvasInspector ? <CanvasInspector className="pb-3" projection={canvasInspector} /> : null
-                }
+                inspector={canvasInspector ? <CanvasInspector className="pb-3" projection={canvasInspector} /> : null}
                 modal={workspaceLayout.agent !== "dock"}
                 mode={secondarySidebar.visible ? workspaceUtilityDrawer.mode : "closed"}
                 modes={utilityModes}

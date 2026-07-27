@@ -22,7 +22,10 @@ import {
   CanvasCardConversationPanel,
   CanvasCardGenerationCatalogRequestTracker,
   canvasCardAgentContextNodeIds,
+  canvasCardAgentInitialMentionNodeIds,
   canvasCardGenerationOutput,
+  canvasCardGenerationPromptContextNodeIds,
+  canvasCardGenerationReferenceConstraint,
   canvasCardGenerationReferences,
   compatibleCanvasCardGenerationTools,
   createCanvasCardGenerationRequest,
@@ -199,6 +202,15 @@ describe("Canvas card generation output", () => {
     ])
   })
 
+  test("binds replace-card references to the owner's direct incoming edges", () => {
+    expect(
+      canvasCardGenerationReferenceConstraint({
+        resultMode: { nodeId: "image-card", type: "replace-node" },
+      }),
+    ).toEqual({ ownerNodeId: "image-card", type: "direct-incoming" })
+    expect(canvasCardGenerationReferenceConstraint({ resultMode: { type: "add" } })).toBeUndefined()
+  })
+
   test("inherits the Agent model until this node stores its own override", () => {
     const first = tool()
     const second = tool({ id: "tools/other", title: "Other image" })
@@ -210,24 +222,37 @@ describe("Canvas card generation output", () => {
     expect(resolveCanvasCardGenerationTool(second.id, [second, third], { id: third.id, output: "image" })).toBe(second)
   })
 
-  test("replaces a stale persisted id only with an unambiguous same-output fallback", () => {
+  test("prefers an input-compatible default without hiding the installed fallback", () => {
+    const incompatible = tool({ acceptedInputs: ["reference_image"], id: "tools/image-only" })
+    const compatible = tool({ acceptedInputs: ["text"], id: "tools/text-image" })
+    const agentDefault = { id: incompatible.id, output: "image" as const }
+
+    expect(
+      resolveCanvasCardGenerationTool(undefined, [incompatible, compatible], agentDefault, "image", [compatible]),
+    ).toBe(compatible)
+    expect(resolveCanvasCardGenerationTool(undefined, [incompatible], agentDefault, "image", [])).toBe(incompatible)
+    expect(
+      resolveCanvasCardGenerationTool(incompatible.id, [incompatible, compatible], agentDefault, "image", [compatible]),
+    ).toBe(incompatible)
+  })
+
+  test("fails closed for a stale persisted id instead of silently changing models", () => {
     const staleId = "xiaoyunque-generation/image.nova2"
     const image = tool()
     const otherImage = tool({ id: "tools/other-image", title: "Other image" })
     const video = tool({ id: "tools/video", output: "video", title: "Video" })
     const agentVideo = { id: video.id, output: "video" as const }
 
-    const fallback = resolveCanvasCardGenerationTool(staleId, [image, video], agentVideo, "image")
-    expect(fallback).toBe(image)
+    expect(resolveCanvasCardGenerationTool(staleId, [image, video], agentVideo, "image")).toBeUndefined()
     expect(resolveCanvasCardGenerationTool(staleId, [image, otherImage, video], agentVideo, "image")).toBeUndefined()
     expect(resolveCanvasCardGenerationTool(video.id, [image, video], agentVideo, "image")).toBeUndefined()
 
     const request = createCanvasCardGenerationRequest({
-      description: { fields: [], toolId: fallback!.id },
+      description: { fields: [], toolId: image.id },
       prompt: "A small rabbit",
       request: assistantRequest(imageNode()),
       signal: new AbortController().signal,
-      tool: fallback!,
+      tool: image,
       toolInput: {},
     })
     expect(request.toolId).toBe(image.id)
@@ -239,14 +264,14 @@ describe("Canvas card generation output", () => {
     const otherImage = tool({ id: "tools/other-image", title: "Other image" })
     const video = tool({ id: "tools/video", output: "video", title: "Video" })
     const agentVideo = { id: video.id, output: "video" as const }
-    const emptyImage = imageNode({ data: { kind: "image", label: "Image", url: "" } })
+    const emptyImage = imageNode({
+      data: { kind: "image", label: "Image", metadata: {}, resourceState: { status: "ready", url: "" } },
+    })
     const ownerOutput = canvasCardGenerationOutput(assistantRequest(emptyImage))
 
     expect(ownerOutput).toBe("image")
     expect(resolveCanvasCardGenerationTool(undefined, [image, video], agentVideo, ownerOutput)).toBe(image)
-    expect(
-      resolveCanvasCardGenerationTool(undefined, [image, otherImage, video], agentVideo, ownerOutput),
-    ).toBeUndefined()
+    expect(resolveCanvasCardGenerationTool(undefined, [image, otherImage, video], agentVideo, ownerOutput)).toBe(image)
     expect(resolveCanvasCardGenerationTool(undefined, [video], agentVideo, ownerOutput)).toBeUndefined()
     expect(resolveCanvasCardGenerationTool(video.id, [image, video], agentVideo, ownerOutput)).toBeUndefined()
 
@@ -316,6 +341,34 @@ describe("Canvas card generation request", () => {
     expect(second.operationId).not.toBe(first.operationId)
   })
 
+  test("carries mentioned text as prompt context and allows it to be the entire prompt", () => {
+    const owner = imageNode()
+    const notes = createTextNode({
+      id: "notes",
+      metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/prompt.txt" } },
+      name: "prompt.txt",
+      position: { x: -320, y: 0 },
+      resourceState: { status: "ready", text: "A rainy neon alley" },
+    })
+    const reference = imageNode({ id: "style-image" })
+    const selected = tool()
+
+    expect(
+      createCanvasCardGenerationRequest({
+        description: { fields: [], toolId: selected.id },
+        prompt: "   ",
+        request: assistantRequest(owner, [owner, notes, reference], [notes.id, reference.id]),
+        signal: new AbortController().signal,
+        tool: selected,
+        toolInput: {},
+      }),
+    ).toMatchObject({
+      prompt: "",
+      promptContextNodeIds: [notes.id],
+      references: [{ nodeId: reference.id, role: "reference_image" }],
+    })
+  })
+
   test("rejects direct generation for generic and non-visual media cards", () => {
     const folder = createFolderNode({
       id: "folder",
@@ -371,7 +424,8 @@ describe("Canvas card generation request", () => {
       data: {
         kind: "image",
         label: "Image",
-        url: "",
+        metadata: {},
+        resourceState: { status: "ready", url: "" },
       },
     })
     const selected = tool({ acceptedInputs: [] })
@@ -447,7 +501,7 @@ describe("Canvas card generation request", () => {
     ).toThrow("configuration is stale")
   })
 
-  test("infers explicitly mentioned text, image, video, and audio references but leaves other cards prompt-only", () => {
+  test("infers text prompt context separately from media references", () => {
     const nodes = [
       createTextNode({
         id: "text",
@@ -497,13 +551,16 @@ describe("Canvas card generation request", () => {
     ]
 
     expect(nodes.map((node) => canvasCardGenerationReferences(assistantRequest(node, nodes, [node.id])))).toEqual([
-      [{ nodeId: "text", role: "text" }],
+      [],
       [{ nodeId: "image", role: "reference_image" }],
       [{ nodeId: "video", role: "reference_video" }],
       [{ nodeId: "audio", role: "audio" }],
       [],
       [],
     ])
+    expect(
+      nodes.map((node) => canvasCardGenerationPromptContextNodeIds(assistantRequest(node, nodes, [node.id]))),
+    ).toEqual([["text"], [], [], [], [], []])
   })
 
   test("locks direct cards to their output kind while preserving explicit image input for video generation", () => {
@@ -719,14 +776,16 @@ describe("Canvas card generation lifecycle", () => {
   })
 
   test("keeps the file owner in Agent context without turning it into a generation mention", () => {
-    expect(canvasCardAgentContextNodeIds({ mentionedNodeIds: [], mode: "file", ownerNodeId: "managed-image" })).toEqual(
-      ["managed-image"],
-    )
+    expect(canvasCardAgentContextNodeIds({ mode: "file", ownerNodeId: "managed-image" })).toEqual(["managed-image"])
     expect(
       canvasCardAgentContextNodeIds({
-        mentionedNodeIds: ["connected-image", "connected-video"],
         mode: "agent",
         ownerNodeId: "agent-card",
+      }),
+    ).toEqual([])
+    expect(
+      canvasCardAgentInitialMentionNodeIds({
+        mentionedNodeIds: ["connected-image", "connected-video", "connected-image"],
       }),
     ).toEqual(["connected-image", "connected-video"])
   })
@@ -808,21 +867,55 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain('data-canvas-card-generation-surface="single"')
     expect(markup).toContain("min-h-28 max-h-48 flex-1 resize-none")
     expect(markup).not.toContain("rounded-2xl border border-border/60 bg-card shadow-sm")
-    expect(markup).toContain('aria-label="Model"')
-    expect(markup).toContain(">Models</span>")
-    expect(markup).toContain("justify-start gap-1 border-0 bg-transparent")
-    expect(markup).not.toContain("rounded-full border-border/60 bg-muted/60")
+    expect(markup).not.toContain("Auto")
+    expect(markup).not.toContain("自动")
+    expect(markup).not.toContain("跟随 Agent")
+    expect(markup).toContain("正在加载模型…")
     expect(markup).toContain("items-center gap-1 pt-1")
     expect(markup).toContain('aria-label="Generate"')
     const generateButton = markup.match(/<button[^>]*aria-label="Generate"[^>]*>/)?.[0] ?? ""
     expect(generateButton).toContain("size-8")
     expect(generateButton).toContain("rounded-md")
     expect(generateButton).not.toContain("rounded-full")
-    expect(markup).toContain("@ reference.png")
+    expect(markup).toContain('data-agent-composer-token=""')
+    expect(markup).toContain(">reference.png</span>")
+    expect(markup).toContain('aria-label="Remove Canvas reference: reference.png"')
     expect(markup).not.toContain("reference_image 参考输入")
     expect(markup).toContain("data-agent-panel")
     expect(markup.match(/hidden=""/g)).toHaveLength(1)
     expect(markup).not.toContain("h-[380px]")
+  })
+
+  test("shows every incoming card as a removable @ and flags unsupported generation inputs", () => {
+    const owner = imageNode()
+    const folder = createFolderNode({
+      id: "folder-input",
+      position: { x: -320, y: 0 },
+      resource: {
+        id: "folder-resource",
+        kind: "folder",
+        metadata: {},
+        name: "Source folder",
+        state: { status: "ready" },
+      },
+    })
+    const request = assistantRequest(owner, [owner, folder], [folder.id])
+    const markup = renderToStaticMarkup(
+      <CanvasCardConversationPanel
+        agent={<div>Agent</div>}
+        request={request}
+        service={{
+          describeTool: async (toolId) => ({ fields: [], toolId }),
+          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          listTools: async () => [],
+        }}
+      />,
+    )
+
+    expect(markup).toContain('data-agent-composer-token=""')
+    expect(markup).toContain(">Source folder</span>")
+    expect(markup).toContain("border-amber-500/35 bg-amber-500/10")
+    expect(markup).toContain('aria-label="Remove Canvas reference: Source folder"')
   })
 
   test("renders only Agent for text, audio, folder, and plugin cards", () => {

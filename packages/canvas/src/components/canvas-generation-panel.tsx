@@ -1,21 +1,6 @@
-import {
-  Button,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  cn,
-} from "@convax/ui"
+import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
 import { LoaderCircle, Sparkles } from "lucide-react"
-import {
-  type FormEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   CanvasGenerationCatalogRequestTracker,
   assignCanvasGenerationImageRole,
@@ -38,6 +23,7 @@ export interface CanvasGenerationPanelProps {
   document: CanvasDocument
   generateService: CanvasGenerateService
   initialPrompt?: string
+  onOpenServices?: () => void
   onSubmit: (submission: CanvasGenerationComposerSubmission) => void
   scopeId?: string
   selectedNodeIds: readonly string[]
@@ -85,15 +71,11 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   }, [props.document.id, props.initialPrompt, scopeId])
 
   useEffect(() => {
-    setImageRoles((current) =>
-      reconcileCanvasGenerationImageRoles(current, projection.inferredReferences),
-    )
+    setImageRoles((current) => reconcileCanvasGenerationImageRoles(current, projection.inferredReferences))
   }, [projection.inferredReferences])
 
   useEffect(() => {
-    setSelectedToolId((current) =>
-      resolveCanvasGenerationToolId(current, projection.compatibleTools),
-    )
+    setSelectedToolId((current) => resolveCanvasGenerationToolId(current, projection.compatibleTools))
   }, [projection.compatibleTools])
 
   useEffect(() => {
@@ -118,13 +100,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       },
     )
     return () => catalogTrackerRef.current.cancel(request)
-  }, [
-    catalogAttempt,
-    props.document.id,
-    props.generateService,
-    props.generateService.catalogVersion,
-    scopeId,
-  ])
+  }, [catalogAttempt, props.document.id, props.generateService, props.generateService.catalogVersion, scopeId])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -140,16 +116,11 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
     if (submission) props.onSubmit(submission)
   }
 
-  const referenceImageNodes = projection.inferredReferences.filter(
-    (reference) => reference.role === "reference_image",
-  )
+  const referenceImageNodes = projection.inferredReferences.filter((reference) => reference.role === "reference_image")
   const nodeById = new Map(props.document.nodes.map((node) => [node.id, node]))
   const selectedTool = projection.selectedTool
   const inputDisabled =
-    Boolean(props.disabled) ||
-    Boolean(props.submitting) ||
-    catalogStatus !== "ready" ||
-    !selectedTool
+    Boolean(props.disabled) || Boolean(props.submitting) || catalogStatus !== "ready" || !selectedTool
 
   return (
     <div className={cn("flex min-w-0 flex-col", props.className)}>
@@ -168,9 +139,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-xs text-destructive"
             role="alert"
           >
-            <span className="min-w-0 truncate">
-              {catalogError ?? "Could not load generation tools."}
-            </span>
+            <span className="min-w-0 truncate">{catalogError ?? "Could not load generation tools."}</span>
             <Button
               onClick={() => setCatalogAttempt((attempt) => attempt + 1)}
               size="sm"
@@ -193,9 +162,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
                   disabled={props.disabled || props.submitting}
                   onValueChange={(role) => {
                     if (!isCanvasGenerationImageRole(role)) return
-                    setImageRoles((current) =>
-                      assignCanvasGenerationImageRole(current, reference.nodeId, role),
-                    )
+                    setImageRoles((current) => assignCanvasGenerationImageRole(current, reference.nodeId, role))
                   }}
                   value={imageRoles[reference.nodeId] ?? "reference_image"}
                 >
@@ -222,11 +189,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             onValueChange={setSelectedToolId}
             value={selectedToolId}
           >
-            <SelectTrigger
-              aria-label="Generation tool"
-              className="w-full"
-              data-canvas-shortcuts="ignore"
-            >
+            <SelectTrigger aria-label="Generation tool" className="w-full" data-canvas-shortcuts="ignore">
               <SelectValue>{selectedTool?.title ?? "Choose a generation tool"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
@@ -252,14 +215,18 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           </div>
         ) : null}
         {catalogStatus === "ready" && projection.compatibleTools.length === 0 ? (
-          <div
-            className="rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            {projection.referenceError ??
-              (tools.length === 0
-                ? "No generation tools are installed. Install a Tool Plugin to generate content."
-                : "No installed generation tool supports all selected references.")}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground">
+            <span role="status">
+              {projection.inputError ??
+                (tools.length === 0
+                  ? "No available generation service provides a model."
+                  : "No available generation model supports all selected references.")}
+            </span>
+            {!projection.inputError && tools.length === 0 && props.onOpenServices ? (
+              <Button onClick={props.onOpenServices} size="sm" type="button" variant="outline">
+                Go to Services
+              </Button>
+            ) : null}
           </div>
         ) : null}
         <div className="flex gap-2">
@@ -273,7 +240,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           />
           <Button
             aria-label="Run generation"
-            disabled={inputDisabled || !prompt.trim()}
+            disabled={inputDisabled || (!prompt.trim() && projection.promptContextNodeIds.length === 0)}
             size="icon"
             type="submit"
           >
@@ -282,9 +249,18 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
         </div>
       </form>
       <div className="mt-2 text-xs text-muted-foreground">
-        {projection.references.length > 0
-          ? `${projection.references.length} selected reference${projection.references.length === 1 ? "" : "s"} will be used as input.`
-          : "No supported reference nodes selected."}
+        {projection.promptContextNodeIds.length > 0 || projection.references.length > 0
+          ? [
+              projection.promptContextNodeIds.length > 0
+                ? `${projection.promptContextNodeIds.length} text prompt context${projection.promptContextNodeIds.length === 1 ? "" : "s"}`
+                : undefined,
+              projection.references.length > 0
+                ? `${projection.references.length} media reference${projection.references.length === 1 ? "" : "s"}`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "No supported context or reference nodes selected."}
       </div>
     </div>
   )

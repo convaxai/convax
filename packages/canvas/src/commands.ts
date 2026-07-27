@@ -1,5 +1,6 @@
 import { createCanvasId, createGroupNode, getCanvasNodeSize } from "./document"
 import { cloneCanvasNodeGenerationRunData } from "./generation-run"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID, isCanvasConnectableNode } from "./connections"
 import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export type CanvasAlign = "left" | "center" | "right" | "top" | "middle" | "bottom"
@@ -75,20 +76,20 @@ export function connectCanvasNodes(
   connection: Pick<CanvasEdge, "source" | "target"> & Partial<CanvasEdge>,
 ): CanvasDocument {
   if (connection.source === connection.target) return document
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const source = nodes.get(connection.source)
+  const target = nodes.get(connection.target)
+  if ((source && !isCanvasConnectableNode(source)) || (target && !isCanvasConnectableNode(target))) return document
   const duplicate = document.edges.some(
-    (edge) =>
-      edge.source === connection.source &&
-      edge.target === connection.target &&
-      edge.sourceHandle === connection.sourceHandle &&
-      edge.targetHandle === connection.targetHandle,
+    (edge) => edge.source === connection.source && edge.target === connection.target,
   )
   if (duplicate) return document
   const edge: CanvasEdge = {
     id: connection.id ?? createCanvasId("edge"),
     source: connection.source,
     target: connection.target,
-    sourceHandle: connection.sourceHandle,
-    targetHandle: connection.targetHandle,
+    sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+    targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
     animated: connection.animated,
     type: connection.type ?? "canvas",
     data: connection.data,

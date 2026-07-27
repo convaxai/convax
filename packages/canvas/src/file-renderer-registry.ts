@@ -8,7 +8,7 @@ export interface CanvasFileRendererDefinition {
   /** Stable renderer identifier, persisted as `node.data.kind`. */
   id: string
   label: string
-  /** Complete node renderer; use the exported CanvasNodeChrome for standard handles/resizing. */
+  /** Complete node renderer; connectable cards must use CanvasNodeChrome for the fixed left-input/right-output ports. */
   component: ComponentType<NodeProps<CanvasNode>>
   /** Render-only contributions can omit create and stay out of insertion menus. */
   create?: (input: CanvasNodeCreateInput) => CanvasNode

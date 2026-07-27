@@ -38,6 +38,11 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   are fallible projection work. Renderer components hydrate and display that state;
   mounting, selection and panel lifetime must never become task ownership or
   implicit cancellation.
+- Card-scoped Agent and Generate conversations preload only direct incoming Canvas
+  file nodes as removable `@` references. Keep the owning card separate as locked
+  conversation context or the replacement target; never infer it or an outgoing
+  neighbor as an input. Revalidate generation mentions against Main's live incoming
+  edges before execution.
 - Agent tools are thin adapters over Canvas application/business and view ports.
   Host Project scope is authoritative; document tools may select only a Canvas in
   that Project's live catalog, while view tools resolve the mounted active Canvas.
@@ -179,11 +184,23 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   never raw JSON Schema, across preload; revalidate them in Main immediately before
   execution and never allow them to replace the fixed generation-call envelope.
 - Keep the Agent-selected generation model as the user-global renderer default.
-  Cards without an owning-node override inherit it only when its output matches the
-  owning card's intrinsic media kind. A direct card catalog contains only tools for
-  that intrinsic output; mismatched Agent defaults and persisted overrides fail
-  closed. A card selection writes only the node override through Canvas and never
-  mutates the Agent default in reverse.
+  A generation model is available only when its owning Plugin contributes the same
+  model through a service and Main's bounded live status reports that service
+  connected. Missing, disconnected, attention, unknown, timed-out, or invalid
+  service status hides that service's models; service-independent operations remain
+  manifest-driven. If no model is available, Agent and card composers route to
+  Services and never synthesize an `auto` option. A card's output-scoped available
+  model catalog remains visible regardless of its current `@` inputs. Non-empty text
+  `@` inputs are authoritative prompt context:
+  Main reads and appends their text in order, and they never enter model
+  `acceptedInputs` or the sidecar reference array. Media `@` inputs remain typed
+  references. Cards without an owning-node override prefer a compatible
+  matching Agent default, then the first compatible model; if none accepts the
+  current inputs, they still show the matching Agent default or first available model
+  and block execution until the inputs or model change. A persisted override requires
+  an exact available output match and remains visible when only its inputs are
+  incompatible; stale or output-mismatched ids fail closed. A card selection writes
+  only the node override through Canvas and never mutates the Agent default in reverse.
 - Browser-cookie service authorization is a main-only two-phase fixed exchange.
   Use a fresh non-persistent sandboxed Electron session. Choosing Configure and
   personally completing sign-in is explicit authorization: an allowlisted cookie

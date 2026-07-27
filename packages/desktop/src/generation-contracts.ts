@@ -125,6 +125,11 @@ export interface GenerationCanvasRequest {
   /** Trusted host-only output cardinality guard; this never enters the Tool Plugin input. */
   expectedOutputCount?: number
   prompt: string
+  /**
+   * Canvas text nodes whose authoritative content Main appends to `prompt`.
+   * These ids never become model reference inputs or cross into the Tool Plugin.
+   */
+  promptContextNodeIds?: readonly string[]
   /** Omit only when exactly one installed tool can satisfy the request. */
   toolId?: string
   /** Tool-owned scalar inputs validated in Main against its current MCP input schema. */

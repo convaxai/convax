@@ -60,8 +60,15 @@ Canvas owns document and editor semantics independently of Project and Agent.
   other metadata namespace. Generated
   replacement preserves only explicitly admitted node-local namespaces rather than
   blindly merging old metadata.
+- Model-generation text selections are prompt-context node ids, not typed model
+  references. Hosts read their authoritative text and compose the final prompt;
+  media selections alone participate in `acceptedInputs` compatibility.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
+- Every connectable card has one fixed left input and one fixed right output.
+  `edge.source` is the right/output card and `edge.target` is the left/input card;
+  moving cards must never adapt ports to top/bottom or reverse their roles. Structural
+  groups remain non-connectable containers.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web
   packages, permissions, iframe transport, Project/Agent calls and package storage

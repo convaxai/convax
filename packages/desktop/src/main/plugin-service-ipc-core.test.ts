@@ -1,7 +1,16 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 
-import { pluginServiceIpcChannels } from "../plugin-service-contracts"
-import { parsePluginServiceTarget, PluginServiceIpcOperations } from "./plugin-service-ipc-core"
+import {
+  pluginServiceIpcChannels,
+  pluginServiceStatusSchema,
+  type PluginServiceStatus,
+} from "../plugin-service-contracts"
+import {
+  parsePluginServiceTarget,
+  PluginServiceIpcOperations,
+  registerPluginServiceIpcCore,
+  type PluginServiceExecutor,
+} from "./plugin-service-ipc-core"
 
 class TestSender {
   readonly #listeners = new Set<() => void>()
@@ -19,6 +28,27 @@ function waitForAbort(signal: AbortSignal) {
   })
 }
 
+const status: PluginServiceStatus = {
+  account: { availability: "unavailable" },
+  credential: { configured: true, verification: "verified" },
+  credits: { availability: "unavailable" },
+  schema: pluginServiceStatusSchema,
+  state: "connected",
+  usage: { availability: "unavailable" },
+}
+
+function executor(overrides: Partial<PluginServiceExecutor> = {}): PluginServiceExecutor {
+  return {
+    authorize: mock(async () => status),
+    cancelAuthorization: mock(async () => status),
+    getStatus: mock(async () => status),
+    listServices: mock(async () => []),
+    reauthorize: mock(async () => status),
+    signOut: mock(async () => status),
+    ...overrides,
+  }
+}
+
 describe("Plugin service IPC boundary", () => {
   test("accepts only an exact Plugin id target and defines no generic action channel", () => {
     expect(parsePluginServiceTarget({ pluginId: "account-tools" })).toEqual({ pluginId: "account-tools" })
@@ -29,6 +59,7 @@ describe("Plugin service IPC boundary", () => {
     expect(Object.values(pluginServiceIpcChannels)).toEqual([
       "plugin-service:authorize",
       "plugin-service:authorization-cancel",
+      "plugin-service:changed",
       "plugin-service:status",
       "plugin-service:list",
       "plugin-service:reauthorize",
@@ -64,5 +95,72 @@ describe("Plugin service IPC boundary", () => {
     expect(await secondOutcome).toMatchObject({ name: "AbortError" })
     expect(owner.listenerCount()).toBe(0)
     await expect(operations.run(owner, "status\0one", async () => "no")).rejects.toThrow("disposed")
+  })
+
+  test("publishes model/service invalidation after every successful mutation", async () => {
+    type Event = { sender: TestSender }
+    const handlers = new Map<string, (event: Event, input?: unknown) => unknown>()
+    const changes: string[] = []
+    const removed: string[] = []
+    const dispose = registerPluginServiceIpcCore(
+      executor(),
+      { isTrustedSender: ({ sender }) => sender.id === 1 },
+      {
+        handle: (channel, handler) => handlers.set(channel, handler),
+        publishChange: () => changes.push(pluginServiceIpcChannels.changed),
+        removeHandler: (channel) => {
+          removed.push(channel)
+          handlers.delete(channel)
+        },
+      },
+    )
+    const sender = new TestSender(1)
+    const invoke = (channel: string) => {
+      const handler = handlers.get(channel)
+      if (!handler) throw new Error(`Missing handler: ${channel}`)
+      return handler({ sender }, { pluginId: "account-tools" })
+    }
+
+    await invoke(pluginServiceIpcChannels.getStatus)
+    expect(changes).toEqual([])
+    for (const channel of [
+      pluginServiceIpcChannels.authorize,
+      pluginServiceIpcChannels.reauthorize,
+      pluginServiceIpcChannels.cancelAuthorization,
+      pluginServiceIpcChannels.signOut,
+    ]) {
+      await invoke(channel)
+    }
+    expect(changes).toEqual(Array.from({ length: 4 }, () => pluginServiceIpcChannels.changed))
+
+    dispose()
+    expect(removed).toHaveLength(6)
+  })
+
+  test("does not publish a service change when the mutation fails", async () => {
+    type Event = { sender: TestSender }
+    const handlers = new Map<string, (event: Event, input?: unknown) => unknown>()
+    const changes: string[] = []
+    const dispose = registerPluginServiceIpcCore(
+      executor({
+        authorize: mock(async () => {
+          throw new Error("authorization failed")
+        }),
+      }),
+      { isTrustedSender: ({ sender }) => sender.id === 1 },
+      {
+        handle: (channel, handler) => handlers.set(channel, handler),
+        publishChange: () => changes.push(pluginServiceIpcChannels.changed),
+        removeHandler: (channel) => handlers.delete(channel),
+      },
+    )
+    const handler = handlers.get(pluginServiceIpcChannels.authorize)
+    if (!handler) throw new Error("Missing authorize handler")
+
+    await expect(handler({ sender: new TestSender(1) }, { pluginId: "account-tools" })).rejects.toThrow(
+      "authorization failed",
+    )
+    expect(changes).toEqual([])
+    dispose()
   })
 })

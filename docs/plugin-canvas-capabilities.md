@@ -101,6 +101,10 @@ built-in transport adapter remains future work.
 - `structure`: geometry plus bounded portable metadata, inline fields still present
   in the current schema, and Project-relative resource references.
 
+Projection edges are directed from the source card's right-side output to the target
+card's left-side input. For any card, only edges whose `target` is that card describe
+its inputs; outgoing neighbors are outputs.
+
 Neither projection contains native paths, runtime/blob/data URLs or resource bytes.
 `canvas.nodes.query` provides a smaller indexed-style query result when a full
 projection is unnecessary.

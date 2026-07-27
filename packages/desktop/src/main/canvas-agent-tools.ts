@@ -96,7 +96,19 @@ const primitiveCommandSchema = {
       {
         connection: {
           additionalProperties: false,
-          properties: { label: { type: "string" }, source: nonEmptyStringSchema, target: nonEmptyStringSchema },
+          description:
+            "A directed connection from the source card's right-side output to the target card's left-side input.",
+          properties: {
+            label: { type: "string" },
+            source: {
+              description: "Node whose right-side output emits this connection.",
+              ...nonEmptyStringSchema,
+            },
+            target: {
+              description: "Node whose left-side input receives this connection.",
+              ...nonEmptyStringSchema,
+            },
+          },
           required: ["source", "target"],
           type: "object",
         },
@@ -197,7 +209,8 @@ const tools = [
   },
   {
     name: "canvas_query_nodes",
-    description: "Query serializable Canvas node summaries before deciding what to change or reveal.",
+    description:
+      "Query serializable Canvas node summaries before deciding what to change or reveal. incomingNodeIds are direct inputs from source/right-output edges; outgoingNodeIds are outputs to target/left-input edges.",
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -205,7 +218,10 @@ const tools = [
         kind: { type: "string" },
         limit: { maximum: 500, minimum: 1, type: "integer" },
         nodeIds: { items: { type: "string" }, type: "array" },
-        relatedToNodeId: { type: "string" },
+        relatedToNodeId: {
+          description: "Direction-agnostic neighbor filter; inspect incomingNodeIds to identify inputs.",
+          type: "string",
+        },
         text: { type: "string" },
       },
       required: ["canvasId"],
@@ -342,8 +358,7 @@ export function createCanvasAgentToolProvider(input: {
       const signal = context?.signal
       throwIfAborted(signal)
       if (name === "canvas_list") return listCanvases(input.canvases, scope, value, signal)
-      if (name === "canvas_query_nodes")
-        return queryNodes(input.application, input.canvases, scope, value, signal)
+      if (name === "canvas_query_nodes") return queryNodes(input.application, input.canvases, scope, value, signal)
       if (name === "canvas_add_resources")
         return addResources(input.canvases, input.resources, input.renderer, scope, value, signal)
       if (name === "canvas_auto_layout")

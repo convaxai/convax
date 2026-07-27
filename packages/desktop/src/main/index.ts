@@ -116,6 +116,7 @@ import {
 } from "./plugin-manager"
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
+import { ServiceAwareGenerationTools } from "./service-aware-generation-tools"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
 import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-authorization-checkpoints"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
@@ -571,7 +572,13 @@ function startApplication() {
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
     )
-    const pluginServices = new PluginServiceHost(generationRuntime, pluginServiceBrowserAuthorization)
+    let refreshAgentConfiguration: (() => Promise<void>) | undefined
+    const pluginServices = new PluginServiceHost(
+      generationRuntime,
+      pluginServiceBrowserAuthorization,
+      () => refreshAgentConfiguration?.(),
+    )
+    const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
     const generationOperations = new GenerationOperationStore(
       join(userDataDirectory, "generation-operations", "operation-v1"),
     )
@@ -588,7 +595,7 @@ function startApplication() {
       renderer: canvasRenderer,
       resources: canvasResources,
       runs: canvasGenerationRuns,
-      tools: generationRuntime,
+      tools: availableGenerationTools,
     })
     const generationRecoveryActor = { id: "desktop:main-supervisor", kind: "host" } as const
     const logGenerationRecoveryFailure = (stage: string, error: unknown) => {
@@ -651,8 +658,14 @@ function startApplication() {
       async resolveProviders() {
         try {
           const providers = await generationRuntime.connectLlmProviders()
+          const availability = await Promise.all(
+            providers.map(async (provider) => ({
+              available: await availableGenerationTools.isPluginAvailable(provider.pluginId),
+              provider,
+            })),
+          )
           return Object.fromEntries(
-            providers.map((provider) => [
+            availability.filter(({ available }) => available).map(({ provider }) => [
               provider.providerId,
               {
                 models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
@@ -712,6 +725,7 @@ function startApplication() {
       ]),
       toolServerName: "convax",
     })
+    refreshAgentConfiguration = () => agentRuntime.refreshConfiguration()
     const petStateStore = new PetStateStore(join(userDataDirectory, "pet-state-v1.json"))
     const activity = new AgentActivityController({
       projects: projectManager,
@@ -830,7 +844,7 @@ function startApplication() {
       new RemoteCapabilityInstaller({
         authorizationStore: toolPluginAuthorizations,
         beforePluginPublish: async (pluginId) => {
-          pluginServices.discardPlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
         },
         builtinPlugins: desktopBuiltinPluginCatalog,
         builtinSkills: desktopBuiltinSkillCatalog,
@@ -1058,7 +1072,7 @@ function startApplication() {
       remoteCapabilities,
       {
         beforeChange: async (pluginId) => {
-          pluginServices.discardPlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
         },
         connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
         listAgentMcpStatuses: (plugins) => pluginAgentMcpConnection.listStatuses(plugins),

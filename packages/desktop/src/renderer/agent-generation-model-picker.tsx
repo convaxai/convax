@@ -5,8 +5,8 @@ import type {
   GenerationToolInputValue,
   GenerationToolSummary,
 } from "../generation-contracts"
-import { SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
-import { Check, ChevronRight, LoaderCircle } from "lucide-react"
+import { Button, SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
+import { Check, ChevronRight, LoaderCircle, Settings2 } from "lucide-react"
 import { useEffect, useId, useRef } from "react"
 import {
   agentGenerationOutputs,
@@ -15,7 +15,7 @@ import {
   type AgentGenerationOutput,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
-import type { AgentLlmModelSelection } from "./agent-llm-models"
+import { availableAgentLlmProviders, type AgentLlmModelSelection } from "./agent-llm-models"
 
 export type AgentModelPickerTab = AgentGenerationOutput | "llm"
 
@@ -31,8 +31,9 @@ export interface AgentGenerationModelPickerProps {
   descriptionError?: string
   descriptionLoading?: boolean
   onClose(): void
-  onLlmSelect(selection?: AgentLlmModelSelection): void
-  onSelect(selection?: AgentGenerationToolSelection): void
+  onLlmSelect(selection: AgentLlmModelSelection): void
+  onOpenServices(): void
+  onSelect(selection: AgentGenerationToolSelection): void
   onTabChange(tab: AgentModelPickerTab): void
   onToolInputChange(input: Record<string, GenerationToolInputValue>): void
   selected?: AgentGenerationToolSelection
@@ -51,6 +52,18 @@ const tabLabels: Record<AgentModelPickerTab, string> = {
   llm: "LLM",
 }
 
+function OpenServicesPrompt(props: { error?: boolean; message: string; onOpenServices(): void }) {
+  return (
+    <div className="px-2.5 py-3">
+      <p className={props.error ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{props.message}</p>
+      <Button className="mt-2" onClick={props.onOpenServices} size="sm" variant="outline">
+        <Settings2 />
+        Open Services
+      </Button>
+    </div>
+  )
+}
+
 export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProps) {
   const instanceId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -63,7 +76,12 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
   })) satisfies readonly SegmentedTabItem<AgentModelPickerTab>[]
   const activeOutput = props.activeTab === "llm" ? undefined : props.activeTab
   const services = activeOutput ? groupAgentGenerationToolsByService(props.tools, activeOutput) : []
-  const llmProviders = props.llmCatalog?.providers.filter((provider) => provider.connected) ?? []
+  const defaultGenerationModel = services[0]?.models[0]
+  const selectedGenerationModel =
+    activeOutput && props.selected?.output === activeOutput
+      ? services.flatMap((service) => service.models).find((model) => model.id === props.selected?.id)
+      : undefined
+  const llmProviders = availableAgentLlmProviders(props.llmCatalog)
   const selectedServiceId = services.find((service) =>
     service.models.some((model) => model.id === props.selected?.id && model.output === props.selected?.output),
   )?.id
@@ -73,6 +91,20 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     ),
   )?.providerId
   const activeTab = tabs.find((tab) => tab.value === props.activeTab)!
+
+  useEffect(() => {
+    if (!activeOutput || props.loading || props.error || selectedGenerationModel || !defaultGenerationModel) {
+      return
+    }
+    props.onSelect({ id: defaultGenerationModel.id, output: activeOutput })
+  }, [
+    activeOutput,
+    defaultGenerationModel?.id,
+    props.error,
+    props.loading,
+    props.onSelect,
+    selectedGenerationModel?.id,
+  ])
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -115,28 +147,18 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       >
         {props.activeTab === "llm" ? (
           <div role="radiogroup">
-            <button
-              aria-checked={!props.llmSelected}
-              className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-              onClick={() => props.onLlmSelect(undefined)}
-              role="radio"
-              type="button"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">Auto</span>
-                <span className="block text-[10px] text-muted-foreground">Use the agent runtime default model</span>
-              </span>
-              {!props.llmSelected ? <Check className="size-4 shrink-0" /> : null}
-            </button>
             {props.llmLoading ? (
               <div className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
                 <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
                 Loading agent models…
               </div>
             ) : props.llmError ? (
-              <div className="px-2.5 py-3 text-xs text-destructive">{props.llmError}</div>
+              <OpenServicesPrompt error message={props.llmError} onOpenServices={props.onOpenServices} />
             ) : llmProviders.length === 0 ? (
-              <div className="px-2.5 py-3 text-xs text-muted-foreground">No connected LLM services.</div>
+              <OpenServicesPrompt
+                message="No LLM service with an available model is connected."
+                onOpenServices={props.onOpenServices}
+              />
             ) : (
               llmProviders.map((provider) => (
                 <details
@@ -178,30 +200,18 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
           </div>
         ) : (
           <div role="radiogroup">
-            <button
-              aria-checked={!props.selected}
-              className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-              onClick={() => props.onSelect(undefined)}
-              role="radio"
-              type="button"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">Auto</span>
-                <span className="block text-[10px] text-muted-foreground">No preferred generation tool</span>
-              </span>
-              {!props.selected ? <Check className="size-4 shrink-0" /> : null}
-            </button>
             {props.loading ? (
               <div className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
                 <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                Loading installed models…
+                Loading available models…
               </div>
             ) : props.error ? (
-              <div className="px-2.5 py-3 text-xs text-destructive">{props.error}</div>
+              <OpenServicesPrompt error message={props.error} onOpenServices={props.onOpenServices} />
             ) : services.length === 0 ? (
-              <div className="px-2.5 py-3 text-xs text-muted-foreground">
-                No installed {outputLabels[activeOutput!].toLocaleLowerCase()} generation services.
-              </div>
+              <OpenServicesPrompt
+                message={`No available ${outputLabels[activeOutput!].toLocaleLowerCase()} generation service provides a model.`}
+                onOpenServices={props.onOpenServices}
+              />
             ) : (
               services.map((service) => (
                 <details

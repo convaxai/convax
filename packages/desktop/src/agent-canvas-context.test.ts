@@ -31,21 +31,31 @@ describe("desktop Canvas Agent context", () => {
 
     expect(instructions.join("\n")).toContain('Active Canvas ID: "canvas-main"')
     expect(instructions.join("\n")).toContain('Active Canvas name: "Canvas 1"')
-    expect(instructions.join("\n")).toContain(
-      'call convax_canvas_query_nodes immediately with canvasId "canvas-main"',
-    )
+    expect(instructions.join("\n")).toContain('call convax_canvas_query_nodes immediately with canvasId "canvas-main"')
+    expect(instructions.join("\n")).toContain("source is the card's right-side output")
+    expect(instructions.join("\n")).toContain("only incomingNodeIds")
+    expect(instructions.join("\n")).toContain("outgoingNodeIds are outputs")
     expect(instructions.join("\n")).toContain("Do not search the filesystem for Canvas instructions")
     expect(instructions.join("\n")).toContain("read-only snapshots")
   })
 
   test("flushes active-Canvas-only prompts without adding guidance outside Canvas context", () => {
-    expect(shouldFlushAgentCanvasContext({
-      activeCanvas: { id: "canvas-main" },
-      resources: [],
-    })).toBeTrue()
-    expect(shouldFlushAgentCanvasContext({
-      resources: [{ kind: "resource", uri: "convax://canvas/canvas-main" }],
-    })).toBeTrue()
+    expect(
+      shouldFlushAgentCanvasContext({
+        activeCanvas: { id: "canvas-main" },
+        resources: [],
+      }),
+    ).toBeTrue()
+    expect(
+      shouldFlushAgentCanvasContext({
+        resources: [{ kind: "resource", uri: "convax://canvas/canvas-main" }],
+      }),
+    ).toBeTrue()
+    expect(
+      createAgentCanvasInstructions({
+        resources: [{ kind: "resource", uri: "convax://canvas/canvas-main/node/input" }],
+      }).join("\n"),
+    ).toContain("only incomingNodeIds")
     expect(shouldFlushAgentCanvasContext({ resources: [] })).toBeFalse()
     expect(createAgentCanvasInstructions({ resources: [] })).toEqual([])
   })

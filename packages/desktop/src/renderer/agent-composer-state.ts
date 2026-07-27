@@ -34,6 +34,13 @@ export type AgentComposerSuggestionState = { open: false } | OpenAgentComposerSu
 
 export const emptyAgentComposerDraft = (): AgentComposerDraft => ({ segments: [] })
 
+/** Builds the removable inline @/$ tokens used to seed a newly opened composer. */
+export function agentComposerDraftWithResources(resources: readonly AgentResource[]): AgentComposerDraft {
+  return normalizeAgentComposerDraft({
+    segments: resources.map((resource) => ({ resource, type: "resource" as const })),
+  })
+}
+
 export function normalizeAgentComposerDraft(draft: AgentComposerDraft): AgentComposerDraft {
   const segments: AgentComposerSegment[] = []
   for (const segment of draft.segments) {

@@ -83,6 +83,39 @@ const serviceSnapshot: ServiceCatalogSnapshot = {
   ],
 }
 
+function installTestWindow() {
+  const testWindow = new Window({ url: "https://convax.test/" })
+  const globals = {
+    Element: testWindow.Element,
+    Event: testWindow.Event,
+    HTMLElement: testWindow.HTMLElement,
+    Node: testWindow.Node,
+    document: testWindow.document,
+    window: testWindow,
+  }
+  const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, value] of Object.entries(globals)) {
+    originalDescriptors.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  originalDescriptors.set(
+    "IS_REACT_ACT_ENVIRONMENT",
+    Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT"),
+  )
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  return async () => {
+    await testWindow.happyDOM.close()
+    for (const [name, descriptor] of originalDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+}
+
 describe("SettingsView", () => {
   test("renders Appearance as a dedicated full-page settings section", () => {
     const markup = renderToStaticMarkup(
@@ -202,9 +235,9 @@ describe("SettingsView", () => {
       expect(document.querySelector("main h2")?.textContent).toBe("General")
 
       await act(async () => root?.render(renderSettings("appearance")))
-      expect(
-        document.querySelector('[data-settings-navigation-item="appearance"]')?.getAttribute("aria-current"),
-      ).toBe("page")
+      expect(document.querySelector('[data-settings-navigation-item="appearance"]')?.getAttribute("aria-current")).toBe(
+        "page",
+      )
       expect(document.querySelector("main h2")?.textContent).toBe("Appearance")
     } finally {
       if (root) await act(async () => root?.unmount())
@@ -288,7 +321,54 @@ describe("SettingsView", () => {
     expect(markup).toContain(`aria-label="${appMessage("en", "services.title")}"`)
     expect(markup).toContain("OpenCode")
     expect(markup).toContain(appMessage("en", "services.free"))
+    expect(markup).toContain(`>${appMessage("en", "services.install")}</button>`)
     expect(markup).not.toContain("iframe")
+  })
+
+  test("routes the Services install action to the Plugin catalog", async () => {
+    const restoreWindow = installTestWindow()
+    let root: Root | undefined
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () => {
+        root?.render(
+          <SettingsView
+            appearancePreferences={defaultAppearancePreferences}
+            initialSection="services"
+            languagePreference="en"
+            locale="en"
+            onAppearancePreferencesChange={noop}
+            onClose={noop}
+            onLanguageChange={noop}
+            onRefreshServices={noop}
+            onServiceAction={noop}
+            petClient={petClient}
+            petProviderSnapshot={{ status: "absent" }}
+            pluginClient={pluginClient}
+            serviceSnapshot={serviceSnapshot}
+            skillClient={skillClient}
+          />,
+        )
+      })
+
+      const install = [...document.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === appMessage("en", "services.install"),
+      )
+      expect(install).toBeDefined()
+      await act(async () => {
+        install?.click()
+        await Promise.resolve()
+      })
+      const pluginTab = [...document.querySelectorAll<HTMLButtonElement>('button[role="tab"]')].find(
+        (button) => button.textContent?.trim() === appMessage("en", "capabilities.plugins"),
+      )
+      expect(pluginTab?.getAttribute("aria-selected")).toBe("true")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      await restoreWindow()
+    }
   })
 
   test("hides disabled build-time sections and falls back to General", () => {

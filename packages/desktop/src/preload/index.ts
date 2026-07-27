@@ -465,7 +465,11 @@ const pluginServiceClient = {
   onDidChange(listener) {
     const handleChange = () => listener()
     ipcRenderer.on(pluginChannels.changed, handleChange)
-    return () => ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+    ipcRenderer.on(pluginServiceIpcChannels.changed, handleChange)
+    return () => {
+      ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+      ipcRenderer.removeListener(pluginServiceIpcChannels.changed, handleChange)
+    }
   },
   reauthorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.reauthorize, input),
   signOut: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.signOut, input),

@@ -20,7 +20,24 @@ import { CanvasServicesProvider, createCanvasServices, type CanvasAssistantReque
 import type { CanvasDocument, CanvasNode, CanvasSelection } from "../types"
 
 mock.module("@xyflow/react", () => ({
-  Handle: (props: { children?: ReactNode }) => <div>{props.children}</div>,
+  Handle: (props: {
+    "aria-disabled"?: boolean
+    "aria-label"?: string
+    children?: ReactNode
+    id?: string
+    isConnectable?: boolean
+    style?: Record<string, unknown>
+  }) => (
+    <div
+      aria-disabled={props["aria-disabled"]}
+      aria-label={props["aria-label"]}
+      data-handle-connectable={String(props.isConnectable)}
+      data-handle-id={props.id}
+      style={props.style}
+    >
+      {props.children}
+    </div>
+  ),
   NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
   NodeToolbar: (props: { children?: ReactNode; isVisible?: boolean }) => (
     <div data-node-toolbar data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}>
@@ -624,6 +641,26 @@ describe("built-in node toolbar visibility", () => {
     expect(toolbarCount(render(selection(["node-a", "node-b"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"], ["edge-a"])))).toBe(0)
     expect(toolbarCount(render(selection(["node-a"]), true))).toBe(0)
+  })
+
+  test("keeps fixed left-input and right-output handles mounted but inert while read-only", () => {
+    const render = (readOnly: boolean) =>
+      renderWithEditor(selection(["node-a"]), readOnly, (props) => (
+        <CanvasNodeChrome icon={null} label="Test" node={props}>
+          <div />
+        </CanvasNodeChrome>
+      ))
+
+    const editable = render(false)
+    expect(editable).toContain('data-handle-id="target-left"')
+    expect(editable).toContain('data-handle-id="source-right"')
+    expect(editable.match(/data-handle-connectable="true"/g)).toHaveLength(2)
+
+    const readOnly = render(true)
+    expect(readOnly).toContain('data-handle-id="target-left"')
+    expect(readOnly).toContain('data-handle-id="source-right"')
+    expect(readOnly.match(/data-handle-connectable="false"/g)).toHaveLength(2)
+    expect(readOnly).not.toContain("convax-node__connection-icon")
   })
 
   test("shows node-local focus chrome only for the sole selected card", () => {

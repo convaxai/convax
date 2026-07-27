@@ -5,6 +5,7 @@ export const pluginServiceStatusSchema = "convax.plugin-service-status/1" as con
 export const pluginServiceIpcChannels = {
   authorize: "plugin-service:authorize",
   cancelAuthorization: "plugin-service:authorization-cancel",
+  changed: "plugin-service:changed",
   getStatus: "plugin-service:status",
   listServices: "plugin-service:list",
   reauthorize: "plugin-service:reauthorize",

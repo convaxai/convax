@@ -1,4 +1,9 @@
 import { requireWebPluginId } from "../plugin-contracts"
+import {
+  pluginServiceIpcChannels,
+  type PluginServiceStatus,
+  type PluginServiceSummary,
+} from "../plugin-service-contracts"
 
 export interface PluginServiceIpcSender {
   readonly id: number
@@ -87,5 +92,72 @@ export class PluginServiceIpcOperations {
     if (state.controllers.size || this.#senders.get(state.sender.id) !== state) return
     state.sender.removeListener("destroyed", state.destroyed)
     this.#senders.delete(state.sender.id)
+  }
+}
+
+export interface PluginServiceExecutor {
+  authorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  cancelAuthorization(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  listServices(): Promise<readonly PluginServiceSummary[]>
+  reauthorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  signOut(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+}
+
+export interface PluginServiceIpcTransport<Event extends { sender: PluginServiceIpcSender }> {
+  handle(channel: string, handler: (event: Event, input?: unknown) => unknown): void
+  publishChange(): void
+  removeHandler(channel: string): void
+}
+
+/** Electron-free registration policy shared by production IPC and boundary tests. */
+export function registerPluginServiceIpcCore<Event extends { sender: PluginServiceIpcSender }>(
+  executor: PluginServiceExecutor,
+  options: { isTrustedSender(event: Event): boolean },
+  transport: PluginServiceIpcTransport<Event>,
+) {
+  const operations = new PluginServiceIpcOperations()
+  let disposed = false
+
+  const register = <Result>(
+    channel: string,
+    operation: (pluginId: string, signal: AbortSignal) => Promise<Result>,
+    publish = false,
+  ) => {
+    transport.handle(channel, async (event, input) => {
+      if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
+      if (disposed) throw new Error("Plugin service IPC is disposed")
+      const { pluginId } = parsePluginServiceTarget(input)
+      const operationKey = `${channel}\0${pluginId}`
+      return operations.run(event.sender, operationKey, async (signal) => {
+        const result = await operation(pluginId, signal)
+        if (publish) transport.publishChange()
+        return result
+      })
+    })
+  }
+
+  transport.handle(pluginServiceIpcChannels.listServices, (event) => {
+    if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
+    if (disposed) throw new Error("Plugin service IPC is disposed")
+    return executor.listServices()
+  })
+  register(pluginServiceIpcChannels.getStatus, (pluginId, signal) => executor.getStatus(pluginId, signal))
+  register(pluginServiceIpcChannels.authorize, (pluginId, signal) => executor.authorize(pluginId, signal), true)
+  register(pluginServiceIpcChannels.reauthorize, (pluginId, signal) => executor.reauthorize(pluginId, signal), true)
+  register(
+    pluginServiceIpcChannels.cancelAuthorization,
+    (pluginId, signal) => executor.cancelAuthorization(pluginId, signal),
+    true,
+  )
+  register(pluginServiceIpcChannels.signOut, (pluginId, signal) => executor.signOut(pluginId, signal), true)
+
+  return () => {
+    if (disposed) return
+    disposed = true
+    operations.dispose()
+    for (const channel of Object.values(pluginServiceIpcChannels)) {
+      if (channel !== pluginServiceIpcChannels.changed) transport.removeHandler(channel)
+    }
   }
 }

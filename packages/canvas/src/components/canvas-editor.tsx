@@ -124,6 +124,7 @@ import {
   writeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider, CanvasOverlayRootProvider } from "../editor-context"
 import {
@@ -1013,6 +1014,8 @@ function CanvasEditorContent(
       ...edge,
       animated: shouldAnimateCanvasEdge(edge, selection),
       selected: selection.edgeIds.has(edge.id),
+      sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+      targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
       type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
     }))
   }, [edgesHidden, history.document.edges, selection])
@@ -2257,15 +2260,15 @@ function CanvasEditorContent(
           side === "right"
             ? {
                 source: anchor.id,
-                sourceHandle: "source-right",
+                sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
                 target: node.id,
-                targetHandle: "target-left",
+                targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
               }
             : {
                 source: node.id,
-                sourceHandle: "source-right",
+                sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
                 target: anchor.id,
-                targetHandle: "target-left",
+                targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
               },
         )
       })
@@ -2457,81 +2460,87 @@ function CanvasEditorContent(
     },
     [mutationService, pointAtCenter, readOnly, runResourceMutation],
   )
-  const runGenerate = useCallback((submission: CanvasGenerationComposerSubmission) => {
-    if (!generateService || readOnly || generationControllerRef.current) return
-    const currentDocument = documentRef.current
-    if (
-      !isCanvasGenerationComposerSubmissionCurrent(submission, {
-        documentId: currentDocument.id,
-        revision: currentDocument.revision,
-        scopeId: props.viewScopeId ?? "",
-      })
-    )
-      return
-    setGenerating(true)
-    props.onGenerationStateChange?.(true)
-    const controller = new AbortController()
-    operationControllersRef.current.add(controller)
-    const document = currentDocument
-    const documentId = document.id
-    const expectedRevision = document.revision
-    const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
-    generationControllerRef.current = { controller, documentId }
-    void (async () => {
-      await startSave(document)
+  const runGenerate = useCallback(
+    (submission: CanvasGenerationComposerSubmission) => {
+      if (!generateService || readOnly || generationControllerRef.current) return
+      const currentDocument = documentRef.current
       if (
-        controller.signal.aborted ||
-        documentRef.current.id !== documentId ||
-        documentRef.current.revision !== expectedRevision
+        !isCanvasGenerationComposerSubmissionCurrent(submission, {
+          documentId: currentDocument.id,
+          revision: currentDocument.revision,
+          scopeId: props.viewScopeId ?? "",
+        })
       )
-        return undefined
-      return generateService.generate({
-        anchor,
-        context: { documentId, selectedNodeIds: submission.selectedNodeIds, source: "canvas" },
-        expectedRevision,
-        output: submission.tool.output,
-        prompt: submission.prompt,
-        references: submission.references,
-        signal: controller.signal,
-        toolId: submission.tool.id,
-      })
-    })()
-      .then(
-        (result) => {
-          if (!result || controller.signal.aborted || documentRef.current.id !== documentId) return
-          setGenerateOpen(false)
-          notificationService?.show({
-            description: result.warnings.length > 0 ? result.warnings.join("\n") : undefined,
-            kind: result.warnings.length > 0 ? "warning" : "success",
-            title:
-              result.createdNodeIds.length > 0
-                ? `${result.createdNodeIds.length} generated item${result.createdNodeIds.length === 1 ? "" : "s"} added`
-                : "Generation complete",
-          })
-        },
-        (error) => {
-          if (!controller.signal.aborted) notifyError("Generation failed", error)
-        },
-      )
-      .finally(() => {
-        operationControllersRef.current.delete(controller)
-        if (generationControllerRef.current?.controller === controller) {
-          generationControllerRef.current = null
-          setGenerating(false)
-          props.onGenerationStateChange?.(false)
-        }
-      })
-  }, [
-    generateService,
-    insertPoint,
-    notificationService,
-    notifyError,
-    pointAtCenter,
-    props.onGenerationStateChange,
-    props.viewScopeId,
-    readOnly,
-    startSave,
-  ])
+        return
+      setGenerating(true)
+      props.onGenerationStateChange?.(true)
+      const controller = new AbortController()
+      operationControllersRef.current.add(controller)
+      const document = currentDocument
+      const documentId = document.id
+      const expectedRevision = document.revision
+      const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
+      generationControllerRef.current = { controller, documentId }
+      void (async () => {
+        await startSave(document)
+        if (
+          controller.signal.aborted ||
+          documentRef.current.id !== documentId ||
+          documentRef.current.revision !== expectedRevision
+        )
+          return undefined
+        return generateService.generate({
+          anchor,
+          context: { documentId, selectedNodeIds: submission.selectedNodeIds, source: "canvas" },
+          expectedRevision,
+          output: submission.tool.output,
+          prompt: submission.prompt,
+          ...(submission.promptContextNodeIds.length > 0
+            ? { promptContextNodeIds: submission.promptContextNodeIds }
+            : {}),
+          references: submission.references,
+          signal: controller.signal,
+          toolId: submission.tool.id,
+        })
+      })()
+        .then(
+          (result) => {
+            if (!result || controller.signal.aborted || documentRef.current.id !== documentId) return
+            setGenerateOpen(false)
+            notificationService?.show({
+              description: result.warnings.length > 0 ? result.warnings.join("\n") : undefined,
+              kind: result.warnings.length > 0 ? "warning" : "success",
+              title:
+                result.createdNodeIds.length > 0
+                  ? `${result.createdNodeIds.length} generated item${result.createdNodeIds.length === 1 ? "" : "s"} added`
+                  : "Generation complete",
+            })
+          },
+          (error) => {
+            if (!controller.signal.aborted) notifyError("Generation failed", error)
+          },
+        )
+        .finally(() => {
+          operationControllersRef.current.delete(controller)
+          if (generationControllerRef.current?.controller === controller) {
+            generationControllerRef.current = null
+            setGenerating(false)
+            props.onGenerationStateChange?.(false)
+          }
+        })
+    },
+    [
+      generateService,
+      insertPoint,
+      notificationService,
+      notifyError,
+      pointAtCenter,
+      props.onGenerationStateChange,
+      props.viewScopeId,
+      readOnly,
+      startSave,
+    ],
+  )
   submitGenerationRef.current = runGenerate
   const exportCanvas = useCallback(() => {
     if (!exportService) return
@@ -3158,20 +3167,20 @@ function CanvasEditorContent(
                   </FloatingPanel>
                 ) : null}
 
-              {generateOpen && generateService ? (
-                <FloatingPanel className="left-1/2 top-20 w-[min(440px,calc(100%-32px))] -translate-x-1/2">
-                  <CanvasGenerationPanel
-                    autoFocus
-                    disabled={readOnly}
-                    document={history.document}
-                    generateService={generateService}
-                    onSubmit={runGenerate}
-                    scopeId={currentViewScopeId}
-                    selectedNodeIds={selectedNodeIds}
-                    submitting={generating}
-                  />
-                </FloatingPanel>
-              ) : null}
+                {generateOpen && generateService ? (
+                  <FloatingPanel className="left-1/2 top-20 w-[min(440px,calc(100%-32px))] -translate-x-1/2">
+                    <CanvasGenerationPanel
+                      autoFocus
+                      disabled={readOnly}
+                      document={history.document}
+                      generateService={generateService}
+                      onSubmit={runGenerate}
+                      scopeId={currentViewScopeId}
+                      selectedNodeIds={selectedNodeIds}
+                      submitting={generating}
+                    />
+                  </FloatingPanel>
+                ) : null}
 
                 {searchOpen ? (
                   <div

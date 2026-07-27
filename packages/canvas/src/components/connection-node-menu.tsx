@@ -1,6 +1,7 @@
 import { File, Type } from "lucide-react"
 import { createPortal } from "react-dom"
 import { Position, getBezierPath } from "@xyflow/react"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import type { CanvasConnectionNodeType } from "../editor-context"
 import type { CanvasEdge, CanvasPoint } from "../types"
 
@@ -12,15 +13,15 @@ export function createCanvasCardConnection(
   return sourceSide === "right"
     ? {
         source: sourceNodeId,
-        sourceHandle: "source-right",
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
         target: targetNodeId,
-        targetHandle: "target-left",
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
       }
     : {
         source: targetNodeId,
-        sourceHandle: "source-right",
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
         target: sourceNodeId,
-        targetHandle: "target-left",
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
       }
 }
 

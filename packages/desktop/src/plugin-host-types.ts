@@ -34,7 +34,10 @@ export interface PluginAgentPromptResult {
   text: string
 }
 
-/** Pathless metadata for one direct incoming Canvas file node. */
+/**
+ * Pathless metadata for one direct incoming Canvas file node.
+ * The source card's right-side output feeds the owning Plugin card's left-side input.
+ */
 export interface PluginConnectedInputDescriptor {
   durationMs?: number
   height?: number

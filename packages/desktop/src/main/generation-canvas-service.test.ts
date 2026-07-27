@@ -995,6 +995,273 @@ describe("GenerationCanvasService", () => {
     expect(mismatch.calls).toEqual([])
   })
 
+  test("rejects an outgoing neighbor submitted as a constrained generation input", async () => {
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Owner" })
+    const output = createTextNode({ id: "output", position: { x: 320, y: 0 }, text: "Not an input" })
+    const document = createCanvasDocument({
+      edges: [{ id: "owner-to-output", source: owner.id, target: output.id }],
+      id: "canvas-one",
+      nodes: [owner, output],
+      title: "Canvas",
+    })
+    const selectedTool = tool({ acceptedInputs: ["text"] })
+    const harness = setup({ document, selectedTool })
+
+    await expect(
+      harness.service.generate(
+        request({
+          referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+          references: [{ nodeId: output.id, role: "text" }],
+          toolId: selectedTool.id,
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("must remain direct incoming")
+    expect(harness.calls).toEqual([])
+  })
+
+  test("composes authoritative text prompt context without exposing it as a model reference", async () => {
+    const first = createTextNode({ id: "first", position: { x: 0, y: 0 }, text: "First scene detail" })
+    const second = createTextNode({ id: "second", position: { x: 0, y: 160 }, text: "Second scene detail" })
+    const owner = createTextNode({ id: "owner", position: { x: 360, y: 0 }, text: "Output card" })
+    const document = createCanvasDocument({
+      edges: [
+        { id: "first-to-owner", source: first.id, target: owner.id },
+        { id: "second-to-owner", source: second.id, target: owner.id },
+      ],
+      id: "canvas-one",
+      nodes: [first, second, owner],
+      title: "Canvas",
+    })
+    const selectedTool = tool({
+      acceptedInputs: [],
+      id: "creative-tools/draw",
+      output: "image",
+      toolId: "draw",
+    })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = setup({
+      document,
+      result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
+      selectedTool,
+    })
+
+    await harness.service.generate(
+      request({
+        prompt: "",
+        promptContextNodeIds: [first.id, second.id],
+        referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+        output: "image",
+        toolId: selectedTool.id,
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(harness.calls[0]?.prompt).toBe("First scene detail\n\nSecond scene detail")
+    expect(harness.calls[0]?.references).toEqual([])
+  })
+
+  test("combines text prompt context with media references without conflating their tool inputs", async () => {
+    const root = await temporaryDirectory()
+    const referencePath = path.join(root, "reference.png")
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await fs.writeFile(referencePath, png)
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Scene detail" })
+    const image = createMediaNode({
+      id: "image-one",
+      position: { x: 0, y: 160 },
+      resource: {
+        id: "resource-one",
+        kind: "image",
+        metadata: {
+          [projectResourceReferenceKey]: projectFileReference("Media/reference.png"),
+        },
+        mimeType: "image/png",
+        name: "reference.png",
+        state: { status: "ready", url: "" },
+      },
+    })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [context, image], title: "Canvas" })
+    const harness = setup({
+      document,
+      project: {
+        async readFileInfo() {
+          return {
+            mimeType: "image/png",
+            name: "reference.png",
+            path: "Media/reference.png",
+            size: png.length,
+          }
+        },
+        async resolveEntryPath() {
+          return referencePath
+        },
+      },
+      result: { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
+      selectedTool: tool({
+        acceptedInputs: ["reference_image"],
+        id: "creative-tools/draw",
+        output: "image",
+        toolId: "draw",
+      }),
+    })
+
+    await harness.service.generate(
+      request({
+        output: "image",
+        prompt: "Typed instruction",
+        promptContextNodeIds: [context.id],
+        references: [{ nodeId: image.id, role: "reference_image" }],
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(harness.calls[0]?.prompt).toBe("Typed instruction\n\nScene detail")
+    expect(harness.calls[0]?.references).toEqual([
+      expect.objectContaining({ kind: "file", node_id: image.id, role: "reference_image" }),
+    ])
+  })
+
+  test("rejects forged or oversized prompt context before external execution", async () => {
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Owner" })
+    const outgoing = createTextNode({ id: "outgoing", position: { x: 320, y: 0 }, text: "Not an input" })
+    const document = createCanvasDocument({
+      edges: [{ id: "owner-to-outgoing", source: owner.id, target: outgoing.id }],
+      id: "canvas-one",
+      nodes: [owner, outgoing],
+      title: "Canvas",
+    })
+    const forged = setup({ document })
+    await expect(
+      forged.service.generate(
+        request({
+          prompt: "",
+          promptContextNodeIds: [outgoing.id],
+          referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("must remain a direct incoming Canvas text node")
+    expect(forged.calls).toEqual([])
+
+    const oversized = createTextNode({
+      id: "oversized",
+      position: { x: 0, y: 0 },
+      text: "x".repeat(64 * 1024 + 1),
+    })
+    const oversizedHarness = setup({
+      document: createCanvasDocument({ id: "canvas-one", nodes: [oversized], title: "Canvas" }),
+    })
+    await expect(
+      oversizedHarness.service.generate(request({ prompt: "", promptContextNodeIds: [oversized.id] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("prompt context is too large")
+    expect(oversizedHarness.calls).toEqual([])
+
+    const empty = createTextNode({ id: "empty", position: { x: 0, y: 0 }, text: "   " })
+    const emptyHarness = setup({
+      document: createCanvasDocument({ id: "canvas-one", nodes: [empty], title: "Canvas" }),
+    })
+    await expect(
+      emptyHarness.service.generate(request({ prompt: "", promptContextNodeIds: [empty.id] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("prompt context is empty")
+    expect(emptyHarness.calls).toEqual([])
+  })
+
+  test("rejects prompt context text that changes while the model is running", async () => {
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" })
+    const harness = setup({
+      document,
+      async result() {
+        context.data.resourceState = {
+          status: "ready",
+          text: "Changed while the model was running",
+        }
+        return { content: [{ text: "Generated result", type: "text" }] }
+      },
+    })
+
+    await expect(
+      harness.service.generate(request({ prompt: "", promptContextNodeIds: [context.id] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("Generation references changed while the tool was running")
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.resourceRequests).toEqual([])
+  })
+
+  test("rejects prompt context whitespace edits while the model is running", async () => {
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [context], title: "Canvas" })
+    const harness = setup({
+      document,
+      async result() {
+        context.data.resourceState = {
+          status: "ready",
+          text: " Original brief ",
+        }
+        return { content: [{ text: "Generated result", type: "text" }] }
+      },
+    })
+
+    await expect(
+      harness.service.generate(request({ prompt: "", promptContextNodeIds: [context.id] }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("Generation references changed while the tool was running")
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.resourceRequests).toEqual([])
+  })
+
+  test("rejects a prompt context incoming edge removed while the model is running", async () => {
+    const context = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Original brief" })
+    const owner = createMediaNode({
+      id: "image-output",
+      position: { x: 320, y: 0 },
+      resource: {
+        id: "image-output",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "" },
+      },
+    })
+    const document = createCanvasDocument({
+      edges: [{ id: "brief-to-output", source: context.id, target: owner.id }],
+      id: "canvas-one",
+      nodes: [context, owner],
+      title: "Canvas",
+    })
+    const harness = setup({
+      document,
+      async result() {
+        document.edges = []
+        return { content: [{ text: "Generated result", type: "text" }] }
+      },
+    })
+
+    await expect(
+      harness.service.generate(
+        request({
+          prompt: "",
+          promptContextNodeIds: [context.id],
+          referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("Generation direct incoming references changed while the tool was running")
+    expect(harness.calls).toHaveLength(1)
+    expect(harness.resourceRequests).toEqual([])
+  })
+
   test("rechecks the exact Plugin owner identity after a direct-incoming side effect", async () => {
     const root = await temporaryDirectory()
     await writeProjectTextReferences(root, { brief: "Import this" })
@@ -1739,7 +2006,18 @@ describe("GenerationCanvasService", () => {
           currentDocument = {
             ...currentDocument,
             nodes: currentDocument.nodes.map((node) =>
-              node.id === owner.id ? { ...node, data: { ...node.data, text: "Edited before external start" } } : node,
+              node.id === owner.id
+                ? {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      resourceState: {
+                        status: "ready",
+                        text: "Edited before external start",
+                      },
+                    },
+                  }
+                : node,
             ),
             revision: input.expectedRevision + 1,
           }
@@ -2559,7 +2837,16 @@ describe("GenerationCanvasService", () => {
     ).resolves.toMatchObject({ createdNodeIds: [] })
     expect(unrelated.replacementRequests).toHaveLength(1)
 
-    const editedOwner = { ...owner, data: { ...owner.data, text: "User edited this card" } }
+    const editedOwner = {
+      ...owner,
+      data: {
+        ...owner.data,
+        resourceState: {
+          status: "ready" as const,
+          text: "User edited this card",
+        },
+      },
+    }
     currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
     const changed = setup({
       document: currentDocument,

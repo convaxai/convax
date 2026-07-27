@@ -3,6 +3,7 @@ import type { GenerationToolSummary } from "../generation-contracts"
 import {
   AgentGenerationCatalogRequestTracker,
   agentGenerationModelDisplayTitle,
+  agentGenerationModelSelectionTitle,
   agentGenerationToolsForOutput,
   createAgentPromptInstructions,
   findAgentGenerationTool,
@@ -72,6 +73,12 @@ describe("Agent generation models", () => {
     ])
     expect(agentGenerationModelDisplayTitle(services[0].models[0])).toBe("GPT Image 2")
     expect(agentGenerationModelDisplayTitle(services[1].models[0])).toBe("Seedream 4")
+    expect(agentGenerationModelSelectionTitle(services[0].models[0])).toBe("小云雀生成 · GPT Image 2")
+    expect(
+      agentGenerationModelSelectionTitle(
+        tool({ modelName: undefined, pluginName: "小云雀生成", title: "小云雀生成 · Seedream 5" }),
+      ),
+    ).toBe("小云雀生成 · Seedream 5")
   })
 
   test("fails a remembered choice closed when its installed id or output changes", () => {

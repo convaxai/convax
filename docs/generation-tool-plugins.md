@@ -52,11 +52,18 @@ callers. OpenCode is a client of that operation for Agent turns; it is not the
 execution bus, and Toolbar or Plugin actions do not need an OpenCode session.
 
 Installing a Generation Tool Plugin never creates a vendor-specific Canvas node.
-Toolbar and Agent actions may start generation from ordinary Canvas selections;
-normal text, image, video and audio nodes become typed references only when the
-chosen tool accepts their roles. Generated results are admitted as the existing
-normal text or `file` nodes. Vendor identity remains an execution detail of the
-headless tool and is never encoded in Canvas node types.
+Toolbar and Agent actions may start generation from ordinary Canvas selections.
+For model generation, non-empty text nodes are authoritative prompt context, while
+image, video and audio nodes become typed references only when the chosen tool
+accepts their roles. Text prompt context is appended by Main and never appears in
+the sidecar `references` array. Explicit operation contracts may still use the
+`text` reference role. Generated results are admitted as the existing normal text
+or `file` nodes. Vendor identity remains an execution detail of the headless tool
+and is never encoded in Canvas node types.
+
+OpenCode's `canvas_generate` tool carries Canvas text through ordered
+`promptContextNodeIds`; its `references` field is media-only. The same Main boundary
+then reads, composes, bounds, and revalidates those inputs used by direct Generate.
 
 The Desktop file-card surface composes one host-rendered **Generate** tab beside
 the existing **Agent** conversation. The Generate tab is a direct caller of this
@@ -239,6 +246,8 @@ The declaration rules are intentionally small:
 - output modalities are `text`, `image`, `video` and `audio`;
 - reference roles are `text`, `reference_image`, `reference_video`, `first_frame`,
   `last_frame` and `audio`;
+- model-facing Canvas text selections are prompt context rather than references;
+  the `text` role remains available to explicit operation/reference contracts;
 - `acceptedInputs` is the compatibility declaration for optional Canvas
   references and may be `[]` for a prompt-only tool; the prompt is always passed
   separately and a call may contain no references;
@@ -408,6 +417,13 @@ listing them does not start the sidecar. OpenCode appears as the existing built-
 LLM runtime and lists only the bounded provider/model projection supplied by
 `@convax/agent-runtime`. This display catalog has no generic execute method and does
 not alter either tool selection or Agent model routing.
+
+Installed rows remain visible in Services for configuration, but they are not proof
+that a model is executable. Main's generation catalog requires an exact
+Plugin/service/model join and a bounded live `service.status` result whose state is
+`connected`. Missing service declarations, disconnected or indeterminate states,
+timeouts, and invalid results hide only that service's models and lead callers to the
+Services route; service-independent operations remain manifest-driven.
 
 An `authorize` or `reauthorize` action may instead request a main-owned browser
 exchange. This is a two-phase fixed protocol, not a general MCP callback. The first
@@ -662,6 +678,9 @@ items. Explicit references must be supported nodes connected by a direct incomin
 Canvas edge to the Plugin's owning file node. When the field is omitted, the host
 infers direct incoming text, image, video and audio nodes in edge order using their
 default roles. `first_frame` and `last_frame` are explicit image roles.
+Canvas direction is fixed: the source card's right-side output feeds the target
+card's left-side input. Only edges targeting the owning Plugin node are inputs;
+outgoing neighbors are never inferred as references.
 
 For `generation.canvas.execute`, the iframe cannot supply a Project/Canvas id, native path, revision, placement,
 operation id or mutation actor. The host derives all of them from the live bound

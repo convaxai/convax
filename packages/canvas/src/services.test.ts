@@ -2,7 +2,9 @@ import { describe, expect, mock, test } from "bun:test"
 import { createAgentNode, createFolderNode, createGroupNode, createMediaNode, createTextNode } from "./document"
 import {
   getCompatibleCanvasGenerationTools,
+  getCanvasGenerationInputError,
   getCanvasGenerationReferenceError,
+  inferCanvasGenerationInputs,
   inferCanvasGenerationReferences,
   CanvasTextResourceConflictError,
   createCanvasPendingDraftRegistry,
@@ -192,7 +194,7 @@ describe("Canvas generation services", () => {
     })
   })
 
-  test("infers semantic roles for supported selected file nodes", () => {
+  test("partitions text prompt context from supported media references", () => {
     const nodes = [
       createTextNode({
         id: "brief",
@@ -245,7 +247,7 @@ describe("Canvas generation services", () => {
     ]
 
     expect(
-      inferCanvasGenerationReferences(nodes, [
+      inferCanvasGenerationInputs(nodes, [
         "audio",
         "brief",
         "image",
@@ -257,11 +259,16 @@ describe("Canvas generation services", () => {
         "missing",
         "image",
       ]),
-    ).toEqual([
-      { nodeId: "audio", role: "audio" },
-      { nodeId: "brief", role: "text" },
+    ).toEqual({
+      promptContextNodeIds: ["brief"],
+      references: [
+        { nodeId: "audio", role: "audio" },
+        { nodeId: "image", role: "reference_image" },
+        { nodeId: "video", role: "reference_video" },
+      ],
+    })
+    expect(inferCanvasGenerationReferences(nodes, ["brief", "image"])).toEqual([
       { nodeId: "image", role: "reference_image" },
-      { nodeId: "video", role: "reference_video" },
     ])
   })
 
@@ -369,5 +376,11 @@ describe("Canvas generation services", () => {
 
     expect(getCanvasGenerationReferenceError(references)).toBe("Choose at most 32 generation references.")
     expect(getCompatibleCanvasGenerationTools(tools, references)).toEqual([])
+    expect(
+      getCanvasGenerationInputError({
+        promptContextNodeIds: Array.from({ length: 16 }, (_, index) => `context-${index}`),
+        references: references.slice(0, 17),
+      }),
+    ).toBe("Choose at most 32 generation inputs.")
   })
 })

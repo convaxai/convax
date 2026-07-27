@@ -1,13 +1,4 @@
-import {
-  Button,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-  SettingsRow,
-  cn,
-} from "@convax/ui"
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingsRow, cn } from "@convax/ui"
 import { ArrowLeft, Cloud, Languages, Palette, PawPrint, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 import type { WebPluginClient, WebPluginManifest, WebPluginServiceAction } from "../plugin-contracts"
@@ -15,7 +6,7 @@ import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { AppearanceSettings, type AppearanceSaveState } from "./appearance-settings"
 import type { AppearancePreferences } from "./appearance-preferences"
-import { CapabilityManagementSurface } from "./capability-center"
+import { CapabilityManagementSurface, type CapabilityCenterTab } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
 import {
@@ -137,6 +128,7 @@ export function SettingsView({
       ? "general"
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
+  const [capabilityInitialTab, setCapabilityInitialTab] = useState<CapabilityCenterTab>("skills")
 
   useEffect(() => {
     setSection(enabledInitialSection)
@@ -280,7 +272,10 @@ export function SettingsView({
           className="mt-6"
           emptyLabel={locale === "zh-CN" ? "没有匹配的设置" : "No matching settings"}
           items={navigationItems}
-          onValueChange={setSection}
+          onValueChange={(value) => {
+            if (value === "capabilities") setCapabilityInitialTab("skills")
+            setSection(value)
+          }}
           searchLabel={locale === "zh-CN" ? "搜索设置" : "Search settings"}
           value={section}
         />
@@ -313,6 +308,14 @@ export function SettingsView({
             <ServicesSurface
               locale={locale}
               onAction={onServiceAction}
+              onInstallServices={
+                featureFlags.skillsAndPlugins
+                  ? () => {
+                      setCapabilityInitialTab("plugins")
+                      setSection("capabilities")
+                    }
+                  : undefined
+              }
               onRefresh={onRefreshServices}
               snapshot={serviceSnapshot}
             />
@@ -322,6 +325,7 @@ export function SettingsView({
               activeProjectId={activeProjectId}
               className="min-h-[32rem]"
               initialSkillName={initialSkillName}
+              initialTab={capabilityInitialTab}
               locale={locale}
               onUsePluginOnCanvas={onUsePluginOnCanvas}
               onUsePluginInAgent={onUsePluginInAgent}
@@ -337,7 +341,10 @@ export function SettingsView({
               data-pet-provider-status="loading"
             />
           ) : (
-            <div className="rounded-xl border border-border-default bg-surface-raised p-5 text-sm text-text-tertiary" role="status">
+            <div
+              className="rounded-xl border border-border-default bg-surface-raised p-5 text-sm text-text-tertiary"
+              role="status"
+            >
               Pet provider unavailable.
             </div>
           )}
