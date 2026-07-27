@@ -1,0 +1,318 @@
+:root[data-app-theme] {
+  /* Keep current Desktop consumers live while they migrate to semantic roles. */
+  --background: var(--ui-surface-canvas);
+  --foreground: var(--ui-text-primary);
+  --card: var(--ui-surface-panel);
+  --card-foreground: var(--ui-text-primary);
+  --popover: var(--ui-surface-raised);
+  --popover-foreground: var(--ui-text-primary);
+  --primary: var(--ui-brand);
+  --primary-foreground: var(--ui-on-brand);
+  --secondary: var(--ui-surface-inset);
+  --secondary-foreground: var(--ui-text-primary);
+  --muted: var(--ui-surface-inset);
+  --muted-foreground: var(--ui-text-tertiary);
+  --accent: var(--ui-interactive-selected);
+  --accent-foreground: var(--ui-text-primary);
+  --destructive: var(--ui-status-danger);
+  --border: var(--ui-border-default);
+  --input: var(--ui-border-strong);
+  --ring: var(--ui-focus-ring);
+  /* Canvas menus portal to body and need the complete host material projection. */
+  --canvas-accent: var(--ui-brand);
+  --canvas-accent-foreground: var(--ui-on-brand);
+  --canvas-background: var(--ui-surface-canvas);
+  --canvas-edge: var(--ui-border-strong);
+  --canvas-edge-active: var(--ui-selection);
+  --canvas-grid: var(--ui-border-default);
+  --canvas-interactive-hover: var(--ui-interactive-hover);
+  --canvas-interactive-pressed: var(--ui-interactive-pressed);
+  --canvas-interactive-selected: var(--ui-interactive-selected);
+  --canvas-node-background: var(--ui-surface-raised);
+  --canvas-node-border: var(--ui-border-default);
+  --canvas-success: var(--ui-status-success);
+  --canvas-surface: var(--ui-surface-raised);
+  --canvas-text: var(--ui-text-primary);
+  --canvas-text-muted: var(--ui-text-tertiary);
+}
+
+:root,
+:root[data-app-theme="paper"] {
+  color-scheme: light;
+  --ui-surface-canvas: #f4f2ec;
+  --ui-surface-panel: #fbfaf7;
+  --ui-surface-raised: #ffffff;
+  --ui-surface-inset: #e8e5de;
+  --ui-text-primary: #1b1d1a;
+  --ui-text-secondary: #4d554f;
+  --ui-text-tertiary: #68716b;
+  --ui-text-disabled: #858c87;
+  --ui-brand: #6254c7;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #5267ca;
+  --ui-on-selection: #ffffff;
+  --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --ui-interactive-selected-border: color-mix(in oklab, var(--ui-brand) 56%, var(--ui-border-default));
+  --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
+  --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
+  --ui-backdrop: rgb(16 18 17 / 44%);
+  --ui-focus-ring: #5267ca;
+  --ui-status-danger: #b52f43;
+  --ui-status-danger-surface: #f9e4e7;
+  --ui-status-warning: #8b5a00;
+  --ui-status-warning-surface: #f7ead1;
+  --ui-status-success: #247147;
+  --ui-status-success-surface: #ddf0e4;
+  --ui-status-info: #3569b8;
+  --ui-status-info-surface: #e1eafa;
+  --ui-border-subtle: #dedbd4;
+  --ui-border-default: #cbc8c1;
+  --ui-border-strong: #a9ada8;
+  --ui-control-background: #ffffff;
+  --ui-shadow-low: 0 1px 1px rgb(24 26 25 / 8%), 0 3px 8px rgb(24 26 25 / 6%);
+  --ui-shadow-medium: 0 8px 28px rgb(24 26 25 / 14%);
+  --ui-shadow-high: 0 18px 56px rgb(24 26 25 / 20%);
+}
+
+:root[data-app-theme="graphite"] {
+  color-scheme: dark;
+  --ui-surface-canvas: #151619;
+  --ui-surface-panel: #1c1d21;
+  --ui-surface-raised: #24252a;
+  --ui-surface-inset: #101114;
+  --ui-text-primary: #f1f2f4;
+  --ui-text-secondary: #c4c7cd;
+  --ui-text-tertiary: #9499a2;
+  --ui-text-disabled: #6f747d;
+  --ui-brand: #9992ff;
+  --ui-on-brand: #111217;
+  --ui-selection: #8e94ff;
+  --ui-on-selection: #111217;
+  --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --ui-interactive-selected-border: color-mix(in oklab, var(--ui-brand) 56%, var(--ui-border-default));
+  --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
+  --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
+  --ui-backdrop: rgb(0 0 0 / 62%);
+  --ui-focus-ring: #9aa7ff;
+  --ui-status-danger: #ff7885;
+  --ui-status-danger-surface: #3b1c23;
+  --ui-status-warning: #e9b24a;
+  --ui-status-warning-surface: #352817;
+  --ui-status-success: #52c88a;
+  --ui-status-success-surface: #173126;
+  --ui-status-info: #70a9ff;
+  --ui-status-info-surface: #192a42;
+  --ui-border-subtle: #292b31;
+  --ui-border-default: #363840;
+  --ui-border-strong: #50535d;
+  --ui-control-background: #202126;
+  --ui-shadow-low: 0 1px 0 rgb(255 255 255 / 4%), 0 8px 24px rgb(0 0 0 / 20%);
+  --ui-shadow-medium: 0 12px 36px rgb(0 0 0 / 34%);
+  --ui-shadow-high: 0 20px 64px rgb(0 0 0 / 48%);
+}
+
+:root[data-app-theme="midnight"] {
+  color-scheme: dark;
+  --ui-surface-canvas: #08090a;
+  --ui-surface-panel: #1c1c1f;
+  --ui-surface-raised: #232326;
+  --ui-surface-inset: #0e0f11;
+  --ui-text-primary: #f7f8f8;
+  --ui-text-secondary: #d0d6e0;
+  --ui-text-tertiary: #8f949d;
+  --ui-text-disabled: #62666d;
+  --ui-brand: #929cff;
+  --ui-on-brand: #0b0c12;
+  --ui-selection: #7f8cff;
+  --ui-on-selection: #08090a;
+  --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --ui-interactive-selected-border: color-mix(in oklab, var(--ui-brand) 56%, var(--ui-border-default));
+  --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
+  --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
+  --ui-backdrop: rgb(0 0 0 / 62%);
+  --ui-focus-ring: #9aa7ff;
+  --ui-status-danger: #ff727d;
+  --ui-status-danger-surface: #38181e;
+  --ui-status-warning: #f0bf52;
+  --ui-status-warning-surface: #342816;
+  --ui-status-success: #4fca82;
+  --ui-status-success-surface: #142e20;
+  --ui-status-info: #68a9ff;
+  --ui-status-info-surface: #14263d;
+  --ui-border-subtle: #23252a;
+  --ui-border-default: #34343a;
+  --ui-border-strong: #4a4b53;
+  --ui-control-background: #202023;
+  --ui-shadow-low: 0 1px 0 rgb(255 255 255 / 4%), 0 8px 28px rgb(0 0 0 / 30%);
+  --ui-shadow-medium: 0 14px 42px rgb(0 0 0 / 46%);
+  --ui-shadow-high: 0 22px 72px rgb(0 0 0 / 62%);
+}
+
+:root[data-app-theme="studio"] {
+  color-scheme: light;
+  --ui-surface-canvas: #edf0f6;
+  --ui-surface-panel: #f8f9fc;
+  --ui-surface-raised: #ffffff;
+  --ui-surface-inset: #dfe4ee;
+  --ui-text-primary: #171923;
+  --ui-text-secondary: #454c5e;
+  --ui-text-tertiary: #626b7e;
+  --ui-text-disabled: #81899a;
+  --ui-brand: #5c4db3;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #3d64b8;
+  --ui-on-selection: #ffffff;
+  --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
+  --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
+  --ui-interactive-selected-border: color-mix(in oklab, var(--ui-brand) 56%, var(--ui-border-default));
+  --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
+  --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
+  --ui-backdrop: rgb(16 18 17 / 44%);
+  --ui-focus-ring: #3d64b8;
+  --ui-status-danger: #b52f43;
+  --ui-status-danger-surface: #f9e3e8;
+  --ui-status-warning: #895900;
+  --ui-status-warning-surface: #f7ead1;
+  --ui-status-success: #247147;
+  --ui-status-success-surface: #dcefe5;
+  --ui-status-info: #2f64b5;
+  --ui-status-info-surface: #dfe9fa;
+  --ui-border-subtle: #d5dae4;
+  --ui-border-default: #c1c8d5;
+  --ui-border-strong: #9ea7b7;
+  --ui-control-background: #ffffff;
+  --ui-shadow-low: 0 1px 1px rgb(29 37 54 / 8%), 0 4px 12px rgb(29 37 54 / 7%);
+  --ui-shadow-medium: 0 10px 32px rgb(29 37 54 / 15%);
+  --ui-shadow-high: 0 20px 60px rgb(29 37 54 / 22%);
+}
+
+/* Accent is independent from surface theme. Light and dark ramps preserve contrast. */
+:root[data-app-theme="paper"][data-app-accent="violet"],
+:root[data-app-theme="studio"][data-app-accent="violet"] {
+  --ui-brand: #6254c7;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #5267ca;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #6254c7;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="violet"],
+:root[data-app-theme="midnight"][data-app-accent="violet"] {
+  --ui-brand: #9992ff;
+  --ui-on-brand: #111217;
+  --ui-selection: #8e94ff;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #a6a0ff;
+}
+
+:root[data-app-theme="paper"][data-app-accent="blue"],
+:root[data-app-theme="studio"][data-app-accent="blue"] {
+  --ui-brand: #2563eb;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #1d4ed8;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #2563eb;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="blue"],
+:root[data-app-theme="midnight"][data-app-accent="blue"] {
+  --ui-brand: #70a5ff;
+  --ui-on-brand: #111217;
+  --ui-selection: #5b8ff5;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #8bb4ff;
+}
+
+:root[data-app-theme="paper"][data-app-accent="cyan"],
+:root[data-app-theme="studio"][data-app-accent="cyan"] {
+  --ui-brand: #087f8c;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #0f7280;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #087f8c;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="cyan"],
+:root[data-app-theme="midnight"][data-app-accent="cyan"] {
+  --ui-brand: #5cc8d7;
+  --ui-on-brand: #111217;
+  --ui-selection: #43b7c8;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #75d4df;
+}
+
+:root[data-app-theme="paper"][data-app-accent="green"],
+:root[data-app-theme="studio"][data-app-accent="green"] {
+  --ui-brand: #198754;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #147647;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #198754;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="green"],
+:root[data-app-theme="midnight"][data-app-accent="green"] {
+  --ui-brand: #62c68a;
+  --ui-on-brand: #111217;
+  --ui-selection: #49b974;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #78d19b;
+}
+
+:root[data-app-theme="paper"][data-app-accent="orange"],
+:root[data-app-theme="studio"][data-app-accent="orange"] {
+  --ui-brand: #c45116;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #ad4411;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #c45116;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="orange"],
+:root[data-app-theme="midnight"][data-app-accent="orange"] {
+  --ui-brand: #f2a65a;
+  --ui-on-brand: #111217;
+  --ui-selection: #e69545;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #f7b773;
+}
+
+:root[data-app-theme="paper"][data-app-accent="rose"],
+:root[data-app-theme="studio"][data-app-accent="rose"] {
+  --ui-brand: #be3f6b;
+  --ui-on-brand: #ffffff;
+  --ui-selection: #a9335b;
+  --ui-on-selection: #ffffff;
+  --ui-focus-ring: #be3f6b;
+}
+
+:root[data-app-theme="graphite"][data-app-accent="rose"],
+:root[data-app-theme="midnight"][data-app-accent="rose"] {
+  --ui-brand: #f08aac;
+  --ui-on-brand: #111217;
+  --ui-selection: #df7398;
+  --ui-on-selection: #111217;
+  --ui-focus-ring: #f49fba;
+}
+
+/* This file is loaded after the chosen preset, so accessibility wins the cascade. */
+:root[data-high-contrast="true"] {
+  --ui-text-tertiary: var(--ui-text-secondary);
+  --ui-text-disabled: var(--ui-text-tertiary);
+  --ui-border-subtle: var(--ui-border-default);
+  --ui-border-default: var(--ui-border-strong);
+  --ui-focus-ring-width: 3px;
+}
+
+@media (prefers-contrast: more) {
+  :root:not([data-high-contrast="false"]) {
+    --ui-text-tertiary: var(--ui-text-secondary);
+    --ui-text-disabled: var(--ui-text-tertiary);
+    --ui-border-subtle: var(--ui-border-default);
+    --ui-border-default: var(--ui-border-strong);
+    --ui-focus-ring-width: 3px;
+  }
+}

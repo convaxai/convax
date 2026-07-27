@@ -3,10 +3,14 @@ import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import { isTransientDebuggerEvaluationError } from "./debugger-evaluation-error"
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..")
 const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
-const timeoutMs = 25_000
+// This smoke runs after the complete monorepo test/build workload. Give Electron
+// and animation-driven viewport state enough time to quiesce on a saturated CI
+// host; every wait below still requires the exact observable state.
+const timeoutMs = 45_000
 const evaluationTimeoutMs = timeoutMs * 2 + 10_000
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
@@ -141,12 +145,7 @@ async function evaluateStable(webSocketUrl: string, expression: string) {
     try {
       return await evaluate(webSocketUrl, expression)
     } catch (error) {
-      const message = String(error)
-      if (
-        (!message.includes("Execution context was destroyed") &&
-          !message.includes("Inspected target navigated or closed")) ||
-        Date.now() >= deadline
-      ) {
+      if (!isTransientDebuggerEvaluationError(error) || Date.now() >= deadline) {
         throw error
       }
       await Bun.sleep(100)
@@ -279,6 +278,9 @@ try {
     }
     const buttonWithText = (text) => [...document.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === text)
+    const buttonWithAnyText = (...texts) => texts
+      .map((text) => buttonWithText(text))
+      .find(Boolean)
     const buttonContainingText = (text) => [...document.querySelectorAll("button")]
       .find((button) => button.textContent?.includes(text))
     const preloadDeadline = Date.now() + ${timeoutMs}
@@ -287,8 +289,8 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
     const initialSurface = await waitFor(
-      () => buttonWithText("Open project") || document.querySelector(".convax-canvas"),
-      "the empty or restored Project surface",
+      () => document.querySelector('[data-project-home="true"]') || document.querySelector(".convax-canvas"),
+      "Project Home or the restored Canvas",
     )
     const projectAlreadyOpen = initialSurface instanceof Element
       && initialSurface.classList.contains("convax-canvas")
@@ -296,10 +298,29 @@ try {
       throw new Error("The empty Project surface exposed global capabilities")
     }
     if (!projectAlreadyOpen) {
-      const openProject = await waitFor(() => buttonWithText("Open project"), "the Open project action")
-      openProject.click()
+      const enterProject = await waitFor(
+        () => buttonWithAnyText("Continue", "继续", "Open project", "打开项目"),
+        "the Project Home enter action",
+      )
+      enterProject.click()
     }
-    const canvasElement = await waitFor(() => document.querySelector(".convax-canvas"), "the active Canvas")
+    const canvasElement = await waitFor(
+      () => document.querySelector(".convax-canvas"),
+      "the active Canvas",
+    ).catch((error) => {
+      const home = document.querySelector('[data-project-home="true"]')
+      const alert = home?.querySelector('[role="alert"]')?.textContent?.trim()
+      const buttons = [...(home?.querySelectorAll("button") ?? [])]
+        .map((button) => ({
+          disabled: button.disabled,
+          text: button.textContent?.trim(),
+        }))
+      throw new Error(
+        String(error)
+          + "; Project Home state: "
+          + JSON.stringify({ alert, buttons, text: home?.textContent?.trim().slice(0, 500) }),
+      )
+    })
     await waitFor(() => !document.body.textContent?.includes("Loading canvas"), "Canvas hydration")
 
     const projects = await window.convax.projects.listProjects()
@@ -700,14 +721,9 @@ try {
       await new Promise(() => {})
     }
 
-    const applicationMenu = await waitFor(
-      () => document.querySelector('button[aria-label="Open application menu"], button[aria-label="打开应用菜单"]'),
-      "the local workspace application menu",
-    )
-    applicationMenu.click()
     const settingsAction = await waitFor(
-      () => buttonContainingText("Settings") || buttonContainingText("设置"),
-      "the Settings action",
+      () => document.querySelector('button[aria-label="Open Settings"], button[aria-label="打开设置"]'),
+      "the application-titlebar Settings action",
     )
     settingsAction.click()
     const settingsView = await waitFor(
@@ -859,13 +875,26 @@ try {
     `(async () => {
       const deadline = Date.now() + ${timeoutMs}
       let composer
+      let requestedAgent = false
       while (Date.now() < deadline) {
-        composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+        composer = [...document.querySelectorAll('[contenteditable="true"][aria-label="Message the project agent"]')]
+          .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
         if (composer) break
+        if (!requestedAgent) {
+          const openAgent = document.querySelector(
+            'button[aria-label^="Open agent"], button[aria-label^="打开 Agent"]',
+          )
+          if (openAgent) {
+            openAgent.click()
+            requestedAgent = true
+          }
+        }
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
       if (!composer) {
-        const openAgent = document.querySelector('button[aria-label="Open agent"]')
+        const openAgent = document.querySelector(
+          'button[aria-label^="Open agent"], button[aria-label^="打开 Agent"]',
+        )
         const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
         const alerts = [...document.querySelectorAll('[role="alert"]')]
           .map((alert) => alert.textContent?.trim())
@@ -903,7 +932,8 @@ try {
         if (picker) break
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+      const composer = [...document.querySelectorAll('[contenteditable="true"][aria-label="Message the project agent"]')]
+        .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
       if (!composer || !picker) throw new Error("Real @ input did not open the Agent composer picker")
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const composerBounds = composer.getBoundingClientRect()

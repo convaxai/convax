@@ -1,6 +1,6 @@
 import type { AgentMessage, AgentMessagePart, AgentToolState } from "@convax/agent-runtime"
 import { describe, expect, test } from "bun:test"
-import { buildAgentConversationTurns } from "./agent-conversation-presentation"
+import { agentConversationTurnHasFailure, buildAgentConversationTurns } from "./agent-conversation-presentation"
 
 function message(id: string, role: AgentMessage["role"], parts: AgentMessagePart[] = [], error?: string): AgentMessage {
   return {
@@ -116,6 +116,24 @@ describe("Agent conversation presentation", () => {
     expect(turn?.delivery?.message).toBe(delivered)
     expect(turn?.errors).toEqual([{ message: errored, text: "Transient failure" }])
     expect(turn?.activity[0]?.message).toBe(errored)
+    expect(turn && agentConversationTurnHasFailure(turn)).toBeTrue()
+  })
+
+  test("uses structured errors and tool outcomes for failure status", () => {
+    const [successful] = buildAgentConversationTurns([
+      message("user-1", "user", [text("user-text", "Run it")]),
+      message("assistant-1", "assistant", [
+        tool("success", { input: {}, output: "ok", status: "completed", title: "Success" }),
+        text("final-text", "Done"),
+      ]),
+    ])
+    const [failed] = buildAgentConversationTurns([
+      message("user-2", "user", [text("user-text-2", "Run it")]),
+      message("assistant-2", "assistant", [tool("failure", { error: "failed", input: {}, status: "error" })]),
+    ])
+
+    expect(successful && agentConversationTurnHasFailure(successful)).toBeFalse()
+    expect(failed && agentConversationTurnHasFailure(failed)).toBeTrue()
   })
 
   test("summarizes pending, running, successful, and failed tools", () => {

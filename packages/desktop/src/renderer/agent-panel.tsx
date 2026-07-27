@@ -29,7 +29,6 @@ import {
   ExternalLink,
   FileText,
   Folder,
-  History,
   LoaderCircle,
   MessageSquare,
   PanelsTopLeft,
@@ -50,6 +49,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react"
 import { isAgentCanvasResource, shouldFlushAgentCanvasContext } from "../agent-canvas-context"
 import { AgentGenerationModelPicker, type AgentModelPickerTab } from "./agent-generation-model-picker"
@@ -62,6 +62,7 @@ import {
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
 import {
+  type AgentCompactStatus,
   agentSessionContentKey,
   AgentSessionStateRequestTracker,
   agentResourceKey,
@@ -74,6 +75,7 @@ import {
   forgetStaleEmbeddedConversation,
   isAgentScrollNearBottom,
   mergeAgentResources,
+  resolveAgentCompactStatus,
   selectAgentSessionAfterRefresh,
 } from "./agent-panel-state"
 import {
@@ -131,8 +133,14 @@ import {
 import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { findAgentLlmModel, reconcileAgentLlmModelSelection, type AgentLlmModelSelection } from "./agent-llm-models"
-import { buildAgentConversationTurns, type AgentConversationTurn } from "./agent-conversation-presentation"
+import {
+  agentConversationTurnHasFailure,
+  buildAgentConversationTurns,
+  type AgentConversationTurn,
+} from "./agent-conversation-presentation"
 import { getAgentToolPresentation } from "./agent-tool-presentation"
+import { AgentActivitySummary } from "./agent-activity-summary"
+import { AgentDrawerHeader, AgentDrawerTrigger } from "./agent-drawer-header"
 
 const resourceDragType = "application/x-convax-agent-resource"
 
@@ -196,6 +204,7 @@ export interface AgentPanelLayout {
   onOpenChange(open: boolean): void
   onResizeKeyDown(event: React.KeyboardEvent<HTMLDivElement>): void
   onResizeStart(event: React.PointerEvent<HTMLDivElement>): void
+  resizable?: boolean
   resizing: boolean
   width: number
 }
@@ -205,16 +214,28 @@ export interface AgentPanelProps {
   beforePrompt?: () => Promise<void>
   canvases: ProjectCanvas[]
   className?: string
+  /** Set false when the workspace shell renders AgentDrawerTrigger itself. */
+  collapsedEntry?: boolean
   contextResources?: readonly AgentResource[]
   conversationKey?: string
   embedded?: boolean
   embeddedHeader?: boolean
   generationCatalogVersion?: string
+  /** Render as content inside Desktop's persistent utility drawer region. */
+  hosted?: boolean
   onSessionDisplayed?: (input: PetDisplayedSession) => void
+  onStatusChange?: (status: AgentCompactStatus) => void
   layout?: AgentPanelLayout
   onOpenSkillDetails?: (name: string) => boolean | Promise<boolean>
+  /**
+   * Supplied only by a future revision-safe review owner. Ordinary completed
+   * Agent output is not pending Canvas change.
+   */
+  pendingChanges?: boolean
   projectId?: string
   projectName?: string
+  utilityCloseLabel?: string
+  utilityNavigation?: ReactNode
 }
 
 export interface AgentPanelHandle {
@@ -238,6 +259,7 @@ export async function routeAgentSkillOpen(
 
 export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function AgentPanel(props, ref) {
   const embedded = props.embedded === true
+  const hosted = !embedded && props.hosted === true
   const compactEmbeddedChrome = embedded && props.embeddedHeader === false
   const sharedGenerationPreference = useAgentGenerationPreference()
   const sharedGenerationSelection = sharedGenerationPreference?.selection
@@ -252,7 +274,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     embedded ? (props.conversationKey ?? null) : null,
   ])
   const contextResources = mergeAgentResources(props.contextResources ?? [])
-  const open = embedded || props.layout?.open === true
+  const open = hosted || embedded || props.layout?.open === true
   const [historyVisible, setHistoryVisible] = useState(false)
   const [suggestion, setSuggestion] = useState<AgentComposerSuggestionState>({ open: false })
   const [suggestionQuery, setSuggestionQuery] = useState("")
@@ -1192,11 +1214,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     async (name: string) => {
       if (!props.projectId) return
       try {
-        await routeAgentSkillOpen(
-          name,
-          props.projectId,
-          props.onOpenSkillDetails,
-          (input) => window.convax.agent.skills.openSkill(input),
+        await routeAgentSkillOpen(name, props.projectId, props.onOpenSkillDetails, (input) =>
+          window.convax.agent.skills.openSkill(input),
         )
       } catch (cause) {
         if (mountedRef.current) setError(errorMessage(cause))
@@ -1252,10 +1271,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         if (props.projectId !== input.scopeId) return
         setSessionPrompting(input.sessionId, false)
         if (activeSessionIdRef.current === input.sessionId) {
-          void Promise.all([
-            refreshSessionState(input.sessionId),
-            refreshSessions(input.sessionId),
-          ]).catch((cause) => {
+          void Promise.all([refreshSessionState(input.sessionId), refreshSessions(input.sessionId)]).catch((cause) => {
             if (
               mountedRef.current &&
               activeProjectRef.current === input.scopeId &&
@@ -1280,10 +1296,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         sessionProjectRef.current = input.scopeId
         sessionScopeRef.current = conversationScope
         restoredSessionRef.current = undefined
-        setSessions((current) => [
-          input.session,
-          ...current.filter((session) => session.id !== input.session.id),
-        ])
+        setSessions((current) => [input.session, ...current.filter((session) => session.id !== input.session.id)])
         selectSession(input.session.id)
         setSessionState(undefined)
         setHistoryVisible(false)
@@ -1687,6 +1700,32 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     () => buildAgentConversationTurns(sessionState?.messages ?? []),
     [sessionState?.messages],
   )
+  const latestConversationTurn = conversationTurns.at(-1)
+  const compactStatus = useMemo(
+    () =>
+      resolveAgentCompactStatus({
+        failed: Boolean(error || (latestConversationTurn && agentConversationTurnHasFailure(latestConversationTurn))),
+        interaction: sessionState?.pendingPermissions.length
+          ? "permission"
+          : sessionState?.pendingQuestions.length
+            ? "question"
+            : undefined,
+        pendingChanges: props.pendingChanges,
+        working: runtimeBusy,
+      }),
+    [
+      error,
+      latestConversationTurn,
+      props.pendingChanges,
+      runtimeBusy,
+      sessionState?.pendingPermissions.length,
+      sessionState?.pendingQuestions.length,
+    ],
+  )
+  useEffect(
+    () => props.onStatusChange?.(compactStatus),
+    [compactStatus.detail, compactStatus.kind, compactStatus.label, props.onStatusChange],
+  )
   const failedSubmission = failedSubmissions[0]
   const failedConversationTitle = failedSubmission
     ? sessions.find((session) => session.id === failedSubmission.sessionId)?.title || "another conversation"
@@ -1697,46 +1736,41 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   if (!props.projectId) return null
 
   if (!embedded && !open) {
+    if (props.collapsedEntry === false) return null
     return (
       <TooltipProvider>
         <aside
-          className="relative z-40 flex shrink-0 flex-col items-center overflow-hidden border-l border-border bg-card py-2 transition-[width] duration-200 ease-out motion-reduce:transition-none max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0"
-          style={{ width: props.layout?.collapsedWidth }}
+          aria-label="Agent status"
+          className="pointer-events-none absolute right-3 top-3 z-40"
+          data-agent-drawer-collapsed
         >
-          <Tooltip content="Open agent">
-            <Button
-              aria-label="Open agent"
-              onClick={() => props.layout?.onOpenChange(true)}
-              size="icon-sm"
-              variant="ghost"
-            >
-              <Bot />
-            </Button>
-          </Tooltip>
-          <div className="mt-2 h-px w-5 bg-border" />
-          <span className="mt-3 [writing-mode:vertical-rl] text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Agent
-          </span>
+          <AgentDrawerTrigger onOpen={() => props.layout?.onOpenChange(true)} status={compactStatus} />
         </aside>
       </TooltipProvider>
     )
   }
 
+  const PanelRoot = hosted ? "div" : "aside"
+
   return (
     <TooltipProvider>
-      <aside
+      <PanelRoot
         className={cn(
-          embedded
+          hosted
+            ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-surface-panel text-text-primary"
+            : embedded
             ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-card text-card-foreground"
             : "relative z-40 flex shrink-0 flex-col overflow-hidden border-l border-border bg-card text-card-foreground max-[1040px]:absolute max-[1040px]:inset-y-0 max-[1040px]:right-0 max-[1040px]:shadow-2xl",
           !embedded &&
+            !hosted &&
             !props.layout?.resizing &&
             "transition-[width] duration-200 ease-out motion-reduce:transition-none",
           props.className,
         )}
-        style={embedded ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
+        data-agent-panel-hosted={hosted || undefined}
+        style={embedded || hosted ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
       >
-        {!embedded ? (
+        {!embedded && !hosted && props.layout?.resizable !== false ? (
           <div
             aria-label="Resize agent panel"
             aria-orientation="vertical"
@@ -1751,52 +1785,19 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           />
         ) : null}
         {!compactEmbeddedChrome ? (
-          <header
-            className={cn("flex shrink-0 items-center gap-1 border-b border-border px-2", embedded ? "h-9" : "h-11")}
-          >
-            <Bot className="ml-1 size-4 text-primary" />
-            <span className={cn("min-w-0 flex-1 truncate font-semibold", embedded ? "text-xs" : "text-sm")}>
-              {embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}
-            </span>
-            {capabilities ? (
-              <span className="mr-1 text-[10px] text-muted-foreground">{capabilities.toolIds.length} tools</span>
-            ) : null}
-            {!embedded ? (
-              <Tooltip content="Conversation history">
-                <Button
-                  aria-label="Conversation history"
-                  onClick={() => setHistoryVisible((value) => !value)}
-                  size="icon-sm"
-                  variant={historyVisible ? "secondary" : "ghost"}
-                >
-                  <History />
-                </Button>
-              </Tooltip>
-            ) : null}
-            <Tooltip content={embedded ? "Restart conversation for this context" : "New conversation"}>
-              <Button
-                aria-label={embedded ? "Restart embedded conversation" : "New conversation"}
-                disabled={!props.projectId || creatingSession}
-                onClick={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <Plus />
-              </Button>
-            </Tooltip>
-            {!embedded ? (
-              <Tooltip content="Close agent">
-                <Button
-                  aria-label="Close agent"
-                  onClick={() => props.layout?.onOpenChange(false)}
-                  size="icon-sm"
-                  variant="ghost"
-                >
-                  <ChevronRight />
-                </Button>
-              </Tooltip>
-            ) : null}
-          </header>
+          <AgentDrawerHeader
+            closeLabel={props.utilityCloseLabel}
+            createDisabled={!props.projectId || creatingSession}
+            historyVisible={historyVisible}
+            onClose={embedded || hosted ? undefined : () => props.layout?.onOpenChange(false)}
+            onCreate={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
+            onHistory={embedded ? undefined : () => setHistoryVisible((value) => !value)}
+            restart={embedded}
+            status={compactStatus}
+            title={embedded ? "Agent" : props.projectName ? `${props.projectName} Agent` : "Agent"}
+            toolCount={capabilities?.toolIds.length}
+            utilityNavigation={hosted ? props.utilityNavigation : undefined}
+          />
         ) : null}
 
         {!embedded && historyVisible ? (
@@ -1906,7 +1907,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               </div>
               {!followingLatest ? (
                 <button
-                  className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border border-border/70 bg-card px-2.5 py-1 text-[10px] text-muted-foreground shadow-md hover:text-foreground"
+                  className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-surface-raised px-2.5 py-1 text-[10px] text-muted-foreground shadow-[var(--ui-shadow-low)] transition-[color,transform] hover:text-foreground active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                   onClick={() => {
                     stickToBottomRef.current = true
                     setFollowingLatest(true)
@@ -1939,7 +1940,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               )}
             >
               {failedSubmission ? (
-                <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-800 dark:text-amber-300">
+                <div className="mb-2 flex items-start gap-2 rounded-md border-l-2 border-status-warning bg-status-warning-surface px-2.5 py-2 text-xs text-status-warning">
                   <span className="min-w-0 flex-1">
                     A message in {failedConversationTitle} failed: {failedSubmission.message}
                     {failedSubmissions.length > 1 ? ` · ${failedSubmissions.length - 1} more` : ""}
@@ -1972,7 +1973,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 </div>
               ) : null}
               {error ? (
-                <div className="mb-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
+                <div className="mb-2 flex items-start gap-2 rounded-md border-l-2 border-status-danger bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger">
                   <span className="min-w-0 flex-1">{error}</span>
                   <button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button">
                     <X className="size-3.5" />
@@ -2046,8 +2047,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   className={cn(
                     compactEmbeddedChrome
                       ? "bg-transparent py-2.5"
-                      : "rounded-2xl border border-border/60 bg-card p-2.5 shadow-lg shadow-black/5 transition-[border-color,box-shadow] focus-within:border-ring/60 focus-within:shadow-xl focus-within:shadow-black/[0.07]",
-                    dropActive && "rounded-2xl border border-primary bg-primary/5 ring-2 ring-primary/15",
+                      : "rounded-xl bg-surface-raised p-2.5 shadow-[var(--ui-shadow-low)] transition-[background-color,box-shadow] focus-within:shadow-[var(--ui-shadow-medium)]",
+                    dropActive && "rounded-xl bg-primary/5 ring-2 ring-primary/40",
                   )}
                   data-agent-composer-surface={compactEmbeddedChrome ? "flat" : "framed"}
                   onDragEnter={(event) => {
@@ -2359,7 +2360,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
             </div>
           </>
         )}
-      </aside>
+      </PanelRoot>
     </TooltipProvider>
   )
 })
@@ -2434,19 +2435,20 @@ export function ConversationTurnView(props: {
     <section className="space-y-3">
       {props.turn.user ? <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.user} user /> : null}
       {props.turn.activity.length ? (
-        <AgentActivity
-          awaitingInput={props.awaitingInput}
-          busy={props.busy}
-          onOpenSkill={props.onOpenSkill}
-          turn={props.turn}
-        />
+        <AgentActivitySummary awaitingInput={props.awaitingInput} busy={props.busy} turn={props.turn}>
+          {props.turn.activity.flatMap((slice) =>
+            slice.parts.map((part) => (
+              <MessagePartView key={`${slice.message.id}:${part.id}`} onOpenSkill={props.onOpenSkill} part={part} />
+            )),
+          )}
+        </AgentActivitySummary>
       ) : null}
       {props.turn.delivery && !props.busy ? (
         <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.delivery} />
       ) : null}
       {props.turn.errors.map((entry) => (
         <div
-          className="rounded-md border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive"
+          className="rounded-md border-l-2 border-status-danger bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger"
           key={`${entry.message.id}:${entry.text}`}
         >
           {entry.text}
@@ -2454,52 +2456,6 @@ export function ConversationTurnView(props: {
       ))}
     </section>
   )
-}
-
-export function formatAgentActivityDuration(durationMs: number | undefined) {
-  if (durationMs === undefined || !Number.isFinite(durationMs) || durationMs < 0) return undefined
-  if (durationMs < 1_000) return "<1s"
-  const totalSeconds = Math.max(1, Math.round(durationMs / 1_000))
-  const hours = Math.floor(totalSeconds / 3_600)
-  const minutes = Math.floor((totalSeconds % 3_600) / 60)
-  const seconds = totalSeconds % 60
-  return [
-    hours ? `${hours}h` : undefined,
-    minutes ? `${minutes}m` : undefined,
-    seconds || (!hours && !minutes) ? `${seconds}s` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ")
-}
-
-function agentActivityDescription(turn: AgentConversationTurn) {
-  const reasoning = turn.activity.some((slice) => slice.parts.some((part) => part.type === "reasoning"))
-  const tools = turn.tools.count
-  if (reasoning && tools > 1) return `Thought and ran ${tools} tool calls`
-  if (reasoning && tools === 1) return "Thought and ran a tool call"
-  if (reasoning) return "Thought through the task"
-  if (tools > 1) return `Ran ${tools} tool calls`
-  if (tools === 1) return "Ran a tool call"
-  return "Agent activity"
-}
-
-function agentActivitySummary(
-  turn: AgentConversationTurn,
-  options: { awaitingInput: boolean; busy: boolean; open: boolean },
-) {
-  if (options.awaitingInput) return "Waiting for your response"
-  if (options.busy && !options.open) return "Working"
-  if (options.open) return agentActivityDescription(turn)
-  if (turn.interrupted) {
-    return turn.tools.failed
-      ? `Interrupted · ${turn.tools.failed} failed tool ${turn.tools.failed === 1 ? "call" : "calls"}`
-      : "Interrupted"
-  }
-  if (turn.tools.failed) {
-    return `Completed with errors · ${turn.tools.failed} failed tool ${turn.tools.failed === 1 ? "call" : "calls"}`
-  }
-  const duration = formatAgentActivityDuration(turn.durationMs)
-  return duration ? `Worked for ${duration}` : "Worked"
 }
 
 function MessageSliceView(props: {
@@ -2526,72 +2482,6 @@ function MessageSliceView(props: {
         ))}
       </div>
     </article>
-  )
-}
-
-export function AgentActivity(props: {
-  awaitingInput?: boolean
-  busy: boolean
-  onOpenSkill: (name: string) => Promise<void>
-  turn: AgentConversationTurn
-}) {
-  const active = props.busy || Boolean(props.awaitingInput)
-  const [open, setOpen] = useState(active)
-  const wasActiveRef = useRef(active)
-  useEffect(() => {
-    if (active !== wasActiveRef.current) setOpen(active)
-    wasActiveRef.current = active
-  }, [active])
-  const expanded = open
-  const label = agentActivitySummary(props.turn, {
-    awaitingInput: Boolean(props.awaitingInput),
-    busy: props.busy,
-    open: expanded,
-  })
-  const hasTool = props.turn.tools.count > 0
-  const hasReadActivity = props.turn.activity.some((slice) =>
-    slice.parts.some(
-      (part) => part.type === "reasoning" || (part.type === "tool" && agentToolLooksLikeRead(part)),
-    ),
-  )
-  const ActivityIcon = hasReadActivity || !hasTool ? BookOpen : SquareTerminal
-  return (
-    <section
-      className={cn("text-xs", !expanded && "border-b border-border/60 pb-2")}
-      data-agent-activity
-    >
-      <button
-        aria-expanded={expanded}
-        className="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-left text-muted-foreground outline-none hover:bg-muted/45 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/30"
-        onClick={() => setOpen((current) => !current)}
-        type="button"
-      >
-        {props.busy ? (
-          <LoaderCircle className="size-3.5 animate-spin text-primary motion-reduce:animate-none" />
-        ) : props.awaitingInput || props.turn.interrupted ? (
-          <ShieldAlert className="size-3.5 text-amber-600" />
-        ) : props.turn.tools.outcome === "failure" ? (
-          <X className="size-3.5 text-destructive" />
-        ) : (
-          <ActivityIcon className="size-3.5" />
-        )}
-        <span className="min-w-0 truncate">{label}</span>
-        {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-      </button>
-      {expanded ? (
-        <div className="mt-1 space-y-0.5 text-muted-foreground" data-agent-activity-content>
-          {props.turn.activity.flatMap((slice) =>
-            slice.parts.map((part) => (
-              <MessagePartView
-                key={`${slice.message.id}:${part.id}`}
-                onOpenSkill={props.onOpenSkill}
-                part={part}
-              />
-            )),
-          )}
-        </div>
-      ) : null}
-    </section>
   )
 }
 
@@ -2633,7 +2523,7 @@ export function MessagePartView({
     )
   if (part.type === "file")
     return (
-      <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+      <div className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-surface-inset px-2 py-1 text-xs">
         <FileText className="size-3.5" />
         <span className="truncate">{part.filename ?? "File"}</span>
       </div>
@@ -2697,7 +2587,7 @@ function ResourceChip(props: { locked?: boolean; onRemove?: () => void; resource
       <FileText />
     )
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-muted/60 px-1.5 py-1 text-[11px]">
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-surface-inset px-1.5 py-1 text-[11px]">
       <span className="text-primary [&_svg]:size-3">{icon}</span>
       <span className="max-w-40 truncate">{resourceLabel(props.resource)}</span>
       {props.locked ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">context</span> : null}
@@ -2733,9 +2623,9 @@ function PermissionCard(props: {
     }
   }
   return (
-    <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+    <div className="mt-3 rounded-lg border-l-2 border-status-warning bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]">
       <div className="flex items-center gap-2 font-medium">
-        <ShieldAlert className="size-4 text-amber-600" />
+        <ShieldAlert className="size-4 text-status-warning" />
         Permission required
       </div>
       <div className="mt-2 text-muted-foreground">
@@ -2747,7 +2637,7 @@ function PermissionCard(props: {
         </div>
       ) : null}
       {props.request.always.length ? (
-        <div className="mt-2 rounded border border-amber-500/20 bg-background/70 p-2 text-[10px] text-muted-foreground">
+        <div className="mt-2 rounded-md bg-surface-inset p-2 text-[10px] text-muted-foreground">
           <span className="font-semibold text-foreground">Always allow scope: </span>
           <span className="break-all font-mono">{props.request.always.join(", ")}</span>
         </div>
@@ -2822,9 +2712,9 @@ function QuestionCard(props: {
     }
   }
   return (
-    <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3 text-xs">
+    <div className="mt-3 rounded-lg border-l-2 border-primary/70 bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]">
       {props.request.questions.map((question, index) => (
-        <div className={cn(index > 0 && "mt-3 border-t border-border pt-3")} key={`${props.request.id}:${index}`}>
+        <div className={cn(index > 0 && "mt-4 pt-1")} key={`${props.request.id}:${index}`}>
           <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">{question.header}</div>
           <div className="mt-1 font-medium">{question.question}</div>
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -2833,8 +2723,8 @@ function QuestionCard(props: {
               return (
                 <button
                   className={cn(
-                    "rounded-md border border-border bg-background px-2 py-1.5 text-left hover:bg-muted",
-                    selected && "border-primary bg-accent text-accent-foreground",
+                    "rounded-md bg-surface-inset px-2 py-1.5 text-left outline-none transition-[background-color,color,transform] hover:bg-muted active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/40",
+                    selected && "bg-accent text-accent-foreground ring-1 ring-primary/45",
                   )}
                   key={option.label}
                   onClick={() => update(index, option.label, question.multiple)}
@@ -2848,7 +2738,7 @@ function QuestionCard(props: {
           </div>
           {question.custom ? (
             <input
-              className="mt-2 h-8 w-full rounded-md border border-input bg-background px-2 outline-none focus:border-ring"
+              className="mt-2 h-8 w-full rounded-md bg-surface-inset px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
               onChange={(event) => updateCustom(index, event.currentTarget.value, question.multiple)}
               placeholder="Type another answer"
               value={customAnswers[index] ?? ""}

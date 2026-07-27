@@ -4,6 +4,11 @@
 @import "@convax/ui/styles.css";
 
 @theme inline {
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+  --breakpoint-2xl: 96rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -28,40 +33,42 @@
 }
 
 :root {
-  --radius: 6px;
-  --background: #f7f8f7;
-  --foreground: #171a18;
-  --card: #ffffff;
-  --card-foreground: #171a18;
-  --popover: #ffffff;
-  --popover-foreground: #171a18;
-  --primary: #7657e8;
-  --primary-foreground: #ffffff;
-  --secondary: #e8eeeb;
-  --secondary-foreground: #24342d;
-  --muted: #edf0ee;
-  --muted-foreground: #68716c;
-  --accent: #efecfb;
-  --accent-foreground: #40346d;
-  --destructive: #c43d49;
-  --border: #d9ddda;
-  --input: #ccd2ce;
-  --ring: #7657e8;
+  --radius: var(--ui-radius-sm);
+  --background: var(--ui-surface-canvas);
+  --foreground: var(--ui-text-primary);
+  --card: var(--ui-surface-panel);
+  --card-foreground: var(--ui-text-primary);
+  --popover: var(--ui-surface-raised);
+  --popover-foreground: var(--ui-text-primary);
+  --primary: var(--ui-brand);
+  --primary-foreground: var(--ui-on-brand);
+  --secondary: var(--ui-surface-inset);
+  --secondary-foreground: var(--ui-text-primary);
+  --muted: var(--ui-surface-inset);
+  --muted-foreground: var(--ui-text-tertiary);
+  --accent: var(--ui-interactive-selected);
+  --accent-foreground: var(--ui-text-primary);
+  --destructive: var(--ui-status-danger);
+  --border: var(--ui-border-default);
+  --input: var(--ui-border-strong);
+  --ring: var(--ui-focus-ring);
   color: var(--foreground);
   background: var(--background);
-  font-family:
-    Inter,
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--ui-font-sans);
+  font-feature-settings: "cv01", "ss03";
+  font-variation-settings: "opsz" auto;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
+}
+
+.convax-settings-search__input {
+  padding-inline-start: 2.25rem;
 }
 
 html,
@@ -82,6 +89,14 @@ button,
 input,
 textarea {
   font: inherit;
+}
+
+.app-titlebar {
+  -webkit-app-region: drag;
+}
+
+.app-titlebar button {
+  -webkit-app-region: no-drag;
 }
 
 .media-trim-range {
@@ -190,7 +205,7 @@ textarea {
   border-radius: 4px;
   background: color-mix(in srgb, var(--muted) 82%, transparent);
   padding: 0.1rem 0.3rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--ui-font-mono);
   font-size: 0.88em;
 }
 

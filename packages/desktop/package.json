@@ -20,7 +20,7 @@
     "package:linux": "bun run package:prepare && electron-builder --config electron-builder.config.ts --linux",
     "smoke:packaged": "bun run package:dir && bun scripts/desktop-packaged-smoke.ts",
     "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
-    "test": "bun test --isolate",
+    "test": "bun scripts/desktop-test-suite.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

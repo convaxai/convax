@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ApplicationMenu, ApplicationMenuPanel } from "./application-menu"
+import { ApplicationMenu, ApplicationMenuPanel, resolveApplicationMenuPosition } from "./application-menu"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
 
 const services: ServiceCatalogSnapshot = {
@@ -45,6 +45,7 @@ describe("ApplicationMenu", () => {
     expect(markup).toContain("Skill &amp; Plugin")
     expect(markup).toContain("Services")
     expect(markup).toContain(">CX</span>")
+    expect(markup).toContain('data-ui-menu-surface=""')
     expect(markup).not.toContain("Log out")
     expect(markup).not.toContain("Account")
   })
@@ -54,6 +55,23 @@ describe("ApplicationMenu", () => {
 
     expect(markup).toContain("打开应用菜单")
     expect(markup).toContain("本地工作区")
+  })
+
+  test("places the compact workspace menu below top chrome and above bottom chrome", () => {
+    expect(
+      resolveApplicationMenuPosition(
+        { bottom: 60, left: 320, right: 368, top: 12 },
+        { height: 800, width: 1200 },
+        true,
+      ),
+    ).toEqual({ left: 376, top: 68 })
+    expect(
+      resolveApplicationMenuPosition(
+        { bottom: 788, left: 12, right: 60, top: 740 },
+        { height: 800, width: 1200 },
+        true,
+      ),
+    ).toEqual({ bottom: 12, left: 68 })
   })
 
   test("hides disabled build-time entries and their service summaries", () => {

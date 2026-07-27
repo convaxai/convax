@@ -598,6 +598,21 @@ try {
       const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
       const canvasId = catalog.canvases[0]?.id
       if (canvasId !== "canvas-main") throw new Error("The packaged Project did not expose canvas-main")
+      await waitFor(
+        () => document.querySelector('[data-project-home="true"]') || document.querySelector(".convax-canvas"),
+        "the packaged Home or Canvas",
+      )
+      if (document.querySelector('[data-project-home="true"]')) {
+        const projectEntry =
+          document.querySelector('[data-project-id="' + project.id + '"]') ??
+          [...document.querySelectorAll("button")].find((button) =>
+            ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
+          )
+        if (!(projectEntry instanceof HTMLElement)) {
+          throw new Error("The packaged Home did not expose the seeded Project")
+        }
+        projectEntry.click()
+      }
       await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")
       const jianyingStatus = await window.convax.jianying.getDraftStatus()
       if (![
@@ -709,8 +724,20 @@ try {
   const outerFrames = (await renderer.evaluate(
     `(async () => {
       const deadline = Date.now() + ${pluginTimeoutMs}
+      let projectEntryRequested = false
       while (Date.now() < deadline) {
         if (window.convax) {
+          if (!projectEntryRequested && document.querySelector('[data-project-home="true"]')) {
+            const projectEntry =
+              document.querySelector('[data-project-id="${seededProject.id}"]') ??
+              [...document.querySelectorAll("button")].find((button) =>
+                ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
+              )
+            if (projectEntry instanceof HTMLElement) {
+              projectEntryRequested = true
+              projectEntry.click()
+            }
+          }
           const expected = [
             ["jianying-editor", "JianYing Export plugin"],
           ]

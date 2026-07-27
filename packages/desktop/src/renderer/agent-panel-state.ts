@@ -11,6 +11,43 @@ export interface StorageLike {
   setItem(key: string, value: string): void
 }
 
+export type AgentCompactStatusKind = "failed" | "idle" | "needs-approval" | "pending-changes" | "working"
+
+export interface AgentCompactStatus {
+  detail?: string
+  kind: AgentCompactStatusKind
+  label: string
+}
+
+export interface AgentCompactStatusInput {
+  failed?: boolean
+  interaction?: "permission" | "question"
+  /**
+   * Reserved for a revision-safe review capability. A completed response alone
+   * must never be presented as pending changes.
+   */
+  pendingChanges?: boolean
+  working?: boolean
+}
+
+/**
+ * Produces the small, text-readable status used outside the drawer. Priority is
+ * intentionally actionable-first and does not inspect human-readable logs.
+ */
+export function resolveAgentCompactStatus(input: AgentCompactStatusInput): AgentCompactStatus {
+  if (input.interaction) {
+    return {
+      detail: input.interaction === "permission" ? "Permission required" : "Answer required",
+      kind: "needs-approval",
+      label: "Needs approval",
+    }
+  }
+  if (input.working) return { kind: "working", label: "Working" }
+  if (input.failed) return { kind: "failed", label: "Failed" }
+  if (input.pendingChanges) return { kind: "pending-changes", label: "Changes ready" }
+  return { kind: "idle", label: "Idle" }
+}
+
 interface StoredEmbeddedConversations {
   conversations: Record<string, string>
   sessionIds: string[]

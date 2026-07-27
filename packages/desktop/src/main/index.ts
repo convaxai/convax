@@ -40,6 +40,7 @@ import {
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from "electron"
+import { resolveMainWindowChrome } from "./main-window-chrome"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import {
@@ -85,6 +86,7 @@ import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
 import { desktopBuiltinSkillPresentations } from "./builtin-skill-presentations"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
+import { registerWorkspaceSystemStatusIpc } from "./workspace-system-status-ipc"
 import {
   desktopDevelopmentCachePolicy,
   quarantineLegacyDevelopmentCaches,
@@ -211,6 +213,7 @@ function createWindow(
   const window = new BrowserWindow({
     title: applicationName,
     icon: appIcon,
+    ...resolveMainWindowChrome(process.platform),
     width: 1280,
     height: 820,
     minWidth: 720,
@@ -596,10 +599,7 @@ function startApplication() {
       const catalog = await projectCanvases.getCanvasCatalog({ projectId })
       for (const canvas of catalog.canvases) {
         try {
-          await generation.reconcileCanvas(
-            { canvasId: canvas.id, scopeId: projectId },
-            generationRecoveryActor,
-          )
+          await generation.reconcileCanvas({ canvasId: canvas.id, scopeId: projectId }, generationRecoveryActor)
         } catch (error) {
           logGenerationRecoveryFailure("Canvas reconciliation", error)
         }
@@ -615,9 +615,7 @@ function startApplication() {
     try {
       const projects = await projectManager.list()
       await Promise.all(
-        projects
-          .filter((project) => !project.missing)
-          .map((project) => reconcileProjectGenerationSafely(project.id)),
+        projects.filter((project) => !project.missing).map((project) => reconcileProjectGenerationSafely(project.id)),
       )
     } catch (error) {
       logGenerationRecoveryFailure("startup", error)
@@ -948,6 +946,7 @@ function startApplication() {
       petActivityNotifier.dispose()
     }
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
+    const disposeWorkspaceSystemStatusIpc = registerWorkspaceSystemStatusIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
       projectCreationDirectory,
@@ -1152,6 +1151,7 @@ function startApplication() {
         () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
         disposeDesktopProtocolIpc,
+        disposeWorkspaceSystemStatusIpc,
         disposeProjectIpc,
         disposeProjectCanvasIpc,
         disposeCanvasDocumentIpc,
