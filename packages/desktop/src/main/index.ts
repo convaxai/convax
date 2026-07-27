@@ -135,12 +135,6 @@ import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
 import { provisionDefaultCapabilities } from "./default-capability-provisioner"
 import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
-import { JianyingCanvasService } from "./jianying-canvas-service"
-import { createJianyingAgentToolProvider } from "./jianying-agent-tools"
-import { MacOSJianyingDeepLinkTransport } from "./jianying-deeplink"
-import { registerJianyingIpc } from "./jianying-ipc"
-import { createJianyingNativeAdapter, JianyingIntegrationService } from "./jianying-service"
-import { jianyingBuiltinPluginId, jianyingBuiltinPluginVersion } from "../jianying-contracts"
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
 import { FileRemoteArtifactCache, FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
@@ -503,24 +497,6 @@ function startApplication() {
     void canvasExternalMediaDrag.initialize().catch((error) => {
       console.warn("Could not initialize Canvas native drag media", error)
     })
-    const jianyingIntegration = new JianyingIntegrationService(
-      createJianyingNativeAdapter({
-        transport: new MacOSJianyingDeepLinkTransport(),
-      }),
-    )
-    const jianyingBuiltin = desktopBuiltinPluginCatalog.find((item) => item.manifest.id === jianyingBuiltinPluginId)
-    if (!jianyingBuiltin || jianyingBuiltin.manifest.version !== jianyingBuiltinPluginVersion) {
-      throw new Error("The built-in JianYing Plugin catalog entry does not match its host contract")
-    }
-    const isJianyingEnabled = () => pluginManager.isBuiltinBundleInstalled(jianyingBuiltin.bundle)
-    const jianying = new JianyingCanvasService({
-      assets: projectAssets,
-      documents: canvasDocuments,
-      integration: jianyingIntegration,
-      isEnabled: isJianyingEnabled,
-      media: managedCanvasMedia,
-      projects: projectManager,
-    })
     const ipcSecurity = {
       isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) =>
         trustedWebContents.has(event.sender.id) &&
@@ -698,19 +674,6 @@ function startApplication() {
         }),
         createGenerationAgentToolProvider(generation),
         createPluginOperationAgentToolProvider(generation, {
-          async resolveActiveCanvas() {
-            const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
-            return snapshot
-              ? {
-                  canvasId: snapshot.documentId,
-                  revision: snapshot.revision,
-                  scopeId: snapshot.scopeId,
-                }
-              : null
-          },
-        }),
-        createJianyingAgentToolProvider(jianying, {
-          isEnabled: async () => process.platform === "darwin" && (await isJianyingEnabled()),
           async resolveActiveCanvas() {
             const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
             return snapshot
@@ -1052,19 +1015,6 @@ function startApplication() {
       isTrustedSender: ipcSecurity.isTrustedSender,
       principals: pluginPrincipals,
     })
-    const disposeJianyingIpc = registerJianyingIpc(jianying, {
-      isTrustedSender: ipcSecurity.isTrustedSender,
-      async resolveActiveCanvas() {
-        const snapshot = await canvasRenderer.getViewSnapshot("desktop-main")
-        return snapshot
-          ? {
-              canvasId: snapshot.documentId,
-              revision: snapshot.revision,
-              scopeId: snapshot.scopeId,
-            }
-          : null
-      },
-    })
     const disposePluginManagementIpc = registerPluginManagementIpc(
       pluginManager,
       desktopBuiltinPluginCatalog,
@@ -1176,7 +1126,6 @@ function startApplication() {
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
-        disposeJianyingIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
         disposeAgentIpc,

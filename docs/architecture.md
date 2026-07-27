@@ -247,8 +247,6 @@ Packaged app Resources/
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
-~/Movies/JianyingPro/ConvaxImports/     macOS media staged for bounded JianYing transfer
-
 browser localStorage                    per-user Workbench/renderer preferences
 
 <project root>/
@@ -816,10 +814,10 @@ permissions, Canvas transactions, or Project scope.
 Canvas also exposes one explicit host-neutral selection action slot. It renders an
 action in an eligible single-node toolbar or the multi-selection toolbar against
 an immutable document/selection snapshot, isolates visibility failures, prevents
-duplicate execution, and aborts stale work. Desktop may use this slot for a concrete
-trusted integration such as JianYing. This is not a manifest
-function-call bridge: sandboxed Plugin frames cannot register or invoke selection
-actions, receive native paths, or select a native adapter by string.
+duplicate execution, and aborts stale work. Desktop maps only validated manifest
+selection-action declarations onto fixed host editors and generation operations.
+Sandboxed Plugin frames cannot register arbitrary callbacks, receive native paths,
+or select a native adapter by string.
 
 Third-party Web Plugin code is static HTML/JavaScript rendered in an iframe with exactly
 `sandbox="allow-scripts"`. It is never imported into the renderer bundle, loaded as
@@ -918,78 +916,22 @@ calls the shared Canvas resource business operation to place the image and conne
 it from the owning Plugin node. Any failed Canvas commit removes the newly admitted
 asset; renderer destruction, scope changes, and caller cancellation fail closed.
 
-### JianYing trusted built-in
+### Retired built-ins
 
-JianYing is a concrete trusted built-in integration, not a new Plugin RPC capability.
-Its static Plugin package participates in install/uninstall and companion-Skill
-lifecycle only; native detection, staging and Deep Link dispatch are compiled into
-Desktop main. Runtime enablement requires macOS and a byte-for-byte match with the
-catalog bundle's host-authored provenance. Ordinary imports cannot use the reserved
-id, author the provenance marker, or enable the native adapter by matching a
-version. Catalog installation presence remains separate from this trust decision: a
-valid legacy sandboxed Plugin is still shown as installed, but cannot enable native
-tools.
+Removing an id from the built-in catalog removes its host trust and default
+installation immediately. An older provenance-marked package may remain visible as
+an ordinary installed static Plugin so the user can update or uninstall it. Only an
+explicit update may replace that exact digest-verified retired package with a newer
+Registry package; the replacement drops the host-only provenance marker. Retired
+ids grant no native behavior, reserved routing, Agent tools, or preload namespace.
 
-This is legacy architecture debt, not a pattern for Plugin authors. Its package is
-currently only an install-state switch for code compiled into Desktop, so adding a
-second integration of this shape would require new core contracts, IPC, preload,
-Agent, renderer, and native service code. It must either be presented solely as an
-optional built-in integration or migrate its native behavior to a verified companion
-behind a generic external-operation contract. Do not add another identity-gated
-Plugin path or encode `jianying` as a nominal generic capability.
-
-Marker-free catalog installations from an older Convax build are claimed only after
-their complete canonical digest matches the current bundle or a compiled historical
-fingerprint. Missing packages remain missing, so this migration cannot undo a user
-uninstall.
-
-The Canvas toolbar action appears for one or more selected image/video nodes backed
-by valid typed Project-file or managed-asset references: single media uses its node
-toolbar and multiple media use the selection toolbar. Main reloads the live active
-Canvas, checks the expected revision and selected nodes,
-validates matching image/video MIME and regular contained files, and only then
-resolves native paths and stages copies. Remote-only media and other private
-`.convax` paths are ineligible. On an active draft the toolbar imports directly. If
-there is no active draft, Desktop first dispatches JianYing's force-create route and
-proves that a newly created directory became active before sending any media.
-Creating a new draft while another draft is open is an explicit macOS WIP and fails
-before native mutation; the Agent asks the user to return JianYing home, inspects
-again, and proceeds only from a no-active/not-running observation. Ambiguous or
-unsafe draft observations fail closed, and an unverified create never falls back to
-the previously active draft.
-
-Desktop does not drive JianYing UI and requires no Accessibility, Apple Events, JXA
-or `AXPress` access. New-draft export uses two ordered native Deep Links: force-create
-and verify, then the same current-draft material import used by toolbar export. For
-the duration of the material dispatch, main binds a media server to `127.0.0.1` on a
-random port. Each staged item is exposed only at its own unguessable opaque-token
-URL, and the import payload contains only those loopback URLs. Unknown routes and
-unscoped files remain inaccessible. Main keeps the server alive while the bounded
-operation awaits every requested transfer, then closes it after all items complete
-or when the bounded operation fails.
-On macOS the packaged app declares its bounded JianYing draft access with
-`NSAppleMusicUsageDescription`; access to the user's Movies media area remains under
-the operating system's **Media & Apple Music** consent. A denial is reported with
-that settings location and never downgraded to “no active draft.”
-The currently supported JianYing Deep Link imports each item into both the material
-panel and the timeline; it exposes no verified panel-only parameter, so Convax must
-not promise panel-only behavior.
-
-The native adapter boundary reserves Windows explicitly, but its current Windows
-implementation is WIP and fails closed as unsupported without attempting a fallback
-automation path. This platform limitation does not widen the static Plugin package
-or its legacy companion Skill.
-
-The companion Agent workflow first inspects draft state. If a draft is active, the
-Agent asks the user to choose that draft or a new one and submits the short-lived
-observation token for a current-draft export. If the user chooses new, the Agent
-explains the active-to-new WIP boundary, asks the user to return JianYing home, then
-inspects again before submitting a new-draft export. Its tool schema does not accept
-a Project or Canvas id; Desktop injects the currently mounted Canvas and rejects a
-stale revision. This v1-v3-style legacy companion Skill explains the workflow but
-grants no tool or native permission and remains independently installable/removable
-from the Plugin. A future v4 migration would deliberately replace that lifecycle with
-an owned `contributes.skills` entry.
+Vendor-specific desktop integrations belong in Registry Tool Plugins. Their Web
+surface, owned Skill and reviewed executable companion are released together.
+Desktop supplies only generic connected-input staging, principal-bound execution,
+cancellation and return-delivery contracts. The companion receives bounded
+host-staged inputs and owns vendor process, protocol or Deep Link behavior without
+importing Convax packages. No vendor id, model, executable or workflow is compiled
+into Desktop.
 
 ### Native Canvas media drag-out
 
@@ -1044,23 +986,12 @@ window coordination; keep the product's visual implementation in the host.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
-capabilities, Plugin Services, and narrow trusted native integrations such as
-`jianying`. Plugin Services
-accept only an installed Plugin id through fixed actions. The JianYing bridge accepts only a Project/Canvas
-reference, revision, node ids and a constrained target; native paths remain in main.
+capabilities, and Plugin Services. Plugin Services accept only an installed Plugin
+id through fixed actions.
 The Canvas native-drag bridge is a two-phase exception required by Electron: an
 async prepare call returns only an opaque sender-scoped ticket, then a synchronous
 `dragstart` message consumes it. Main rechecks the active Canvas selection before
 preparation and never exposes staged paths through preload.
-Renderer assigns every export an opaque `operationId`; it keeps the live
-`AbortSignal` in the renderer realm and sends only cloneable start/cancel messages
-through preload. Cancellation is scoped to the originating trusted renderer and is
-honored through validation, staging and the final pre-dispatch check. Cancellation
-before Deep Link dispatch is safe. Once dispatch may have produced a JianYing side
-effect, Desktop lets the bounded transfer finish and reports its observable outcome;
-an unknown or partial post-dispatch outcome must never be retried automatically.
-Main also cancels pre-dispatch work on renderer destruction or IPC disposal and
-re-resolves the live active Canvas before starting.
 Incompatible bridge changes must bump the Desktop protocol version so stale
 main/preload/renderer combinations fail visibly instead of hanging.
 

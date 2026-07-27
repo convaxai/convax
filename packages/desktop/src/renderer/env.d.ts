@@ -7,7 +7,6 @@ import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasResourceClient, CanvasTextResourceClient, DesktopProtocolClient } from "../desktop-protocol"
 import type { GenerationClient } from "../generation-contracts"
-import type { JianyingRendererClient } from "../jianying-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
@@ -33,7 +32,6 @@ declare global {
         textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
-      jianying: JianyingRendererClient
       pets: PetSettingsHostClient & {
         markDisplayed(input: PetNavigationRequest): Promise<void>
         markSessionDisplayed(input: PetDisplayedSession): Promise<void>

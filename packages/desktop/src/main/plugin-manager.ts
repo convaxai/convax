@@ -169,6 +169,7 @@ interface ValidatedPluginPackage {
   id: string
   manifest: WebPluginManifest
   path: string
+  retiredBuiltinProvenance: boolean
 }
 
 interface ValidatedPublicationPackage extends ValidatedPluginPackage {
@@ -690,6 +691,7 @@ export class WebPluginManager {
     expectedId: string,
     label: string,
     expectedBuiltin = this.#reservedBuiltinIds.has(expectedId),
+    allowRetiredBuiltinProvenance = false,
   ): Promise<ValidatedPluginPackage> {
     if (path.dirname(directory) !== installationRoot) {
       throw new Error(`${label} must be an immediate child of the Plugin installation root`)
@@ -704,13 +706,21 @@ export class WebPluginManager {
     if (manifest.id !== expectedId) throw new Error(`${label} manifest identity does not match its transaction name`)
     const digest = await installedPackageDigest(realDirectory, this.#limits)
     const markerPath = path.join(realDirectory, builtinProvenanceFileName)
+    let retiredBuiltinProvenance = false
     if (expectedBuiltin) {
       const provenance = await readBuiltinProvenance(realDirectory, manifest)
       if (provenance.bundleDigest !== digest) {
         throw new Error(`${label} built-in provenance does not match its package bytes`)
       }
     } else if (await exists(markerPath)) {
-      throw new Error(`${label} contains host-only built-in provenance`)
+      if (!allowRetiredBuiltinProvenance) {
+        throw new Error(`${label} contains host-only built-in provenance`)
+      }
+      const provenance = await readBuiltinProvenance(realDirectory, manifest)
+      if (provenance.bundleDigest !== digest) {
+        throw new Error(`${label} retired built-in provenance does not match its package bytes`)
+      }
+      retiredBuiltinProvenance = true
     }
     const after = await fs.lstat(directory)
     if (
@@ -731,6 +741,7 @@ export class WebPluginManager {
       id: manifest.id,
       manifest,
       path: realDirectory,
+      retiredBuiltinProvenance,
     }
   }
 
@@ -741,6 +752,7 @@ export class WebPluginManager {
       candidate.id,
       label,
       candidate.builtinProvenance,
+      candidate.retiredBuiltinProvenance,
     )
     if (
       current.declaration !== candidate.declaration ||
@@ -790,6 +802,8 @@ export class WebPluginManager {
       target,
       candidate.id,
       "Restored Plugin package",
+      candidate.builtinProvenance,
+      candidate.retiredBuiltinProvenance,
     )
     if (restored.declaration !== candidate.declaration || restored.digest !== candidate.digest) {
       throw new Error(`Restored Plugin package changed during recovery: ${candidate.id}`)
@@ -842,6 +856,8 @@ export class WebPluginManager {
           candidatePath,
           expectedId,
           `Plugin publication ${remnant.kind}`,
+          this.#reservedBuiltinIds.has(expectedId),
+          !this.#reservedBuiltinIds.has(expectedId),
         )
         const candidate: ValidatedPublicationPackage = {
           ...validated,
@@ -863,7 +879,14 @@ export class WebPluginManager {
       let canonical: ValidatedPluginPackage | null = null
       try {
         canonical = (await exists(target))
-          ? await this.#validatePublicationPackage(installationRoot, target, pluginId, "Installed Plugin package")
+          ? await this.#validatePublicationPackage(
+              installationRoot,
+              target,
+              pluginId,
+              "Installed Plugin package",
+              this.#reservedBuiltinIds.has(pluginId),
+              !this.#reservedBuiltinIds.has(pluginId),
+            )
           : null
       } catch (error) {
         group.failures.push(error)
@@ -968,6 +991,8 @@ export class WebPluginManager {
         target,
         manifest.id,
         "Installed Plugin update source",
+        false,
+        !this.#reservedBuiltinIds.has(manifest.id),
       )
       const installedRoot = previousPackage.path
       const installedManifest = previousPackage.manifest
@@ -1574,11 +1599,13 @@ export class WebPluginManager {
         const manifest = await this.#validateInstalledPackage(pluginRoot)
         if (manifest.id === entry.name) {
           const summary = toInstalledWebPluginSummary(manifest)
-          const trustedBuiltin = await readBuiltinProvenance(pluginRoot, manifest).then(
-            async (provenance) =>
-              (await installedPackageDigest(pluginRoot, this.#limits).catch(() => "")) === provenance.bundleDigest,
-            () => false,
-          )
+          const trustedBuiltin =
+            this.#reservedBuiltinIds.has(manifest.id) &&
+            (await readBuiltinProvenance(pluginRoot, manifest).then(
+              async (provenance) =>
+                (await installedPackageDigest(pluginRoot, this.#limits).catch(() => "")) === provenance.bundleDigest,
+              () => false,
+            ))
           summaries.push(trustedBuiltin ? { ...summary, trustedBuiltin: true } : summary)
         }
       } catch {
@@ -1615,10 +1642,12 @@ export class WebPluginManager {
           throw new Error(`Installed Plugin changed while its capability identity was resolved: ${id}`)
         }
         const summary = toInstalledWebPluginSummary(verifiedManifest)
-        const trustedBuiltin = await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
-          async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
-          () => false,
-        )
+        const trustedBuiltin =
+          this.#reservedBuiltinIds.has(verifiedManifest.id) &&
+          (await readBuiltinProvenance(pluginRoot, verifiedManifest).then(
+            async (provenance) => (await installedPackageDigest(pluginRoot, this.#limits)) === provenance.bundleDigest,
+            () => false,
+          ))
         return {
           digest,
           plugin: trustedBuiltin ? { ...summary, trustedBuiltin: true as const } : summary,

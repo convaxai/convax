@@ -339,7 +339,7 @@ describe("versioned Plugin manifest generation declarations", () => {
         ...parsed,
         contributes: {
           ...parsed.contributes,
-          llm: { ...parsed.contributes.llm, baseUrl: "https://xyq.jianying.com" },
+          llm: { ...parsed.contributes.llm, baseUrl: "https://provider.example.com" },
         },
       }),
     ).toThrow("unsupported field")
