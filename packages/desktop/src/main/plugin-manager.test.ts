@@ -1164,6 +1164,43 @@ describe("WebPluginManager", () => {
     expect(await legacy.isBuiltinBundleInstalled(bundle)).toBe(true)
   })
 
+  test("lets an explicit update replace a retired built-in without preserving host trust", async () => {
+    const root = await temporaryRoot()
+    const installationRoot = path.join(root, "installed")
+    const builtin = new WebPluginManager(installationRoot, {}, ["director-stage"])
+    const oldBundle = simpleBundle("1.0.0", "old built-in")
+    await builtin.installOrUpdateBuiltinBundle(oldBundle)
+
+    const retired = new WebPluginManager(installationRoot)
+    const retiredList = await retired.list()
+    expect(retiredList).toEqual([expect.objectContaining({ id: "director-stage", version: "1.0.0" })])
+    expect(retiredList[0]).not.toHaveProperty("trustedBuiltin")
+    const retiredIdentity = await retired.resolveCapabilityIdentity("director-stage")
+    expect(retiredIdentity).toMatchObject({
+      plugin: { id: "director-stage", version: "1.0.0" },
+    })
+    expect(retiredIdentity?.plugin).not.toHaveProperty("trustedBuiltin")
+
+    const staleStaging = path.join(installationRoot, ".staging-director-stage-00000000-0000-4000-8000-000000000001")
+    await fs.mkdir(staleStaging)
+    const staleBundle = simpleBundle("1.1.0", "stale candidate")
+    await Promise.all(
+      Object.entries(staleBundle.files).map(([name, content]) => fs.writeFile(path.join(staleStaging, name), content)),
+    )
+    await expect(retired.reconcilePublicationState()).resolves.toBeUndefined()
+    await expect(fs.stat(staleStaging)).rejects.toMatchObject({ code: "ENOENT" })
+    expect(await retired.list()).toEqual([expect.objectContaining({ id: "director-stage", version: "1.0.0" })])
+
+    const updated = await retired.installBundle(simpleBundle("2.0.0", "registry release"), {
+      replaceExisting: true,
+    })
+    expect(updated).toMatchObject({ id: "director-stage", version: "2.0.0" })
+    expect(updated).not.toHaveProperty("trustedBuiltin")
+    await expect(fs.stat(path.join(installationRoot, "director-stage", ".convax-builtin.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    })
+  })
+
   test("adopts only an exact host-listed legacy bundle before upgrading it", async () => {
     const root = await temporaryRoot()
     const oldBundle = {

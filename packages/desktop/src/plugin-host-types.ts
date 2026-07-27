@@ -66,6 +66,8 @@ export interface PluginGenerationReference {
 
 export interface PluginGenerationCanvasResult {
   createdNodeIds: readonly string[]
+  /** Present only for a text operation whose declared delivery is `return`. */
+  outputText?: string
   revision: number
   toolId: string
   warnings: readonly string[]
@@ -76,7 +78,7 @@ export interface PluginCanvasImageResult {
   revision: number
 }
 
-export type PluginGenerationResultMode = "create-pending-node"
+export type PluginGenerationResultMode = "create-pending-node" | "return"
 
 /** Product ports supplied by Desktop composition, independent of Plugin transport. */
 export interface PluginCanvasHost {

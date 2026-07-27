@@ -15,7 +15,6 @@ import { projectResourceReferenceKey, type ProjectCanvasClient } from "@convax/p
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { CanvasResourceClient } from "../desktop-protocol"
-import type { JianyingCanvasExportIpcEnvelope, JianyingRendererClient } from "../jianying-contracts"
 import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
 type InvokeHandler = (event: unknown, input?: unknown) => unknown
@@ -26,7 +25,6 @@ type DesktopBridge = {
     externalMediaDrag: CanvasExternalMediaDragRendererClient
     resources: CanvasResourceClient
   }
-  jianying: JianyingRendererClient
   projectFiles: ProjectFilesClient
   projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
 }
@@ -200,17 +198,6 @@ describe("desktop Project lifecycle IPC smoke", () => {
       }),
       registerAgentIpc(runtime, projects, { ...trusted, activity }),
     ]
-    handlers.set("jianying:draft-status", () => ({
-      draftName: "Current draft",
-      draftToken: "draft-token",
-      status: "active",
-    }))
-    handlers.set("jianying:canvas-media-export", (_event, input) => ({
-      createdDraft: (input as JianyingCanvasExportIpcEnvelope).request.target.kind === "new",
-      draftName: "Current draft",
-      importedMediaCount: (input as JianyingCanvasExportIpcEnvelope).request.nodeIds.length,
-      importStatus: "dispatched",
-    }))
     handlers.set("canvas:external-media-drag-prepare", (_event, input) => ({
       expiresAt: Date.now() + 60_000,
       itemCount: (input as { nodeIds: string[] }).nodeIds.length,
@@ -220,32 +207,6 @@ describe("desktop Project lifecycle IPC smoke", () => {
     if (!exposedBridge) throw new Error("The preload bridge was not exposed")
     expect(exposedBridge.projects).not.toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("listDirectory")
-    expect(await exposedBridge.jianying.getDraftStatus()).toEqual({
-      draftName: "Current draft",
-      draftToken: "draft-token",
-      status: "active",
-    })
-    const jianyingEnvelope: JianyingCanvasExportIpcEnvelope = {
-      operationId: "toolbar-export",
-      request: {
-        expectedRevision: 0,
-        nodeIds: ["image-1"],
-        ref: { canvasId: "canvas-main", scopeId: "project-1" },
-        target: { draftToken: "draft-token", kind: "current" },
-      },
-    }
-    expect(await exposedBridge.jianying.exportCanvasMedia(jianyingEnvelope)).toEqual({
-      createdDraft: false,
-      draftName: "Current draft",
-      importedMediaCount: 1,
-      importStatus: "dispatched",
-    })
-    exposedBridge.jianying.cancelCanvasMediaExport({ operationId: "toolbar-export" })
-    expect(rendererSends).toContainEqual({
-      channel: "jianying:canvas-media-export-cancel",
-      input: { operationId: "toolbar-export" },
-    })
-
     const externalDragRequest = {
       expectedRevision: 0,
       nodeIds: ["image-1", "audio-1"],

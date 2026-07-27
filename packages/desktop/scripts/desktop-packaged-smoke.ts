@@ -14,20 +14,7 @@ const distRoot = path.join(desktopRoot, "dist")
 const startupTimeoutMs = 90_000
 const operationTimeoutMs = 120_000
 const pluginTimeoutMs = 45_000
-const pluginIds = ["jianying-editor"] as const
 const defaultRemotePluginId = "ffmpeg-tools"
-const jianyingDraftStatuses = new Set([
-  "active",
-  "ambiguous",
-  "no_active_draft",
-  "not_running",
-  "unavailable",
-  "unsupported",
-])
-const expectedJianyingStatus = process.env.CONVAX_PACKAGED_SMOKE_EXPECT_JIANYING_STATUS?.trim()
-if (expectedJianyingStatus && !jianyingDraftStatuses.has(expectedJianyingStatus)) {
-  throw new Error(`Invalid expected packaged JianYing status: ${expectedJianyingStatus}`)
-}
 
 function loopbackNoProxy(value: string | undefined) {
   const entries = new Set(
@@ -301,61 +288,6 @@ class DevtoolsClient {
   }
 }
 
-function findFrame(tree: FrameTree, urlPrefix: string): FrameTree["frame"] | undefined {
-  if (tree.frame.url.startsWith(urlPrefix)) return tree.frame
-  for (const child of tree.childFrames ?? []) {
-    const found = findFrame(child, urlPrefix)
-    if (found) return found
-  }
-  return undefined
-}
-
-function isTransientContextError(error: unknown) {
-  const message = String(error)
-  return (
-    message.includes("Cannot find context") ||
-    message.includes("Execution context was destroyed") ||
-    message.includes("Inspected target navigated or closed")
-  )
-}
-
-async function evaluatePluginFrame(
-  port: number,
-  renderer: DevtoolsClient,
-  pluginId: (typeof pluginIds)[number],
-  expression: string,
-) {
-  const urlPrefix = `convax-plugin://${pluginId}/`
-  const deadline = Date.now() + pluginTimeoutMs
-  let lastError: unknown
-  while (Date.now() < deadline) {
-    try {
-      const target = (await listDebugTargets(port)).find(
-        (candidate) => candidate.url?.startsWith(urlPrefix) && candidate.webSocketDebuggerUrl,
-      )
-      if (target?.webSocketDebuggerUrl) {
-        const frameClient = await DevtoolsClient.connect(target.webSocketDebuggerUrl)
-        try {
-          return await frameClient.evaluate(expression, { timeoutMs: pluginTimeoutMs })
-        } finally {
-          frameClient.close()
-        }
-      }
-
-      const frame = findFrame(await renderer.frameTree(), urlPrefix)
-      const contextId = frame ? renderer.contextForFrame(frame.id) : undefined
-      if (contextId !== undefined) {
-        return await renderer.evaluate(expression, { contextId, timeoutMs: pluginTimeoutMs })
-      }
-    } catch (error) {
-      lastError = error
-      if (!isTransientContextError(error)) throw error
-    }
-    await Bun.sleep(100)
-  }
-  throw new Error(`Timed out waiting for the running ${pluginId} frame${lastError ? `: ${String(lastError)}` : ""}`)
-}
-
 async function walkDirectories(root: string, depth: number): Promise<string[]> {
   if (depth < 0) return []
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
@@ -614,82 +546,20 @@ try {
         projectEntry.click()
       }
       await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")
-      const jianyingStatus = await window.convax.jianying.getDraftStatus()
-      if (![
-        "active",
-        "ambiguous",
-        "no_active_draft",
-        "not_running",
-        "unavailable",
-        "unsupported",
-      ].includes(jianyingStatus.status)) {
-        throw new Error("Packaged JianYing inspection returned an invalid status: " + JSON.stringify(jianyingStatus))
-      }
-
-      let inventory = await window.convax.plugins.listPlugins()
-      const requiredIds = ${JSON.stringify(pluginIds)}
+      const inventory = await window.convax.plugins.listPlugins()
       const defaultRemotePluginId = ${JSON.stringify(defaultRemotePluginId)}
       const packagedDefault = inventory.installed.find((plugin) => plugin.id === defaultRemotePluginId)
       if (!packagedDefault) {
         throw new Error("Packaged default Plugin did not install from the offline seed: " + defaultRemotePluginId)
-      }
-      for (const id of requiredIds) {
-        if (!inventory.catalog.some((plugin) => plugin.id === id)) {
-          throw new Error("Built-in Plugin is missing from the packaged catalog: " + id)
-        }
-        if (!inventory.installed.some((plugin) => plugin.id === id)) {
-          await window.convax.plugins.installCatalogPlugin({ id })
-          inventory = await window.convax.plugins.listPlugins()
-        }
-      }
-      const installed = new Map(inventory.installed.map((plugin) => [plugin.id, plugin]))
-      for (const id of requiredIds) {
-        if (!installed.has(id)) throw new Error("Built-in Plugin did not install from the packaged catalog: " + id)
-      }
-      const identity = (id) => {
-        const plugin = installed.get(id)
-        if (!plugin || typeof plugin.entry !== "string") throw new Error("Plugin has no Web entry: " + id)
-        return { entry: plugin.entry, id, version: plugin.version }
       }
       const loaded = await window.convax.canvas.documents.load({ canvasId, scopeId: project.id })
       if (!loaded.document) throw new Error("The packaged Canvas document did not load")
       if (loaded.document.nodes.length !== 0) {
         throw new Error("The isolated packaged Canvas was not empty: " + JSON.stringify(loaded.document.nodes))
       }
-      await window.convax.canvas.documents.execute({
-        command: {
-          type: "document.patch",
-          addedEdges: [],
-          addedNodes: [
-            {
-              data: {
-                kind: "integration.jianying",
-                label: "JianYing Export",
-                metadata: {
-                  convaxPlugin: identity("jianying-editor"),
-                  convaxPluginState: {},
-                },
-              },
-              id: "packaged-smoke-jianying",
-              position: { x: 0, y: 0 },
-              style: { height: 260, width: 520 },
-              type: "file",
-            },
-          ],
-          removedEdgeIds: [],
-          removedNodeIds: [],
-          updatedEdges: [],
-          updatedNodes: [],
-        },
-        commandId: "packaged-smoke-seed-plugins",
-        expectedRevision: loaded.document.revision,
-        ref: { canvasId, scopeId: project.id },
-      })
       return {
         canvasId,
         defaultRemote: { id: packagedDefault.id, version: packagedDefault.version },
-        installed: requiredIds.map((id) => ({ id, version: installed.get(id)?.version })),
-        jianyingStatus,
         projectId: project.id,
         protocol: mainProtocol,
       }
@@ -697,8 +567,6 @@ try {
   )) as {
     canvasId?: string
     defaultRemote?: { id?: string; version?: string }
-    installed?: Array<{ id?: string; version?: string }>
-    jianyingStatus?: { draftName?: string; reason?: string; status?: string }
     projectId?: string
     protocol?: string
   }
@@ -707,88 +575,10 @@ try {
     seeded.defaultRemote?.id !== defaultRemotePluginId ||
     !seeded.defaultRemote.version ||
     seeded.projectId !== seededProject.id ||
-    seeded.installed?.length !== pluginIds.length ||
-    typeof seeded.jianyingStatus?.status !== "string" ||
     typeof seeded.protocol !== "string"
   ) {
     throw new Error(`Unexpected packaged seed result: ${JSON.stringify(seeded)}`)
   }
-  if (expectedJianyingStatus && seeded.jianyingStatus?.status !== expectedJianyingStatus) {
-    throw new Error(
-      `Packaged JianYing inspection expected ${expectedJianyingStatus}, received ${JSON.stringify(seeded.jianyingStatus)}`,
-    )
-  }
-
-  await renderer.evaluate(`(() => { setTimeout(() => window.location.reload(), 0); return true })()`)
-  await Bun.sleep(250)
-  const outerFrames = (await renderer.evaluate(
-    `(async () => {
-      const deadline = Date.now() + ${pluginTimeoutMs}
-      let projectEntryRequested = false
-      while (Date.now() < deadline) {
-        if (window.convax) {
-          if (!projectEntryRequested && document.querySelector('[data-project-home="true"]')) {
-            const projectEntry =
-              document.querySelector('[data-project-id="${seededProject.id}"]') ??
-              [...document.querySelectorAll("button")].find((button) =>
-                ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
-              )
-            if (projectEntry instanceof HTMLElement) {
-              projectEntryRequested = true
-              projectEntry.click()
-            }
-          }
-          const expected = [
-            ["jianying-editor", "JianYing Export plugin"],
-          ]
-          const frames = expected.map(([id, title]) => {
-            const frame = document.querySelector('iframe[title="' + title + '"]')
-            return frame ? {
-              allow: frame.getAttribute("allow"),
-              allowFullscreen: frame.hasAttribute("allowfullscreen"),
-              id,
-              sandbox: frame.getAttribute("sandbox"),
-              src: frame.getAttribute("src"),
-            } : null
-          })
-          if (frames.every(Boolean)) return frames
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      throw new Error("Timed out waiting for all packaged Plugin iframes")
-    })()`,
-  )) as Array<{
-    allow?: string | null
-    allowFullscreen?: boolean
-    id?: string
-    sandbox?: string | null
-    src?: string | null
-  }>
-  for (const pluginId of pluginIds) {
-    const frame = outerFrames.find((candidate) => candidate.id === pluginId)
-    if (frame?.sandbox !== "allow-scripts" || !frame.src?.startsWith(`convax-plugin://${pluginId}/`)) {
-      throw new Error(`Unexpected packaged ${pluginId} iframe: ${JSON.stringify(frame)}`)
-    }
-  }
-
-  const jianying = (await evaluatePluginFrame(
-    debuggerPort,
-    renderer,
-    "jianying-editor",
-    `(() => ({
-      body: document.body.innerText,
-      heading: document.querySelector("h1")?.textContent?.trim(),
-      title: document.title,
-    }))()`,
-  )) as { body?: string; heading?: string; title?: string }
-  if (
-    jianying.title !== "JianYing Export" ||
-    jianying.heading !== "JianYing Export" ||
-    !jianying.body?.includes("原生导入由 Convax Desktop")
-  ) {
-    throw new Error(`Unexpected packaged JianYing frame: ${JSON.stringify(jianying)}`)
-  }
-
   const agent = (await renderer.evaluate(
     `(async () => {
       const projects = await window.convax.projects.listProjects()
@@ -815,26 +605,8 @@ try {
   }
 
   const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
-  type PersistedDocument = {
-    nodes?: Array<{
-      data?: { kind?: string }
-      id?: string
-    }>
-  }
-  const persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as PersistedDocument
-  const jianyingNode = persisted.nodes?.find((node) => node.id === "packaged-smoke-jianying")
-  if (
-    persisted.nodes?.length !== pluginIds.length ||
-    jianyingNode?.data?.kind !== "integration.jianying"
-  ) {
-    throw new Error(`Packaged Plugin node did not persist: ${JSON.stringify(persisted)}`)
-  }
-  for (const pluginId of pluginIds) {
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(userDataRoot, "plugins", pluginId, "manifest.json"), "utf8"),
-    ) as { id?: string }
-    if (manifest.id !== pluginId) throw new Error(`Packaged Plugin installation is invalid: ${pluginId}`)
-  }
+  const persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as { nodes?: unknown[] }
+  if (persisted.nodes?.length !== 0) throw new Error(`Packaged Canvas was not empty: ${JSON.stringify(persisted)}`)
   const ffmpegManifest = JSON.parse(
     await fs.readFile(path.join(userDataRoot, "plugins", defaultRemotePluginId, "manifest.json"), "utf8"),
   ) as { id?: string; runtime?: { command?: string }; version?: string }
@@ -905,9 +677,8 @@ try {
   }
 
   console.log(
-    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${[...pluginIds, defaultRemotePluginId].join(", ")}, ${agent.providerCount} OpenCode providers)`,
+    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${defaultRemotePluginId}, ${agent.providerCount} OpenCode providers)`,
   )
-  console.log(`Packaged JianYing inspection: ${JSON.stringify(seeded.jianyingStatus)}`)
   const application =
     process.platform === "darwin" ? path.resolve(path.dirname(executable), "..", "..") : path.dirname(executable)
   console.log(`Unpacked packaged application retained at: ${application}`)
