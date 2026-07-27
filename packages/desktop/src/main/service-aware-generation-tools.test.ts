@@ -6,10 +6,7 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
-import type {
-  GenerationToolExecutionPort,
-  PreparedGenerationToolExecution,
-} from "./generation-canvas-service"
+import type { GenerationToolExecutionPort, PreparedGenerationToolExecution } from "./generation-canvas-service"
 import {
   ServiceAwareGenerationTools,
   type GenerationPluginServiceAvailabilityPort,
@@ -17,8 +14,10 @@ import {
 
 const connected: PluginServiceStatus = {
   account: { availability: "unavailable" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "unavailable" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -59,13 +58,15 @@ function service(pluginId: string): PluginServiceSummary {
   }
 }
 
-function setup(input: {
-  availabilityTimeoutMs?: number
-  getStatus?: (pluginId: string, signal?: AbortSignal) => Promise<PluginServiceStatus>
-  services?: readonly PluginServiceSummary[]
-  statuses?: Readonly<Record<string, PluginServiceStatus | Error>>
-  tools?: readonly GenerationToolSummary[]
-} = {}) {
+function setup(
+  input: {
+    availabilityTimeoutMs?: number
+    getStatus?: (pluginId: string, signal?: AbortSignal) => Promise<PluginServiceStatus>
+    services?: readonly PluginServiceSummary[]
+    statuses?: Readonly<Record<string, PluginServiceStatus | Error>>
+    tools?: readonly GenerationToolSummary[]
+  } = {},
+) {
   const listedTools = input.tools ?? [generationTool("remote-images")]
   const describeTool = mock(async (toolId: string): Promise<GenerationToolDescription> => ({ fields: [], toolId }))
   const prepared: PreparedGenerationToolExecution = {

@@ -32,6 +32,29 @@ export function parsePluginServiceTarget(input: unknown) {
   return { pluginId: requireWebPluginId(value.pluginId) }
 }
 
+export function parsePluginServiceCheckoutTarget(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  const prototype = Object.getPrototypeOf(input)
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  const value = input as Record<string, unknown>
+  if (
+    Object.keys(value).length !== 2 ||
+    !("pluginId" in value) ||
+    !("planKey" in value) ||
+    typeof value.planKey !== "string" ||
+    value.planKey !== value.planKey.trim() ||
+    value.planKey.length > 80 ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.planKey)
+  ) {
+    throw new Error("Plugin service Checkout target is invalid")
+  }
+  return { planKey: value.planKey, pluginId: requireWebPluginId(value.pluginId) }
+}
+
 /** Sender-scoped cancellation and duplicate suppression without an Electron dependency. */
 export class PluginServiceIpcOperations {
   readonly #senders = new Map<number, SenderState>()
@@ -64,7 +87,8 @@ export class PluginServiceIpcOperations {
     this.#disposed = true
     for (const state of this.#senders.values()) {
       state.sender.removeListener("destroyed", state.destroyed)
-      for (const controller of state.controllers.values()) controller.abort(abortError("Plugin service IPC was disposed"))
+      for (const controller of state.controllers.values())
+        controller.abort(abortError("Plugin service IPC was disposed"))
       state.controllers.clear()
     }
     this.#senders.clear()
@@ -98,6 +122,7 @@ export class PluginServiceIpcOperations {
 export interface PluginServiceExecutor {
   authorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   cancelAuthorization(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  checkout(pluginId: string, planKey: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   listServices(): Promise<readonly PluginServiceSummary[]>
   reauthorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
@@ -150,6 +175,16 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
     (pluginId, signal) => executor.cancelAuthorization(pluginId, signal),
     true,
   )
+  transport.handle(pluginServiceIpcChannels.checkout, async (event, input) => {
+    if (!options.isTrustedSender(event)) throw new Error("Plugin service IPC request came from an untrusted renderer")
+    if (disposed) throw new Error("Plugin service IPC is disposed")
+    const { planKey, pluginId } = parsePluginServiceCheckoutTarget(input)
+    return operations.run(event.sender, `${pluginServiceIpcChannels.checkout}\0${pluginId}`, async (signal) => {
+      const result = await executor.checkout(pluginId, planKey, signal)
+      transport.publishChange()
+      return result
+    })
+  })
   register(pluginServiceIpcChannels.signOut, (pluginId, signal) => executor.signOut(pluginId, signal), true)
 
   return () => {

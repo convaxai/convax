@@ -20,8 +20,10 @@ const summary: PluginServiceSummary = {
 
 const connected: PluginServiceStatus = {
   account: { availability: "unavailable" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "unavailable" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -45,6 +47,7 @@ function client(overrides: Partial<PluginServiceClient> = {}): PluginServiceClie
   return {
     authorize: mock(async () => connected),
     cancelAuthorization: mock(async () => connected),
+    checkout: mock(async () => connected),
     getStatus: mock(async () => connected),
     listServices: mock(async () => [summary]),
     onDidChange: mock(() => () => undefined),
@@ -55,6 +58,34 @@ function client(overrides: Partial<PluginServiceClient> = {}): PluginServiceClie
 }
 
 describe("PluginServicesController", () => {
+  test("uses the selected advertised Plan for the fixed Checkout action", async () => {
+    const checkoutStatus: PluginServiceStatus = {
+      ...connected,
+      billing: {
+        availability: "available",
+        checkout: {
+          availability: "available",
+          plans: [{ billingInterval: "month", key: "pro", name: "Pro" }],
+        },
+      },
+      plan: { availability: "available", billingInterval: "month", key: "free", name: "Free" },
+    }
+    const checkoutSummary = { ...summary, actions: ["checkout", "sign_out"] as const }
+    const serviceClient = client({
+      checkout: mock(async () => checkoutStatus),
+      getStatus: mock(async () => checkoutStatus),
+      listServices: mock(async () => [checkoutSummary]),
+    })
+    const controller = new PluginServicesController(serviceClient)
+    await controller.refresh()
+
+    await controller.checkout("account-tools", "pro")
+
+    expect(serviceClient.checkout).toHaveBeenCalledWith({ planKey: "pro", pluginId: "account-tools" })
+    await expect(controller.checkout("account-tools", "enterprise")).rejects.toThrow("no longer available")
+    controller.dispose()
+  })
+
   test("loads installed services and applies only explicitly declared fixed actions", async () => {
     const serviceClient = client()
     const controller = new PluginServicesController(serviceClient)

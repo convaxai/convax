@@ -56,6 +56,7 @@ import {
   desktopRendererUrl,
   desktopUserDataDirectory,
 } from "./app-branding"
+import { desktopDeepLinkScheme, findDesktopDeepLink, parseDesktopDeepLink } from "./desktop-deep-link"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
 import { createGenerationAgentToolProvider } from "./generation-agent-tools"
@@ -102,6 +103,8 @@ import {
 } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
+import { registerPluginMaterializationIpc } from "./plugin-materialization-ipc"
+import { PluginMaterializationService } from "./plugin-materialization-service"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
 import { registerPluginCanvasImageIpc } from "./plugin-canvas-image-ipc"
 import { PluginCanvasImageService } from "./plugin-canvas-image-service"
@@ -109,6 +112,7 @@ import { installedPluginAgentMcpServers } from "./plugin-agent-mcp"
 import { PluginAgentMcpConnectionService } from "./plugin-agent-mcp-connection"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { pluginConnectedMediaPrivileges, pluginConnectedMediaScheme } from "../plugin-connected-media-contracts"
 import {
   WebPluginManager,
   WebPluginPublicationDeferredError,
@@ -118,6 +122,8 @@ import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
 import { ServiceAwareGenerationTools } from "./service-aware-generation-tools"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
+import { createElectronPluginServiceCheckoutNavigation } from "./electron-plugin-service-checkout"
+import { createElectronPluginServiceExternalAuthorizationBroker } from "./electron-plugin-service-external-authorization"
 import { PluginServiceAuthorizationCheckpointStore } from "./plugin-service-authorization-checkpoints"
 import { registerProjectCanvasIpc } from "./project-canvas-ipc"
 import { registerProjectIpc } from "./project-ipc"
@@ -144,6 +150,8 @@ import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { PluginHookAuthorizationStore } from "./plugin-hook-authorizations"
 import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import { registerPluginConnectedMediaIpc } from "./plugin-connected-media-ipc"
+import { PluginConnectedMediaService } from "./plugin-connected-media-service"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
 import {
@@ -161,6 +169,7 @@ type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
 let mainWindow: BrowserWindow | null = null
+let pendingDeepLinkActivation = false
 const rendererUrl = desktopRendererUrl({
   isPackaged: app.isPackaged,
   requestedUrl: process.env.ELECTRON_RENDERER_URL,
@@ -201,6 +210,24 @@ function isTrustedRendererUrl(value: string) {
   }
 }
 
+function activateMainWindow() {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) {
+    pendingDeepLinkActivation = true
+    return
+  }
+  pendingDeepLinkActivation = false
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+}
+
+function handleDesktopDeepLink(value: string) {
+  if (!parseDesktopDeepLink(value)) return false
+  activateMainWindow()
+  return true
+}
+
 function createWindow(
   projectManager: NodeProjectManager,
   projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
@@ -223,6 +250,7 @@ function createWindow(
     },
   })
   mainWindow = window
+  if (pendingDeepLinkActivation) activateMainWindow()
   const webContentsId = window.webContents.id
   const pluginFrameBindings = new Map<number, string>()
   trustedWebContents.add(webContentsId)
@@ -311,17 +339,34 @@ function startApplication() {
       privileges: { corsEnabled: true, secure: true, standard: true, stream: true, supportFetchAPI: true },
     },
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
+    { scheme: pluginConnectedMediaScheme, privileges: pluginConnectedMediaPrivileges },
     { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
-  app.on("second-instance", () => {
-    const window = mainWindow
-    if (!window) return
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
+  app.on("open-url", (event, url) => {
+    event.preventDefault()
+    handleDesktopDeepLink(url)
+  })
+  app.on("second-instance", (_event, commandLine) => {
+    if (!findDesktopDeepLink(commandLine)) {
+      activateMainWindow()
+      return
+    }
+    for (const value of commandLine) {
+      if (handleDesktopDeepLink(value)) return
+    }
   })
 
   void app.whenReady().then(async () => {
+    const protocolRegistered =
+      process.defaultApp && process.argv[1]
+        ? app.setAsDefaultProtocolClient(desktopDeepLinkScheme, process.execPath, [resolve(process.argv[1])])
+        : app.setAsDefaultProtocolClient(desktopDeepLinkScheme)
+    if (!protocolRegistered) {
+      console.warn(`Could not register ${desktopDeepLinkScheme}:// as the Convax desktop protocol`)
+    }
+    for (const value of process.argv) {
+      if (handleDesktopDeepLink(value)) break
+    }
     if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
 
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
@@ -513,6 +558,16 @@ function startApplication() {
         .catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
     })
     const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginManager)
+    const pluginConnectedMedia = new PluginConnectedMediaService({
+      changes: canvasDocumentChanges,
+      documents: canvasDocuments,
+      media: managedCanvasMedia,
+      plugins: pluginManager,
+    })
+    const pluginMaterialization = new PluginMaterializationService({
+      application: canvasApplication,
+      plugins: pluginManager,
+    })
     const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
       application: canvasApplication,
       canvases: projectCanvases,
@@ -548,11 +603,15 @@ function startApplication() {
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
     )
+    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
     let refreshAgentConfiguration: (() => Promise<void>) | undefined
     const pluginServices = new PluginServiceHost(
       generationRuntime,
       pluginServiceBrowserAuthorization,
+      pluginServiceExternalAuthorization,
+      createElectronPluginServiceCheckoutNavigation(),
       () => refreshAgentConfiguration?.(),
+      activateMainWindow,
     )
     const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
     const generationOperations = new GenerationOperationStore(
@@ -641,18 +700,20 @@ function startApplication() {
             })),
           )
           return Object.fromEntries(
-            availability.filter(({ available }) => available).map(({ provider }) => [
-              provider.providerId,
-              {
-                models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
-                name: provider.name,
-                npm: "@ai-sdk/openai-compatible",
-                options: {
-                  apiKey: provider.apiKey,
-                  baseURL: provider.baseUrl,
+            availability
+              .filter(({ available }) => available)
+              .map(({ provider }) => [
+                provider.providerId,
+                {
+                  models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
+                  name: provider.name,
+                  npm: "@ai-sdk/openai-compatible",
+                  options: {
+                    apiKey: provider.apiKey,
+                    baseURL: provider.baseUrl,
+                  },
                 },
-              },
-            ]),
+              ]),
           )
         } catch (error) {
           console.warn("Could not connect installed Plugin LLM providers", error)
@@ -1007,13 +1068,32 @@ function startApplication() {
       },
       { isTrustedSender: ipcSecurity.isTrustedSender },
     )
-    const disposePluginServiceIpc = registerPluginServiceIpc(pluginServices, {
-      isTrustedSender: ipcSecurity.isTrustedSender,
-    })
+    const disposePluginServiceIpc = registerPluginServiceIpc(
+      {
+        authorize: (pluginId, signal) => pluginServices.authorize(pluginId, signal),
+        cancelAuthorization: (pluginId, signal) => pluginServices.cancelAuthorization(pluginId, signal),
+        checkout: (pluginId, planKey, signal) => pluginServices.checkout(pluginId, planKey, signal),
+        getStatus: (pluginId, signal) => pluginServices.getStatus(pluginId, signal),
+        listServices: () => pluginServices.listServices(),
+        reauthorize: (pluginId, signal) => pluginServices.reauthorize(pluginId, signal),
+        signOut: (pluginId, signal) => pluginServices.signOut(pluginId, signal),
+      },
+      {
+        isTrustedSender: ipcSecurity.isTrustedSender,
+      },
+    )
     const disposePluginCapabilityIpc = registerPluginCapabilityIpc({
       broker: pluginCanvasCapabilities,
       isTrustedSender: ipcSecurity.isTrustedSender,
       principals: pluginPrincipals,
+    })
+    const disposePluginConnectedMediaIpc = registerPluginConnectedMediaIpc({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      service: pluginConnectedMedia,
+    })
+    const disposePluginMaterializationIpc = registerPluginMaterializationIpc({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      service: pluginMaterialization,
     })
     const disposePluginManagementIpc = registerPluginManagementIpc(
       pluginManager,
@@ -1022,6 +1102,7 @@ function startApplication() {
       remoteCapabilities,
       {
         beforeChange: async (pluginId) => {
+          pluginConnectedMedia.revokePlugin(pluginId)
           await pluginServices.discardPlugin(pluginId)
         },
         connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
@@ -1087,6 +1168,7 @@ function startApplication() {
         rendererUrl: trustedRendererUrl,
       }),
     )
+    protocol.handle(pluginConnectedMediaScheme, (request) => pluginConnectedMedia.handle(request))
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
@@ -1114,6 +1196,7 @@ function startApplication() {
         () => protocol.unhandle("convax-asset"),
         () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
+        () => protocol.unhandle(pluginConnectedMediaScheme),
         disposeDesktopProtocolIpc,
         disposeWorkspaceSystemStatusIpc,
         disposeProjectIpc,
@@ -1126,6 +1209,8 @@ function startApplication() {
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
+        disposePluginConnectedMediaIpc,
+        disposePluginMaterializationIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
         disposeAgentIpc,
@@ -1138,6 +1223,7 @@ function startApplication() {
         () => pluginServiceBrowserAuthorization.dispose(),
         () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
+        () => pluginConnectedMedia.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
       ],

@@ -109,6 +109,12 @@ CONVAX_FEATURE_SERVICES=0 CONVAX_FEATURE_SKILLS_AND_PLUGINS=0 bun --cwd packages
 
 ## 项目文档
 
+本地预览文档站：
+
+```bash
+bun run dev:docs
+```
+
 - [架构说明](docs/architecture.md)
 - [Plugin 与 Skill 平台](docs/plugin-skill-platform.md)
 - [Canvas 选择与操作](docs/canvas-selection-context.md)

@@ -17,6 +17,7 @@ import {
   type DesktopPluginHostCommand,
   type DesktopPluginHostRequest,
   type DesktopPluginHostResponse,
+  type PluginCapabilityProtocol,
 } from "./plugin-host-protocol"
 
 const maximumRequestBytes = 1024 * 1024
@@ -50,6 +51,7 @@ export class PluginCapabilityConnection {
     private readonly client: PluginCanvasCapabilityClient,
     private readonly events: PluginCapabilityEventSink,
     private readonly createId: () => string = () => globalThis.crypto.randomUUID(),
+    private readonly protocol: PluginCapabilityProtocol = pluginCapabilityProtocolV1,
   ) {}
 
   async dispatch(value: unknown, signal?: AbortSignal): Promise<DesktopPluginHostResponse | null> {
@@ -59,7 +61,7 @@ export class PluginCapabilityConnection {
       throwIfAborted(signal)
       if (this.closed) throw new Error("Plugin capability connection is closed")
       assertSerializedSize(value, maximumRequestBytes, "Plugin capability request")
-      if (!isDesktopPluginHostRequest(value) || value.protocol !== pluginCapabilityProtocolV1) {
+      if (!isDesktopPluginHostRequest(value) || value.protocol !== this.protocol) {
         throw new Error("Invalid Plugin capability request")
       }
       if (this.inFlightRequests >= maximumInFlightRequests) {
@@ -84,17 +86,17 @@ export class PluginCapabilityConnection {
       // Preserve that authoritative success if cancellation raced after the
       // Canvas application's final pre-save checkpoint.
       if (value.method !== "canvas.transaction.execute") throwIfAborted(signal)
-      const response = pluginHostSuccess(id, result, pluginCapabilityProtocolV1)
+      const response = pluginHostSuccess(id, result, this.protocol)
       try {
         assertSerializedSize(response, maximumResponseBytes, "Plugin capability response")
         return response
       } catch (error) {
         if (value.method !== "canvas.transaction.execute") throw error
-        const compact = pluginHostSuccess(id, compactCommittedTransactionResult(result), pluginCapabilityProtocolV1)
+        const compact = pluginHostSuccess(id, compactCommittedTransactionResult(result), this.protocol)
         return compact
       }
     } catch (error) {
-      return pluginHostFailure(id, errorMessage(error), pluginCapabilityProtocolV1)
+      return pluginHostFailure(id, errorMessage(error), this.protocol)
     }
   }
 
@@ -179,7 +181,7 @@ export class PluginCapabilityConnection {
           this.events.send({
             command: pluginCanvasDocumentChangedCommand,
             params: { event, subscriptionId },
-            protocol: pluginCapabilityProtocolV1,
+            protocol: this.protocol,
             type: "command",
           })
         }

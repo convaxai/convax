@@ -7,17 +7,24 @@ import {
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import type { GenerationPluginRuntime } from "./generation-plugin-runtime"
+import { parsePluginServiceCheckoutResult, type PluginServiceCheckoutNavigation } from "./plugin-service-checkout"
 import {
   parsePluginServiceBrowserAuthorizationRequest,
   pluginServiceBrowserAuthorizationRequestSchema,
   type PluginServiceBrowserAuthorizationBroker,
   type PluginServiceBrowserAuthorizationCompletion,
 } from "./plugin-service-browser-authorization"
+import {
+  parsePluginServiceExternalAuthorizationRequest,
+  pluginServiceExternalAuthorizationRequestSchema,
+  type PluginServiceExternalAuthorizationBroker,
+  type PluginServiceExternalAuthorizationCompletion,
+} from "./plugin-service-external-authorization"
 
 interface PluginServiceToolCallResult {
   authorizationIdentity?: string
   completeAuthorization?: (
-    input: PluginServiceBrowserAuthorizationCompletion,
+    input: PluginServiceBrowserAuthorizationCompletion | PluginServiceExternalAuthorizationCompletion,
     signal?: AbortSignal,
   ) => Promise<{ isError?: boolean; structuredContent?: Record<string, unknown> }>
   isError?: boolean
@@ -41,6 +48,7 @@ export interface PluginServiceToolRuntime {
     pluginId: string,
     call: "status" | WebPluginServiceAction,
     signal?: AbortSignal,
+    input?: { readonly planKey: string },
   ): Promise<PluginServiceToolCallResult>
   listServices(): Promise<readonly PluginServiceSummary[]>
 }
@@ -73,10 +81,7 @@ function summaryFingerprint(summary: PluginServiceSummary) {
   })
 }
 
-function authorizationIdentity(
-  result: PluginServiceToolCallResult,
-  summary: PluginServiceSummary,
-) {
+function authorizationIdentity(result: PluginServiceToolCallResult, summary: PluginServiceSummary) {
   if (result.authorizationIdentity !== undefined) {
     if (!/^[a-f0-9]{64}$/.test(result.authorizationIdentity)) {
       throw new Error(`Plugin service returned an invalid authorization identity: ${summary.pluginId}`)
@@ -112,7 +117,10 @@ export class PluginServiceHost {
     private readonly browserAuthorization?:
       | PluginServiceBrowserAuthorizationBroker
       | PluginServiceBrowserAuthorizationHost,
+    private readonly externalAuthorization?: PluginServiceExternalAuthorizationBroker,
+    private readonly checkoutNavigation?: PluginServiceCheckoutNavigation,
     private readonly onServiceMutation?: () => Promise<void> | void,
+    private readonly onExternalAuthorizationComplete?: () => Promise<void> | void,
   ) {}
 
   listServices() {
@@ -163,6 +171,28 @@ export class PluginServiceHost {
     }
   }
 
+  async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {
+    return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+      if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
+      const before = await this.#installed(pluginId)
+      if (!before.actions.includes("checkout")) throw new Error(`Plugin service Checkout is not declared: ${pluginId}`)
+      const result = await this.runtime.callService(pluginId, "checkout", controlSignal, { planKey })
+      if (result.isError || !result.structuredContent) {
+        throw new Error(`Plugin service Checkout failed: ${pluginId}`)
+      }
+      await this.#assertCurrent(before)
+      let checkout: ReturnType<typeof parsePluginServiceCheckoutResult>
+      try {
+        checkout = parsePluginServiceCheckoutResult(result.structuredContent)
+      } catch {
+        throw new Error(`Plugin service returned an invalid Checkout result: ${pluginId}`)
+      }
+      await this.checkoutNavigation.open(checkout.checkoutUrl)
+      await this.#assertCurrent(before)
+      return this.#call(pluginId, "status", controlSignal)
+    })
+  }
+
   /** Explicit Plugin lifecycle changes must not hand old Cookies to new bytes. */
   async discardPlugin(pluginId: string) {
     return this.#withExclusiveControl(pluginId, undefined, () => this.#discardPlugin(pluginId))
@@ -182,14 +212,18 @@ export class PluginServiceHost {
     if (callerSignal?.aborted) throw abortError("Plugin service control action was canceled")
     const controller = new AbortController()
     let finish!: () => void
-    const finished = new Promise<void>((resolve) => { finish = resolve })
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve
+    })
     const active: ActivePluginServiceControl = { controller, finish, finished }
     this.#activeControls.add(active)
     const onCallerAbort = () => controller.abort(abortError("Plugin service control action was canceled"))
     callerSignal?.addEventListener("abort", onCallerAbort, { once: true })
     const preceding = this.#controlActions.get(pluginId) ?? Promise.resolve()
     let release!: () => void
-    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const tail = preceding.catch(() => undefined).then(() => gate)
     this.#controlActions.set(pluginId, tail)
     await preceding.catch(() => undefined)
@@ -212,6 +246,7 @@ export class PluginServiceHost {
       await active.finished
     }
     await this.browserAuthorization?.disposePlugin(pluginId)
+    await this.externalAuthorization?.disposePlugin(pluginId)
   }
 
   async dispose() {
@@ -234,11 +269,14 @@ export class PluginServiceHost {
     if (this.#controlActions.has(pluginId)) {
       throw new Error(`Plugin service control action is active: ${pluginId}`)
     }
-    if (this.#authorizations.has(pluginId)) throw new Error(`Plugin service authorization is already active: ${pluginId}`)
+    if (this.#authorizations.has(pluginId))
+      throw new Error(`Plugin service authorization is already active: ${pluginId}`)
     if (signal?.aborted) throw abortError("Plugin service authorization was canceled")
     const controller = new AbortController()
     let finish!: () => void
-    const finished = new Promise<void>((resolve) => { finish = resolve })
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve
+    })
     const active: ActivePluginServiceAuthorization = { controller, finish, finished }
     this.#authorizations.set(pluginId, active)
     const onCallerAbort = () => controller.abort(abortError("Plugin service authorization was canceled"))
@@ -265,25 +303,47 @@ export class PluginServiceHost {
       if (result.isError || !result.structuredContent) {
         throw new Error(`Plugin service action failed: ${pluginId}`)
       }
-      if (result.structuredContent.schema !== pluginServiceBrowserAuthorizationRequestSchema) {
+      if (
+        result.structuredContent.schema !== pluginServiceBrowserAuthorizationRequestSchema &&
+        result.structuredContent.schema !== pluginServiceExternalAuthorizationRequestSchema
+      ) {
         return this.#parseStatus(pluginId, result.structuredContent)
       }
-      if (!this.browserAuthorization || !result.completeAuthorization) {
-        throw new Error(`Plugin service browser authorization is unavailable: ${pluginId}`)
+      if (!result.completeAuthorization) {
+        throw new Error(`Plugin service authorization completion is unavailable: ${pluginId}`)
       }
 
-      let request: ReturnType<typeof parsePluginServiceBrowserAuthorizationRequest>
-      try {
-        request = parsePluginServiceBrowserAuthorizationRequest(result.structuredContent)
-      } catch {
-        throw new Error(`Plugin service returned an invalid browser authorization request: ${pluginId}`)
+      let completion: PluginServiceBrowserAuthorizationCompletion | PluginServiceExternalAuthorizationCompletion
+      let commitBrowserCheckpoint = false
+      if (result.structuredContent.schema === pluginServiceBrowserAuthorizationRequestSchema) {
+        if (!this.browserAuthorization) {
+          throw new Error(`Plugin service browser authorization is unavailable: ${pluginId}`)
+        }
+        let request: ReturnType<typeof parsePluginServiceBrowserAuthorizationRequest>
+        try {
+          request = parsePluginServiceBrowserAuthorizationRequest(result.structuredContent)
+        } catch {
+          throw new Error(`Plugin service returned an invalid browser authorization request: ${pluginId}`)
+        }
+        completion = await this.browserAuthorization.authorize(pluginId, request, {
+          action: call,
+          isCurrent: async () => this.#isCurrent(before),
+          serviceIdentity: authorizationIdentity(result, before),
+          signal,
+        })
+        commitBrowserCheckpoint = true
+      } else {
+        if (!this.externalAuthorization) {
+          throw new Error(`Plugin service external authorization is unavailable: ${pluginId}`)
+        }
+        let request: ReturnType<typeof parsePluginServiceExternalAuthorizationRequest>
+        try {
+          request = parsePluginServiceExternalAuthorizationRequest(result.structuredContent)
+        } catch {
+          throw new Error(`Plugin service returned an invalid external authorization request: ${pluginId}`)
+        }
+        completion = await this.#openExternalAuthorization(pluginId, request, before, signal)
       }
-      const completion = await this.browserAuthorization.authorize(pluginId, request, {
-        action: call,
-        isCurrent: async () => this.#isCurrent(before),
-        serviceIdentity: authorizationIdentity(result, before),
-        signal,
-      })
       // completeAuthorization is an in-process one-shot closure bound by the
       // runtime to the exact manifest, executable snapshot and MCP client that
       // created the request. No renderer can select this method or payload.
@@ -296,11 +356,39 @@ export class PluginServiceHost {
       if (!status.credential.configured) {
         throw new Error(`Plugin service authorization did not persist a credential: ${pluginId}`)
       }
-      await this.browserAuthorization.commitPlugin?.(pluginId)
+      if (commitBrowserCheckpoint) await this.browserAuthorization?.commitPlugin?.(pluginId)
+      if (result.structuredContent.schema === pluginServiceExternalAuthorizationRequestSchema) {
+        this.#notifyExternalAuthorizationComplete()
+      }
       return status
     } catch (error) {
       await this.#cancelFailedAuthorization(before)
       throw error
+    }
+  }
+
+  async #openExternalAuthorization(
+    pluginId: string,
+    request: ReturnType<typeof parsePluginServiceExternalAuthorizationRequest>,
+    before: PluginServiceSummary,
+    signal: AbortSignal,
+  ) {
+    const controller = new AbortController()
+    const forwardAbort = () => controller.abort(signal.reason)
+    signal.addEventListener("abort", forwardAbort, { once: true })
+    const timeout = setTimeout(
+      () => controller.abort(abortError("Plugin service external authorization timed out")),
+      request.timeoutSeconds * 1_000,
+    )
+    timeout.unref?.()
+    try {
+      if (!(await this.#isCurrent(before))) {
+        throw new Error(`Plugin service changed before external authorization opened: ${pluginId}`)
+      }
+      return await this.externalAuthorization!.authorize(pluginId, request, { signal: controller.signal })
+    } finally {
+      clearTimeout(timeout)
+      signal.removeEventListener("abort", forwardAbort)
     }
   }
 
@@ -321,6 +409,16 @@ export class PluginServiceHost {
       // Cleanup is best effort and must never replace the original failure.
     } finally {
       clearTimeout(timeout)
+    }
+  }
+
+  #notifyExternalAuthorizationComplete() {
+    try {
+      void Promise.resolve(this.onExternalAuthorizationComplete?.()).catch((error) => {
+        console.warn("Could not focus Convax after external Plugin service authorization", error)
+      })
+    } catch (error) {
+      console.warn("Could not focus Convax after external Plugin service authorization", error)
     }
   }
 

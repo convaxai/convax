@@ -396,11 +396,7 @@ describe("generation IPC", () => {
     expect(cancel).toHaveBeenCalledWith({ operationId: "operation-after-restart" })
     await expect(
       Promise.resolve(
-        invoke(
-          generationIpcChannels.cancel,
-          { operationId: "operation-after-restart" },
-          new TestSender(2),
-        ),
+        invoke(generationIpcChannels.cancel, { operationId: "operation-after-restart" }, new TestSender(2)),
       ),
     ).rejects.toThrow("untrusted")
     dispose()

@@ -1,9 +1,6 @@
 import type { GenerationOutputModality, GenerationToolSummary } from "../generation-contracts"
 import type { PluginServiceStatus, PluginServiceSummary } from "../plugin-service-contracts"
-import type {
-  GenerationToolExecutionPort,
-  PreparedGenerationToolExecution,
-} from "./generation-canvas-service"
+import type { GenerationToolExecutionPort, PreparedGenerationToolExecution } from "./generation-canvas-service"
 
 export interface GenerationPluginServiceAvailabilityPort {
   getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
@@ -57,9 +54,7 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     return this.#isServiceAvailable(service, signal)
   }
 
-  async listTools(
-    options: { output?: GenerationOutputModality } = {},
-  ): Promise<readonly GenerationToolSummary[]> {
+  async listTools(options: { output?: GenerationOutputModality } = {}): Promise<readonly GenerationToolSummary[]> {
     const tools = await this.tools.listTools(options)
     const models = tools.filter((tool) => tool.kind === "model")
     if (models.length === 0) return tools
@@ -100,10 +95,7 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     return this.tools.describeTool(toolId, signal)
   }
 
-  async prepareTool(
-    tool: GenerationToolSummary,
-    signal?: AbortSignal,
-  ): Promise<PreparedGenerationToolExecution> {
+  async prepareTool(tool: GenerationToolSummary, signal?: AbortSignal): Promise<PreparedGenerationToolExecution> {
     await this.#assertModelAvailable(tool, signal)
     return this.tools.prepareTool(tool, signal)
   }
@@ -133,10 +125,7 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     const onAvailabilityAbort = () => rejectCanceled(abortReason(controller.signal))
     controller.signal.addEventListener("abort", onAvailabilityAbort, { once: true })
     try {
-      const status = await Promise.race([
-        this.services.getStatus(service.pluginId, controller.signal),
-        canceled,
-      ])
+      const status = await Promise.race([this.services.getStatus(service.pluginId, controller.signal), canceled])
       return isAvailable(status)
     } catch {
       if (signal?.aborted) throw abortReason(signal)

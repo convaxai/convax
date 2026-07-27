@@ -26,6 +26,46 @@ const baseService: Omit<PluginServiceCatalogEntry, "status"> = {
 }
 
 describe("Plugin Services host UI", () => {
+  test("shows the authoritative Plan and Upgrade action advertised by the Plugin", () => {
+    const markup = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="en"
+        onAction={noop}
+        onCheckout={noop}
+        onRefresh={noop}
+        snapshot={{
+          loading: false,
+          services: [
+            {
+              ...baseService,
+              actions: ["checkout", "sign_out"],
+              billing: { kind: "free" },
+              status: {
+                account: { availability: "available", displayName: "Convax" },
+                billing: {
+                  availability: "available",
+                  checkout: {
+                    availability: "available",
+                    plans: [{ billingInterval: "month", key: "pro", name: "Pro" }],
+                  },
+                },
+                credential: { configured: true, verification: "verified" },
+                credits: { availability: "available", remaining: 1000, unit: "quota units" },
+                plan: { availability: "available", billingInterval: "month", key: "free", name: "Free" },
+                schema: pluginServiceStatusSchema,
+                state: "connected",
+                usage: { availability: "unavailable" },
+              },
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(markup).toContain("Free · monthly")
+    expect(markup).toContain("Upgrade to Pro")
+  })
+
   test("shows unavailable account and metering explicitly without inventing reauthorization", () => {
     const markup = renderToStaticMarkup(
       <PluginServicesSurface
@@ -39,8 +79,10 @@ describe("Plugin Services host UI", () => {
               ...baseService,
               status: {
                 account: { availability: "unavailable" },
+                billing: { availability: "unavailable" },
                 credential: { configured: true, verification: "verified" },
                 credits: { availability: "unavailable" },
+                plan: { availability: "unavailable" },
                 schema: pluginServiceStatusSchema,
                 state: "connected",
                 usage: { availability: "unavailable" },
@@ -52,7 +94,7 @@ describe("Plugin Services host UI", () => {
     )
 
     expect(markup).toContain("Account Tools")
-    expect(markup.match(/Not supported or unavailable/g)?.length).toBe(3)
+    expect(markup.match(/Not supported or unavailable/g)?.length).toBe(5)
     expect(markup).toContain("does not provide in-app authorization")
     expect(markup).toContain("Sign out")
     expect(markup).not.toContain("Reconfigure")
@@ -75,8 +117,10 @@ describe("Plugin Services host UI", () => {
               name: "账号工具",
               status: {
                 account: { availability: "available", displayName: "创作账号" },
+                billing: { availability: "unavailable" },
                 credential: { configured: true, verification: "verified" },
                 credits: { availability: "available", remaining: 80.5, unit: "积分" },
+                plan: { availability: "unavailable" },
                 schema: pluginServiceStatusSchema,
                 state: "connected",
                 usage: { availability: "available", consumed: 19, period: "本月", unit: "积分" },
@@ -123,8 +167,10 @@ describe("Plugin Services host UI", () => {
               state: "disconnected",
               status: {
                 account: { availability: "unavailable" },
+                billing: { availability: "unavailable" },
                 credential: { configured: false, verification: "unknown" },
                 credits: { availability: "unavailable" },
+                plan: { availability: "unavailable" },
                 schema: pluginServiceStatusSchema,
                 state: "disconnected",
                 usage: { availability: "unavailable" },

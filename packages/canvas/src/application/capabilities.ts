@@ -51,6 +51,12 @@ export const canvasCommandCapabilities = [
     layer: "primitive",
   },
   {
+    commandType: "nodes.materialize-connected",
+    defaultForAgent: false,
+    description: "Create one authorized top-level file node and its source edge with Canvas-owned placement.",
+    layer: "business",
+  },
+  {
     commandType: "nodes.distribute",
     defaultForAgent: false,
     description: "Evenly distribute a set of nodes.",

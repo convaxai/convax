@@ -161,7 +161,62 @@ function remoteMcpManifest(
   }
 }
 
+function materializationManifest(overrides: Record<string, unknown> = {}) {
+  return {
+    capabilities: [
+      "canvas.connectedInputs.read",
+      "canvas.connectedMedia.stream",
+      "canvas.node.read",
+      "canvas.node.write",
+      "ui.fullscreen",
+    ],
+    contributes: {
+      canvas: {
+        renderer: { create: true, height: 760, width: 1120 },
+        selectionActions: [
+          {
+            action: { connect: "selection-to-created", type: "materialize-own-plugin-node" },
+            description: { default: "Create an editable timeline" },
+            id: "create-timeline",
+            target: "video",
+            title: { default: "Create Timeline" },
+          },
+        ],
+      },
+    },
+    description: "Timeline surface",
+    entry: "index.html",
+    id: "timeline-surface",
+    name: "Timeline Surface",
+    schema: "convax.plugin/7",
+    version: "1.0.0",
+    ...overrides,
+  }
+}
+
 describe("versioned Plugin manifest generation declarations", () => {
+  test("parses v7 own-node materialization and connected-media streaming without widening v6", () => {
+    const parsed = parseWebPluginManifest(materializationManifest())
+    expect(parsed.schema).toBe("convax.plugin/7")
+    expect(parsed.capabilities).toContain("canvas.connectedMedia.stream")
+    expect(parsed.contributes.canvas?.selectionActions?.[0]).toMatchObject({
+      action: { connect: "selection-to-created", type: "materialize-own-plugin-node" },
+      id: "create-timeline",
+      target: "video",
+    })
+    expect(() => parseWebPluginManifest(materializationManifest({ schema: "convax.plugin/6" }))).toThrow(
+      "Connected-media streaming is available only to convax.plugin/7",
+    )
+    expect(() =>
+      parseWebPluginManifest(
+        materializationManifest({
+          capabilities: ["canvas.connectedInputs.read"],
+          contributes: materializationManifest().contributes,
+          schema: "convax.plugin/6",
+        }),
+      ),
+    ).toThrow()
+  })
   test("keeps convax.plugin/1 static-only", () => {
     const parsed = parseWebPluginManifest(staticManifest())
     expect(parsed.schema).toBe("convax.plugin/1")
@@ -319,7 +374,8 @@ describe("versioned Plugin manifest generation declarations", () => {
       capabilities: [],
       contributes: {
         llm: {
-          models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+          modelCatalog: "runtime",
+          models: [{ id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" }],
           provider: { id: "pippit-glm", name: "Pippit GLM" },
         },
       },
@@ -331,9 +387,19 @@ describe("versioned Plugin manifest generation declarations", () => {
       version: "0.4.0",
     })
     expect(parsed.contributes.llm).toEqual({
-      models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+      modelCatalog: "runtime",
+      models: [{ id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" }],
       provider: { id: "pippit-glm", name: "Pippit GLM" },
     })
+    expect(() =>
+      parseWebPluginManifest({
+        ...parsed,
+        contributes: {
+          ...parsed.contributes,
+          llm: { ...parsed.contributes.llm, modelCatalog: "provider-specific" },
+        },
+      }),
+    ).toThrow("LLM model catalog must be runtime")
     expect(() =>
       parseWebPluginManifest({
         ...parsed,
@@ -379,11 +445,7 @@ describe("versioned Plugin manifest generation declarations", () => {
       }),
     )
 
-    expect(parsed.capabilities).toEqual([
-      "pet.activity.read",
-      "pet.activity.open",
-      "pet.preferences.write",
-    ])
+    expect(parsed.capabilities).toEqual(["pet.activity.read", "pet.activity.open", "pet.preferences.write"])
   })
 
   test.each([

@@ -238,9 +238,7 @@ describe("generation Agent tool", () => {
     await entered
     cancellation.abort(new DOMException("Stopped", "AbortError"))
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
-    expect(service.cancels).toEqual([
-      { actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" },
-    ])
+    expect(service.cancels).toEqual([{ actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" }])
 
     function providerCall() {
       return createGenerationAgentToolProvider(service).callTool(scope, "canvas_generate", validInput(), {

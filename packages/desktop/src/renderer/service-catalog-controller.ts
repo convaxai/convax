@@ -68,23 +68,49 @@ function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentic
 }
 
 function pluginBilling(service: PluginServiceViewEntry): ServiceBilling {
+  const plan = service.status?.plan
+  if (plan?.availability === "available") {
+    return plan.key === "free" ? { kind: "free" } : { kind: "subscription", name: plan.name }
+  }
   const credits = service.status?.credits
   return credits?.availability === "available"
     ? { kind: "credits", remaining: credits.remaining, unit: credits.unit }
     : { kind: "unknown" }
 }
 
-function pluginEntry(service: PluginServiceViewEntry): PluginServiceCatalogEntry {
+function pluginProviderPrefix(pluginId: string) {
+  return `plugin-${pluginId}-`
+}
+
+function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalog): PluginServiceCatalogEntry {
+  const connectedLlmProviders =
+    catalog?.providers.filter(
+      (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
+    ) ?? []
+  const models =
+    connectedLlmProviders.length === 0
+      ? service.models
+      : [
+          ...service.models.filter((model) => model.capability !== "llm"),
+          ...connectedLlmProviders.flatMap((provider) =>
+            provider.models.map((model) => ({
+              capability: "llm" as const,
+              default: model.default,
+              id: model.modelId,
+              name: model.modelName,
+            })),
+          ),
+        ]
   return {
     actions: service.actions,
     authentication: pluginAuthentication(service),
     billing: pluginBilling(service),
-    capabilities: service.capabilities,
+    capabilities: [...new Set(models.map((model) => model.capability))],
     description: service.description,
     error: service.error,
     kind: "plugin",
     loading: service.loading,
-    models: service.models,
+    models,
     name: service.pluginName,
     pluginId: service.pluginId,
     serviceId: `plugin:${service.pluginId}`,
@@ -100,7 +126,9 @@ function openCodeEntry(input: {
   loading: boolean
 }): BuiltinServiceCatalogEntry {
   const connectedProviders =
-    input.catalog?.providers.filter((provider) => provider.connected && provider.models.length > 0) ?? []
+    input.catalog?.providers.filter(
+      (provider) => provider.connected && provider.models.length > 0 && !provider.providerId.startsWith("plugin-"),
+    ) ?? []
   const models = connectedProviders.flatMap((provider) =>
     provider.models.map((model) => ({
       capability: "llm" as const,
@@ -199,6 +227,10 @@ export class ServiceCatalogController {
     await this.#refreshModels()
   }
 
+  async checkout(pluginId: string, planKey: string) {
+    return this.#plugins.checkout(pluginId, planKey)
+  }
+
   dispose() {
     if (this.#disposed) return
     this.#disposed = true
@@ -247,7 +279,7 @@ export class ServiceCatalogController {
       loading: this.#pluginSnapshot.loading || this.#agentLoading,
       services: [
         openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
-        ...this.#pluginSnapshot.services.map(pluginEntry),
+        ...this.#pluginSnapshot.services.map((service) => pluginEntry(service, this.#agentCatalog)),
       ],
     }
   }

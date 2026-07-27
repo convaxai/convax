@@ -8,6 +8,11 @@ import {
   pluginServiceBrowserAuthorizationRequestSchema,
   type PluginServiceBrowserAuthorizationCompletion,
 } from "./plugin-service-browser-authorization"
+import {
+  pluginServiceExternalAuthorizationCompletionSchema,
+  pluginServiceExternalAuthorizationRequestSchema,
+  type PluginServiceExternalAuthorizationCompletion,
+} from "./plugin-service-external-authorization"
 
 const summary: PluginServiceSummary = {
   actions: ["sign_out"],
@@ -21,8 +26,10 @@ const summary: PluginServiceSummary = {
 
 const status = {
   account: { availability: "unavailable" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "unavailable" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -37,6 +44,36 @@ function deferred<T>() {
 }
 
 describe("PluginServiceHost", () => {
+  test("opens only the fixed Checkout result and returns the refreshed bounded status", async () => {
+    const checkoutSummary = { ...summary, actions: ["checkout", "sign_out"] as WebPluginServiceAction[] }
+    const calls: Array<{ call: string; input?: { readonly planKey: string } }> = []
+    const runtime: PluginServiceToolRuntime = {
+      async callService(_pluginId, call, _signal, input) {
+        calls.push({ call, ...(input === undefined ? {} : { input }) })
+        return call === "checkout"
+          ? {
+              structuredContent: {
+                checkout_id: "checkout_12345678",
+                checkout_url: "https://checkout.example.test/session/123?provider=secure",
+                schema: "convax.plugin-service-checkout/1",
+              },
+            }
+          : { structuredContent: status }
+      },
+      listServices: async () => [checkoutSummary],
+    }
+    const opened: string[] = []
+    const host = new PluginServiceHost(runtime, undefined, undefined, {
+      open: async (url) => {
+        opened.push(url)
+      },
+    })
+
+    expect(await host.checkout("account-tools", "pro")).toEqual(status)
+    expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
+    expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
+  })
+
   test("returns only a validated structured status and ignores raw MCP text", async () => {
     const callService = mock(async () => ({
       content: [{ text: "Bearer secret-must-not-cross-preload", type: "text" }],
@@ -63,7 +100,7 @@ describe("PluginServiceHost", () => {
       },
       listServices: async () => [summary],
     }
-    const host = new PluginServiceHost(runtime, undefined, onServiceMutation)
+    const host = new PluginServiceHost(runtime, undefined, undefined, undefined, onServiceMutation)
 
     await host.getStatus("account-tools")
     await host.signOut("account-tools")
@@ -81,6 +118,8 @@ describe("PluginServiceHost", () => {
         callService: async () => ({ structuredContent: status }),
         listServices: async () => [summary],
       },
+      undefined,
+      undefined,
       undefined,
       async () => {
         throw new Error("Agent refresh failed")
@@ -101,6 +140,8 @@ describe("PluginServiceHost", () => {
         callService: async () => ({ structuredContent: status }),
         listServices: async () => [summary],
       },
+      undefined,
+      undefined,
       undefined,
       onServiceMutation,
     )
@@ -128,6 +169,7 @@ describe("PluginServiceHost", () => {
         expect(call).toBe("authorize")
         return {
           completeAuthorization: async (input) => {
+            if (!("cookies" in input)) throw new Error("unexpected external authorization completion")
             completions.push(input)
             return { structuredContent: status }
           },
@@ -175,6 +217,105 @@ describe("PluginServiceHost", () => {
       },
     ])
     expect(JSON.stringify(result)).not.toContain("main-only-cookie")
+  })
+
+  test("opens public-client authorization externally and completes without exposing a code or token", async () => {
+    const authorizationSummary: PluginServiceSummary = {
+      ...summary,
+      actions: ["authorize", "authorization.cancel", "sign_out"],
+    }
+    const completions: PluginServiceExternalAuthorizationCompletion[] = []
+    const runtime: PluginServiceToolRuntime = {
+      async callService(_pluginId, call) {
+        if (call === "authorization.cancel") return { structuredContent: status }
+        return {
+          completeAuthorization: async (input) => {
+            if ("cookies" in input) throw new Error("unexpected browser-cookie completion")
+            completions.push(input)
+            return { structuredContent: status }
+          },
+          structuredContent: {
+            authorization_id: "request_0123456789abcdef",
+            authorization_url:
+              "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
+            schema: pluginServiceExternalAuthorizationRequestSchema,
+          },
+        }
+      },
+      listServices: async () => [authorizationSummary],
+    }
+    const opened: string[] = []
+    const completed = mock(() => undefined)
+    const host = new PluginServiceHost(
+      runtime,
+      undefined,
+      {
+        async authorize(_pluginId, request) {
+          opened.push(request.authorizationUrl)
+          return {
+            authorization_id: request.authorizationId,
+            schema: pluginServiceExternalAuthorizationCompletionSchema,
+          }
+        },
+        async disposePlugin() {},
+      },
+      undefined,
+      undefined,
+      completed,
+    )
+
+    expect(await host.authorize("account-tools")).toEqual(status)
+    expect(completed).toHaveBeenCalledTimes(1)
+    expect(opened).toEqual([
+      "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
+    ])
+    expect(completions).toEqual([
+      {
+        authorization_id: "request_0123456789abcdef",
+        schema: pluginServiceExternalAuthorizationCompletionSchema,
+      },
+    ])
+  })
+
+  test("does not focus Convax when external authorization completion fails", async () => {
+    const authorizationSummary: PluginServiceSummary = {
+      ...summary,
+      actions: ["authorize", "authorization.cancel"],
+    }
+    const focused = mock(() => undefined)
+    const host = new PluginServiceHost(
+      {
+        async callService(_pluginId, call) {
+          if (call === "authorization.cancel") return { structuredContent: status }
+          return {
+            completeAuthorization: async () => ({ isError: true }),
+            structuredContent: {
+              authorization_id: "request_0123456789abcdef",
+              authorization_url:
+                "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
+              schema: pluginServiceExternalAuthorizationRequestSchema,
+            },
+          }
+        },
+        listServices: async () => [authorizationSummary],
+      },
+      undefined,
+      {
+        async authorize(_pluginId, request) {
+          return {
+            authorization_id: request.authorizationId,
+            schema: pluginServiceExternalAuthorizationCompletionSchema,
+          }
+        },
+        async disposePlugin() {},
+      },
+      undefined,
+      undefined,
+      focused,
+    )
+
+    await expect(host.authorize("account-tools")).rejects.toThrow("authorization completion failed")
+    expect(focused).not.toHaveBeenCalled()
   })
 
   test("fails closed before opening a browser for an invalid request", async () => {

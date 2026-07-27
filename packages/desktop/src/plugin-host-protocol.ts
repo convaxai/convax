@@ -8,8 +8,12 @@ export const desktopPluginHostProtocolV4 = "convax.plugin-host/4" as const
  * independently instead of creating another Web-host protocol version.
  */
 export const pluginCapabilityProtocolV1 = "convax.plugin-capability/1" as const
+/** v2 adds self-node materialization admission and node-scoped connected-media streams. */
+export const pluginCapabilityProtocolV2 = "convax.plugin-capability/2" as const
+export type PluginCapabilityProtocol = typeof pluginCapabilityProtocolV1 | typeof pluginCapabilityProtocolV2
 /** Compatibility name for callers that still index protocols by manifest generation. */
 export const desktopPluginHostProtocolV5 = pluginCapabilityProtocolV1
+export const desktopPluginHostProtocolV7 = pluginCapabilityProtocolV2
 /** Backwards-compatible name for the original static Plugin protocol. */
 export const desktopPluginHostProtocol = desktopPluginHostProtocolV1
 export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
@@ -22,6 +26,7 @@ export type DesktopPluginHostProtocol =
   | typeof desktopPluginHostProtocolV3
   | typeof desktopPluginHostProtocolV4
   | typeof desktopPluginHostProtocolV5
+  | typeof desktopPluginHostProtocolV7
 
 export type DesktopPluginHostMethodV1 =
   | "host.context.get"
@@ -51,7 +56,12 @@ export type DesktopPluginHostMethodV5 =
   | "canvas.events.subscribe"
   | "canvas.events.unsubscribe"
 
-export type DesktopPluginHostMethod = DesktopPluginHostMethodV5
+export type DesktopPluginHostMethodV7 =
+  | DesktopPluginHostMethodV5
+  | "canvas.connectedMedia.open"
+  | "canvas.connectedMedia.close"
+
+export type DesktopPluginHostMethod = DesktopPluginHostMethodV7
 
 export interface DesktopPluginHostRequest {
   id: string
@@ -120,6 +130,11 @@ const methodsV5 = new Set<DesktopPluginHostMethodV5>([
   "canvas.events.subscribe",
   "canvas.events.unsubscribe",
 ])
+const methodsV7 = new Set<DesktopPluginHostMethodV7>([
+  ...methodsV5,
+  "canvas.connectedMedia.open",
+  "canvas.connectedMedia.close",
+])
 
 export function desktopPluginHostProtocolForManifestSchema(
   schema:
@@ -131,15 +146,17 @@ export function desktopPluginHostProtocolForManifestSchema(
     | "convax.plugin/6"
     | "convax.plugin/7",
 ): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/5" || schema === "convax.plugin/6" || schema === "convax.plugin/7"
-    ? desktopPluginHostProtocolV5
-    : schema === "convax.plugin/4"
-      ? desktopPluginHostProtocolV4
-      : schema === "convax.plugin/3"
-        ? desktopPluginHostProtocolV3
-        : schema === "convax.plugin/2"
-          ? desktopPluginHostProtocolV2
-          : desktopPluginHostProtocolV1
+  return schema === "convax.plugin/7"
+    ? desktopPluginHostProtocolV7
+    : schema === "convax.plugin/5" || schema === "convax.plugin/6"
+      ? desktopPluginHostProtocolV5
+      : schema === "convax.plugin/4"
+        ? desktopPluginHostProtocolV4
+        : schema === "convax.plugin/3"
+          ? desktopPluginHostProtocolV3
+          : schema === "convax.plugin/2"
+            ? desktopPluginHostProtocolV2
+            : desktopPluginHostProtocolV1
 }
 
 export function isDesktopPluginHostProtocol(value: unknown): value is DesktopPluginHostProtocol {
@@ -148,7 +165,8 @@ export function isDesktopPluginHostProtocol(value: unknown): value is DesktopPlu
     value === desktopPluginHostProtocolV2 ||
     value === desktopPluginHostProtocolV3 ||
     value === desktopPluginHostProtocolV4 ||
-    value === desktopPluginHostProtocolV5
+    value === desktopPluginHostProtocolV5 ||
+    value === desktopPluginHostProtocolV7
   )
 }
 
@@ -172,7 +190,9 @@ export function isDesktopPluginHostRequest(value: unknown): value is DesktopPlug
         ? methodsV3.has(request.method as DesktopPluginHostMethodV3)
         : request.protocol === desktopPluginHostProtocolV4
           ? methodsV4.has(request.method as DesktopPluginHostMethodV4)
-          : methodsV5.has(request.method as DesktopPluginHostMethodV5)
+          : request.protocol === desktopPluginHostProtocolV5
+            ? methodsV5.has(request.method as DesktopPluginHostMethodV5)
+            : methodsV7.has(request.method as DesktopPluginHostMethodV7)
 }
 
 export function pluginHostSuccess(

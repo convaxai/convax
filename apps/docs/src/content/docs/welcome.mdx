@@ -1,0 +1,36 @@
+---
+title: 认识 Convax
+description: 了解 Convax 如何把本地项目、多个画布、Agent 与可安装创作能力组织到同一个桌面工作空间。
+sidebar:
+  order: 0
+  badge: 概览
+---
+
+Convax 是一个桌面端可视化工作空间，用来把项目文件、创意和 AI 协作过程组织成彼此关联、
+可以持续编辑的画布。
+
+<CardGrid>
+  <Card title="围绕真实项目工作" icon="ph:folder-open">
+    浏览、导入和整理本地文件，把文件或文件夹直接拖入 Canvas 和 Agent 上下文。
+  </Card>
+  <Card title="在多个画布中组织内容" icon="ph:selection-background">
+    在同一个 Project 中维护彼此独立的 Canvas，连接文本、图片、音视频、文件和 Agent 节点。
+  </Card>
+  <Card title="与 Agent 协作" icon="ph:sparkle">
+    让 Agent 使用与界面相同的 Canvas 操作查看内容、添加资源、调整关系和定位节点。
+  </Card>
+  <Card title="通过 Skill 和 Plugin 扩展" icon="ph:puzzle-piece">
+    安装可复用的 Agent 工作流和创作工具，并通过明确授权的能力访问 Project、Canvas 或 Agent。
+  </Card>
+</CardGrid>
+
+## 核心模型
+
+- **Project** 是绑定到本地目录的持久化工作单元，拥有文件能力和 Canvas 目录。
+- **Canvas** 是带修订版本的独立文档，承载节点、边、业务操作和视图命令。
+- **Workbench** 负责当前窗口中正在显示的输入、选择和布局状态。
+- **Agent** 在当前 Project 范围内读取结构化资源，并通过受保护的工具调用业务能力。
+
+<Aside type="note" title="一份业务语义">
+  界面与 Agent 复用同一套应用服务。持久化、冲突处理和权限校验不会在不同入口各自实现。
+</Aside>

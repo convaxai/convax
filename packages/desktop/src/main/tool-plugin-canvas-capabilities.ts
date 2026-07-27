@@ -4,6 +4,7 @@ import { PluginCapabilityConnection } from "../plugin-capability-dispatch"
 import {
   pluginCanvasDocumentChangedCommand,
   pluginCapabilityProtocolV1,
+  type PluginCapabilityProtocol,
   type DesktopPluginHostMethod,
 } from "../plugin-host-protocol"
 import type { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
@@ -87,7 +88,7 @@ export async function createToolPluginCanvasMcpBridge(
     throw new Error(`Tool Plugin changed before its Canvas capability connection was established: ${plugin.id}`)
   }
   const client = await host.broker.connect({ principal, scope: { kind: "all-bound-projects" } })
-  return new ToolPluginCanvasConnection(client, definitions)
+  return new ToolPluginCanvasConnection(client, definitions, principal.capabilityProtocol ?? pluginCapabilityProtocolV1)
 }
 
 class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
@@ -96,12 +97,15 @@ class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
   readonly #methods: ReadonlyMap<string, DesktopPluginHostMethod>
   #closed = false
   #nextRequestId = 1
+  readonly #protocol: PluginCapabilityProtocol
   #sendNotification?: StdioMcpServerRequestContext["sendNotification"]
 
   constructor(
     client: PluginCanvasCapabilityClient,
     definitions: readonly { host: DesktopPluginHostMethod; mcp: string }[],
+    protocol: PluginCapabilityProtocol,
   ) {
+    this.#protocol = protocol
     this.#methods = new Map(definitions.map(({ host, mcp }) => [mcp, host]))
     this.#connection = new PluginCapabilityConnection(client, {
       send: (command) => {
@@ -112,7 +116,7 @@ class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
           this.close()
         }
       },
-    })
+    }, undefined, protocol)
     this.handler = {
       close: () => this.close(),
       handle: (request, context) => this.#handle(request.method, request.params, context),
@@ -139,7 +143,7 @@ class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
         id: `tool-request-${this.#nextRequestId++}`,
         method: hostMethod,
         ...(params === undefined ? {} : { params }),
-        protocol: pluginCapabilityProtocolV1,
+        protocol: this.#protocol,
         type: "request",
       },
       context.signal,
@@ -152,7 +156,7 @@ class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
             id: `tool-request-${this.#nextRequestId++}`,
             method: "canvas.events.unsubscribe",
             params: { subscriptionId },
-            protocol: pluginCapabilityProtocolV1,
+            protocol: this.#protocol,
             type: "request",
           })
         }

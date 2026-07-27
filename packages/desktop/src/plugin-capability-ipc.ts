@@ -1,4 +1,5 @@
 import type { DesktopPluginHostCommand, DesktopPluginHostResponse } from "./plugin-host-protocol"
+import type { PluginCapabilityProtocol } from "./plugin-host-protocol"
 
 export const pluginCapabilityIpcChannels = {
   call: "plugin:capability-call",
@@ -17,7 +18,7 @@ export interface PluginCapabilityConnectInput {
 
 export interface PluginCapabilityConnectResult {
   connectionId: string
-  protocol: "convax.plugin-capability/1"
+  protocol: PluginCapabilityProtocol
 }
 
 export interface PluginCapabilityCallInput {

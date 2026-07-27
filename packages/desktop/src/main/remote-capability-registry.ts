@@ -25,6 +25,7 @@ export const remotePluginHostSchemaV2 = "convax.plugin-host/2" as const
 export const remotePluginHostSchemaV3 = "convax.plugin-host/3" as const
 export const remotePluginHostSchemaV4 = "convax.plugin-host/4" as const
 export const remotePluginCapabilitySchemaV1 = "convax.plugin-capability/1" as const
+export const remotePluginCapabilitySchemaV2 = "convax.plugin-capability/2" as const
 export const remoteSkillSchema = "opencode.skill/1" as const
 
 export type RemotePluginCompatibility =
@@ -53,7 +54,7 @@ export type RemotePluginCompatibility =
       pluginSchema: typeof webPluginManifestSchemaV6
     }
   | {
-      pluginHost: typeof remotePluginCapabilitySchemaV1
+      pluginHost: typeof remotePluginCapabilitySchemaV2
       pluginSchema: typeof webPluginManifestSchemaV7
     }
 
@@ -603,7 +604,7 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
     compatibility.pluginHost === remotePluginCapabilitySchemaV1 &&
     compatibility.pluginSchema === webPluginManifestSchemaV6
   const compatibleV7 =
-    compatibility.pluginHost === remotePluginCapabilitySchemaV1 &&
+    compatibility.pluginHost === remotePluginCapabilitySchemaV2 &&
     compatibility.pluginSchema === webPluginManifestSchemaV7
   if (
     !compatibleV1 &&
@@ -628,7 +629,7 @@ function parsePluginPackage(input: Record<string, unknown>): RemotePluginPackage
             ? { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV5 }
             : compatibleV6
               ? { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV6 }
-              : { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: webPluginManifestSchemaV7 }
+              : { pluginHost: remotePluginCapabilitySchemaV2, pluginSchema: webPluginManifestSchemaV7 }
   let manifest: WebPluginManifest
   try {
     manifest = parseWebPluginManifest(input.manifest)

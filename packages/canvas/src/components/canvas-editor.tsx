@@ -401,6 +401,8 @@ export interface CanvasEditorHandle {
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
   resumeAfterLeaveCanceled: () => void
+  /** Selects existing nodes after a host-owned mutation has been reloaded. */
+  selectNodes: (nodeIds: readonly string[]) => void
   /** Transfers a host-rendered Canvas composer submission to Canvas's operation owner. */
   submitGeneration: (submission: CanvasGenerationComposerSubmission) => void
 }
@@ -2165,6 +2167,9 @@ function CanvasEditorContent(
         leavingRef.current = false
         setLeaving(false)
       },
+      selectNodes(nodeIds) {
+        selectNodes(nodeIds)
+      },
       submitGeneration(submission) {
         submitGenerationRef.current(submission)
       },
@@ -2178,6 +2183,7 @@ function CanvasEditorContent(
       reloadDocument,
       reloadAuthoritativeDocument,
       resourceRefreshController,
+      selectNodes,
       requestGenerate,
       startSave,
       waitForStableLoad,

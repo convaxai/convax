@@ -209,6 +209,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   readonly forcedCloses: boolean[] = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
+  readonly toolResults = new Map<string, McpToolCallResult>()
   readonly recoveryCalls: Array<{ input: unknown; method: string }> = []
 
   async callTool(
@@ -220,6 +221,8 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   ): Promise<McpToolCallResult> {
     await lifecycleObserver?.({ type: "external-started" })
     this.calls.push({ input, name, requestTimeoutMs, signal })
+    const configuredResult = this.toolResults.get(name)
+    if (configuredResult) return configuredResult
     if (name === "llm.gateway.start") {
       return {
         content: [{ text: "started", type: "text" }],
@@ -227,6 +230,18 @@ class FakeMcpClient implements GenerationPluginMcpClient {
           api_key: "a".repeat(43),
           base_url: "http://127.0.0.1:43123/v1",
           schema: "convax.llm-gateway/1",
+        },
+      }
+    }
+    if (name === "llm.models.list") {
+      return {
+        content: [{ text: "listed", type: "text" }],
+        structuredContent: {
+          models: [
+            { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+            { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+          ],
+          schema: "convax.llm-model-catalog/1",
         },
       }
     }
@@ -338,6 +353,58 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
+  })
+
+  test("loads a bounded runtime LLM model catalog before starting the provider gateway", async () => {
+    const dynamic = llmPlugin()
+    dynamic.contributes.llm!.modelCatalog = "runtime"
+    const { clients, runtime } = setup([dynamic], ["llm.models.list", "llm.gateway.start"])
+
+    expect(await runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [
+          { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+          { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+        ],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.models.list", "llm.gateway.start"])
+  })
+
+  test("keeps a shared service authorization runtime alive when its LLM catalog reports an error", async () => {
+    const combined = llmPlugin()
+    combined.contributes.llm!.modelCatalog = "runtime"
+    combined.contributes.service = { actions: ["authorize"] }
+    const { clients, runtime } = setup(
+      [combined],
+      ["llm.models.list", "llm.gateway.start", "service.authorize", "service.authorization.complete"],
+    )
+    const authorization = await runtime.callService(combined.id, "authorize")
+    clients[0]!.toolResults.set("llm.models.list", {
+      content: [{ text: "Sign in before loading models", type: "text" }],
+      isError: true,
+    })
+
+    await expect(runtime.connectLlmProviders()).rejects.toThrow(
+      `Plugin LLM model catalog failed to load: ${combined.id}`,
+    )
+    expect(clients[0]!.closed).toBe(0)
+
+    await authorization.completeAuthorization!({
+      authorization_id: "request_0123456789abcdef",
+      schema: "convax.plugin-service-external-authorization-completion/1",
+    })
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
+      "service.authorize",
+      "llm.models.list",
+      "service.authorization.complete",
+    ])
+    expect(clients[0]!.closed).toBe(0)
   })
 
   test("discovers only v2 generation contributions without starting their commands", async () => {
@@ -888,6 +955,25 @@ describe("GenerationPluginRuntime", () => {
     expect(clients).toHaveLength(0)
   })
 
+  test("derives LLM service capabilities and models from the LLM manifest", async () => {
+    const combined = llmPlugin()
+    combined.contributes.service = { actions: ["authorize"] }
+    const { clients, runtime } = setup([combined])
+
+    expect(await runtime.listServices()).toEqual([
+      {
+        actions: ["authorize"],
+        capabilities: ["llm"],
+        description: "External LLM provider",
+        models: [{ capability: "llm", id: "pippit-glm-main", name: "Pippit GLM Main" }],
+        pluginId: "xiaoyunque-generation",
+        pluginName: "XiaoYunque",
+        version: "0.4.0",
+      },
+    ])
+    expect(clients).toHaveLength(0)
+  })
+
   test("binds browser authorization completion to the exact service runtime and fixed MCP tool", async () => {
     const { clients, runtime } = setup(
       [servicePlugin(["authorize"])],
@@ -949,6 +1035,24 @@ describe("GenerationPluginRuntime", () => {
       "did not expose its fixed MCP tool: service.sign_out",
     )
     expect(missing.clients[0].calls).toHaveLength(0)
+  })
+
+  test("passes only the selected Plan key to the fixed Checkout tool", async () => {
+    const { clients, runtime } = setup([servicePlugin(["checkout"])], ["service.checkout", "service.status"])
+
+    await runtime.callService("account-tools", "checkout", undefined, { planKey: "pro-monthly" })
+
+    expect(clients[0]?.calls).toEqual([
+      {
+        input: { plan_key: "pro-monthly" },
+        name: "service.checkout",
+        requestTimeoutMs: undefined,
+      },
+    ])
+    await expect(runtime.callService("account-tools", "checkout")).rejects.toThrow("input is invalid")
+    await expect(runtime.callService("account-tools", "status", undefined, { planKey: "pro-monthly" })).rejects.toThrow(
+      "input is invalid",
+    )
   })
 
   test("reuses one verified sidecar for generation and service contributions", async () => {

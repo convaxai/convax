@@ -3,10 +3,7 @@ import type { ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
-import {
-  canvasDocumentIpcChannels,
-  type CanvasRendererDocumentClient,
-} from "../canvas-document-contracts"
+import { canvasDocumentIpcChannels, type CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import {
   canvasExternalMediaDragIpcChannels,
   type CanvasExternalMediaDragRendererClient,
@@ -14,14 +11,19 @@ import {
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import {
+  pluginConnectedMediaIpcChannels,
+  type PluginConnectedMediaRendererClient,
+} from "../plugin-connected-media-contracts"
+import {
+  pluginMaterializationIpcChannels,
+  type PluginMaterializationRendererClient,
+} from "../plugin-materialization-contracts"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
-import {
-  pluginCanvasImageIpcChannels,
-  type PluginCanvasImageClient,
-} from "../plugin-canvas-image-contracts"
+import { pluginCanvasImageIpcChannels, type PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
@@ -29,10 +31,7 @@ import {
   type CanvasRendererRequestEnvelope,
   type CanvasRendererResponseEnvelope,
 } from "../canvas-renderer-contracts"
-import {
-  workspaceSystemStatusIpcChannel,
-  type WorkspaceSystemStatusClient,
-} from "../workspace-system-status-contracts"
+import { workspaceSystemStatusIpcChannel, type WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 
 const channels = {
   createProject: "project:create",
@@ -450,9 +449,20 @@ const pluginCapabilityClient = {
   },
 } satisfies PluginCapabilityRendererClient
 
+const pluginMaterializationClient = {
+  materialize: (input) => ipcRenderer.invoke(pluginMaterializationIpcChannels.materialize, input),
+} satisfies PluginMaterializationRendererClient
+
+const pluginConnectedMediaClient = {
+  close: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.close, input),
+  open: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.open, input),
+  revokeFrame: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.revokeFrame, input),
+} satisfies PluginConnectedMediaRendererClient
+
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
+  checkout: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.checkout, input),
   getStatus: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.getStatus, input),
   listServices: () => ipcRenderer.invoke(pluginServiceIpcChannels.listServices),
   onDidChange(listener) {
@@ -547,6 +557,8 @@ contextBridge.exposeInMainWorld("convax", {
   canvas: {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
+    pluginConnectedMedia: pluginConnectedMediaClient,
+    pluginMaterialization: pluginMaterializationClient,
     pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
     resources: canvasResourceClient,

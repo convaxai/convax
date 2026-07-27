@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "bun turbo dev --filter=@convax/desktop",
     "dev:desktop": "bun turbo dev --filter=@convax/desktop",
+    "dev:docs": "bun turbo dev --filter=@convax/docs",
     "build": "bun turbo build",
     "package": "bun run --cwd packages/desktop package",
     "package:dir": "bun run --cwd packages/desktop package:dir",
@@ -25,6 +26,7 @@
   },
   "workspaces": {
     "packages": [
+      "apps/*",
       "packages/*"
     ],
     "catalog": {

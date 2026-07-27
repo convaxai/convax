@@ -6,6 +6,7 @@ import {
   type PluginServiceStatus,
 } from "../plugin-service-contracts"
 import {
+  parsePluginServiceCheckoutTarget,
   parsePluginServiceTarget,
   PluginServiceIpcOperations,
   registerPluginServiceIpcCore,
@@ -15,10 +16,19 @@ import {
 class TestSender {
   readonly #listeners = new Set<() => void>()
   constructor(readonly id: number) {}
-  once(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.add(listener) }
-  removeListener(event: "destroyed", listener: () => void) { if (event === "destroyed") this.#listeners.delete(listener) }
-  destroy() { for (const listener of this.#listeners) listener(); this.#listeners.clear() }
-  listenerCount() { return this.#listeners.size }
+  once(event: "destroyed", listener: () => void) {
+    if (event === "destroyed") this.#listeners.add(listener)
+  }
+  removeListener(event: "destroyed", listener: () => void) {
+    if (event === "destroyed") this.#listeners.delete(listener)
+  }
+  destroy() {
+    for (const listener of this.#listeners) listener()
+    this.#listeners.clear()
+  }
+  listenerCount() {
+    return this.#listeners.size
+  }
 }
 
 function waitForAbort(signal: AbortSignal) {
@@ -30,8 +40,10 @@ function waitForAbort(signal: AbortSignal) {
 
 const status: PluginServiceStatus = {
   account: { availability: "unavailable" },
+  billing: { availability: "unavailable" },
   credential: { configured: true, verification: "verified" },
   credits: { availability: "unavailable" },
+  plan: { availability: "unavailable" },
   schema: pluginServiceStatusSchema,
   state: "connected",
   usage: { availability: "unavailable" },
@@ -41,6 +53,7 @@ function executor(overrides: Partial<PluginServiceExecutor> = {}): PluginService
   return {
     authorize: mock(async () => status),
     cancelAuthorization: mock(async () => status),
+    checkout: mock(async () => status),
     getStatus: mock(async () => status),
     listServices: mock(async () => []),
     reauthorize: mock(async () => status),
@@ -59,12 +72,30 @@ describe("Plugin service IPC boundary", () => {
     expect(Object.values(pluginServiceIpcChannels)).toEqual([
       "plugin-service:authorize",
       "plugin-service:authorization-cancel",
+      "plugin-service:checkout",
       "plugin-service:changed",
       "plugin-service:status",
       "plugin-service:list",
       "plugin-service:reauthorize",
       "plugin-service:sign-out",
     ])
+  })
+
+  test("accepts only an exact Plugin id and Plan key for Checkout", () => {
+    expect(parsePluginServiceCheckoutTarget({ planKey: "pro-monthly", pluginId: "account-tools" })).toEqual({
+      planKey: "pro-monthly",
+      pluginId: "account-tools",
+    })
+    expect(() =>
+      parsePluginServiceCheckoutTarget({
+        checkoutUrl: "https://attacker.example/checkout",
+        planKey: "pro-monthly",
+        pluginId: "account-tools",
+      }),
+    ).toThrow("Checkout target is invalid")
+    expect(() => parsePluginServiceCheckoutTarget({ planKey: "Pro Monthly", pluginId: "account-tools" })).toThrow(
+      "Checkout target is invalid",
+    )
   })
 
   test("scopes duplicate operations and renderer destruction to one sender", async () => {
@@ -87,8 +118,14 @@ describe("Plugin service IPC boundary", () => {
     const owner = new TestSender(1)
     const first = operations.run(owner, "authorize\0one", waitForAbort)
     const second = operations.run(owner, "authorize\0two", waitForAbort)
-    const firstOutcome = first.then(() => null, (error: unknown) => error)
-    const secondOutcome = second.then(() => null, (error: unknown) => error)
+    const firstOutcome = first.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    const secondOutcome = second.then(
+      () => null,
+      (error: unknown) => error,
+    )
     operations.dispose()
     operations.dispose()
     expect(await firstOutcome).toMatchObject({ name: "AbortError" })
@@ -115,10 +152,10 @@ describe("Plugin service IPC boundary", () => {
       },
     )
     const sender = new TestSender(1)
-    const invoke = (channel: string) => {
+    const invoke = (channel: string, input: Record<string, unknown> = { pluginId: "account-tools" }) => {
       const handler = handlers.get(channel)
       if (!handler) throw new Error(`Missing handler: ${channel}`)
-      return handler({ sender }, { pluginId: "account-tools" })
+      return handler({ sender }, input)
     }
 
     await invoke(pluginServiceIpcChannels.getStatus)
@@ -131,10 +168,14 @@ describe("Plugin service IPC boundary", () => {
     ]) {
       await invoke(channel)
     }
-    expect(changes).toEqual(Array.from({ length: 4 }, () => pluginServiceIpcChannels.changed))
+    await invoke(pluginServiceIpcChannels.checkout, {
+      planKey: "pro-monthly",
+      pluginId: "account-tools",
+    })
+    expect(changes).toEqual(Array.from({ length: 5 }, () => pluginServiceIpcChannels.changed))
 
     dispose()
-    expect(removed).toHaveLength(6)
+    expect(removed).toHaveLength(7)
   })
 
   test("does not publish a service change when the mutation fails", async () => {

@@ -213,6 +213,66 @@ describe("canvas application commands", () => {
     ])
   })
 
+  test("atomically materializes one top-level file node beside a matching source and connects it", () => {
+    const source = {
+      ...createMediaNode({
+        id: "video-source",
+        position: { x: 20, y: 40 },
+        resource: {
+          id: "video-resource",
+          kind: "video",
+          metadata: {},
+          state: { status: "ready", url: "asset://source" },
+        },
+      }),
+      style: { height: 180, width: 320 },
+    }
+    const plugin = {
+      ...createTextNode({
+        id: "plugin-node",
+        metadata: {},
+        position: { x: -1000, y: -1000 },
+        resourceState: { status: "ready", text: "" },
+      }),
+      data: { kind: "plugin.editor", label: "Editor", metadata: { plugin: "editor" } },
+      style: { height: 500, width: 700 },
+    }
+    const document = createCanvasDocument({ id: "materialize", nodes: [source] })
+    const committed = executeCanvasBusinessCommand(document, {
+      actor: { id: "plugin:editor", kind: "host" },
+      command: {
+        type: "nodes.materialize-connected",
+        node: plugin,
+        sourceKind: "video",
+        sourceNodeId: source.id,
+      },
+      commandId: "materialize-editor",
+      expectedRevision: 0,
+    })
+
+    expect(committed.document.revision).toBe(1)
+    expect(committed.createdNodeIds).toEqual([plugin.id])
+    expect(committed.document.nodes.find((node) => node.id === plugin.id)).toMatchObject({
+      data: { kind: "plugin.editor" },
+      position: { x: 364, y: 40 },
+    })
+    expect(committed.document.edges).toEqual([expect.objectContaining({ source: source.id, target: plugin.id })])
+    expect(committed.document.nodes.find((node) => node.id === source.id)).toEqual(source)
+    expect(() =>
+      executeCanvasBusinessCommand(document, {
+        actor: { id: "plugin:editor", kind: "host" },
+        command: {
+          type: "nodes.materialize-connected",
+          node: plugin,
+          sourceKind: "audio",
+          sourceNodeId: source.id,
+        },
+        commandId: "wrong-source-kind",
+        expectedRevision: 0,
+      }),
+    ).toThrow("requires a audio file node")
+  })
+
   test("keeps searching for free placement after the old fixed candidate set is full", () => {
     const occupiedPoints = [
       [0, 0],

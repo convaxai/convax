@@ -1,0 +1,49 @@
+---
+title: 维护文档
+description: 在 Nimbus 与 Astro 提供的文档应用中新增内容、复用组件并运行验证。
+sidebar:
+  order: 2
+---
+
+文档应用位于 `apps/docs`，页面内容放在 `src/content/docs/`。每个 `.mdx` 文件都会经过
+内容集合和 frontmatter 校验，并自动进入侧边栏。
+
+## 新增页面
+
+<Steps>
+  <Step title="创建 MDX 文件">在 `src/content/docs/` 下新建页面，并填写 `title` 和一句话 `description`。</Step>
+  <Step title="组织导航">通过 `sidebar.order` 调整顺序；需要分组时按目录组织内容。</Step>
+  <Step title="运行验证">执行 `bun --cwd apps/docs run test` 和 `bun --cwd apps/docs run typecheck`。</Step>
+</Steps>
+
+```mdx title="src/content/docs/example.mdx"
+---
+title: 页面标题
+description: 用于搜索、SEO 和 Agent 索引的一句话说明。
+sidebar:
+  order: 3
+---
+
+从正文开始，不要重复一级标题。
+```
+
+## 可用组件
+
+Nimbus starter 已提供并全局注册常用 MDX 组件：
+
+- `<Aside>`：提示、注意和危险信息；
+- `<Card>` 与 `<CardGrid>`：能力入口和概览；
+- `<Tabs>` 与 `<TabItem>`：并列展示多套命令或平台差异；
+- `<Steps>` 与 `<Step>`：按顺序描述操作流程；
+- `<Render>`：复用 `src/content/partials/` 下的内容。
+
+新增组件时需要同步注册到 `src/components.ts`。从 Nimbus registry 安装组件时使用：
+
+```bash
+bunx @cloudflare/nimbus-docs add <component>
+```
+
+## Agent 可读入口
+
+构建结果同时生成每页的 Markdown 版本、`/llms.txt`、`/llms-full.txt`、JSON-LD、站点地图、
+`robots.txt` 和 OG 图片。不要移除 `BaseLayout.astro` 中的 `<AgentDirective />`。

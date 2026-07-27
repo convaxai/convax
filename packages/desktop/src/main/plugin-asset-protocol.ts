@@ -2,7 +2,6 @@ import fs from "node:fs/promises"
 import { extname } from "node:path"
 
 import { requireWebPluginId, requireWebPluginRelativePath } from "../plugin-contracts"
-import type { WebPluginManager } from "./plugin-manager"
 
 export const webPluginAssetScheme = "convax-plugin"
 
@@ -44,6 +43,9 @@ const contentTypeByExtension: Readonly<Record<string, string>> = {
 
 export interface WebPluginAssetResolver {
   resolveAsset(pluginId: string, relativePath: string): Promise<string>
+  resolveCapabilityIdentity?(pluginId: string): Promise<{
+    plugin: { capabilities: readonly string[]; id: string; schema: string }
+  } | null>
 }
 
 export interface WebPluginAssetHandlerOptions {
@@ -62,7 +64,7 @@ export function pluginAssetContentType(relativePath: string) {
   return contentTypeByExtension[extname(relativePath).toLowerCase()] ?? "application/octet-stream"
 }
 
-function responseHeaders(relativePath: string, rendererUrl: string) {
+function responseHeaders(relativePath: string, rendererUrl: string, allowConnectedMedia = false) {
   const frameAncestor = pluginFrameAncestorSource(rendererUrl)
   return {
     "Cache-Control": "no-store",
@@ -71,7 +73,7 @@ function responseHeaders(relativePath: string, rendererUrl: string) {
       "script-src 'self'",
       "style-src 'self'",
       "img-src 'self' data: blob:",
-      "media-src 'self' data: blob:",
+      `media-src 'self' data: blob:${allowConnectedMedia ? " convax-connected-media:" : ""}`,
       "font-src 'self' data:",
       "connect-src 'none'",
       "worker-src 'none'",
@@ -155,7 +157,7 @@ async function readResolvedAsset(absolutePath: string) {
  * can be tested directly. Package lookup always goes through WebPluginManager.
  */
 export function createWebPluginAssetHandler(
-  manager: Pick<WebPluginManager, "resolveAsset"> | WebPluginAssetResolver,
+  manager: WebPluginAssetResolver,
   options: WebPluginAssetHandlerOptions,
 ) {
   const rendererUrl = options.rendererUrl
@@ -165,9 +167,21 @@ export function createWebPluginAssetHandler(
   return async (request: Pick<Request, "url">): Promise<Response> => {
     try {
       const { pluginId, relativePath } = parsePluginAssetUrl(request.url)
-      const absolutePath = await manager.resolveAsset(pluginId, relativePath)
+      const [absolutePath, identity] = await Promise.all([
+        manager.resolveAsset(pluginId, relativePath),
+        manager.resolveCapabilityIdentity?.(pluginId),
+      ])
+      const allowConnectedMedia = Boolean(
+        identity &&
+          identity.plugin.id === pluginId &&
+          identity.plugin.schema === "convax.plugin/7" &&
+          identity.plugin.capabilities.includes("canvas.connectedMedia.stream"),
+      )
       const content = await readResolvedAsset(absolutePath)
-      return new Response(content, { headers: responseHeaders(relativePath, rendererUrl), status: 200 })
+      return new Response(content, {
+        headers: responseHeaders(relativePath, rendererUrl, allowConnectedMedia),
+        status: 200,
+      })
     } catch {
       return new Response("Plugin asset was not found", {
         headers: {

@@ -99,6 +99,32 @@ describe("Plugin asset protocol", () => {
     expect(response.headers.get("referrer-policy")).toBe("no-referrer")
     expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'")
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors file:")
+    expect(response.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
+  })
+
+  test("opens the connected-media CSP source only for an exact authorized v7 surface", async () => {
+    const asset = await temporaryAsset("index.html", "<!doctype html>")
+    let authorized = true
+    const handle = createWebPluginAssetHandler(
+      {
+        resolveAsset: async () => asset,
+        resolveCapabilityIdentity: async () => ({
+          plugin: {
+            capabilities: authorized ? ["canvas.connectedMedia.stream"] : [],
+            id: "director-stage",
+            schema: "convax.plugin/7",
+          },
+        }),
+      },
+      { rendererUrl: "file:///Applications/Convax/index.html" },
+    )
+    const allowed = await handle({ url: "convax-plugin://director-stage/index.html" })
+    expect(allowed.headers.get("content-security-policy")).toContain(
+      "media-src 'self' data: blob: convax-connected-media:",
+    )
+    authorized = false
+    const denied = await handle({ url: "convax-plugin://director-stage/index.html" })
+    expect(denied.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
   })
 
   test("rejects ambiguous, malformed, traversal, and Windows-unsafe URLs before lookup", async () => {

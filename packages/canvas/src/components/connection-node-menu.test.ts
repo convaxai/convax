@@ -2,10 +2,16 @@ import { describe, expect, test } from "bun:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import { ConnectionNodeMenu, createCanvasCardConnection } from "./connection-node-menu"
 import { getCanvasNodeInsertionItems } from "./insertion-items"
 
 describe("card-level canvas connections", () => {
+  test("keeps the canonical card handle ids stable", () => {
+    expect(CANVAS_NODE_INPUT_HANDLE_ID).toBe("target-left")
+    expect(CANVAS_NODE_OUTPUT_HANDLE_ID).toBe("source-right")
+  })
+
   test("uses only the dragged endpoint and the card released under the pointer", () => {
     expect(createCanvasCardConnection("source", "right", "target")).toEqual({
       source: "source",

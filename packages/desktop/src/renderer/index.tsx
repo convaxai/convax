@@ -98,6 +98,10 @@ import {
 } from "./media-operation-selection-action"
 import { MediaOperationDialog } from "./media-operation-dialog"
 import {
+  canRunPluginMaterialization,
+  listInstalledPluginMaterializationActions,
+} from "./plugin-materialization-selection-action"
+import {
   mediaOperationCancellationNotice,
   MediaOperationPartialError,
   type MediaOperationProgress,
@@ -194,6 +198,10 @@ function App() {
   const webPluginGenerationProjection = useMemo(() => new WebPluginGenerationProjectionCoordinator(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
   const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
+  const pluginMaterializationActions = useMemo(
+    () => listInstalledPluginMaterializationActions(installedPlugins),
+    [installedPlugins],
+  )
   const generationToolCatalogVersionRef = useRef("")
   const generationToolCatalogVersion = JSON.stringify([
     modelCatalogEpoch,
@@ -350,6 +358,11 @@ function App() {
     return () => serviceCatalogController.dispose()
   }, [serviceCatalogController])
   useEffect(() => window.convax.pluginServices.onDidChange(() => setModelCatalogEpoch((current) => current + 1)), [])
+  useEffect(() => {
+    const refreshServicesAfterBrowserReturn = () => void serviceCatalogController.refresh()
+    window.addEventListener("focus", refreshServicesAfterBrowserReturn)
+    return () => window.removeEventListener("focus", refreshServicesAfterBrowserReturn)
+  }, [serviceCatalogController])
   useEffect(() => {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth)
     window.addEventListener("resize", updateViewportWidth)
@@ -1194,8 +1207,61 @@ function App() {
           setMediaOperationDialog({ action, canvasId: activeCanvasId, context, projectId: activeProjectId })
         },
       })),
+      ...pluginMaterializationActions.map((action) => ({
+        id: `plugin-materialization-action:${action.pluginId}/${action.id}`,
+        label: localizedMediaOperationText(action.title, locale),
+        icon: <Layers3 />,
+        visible(context: CanvasSelectionActionContext) {
+          return canRunPluginMaterialization(context, action)
+        },
+        async execute(context: CanvasSelectionActionContext) {
+          if (!activeCanvasId || !activeProjectId) {
+            throw new Error("Open a Project Canvas before materializing a Plugin node")
+          }
+          const sourceNodeId = context.selectedNodeIds[0]
+          if (!sourceNodeId) throw new Error("Select one video before materializing a Plugin node")
+          const authoritative = await flushAuthoritativeCanvas()
+          if (context.signal.aborted) throw context.signal.reason ?? new DOMException("Canceled", "AbortError")
+          if (!authoritative || authoritative.id !== activeCanvasId) {
+            throw new Error("The active Canvas could not be made authoritative")
+          }
+          const source = authoritative.nodes.find((node) => node.id === sourceNodeId)
+          if (!source || source.type !== "file" || source.data.kind !== "video") {
+            throw new Error("The selected source is no longer a video")
+          }
+          const result = await window.convax.canvas.pluginMaterialization.materialize({
+            actionId: action.id,
+            canvasId: activeCanvasId,
+            expectedRevision: authoritative.revision,
+            pluginId: action.pluginId,
+            pluginVersion: action.pluginVersion,
+            projectId: activeProjectId,
+            sourceNodeId,
+          })
+          if (context.signal.aborted) return
+          await canvasEditorRef.current?.reloadAuthoritative()
+          canvasEditorRef.current?.selectNodes([result.createdNodeId])
+          setNotification({
+            description:
+              locale === "zh-CN"
+                ? "已保留源视频，并创建了相连的可编辑 Plugin 节点。"
+                : "The source video was preserved and connected to a new editable Plugin node.",
+            kind: "success",
+            title: localizedMediaOperationText(action.title, locale),
+          })
+        },
+      })),
     ],
-    [activeCanvasId, activeProjectId, locale, mediaOperationActions],
+    [
+      activeCanvasId,
+      activeProjectId,
+      flushAuthoritativeCanvas,
+      flushCanvasForAgent,
+      installedPlugins,
+      locale,
+      mediaOperationActions,
+      pluginMaterializationActions,
+    ],
   )
 
   const selectionDragSource = useMemo<CanvasSelectionDragSource | undefined>(() => {
@@ -2019,6 +2085,7 @@ function App() {
               onLanguageChange={changeLanguage}
               onRefreshServices={() => void serviceCatalogController.refresh()}
               onServiceAction={(pluginId, action) => void serviceCatalogController.perform(pluginId, action)}
+              onServiceCheckout={(pluginId, planKey) => void serviceCatalogController.checkout(pluginId, planKey)}
               onUsePluginOnCanvas={usePluginOnCanvas}
               onUsePluginInAgent={usePluginInAgent}
               petClient={window.convax.pets}

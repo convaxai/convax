@@ -1,12 +1,9 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron"
 
 import { pluginServiceIpcChannels } from "../plugin-service-contracts"
-import {
-  registerPluginServiceIpcCore,
-  type PluginServiceExecutor,
-} from "./plugin-service-ipc-core"
+import { registerPluginServiceIpcCore, type PluginServiceExecutor } from "./plugin-service-ipc-core"
 
-export { parsePluginServiceTarget } from "./plugin-service-ipc-core"
+export { parsePluginServiceCheckoutTarget, parsePluginServiceTarget } from "./plugin-service-ipc-core"
 export type { PluginServiceExecutor } from "./plugin-service-ipc-core"
 
 /** Exposes fixed service operations only; no MCP method or payload crosses preload. */

@@ -88,6 +88,7 @@ export function listInstalledMediaOperationActions(
     const generationTools = plugin.contributes.generation?.tools ?? []
     const actions = plugin.contributes.canvas?.selectionActions ?? []
     return actions.flatMap((action) => {
+      if (!("steps" in action)) return []
       if (!("target" in action) || action.target !== "video") return []
       const steps = action.steps.flatMap((step) => {
         if (!("tool" in step)) return []

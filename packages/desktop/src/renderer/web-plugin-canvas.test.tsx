@@ -7,6 +7,7 @@ import {
   desktopPluginHostProtocol,
   desktopPluginHostProtocolV2,
   pluginCapabilityProtocolV1,
+  pluginCapabilityProtocolV2,
   type DesktopPluginHostProtocol,
 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
@@ -260,8 +261,23 @@ function hostContext(
     signal: controller.signal,
     updateNodeState: mock(async () => undefined),
     ...overrides,
+    closeConnectedMedia: overrides.closeConnectedMedia ?? mock(async () => true),
+    connectedMediaOpenGate: overrides.connectedMediaOpenGate ?? { active: false },
     createCanvasImage:
       overrides.createCanvasImage ?? mock(async () => ({ createdNodeId: "captured-image-1", revision: 1 })),
+    openConnectedMedia:
+      overrides.openConnectedMedia ??
+      mock(async () => ({
+        probe: {
+          duration: { estimated: false, milliseconds: 1_000 },
+          kind: "video" as const,
+          mediaRevision: "revision-1",
+          mimeType: "video/mp4",
+          size: 100,
+        },
+        sessionId: "session-1",
+        url: "convax-connected-media://session-1/token",
+      })),
   } satisfies WebPluginHostRequestContext
 }
 
@@ -853,6 +869,61 @@ describe("Canvas Web Plugin host requests", () => {
       error: "Plugin capability is not granted: canvas.connectedInputs.read",
       ok: false,
     })
+  })
+
+  test("opens and closes only direct connected media through the v7 scoped host port", async () => {
+    const installedPlugin = {
+      ...plugin(["canvas.connectedMedia.stream"]),
+      schema: "convax.plugin/7" as const,
+    }
+    const video = generationInputNode("video", "video-1")
+    const document = {
+      ...createCanvasDocument({
+        edges: [{ id: "edge-1", source: video.id, target: "node-1" }],
+        id: "canvas-1",
+        nodes: [canvasNode(), video],
+      }),
+      revision: 3,
+    }
+    const openConnectedMedia = mock(async () => ({
+      probe: {
+        duration: { estimated: false, milliseconds: 1_000 },
+        kind: "video" as const,
+        mediaRevision: "revision-1",
+        mimeType: "video/mp4",
+        size: 1_024,
+      },
+      sessionId: "session-1",
+      url: "convax-connected-media://session-1/token",
+    }))
+    const closeConnectedMedia = mock(async () => true)
+    const context = hostContext(installedPlugin, {
+      closeConnectedMedia,
+      getConnectedInputNodes: () => [video],
+      getDocument: () => document,
+      openConnectedMedia,
+    })
+
+    const opened = await dispatchWebPluginHostRequest(
+      request("canvas.connectedMedia.open", { nodeId: video.id }, pluginCapabilityProtocolV2),
+      context,
+    )
+    expect(opened).toMatchObject({ ok: true, result: { sessionId: "session-1" } })
+    expect(openConnectedMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedRevision: 3, sourceNodeId: video.id }),
+    )
+    const closed = await dispatchWebPluginHostRequest(
+      request("canvas.connectedMedia.close", { sessionId: "session-1" }, pluginCapabilityProtocolV2),
+      context,
+    )
+    expect(closed).toMatchObject({ ok: true, result: { closed: true } })
+    expect(closeConnectedMedia).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1" }))
+
+    const denied = await dispatchWebPluginHostRequest(
+      request("canvas.connectedMedia.open", { nodeId: "not-connected" }, pluginCapabilityProtocolV2),
+      context,
+    )
+    expect(denied).toMatchObject({ ok: false })
   })
 
   test("derives connected-input order and fingerprints source changes without exposing source data", async () => {
