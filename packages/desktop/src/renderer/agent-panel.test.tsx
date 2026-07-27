@@ -100,11 +100,12 @@ describe("Agent conversation activity", () => {
 
     expect(markup).toContain('data-agent-activity="true"')
     expect(markup).toContain('aria-expanded="false"')
-    expect(markup).toContain("Worked for 14m 18s")
+    expect(markup).toContain("Activity complete")
+    expect(markup).toContain("1 succeeded · 14m 18s")
     expect(markup).not.toContain("data-agent-tool-call")
   })
 
-  test("keeps activity expanded while working or waiting for user input", () => {
+  test("keeps active status prominent without expanding the full log", () => {
     const reasoning: AgentMessagePart = { id: "reasoning-1", text: "Checking the project", type: "reasoning" }
     const message: AgentMessage = {
       createdAt: 1,
@@ -122,23 +123,18 @@ describe("Agent conversation activity", () => {
     }
 
     const markup = renderToStaticMarkup(
-      <ConversationTurnView
-        awaitingInput
-        busy={false}
-        onOpenSkill={async () => undefined}
-        turn={turn}
-      />,
+      <ConversationTurnView awaitingInput busy={false} onOpenSkill={async () => undefined} turn={turn} />,
     )
 
-    expect(markup).toContain('aria-expanded="true"')
-    expect(markup).toContain("Waiting for your response")
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain("Needs your response")
     expect(markup).not.toContain(">Interrupted<")
-    expect(markup).toContain('data-agent-activity-content="true"')
-    expect(markup).toContain("text-muted-foreground")
-    expect(markup).not.toMatch(/(?:class="|\s)text-foreground(?:\s|")/)
+    expect(markup).not.toContain('data-agent-activity-content="true"')
+    expect(markup).toContain("text-text-tertiary")
+    expect(markup).not.toMatch(/(?:class="|\s)text-text-primary(?:\s|")/)
   })
 
-  test("auto-collapses when work finishes and still lets the user reopen the turn", async () => {
+  test("starts collapsed while working and still lets the user reveal activity after completion", async () => {
     const restoreWindow = installTestWindow()
     let root: Root | undefined
     let busy = true
@@ -159,26 +155,25 @@ describe("Agent conversation activity", () => {
       interrupted: false,
       tools: { count: 0, failed: 0, outcome: "none", pending: 0, running: 0, succeeded: 0 },
     }
-    const renderTurn = () => (
-      <ConversationTurnView busy={busy} onOpenSkill={async () => undefined} turn={turn} />
-    )
+    const renderTurn = () => <ConversationTurnView busy={busy} onOpenSkill={async () => undefined} turn={turn} />
 
     try {
       const container = document.createElement("div")
       document.body.append(container)
       root = createRoot(container)
       await act(async () => root?.render(renderTurn()))
-      expect(document.querySelector("[data-agent-activity] button")?.getAttribute("aria-expanded")).toBe("true")
+      expect(document.querySelector("[data-agent-activity] button")?.getAttribute("aria-expanded")).toBe("false")
 
       busy = false
       await act(async () => root?.render(renderTurn()))
       expect(document.querySelector("[data-agent-activity] button")?.getAttribute("aria-expanded")).toBe("false")
-      expect(document.body.textContent).toContain("Worked for 2s")
+      expect(document.body.textContent).toContain("Activity complete")
+      expect(document.body.textContent).toContain("2s")
       expect(document.body.textContent).not.toContain("Checking the project")
 
       await act(async () => document.querySelector<HTMLElement>("[data-agent-activity] > button")?.click())
       expect(document.querySelector("[data-agent-activity] button")?.getAttribute("aria-expanded")).toBe("true")
-      expect(document.body.textContent).toContain("Thought through the task")
+      expect(document.body.textContent).toContain("Activity complete")
       expect(document.body.textContent).toContain("Checking the project")
     } finally {
       if (root) await act(async () => root?.unmount())
@@ -238,16 +233,12 @@ describe("Agent conversation activity", () => {
       document.body.append(container)
       root = createRoot(container)
       await act(async () =>
-        root?.render(
-          <ConversationTurnView busy={false} onOpenSkill={async () => undefined} turn={turn} />,
-        ),
+        root?.render(<ConversationTurnView busy={false} onOpenSkill={async () => undefined} turn={turn} />),
       )
 
       expect(document.querySelector("[data-agent-tool-call]")).toBeNull()
       await act(async () =>
-        document
-          .querySelector("[data-agent-activity]")
-          ?.dispatchEvent(new Event("pointerover", { bubbles: true })),
+        document.querySelector("[data-agent-activity]")?.dispatchEvent(new Event("pointerover", { bubbles: true })),
       )
       expect(document.querySelector("[data-agent-tool-call]")).toBeNull()
       await act(async () => document.querySelector<HTMLElement>("[data-agent-activity] > button")?.click())
@@ -314,6 +305,14 @@ describe("Agent composer source contract", () => {
     expect(source).not.toContain("Show agent activity")
     expect(source).not.toContain("findAgentSkillSlashQuery")
     expect(source).not.toContain('aria-label="Add context or Skill"')
+    expect(source).toContain("data-agent-drawer-collapsed")
+    expect(source).toContain("props.collapsedEntry === false")
+    expect(source).not.toContain("style={{ width: props.layout?.collapsedWidth }}")
+    expect(source).toContain("const hosted = !embedded && props.hosted === true")
+    expect(source).toContain("const open = hosted || embedded || props.layout?.open === true")
+    expect(source).toContain("data-agent-panel-hosted={hosted || undefined}")
+    expect(source).toContain("!embedded && !hosted && props.layout?.resizable !== false")
+    expect(source).toContain("utilityNavigation={hosted ? props.utilityNavigation : undefined}")
   })
 })
 

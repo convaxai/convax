@@ -203,6 +203,7 @@ export const SelectContent = forwardRef<HTMLDivElement, Omit<ComponentProps<type
             className,
           )}
           data-slot="select-content"
+          data-ui-menu-surface=""
           id={context.contentId}
           loop
           onCloseAutoFocus={(event) => {

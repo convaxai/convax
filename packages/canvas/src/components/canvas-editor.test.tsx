@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { CanvasNode } from "../types"
+import type { CanvasAppearanceInput } from "../appearance"
 
 const fitView = mock(async () => undefined)
 const setViewport = mock(async () => undefined)
@@ -38,6 +39,10 @@ let keyDownOnCanvas:
 let copyOnCanvas: ((event: unknown) => void) | undefined
 let pasteOnCanvas: ((event: unknown) => void) | undefined
 let renderedCanvasNodes: CanvasNode[] = []
+let renderedBackground:
+  | { color?: string; gap?: number; size?: number; variant?: string }
+  | undefined
+let renderedColorMode: string | undefined
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 Object.defineProperty(globalThis, "window", {
@@ -59,8 +64,9 @@ function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
 }
 
-function MockReactFlow(props: { children?: ReactNode; nodes?: CanvasNode[] }) {
+function MockReactFlow(props: { children?: ReactNode; colorMode?: string; nodes?: CanvasNode[] }) {
   renderedCanvasNodes = props.nodes ?? []
+  renderedColorMode = props.colorMode
   return <>{props.children}</>
 }
 
@@ -92,7 +98,7 @@ mock.module("@convax/ui", () => ({
     }
     return <>{props.children}</>
   },
-  Input: () => <input />,
+  Input: (props: { className?: string }) => <input className={props.className} />,
   Select: Passthrough,
   SelectContent: Passthrough,
   SelectItem: Passthrough,
@@ -105,8 +111,11 @@ mock.module("@convax/ui", () => ({
 }))
 
 mock.module("@xyflow/react", () => ({
-  Background: () => null,
-  BackgroundVariant: { Dots: "dots" },
+  Background: (props: typeof renderedBackground) => {
+    renderedBackground = props
+    return null
+  },
+  BackgroundVariant: { Dots: "dots", Lines: "lines" },
   BaseEdge: () => null,
   EdgeLabelRenderer: Passthrough,
   Handle: () => null,
@@ -164,6 +173,8 @@ beforeEach(() => {
   keyDownOnCanvas = undefined
   pasteOnCanvas = undefined
   renderedCanvasNodes = []
+  renderedBackground = undefined
+  renderedColorMode = undefined
   fitView.mockClear()
   setCenter.mockClear()
   setViewport.mockClear()
@@ -185,6 +196,8 @@ function renderEditor(
   services = createCanvasServices(),
   options: {
     initialDocument?: ReturnType<typeof createCanvasDocument>
+    appearance?: CanvasAppearanceInput
+    onGenerateRequest?: () => void
     readOnly?: boolean
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
@@ -192,6 +205,8 @@ function renderEditor(
   return renderToStaticMarkup(
     <CanvasEditor
       initialDocument={options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })}
+      appearance={options.appearance}
+      onGenerateRequest={options.onGenerateRequest}
       readOnly={options.readOnly}
       selectionDragSource={options.selectionDragSource}
       services={services}
@@ -946,6 +961,90 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(buttonActions.get("Audio")).toBeUndefined()
     expect(buttonActions.get("Agent")).toBeUndefined()
     expect(buttonActions.get("Generate")).toBeFunction()
+  })
+
+  test("routes Generate presentation to the host without opening Canvas's legacy overlay", () => {
+    const onGenerateRequest = mock(() => undefined)
+    renderEditor(
+      createCanvasServices({
+        generate: {
+          describeTool: async (toolId) => ({ fields: [], toolId }),
+          generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+          listTools: async () => [],
+        },
+      }),
+      { onGenerateRequest },
+    )
+
+    buttonActions.get("Generate")?.()
+
+    expect(onGenerateRequest).toHaveBeenCalledTimes(1)
+  })
+
+  test("rejects generation re-entry instead of implicitly cancelling accepted work", async () => {
+    const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
+
+    expect(source).toContain("if (!generateService || readOnly || generationControllerRef.current) return")
+    expect(source).not.toContain("generationControllerRef.current?.controller.abort()\n    setGenerating(true)")
+    expect(source).toContain("props.onGenerationStateChange?.(true)")
+    expect(source).toContain("props.onGenerationStateChange?.(false)")
+  })
+
+  test("keeps Search directly available and protects its input from shared padding utilities", async () => {
+    const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
+    const markup = renderEditor(
+      createCanvasServices({
+        export: { export: async () => undefined },
+      }),
+    )
+
+    expect(markup).toContain("convax-creation-toolbar")
+    expect(source).toContain('className="convax-node-search__input"')
+    expect(source).toContain('className="convax-node-search__backdrop"')
+    expect(source).toContain('data-convax-node-search-panel="true"')
+    expect(source).toContain("bindCanvasSearchDismissal({")
+    expect(markup).toContain('role="menu"')
+    expect(markup).toContain("<span>Undo</span>")
+    expect(markup).toContain("<span>Redo</span>")
+    expect(markup).toContain("<span>Export</span>")
+    expect(markup).not.toContain("<span>Search</span>")
+    expect(buttonActions.get("Select")).toBeFunction()
+    expect(buttonActions.get("Text")).toBeFunction()
+    expect(buttonActions.get("Search")).toBeFunction()
+    expect(buttonActions.get("More canvas actions")).toBeFunction()
+  })
+
+  test("renders host appearance without producing an editor command", () => {
+    const markup = renderEditor(createCanvasServices(), {
+      appearance: {
+        gridGap: 36,
+        gridSize: 2,
+        gridStyle: "lines",
+        palette: {
+          accent: "#7580e8",
+          accentForeground: "#08090a",
+          background: "#08090a",
+          colorScheme: "dark",
+          edge: "#34363d",
+          edgeActive: "#8791ef",
+          gridColor: "#292b31",
+          nodeBackground: "#1c1c1f",
+          nodeBorder: "#303137",
+          surface: "#1c1c1f",
+          text: "#f2f3f3",
+          textMuted: "#8a8f98",
+        },
+      },
+    })
+
+    expect(markup).toContain('data-canvas-color-scheme="dark"')
+    expect(renderedColorMode).toBe("dark")
+    expect(renderedBackground).toMatchObject({
+      color: "var(--canvas-grid)",
+      gap: 36,
+      size: 2,
+      variant: "lines",
+    })
   })
 })
 

@@ -36,7 +36,7 @@ Convax 是一个桌面端可视化工作空间，用来把项目文件、创意�
 - 经过授权的 Plugin 可以在明确范围内调用当前 Project、Canvas 或 Agent 的能力。
 - Plugin 节点的可移植状态会跟随 Canvas 保存，复制节点或重新打开 Project 后仍可继续使用。
 
-当前内置示例是：
+Registry 中的一个示例是：
 
 - **3D Director Desk**：在交互式 3D 场景中布置角色、道具和相机，场景状态会跟随 Canvas 节点保存。
 

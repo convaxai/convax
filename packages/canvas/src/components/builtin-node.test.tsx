@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test"
+import type { Editor } from "@tiptap/core"
 import type { NodeProps } from "@xyflow/react"
 import type { ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
@@ -39,14 +40,23 @@ const {
   BuiltinTextFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
+  canOpenCanvasTextLineMenu,
   ExpandedTextEditorDialog,
+  TextEditorDrawer,
   completeCanvasTextDraftSave,
   createCanvasTextDraftSaveQueue,
   createCanvasTextDraftState,
   discardCanvasTextDraft,
   failCanvasTextDraftSave,
+  getCanvasTextMenuGeometry,
+  isCanvasTextLineMenuSelectionValid,
   isCanvasTextResourceEditable,
+  moveCanvasTextLineMenuIndex,
+  rebaseCanvasTextDraft,
+  resolveCanvasTextHandleTarget,
+  runCanvasTextInlineCommand,
   saveCanvasTextDraft,
+  shouldShowCanvasTextInlineMenu,
   startCanvasSelectionDragFromNode,
   updateCanvasTextDraft,
 } = await import("./builtin-node")
@@ -223,6 +233,130 @@ describe("built-in text file drafts", () => {
     expect(discardCanvasTextDraft(dirty)).toMatchObject({ content: "original", dirty: false })
   })
 
+  test("rebases a conflicted draft onto the authoritative revision without losing local content", () => {
+    const conflicted = failCanvasTextDraftSave(
+      updateCanvasTextDraft(
+        createCanvasTextDraftState({ contentRevision: "rev-before", text: "original" }),
+        "my draft",
+      ),
+      "This file changed outside Convax.",
+    )
+
+    expect(rebaseCanvasTextDraft(conflicted, { contentRevision: "rev-latest", text: "latest content" })).toEqual({
+      baseContent: "latest content",
+      baseRevision: "rev-latest",
+      content: "my draft",
+      dirty: true,
+      error: null,
+    })
+  })
+
+  test("opens the Line Menu only at an empty line prefix and wraps keyboard selection", () => {
+    expect(canOpenCanvasTextLineMenu("")).toBeTrue()
+    expect(canOpenCanvasTextLineMenu("   ")).toBeTrue()
+    expect(canOpenCanvasTextLineMenu("https:")).toBeFalse()
+    expect(moveCanvasTextLineMenuIndex(0, -1, 6)).toBe(5)
+    expect(moveCanvasTextLineMenuIndex(5, 1, 6)).toBe(0)
+    expect(isCanvasTextLineMenuSelectionValid({ selectionFrom: 11, slashCharacter: "/", slashPosition: 10 })).toBeTrue()
+    expect(
+      isCanvasTextLineMenuSelectionValid({ selectionFrom: 20, slashCharacter: "/", slashPosition: 10 }),
+    ).toBeFalse()
+  })
+
+  test("keeps the contextual menu inside the drawer near the bottom edge", () => {
+    const geometry = getCanvasTextMenuGeometry(500, 480)
+    expect(geometry).toEqual({ gripTop: 452, maxHeight: 204, popupTop: 288 })
+    expect(geometry.popupTop + geometry.maxHeight).toBeLessThanOrEqual(492)
+  })
+
+  test("targets the hovered block instead of the stale text selection for handle commands", () => {
+    expect(resolveCanvasTextHandleTarget({ documentSize: 100, hoverPosition: 72, selectionFrom: 12 })).toBe(72)
+    expect(resolveCanvasTextHandleTarget({ documentSize: 100, hoverPosition: null, selectionFrom: 12 })).toBe(12)
+    expect(resolveCanvasTextHandleTarget({ documentSize: 100, hoverPosition: 120, selectionFrom: 12 })).toBe(100)
+  })
+
+  test("shows inline formatting only for a non-empty editable text selection", () => {
+    expect(
+      shouldShowCanvasTextInlineMenu({
+        codeBlockActive: false,
+        editable: true,
+        selectionFrom: 4,
+        selectionTo: 12,
+        textSelection: true,
+      }),
+    ).toBeTrue()
+    expect(
+      shouldShowCanvasTextInlineMenu({
+        codeBlockActive: false,
+        editable: true,
+        selectionFrom: 4,
+        selectionTo: 4,
+        textSelection: true,
+      }),
+    ).toBeFalse()
+    expect(
+      shouldShowCanvasTextInlineMenu({
+        codeBlockActive: true,
+        editable: true,
+        selectionFrom: 4,
+        selectionTo: 12,
+        textSelection: true,
+      }),
+    ).toBeFalse()
+    expect(
+      shouldShowCanvasTextInlineMenu({
+        codeBlockActive: false,
+        editable: false,
+        selectionFrom: 4,
+        selectionTo: 12,
+        textSelection: true,
+      }),
+    ).toBeFalse()
+    expect(
+      shouldShowCanvasTextInlineMenu({
+        codeBlockActive: false,
+        editable: true,
+        selectionFrom: 4,
+        selectionTo: 12,
+        textSelection: false,
+      }),
+    ).toBeFalse()
+  })
+
+  test("runs inline formatting through the editor chain while preserving focus", () => {
+    const calls: string[] = []
+    const chain = {
+      focus() {
+        calls.push("focus")
+        return this
+      },
+      run() {
+        calls.push("run")
+        return true
+      },
+      toggleBold() {
+        calls.push("bold")
+        return this
+      },
+      toggleCode() {
+        calls.push("code")
+        return this
+      },
+      toggleItalic() {
+        calls.push("italic")
+        return this
+      },
+      toggleStrike() {
+        calls.push("strike")
+        return this
+      },
+    }
+    const editor = { chain: () => chain } as unknown as Editor
+
+    expect(runCanvasTextInlineCommand(editor, "bold")).toBeTrue()
+    expect(calls).toEqual(["focus", "bold", "run"])
+  })
+
   test("saves the local draft through the text resource service only", async () => {
     const save = mock(async () => ({ contentRevision: "rev-after" }))
     const dirty = updateCanvasTextDraft(
@@ -261,24 +395,44 @@ describe("built-in text file drafts", () => {
 })
 
 describe("built-in node toolbar visibility", () => {
-  test("renders an almost full-screen editor dialog for text nodes", () => {
+  test("preserves the published expanded-editor export as a compatibility alias", () => {
+    expect(ExpandedTextEditorDialog).toBe(TextEditorDrawer)
+  })
+
+  test("renders a non-modal side drawer for text-node editing", () => {
     const markup = renderToStaticMarkup(
-      <ExpandedTextEditorDialog
-        editor={null}
-        label="Story outline"
-        onClose={() => {}}
-        toolbar={<div data-text-formatting />}
-      />,
+      <TextEditorDrawer editor={null} label="Story outline" onClose={() => {}} onSave={() => {}} />,
     )
 
     expect(markup).toContain('role="dialog"')
-    expect(markup).toContain('aria-modal="true"')
+    expect(markup).not.toContain('aria-modal="true"')
     expect(markup).toContain("Story outline")
-    expect(markup).toContain("h-[calc(100vh-32px)]")
-    expect(markup).toContain("w-[calc(100vw-32px)]")
-    expect(markup).toContain("convax-text-editor-dialog__toolbar-inner")
-    expect(markup).toContain("data-text-formatting")
-    expect(markup).toContain('aria-label="Close expanded editor"')
+    expect(markup).toContain("convax-text-editor-drawer")
+    expect(markup).toContain("w-[min(520px,calc(100%-12px))]")
+    expect(markup).toContain('aria-label="Open block handle menu"')
+    expect(markup).not.toContain("Text formatting")
+    expect(markup).not.toContain(">Save<")
+    expect(markup).not.toContain(">Discard<")
+    expect(markup).toContain('aria-label="Close text editor"')
+  })
+
+  test("keeps save conflicts actionable inside the drawer without restoring a fixed toolbar", () => {
+    const markup = renderToStaticMarkup(
+      <TextEditorDrawer
+        editor={null}
+        discardLabel="Discard and reload"
+        error="This file changed outside Convax. Your draft was kept."
+        label="Story outline"
+        onClose={() => {}}
+        onDiscard={() => {}}
+        onReload={() => {}}
+      />,
+    )
+
+    expect(markup).toContain('role="alert"')
+    expect(markup).toContain("Reload latest")
+    expect(markup).toContain("Discard and reload")
+    expect(markup).not.toContain("Text formatting")
   })
 
   test("can show a compact visible label for commands without a meaningful icon", () => {
@@ -439,6 +593,24 @@ describe("built-in node toolbar visibility", () => {
 
     expect(toolbarCount(markup)).toBe(1)
     expect(markup).toContain('data-visibility="default"')
+  })
+
+  test("exposes host-neutral kind and status hooks for semantic appearance", () => {
+    const pendingNode = { ...node, data: { ...node.data, status: "pending" as const } }
+    const markup = renderWithEditor(
+      selection(["node-a"]),
+      false,
+      (props) => (
+        <CanvasNodeChrome icon={null} label="Test" node={props}>
+          <div />
+        </CanvasNodeChrome>
+      ),
+      false,
+      { node: pendingNode },
+    )
+
+    expect(markup).toContain('data-canvas-node-kind="test-file"')
+    expect(markup).toContain('data-canvas-node-status="pending"')
   })
 
   test("does not mount the built-in toolbar for multi, mixed, or read-only selection", () => {

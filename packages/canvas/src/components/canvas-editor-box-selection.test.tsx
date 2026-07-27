@@ -208,6 +208,7 @@ test("box-selects connected nodes without feeding controlled selection back into
       )
     })
 
+    expect(errors).toEqual([])
     const pane = container.querySelector<HTMLElement>(".react-flow__pane")
     const firstNode = container.querySelector<HTMLElement>('.react-flow__node[data-id="first"]')
     expect(pane).not.toBeNull()

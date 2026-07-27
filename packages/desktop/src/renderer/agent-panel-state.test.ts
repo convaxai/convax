@@ -15,6 +15,7 @@ import {
   isAgentScrollNearBottom,
   mergeAgentResources,
   selectAgentSessionAfterRefresh,
+  resolveAgentCompactStatus,
   type StorageLike,
 } from "./agent-panel-state"
 
@@ -193,6 +194,41 @@ describe("parallel session presentation", () => {
 
   test("falls back only when the selected session disappeared", () => {
     expect(selectAgentSessionAfterRefresh(sessions, "missing", "also-missing")).toBe("latest")
+  })
+})
+
+describe("compact Agent status", () => {
+  test("prioritizes actionable input, active work, failure, and explicit pending changes", () => {
+    expect(
+      resolveAgentCompactStatus({
+        failed: true,
+        interaction: "permission",
+        pendingChanges: true,
+        working: true,
+      }),
+    ).toEqual({
+      detail: "Permission required",
+      kind: "needs-approval",
+      label: "Needs approval",
+    })
+    expect(resolveAgentCompactStatus({ failed: true, pendingChanges: true, working: true })).toEqual({
+      kind: "working",
+      label: "Working",
+    })
+    expect(resolveAgentCompactStatus({ failed: true, pendingChanges: true })).toEqual({
+      kind: "failed",
+      label: "Failed",
+    })
+    expect(resolveAgentCompactStatus({ pendingChanges: true })).toEqual({
+      kind: "pending-changes",
+      label: "Changes ready",
+    })
+    expect(resolveAgentCompactStatus({})).toEqual({ kind: "idle", label: "Idle" })
+  })
+
+  test("distinguishes a question from a permission using visible text", () => {
+    expect(resolveAgentCompactStatus({ interaction: "question" }).detail).toBe("Answer required")
+    expect(resolveAgentCompactStatus({ interaction: "permission" }).detail).toBe("Permission required")
   })
 })
 

@@ -32,6 +32,10 @@ import {
   type CanvasRendererRequestEnvelope,
   type CanvasRendererResponseEnvelope,
 } from "../canvas-renderer-contracts"
+import {
+  workspaceSystemStatusIpcChannel,
+  type WorkspaceSystemStatusClient,
+} from "../workspace-system-status-contracts"
 
 const channels = {
   createProject: "project:create",
@@ -256,6 +260,10 @@ const desktopProtocolClient = {
   getVersion: () => ipcRenderer.invoke(desktopProtocolChannel),
   version: desktopProtocolVersion,
 } satisfies DesktopProtocolClient
+
+const workspaceSystemStatusClient = {
+  getSnapshot: () => ipcRenderer.invoke(workspaceSystemStatusIpcChannel),
+} satisfies WorkspaceSystemStatusClient
 
 const importTokens = new Map<string, { expiresAt: number; path: string }>()
 const maxImportTokens = 1_000
@@ -578,4 +586,5 @@ contextBridge.exposeInMainWorld("convax", {
   projectFiles: projectFilesClient,
   projects: projectsClient,
   protocol: desktopProtocolClient,
+  systemStatus: workspaceSystemStatusClient,
 })

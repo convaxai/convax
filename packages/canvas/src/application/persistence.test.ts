@@ -83,11 +83,11 @@ describe("canvas document persistence", () => {
       nodes: [
         {
           data: {
-            kind: "plugin.storyai-3d-director-desk",
-            label: "3D Director Desk",
+            kind: "plugin.example-stage",
+            label: "Example Stage",
             metadata: { convaxPluginState: pluginState },
           },
-          id: "director-node",
+          id: "example-stage-node",
           position: { x: 10, y: 20 },
           type: "file",
         },

@@ -293,18 +293,21 @@ Language is a renderer preference, never Project metadata. Host-owned settings a
 capability copy is localized; Plugin manifest content and independent package UI are
 left untouched.
 
-## First built-in workflows
+## First workflows
 
 The catalog validates useful end-to-end behavior instead of shipping placeholder
 surfaces:
 
 - **Storyboard Builder** turns a script or brief into ordered shot cards by composing
   the existing Canvas query, resource business, primitive and view tools.
-- **3D Director Desk** embeds the MIT-licensed StoryAI director surface for spatial
+- **3D Director Desk** is released from `microvoid/convax-plugins` and embeds the
+  MIT-licensed StoryAI director surface for spatial
   character, geometry, camera, panorama and shot-preview work. Its portable scene
   graph and director viewport camera are stored as separate fields in the owning
-  Canvas node through `canvas.node.updateState`; its legacy independently managed
-  companion Skill reviews the same snapshot through normal Canvas Agent resources.
+  Canvas node through `canvas.node.updateState`; its Registry package retains the
+  legacy independently managed companion Skill, which reviews the same snapshot
+  through normal Canvas Agent resources. Desktop carries no second static bundle,
+  Skill, or showcase copy.
 - **JianYing Editor** is default-provisioned as a trusted built-in Plugin plus a
   separately receipted legacy companion Skill. The package controls lifecycle and
   describes the workflow; its native implementation remains compiled into Desktop

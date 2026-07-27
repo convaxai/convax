@@ -2,3 +2,100 @@
 @import "./theme.css";
 
 @source "./**/*.{ts,tsx}";
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  * {
+    scrollbar-color: var(--ui-scrollbar-thumb) transparent;
+    scrollbar-gutter: auto;
+    scrollbar-width: thin;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    min-width: 32px;
+    min-height: 32px;
+    border: 3px solid transparent;
+    border-radius: var(--ui-radius-pill);
+    background: var(--ui-scrollbar-thumb);
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--ui-scrollbar-thumb-hover);
+    background-clip: padding-box;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    * {
+      scrollbar-color: transparent transparent;
+    }
+
+    *:hover,
+    *:focus-within {
+      scrollbar-color: var(--ui-scrollbar-thumb) transparent;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background: transparent;
+    }
+
+    *:hover::-webkit-scrollbar-thumb,
+    *:focus-within::-webkit-scrollbar-thumb {
+      background: var(--ui-scrollbar-thumb);
+      background-clip: padding-box;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: var(--ui-scrollbar-thumb-hover);
+      background-clip: padding-box;
+    }
+  }
+
+  :focus-visible {
+    outline: var(--ui-focus-ring-width) solid var(--ui-focus-ring);
+    outline-offset: 2px;
+  }
+
+  :where([data-ui-portal-backdrop]) {
+    background: var(--ui-backdrop);
+  }
+
+  :where([data-ui-interactive]) {
+    transition:
+      color var(--ui-motion-fast) var(--ui-ease-standard),
+      background-color var(--ui-motion-fast) var(--ui-ease-standard),
+      border-color var(--ui-motion-fast) var(--ui-ease-standard),
+      box-shadow var(--ui-motion-fast) var(--ui-ease-standard),
+      transform var(--ui-motion-fast) var(--ui-ease-standard);
+  }
+
+  :where([data-ui-interactive]:active:not(:disabled, [aria-disabled="true"])) {
+    transform: scale(0.97);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where([data-ui-interactive]) {
+      transition-duration: 0ms;
+    }
+
+    :where([data-ui-interactive]:active:not(:disabled, [aria-disabled="true"])) {
+      transform: none;
+    }
+  }
+}

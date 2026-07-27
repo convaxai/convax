@@ -36,7 +36,7 @@ The built-in coding Agent is powered by OpenCode.
 - Let authorized Plugins work with the active Project, Canvas, or Agent through scoped capabilities.
 - Keep portable Plugin node state with the Canvas, including when a node is duplicated or a Project is reopened.
 
-The built-in example is:
+One Registry example is:
 
 - **3D Director Desk** for arranging characters, props, and cameras in an interactive 3D scene whose state stays with the Canvas node.
 

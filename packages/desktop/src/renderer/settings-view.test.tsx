@@ -1,10 +1,14 @@
 import { describe, expect, mock, test } from "bun:test"
+import { Window } from "happy-dom"
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
 import type { PetSettingsHostClient, PetSettingsProvider, PetSettingsProviderSnapshot } from "./pet-settings-host"
 import type { ServiceCatalogSnapshot } from "./service-catalog-controller"
+import { defaultAppearancePreferences } from "./appearance-preferences"
 import { SettingsView } from "./settings-view"
 
 const noop = () => undefined
@@ -80,11 +84,15 @@ const serviceSnapshot: ServiceCatalogSnapshot = {
 }
 
 describe("SettingsView", () => {
-  test("renders a controlled global language preference and return action", () => {
+  test("renders Appearance as a dedicated full-page settings section", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={{ ...defaultAppearancePreferences, theme: "midnight" }}
+        appearanceSaveState="saved"
+        initialSection="appearance"
         languagePreference="en"
         locale="en"
+        onAppearancePreferencesChange={noop}
         onClose={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
@@ -96,23 +104,126 @@ describe("SettingsView", () => {
       />,
     )
 
+    expect(markup).toContain("Appearance")
+    expect(markup).toContain('data-appearance-settings="true"')
+    expect(markup).toContain('aria-label="Search settings"')
+    expect(markup).toContain("Saved automatically")
+    expect(markup).toContain('data-settings-layout="rail-content"')
+    expect(markup).toContain("background-color:var(--ui-surface-canvas)")
+    expect(markup).toContain("grid-cols-[13rem_minmax(0,1fr)]")
+    expect(markup).toContain("<aside")
+    expect(markup).toContain("min-w-0")
+    expect(markup).not.toContain("w-64")
+    expect(markup).not.toContain('role="dialog"')
+    expect(markup).not.toContain("localStorage")
+  })
+
+  test("renders a controlled global language preference and return action", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onAppearancePreferencesChange={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />,
+    )
+
     expect(markup).toContain('data-settings-view="true"')
+    expect(markup).toContain('data-settings-layout="rail-content"')
+    expect(markup).toContain("grid-cols-[13rem_minmax(0,1fr)]")
+    expect(markup).toContain("md:grid-cols-[15rem_minmax(0,1fr)]")
+    expect(markup).not.toContain("min-w-[45rem]")
+    expect(markup).not.toContain("sm:flex-row")
     expect(markup).toContain(appMessage("en", "settings.back"))
     expect(markup).toContain(appMessage("en", "settings.languageDescription"))
     expect(markup).toContain('data-slot="select-trigger"')
     expect(markup).toContain('role="combobox"')
     expect(markup).toContain('aria-haspopup="listbox"')
+    expect(markup).toContain('data-slot="settings-row"')
     expect(markup).toContain(">English</span>")
     expect(markup).not.toContain("<select")
     expect(markup).not.toContain("localStorage")
+    expect(markup).not.toContain("Open at login")
+    expect(markup).not.toContain("Autosave")
+    expect(markup).not.toContain("Default project location")
+    expect(markup).not.toContain("Updates")
+  })
+
+  test("syncs a new initial section target while remaining mounted", async () => {
+    const window = new Window()
+    const previousWindow = globalThis.window
+    const previousDocument = globalThis.document
+    const reactGlobal = globalThis as typeof globalThis & {
+      IS_REACT_ACT_ENVIRONMENT?: boolean
+    }
+    const previousActEnvironment = reactGlobal.IS_REACT_ACT_ENVIRONMENT
+    Object.assign(globalThis, {
+      IS_REACT_ACT_ENVIRONMENT: true,
+      document: window.document,
+      window,
+    })
+    let root: Root | undefined
+
+    const renderSettings = (initialSection: "general" | "appearance") => (
+      <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
+        initialSection={initialSection}
+        languagePreference="en"
+        locale="en"
+        onClose={noop}
+        onAppearancePreferencesChange={noop}
+        onLanguageChange={noop}
+        onRefreshServices={noop}
+        onServiceAction={noop}
+        petClient={petClient}
+        petProviderSnapshot={{ status: "absent" }}
+        pluginClient={pluginClient}
+        serviceSnapshot={serviceSnapshot}
+        skillClient={skillClient}
+      />
+    )
+
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () => root?.render(renderSettings("general")))
+      expect(document.querySelector('[data-settings-navigation-item="general"]')?.getAttribute("aria-current")).toBe(
+        "page",
+      )
+      expect(document.querySelector("main h2")?.textContent).toBe("General")
+
+      await act(async () => root?.render(renderSettings("appearance")))
+      expect(
+        document.querySelector('[data-settings-navigation-item="appearance"]')?.getAttribute("aria-current"),
+      ).toBe("page")
+      expect(document.querySelector("main h2")?.textContent).toBe("Appearance")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      Object.assign(globalThis, {
+        IS_REACT_ACT_ENVIRONMENT: previousActEnvironment,
+        document: previousDocument,
+        window: previousWindow,
+      })
+    }
   })
 
   test("uses the resolved locale while retaining the explicit preference", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
         languagePreference="zh-CN"
         locale="zh-CN"
         onClose={noop}
+        onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
@@ -131,10 +242,12 @@ describe("SettingsView", () => {
   test("embeds Skill and Plugin management as a settings page", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
         initialSection="capabilities"
         languagePreference="en"
         locale="en"
         onClose={noop}
+        onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
@@ -155,10 +268,12 @@ describe("SettingsView", () => {
   test("exposes installed Plugin services as a host-rendered settings section", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
         initialSection="services"
         languagePreference="en"
         locale="en"
         onClose={noop}
+        onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
@@ -179,11 +294,13 @@ describe("SettingsView", () => {
   test("hides disabled build-time sections and falls back to General", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
         featureFlags={{ services: false, skillsAndPlugins: false }}
         initialSection="services"
         languagePreference="en"
         locale="en"
         onClose={noop}
+        onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}
@@ -237,10 +354,12 @@ describe("SettingsView", () => {
   function renderPetSettings(petProviderSnapshot: PetSettingsProviderSnapshot) {
     return renderToStaticMarkup(
       <SettingsView
+        appearancePreferences={defaultAppearancePreferences}
         initialSection="pets"
         languagePreference="en"
         locale="en"
         onClose={noop}
+        onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
         onRefreshServices={noop}
         onServiceAction={noop}

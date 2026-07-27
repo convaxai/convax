@@ -51,11 +51,31 @@ describe("desktop branding", () => {
   })
 
   test("keeps an editable vector source for the application icon", async () => {
-    const source = await Bun.file(new URL("../../resources/icon.svg", import.meta.url)).text()
+    const brandSource = await Bun.file(
+      new URL("../../resources/icon.svg", import.meta.url),
+    ).text()
+    const darkSource = await Bun.file(
+      new URL("../../resources/icon-white-on-black.svg", import.meta.url),
+    ).text()
+    const lightSource = await Bun.file(
+      new URL("../../resources/icon-black-on-white.svg", import.meta.url),
+    ).text()
 
-    expect(source).toContain('viewBox="0 0 100 100"')
-    expect(source).toContain('<rect x="9" y="9" width="82" height="82" rx="18" fill="#fff"/>')
-    expect(source).not.toContain("stroke=")
+    expect(darkSource).toContain('viewBox="0 0 100 100"')
+    expect(brandSource).toContain('aria-label="Convax radial C logo"')
+    expect(darkSource).toContain('aria-label="Convax radial C logo, white on black"')
+    expect(lightSource).toContain('aria-label="Convax radial C logo, black on white"')
+    expect(brandSource).toContain('<rect x="8" y="8" width="84" height="84" rx="15"')
+    expect(darkSource).toContain('<rect x="8" y="8" width="84" height="84" rx="15"')
+    expect(lightSource).toContain('<rect x="8" y="8" width="84" height="84" rx="15"')
+    for (const source of [brandSource, darkSource, lightSource]) {
+      expect(source).toContain('data-logo-part="radial-c"')
+      expect(source).toContain('data-spoke-count="31"')
+      expect(source).toContain('transform="translate(24 27.64) scale(.26)"')
+      expect(source.match(/\n      M/g)).toHaveLength(31)
+      expect(source).not.toContain('data-logo-part="player"')
+      expect(source).not.toContain('data-logo-part="canvas-x"')
+    }
   })
 
   test("keeps development data in the pre-productName profile", () => {

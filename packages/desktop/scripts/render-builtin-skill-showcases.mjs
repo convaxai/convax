@@ -244,101 +244,6 @@ function canvasStoryboard(progress) {
   )
 }
 
-function stageGrid() {
-  const horizontal = Array.from({ length: 7 }, (_, index) => {
-    const t = index / 6
-    const leftX = mix(132, 208, t)
-    const rightX = mix(800, 724, t)
-    const y = mix(538, 292, t)
-    return `<line x1="${n(leftX)}" y1="${n(y)}" x2="${n(rightX)}" y2="${n(y)}" stroke="#9eb2cc" stroke-opacity="0.12"/>`
-  }).join("")
-  const vertical = Array.from({ length: 11 }, (_, index) => {
-    const t = index / 10
-    return `<line x1="${n(mix(132, 800, t))}" y1="538" x2="${n(mix(208, 724, t))}" y2="292" stroke="#9eb2cc" stroke-opacity="0.12"/>`
-  }).join("")
-  return horizontal + vertical
-}
-
-function stagePerson(x, y, color, label) {
-  return `<g filter="url(#small-shadow)">
-    <ellipse cx="${x}" cy="${y + 23}" rx="26" ry="9" fill="#03070d" fill-opacity="0.45"/>
-    <path d="M${x - 13} ${y - 25} q13 -13 26 0 v39 q0 18 -13 18 q-13 0 -13 -18z" fill="${color}" fill-opacity="0.82"/>
-    <circle cx="${x}" cy="${y - 36}" r="13" fill="#e7edf5"/>
-    ${text(label, x, y + 52, { anchor: "middle", fill: color, size: 9, tracking: 0.7, weight: 720 })}
-  </g>`
-}
-
-function directorDesk(progress) {
-  const accent = "#b493ff"
-  const stage = smooth(0.06, 0.24, progress)
-  const guidance = smooth(0.2, 0.46, progress)
-  const userAction = smooth(0.43, 0.68, progress)
-  const review = smooth(0.7, 0.87, progress)
-  const cameraX = mix(684, 650, userAction)
-  const cameraY = mix(488, 464, userAction)
-  const cursorX = mix(1082, cameraX + 20, userAction)
-  const cursorY = mix(426, cameraY - 12, userAction)
-  return shell(
-    `
-    <g opacity="${n(stage)}">
-      ${roundedRect(72, 218, 760, 386, { fill: "#0b1626", radius: 24, stroke: accent, strokeOpacity: 0.23 })}
-      ${text("OPEN-SOURCE 3D STAGE · READ ONLY TO AGENT", 98, 250, { fill: "#8797ad", size: 11, tracking: 1.15, weight: 700 })}
-      ${pill("SCENE SNAPSHOT", 655, 231, 150, accent, false)}
-      <path d="M132 538 L800 538 L724 292 L208 292 Z" fill="#111f34" stroke="#3b4e6b" stroke-opacity="0.78"/>
-      ${stageGrid()}
-      <path d="M${n(cameraX)} ${n(cameraY)} L380 388 L505 350 Z" fill="${accent}" fill-opacity="0.08" stroke="${accent}" stroke-opacity="0.45" stroke-dasharray="6 6"/>
-      ${stagePerson(372, 403, "#64b7ff", "MARA")}
-      ${stagePerson(503, 369, "#ff8ea4", "ELI")}
-      <g filter="url(#small-shadow)"><ellipse cx="555" cy="453" rx="28" ry="9" fill="#02060b" fill-opacity="0.42"/><path d="M529 402 l42 0 12 44 -48 0z" fill="#e5ac6c" fill-opacity="0.78"/><path d="M529 402 l13 -13 h40 l-11 13z" fill="#f2c58d" fill-opacity="0.78"/>${text("PROP", 555, 474, { anchor: "middle", fill: "#cda979", size: 9, tracking: 0.7, weight: 720 })}</g>
-      <g transform="translate(${n(cameraX)} ${n(cameraY)})" filter="url(#small-shadow)">
-        <rect x="-20" y="-14" width="38" height="27" rx="6" fill="${accent}" fill-opacity="0.82"/>
-        <path d="M18 -8 l16 -10 v35 l-16 -10z" fill="#d9cdf7" fill-opacity="0.82"/>
-        <path d="M-10 14 l-12 22 M9 14 l15 22 M0 14 v24" stroke="#aebbd0" stroke-width="3" stroke-linecap="round"/>
-        ${text("CAM A", 1, 58, { anchor: "middle", fill: accent, size: 9, tracking: 0.7, weight: 720 })}
-      </g>
-      <path d="M250 416 C304 379 335 394 357 397" fill="none" stroke="#64b7ff" stroke-opacity="0.65" stroke-width="2" stroke-dasharray="5 6"/>
-      ${text("EYELINE", 242, 408, { anchor: "end", fill: "#72839b", size: 9, tracking: 0.8, weight: 680 })}
-    </g>
-    <g opacity="${n(guidance)}" filter="url(#shadow)">
-      ${roundedRect(856, 218, 352, 386, { fill: "url(#surface)", radius: 24, stroke: accent, strokeOpacity: 0.3 })}
-      ${text("AGENT GUIDANCE", 882, 250, { fill: accent, size: 11, tracking: 1.35, weight: 730 })}
-      ${pill("GUIDANCE ONLY", 1034, 232, 150, accent, false)}
-      ${[
-        ["01", "Move CAM A slightly left", "Clear the prop overlap"],
-        ["02", "Hold the shared eyeline", "Keep screen direction stable"],
-        ["03", "Review the close coverage", "Check FOV after adjustment"],
-      ]
-        .map(([number, title, note], index) => {
-          const visible = smooth(0.23 + index * 0.07, 0.42 + index * 0.07, progress)
-          const y = 286 + index * 78
-          return `<g opacity="${n(visible)}">${roundedRect(880, y, 304, 64, { fill: "#132139", radius: 14, stroke: index === 0 ? accent : "#31435d", strokeOpacity: index === 0 ? 0.46 : 0.62 })}${text(number, 898, y + 25, { fill: index === 0 ? accent : "#72839b", size: 10, tracking: 0.8, weight: 720 })}${text(title, 928, y + 25, { size: 13, weight: 650 })}${text(note, 928, y + 46, { fill: "#8493a9", size: 10 })}</g>`
-        })
-        .join("")}
-      <g opacity="${n(userAction)}">
-        ${pill("USER ADJUSTS THE STAGE", 880, 530, 222, "#65d6b8")}
-        ${checkMark(1127, 548, "#65d6b8")}
-      </g>
-    </g>
-    <g opacity="${n(userAction)}" transform="translate(${n(cursorX)} ${n(cursorY)})" filter="url(#small-shadow)">
-      <path d="M0 0 l2 25 7 -7 7 14 7 -4 -8 -14 10 -2z" fill="#f7f9fc" stroke="#1c2940" stroke-width="2" stroke-linejoin="round"/>
-    </g>
-    <g opacity="${n(review)}">
-      ${roundedRect(98, 557, 706, 28, { fill: accent, opacity: 0.1, radius: 14, stroke: accent, strokeOpacity: 0.32 })}
-      ${checkMark(116, 575, accent)}
-      ${text("Re-query complete · blocking and camera continuity ready for review", 137, 578, { fill: "#c7d1df", size: 11, weight: 620 })}
-    </g>
-  `,
-    {
-      accent,
-      footer: ["READ STAGE", "GUIDE", "USER ADJUSTS", "REVIEW"],
-      label: "3D BLOCKING WORKFLOW",
-      subtitle: "Inspect the stage. Guide the human. Re-query to review.",
-      title: "3D Director Desk",
-    },
-    progress,
-  )
-}
-
 function mediaThumbnail(x, y, color, kind, selected, progress) {
   return `<g opacity="${n(progress)}" transform="translate(0 ${n(mix(12, 0, progress))})">
     ${roundedRect(x, y, 132, 116, { fill: "#142238", radius: 14, stroke: selected ? color : "#32445e", strokeOpacity: selected ? 0.9 : 0.55, strokeWidth: selected ? 2 : 1 })}
@@ -438,7 +343,6 @@ function jianyingEditor(progress) {
 
 const showcases = [
   { id: "canvas-storyboard", posterProgress: 0.88, render: canvasStoryboard },
-  { id: "storyai-3d-director-desk", posterProgress: 0.87, render: directorDesk },
   { id: "jianying-editor", posterProgress: 0.89, render: jianyingEditor },
 ]
 

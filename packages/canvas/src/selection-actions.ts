@@ -14,8 +14,26 @@ export interface CanvasSelectionAction {
   readonly id: string
   readonly label: string
   readonly icon?: ReactNode
+  /** Presentation is a hint only; execution authority remains unchanged. */
+  readonly presentation?: {
+    readonly placement?: "overflow" | "primary"
+    readonly tone?: "default" | "destructive"
+  }
   readonly visible?: (context: CanvasSelectionActionContext) => boolean
   readonly execute: (context: CanvasSelectionActionContext) => void | Promise<void>
+}
+
+export function partitionCanvasSelectionActions(actions: readonly CanvasSelectionAction[]) {
+  const primary: CanvasSelectionAction[] = []
+  const overflow: CanvasSelectionAction[] = []
+  for (const action of actions) {
+    if (action.presentation?.placement === "overflow" || action.presentation?.tone === "destructive") {
+      overflow.push(action)
+    } else {
+      primary.push(action)
+    }
+  }
+  return { overflow, primary }
 }
 
 export function createCanvasSelectionActionContext(

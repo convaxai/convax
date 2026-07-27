@@ -17,8 +17,27 @@ interface ApplicationMenuProps {
 }
 
 interface MenuPosition {
-  bottom: number
+  bottom?: number
   left: number
+  top?: number
+}
+
+export function resolveApplicationMenuPosition(
+  bounds: Pick<DOMRect, "bottom" | "left" | "right" | "top">,
+  viewport: { height: number; width: number },
+  compact: boolean,
+): MenuPosition {
+  const menuWidth = 288
+  const left = compact
+    ? Math.min(viewport.width - menuWidth - 8, bounds.right + 8)
+    : Math.min(viewport.width - menuWidth - 8, bounds.left)
+  if (compact && bounds.top < viewport.height / 2) {
+    return { left: Math.max(8, left), top: bounds.bottom + 8 }
+  }
+  return {
+    bottom: compact ? Math.max(8, viewport.height - bounds.bottom) : Math.max(8, viewport.height - bounds.top + 8),
+    left: Math.max(8, left),
+  }
 }
 
 export function ApplicationMenuPanel({
@@ -40,9 +59,19 @@ export function ApplicationMenuPanel({
     <div
       aria-label={appMessage(locale, "appMenu.open")}
       className="z-[80] w-72 overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-2xl"
+      data-ui-menu-surface=""
       ref={panelRef}
       role="menu"
-      style={position ? { bottom: position.bottom, left: position.left, position: "fixed" } : undefined}
+      style={
+        position
+          ? {
+              bottom: position.bottom,
+              left: position.left,
+              position: "fixed",
+              top: position.top,
+            }
+          : undefined
+      }
     >
       <div className="flex items-center gap-3 px-2.5 py-2.5">
         <span className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
@@ -173,16 +202,9 @@ export function ApplicationMenu({
   const updatePosition = useCallback(() => {
     const bounds = triggerRef.current?.getBoundingClientRect()
     if (!bounds) return
-    const menuWidth = 288
-    const left = compact
-      ? Math.min(window.innerWidth - menuWidth - 8, bounds.right + 8)
-      : Math.min(window.innerWidth - menuWidth - 8, bounds.left)
-    setPosition({
-      bottom: compact
-        ? Math.max(8, window.innerHeight - bounds.bottom)
-        : Math.max(8, window.innerHeight - bounds.top + 8),
-      left: Math.max(8, left),
-    })
+    setPosition(
+      resolveApplicationMenuPosition(bounds, { height: window.innerHeight, width: window.innerWidth }, compact),
+    )
   }, [compact])
 
   useEffect(() => {

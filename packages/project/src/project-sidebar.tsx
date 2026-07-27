@@ -42,7 +42,6 @@ import {
   FilePreviewPortal,
   InlineInput,
   getFilePreviewKind,
-  type FilePreviewKind,
 } from "./project-sidebar-items"
 
 export interface ProjectSidebarProps {
@@ -59,6 +58,7 @@ export interface ProjectSidebarProps {
   filesController: ProjectFilesController
   footerActions?: ReactNode
   hideWhenNoProject?: boolean
+  presentation?: "sidebar" | "embedded-files"
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
 }
 
@@ -81,13 +81,24 @@ const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   selectedPaths: [],
 }
 
-export function ProjectSidebar({ className, controller, extension, filesController, footerActions, hideWhenNoProject = false, resolveFileUrl }: ProjectSidebarProps) {
+export function ProjectSidebar({
+  className,
+  controller,
+  extension,
+  filesController,
+  footerActions,
+  hideWhenNoProject = false,
+  presentation = "sidebar",
+  resolveFileUrl,
+}: ProjectSidebarProps) {
   const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const latestFilesSnapshot = useSyncExternalStore(filesController.subscribe, filesController.getSnapshot, filesController.getSnapshot)
   const filesSnapshot = latestFilesSnapshot.projectId === projectSnapshot.activeProjectId
     ? latestFilesSnapshot
     : emptyProjectFilesSnapshot
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
+  const embeddedFiles = presentation === "embedded-files"
+  const displayedExtension = embeddedFiles ? undefined : extension
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [projectName, setProjectName] = useState("")
@@ -227,22 +238,24 @@ export function ProjectSidebar({ className, controller, extension, filesControll
   }
 
   const sectionSplitBounds = getSectionSplitBounds(sectionsRef.current?.clientHeight ?? 0)
-  const bothSectionsExpanded = Boolean(extension) && filesExpanded && extensionExpanded
+  const bothSectionsExpanded = Boolean(displayedExtension) && filesExpanded && extensionExpanded
   const expandedSectionMinHeight = `min(${minimumExpandedSectionSize}px, calc((100% - ${sectionSplitterSize}px) / 2))`
 
-  if (hideWhenNoProject && !activeProject) return null
+  if ((hideWhenNoProject || embeddedFiles) && !activeProject) return null
 
   return (
     <TooltipProvider>
       <aside
         aria-busy={projectSnapshot.changingActiveProject}
         className={cn(
-          "relative flex h-full w-[292px] shrink-0 flex-col border-r border-border bg-card text-card-foreground",
+          "relative flex h-full shrink-0 flex-col bg-card text-card-foreground",
+          embeddedFiles ? "w-full" : "w-[292px] border-r border-border",
           projectSnapshot.changingActiveProject && "pointer-events-none opacity-80",
           className,
         )}
+        data-project-files-view={embeddedFiles ? "embedded" : undefined}
       >
-      <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
+      {!embeddedFiles ? <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
         <button
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => setSwitcherOpen((open) => !open)}
@@ -283,7 +296,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
             onOpen={() => void controller.openProject()}
           />
         ) : null}
-      </header>
+      </header> : null}
 
       {!activeProject ? (
         <ProjectEmptyState
@@ -297,7 +310,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
             <section
               className="flex min-h-0 flex-col overflow-hidden"
               style={{
-                flex: filesExpanded ? (extension && extensionExpanded ? `${sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
+                flex: filesExpanded ? (displayedExtension && extensionExpanded ? `${sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
                 minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
               }}
             >
@@ -386,7 +399,7 @@ export function ProjectSidebar({ className, controller, extension, filesControll
 
             {bothSectionsExpanded ? (
               <div
-                aria-label={`Resize Files and ${extension?.label ?? "extension"} sections`}
+                aria-label={`Resize Files and ${displayedExtension?.label ?? "extension"} sections`}
                 aria-orientation="horizontal"
                 aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
                 aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
@@ -426,13 +439,13 @@ export function ProjectSidebar({ className, controller, extension, filesControll
               </div>
             ) : null}
 
-            {extension ? (
+            {displayedExtension ? (
               <section
-                aria-busy={extension.busy}
+                aria-busy={displayedExtension.busy}
                 className={cn(
                   "flex min-h-0 flex-col overflow-hidden",
                   !bothSectionsExpanded && "border-t border-border",
-                  extension.busy && "opacity-70",
+                  displayedExtension.busy && "opacity-70",
                 )}
                 style={{
                   flex: extensionExpanded ? (filesExpanded ? `${1 - sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
@@ -447,25 +460,25 @@ export function ProjectSidebar({ className, controller, extension, filesControll
                     type="button"
                   >
                     <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", extensionExpanded && "rotate-90")} />
-                    <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{extension.label}</span>
-                    {extension.count === undefined ? null : (
-                      <span className="text-[10px] tabular-nums text-muted-foreground/70">{extension.count}</span>
+                    <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{displayedExtension.label}</span>
+                    {displayedExtension.count === undefined ? null : (
+                      <span className="text-[10px] tabular-nums text-muted-foreground/70">{displayedExtension.count}</span>
                     )}
                   </button>
-                  {extension.onCreate ? (
-                    <Tooltip content={extension.createLabel ?? `New ${extension.label}`}>
-                      <Button aria-label={extension.createLabel ?? `New ${extension.label}`} disabled={extension.busy} onClick={() => {
+                  {displayedExtension.onCreate ? (
+                    <Tooltip content={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}>
+                      <Button aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`} disabled={displayedExtension.busy} onClick={() => {
                         setExtensionExpanded(true)
-                        extension.onCreate?.()
+                        displayedExtension.onCreate?.()
                       }} size="icon-sm" variant="ghost"><Plus /></Button>
                     </Tooltip>
                   ) : null}
                 </div>
-                {extensionExpanded ? extension.content : null}
+                {extensionExpanded ? displayedExtension.content : null}
               </section>
             ) : null}
           </div>
-          {footerActions ? <div className="shrink-0 border-t border-border p-2">{footerActions}</div> : null}
+          {!embeddedFiles && footerActions ? <div className="shrink-0 border-t border-border p-2">{footerActions}</div> : null}
         </>
       )}
 

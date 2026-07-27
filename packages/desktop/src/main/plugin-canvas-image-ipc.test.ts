@@ -56,9 +56,9 @@ const request: PluginCanvasImageCreateRequest = {
   expectedRevision: 4,
   name: "current-frame.png",
   operationId: "frame-1",
-  ownerNodeId: "director-node",
-  pluginId: "storyai-3d-director-desk",
-  pluginVersion: "0.0.1-convax.3",
+  ownerNodeId: "example-stage-node",
+  pluginId: "example-stage-plugin",
+  pluginVersion: "1.0.0",
   ref: { canvasId: "canvas-1", scopeId: "project-1" },
 }
 const result: PluginCanvasImageCreateResult = { createdNodeId: "frame-node", revision: 5 }

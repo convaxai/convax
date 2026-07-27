@@ -17,6 +17,7 @@ import type { PluginMaterializationRendererClient } from "../plugin-materializat
 import type { PluginConnectedMediaRendererClient } from "../plugin-connected-media-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import type { PetSettingsHostClient } from "./pet-settings-host"
+import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -49,6 +50,7 @@ declare global {
       projectFiles: ProjectFilesClient
       projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
       protocol?: DesktopProtocolClient
+      systemStatus: WorkspaceSystemStatusClient
     }
   }
 }

@@ -89,7 +89,7 @@ export function SegmentedTabs<Value extends string>({
       {...props}
       aria-orientation={orientation}
       className={cn(
-        "grid rounded-xl bg-muted/70 p-0.5",
+        "grid rounded-lg bg-surface-inset p-0.5",
         orientation === "horizontal" ? "auto-cols-fr grid-flow-col" : "grid-flow-row",
         className,
       )}
@@ -104,11 +104,12 @@ export function SegmentedTabs<Value extends string>({
             aria-label={item.ariaLabel}
             aria-selected={selected}
             className={cn(
-              "min-w-0 rounded-[10px] px-2 py-1.5 text-xs text-muted-foreground outline-none transition-colors hover:text-foreground data-[state=active]:bg-background data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-45",
+              "min-w-0 rounded-md border border-transparent px-2 py-1.5 text-xs text-text-secondary outline-none hover:bg-interactive-hover hover:text-text-primary active:bg-interactive-pressed data-[state=active]:border-interactive-selected-border data-[state=active]:bg-interactive-selected data-[state=active]:font-medium data-[state=active]:text-text-primary data-[state=active]:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-45",
               tabClassName,
             )}
             data-slot="segmented-tabs-trigger"
             data-state={selected ? "active" : "inactive"}
+            data-ui-interactive=""
             disabled={item.disabled}
             id={item.id}
             key={item.value}

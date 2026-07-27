@@ -1,5 +1,6 @@
 import type { ComponentType } from "react"
 import type { NodeProps } from "@xyflow/react"
+import type { CanvasInspectorContribution } from "./inspector"
 import type { CanvasNodeCreateInput } from "./node-registry"
 import type { CanvasNode, CanvasNodeData } from "./types"
 
@@ -12,6 +13,8 @@ export interface CanvasFileRendererDefinition {
   /** Render-only contributions can omit create and stay out of insertion menus. */
   create?: (input: CanvasNodeCreateInput) => CanvasNode
   hidden?: boolean
+  /** Explicit, bounded opt-in for the read-only Canvas Inspector. */
+  inspector?: CanvasInspectorContribution
   matches: (data: CanvasNodeData) => boolean
   priority?: number
   /** Optional secondary toolbar contribution mounted above the renderer's own toolbar. */
