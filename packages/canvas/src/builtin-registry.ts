@@ -4,20 +4,37 @@ import {
   BuiltinMediaFileNode,
   BuiltinTextFileNode,
 } from "./components/builtin-node"
-import { createAgentNode } from "./document"
+import { createAgentNode, createMediaNode } from "./document"
 import { createCanvasFileRendererRegistry, type CanvasFileRendererDefinition } from "./file-renderer-registry"
 import { builtinCanvasInspectorContribution } from "./inspector"
 import { createCanvasNodeRegistry } from "./node-registry"
 import type { CanvasMediaKind } from "./types"
 
 function mediaRenderer(kind: CanvasMediaKind): CanvasFileRendererDefinition {
+  const canCreateEmptyCard = kind === "image" || kind === "video"
   return {
     id: kind,
     label: kind[0]!.toUpperCase() + kind.slice(1),
     component: BuiltinMediaFileNode,
-    hidden: true,
     inspector: builtinCanvasInspectorContribution,
     matches: (data) => data.kind === kind,
+    ...(canCreateEmptyCard
+      ? {
+          create(input) {
+            const node = createMediaNode({
+              id: input.id,
+              position: input.position,
+              resource: {
+                id: input.id ?? kind,
+                kind,
+                metadata: {},
+                state: { status: "ready" },
+              },
+            })
+            return { ...node, data: { ...node.data, status: "idle" as const } }
+          },
+        }
+      : { hidden: true }),
   }
 }
 
