@@ -65,6 +65,7 @@ function validInput(overrides: Record<string, unknown> = {}) {
     expectedRevision: 4,
     output: "image",
     prompt: "Create a quiet landscape",
+    promptContextNodeIds: [],
     references: [{ nodeId: "reference-1", role: "reference_image" }],
     toolId: "image-tools/generate.image",
     ...overrides,
@@ -144,6 +145,7 @@ describe("generation Agent tool", () => {
       additionalProperties: boolean
       properties: {
         output: { enum: string[] }
+        promptContextNodeIds: { description: string; uniqueItems: boolean }
         references: { description: string }
         toolId: { enum: string[] }
         toolInput: { maxProperties: number; type: string }
@@ -154,12 +156,23 @@ describe("generation Agent tool", () => {
     expect(schema.properties.toolId.enum).toEqual(["image-tools/generate.image", "motion-tools/generate.video"])
     expect(schema.properties.output.enum).toEqual(["image", "video"])
     expect(schema.properties.toolInput).toMatchObject({ maxProperties: 32, type: "object" })
+    expect(schema.properties.promptContextNodeIds).toMatchObject({ uniqueItems: true })
+    expect(schema.properties.promptContextNodeIds.description).toContain("authoritative content Main appends")
     expect(schema.properties.references.description).toContain(
       "Use reference_image for ordinary single-image-to-video input",
     )
+    expect(schema.properties.references.description).toContain("text references are never accepted")
     expect(schema.properties.references.description).toContain("first_frame may be used alone")
     expect(schema.properties.references.description).toContain("first_frame plus last_frame")
-    expect(schema.required).toEqual(["anchor", "canvasId", "commandId", "expectedRevision", "prompt", "references"])
+    expect(schema.required).toEqual([
+      "anchor",
+      "canvasId",
+      "commandId",
+      "expectedRevision",
+      "prompt",
+      "promptContextNodeIds",
+      "references",
+    ])
   })
 
   test("injects the authoritative Agent scope and actor and propagates cancellation context", async () => {
@@ -189,6 +202,7 @@ describe("generation Agent tool", () => {
           operationId: "generate-1",
           output: "image",
           prompt: "Create a quiet landscape",
+          promptContextNodeIds: [],
           ref: { canvasId: "canvas-main", scopeId: "project-a" },
           references: [{ nodeId: "reference-1", role: "reference_image" }],
           resultMode: { type: "create-pending-node" },
@@ -224,15 +238,31 @@ describe("generation Agent tool", () => {
     await entered
     cancellation.abort(new DOMException("Stopped", "AbortError"))
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
-    expect(service.cancels).toEqual([
-      { actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" },
-    ])
+    expect(service.cancels).toEqual([{ actor: { id: "opencode:project-a", kind: "agent" }, operationId: "generate-1" }])
 
     function providerCall() {
       return createGenerationAgentToolProvider(service).callTool(scope, "canvas_generate", validInput(), {
         signal: cancellation.signal,
       })
     }
+  })
+
+  test("passes Canvas text as prompt context without requiring a text-capable model", async () => {
+    const service = new FakeGenerationService([generationTool({ acceptedInputs: [] })])
+    const provider = createGenerationAgentToolProvider(service)
+
+    await provider.callTool(
+      scope,
+      "canvas_generate",
+      validInput({ prompt: "", promptContextNodeIds: ["brief"], references: [] }),
+    )
+
+    expect(service.calls[0]?.request).toMatchObject({
+      prompt: "",
+      promptContextNodeIds: ["brief"],
+      references: [],
+      toolId: "image-tools/generate.image",
+    })
   })
 
   test("passes only bounded scalar tool input through for Main to validate against the selected sidecar schema", async () => {
@@ -336,7 +366,26 @@ describe("generation Agent tool", () => {
       [validInput({ toolId: "missing/generate" }), "not installed"],
       [validInput({ output: "video" }), "does not produce video"],
       [validInput({ references: [{ nodeId: "reference-1", role: "reference_video" }] }), "does not accept"],
+      [validInput({ references: [{ nodeId: "reference-1", role: "text" }] }), "references[0].role"],
       [validInput({ references: [{ nodeId: "reference-1", role: "mask" }] }), "references[0].role"],
+      [validInput({ promptContextNodeIds: ["brief", "brief"] }), "duplicate Canvas node"],
+      [
+        validInput({
+          promptContextNodeIds: ["reference-1"],
+          references: [{ nodeId: "reference-1", role: "reference_image" }],
+        }),
+        "same Canvas node",
+      ],
+      [
+        validInput({
+          promptContextNodeIds: Array.from({ length: 16 }, (_, index) => `brief-${index}`),
+          references: Array.from({ length: 17 }, (_, index) => ({
+            nodeId: `reference-${index}`,
+            role: "reference_image",
+          })),
+        }),
+        "32 total items",
+      ],
       [
         validInput({
           references: [

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { AgentModelCatalog } from "@convax/agent-runtime"
-import { findAgentLlmModel, reconcileAgentLlmModelSelection } from "./agent-llm-models"
+import {
+  availableAgentLlmProviders,
+  defaultAgentLlmModelSelection,
+  findAgentLlmModel,
+  reconcileAgentLlmModelSelection,
+} from "./agent-llm-models"
 
 const catalog: AgentModelCatalog = {
   providers: [
@@ -27,14 +32,65 @@ describe("Agent LLM models", () => {
     expect(reconcileAgentLlmModelSelection(selection, catalog)).toEqual(selection)
   })
 
-  test("fails closed for disconnected, missing, or absent models", () => {
-    expect(reconcileAgentLlmModelSelection({ modelId: "offline", providerId: "offline" }, catalog)).toBeUndefined()
+  test("chooses a concrete default when the remembered model is unavailable or absent", () => {
+    const expected = { modelId: "main", providerId: "plugin-xiaoyunque-generation-pippit-glm" }
+    expect(reconcileAgentLlmModelSelection({ modelId: "offline", providerId: "offline" }, catalog)).toEqual(expected)
     expect(
       reconcileAgentLlmModelSelection(
         { modelId: "removed", providerId: "plugin-xiaoyunque-generation-pippit-glm" },
         catalog,
       ),
-    ).toBeUndefined()
-    expect(reconcileAgentLlmModelSelection(undefined, catalog)).toBeUndefined()
+    ).toEqual(expected)
+    expect(reconcileAgentLlmModelSelection(undefined, catalog)).toEqual(expected)
+  })
+
+  test("uses the first available service's default before falling back to its first model", () => {
+    const withDefaults: AgentModelCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: false, modelId: "first", modelName: "First" }],
+          providerId: "first-service",
+          providerName: "First service",
+        },
+        {
+          connected: true,
+          defaultModelId: "preferred",
+          models: [{ default: true, modelId: "preferred", modelName: "Preferred" }],
+          providerId: "second-service",
+          providerName: "Second service",
+        },
+      ],
+    }
+    expect(defaultAgentLlmModelSelection(withDefaults)).toEqual({ modelId: "first", providerId: "first-service" })
+
+    withDefaults.providers[0]!.connected = false
+    expect(defaultAgentLlmModelSelection(withDefaults)).toEqual({
+      modelId: "preferred",
+      providerId: "second-service",
+    })
+  })
+
+  test("ignores disconnected and model-less services without inventing a model", () => {
+    const unavailable: AgentModelCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [],
+          providerId: "empty",
+          providerName: "Empty",
+        },
+        {
+          connected: false,
+          models: [{ default: true, modelId: "offline", modelName: "Offline" }],
+          providerId: "offline",
+          providerName: "Offline",
+        },
+      ],
+    }
+    expect(availableAgentLlmProviders(unavailable)).toEqual([])
+    expect(defaultAgentLlmModelSelection(unavailable)).toBeUndefined()
+    expect(reconcileAgentLlmModelSelection(undefined, unavailable)).toBeUndefined()
+    expect(reconcileAgentLlmModelSelection(undefined, undefined)).toBeUndefined()
   })
 })

@@ -49,9 +49,16 @@ export function agentGenerationModelDisplayTitle(tool: GenerationToolSummary) {
   return tool.modelName ?? tool.title
 }
 
+export function agentGenerationModelSelectionTitle(tool: GenerationToolSummary) {
+  const modelName = agentGenerationModelDisplayTitle(tool)
+  return modelName === tool.pluginName || modelName.startsWith(`${tool.pluginName} · `)
+    ? modelName
+    : `${tool.pluginName} · ${modelName}`
+}
+
 /**
  * Resolves a remembered choice back to the current host catalog. Exact id and
- * output matching means a removed or changed Plugin tool fails closed to Auto.
+ * output matching means a removed or changed Plugin tool fails closed.
  */
 export function findAgentGenerationTool(
   selection: AgentGenerationToolSelection | undefined,

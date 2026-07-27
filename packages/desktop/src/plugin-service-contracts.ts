@@ -6,6 +6,7 @@ export const pluginServiceIpcChannels = {
   authorize: "plugin-service:authorize",
   cancelAuthorization: "plugin-service:authorization-cancel",
   checkout: "plugin-service:checkout",
+  changed: "plugin-service:changed",
   getStatus: "plugin-service:status",
   listServices: "plugin-service:list",
   reauthorize: "plugin-service:reauthorize",

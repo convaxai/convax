@@ -61,6 +61,7 @@ export interface PluginCanvasGeometryNode {
 }
 
 export interface PluginCanvasGeometryDocument {
+  /** Directed right-output -> left-input edges. Only edges targeting a node are that node's inputs. */
   edges: Array<Pick<CanvasEdge, "id" | "source" | "target">>
   id: string
   nodes: PluginCanvasGeometryNode[]

@@ -62,6 +62,11 @@ into `ProjectController`.
 A Canvas is an independent document with its own schema, revision, commands,
 business operations, queries, view commands, and editor. Project owns the catalog
 relationship and persistence adapter, but it does not own Canvas document semantics.
+Every connectable card has exactly one left-side input and one right-side output.
+Canvas edges are directed from `source` (right/output) to `target` (left/input);
+moving cards never changes those port roles. Structural groups are containers rather
+than connectable cards, and new primitive or resource-relation commands reject a
+group endpoint.
 
 ### Workbench
 
@@ -511,18 +516,38 @@ host-reserved envelope; tools without extensions keep the original payload.
 
 The Agent generation model is a user-global renderer preference. Without an owning
 node override, a file card inherits that preference only when its output matches the
-card's intrinsic text/image/video/audio kind. The card catalog contains only tools
-with that output, and mismatched Agent defaults or persisted overrides fail closed.
-A manual card choice stores only the opaque host tool id in versioned, namespaced
-Canvas node metadata; clearing it restores automatic resolution. The node override
-is portable and undoable with the Canvas document, never updates the Agent preference
-in reverse, and fails closed when its tool is no longer installed or compatible.
+card's intrinsic text/image/video/audio kind and accepts the current media references.
+If that preference is absent, mismatched, or temporarily incompatible, the card prefers
+the first compatible concrete model. A model enters the output-scoped available
+catalog only when the owning Plugin contributes the same model through a service and
+Main's bounded live status reports that service connected. Missing, disconnected,
+attention, unknown, timed-out, or invalid service status hides that service's models;
+service-independent operations remain manifest-driven. When no model is available,
+Agent and card composers offer the Services route instead of synthesizing an `auto`
+choice. The available catalog is never pruned by current `@` inputs: when no model
+accepts all inputs, the card still shows a concrete matching Agent default or first
+available model and blocks execution until the user removes incompatible inputs or
+chooses a compatible model. A manual card choice stores only the opaque host tool id
+in versioned, namespaced Canvas node metadata; clearing it restores host-default
+resolution. The node override is portable
+and undoable with the Canvas document, never updates the Agent preference in reverse,
+and requires an exact available output match. Input incompatibility keeps that exact
+model visible but fails closed at submission; missing or output-mismatched ids remain
+unavailable.
 
-Direct Generate-tab calls include Canvas references only when the user explicitly
-mentions those nodes. Merely opening generation from an image, video, audio or text
-card never turns the owning card into an implicit input. Agent mode may prepare its
-own scoped Canvas context, but every media reference that reaches generation still
-passes the same managed-asset and live-revision guards.
+Opening an Agent or Generate conversation on a card preloads its direct incoming file
+nodes as removable `@` references in edge order. Removing a reference excludes it
+from that submission. The owning card remains separate host context or the generation
+replacement target and never becomes its own implicit input. Generate carries each
+non-empty text mention as a prompt-context node id; Main reads its authoritative
+Canvas text, appends it to the prompt in mention order, and never exposes that text
+node as a model reference or gates it on `acceptedInputs`. Materialized image, video,
+and audio mentions become typed tool references and remain subject to model input
+compatibility. Main revalidates that both prompt-context nodes and media references
+are still direct incoming edges, and that their authoritative content is unchanged,
+before and after external execution. Agent mode may prepare its own scoped Canvas
+context, but every media reference that reaches generation still passes the same
+managed-asset and live-revision guards.
 Known file-card modalities also constrain the direct model catalog and result: an
 image card accepts only image tools, a video card only video tools, and a mismatched
 Agent default or persisted card override fails closed. This output constraint is
@@ -602,6 +627,12 @@ projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
 select an OpenCode provider/model pair.
+
+The Services page may display installed model rows while a service is disconnected so
+the user can understand and configure that installation. Executable model catalogs are
+stricter: Main joins each model back to the exact service projection, performs a
+bounded live status check, and exposes it to Agent, card, Plugin and IPC callers only
+while that service is connected.
 
 `convax.plugin/5` adds one generic LLM contribution without introducing a built-in
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
@@ -897,6 +928,9 @@ native paths, URLs, or credentials. The
 `canvas.connectedInputs.changed` command is only an invalidation signal; it does
 not authorize transfer or trigger a Tool/Agent call. External transfer requires an
 explicit user action and runs through the verified Main-owned operation boundary.
+Here and in document projections, an input means only an edge whose `target` is the
+owning Plugin node: the source card's right-side output feeds the Plugin card's
+left-side input. Outgoing neighbors are outputs and are never included as inputs.
 
 A node-scoped Plugin may add one current-frame PNG only when its manifest declares
 `canvas.image.write` and calls `canvas.image.create`. The iframe supplies bounded

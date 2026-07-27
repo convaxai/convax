@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   AgentComposerCompositionController,
   AgentComposerRequestTracker,
+  agentComposerDraftWithResources,
   agentComposerResources,
   agentComposerText,
   closeAgentComposerSuggestion,
@@ -19,6 +20,14 @@ import {
 } from "./agent-composer-state"
 
 describe("Agent composer state", () => {
+  test("seeds host-provided inputs as ordinary removable composer resources", () => {
+    const resource = { kind: "resource" as const, name: "Input card", uri: "convax://canvas/main/node/input" }
+
+    expect(agentComposerDraftWithResources([resource])).toEqual({
+      segments: [{ resource, type: "resource" }],
+    })
+  })
+
   test("keeps resources at their sentence position and projects prompt inputs", () => {
     const draft = {
       segments: [

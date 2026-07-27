@@ -72,7 +72,9 @@ export interface PluginServiceBrowserAuthorizationHost {
 function summaryFingerprint(summary: PluginServiceSummary) {
   return JSON.stringify({
     actions: [...summary.actions],
+    capabilities: [...summary.capabilities],
     description: summary.description,
+    models: summary.models.map((model) => ({ ...model })),
     pluginId: summary.pluginId,
     pluginName: summary.pluginName,
     version: summary.version,
@@ -117,6 +119,7 @@ export class PluginServiceHost {
       | PluginServiceBrowserAuthorizationHost,
     private readonly externalAuthorization?: PluginServiceExternalAuthorizationBroker,
     private readonly checkoutNavigation?: PluginServiceCheckoutNavigation,
+    private readonly onServiceMutation?: () => Promise<void> | void,
   ) {}
 
   listServices() {
@@ -127,26 +130,44 @@ export class PluginServiceHost {
     return this.#call(pluginId, "status", signal)
   }
 
-  authorize(pluginId: string, signal?: AbortSignal) {
-    return this.#callAuthorization(pluginId, "authorize", signal)
+  async authorize(pluginId: string, signal?: AbortSignal) {
+    const status = await this.#callAuthorization(pluginId, "authorize", signal)
+    this.#notifyServiceMutation()
+    return status
   }
 
-  reauthorize(pluginId: string, signal?: AbortSignal) {
-    return this.#callAuthorization(pluginId, "reauthorize", signal)
+  async reauthorize(pluginId: string, signal?: AbortSignal) {
+    const status = await this.#callAuthorization(pluginId, "reauthorize", signal)
+    this.#notifyServiceMutation()
+    return status
   }
 
   async cancelAuthorization(pluginId: string, signal?: AbortSignal) {
-    return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+    const status = await this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
       await this.#discardPlugin(pluginId)
       return this.#call(pluginId, "authorization.cancel", controlSignal)
     })
+    this.#notifyServiceMutation()
+    return status
   }
 
   async signOut(pluginId: string, signal?: AbortSignal) {
-    return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+    const status = await this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
       await this.#discardPlugin(pluginId)
       return this.#call(pluginId, "sign_out", controlSignal)
     })
+    this.#notifyServiceMutation()
+    return status
+  }
+
+  #notifyServiceMutation() {
+    try {
+      void Promise.resolve(this.onServiceMutation?.()).catch((error) => {
+        console.warn("Could not refresh Agent configuration after a Plugin service mutation", error)
+      })
+    } catch (error) {
+      console.warn("Could not refresh Agent configuration after a Plugin service mutation", error)
+    }
   }
 
   async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {

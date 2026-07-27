@@ -255,6 +255,24 @@ try {
         name: "Storyboard Builder",
       }
     })
+    electron.ipcMain.removeHandler("generation:list-tools")
+    electron.ipcMain.handle("generation:list-tools", () => [{
+      acceptedInputs: ["text"],
+      description: "Built-smoke available image model",
+      id: "smoke-tools/generate.image",
+      kind: "model",
+      modelName: "Smoke Image",
+      output: "image",
+      pluginId: "smoke-tools",
+      pluginName: "Smoke Service",
+      title: "Smoke Image",
+      toolId: "generate.image",
+    }])
+    electron.ipcMain.removeHandler("generation:describe-tool")
+    electron.ipcMain.handle("generation:describe-tool", (_event, input) => ({
+      fields: [],
+      toolId: input?.toolId,
+    }))
     // This smoke verifies the built renderer's real composer input, picker
     // geometry, and Canvas/Plugin flows. Keep those assertions independent from
     // the machine's OpenCode session database and startup latency.
@@ -877,9 +895,10 @@ try {
       let composer
       let requestedAgent = false
       while (Date.now() < deadline) {
-         composer = [...document.querySelectorAll('[contenteditable="true"][aria-label="Message the project agent"]')]
-           .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
-         if (composer) break
+        const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+          .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
+        composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+        if (composer) break
         if (!requestedAgent) {
           const openAgent = document.querySelector(
             'button[aria-label^="Open agent"], button[aria-label^="打开 Agent"]',
@@ -892,22 +911,28 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
       if (!composer) {
-         const openAgent = document.querySelector(
-           'button[aria-label^="Open agent"], button[aria-label^="打开 Agent"]',
-         )
-         const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
+        const openAgent = document.querySelector(
+          'button[aria-label^="Open agent"], button[aria-label^="打开 Agent"]',
+        )
+        const disabledComposer = document.querySelector('[aria-label="Message the project agent"]')
+        const agentPanels = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
         const alerts = [...document.querySelectorAll('[role="alert"]')]
           .map((alert) => alert.textContent?.trim())
           .filter(Boolean)
-        throw new Error("The Agent composer is missing: " + JSON.stringify({
+        throw new Error("The standalone Agent composer is missing after opening its panel: " + JSON.stringify({
           agentStatus: await window.convax.agent.getStatus().catch((cause) => ({ error: String(cause) })),
           alerts,
           bodyText: document.body.innerText.slice(-2_000),
           composerContentEditable: disabledComposer?.getAttribute("contenteditable"),
-            openAgentVisible: openAgent instanceof HTMLElement && openAgent.offsetParent !== null,
-          }))
-        }
-        composer.replaceChildren()
+          openAgentVisible: openAgent instanceof HTMLElement && openAgent.offsetParent !== null,
+          panels: agentPanels.map((panel) => ({
+            text: panel.textContent?.slice(-500),
+            visible: panel instanceof HTMLElement && panel.offsetParent !== null,
+          })),
+          systemStatus: await window.convax.systemStatus.getSnapshot().catch((cause) => ({ error: String(cause) })),
+        }))
+      }
+      composer.replaceChildren()
       composer.focus()
       const range = document.createRange()
       range.selectNodeContents(composer)
@@ -932,8 +957,9 @@ try {
         if (picker) break
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      const composer = [...document.querySelectorAll('[contenteditable="true"][aria-label="Message the project agent"]')]
+      const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
         .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
+      const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
       if (!composer || !picker) throw new Error("Real @ input did not open the Agent composer picker")
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const composerBounds = composer.getBoundingClientRect()
@@ -1022,7 +1048,9 @@ try {
   await evaluateStable(
     rendererDebugger,
     `(() => {
-      const composer = document.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
+      const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+        .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
+      const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
       if (!composer) return
       composer.replaceChildren()
       composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }))
@@ -1030,8 +1058,70 @@ try {
     })()`,
   )
 
+  const agentGenerationModel = (await evaluateStable(
+    rendererDebugger,
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      const waitFor = async (read, label) => {
+        while (Date.now() < deadline) {
+          const value = read()
+          if (value) return value
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+        throw new Error("Timed out waiting for " + label)
+      }
+      const agentPanel = await waitFor(
+        () => [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+          .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null),
+        "the hosted workspace Agent panel",
+      )
+      const modelButton = await waitFor(
+        () => agentPanel.querySelector('button[aria-label^="Select models,"]'),
+        "the standalone Agent model selector",
+      )
+      modelButton.click()
+      const picker = await waitFor(
+        () => agentPanel.querySelector('[data-agent-generation-model-picker]'),
+        "the standalone Agent model picker",
+      )
+      const initialText = picker.textContent ?? ""
+      if (initialText.includes("Auto") || initialText.includes("自动")) {
+        throw new Error("The standalone Agent model picker exposed an Auto option")
+      }
+      const imageTab = await waitFor(
+        () => [...picker.querySelectorAll('[role="tab"]')]
+          .find((candidate) => candidate.textContent?.trim() === "Image"),
+        "the Image model tab",
+      )
+      imageTab.click()
+      const selectedModel = await waitFor(
+        () => [...agentPanel.querySelectorAll('[data-agent-generation-model-picker] [role="radio"]')]
+          .find((candidate) => candidate.getAttribute("aria-label") === "Smoke Image by Smoke Service"
+            && candidate.getAttribute("aria-checked") === "true"),
+        "the first available concrete generation model to become selected",
+      )
+      const selectedLabel = modelButton.getAttribute("aria-label")
+      if (selectedLabel?.includes("Auto") || selectedLabel?.includes("自动")) {
+        throw new Error("The standalone Agent model selector retained an Auto label")
+      }
+      modelButton.click()
+      return {
+        model: selectedModel.getAttribute("aria-label"),
+        pickerHadAuto: initialText.includes("Auto") || initialText.includes("自动"),
+        selector: selectedLabel,
+      }
+    })()`,
+  )) as { model?: string | null; pickerHadAuto?: boolean; selector?: string | null }
+  if (
+    agentGenerationModel.model !== "Smoke Image by Smoke Service" ||
+    agentGenerationModel.pickerHadAuto !== false ||
+    agentGenerationModel.selector !== "Select models, Smoke Service · Smoke Image"
+  ) {
+    throw new Error(`Unexpected standalone Agent model selection: ${JSON.stringify(agentGenerationModel)}`)
+  }
+
   console.log(
-    `Desktop Settings, Canvas generation CAS/late-callback/restart races, installed Skill showcase/detail, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
+    `Desktop workspace, diagnostics, standalone Agent model, Canvas generation CAS/late-callback/restart races, installed Skill showcase/detail, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
   )
 } catch (error) {
   child.kill("SIGKILL")

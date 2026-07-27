@@ -485,7 +485,7 @@ The versioned direct-call surface is intentionally narrow:
 | `host.context.get`            | none                          | current Project, Canvas and own node                                                                      |
 | `canvas.connectedImages.list` | `canvas.connectedImages.read` | metadata for image nodes connected into the own node only                                                 |
 | `canvas.connectedImage.read`  | `canvas.connectedImages.read` | one listed embedded image or managed Project image, atomically type-checked and limited to 16 MiB in main |
-| `canvas.connectedInputs.list` | `canvas.connectedInputs.read` | pathless metadata for direct incoming image, video, and audio nodes in edge order                         |
+| `canvas.connectedInputs.list` | `canvas.connectedInputs.read` | pathless metadata for direct incoming file nodes in edge order                                            |
 | `canvas.node.get`             | `canvas.node.read`            | own node only                                                                                             |
 | `canvas.node.updateState`     | `canvas.node.write`           | own namespaced state only                                                                                 |
 | `canvas.image.create`         | `canvas.image.write`          | one bounded PNG imported as a managed Project asset and added beside the own node                         |
@@ -523,6 +523,10 @@ The v6 connected-input capability similarly sends
 `canvas.connectedInputs.changed`, but this is only an invalidation. The iframe
 re-lists metadata and waits for an explicit user action; it receives no media bytes,
 paths, URLs, credentials, or implicit permission to transfer anything.
+Every Canvas edge runs from the source card's right-side output to the target card's
+left-side input. Therefore the owning Plugin's connected inputs are only sources of
+edges whose target is that Plugin node; nodes reached by its outgoing edges are
+outputs, not inputs.
 
 ## Skill presentation and inspection
 

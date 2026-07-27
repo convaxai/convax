@@ -159,65 +159,21 @@ export function resolveCanvasEdgeGeometry(input: {
   targetHandleId?: string | null
   fallback: CanvasEdgeGeometry
 }): CanvasEdgeGeometry {
-  if (!input.sourceBounds || !input.targetBounds) return input.fallback
-  const adaptive = getAdaptiveEdgeGeometry(input.sourceBounds, input.targetBounds)
-  if (!input.sourceHandleId && !input.targetHandleId) return adaptive
-  const source = getNodeHandleEndpoint(input.sourceBounds, input.sourceHandleId, adaptive.sourcePosition)
-  const target = getNodeHandleEndpoint(input.targetBounds, input.targetHandleId, adaptive.targetPosition)
-  return {
-    sourceX: source.x,
-    sourceY: source.y,
-    sourcePosition: source.position,
-    targetX: target.x,
-    targetY: target.y,
-    targetPosition: target.position,
-  }
-}
-
-function getNodeHandleEndpoint(bounds: CanvasNodeBounds, handleId: string | null | undefined, fallback: Position) {
-  const position = getHandlePosition(handleId, fallback)
-  if (position === Position.Left) return { x: bounds.x, y: bounds.y + bounds.height / 2, position }
-  if (position === Position.Right) return { x: bounds.x + bounds.width, y: bounds.y + bounds.height / 2, position }
-  if (position === Position.Top) return { x: bounds.x + bounds.width / 2, y: bounds.y, position }
-  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height, position }
-}
-
-function getHandlePosition(handleId: string | null | undefined, fallback: Position) {
-  const normalized = handleId?.toLowerCase()
-  if (normalized?.includes("left")) return Position.Left
-  if (normalized?.includes("right")) return Position.Right
-  if (normalized?.includes("top")) return Position.Top
-  if (normalized?.includes("bottom")) return Position.Bottom
-  return fallback
-}
-
-function getAdaptiveEdgeGeometry(
-  source: { x: number; y: number; width: number; height: number },
-  target: { x: number; y: number; width: number; height: number },
-): CanvasEdgeGeometry {
-  const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 }
-  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 }
-  const delta = { x: targetCenter.x - sourceCenter.x, y: targetCenter.y - sourceCenter.y }
-
-  if (Math.abs(delta.x) >= Math.abs(delta.y)) {
-    const forward = delta.x >= 0
+  if (!input.sourceBounds || !input.targetBounds) {
     return {
-      sourceX: forward ? source.x + source.width : source.x,
-      sourceY: sourceCenter.y,
-      sourcePosition: forward ? Position.Right : Position.Left,
-      targetX: forward ? target.x : target.x + target.width,
-      targetY: targetCenter.y,
-      targetPosition: forward ? Position.Left : Position.Right,
+      ...input.fallback,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
     }
   }
-
-  const forward = delta.y >= 0
+  const source = input.sourceBounds
+  const target = input.targetBounds
   return {
-    sourceX: sourceCenter.x,
-    sourceY: forward ? source.y + source.height : source.y,
-    sourcePosition: forward ? Position.Bottom : Position.Top,
-    targetX: targetCenter.x,
-    targetY: forward ? target.y : target.y + target.height,
-    targetPosition: forward ? Position.Top : Position.Bottom,
+    sourceX: source.x + source.width,
+    sourceY: source.y + source.height / 2,
+    sourcePosition: Position.Right,
+    targetX: target.x,
+    targetY: target.y + target.height / 2,
+    targetPosition: Position.Left,
   }
 }

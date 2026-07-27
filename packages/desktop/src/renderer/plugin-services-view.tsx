@@ -373,6 +373,7 @@ export function ServicesSurface({
   locale,
   onAction,
   onCheckout,
+  onInstallServices,
   onRefresh,
   snapshot,
 }: {
@@ -380,6 +381,7 @@ export function ServicesSurface({
   locale: AppLocale
   onAction(pluginId: string, action: WebPluginServiceAction): void
   onCheckout?(pluginId: string, planKey: string): void
+  onInstallServices?: () => void
   onRefresh(): void
   snapshot: ServiceCatalogSnapshot
 }) {
@@ -389,10 +391,18 @@ export function ServicesSurface({
         <div>
           <p className="text-sm text-muted-foreground">{appMessage(locale, "services.description")}</p>
         </div>
-        <Button disabled={snapshot.loading} onClick={onRefresh} size="sm" variant="outline">
-          <RefreshCw className={snapshot.loading ? "animate-spin" : undefined} />
-          {appMessage(locale, "services.retry")}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {onInstallServices ? (
+            <Button onClick={onInstallServices} size="sm">
+              <Cloud />
+              {appMessage(locale, "services.install")}
+            </Button>
+          ) : null}
+          <Button disabled={snapshot.loading} onClick={onRefresh} size="sm" variant="outline">
+            <RefreshCw className={snapshot.loading ? "animate-spin" : undefined} />
+            {appMessage(locale, "services.retry")}
+          </Button>
+        </div>
       </div>
       {snapshot.error ? (
         <div

@@ -146,6 +146,10 @@ export interface CanvasGenerationToolSummary {
   description: string
   output: CanvasGenerationOutput
   acceptedInputs: readonly CanvasGenerationInputRole[]
+  /** Optional host-neutral display metadata for preserving service/model identity. */
+  modelName?: string
+  serviceId?: string
+  serviceName?: string
 }
 
 export interface CanvasGenerationToolQuery {
@@ -179,6 +183,11 @@ export interface CanvasGenerateRequest {
   output?: CanvasGenerationOutput
   prompt: string
   /**
+   * Existing Canvas text nodes whose authoritative text the host appends to
+   * `prompt`. These nodes are context, not model reference inputs.
+   */
+  promptContextNodeIds?: readonly string[]
+  /**
    * Existing Canvas nodes that should be connected to generated results but
    * must not be staged or exposed as generation-tool inputs.
    */
@@ -207,22 +216,50 @@ export interface CanvasGenerateService {
   listTools: (query: CanvasGenerationToolQuery, signal?: AbortSignal) => Promise<readonly CanvasGenerationToolSummary[]>
 }
 
+export interface CanvasGenerationInputs {
+  promptContextNodeIds: readonly string[]
+  references: readonly CanvasGenerationReference[]
+}
+
 /**
- * Converts selected public Canvas file nodes with materialized content into semantic generation inputs.
- * Empty cards remain prompt-only output targets; their kind alone is not an input source.
- * First/last-frame roles remain explicit choices for callers and are not guessed from selection order.
+ * Partitions selected public Canvas file nodes into text prompt context and
+ * model reference inputs. Empty cards remain output targets only; their kind
+ * alone is not an input source. First/last-frame roles remain explicit choices
+ * for callers and are not guessed from selection order.
  */
+export function inferCanvasGenerationInputs(
+  nodes: readonly CanvasNode[],
+  selectedNodeIds: readonly string[],
+): CanvasGenerationInputs {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const promptContextNodeIds: string[] = []
+  const references: CanvasGenerationReference[] = []
+  for (const nodeId of new Set(selectedNodeIds)) {
+    const node = nodeById.get(nodeId)
+    if (!node) continue
+    if (node.data.kind === "text") {
+      const resourceState = node.data.resourceState
+      const text =
+        typeof resourceState === "object" && resourceState !== null && "text" in resourceState
+          ? resourceState.text
+          : undefined
+      if (typeof text === "string" && text.trim()) {
+        promptContextNodeIds.push(nodeId)
+      }
+      continue
+    }
+    const role = inferCanvasGenerationInputRole(node)
+    if (role) references.push({ nodeId, role })
+  }
+  return { promptContextNodeIds, references }
+}
+
+/** Returns only model reference inputs; text nodes are prompt context. */
 export function inferCanvasGenerationReferences(
   nodes: readonly CanvasNode[],
   selectedNodeIds: readonly string[],
 ): readonly CanvasGenerationReference[] {
-  const nodeById = new Map(nodes.map((node) => [node.id, node]))
-  return [...new Set(selectedNodeIds)].flatMap((nodeId) => {
-    const node = nodeById.get(nodeId)
-    if (!node) return []
-    const role = inferCanvasGenerationInputRole(node)
-    return role ? [{ nodeId, role }] : []
-  })
+  return inferCanvasGenerationInputs(nodes, selectedNodeIds).references
 }
 
 export function getCompatibleCanvasGenerationTools(
@@ -245,15 +282,17 @@ export function getCanvasGenerationReferenceError(
   return undefined
 }
 
+export function getCanvasGenerationInputError(inputs: CanvasGenerationInputs): string | undefined {
+  if (inputs.promptContextNodeIds.length + inputs.references.length > 32) {
+    return "Choose at most 32 generation inputs."
+  }
+  return getCanvasGenerationReferenceError(inputs.references)
+}
+
 function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInputRole | undefined {
+  if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
   const resourceState = node.data.resourceState
   if (!resourceState || typeof resourceState !== "object") return undefined
-  if (node.data.kind === "text") {
-    return "text" in resourceState && typeof resourceState.text === "string" && resourceState.text.trim()
-      ? "text"
-      : undefined
-  }
-  if (node.data.kind !== "image" && node.data.kind !== "video" && node.data.kind !== "audio") return undefined
   if (!("url" in resourceState) || typeof resourceState.url !== "string" || !resourceState.url.trim()) return undefined
   if (node.data.kind === "image") return "reference_image"
   if (node.data.kind === "video") return "reference_video"
@@ -311,7 +350,10 @@ export interface CanvasAssistantRequest {
   document: CanvasDocument
   /** Present only when this owner supports direct image/video generation. */
   generation?: CanvasAssistantGenerationCapability
-  /** Host-selected context nodes. A file-card owner is carried separately and is not an implicit mention. */
+  /**
+   * Direct incoming file nodes selected as initial, removable @ references.
+   * The owner is carried separately and is never inferred as its own input.
+   */
   mentionedNodeIds: readonly string[]
   mode: "agent" | "file"
   ownerNodeId: string

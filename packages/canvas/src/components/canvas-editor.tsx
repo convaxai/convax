@@ -124,6 +124,7 @@ import {
   writeCanvasClipboard,
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
 import { CanvasEditorProvider, CanvasOverlayRootProvider } from "../editor-context"
 import {
@@ -1015,6 +1016,8 @@ function CanvasEditorContent(
       ...edge,
       animated: shouldAnimateCanvasEdge(edge, selection),
       selected: selection.edgeIds.has(edge.id),
+      sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+      targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
       type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
     }))
   }, [edgesHidden, history.document.edges, selection])
@@ -2263,15 +2266,15 @@ function CanvasEditorContent(
           side === "right"
             ? {
                 source: anchor.id,
-                sourceHandle: "source-right",
+                sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
                 target: node.id,
-                targetHandle: "target-left",
+                targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
               }
             : {
                 source: node.id,
-                sourceHandle: "source-right",
+                sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
                 target: anchor.id,
-                targetHandle: "target-left",
+                targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
               },
         )
       })
@@ -2498,6 +2501,9 @@ function CanvasEditorContent(
           expectedRevision,
           output: submission.tool.output,
           prompt: submission.prompt,
+          ...(submission.promptContextNodeIds.length > 0
+            ? { promptContextNodeIds: submission.promptContextNodeIds }
+            : {}),
           references: submission.references,
           signal: controller.signal,
           toolId: submission.tool.id,

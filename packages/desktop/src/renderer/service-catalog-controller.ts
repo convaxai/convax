@@ -126,8 +126,18 @@ function openCodeEntry(input: {
   loading: boolean
 }): BuiltinServiceCatalogEntry {
   const connectedProviders =
-    input.catalog?.providers.filter((provider) => provider.connected && !provider.providerId.startsWith("plugin-")) ??
-    []
+    input.catalog?.providers.filter(
+      (provider) => provider.connected && provider.models.length > 0 && !provider.providerId.startsWith("plugin-"),
+    ) ?? []
+  const models = connectedProviders.flatMap((provider) =>
+    provider.models.map((model) => ({
+      capability: "llm" as const,
+      default: model.default,
+      id: JSON.stringify([provider.providerId, model.modelId]),
+      name: model.modelName,
+      providerName: provider.providerName,
+    })),
+  )
   return {
     authentication: "not-applicable",
     billing: { kind: "free" },
@@ -136,18 +146,10 @@ function openCodeEntry(input: {
     error: input.error,
     kind: "builtin",
     loading: input.loading,
-    models: connectedProviders.flatMap((provider) =>
-      provider.models.map((model) => ({
-        capability: "llm" as const,
-        default: model.default,
-        id: JSON.stringify([provider.providerId, model.modelId]),
-        name: model.modelName,
-        providerName: provider.providerName,
-      })),
-    ),
+    models,
     name: "OpenCode",
     serviceId: "builtin:opencode",
-    state: input.error ? "attention" : "connected",
+    state: input.error ? "attention" : input.loading ? "unknown" : models.length > 0 ? "connected" : "disconnected",
   }
 }
 
@@ -172,13 +174,14 @@ export class ServiceCatalogController {
   #scopeId?: string
   #snapshot: ServiceCatalogSnapshot
   #started = false
+  #unsubscribeModelChanges?: () => void
   #unsubscribePlugins?: () => void
 
   constructor(
-    pluginClient: PluginServiceClient,
+    private readonly pluginClient: PluginServiceClient,
     private readonly agentClient: Pick<AgentClient, "listModels">,
   ) {
-    this.#plugins = new PluginServicesController(pluginClient)
+    this.#plugins = new PluginServicesController(this.pluginClient)
     this.#pluginSnapshot = this.#plugins.getSnapshot()
     this.#snapshot = this.#compose()
   }
@@ -196,6 +199,9 @@ export class ServiceCatalogController {
     this.#unsubscribePlugins = this.#plugins.subscribe(() => {
       this.#pluginSnapshot = this.#plugins.getSnapshot()
       this.#publish()
+    })
+    this.#unsubscribeModelChanges = this.pluginClient.onDidChange(() => {
+      void this.#refreshModels()
     })
     this.#plugins.start()
     void this.#refreshModels()
@@ -217,7 +223,8 @@ export class ServiceCatalogController {
   }
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
-    return this.#plugins.perform(pluginId, action)
+    await this.#plugins.perform(pluginId, action)
+    await this.#refreshModels()
   }
 
   async checkout(pluginId: string, planKey: string) {
@@ -230,6 +237,8 @@ export class ServiceCatalogController {
     this.#modelGeneration += 1
     this.#unsubscribePlugins?.()
     this.#unsubscribePlugins = undefined
+    this.#unsubscribeModelChanges?.()
+    this.#unsubscribeModelChanges = undefined
     this.#plugins.dispose()
     this.#listeners.clear()
   }

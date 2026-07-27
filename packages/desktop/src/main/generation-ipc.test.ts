@@ -270,6 +270,26 @@ describe("generation IPC", () => {
     dispose()
   })
 
+  test("accepts text prompt context as the complete typed prompt", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const generate = mock(async () => result)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const contextOnly = {
+      ...request,
+      prompt: "",
+      promptContextNodeIds: ["brief"],
+      references: [],
+    }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, contextOnly))).resolves.toEqual(result)
+    expect(generate).toHaveBeenCalledWith(contextOnly, expect.any(AbortSignal))
+
+    dispose()
+  })
+
   test("preserves trusted host-only relation anchors without turning them into tool references", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const generate = mock(async () => result)
@@ -376,11 +396,7 @@ describe("generation IPC", () => {
     expect(cancel).toHaveBeenCalledWith({ operationId: "operation-after-restart" })
     await expect(
       Promise.resolve(
-        invoke(
-          generationIpcChannels.cancel,
-          { operationId: "operation-after-restart" },
-          new TestSender(2),
-        ),
+        invoke(generationIpcChannels.cancel, { operationId: "operation-after-restart" }, new TestSender(2)),
       ),
     ).rejects.toThrow("untrusted")
     dispose()
@@ -399,6 +415,25 @@ describe("generation IPC", () => {
       [{ ...request, ref: { ...request.ref, scopeId: "C:\\Users\\owner" } }, "scope id is invalid"],
       [{ ...request, toolId: "callTool" }, "tool id is invalid"],
       [{ ...request, output: "model" }, "output modality is invalid"],
+      [{ ...request, prompt: "", promptContextNodeIds: [] }, "prompt is invalid"],
+      [{ ...request, promptContextNodeIds: ["brief", "brief"] }, "duplicate node id"],
+      [{ ...request, promptContextNodeIds: ["/native/path"] }, "prompt context node id is invalid"],
+      [{ ...request, promptContextNodeIds: ["image_1"] }, "contain the same node"],
+      [
+        { ...request, promptContextNodeIds: Array.from({ length: 33 }, (_, index) => `context-${index}`) },
+        "prompt context nodes are invalid",
+      ],
+      [
+        {
+          ...request,
+          promptContextNodeIds: Array.from({ length: 16 }, (_, index) => `context-${index}`),
+          references: Array.from({ length: 17 }, (_, index) => ({
+            nodeId: `reference-${index}`,
+            role: "reference_image",
+          })),
+        },
+        "exceed the input limit",
+      ],
       [{ ...request, references: [{ nodeId: "image_1", role: "provider_image" }] }, "reference role is invalid"],
       [
         {

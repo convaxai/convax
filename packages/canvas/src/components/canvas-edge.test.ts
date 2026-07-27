@@ -49,4 +49,58 @@ describe("canvas edge presentation", () => {
       targetPosition: Position.Left,
     })
   })
+
+  test("keeps handleless and legacy edges right-to-left regardless of card placement", () => {
+    for (const targetBounds of [
+      { x: 100, y: -300, width: 160, height: 100 },
+      { x: 100, y: 500, width: 160, height: 100 },
+      { x: -400, y: 50, width: 160, height: 100 },
+    ]) {
+      expect(
+        resolveCanvasEdgeGeometry({
+          sourceBounds: { x: 100, y: 50, width: 200, height: 120 },
+          sourceHandleId: null,
+          targetBounds,
+          targetHandleId: "legacy-target-top",
+          fallback: {
+            sourceX: 200,
+            sourceY: 50,
+            sourcePosition: Position.Top,
+            targetX: 180,
+            targetY: 500,
+            targetPosition: Position.Bottom,
+          },
+        }),
+      ).toEqual({
+        sourceX: 300,
+        sourceY: 110,
+        sourcePosition: Position.Right,
+        targetX: targetBounds.x,
+        targetY: targetBounds.y + targetBounds.height / 2,
+        targetPosition: Position.Left,
+      })
+    }
+  })
+
+  test("keeps fallback curves horizontal while node bounds are unavailable", () => {
+    expect(
+      resolveCanvasEdgeGeometry({
+        fallback: {
+          sourceX: 20,
+          sourceY: 40,
+          sourcePosition: Position.Bottom,
+          targetX: 80,
+          targetY: 120,
+          targetPosition: Position.Top,
+        },
+      }),
+    ).toEqual({
+      sourceX: 20,
+      sourceY: 40,
+      sourcePosition: Position.Right,
+      targetX: 80,
+      targetY: 120,
+      targetPosition: Position.Left,
+    })
+  })
 })

@@ -6,7 +6,7 @@ import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage, type AppLanguagePreference, type AppLocale } from "./app-language"
 import { AppearanceSettings, type AppearanceSaveState } from "./appearance-settings"
 import type { AppearancePreferences } from "./appearance-preferences"
-import { CapabilityManagementSurface } from "./capability-center"
+import { CapabilityManagementSurface, type CapabilityCenterTab } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
 import { ServicesSurface } from "./plugin-services-view"
 import {
@@ -130,6 +130,7 @@ export function SettingsView({
       ? "general"
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
+  const [capabilityInitialTab, setCapabilityInitialTab] = useState<CapabilityCenterTab>("skills")
 
   useEffect(() => {
     setSection(enabledInitialSection)
@@ -273,7 +274,10 @@ export function SettingsView({
           className="mt-6"
           emptyLabel={locale === "zh-CN" ? "没有匹配的设置" : "No matching settings"}
           items={navigationItems}
-          onValueChange={setSection}
+          onValueChange={(value) => {
+            if (value === "capabilities") setCapabilityInitialTab("skills")
+            setSection(value)
+          }}
           searchLabel={locale === "zh-CN" ? "搜索设置" : "Search settings"}
           value={section}
         />
@@ -307,6 +311,14 @@ export function SettingsView({
               locale={locale}
               onAction={onServiceAction}
               onCheckout={onServiceCheckout}
+              onInstallServices={
+                featureFlags.skillsAndPlugins
+                  ? () => {
+                      setCapabilityInitialTab("plugins")
+                      setSection("capabilities")
+                    }
+                  : undefined
+              }
               onRefresh={onRefreshServices}
               snapshot={serviceSnapshot}
             />
@@ -316,6 +328,7 @@ export function SettingsView({
               activeProjectId={activeProjectId}
               className="min-h-[32rem]"
               initialSkillName={initialSkillName}
+              initialTab={capabilityInitialTab}
               locale={locale}
               onUsePluginOnCanvas={onUsePluginOnCanvas}
               onUsePluginInAgent={onUsePluginInAgent}

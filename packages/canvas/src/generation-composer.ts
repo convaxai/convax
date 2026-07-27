@@ -1,7 +1,8 @@
 import {
+  getCanvasGenerationInputError,
   getCanvasGenerationReferenceError,
   getCompatibleCanvasGenerationTools,
-  inferCanvasGenerationReferences,
+  inferCanvasGenerationInputs,
   type CanvasGenerateService,
   type CanvasGenerationInputRole,
   type CanvasGenerationReference,
@@ -21,6 +22,8 @@ export interface CanvasGenerationComposerProjection {
   documentId: string
   expectedRevision: number
   inferredReferences: readonly CanvasGenerationReference[]
+  inputError?: string
+  promptContextNodeIds: readonly string[]
   referenceError?: string
   references: readonly CanvasGenerationReference[]
   selectedNodeIds: readonly string[]
@@ -31,6 +34,7 @@ export interface CanvasGenerationComposerSubmission {
   documentId: string
   expectedRevision: number
   prompt: string
+  promptContextNodeIds: readonly string[]
   references: readonly CanvasGenerationReference[]
   scopeId: string
   selectedNodeIds: readonly string[]
@@ -66,9 +70,7 @@ export function reconcileCanvasGenerationImageRoles(
   inferredReferences: readonly CanvasGenerationReference[],
 ): Readonly<Record<string, CanvasGenerationImageRole>> {
   const imageNodeIds = new Set(
-    inferredReferences
-      .filter((reference) => reference.role === "reference_image")
-      .map((reference) => reference.nodeId),
+    inferredReferences.filter((reference) => reference.role === "reference_image").map((reference) => reference.nodeId),
   )
   const next = Object.fromEntries(Object.entries(current).filter(([nodeId]) => imageNodeIds.has(nodeId)))
   return shallowEqualRecords(current, next) ? current : next
@@ -81,19 +83,26 @@ export function projectCanvasGenerationComposer(input: {
   selectedToolId: string
   tools: readonly CanvasGenerationToolSummary[]
 }): CanvasGenerationComposerProjection {
-  const inferredReferences = inferCanvasGenerationReferences(input.document.nodes, input.selectedNodeIds)
+  const inferredInputs = inferCanvasGenerationInputs(input.document.nodes, input.selectedNodeIds)
+  const inferredReferences = inferredInputs.references
   const references = inferredReferences.map((reference) =>
     reference.role === "reference_image" && input.imageRoles[reference.nodeId]
       ? { ...reference, role: input.imageRoles[reference.nodeId] }
       : reference,
   )
   const referenceError = getCanvasGenerationReferenceError(references)
-  const compatibleTools = getCompatibleCanvasGenerationTools(input.tools, references)
+  const inputError = getCanvasGenerationInputError({
+    promptContextNodeIds: inferredInputs.promptContextNodeIds,
+    references,
+  })
+  const compatibleTools = inputError ? [] : getCompatibleCanvasGenerationTools(input.tools, references)
   return {
     compatibleTools,
     documentId: input.document.id,
     expectedRevision: input.document.revision,
     inferredReferences,
+    ...(inputError ? { inputError } : {}),
+    promptContextNodeIds: [...inferredInputs.promptContextNodeIds],
     ...(referenceError ? { referenceError } : {}),
     references,
     selectedNodeIds: [...input.selectedNodeIds],
@@ -105,9 +114,7 @@ export function resolveCanvasGenerationToolId(
   currentToolId: string,
   compatibleTools: readonly CanvasGenerationToolSummary[],
 ) {
-  return compatibleTools.some((tool) => tool.id === currentToolId)
-    ? currentToolId
-    : (compatibleTools[0]?.id ?? "")
+  return compatibleTools.some((tool) => tool.id === currentToolId) ? currentToolId : (compatibleTools[0]?.id ?? "")
 }
 
 export function createCanvasGenerationComposerSubmission(input: {
@@ -121,7 +128,7 @@ export function createCanvasGenerationComposerSubmission(input: {
   const prompt = input.prompt.trim()
   if (
     input.catalogStatus !== "ready" ||
-    !prompt ||
+    (!prompt && input.projection.promptContextNodeIds.length === 0) ||
     !input.projection.selectedTool ||
     input.projection.documentId !== input.document.id ||
     input.projection.expectedRevision !== input.document.revision ||
@@ -132,6 +139,7 @@ export function createCanvasGenerationComposerSubmission(input: {
     documentId: input.document.id,
     expectedRevision: input.document.revision,
     prompt,
+    promptContextNodeIds: [...input.projection.promptContextNodeIds],
     references: input.projection.references,
     scopeId: input.scopeId,
     selectedNodeIds: [...input.selectedNodeIds],
@@ -172,8 +180,7 @@ export class CanvasGenerationCatalogRequestTracker {
   cancel(request?: CanvasGenerationCatalogRequest) {
     if (
       !this.#active ||
-      (request &&
-        (request.key !== this.#active.key || request.signal !== this.#active.controller.signal))
+      (request && (request.key !== this.#active.key || request.signal !== this.#active.controller.signal))
     )
       return
     this.#active.controller.abort()
@@ -196,10 +203,7 @@ function shallowEqualRecords(
 ) {
   const leftEntries = Object.entries(left)
   const rightEntries = Object.entries(right)
-  return (
-    leftEntries.length === rightEntries.length &&
-    leftEntries.every(([key, value]) => right[key] === value)
-  )
+  return leftEntries.length === rightEntries.length && leftEntries.every(([key, value]) => right[key] === value)
 }
 
 function equalStrings(left: readonly string[], right: readonly string[]) {

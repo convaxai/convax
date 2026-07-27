@@ -708,7 +708,7 @@ async function executeHostRequest(request: DesktopPluginHostRequest, context: Pl
       const params = exactRecord(request.params, ["nodeId"], "Connected image request")
       const nodeId = requireConnectedImageNodeId(params.nodeId)
       const node = context.getConnectedImageNodes().find((candidate) => candidate.id === nodeId)
-      if (!node) throw new Error("Canvas image is not directly connected to this Plugin node")
+      if (!node) throw new Error("Canvas image is not a direct incoming input to this Plugin node")
       const source = connectedImageSource(node)
       if (!source) {
         throw new Error("Canvas image is not backed by a readable typed Project file reference")

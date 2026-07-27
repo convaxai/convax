@@ -30,6 +30,13 @@ const inputRoles = [
   "last_frame",
   "audio",
 ] as const satisfies readonly GenerationInputRole[]
+const modelReferenceRoles = [
+  "reference_image",
+  "reference_video",
+  "first_frame",
+  "last_frame",
+  "audio",
+] as const satisfies readonly GenerationInputRole[]
 
 const outputModalitySet = new Set<string>(outputModalities)
 const inputRoleSet = new Set<string>(inputRoles)
@@ -40,6 +47,7 @@ const topLevelFields = new Set([
   "expectedRevision",
   "output",
   "prompt",
+  "promptContextNodeIds",
   "references",
   "toolId",
   "toolInput",
@@ -102,16 +110,16 @@ function sanitizedGenerationFailure() {
 function definition(tools: readonly GenerationToolSummary[]): AgentToolDefinition {
   const outputs = unique(tools.map((tool) => tool.output))
   const capabilities = tools
-    .map(
-      (tool) =>
-        `${tool.id} (output: ${tool.output}; reference roles: ${tool.acceptedInputs.length ? tool.acceptedInputs.join(", ") : "none"})`,
-    )
+    .map((tool) => {
+      const referenceRoles = tool.acceptedInputs.filter((role) => role !== "text")
+      return `${tool.id} (output: ${tool.output}; media reference roles: ${referenceRoles.length ? referenceRoles.join(", ") : "none"})`
+    })
     .join("; ")
   return {
     name: toolName,
     description:
       "Generate content through an installed generation Tool Plugin, admit the result as managed Project assets when needed, and add normal file or text nodes to the live Canvas. " +
-      `Installed host tool IDs: ${capabilities}. Omit toolId only when exactly one installed tool matches the requested output and references.`,
+      `Installed host tool IDs: ${capabilities}. Canvas text nodes are universal prompt context, not model references. Omit toolId only when exactly one installed tool matches the requested output and media references.`,
     inputSchema: {
       additionalProperties: false,
       properties: {
@@ -144,19 +152,26 @@ function definition(tools: readonly GenerationToolSummary[]): AgentToolDefinitio
           type: "string",
         },
         prompt: {
-          description: "Generation instructions.",
+          description: "Optional generation instructions. May be empty only when promptContextNodeIds is non-empty.",
           maxLength: 65_536,
-          minLength: 1,
           type: "string",
+        },
+        promptContextNodeIds: {
+          description:
+            "Canvas text node ids whose authoritative content Main appends to the prompt in this order. These are prompt context and never model references.",
+          items: { minLength: 1, type: "string" },
+          maxItems: 32,
+          type: "array",
+          uniqueItems: true,
         },
         references: {
           description:
-            "Canvas nodes used as typed references. Project paths are never accepted. Use reference_image for ordinary single-image-to-video input. first_frame may be used alone as an opening frame; use first_frame plus last_frame only when both endpoints are constrained.",
+            "Canvas media nodes used as typed model references. Project paths and text references are never accepted. Use reference_image for ordinary single-image-to-video input. first_frame may be used alone as an opening frame; use first_frame plus last_frame only when both endpoints are constrained.",
           items: {
             additionalProperties: false,
             properties: {
               nodeId: { minLength: 1, type: "string" },
-              role: { enum: inputRoles, type: "string" },
+              role: { enum: modelReferenceRoles, type: "string" },
             },
             required: ["nodeId", "role"],
             type: "object",
@@ -179,7 +194,7 @@ function definition(tools: readonly GenerationToolSummary[]): AgentToolDefinitio
           type: "object",
         },
       },
-      required: ["anchor", "canvasId", "commandId", "expectedRevision", "prompt", "references"],
+      required: ["anchor", "canvasId", "commandId", "expectedRevision", "prompt", "promptContextNodeIds", "references"],
       type: "object",
     },
   }
@@ -193,13 +208,23 @@ function generationRequest(
   rejectUnknownFields(value, topLevelFields, "canvas_generate input")
   const canvasId = requiredIdentifier(value.canvasId, "canvasId")
   const commandId = requiredIdentifier(value.commandId, "commandId")
-  const prompt = requiredPrompt(value.prompt)
+  const prompt = boundedPrompt(value.prompt)
   const expectedRevision = requiredInteger(value.expectedRevision, "expectedRevision", 0)
   const anchor = point(value.anchor, "anchor")
   const output = optionalEnum(value.output, "output", outputModalities)
   const toolId = optionalIdentifier(value.toolId, "toolId")
   const toolInput = value.toolInput === undefined ? undefined : validateGenerationToolInputShape(value.toolInput)
+  const promptContextNodeIds = generationPromptContextNodeIds(value.promptContextNodeIds)
   const references = generationReferences(value.references)
+  if (!prompt.trim() && promptContextNodeIds.length === 0) {
+    throw new Error("prompt or promptContextNodeIds must provide generation instructions")
+  }
+  if (promptContextNodeIds.length + references.length > 32) {
+    throw new Error("promptContextNodeIds and references accept at most 32 total items")
+  }
+  if (promptContextNodeIds.some((nodeId) => references.some((reference) => reference.nodeId === nodeId))) {
+    throw new Error("promptContextNodeIds and references cannot contain the same Canvas node")
+  }
 
   if (toolId !== undefined) {
     const tool = installed.find((candidate) => candidate.id === toolId)
@@ -218,6 +243,7 @@ function generationRequest(
     operationId: commandId,
     ...(output === undefined ? {} : { output }),
     prompt,
+    promptContextNodeIds,
     ref: {
       canvasId,
       scopeId: requiredIdentifier(scope.scopeId, "Agent scope id"),
@@ -265,12 +291,22 @@ function generationReferences(value: unknown) {
     const input = record(item, label)
     rejectUnknownFields(input, new Set(["nodeId", "role"]), label)
     const nodeId = requiredIdentifier(input.nodeId, `${label}.nodeId`)
-    const role = requiredEnum(input.role, `${label}.role`, inputRoles)
+    const role = requiredEnum(input.role, `${label}.role`, modelReferenceRoles)
     const pair = `${nodeId}\0${role}`
     if (pairs.has(pair)) throw new Error("references contains a duplicate node and role")
     pairs.add(pair)
     return { nodeId, role }
   })
+}
+
+function generationPromptContextNodeIds(value: unknown) {
+  if (!Array.isArray(value)) throw new Error("promptContextNodeIds must be an array")
+  if (value.length > 32) throw new Error("promptContextNodeIds accepts at most 32 items")
+  const nodeIds = value.map((nodeId, index) => requiredIdentifier(nodeId, `promptContextNodeIds[${index}]`))
+  if (new Set(nodeIds).size !== nodeIds.length) {
+    throw new Error("promptContextNodeIds contains a duplicate Canvas node")
+  }
+  return nodeIds
 }
 
 function point(value: unknown, label: string) {
@@ -282,9 +318,9 @@ function point(value: unknown, label: string) {
   }
 }
 
-function requiredPrompt(value: unknown) {
-  if (typeof value !== "string" || !value.trim() || value.length > 65_536 || value.includes("\0")) {
-    throw new Error("prompt must contain between 1 and 65536 characters")
+function boundedPrompt(value: unknown) {
+  if (typeof value !== "string" || value.length > 65_536 || value.includes("\0")) {
+    throw new Error("prompt must contain at most 65536 characters")
   }
   return value
 }

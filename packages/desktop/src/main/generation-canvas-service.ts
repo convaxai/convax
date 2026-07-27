@@ -673,13 +673,23 @@ function validateRequest(request: GenerationCanvasRequest) {
   requireIdentifier(request.operationId, "Generation operation id")
   requireIdentifier(request.ref.scopeId, "Generation scope id")
   requireIdentifier(request.ref.canvasId, "Generation Canvas id")
+  const promptContextNodeIds = request.promptContextNodeIds ?? []
+  if (!Array.isArray(promptContextNodeIds) || promptContextNodeIds.length > 32) {
+    throw new Error("Generation accepts at most 32 Canvas prompt context nodes")
+  }
+  for (const nodeId of promptContextNodeIds) {
+    requireIdentifier(nodeId, "Generation prompt context node id")
+  }
+  if (new Set(promptContextNodeIds).size !== promptContextNodeIds.length) {
+    throw new Error("Generation prompt context nodes contain a duplicate node id")
+  }
   if (
     typeof request.prompt !== "string" ||
-    !request.prompt.trim() ||
+    (!request.prompt.trim() && promptContextNodeIds.length === 0) ||
     request.prompt.length > maxPromptLength ||
     request.prompt.includes("\0")
   ) {
-    throw new Error(`Generation prompt must contain between 1 and ${maxPromptLength} characters`)
+    throw new Error(`Generation prompt or text context must contain between 1 and ${maxPromptLength} characters`)
   }
   if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
     throw new Error("Generation expected revision must be a non-negative integer")
@@ -711,6 +721,12 @@ function validateRequest(request: GenerationCanvasRequest) {
       throw new Error(`Generation accepts at most one ${reference.role} reference`)
     }
     roleCounts.set(reference.role, roleCount)
+  }
+  if (promptContextNodeIds.length + request.references.length > 32) {
+    throw new Error("Generation prompt context and references exceed the input limit")
+  }
+  if (promptContextNodeIds.some((nodeId) => request.references.some((reference) => reference.nodeId === nodeId))) {
+    throw new Error("Generation prompt context and references contain the same node")
   }
   if (!Array.isArray(request.relationAnchorNodeIds ?? []) || (request.relationAnchorNodeIds?.length ?? 0) > 32) {
     throw new Error("Generation accepts at most 32 Canvas relation anchors")
@@ -963,6 +979,53 @@ function generationReferenceSource(node: CanvasNode) {
   }
 }
 
+function generationPromptContexts(
+  document: CanvasDocument,
+  request: GenerationCanvasRequest,
+  incoming?: ReadonlySet<string>,
+) {
+  return (request.promptContextNodeIds ?? []).map((nodeId) => {
+    if (incoming && !incoming.has(nodeId)) {
+      throw new Error("Generation prompt context must remain a direct incoming Canvas text node")
+    }
+    const node = document.nodes.find((candidate) => candidate.id === nodeId)
+    if (!node) throw new Error(`Generation prompt context node was not found: ${nodeId}`)
+    const resourceState = node.data.resourceState
+    if (
+      node.type !== "file" ||
+      node.data.kind !== "text" ||
+      !isRecord(resourceState) ||
+      resourceState.status !== "ready" ||
+      typeof resourceState.text !== "string"
+    ) {
+      throw new Error(`Generation prompt context requires a Canvas text node: ${nodeId}`)
+    }
+    const sourceText = resourceState.text
+    if (sourceText.length > maxTextReferenceLength || sourceText.includes("\0")) {
+      throw new Error(`Generation prompt context is invalid or too large: ${nodeId}`)
+    }
+    const promptText = sourceText.trim()
+    if (!promptText) throw new Error(`Generation prompt context is empty: ${nodeId}`)
+    if (Buffer.byteLength(promptText, "utf8") > maxPromptLength) {
+      throw new Error(`Generation prompt context is too large: ${nodeId}`)
+    }
+    return { nodeId, promptText, sourceText }
+  })
+}
+
+function composeGenerationPrompt(document: CanvasDocument, request: GenerationCanvasRequest) {
+  const prompt = [
+    request.prompt.trim(),
+    ...generationPromptContexts(document, request).map((context) => context.promptText),
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+  if (!prompt || Buffer.byteLength(prompt, "utf8") > maxPromptLength || prompt.includes("\0")) {
+    throw new Error(`Generation prompt and text context must fit within ${maxPromptLength} UTF-8 bytes`)
+  }
+  return prompt
+}
+
 function generationReferenceSnapshot(document: CanvasDocument, request: GenerationCanvasRequest) {
   const constraint = request.referenceConstraint
   let incomingNodeIds: readonly string[] | undefined
@@ -978,6 +1041,10 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
     incomingNodeIds = getIncomingConnectedCanvasFileNodeIds(document, constraint.ownerNodeId)
   }
   const incoming = incomingNodeIds ? new Set(incomingNodeIds) : undefined
+  const promptContexts = generationPromptContexts(document, request, incoming).map(({ nodeId, sourceText }) => ({
+    nodeId,
+    text: sourceText,
+  }))
   const references = request.references.map((reference) => {
     if (incoming && !incoming.has(reference.nodeId)) {
       throw new Error("Generation references must remain direct incoming Canvas file nodes")
@@ -1004,6 +1071,7 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
           type: constraint.type,
         }
       : null,
+    promptContexts,
     references,
     relationAnchors,
   })
@@ -1011,12 +1079,19 @@ function generationReferenceSnapshot(document: CanvasDocument, request: Generati
 
 function generationResultRelation(request: GenerationCanvasRequest): CanvasAddResourceSourcesRequest["relation"] {
   const ownerNodeId = request.referenceConstraint?.ownerNodeId
-  if (!ownerNodeId && !request.references.length && !request.relationAnchorNodeIds?.length) return undefined
+  if (
+    !ownerNodeId &&
+    !request.promptContextNodeIds?.length &&
+    !request.references.length &&
+    !request.relationAnchorNodeIds?.length
+  )
+    return undefined
   return {
     anchorNodeIds: ownerNodeId
       ? [ownerNodeId]
       : [
           ...new Set([
+            ...(request.promptContextNodeIds ?? []),
             ...request.references.map((reference) => reference.nodeId),
             ...(request.relationAnchorNodeIds ?? []),
           ]),
@@ -1236,10 +1311,7 @@ export class GenerationCanvasService {
     }
   }
 
-  async reconcileDeletedCanvas(
-    ref: { canvasId: string; scopeId: string },
-    actor: CanvasCommandActor,
-  ): Promise<void> {
+  async reconcileDeletedCanvas(ref: { canvasId: string; scopeId: string }, actor: CanvasCommandActor): Promise<void> {
     requireIdentifier(ref.canvasId, "Generation Canvas id")
     requireIdentifier(ref.scopeId, "Generation scope id")
     requireIdentifier(actor.id, "Generation actor id")
@@ -1276,13 +1348,13 @@ export class GenerationCanvasService {
         continue
       }
       if (
-        (ledger.phase === "committed"
+        ledger.phase === "committed"
           ? ownerRun.status !== "succeeded"
           : ledger.phase === "failed"
             ? ownerRun.status !== "failed"
             : ledger.phase === "cancelled"
               ? ownerRun.status !== "cancelled"
-              : !isCanvasNodeGenerationRunActive(ownerRun))
+              : !isCanvasNodeGenerationRunActive(ownerRun)
       ) {
         continue
       }
@@ -1299,9 +1371,8 @@ export class GenerationCanvasService {
       operationId: ledger.operationId,
       scopeId: ledger.projectId,
     }
-    const promise = (orphaned
-      ? this.#superviseOrphanedStoredOperation(ledger)
-      : this.#superviseStoredOperation(ledger, actor)
+    const promise = (
+      orphaned ? this.#superviseOrphanedStoredOperation(ledger) : this.#superviseStoredOperation(ledger, actor)
     )
       .catch((error) => this.#logGenerationFailure("supervise", error))
       .finally(() => {
@@ -1929,6 +2000,7 @@ export class GenerationCanvasService {
       expectedRevision: request.expectedRevision,
       output: request.output,
       prompt: request.prompt,
+      promptContextNodeIds: request.promptContextNodeIds ?? [],
       ref: request.ref,
       referenceConstraint: request.referenceConstraint,
       references: request.references,
@@ -1979,23 +2051,25 @@ export class GenerationCanvasService {
     }
     if (signal?.aborted) stopUnacceptedExecution()
     else signal?.addEventListener("abort", stopUnacceptedExecution, { once: true })
-    void result.then(
-      () => {
-        state.settled = true
-      },
-      () => {
-        state.settled = true
-        // Pure preflight errors are safe to retry. Once an external executable
-        // was invoked or a pending Canvas node was committed, retain the failed
-        // operation id as an at-most-once tombstone. Either side effect requires
-        // a fresh operation id for another attempt.
-        if (!state.mustRetain && this.#executions.get(key) === execution) {
-          this.#executions.delete(key)
-        }
-      },
-    ).finally(() => {
-      signal?.removeEventListener("abort", stopUnacceptedExecution)
-    })
+    void result
+      .then(
+        () => {
+          state.settled = true
+        },
+        () => {
+          state.settled = true
+          // Pure preflight errors are safe to retry. Once an external executable
+          // was invoked or a pending Canvas node was committed, retain the failed
+          // operation id as an at-most-once tombstone. Either side effect requires
+          // a fresh operation id for another attempt.
+          if (!state.mustRetain && this.#executions.get(key) === execution) {
+            this.#executions.delete(key)
+          }
+        },
+      )
+      .finally(() => {
+        signal?.removeEventListener("abort", stopUnacceptedExecution)
+      })
     // Callers only own their wait. Once the run or external execution has been
     // accepted, renderer/frame/transport teardown must not cancel Main's task.
     return waitForCaller(result, signal)
@@ -2044,8 +2118,10 @@ export class GenerationCanvasService {
       : undefined
     let requiresStableRevision =
       request.referenceConstraint !== undefined ||
+      (request.promptContextNodeIds?.length ?? 0) > 0 ||
       request.references.length > 0 ||
       (request.relationAnchorNodeIds?.length ?? 0) > 0
+    let effectivePrompt = composeGenerationPrompt(workingDocument, workingRequest)
     let referenceSnapshot = requiresStableRevision
       ? generationReferenceSnapshot(workingDocument, workingRequest)
       : undefined
@@ -2113,8 +2189,10 @@ export class GenerationCanvasService {
         replacementGuard = { kind: "generation", value: createCanvasGenerationTargetGuard(pendingNode) }
         requiresStableRevision =
           workingRequest.referenceConstraint !== undefined ||
+          (workingRequest.promptContextNodeIds?.length ?? 0) > 0 ||
           workingRequest.references.length > 0 ||
           (workingRequest.relationAnchorNodeIds?.length ?? 0) > 0
+        effectivePrompt = composeGenerationPrompt(workingDocument, workingRequest)
         referenceSnapshot = requiresStableRevision
           ? generationReferenceSnapshot(workingDocument, workingRequest)
           : undefined
@@ -2291,7 +2369,7 @@ export class GenerationCanvasService {
           operation_id: externalGenerationOperationId(workingRequest, actor),
           output: tool.output,
           output_directory: outputDirectory,
-          prompt: workingRequest.prompt.trim(),
+          prompt: effectivePrompt,
           references: references.map((reference) =>
             reference.kind === "text"
               ? {

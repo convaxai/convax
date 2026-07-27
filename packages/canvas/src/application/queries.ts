@@ -10,9 +10,11 @@ export interface CanvasNodeQuery {
 
 export interface CanvasNodeSummary {
   id: string
+  /** Direct inputs: source node ids for edges whose target is this node. */
   incomingNodeIds: string[]
   kind: string
   label: string
+  /** Direct outputs: target node ids for edges whose source is this node. */
   outgoingNodeIds: string[]
   parentId?: string
   position: CanvasPoint
@@ -35,31 +37,43 @@ export function queryCanvasNodes(document: CanvasDocument, query: CanvasNodeQuer
     outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
   }
 
-  return document.nodes.flatMap((node) => {
-    if (ids && !ids.has(node.id)) return []
-    if (kinds && !kinds.has(node.data.kind)) return []
-    const incomingNodeIds = incoming.get(node.id) ?? []
-    const outgoingNodeIds = outgoing.get(node.id) ?? []
-    if (related && ![...incomingNodeIds, ...outgoingNodeIds].some((id) => related.has(id))) return []
-    const resourceState = node.data.resourceState
-    const text = resourceState && typeof resourceState === "object" && "text" in resourceState
-      && typeof resourceState.text === "string"
-      ? resourceState.text
-      : undefined
-    const name = "name" in node.data && typeof node.data.name === "string" ? node.data.name : undefined
-    const description = typeof node.data.description === "string" ? node.data.description : undefined
-    if (needle && ![node.id, node.data.kind, node.data.label, description, name, text]
-      .some((value) => value?.toLowerCase().includes(needle))) return []
-    return [{
-      id: node.id,
-      incomingNodeIds: [...incomingNodeIds],
-      kind: node.data.kind,
-      label: node.data.label,
-      outgoingNodeIds: [...outgoingNodeIds],
-      parentId: node.parentId,
-      position: { ...node.position },
-      text,
-      type: node.type,
-    }]
-  }).slice(0, limit)
+  return document.nodes
+    .flatMap((node) => {
+      if (ids && !ids.has(node.id)) return []
+      if (kinds && !kinds.has(node.data.kind)) return []
+      const incomingNodeIds = incoming.get(node.id) ?? []
+      const outgoingNodeIds = outgoing.get(node.id) ?? []
+      if (related && ![...incomingNodeIds, ...outgoingNodeIds].some((id) => related.has(id))) return []
+      const resourceState = node.data.resourceState
+      const text =
+        resourceState &&
+        typeof resourceState === "object" &&
+        "text" in resourceState &&
+        typeof resourceState.text === "string"
+          ? resourceState.text
+          : undefined
+      const name = "name" in node.data && typeof node.data.name === "string" ? node.data.name : undefined
+      const description = typeof node.data.description === "string" ? node.data.description : undefined
+      if (
+        needle &&
+        ![node.id, node.data.kind, node.data.label, description, name, text].some((value) =>
+          value?.toLowerCase().includes(needle),
+        )
+      )
+        return []
+      return [
+        {
+          id: node.id,
+          incomingNodeIds: [...incomingNodeIds],
+          kind: node.data.kind,
+          label: node.data.label,
+          outgoingNodeIds: [...outgoingNodeIds],
+          parentId: node.parentId,
+          position: { ...node.position },
+          text,
+          type: node.type,
+        },
+      ]
+    })
+    .slice(0, limit)
 }

@@ -326,60 +326,76 @@ function NodeChrome(props: {
       <div className={cn("convax-node__surface size-full overflow-hidden border bg-card", props.className)}>
         {props.children}
       </div>
-      {!editor.readOnly ? (
-        <>
-          <Handle
-            aria-expanded={connectMenuSide === "left"}
-            aria-label="Connect input on left"
-            className="convax-node__connection convax-node__connection--left"
-            id={CANVAS_NODE_INPUT_HANDLE_ID}
-            onClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              setConnectMenuSide((current) => (current === "left" ? null : "left"))
-            }}
-            position={Position.Left}
-            type="target"
-          >
+      <>
+        <Handle
+          aria-disabled={editor.readOnly}
+          aria-expanded={!editor.readOnly && connectMenuSide === "left"}
+          aria-label="Connect input on left"
+          className="convax-node__connection convax-node__connection--left"
+          id={CANVAS_NODE_INPUT_HANDLE_ID}
+          isConnectable={!editor.readOnly}
+          onClick={
+            editor.readOnly
+              ? undefined
+              : (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setConnectMenuSide((current) => (current === "left" ? null : "left"))
+                }
+          }
+          position={Position.Left}
+          style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
+          type="target"
+        >
+          {!editor.readOnly ? (
             <span className="convax-node__connection-icon">
               <Plus />
             </span>
-          </Handle>
-          <Handle
-            aria-expanded={connectMenuSide === "right"}
-            aria-label="Connect output on right"
-            className="convax-node__connection convax-node__connection--right"
-            id={CANVAS_NODE_OUTPUT_HANDLE_ID}
-            onClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              setConnectMenuSide((current) => (current === "right" ? null : "right"))
-            }}
-            position={Position.Right}
-            type="source"
-          >
-            <span className="convax-node__connection-icon">
-              <Plus />
-            </span>
-          </Handle>
-          {connectMenuSide ? (
-            <NodeToolbar
-              className="convax-connect-menu-positioner nodrag nowheel"
-              isVisible
-              offset={50}
-              position={connectMenuSide === "left" ? Position.Left : Position.Right}
-            >
-              <ConnectionNodeMenu
-                items={editor.connectionNodeTypes}
-                onSelect={(type) => {
-                  editor.quickConnect(props.node.id, connectMenuSide, type)
-                  setConnectMenuSide(null)
-                }}
-              />
-            </NodeToolbar>
           ) : null}
-        </>
-      ) : null}
+        </Handle>
+        <Handle
+          aria-disabled={editor.readOnly}
+          aria-expanded={!editor.readOnly && connectMenuSide === "right"}
+          aria-label="Connect output on right"
+          className="convax-node__connection convax-node__connection--right"
+          id={CANVAS_NODE_OUTPUT_HANDLE_ID}
+          isConnectable={!editor.readOnly}
+          onClick={
+            editor.readOnly
+              ? undefined
+              : (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setConnectMenuSide((current) => (current === "right" ? null : "right"))
+                }
+          }
+          position={Position.Right}
+          style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
+          type="source"
+        >
+          {!editor.readOnly ? (
+            <span className="convax-node__connection-icon">
+              <Plus />
+            </span>
+          ) : null}
+        </Handle>
+        {!editor.readOnly && connectMenuSide ? (
+          <NodeToolbar
+            className="convax-connect-menu-positioner nodrag nowheel"
+            isVisible
+            offset={50}
+            position={connectMenuSide === "left" ? Position.Left : Position.Right}
+          >
+            <ConnectionNodeMenu
+              items={editor.connectionNodeTypes}
+              onSelect={(type) => {
+                editor.quickConnect(props.node.id, connectMenuSide, type)
+                setConnectMenuSide(null)
+              }}
+            />
+          </NodeToolbar>
+        ) : null}
+      </>
     </div>
   )
 }

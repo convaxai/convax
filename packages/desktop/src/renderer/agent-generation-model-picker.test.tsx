@@ -21,13 +21,14 @@ function tool(overrides: Partial<GenerationToolSummary> = {}): GenerationToolSum
 }
 
 describe("Agent generation model picker", () => {
-  test("renders media tabs and only the active installed-tool group", () => {
+  test("renders media tabs and only the active available-tool group", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
         activeTab="image"
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -48,14 +49,14 @@ describe("Agent generation model picker", () => {
     expect(markup).toMatch(/aria-labelledby="[^"]+-agent-generation-model-tab-image"/)
     expect(markup).toMatch(/id="[^"]+-agent-generation-model-tab-image"[^>]*role="tab"[^>]*tabindex="0"/)
     expect(markup).toMatch(/id="[^"]+-agent-generation-model-tab-video"[^>]*role="tab"[^>]*tabindex="-1"/)
-    expect(markup).toContain("Auto")
+    expect(markup).not.toContain("Auto")
     expect(markup).toContain("Image Model")
     expect(markup).toContain("Generation services")
     expect(markup).toContain("Example Plugin")
     expect(markup).not.toContain("Video Model")
   })
 
-  test("marks the exact host-stable selection and reports empty installed categories", () => {
+  test("marks the exact host-stable selection and reports empty available categories", () => {
     const installed = tool()
     const selected = renderToStaticMarkup(
       <AgentGenerationModelPicker
@@ -63,6 +64,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -79,6 +81,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -86,7 +89,8 @@ describe("Agent generation model picker", () => {
         tools={[installed]}
       />,
     )
-    expect(empty).toContain("No installed audio generation services.")
+    expect(empty).toContain("No available audio generation service provides a model.")
+    expect(empty).toContain("Open Services")
   })
 
   test("renders services as the first level and their supported models as the second level", () => {
@@ -96,6 +100,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -129,6 +134,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -174,6 +180,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -213,6 +220,7 @@ describe("Agent generation model picker", () => {
         loading={false}
         onClose={mock(() => undefined)}
         onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
         onSelect={mock(() => undefined)}
         onTabChange={mock(() => undefined)}
         onToolInputChange={mock(() => undefined)}
@@ -222,9 +230,48 @@ describe("Agent generation model picker", () => {
     )
 
     expect(markup).toContain("Agent runtime")
-    expect(markup).toContain("Use the agent runtime default model")
+    expect(markup).not.toContain("Auto")
     expect(markup).toContain("小云雀生成")
     expect(markup).toMatch(/aria-checked="true" aria-label="Pippit GLM Main by 小云雀生成"/)
+    expect(markup).not.toContain("Offline model")
+  })
+
+  test("treats disconnected and model-less LLM providers as unavailable services", () => {
+    const markup = renderToStaticMarkup(
+      <AgentGenerationModelPicker
+        activeTab="llm"
+        llmCatalog={{
+          providers: [
+            {
+              connected: true,
+              models: [],
+              providerId: "empty",
+              providerName: "Empty provider",
+            },
+            {
+              connected: false,
+              models: [{ default: true, modelId: "offline", modelName: "Offline model" }],
+              providerId: "offline",
+              providerName: "Offline provider",
+            },
+          ],
+        }}
+        loading={false}
+        onClose={mock(() => undefined)}
+        onLlmSelect={mock(() => undefined)}
+        onOpenServices={mock(() => undefined)}
+        onSelect={mock(() => undefined)}
+        onTabChange={mock(() => undefined)}
+        onToolInputChange={mock(() => undefined)}
+        toolInput={{}}
+        tools={[]}
+      />,
+    )
+
+    expect(markup).toContain("No LLM service with an available model is connected.")
+    expect(markup).toContain("Open Services")
+    expect(markup).not.toContain("Auto")
+    expect(markup).not.toContain("Empty provider")
     expect(markup).not.toContain("Offline model")
   })
 })

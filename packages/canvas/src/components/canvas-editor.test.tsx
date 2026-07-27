@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { CanvasNode } from "../types"
+import type { CanvasEdge, CanvasNode } from "../types"
 import type { CanvasAppearanceInput } from "../appearance"
 
 const fitView = mock(async () => undefined)
@@ -38,10 +38,9 @@ let keyDownOnCanvas:
   | undefined
 let copyOnCanvas: ((event: unknown) => void) | undefined
 let pasteOnCanvas: ((event: unknown) => void) | undefined
+let renderedCanvasEdges: CanvasEdge[] = []
 let renderedCanvasNodes: CanvasNode[] = []
-let renderedBackground:
-  | { color?: string; gap?: number; size?: number; variant?: string }
-  | undefined
+let renderedBackground: { color?: string; gap?: number; size?: number; variant?: string } | undefined
 let renderedColorMode: string | undefined
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
@@ -64,7 +63,13 @@ function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
 }
 
-function MockReactFlow(props: { children?: ReactNode; colorMode?: string; nodes?: CanvasNode[] }) {
+function MockReactFlow(props: {
+  children?: ReactNode
+  colorMode?: string
+  edges?: CanvasEdge[]
+  nodes?: CanvasNode[]
+}) {
+  renderedCanvasEdges = props.edges ?? []
   renderedCanvasNodes = props.nodes ?? []
   renderedColorMode = props.colorMode
   return <>{props.children}</>
@@ -146,6 +151,7 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const { createCanvasDocument, createTextNode } = await import("../document")
+const { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } = await import("../connections")
 const { canvasHistoryReducer, createCanvasHistory } = await import("../history")
 const {
   abortCanvasReload,
@@ -172,6 +178,7 @@ beforeEach(() => {
   dropOnCanvas = undefined
   keyDownOnCanvas = undefined
   pasteOnCanvas = undefined
+  renderedCanvasEdges = []
   renderedCanvasNodes = []
   renderedBackground = undefined
   renderedColorMode = undefined
@@ -213,6 +220,62 @@ function renderEditor(
     />,
   )
 }
+
+describe("CanvasEditor edge port projection", () => {
+  test("projects handleless and legacy edges onto fixed ports without mutating the document", () => {
+    const source = createTextNode({
+      id: "source",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const target = createTextNode({
+      id: "target",
+      metadata: {},
+      position: { x: 0, y: 400 },
+      resourceState: { status: "ready" },
+    })
+    const initialDocument = createCanvasDocument({
+      edges: [
+        { id: "handleless", source: source.id, target: target.id },
+        {
+          id: "legacy",
+          source: target.id,
+          sourceHandle: "source-bottom",
+          target: source.id,
+          targetHandle: "target-top",
+        },
+      ],
+      id: "canvas-legacy-edges",
+      nodes: [source, target],
+    })
+
+    renderEditor(createCanvasServices(), { initialDocument, readOnly: true })
+
+    expect(renderedCanvasEdges).toEqual([
+      expect.objectContaining({
+        id: "handleless",
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      }),
+      expect.objectContaining({
+        id: "legacy",
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      }),
+    ])
+    expect(initialDocument.edges).toEqual([
+      { id: "handleless", source: source.id, target: target.id },
+      {
+        id: "legacy",
+        source: target.id,
+        sourceHandle: "source-bottom",
+        target: source.id,
+        targetHandle: "target-top",
+      },
+    ])
+  })
+})
 
 describe("CanvasEditor node dimension projection", () => {
   test("projects persisted numeric style dimensions without mutating the Canvas document", () => {

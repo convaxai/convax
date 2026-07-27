@@ -47,7 +47,7 @@ export const canvasCommandCapabilities = [
   {
     commandType: "nodes.connect",
     defaultForAgent: false,
-    description: "Create an edge between two nodes.",
+    description: "Connect the source node's right-side output to the target node's left-side input.",
     layer: "primitive",
   },
   {

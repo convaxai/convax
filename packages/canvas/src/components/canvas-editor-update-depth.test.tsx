@@ -503,7 +503,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
     })
 
     expect(container.querySelector('[aria-label="Search nodes"]')).toBeNull()
-    expect(container.textContent).not.toContain("No supported reference nodes selected.")
+    expect(container.textContent).not.toContain("No supported context or reference nodes selected.")
 
     await act(async () => editorRef.current?.openSearch())
     expect(container.querySelector('[aria-label="Search nodes"]')).not.toBeNull()
@@ -512,7 +512,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
       editorRef.current?.openGenerate()
       await Promise.resolve()
     })
-    expect(container.textContent).toContain("No supported reference nodes selected.")
+    expect(container.textContent).toContain("No supported context or reference nodes selected.")
     expect(errors).toEqual([])
   } finally {
     if (root) await act(async () => root?.unmount())

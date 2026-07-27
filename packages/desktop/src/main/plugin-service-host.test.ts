@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, mock, spyOn, test } from "bun:test"
 
 import { pluginServiceStatusSchema, type PluginServiceSummary } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
@@ -92,6 +92,7 @@ describe("PluginServiceHost", () => {
 
   test("maps host methods to fixed actions and never accepts an action payload", async () => {
     const calls: Array<{ call: "status" | WebPluginServiceAction; pluginId: string }> = []
+    const onServiceMutation = mock(async () => undefined)
     const runtime: PluginServiceToolRuntime = {
       async callService(pluginId, call) {
         calls.push({ call, pluginId })
@@ -99,10 +100,55 @@ describe("PluginServiceHost", () => {
       },
       listServices: async () => [summary],
     }
-    const host = new PluginServiceHost(runtime)
+    const host = new PluginServiceHost(runtime, undefined, undefined, undefined, onServiceMutation)
 
+    await host.getStatus("account-tools")
     await host.signOut("account-tools")
-    expect(calls).toEqual([{ call: "sign_out", pluginId: "account-tools" }])
+    expect(calls).toEqual([
+      { call: "status", pluginId: "account-tools" },
+      { call: "sign_out", pluginId: "account-tools" },
+    ])
+    expect(onServiceMutation).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not report a completed service mutation as failed when Agent refresh fails", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined)
+    const host = new PluginServiceHost(
+      {
+        callService: async () => ({ structuredContent: status }),
+        listServices: async () => [summary],
+      },
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        throw new Error("Agent refresh failed")
+      },
+    )
+
+    await expect(host.signOut("account-tools")).resolves.toEqual(status)
+    await Promise.resolve()
+    expect(warning).toHaveBeenCalledTimes(1)
+    warning.mockRestore()
+  })
+
+  test("does not delay a completed service mutation while Agent refresh is busy", async () => {
+    const refresh = deferred<void>()
+    const onServiceMutation = mock(() => refresh.promise)
+    const host = new PluginServiceHost(
+      {
+        callService: async () => ({ structuredContent: status }),
+        listServices: async () => [summary],
+      },
+      undefined,
+      undefined,
+      undefined,
+      onServiceMutation,
+    )
+
+    await expect(host.signOut("account-tools")).resolves.toEqual(status)
+    expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    refresh.resolve()
   })
 
   test("keeps the browser request and cookies in main and completes through one fixed continuation", async () => {
@@ -538,6 +584,27 @@ describe("PluginServiceHost", () => {
     await Promise.resolve()
     installed = []
     result.resolve({ structuredContent: status })
+    await expect(pending).rejects.toThrow("changed while the request was running")
+  })
+
+  test("discards a status result if the same-version service model projection changes", async () => {
+    const result = deferred<{ structuredContent: typeof status }>()
+    let installed: readonly PluginServiceSummary[] = [summary]
+    const host = new PluginServiceHost({
+      callService: async () => result.promise,
+      listServices: async () => installed,
+    })
+    const pending = host.getStatus("account-tools")
+    await Promise.resolve()
+    installed = [
+      {
+        ...summary,
+        capabilities: ["image"],
+        models: [{ capability: "image", id: "generate.image", name: "Image Model" }],
+      },
+    ]
+    result.resolve({ structuredContent: status })
+
     await expect(pending).rejects.toThrow("changed while the request was running")
   })
 })

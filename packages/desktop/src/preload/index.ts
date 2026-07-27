@@ -32,10 +32,7 @@ import {
   type CanvasRendererRequestEnvelope,
   type CanvasRendererResponseEnvelope,
 } from "../canvas-renderer-contracts"
-import {
-  workspaceSystemStatusIpcChannel,
-  type WorkspaceSystemStatusClient,
-} from "../workspace-system-status-contracts"
+import { workspaceSystemStatusIpcChannel, type WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 
 const channels = {
   createProject: "project:create",
@@ -478,7 +475,11 @@ const pluginServiceClient = {
   onDidChange(listener) {
     const handleChange = () => listener()
     ipcRenderer.on(pluginChannels.changed, handleChange)
-    return () => ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+    ipcRenderer.on(pluginServiceIpcChannels.changed, handleChange)
+    return () => {
+      ipcRenderer.removeListener(pluginChannels.changed, handleChange)
+      ipcRenderer.removeListener(pluginServiceIpcChannels.changed, handleChange)
+    }
   },
   reauthorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.reauthorize, input),
   signOut: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.signOut, input),

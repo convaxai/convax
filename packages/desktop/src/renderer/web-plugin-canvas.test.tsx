@@ -930,18 +930,31 @@ describe("Canvas Web Plugin host requests", () => {
     const owner = canvasNode()
     const video = generationInputNode("video", "video-1")
     const image = connectedImageNode()
+    const outgoing = generationInputNode("video", "video-output")
     const document = createCanvasDocument({
       edges: [
         { id: "edge-video", source: video.id, target: owner.id },
         { id: "edge-image", source: image.id, target: owner.id },
         { id: "edge-duplicate", source: video.id, target: owner.id },
+        { id: "edge-output", source: owner.id, target: outgoing.id },
       ],
       id: "canvas-1",
-      nodes: [owner, video, image],
+      nodes: [owner, video, image, outgoing],
     })
 
     expect(getIncomingConnectedInputNodes(document, owner.id).map((node) => node.id)).toEqual(["video-1", "image-1"])
     const initial = await connectedInputFingerprint(document, owner.id)
+    const outgoingChanged = await connectedInputFingerprint(
+      {
+        ...document,
+        nodes: document.nodes.map((node) =>
+          node.id === outgoing.id
+            ? { ...node, data: { ...node.data, url: "convax-asset://project-1/output-replaced" } }
+            : node,
+        ),
+      },
+      owner.id,
+    )
     const changed = await connectedInputFingerprint(
       {
         ...document,
@@ -959,6 +972,7 @@ describe("Canvas Web Plugin host requests", () => {
       },
       owner.id,
     )
+    expect(outgoingChanged).toBe(initial)
     expect(changed).not.toBe(initial)
     expect(initial).not.toContain(".convax")
   })
@@ -988,7 +1002,7 @@ describe("Canvas Web Plugin host requests", () => {
     )
     expect(disconnected).toMatchObject({
       ok: false,
-      error: "Canvas image is not directly connected to this Plugin node",
+      error: "Canvas image is not a direct incoming input to this Plugin node",
     })
     expect(readConnectedImage).not.toHaveBeenCalled()
   })

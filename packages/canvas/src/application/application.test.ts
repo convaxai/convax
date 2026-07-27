@@ -383,6 +383,55 @@ describe("canvas application commands", () => {
     })
   })
 
+  test("rejects new primitive, patch, and resource relations to structural groups", () => {
+    const group = createGroupNode({ id: "group", height: 300, position: { x: 0, y: 0 }, width: 400 })
+    const card = createTextNode({
+      id: "card",
+      metadata: {},
+      position: { x: 500, y: 0 },
+      resourceState: { status: "ready", text: "Card" },
+    })
+    const document = createCanvasDocument({ id: "canvas-groups", nodes: [group, card] })
+
+    expect(() =>
+      applyCanvasBusinessCommand(document, {
+        connection: { source: group.id, target: card.id },
+        type: "nodes.connect",
+      }),
+    ).toThrow("structural group is not connectable")
+
+    const patch = createCanvasDocumentPatchCommand(document, {
+      ...document,
+      edges: [{ id: "group-edge", source: card.id, target: group.id }],
+    })
+    expect(() => applyCanvasBusinessCommand(document, patch)).toThrow("structural group is not connectable")
+
+    expect(() =>
+      applyCanvasBusinessCommand(document, {
+        items: [
+          {
+            item: { id: "text", kind: "text", metadata: {}, state: { status: "ready", text: "New" } },
+            nodeId: "new-text",
+          },
+        ],
+        placement: { anchor: { x: 0, y: 0 } },
+        relation: { anchorNodeIds: [group.id], mode: "connect" },
+        type: "resources.add",
+      }),
+    ).toThrow("structural group is not connectable")
+
+    expect(() =>
+      applyCanvasBusinessCommand(document, {
+        kind: "image",
+        label: "Pending",
+        nodeId: "pending",
+        placement: { anchor: { x: 0, y: 0 } },
+        relation: { anchorNodeIds: [group.id], mode: "connect" },
+        type: "resources.pending.create",
+      }),
+    ).toThrow("structural group is not connectable")
+  })
+
   test.each(["text", "image", "video", "audio"] as const)(
     "creates a host-neutral pending %s file resource with placement and relations",
     (kind) => {

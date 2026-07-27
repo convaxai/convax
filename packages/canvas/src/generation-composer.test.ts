@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode } from "./document"
+import { createCanvasDocument, createMediaNode, createTextNode } from "./document"
 import {
   CanvasGenerationCatalogRequestTracker,
   assignCanvasGenerationImageRole,
@@ -67,10 +67,53 @@ describe("Canvas generation composer", () => {
       documentId: "canvas-a",
       expectedRevision: document.revision,
       prompt: "Animate this frame",
+      promptContextNodeIds: [],
       references: [{ nodeId: "source", role: "first_frame" }],
       scopeId: "project-a",
       selectedNodeIds: ["source"],
       tool: videoTool,
+    })
+  })
+
+  test("keeps text as prompt context without requiring model text-reference support", () => {
+    const brief = createTextNode({
+      id: "brief",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "A complete cinematic prompt" },
+    })
+    const document = createCanvasDocument({ id: "canvas-text", nodes: [brief] })
+    const promptOnlyTool = { ...imageTool, acceptedInputs: [] }
+    const projection = projectCanvasGenerationComposer({
+      document,
+      imageRoles: {},
+      selectedNodeIds: [brief.id],
+      selectedToolId: promptOnlyTool.id,
+      tools: [promptOnlyTool],
+    })
+
+    expect(projection.promptContextNodeIds).toEqual([brief.id])
+    expect(projection.references).toEqual([])
+    expect(projection.compatibleTools).toEqual([promptOnlyTool])
+    expect(projection.inputError).toBeUndefined()
+    expect(
+      createCanvasGenerationComposerSubmission({
+        catalogStatus: "ready",
+        document,
+        projection,
+        prompt: "   ",
+        scopeId: "project-a",
+        selectedNodeIds: [brief.id],
+      }),
+    ).toEqual({
+      documentId: document.id,
+      expectedRevision: document.revision,
+      prompt: "",
+      promptContextNodeIds: [brief.id],
+      references: [],
+      scopeId: "project-a",
+      selectedNodeIds: [brief.id],
+      tool: promptOnlyTool,
     })
   })
 
@@ -125,6 +168,7 @@ describe("Canvas generation composer", () => {
       documentId: "canvas-a",
       expectedRevision: 2,
       prompt: "Create",
+      promptContextNodeIds: [],
       references: [],
       scopeId: "project-a",
       selectedNodeIds: [],
@@ -161,11 +205,9 @@ describe("Canvas generation composer", () => {
       "first_frame",
     )
     expect(assigned).toEqual({ removed: "last_frame", second: "first_frame" })
-    expect(
-      reconcileCanvasGenerationImageRoles(assigned, [
-        { nodeId: "second", role: "reference_image" },
-      ]),
-    ).toEqual({ second: "first_frame" })
+    expect(reconcileCanvasGenerationImageRoles(assigned, [{ nodeId: "second", role: "reference_image" }])).toEqual({
+      second: "first_frame",
+    })
   })
 
   test("invalidates late catalog requests when Canvas scope changes", () => {

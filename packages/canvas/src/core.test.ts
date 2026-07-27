@@ -20,7 +20,12 @@ import {
   serializeCanvasClipboard,
   writeCanvasClipboard,
 } from "./clipboard"
-import { getConnectedCanvasFileNodeIds, getIncomingConnectedCanvasFileNodeIds } from "./connections"
+import {
+  CANVAS_NODE_INPUT_HANDLE_ID,
+  CANVAS_NODE_OUTPUT_HANDLE_ID,
+  getConnectedCanvasFileNodeIds,
+  getIncomingConnectedCanvasFileNodeIds,
+} from "./connections"
 import {
   cloneCanvasDocument,
   createAgentNode,
@@ -379,8 +384,8 @@ describe("canvas history", () => {
   })
 })
 
-describe("canvas agent context", () => {
-  test("collects connected file nodes in both directions without duplicates", () => {
+describe("canvas connections", () => {
+  test("collects direction-agnostic topological file neighbors without duplicates", () => {
     const agent = createAgentNode({ id: "agent", position: { x: 0, y: 0 } })
     const first = createTextNode({ id: "first", position: { x: 0, y: 0 } })
     const second = createMediaNode({
@@ -441,6 +446,40 @@ describe("canvas commands", () => {
 
     expect(afterUpload.document.nodes.map((node) => node.id)).toEqual(["concurrent", "uploaded"])
   })
+
+  test("canonicalizes every directed connection to right-output and left-input ports", () => {
+    const source = createTextNode({ id: "source", position: { x: 0, y: 0 } })
+    const target = createTextNode({ id: "target", position: { x: 0, y: 400 } })
+    const connected = connectCanvasNodes(createCanvasDocument({ nodes: [source, target] }), {
+      source: source.id,
+      sourceHandle: "legacy-source-top",
+      target: target.id,
+      targetHandle: "legacy-target-bottom",
+    })
+
+    expect(connected.edges[0]).toMatchObject({
+      source: source.id,
+      sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+      target: target.id,
+      targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+    })
+    expect(
+      connectCanvasNodes(connected, {
+        source: source.id,
+        target: target.id,
+      }).edges,
+    ).toHaveLength(1)
+  })
+
+  test("does not create data-flow edges to or from structural groups", () => {
+    const group = createGroupNode({ id: "group", height: 300, position: { x: 0, y: 0 }, width: 400 })
+    const card = createTextNode({ id: "card", position: { x: 500, y: 0 } })
+    const document = createCanvasDocument({ nodes: [group, card] })
+
+    expect(connectCanvasNodes(document, { source: group.id, target: card.id })).toBe(document)
+    expect(connectCanvasNodes(document, { source: card.id, target: group.id })).toBe(document)
+  })
+
   test("groups and ungroups without changing world positions", () => {
     const first = createTextNode({ id: "node_a", position: { x: 20, y: 50 } })
     const second = createTextNode({ id: "node_b", position: { x: 360, y: 90 } })

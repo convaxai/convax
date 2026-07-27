@@ -120,6 +120,7 @@ import {
 } from "./plugin-manager"
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
+import { ServiceAwareGenerationTools } from "./service-aware-generation-tools"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
 import { createElectronPluginServiceCheckoutNavigation } from "./electron-plugin-service-checkout"
 import { createElectronPluginServiceExternalAuthorizationBroker } from "./electron-plugin-service-external-authorization"
@@ -627,12 +628,15 @@ function startApplication() {
       pluginServiceAuthorizationCheckpoints,
     )
     const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
+    let refreshAgentConfiguration: (() => Promise<void>) | undefined
     const pluginServices = new PluginServiceHost(
       generationRuntime,
       pluginServiceBrowserAuthorization,
       pluginServiceExternalAuthorization,
       createElectronPluginServiceCheckoutNavigation(),
+      () => refreshAgentConfiguration?.(),
     )
+    const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
     const generationOperations = new GenerationOperationStore(
       join(userDataDirectory, "generation-operations", "operation-v1"),
     )
@@ -649,7 +653,7 @@ function startApplication() {
       renderer: canvasRenderer,
       resources: canvasResources,
       runs: canvasGenerationRuns,
-      tools: generationRuntime,
+      tools: availableGenerationTools,
     })
     const generationRecoveryActor = { id: "desktop:main-supervisor", kind: "host" } as const
     const logGenerationRecoveryFailure = (stage: string, error: unknown) => {
@@ -712,19 +716,27 @@ function startApplication() {
       async resolveProviders() {
         try {
           const providers = await generationRuntime.connectLlmProviders()
+          const availability = await Promise.all(
+            providers.map(async (provider) => ({
+              available: await availableGenerationTools.isPluginAvailable(provider.pluginId),
+              provider,
+            })),
+          )
           return Object.fromEntries(
-            providers.map((provider) => [
-              provider.providerId,
-              {
-                models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
-                name: provider.name,
-                npm: "@ai-sdk/openai-compatible",
-                options: {
-                  apiKey: provider.apiKey,
-                  baseURL: provider.baseUrl,
+            availability
+              .filter(({ available }) => available)
+              .map(({ provider }) => [
+                provider.providerId,
+                {
+                  models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
+                  name: provider.name,
+                  npm: "@ai-sdk/openai-compatible",
+                  options: {
+                    apiKey: provider.apiKey,
+                    baseURL: provider.baseUrl,
+                  },
                 },
-              },
-            ]),
+              ]),
           )
         } catch (error) {
           console.warn("Could not connect installed Plugin LLM providers", error)
@@ -773,6 +785,7 @@ function startApplication() {
       ]),
       toolServerName: "convax",
     })
+    refreshAgentConfiguration = () => agentRuntime.refreshConfiguration()
     const petStateStore = new PetStateStore(join(userDataDirectory, "pet-state-v1.json"))
     const activity = new AgentActivityController({
       projects: projectManager,
@@ -891,7 +904,7 @@ function startApplication() {
       new RemoteCapabilityInstaller({
         authorizationStore: toolPluginAuthorizations,
         beforePluginPublish: async (pluginId) => {
-          pluginServices.discardPlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
         },
         builtinPlugins: desktopBuiltinPluginCatalog,
         builtinSkills: desktopBuiltinSkillCatalog,
@@ -1091,23 +1104,15 @@ function startApplication() {
       },
       { isTrustedSender: ipcSecurity.isTrustedSender },
     )
-    const refreshAgentAfterServiceAction = async <T>(action: () => Promise<T>) => {
-      const result = await action()
-      await agentRuntime.refreshConfiguration()
-      return result
-    }
     const disposePluginServiceIpc = registerPluginServiceIpc(
       {
-        authorize: (pluginId, signal) =>
-          refreshAgentAfterServiceAction(() => pluginServices.authorize(pluginId, signal)),
-        cancelAuthorization: (pluginId, signal) =>
-          refreshAgentAfterServiceAction(() => pluginServices.cancelAuthorization(pluginId, signal)),
+        authorize: (pluginId, signal) => pluginServices.authorize(pluginId, signal),
+        cancelAuthorization: (pluginId, signal) => pluginServices.cancelAuthorization(pluginId, signal),
         checkout: (pluginId, planKey, signal) => pluginServices.checkout(pluginId, planKey, signal),
         getStatus: (pluginId, signal) => pluginServices.getStatus(pluginId, signal),
         listServices: () => pluginServices.listServices(),
-        reauthorize: (pluginId, signal) =>
-          refreshAgentAfterServiceAction(() => pluginServices.reauthorize(pluginId, signal)),
-        signOut: (pluginId, signal) => refreshAgentAfterServiceAction(() => pluginServices.signOut(pluginId, signal)),
+        reauthorize: (pluginId, signal) => pluginServices.reauthorize(pluginId, signal),
+        signOut: (pluginId, signal) => pluginServices.signOut(pluginId, signal),
       },
       {
         isTrustedSender: ipcSecurity.isTrustedSender,
@@ -1147,7 +1152,7 @@ function startApplication() {
       {
         beforeChange: async (pluginId) => {
           pluginConnectedMedia.revokePlugin(pluginId)
-          pluginServices.discardPlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
         },
         connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
         listAgentMcpStatuses: (plugins) => pluginAgentMcpConnection.listStatuses(plugins),

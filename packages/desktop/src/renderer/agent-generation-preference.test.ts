@@ -28,7 +28,7 @@ describe("Agent generation preference", () => {
     })
   })
 
-  test("clears to Auto and fails closed on malformed storage", () => {
+  test("represents no stored preference without inventing a model and fails closed on malformed storage", () => {
     let stored = ""
     writeAgentGenerationPreference({ setItem: (_key, value) => (stored = value) })
     expect(readAgentGenerationPreference({ getItem: () => stored })).toBeUndefined()

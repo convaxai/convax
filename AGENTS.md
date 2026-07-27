@@ -160,6 +160,10 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   the prior Project.
 - Canvas document mutation never means “write JSON.” UI and Agent callers use the
   same Canvas application services and revision/conflict handling.
+- Every connectable Canvas card has exactly one left input and one right output.
+  Edges run from `source` (right/output) to `target` (left/input), and card movement
+  never switches ports to top/bottom. When a card-scoped Agent, generation, or
+  Plugin flow infers that card's inputs, only direct incoming sources qualify.
 - Main's Canvas application service/repository is the only authoritative document
   state and the only persistent writer. Renderer edits are optimistic projections
   that submit element-level commands with `expectedRevision`; renderer never saves

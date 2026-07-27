@@ -439,6 +439,12 @@ describe("Canvas Agent tools", () => {
       "canvas_apply_primitive",
       "canvas_view",
     ])
+    expect(definitions.find((tool) => tool.name === "canvas_query_nodes")?.description).toContain(
+      "incomingNodeIds are direct inputs",
+    )
+    expect(JSON.stringify(definitions.find((tool) => tool.name === "canvas_apply_primitive")?.inputSchema)).toContain(
+      "right-side output",
+    )
     await expect(
       provider.callTool({ directory: "/project", scopeId: "project-a" }, "canvas_view", {
         canvasId: "canvas-main",

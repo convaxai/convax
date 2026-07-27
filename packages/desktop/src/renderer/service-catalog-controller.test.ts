@@ -116,7 +116,44 @@ describe("ServiceCatalogController", () => {
     controller.start()
     await controller.refresh()
 
-    expect(controller.getSnapshot().services[0]?.models).toEqual([])
+    expect(controller.getSnapshot().services[0]).toMatchObject({ models: [], state: "disconnected" })
+    controller.dispose()
+  })
+
+  test("refreshes OpenCode models when Plugin service availability changes", async () => {
+    const listeners = new Set<() => void>()
+    const client = pluginClient()
+    client.onDidChange = mock((listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    })
+    let modelName = "Before authorization"
+    const listModels = mock(async () => ({
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "service-model", modelName }],
+          providerId: "service-provider",
+          providerName: "Service provider",
+        },
+      ],
+    }))
+    const controller = new ServiceCatalogController(client, { listModels })
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+    const callsBeforeChange = listModels.mock.calls.length
+
+    modelName = "After authorization"
+    for (const listener of listeners) listener()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(listModels.mock.calls.length).toBeGreaterThan(callsBeforeChange)
+    expect(controller.getSnapshot().services[0]?.models).toEqual([
+      expect.objectContaining({ name: "After authorization" }),
+    ])
     controller.dispose()
   })
 
