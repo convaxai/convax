@@ -75,9 +75,12 @@ mock.module("@convax/ui", () => ({
   SelectTrigger: Passthrough,
   SelectValue: Passthrough,
   Shortcut: Passthrough,
+  ToolInputForm: () => null,
   Tooltip: Passthrough,
   TooltipProvider: Passthrough,
   cn: (...values: unknown[]) => values.filter((value) => typeof value === "string").join(" "),
+  createToolInputDefaultValues: () => ({}),
+  validateToolInputValues: () => ({ input: {}, invalidFieldIds: [], missingRequiredFieldIds: [], valid: true }),
 }))
 
 const { createCanvasDocument, createTextNode } = await import("../document")

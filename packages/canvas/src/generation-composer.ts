@@ -6,6 +6,7 @@ import {
   type CanvasGenerateService,
   type CanvasGenerationInputRole,
   type CanvasGenerationReference,
+  type CanvasGenerationToolInput,
   type CanvasGenerationToolSummary,
 } from "./services"
 import type { CanvasDocument } from "./types"
@@ -39,6 +40,7 @@ export interface CanvasGenerationComposerSubmission {
   scopeId: string
   selectedNodeIds: readonly string[]
   tool: CanvasGenerationToolSummary
+  toolInput?: CanvasGenerationToolInput
 }
 
 export interface CanvasGenerationCatalogRequest {
@@ -124,6 +126,7 @@ export function createCanvasGenerationComposerSubmission(input: {
   projection: CanvasGenerationComposerProjection
   scopeId: string
   selectedNodeIds: readonly string[]
+  toolInput?: CanvasGenerationToolInput
 }): CanvasGenerationComposerSubmission | undefined {
   const prompt = input.prompt.trim()
   if (
@@ -144,6 +147,7 @@ export function createCanvasGenerationComposerSubmission(input: {
     scopeId: input.scopeId,
     selectedNodeIds: [...input.selectedNodeIds],
     tool: input.projection.selectedTool,
+    ...(input.toolInput ? { toolInput: { ...input.toolInput } } : {}),
   }
 }
 

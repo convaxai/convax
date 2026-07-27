@@ -1,4 +1,17 @@
-import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, cn } from "@convax/ui"
+import {
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  ToolInputForm,
+  cn,
+  createToolInputDefaultValues,
+  type ToolInputValue,
+  validateToolInputValues,
+} from "@convax/ui"
 import { LoaderCircle, Sparkles } from "lucide-react"
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -13,7 +26,11 @@ import {
   type CanvasGenerationComposerSubmission,
   type CanvasGenerationImageRole,
 } from "../generation-composer"
-import type { CanvasGenerateService, CanvasGenerationToolSummary } from "../services"
+import type {
+  CanvasGenerateService,
+  CanvasGenerationToolDescription,
+  CanvasGenerationToolSummary,
+} from "../services"
 import type { CanvasDocument } from "../types"
 
 export interface CanvasGenerationPanelProps {
@@ -30,6 +47,11 @@ export interface CanvasGenerationPanelProps {
   submitting?: boolean
 }
 
+type CanvasGenerationDescriptionState =
+  | { scope: string; status: "idle" | "loading" }
+  | { error: string; scope: string; status: "error" }
+  | { scope: string; status: "ready"; value: CanvasGenerationToolDescription }
+
 /**
  * Canvas-owned whole-document generation composer.
  *
@@ -45,6 +67,9 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [catalogAttempt, setCatalogAttempt] = useState(0)
   const [selectedToolId, setSelectedToolId] = useState("")
+  const [description, setDescription] = useState<CanvasGenerationDescriptionState>({ scope: "", status: "idle" })
+  const [descriptionAttempt, setDescriptionAttempt] = useState(0)
+  const [toolInput, setToolInput] = useState<Record<string, ToolInputValue>>({})
   const [imageRoles, setImageRoles] = useState<Readonly<Record<string, CanvasGenerationImageRole>>>({})
   const catalogTrackerRef = useRef(new CanvasGenerationCatalogRequestTracker())
   const previousScopeRef = useRef({ documentId: props.document.id, scopeId })
@@ -68,6 +93,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
     setPrompt(props.initialPrompt ?? "")
     setSelectedToolId("")
     setImageRoles({})
+    setToolInput({})
   }, [props.document.id, props.initialPrompt, scopeId])
 
   useEffect(() => {
@@ -102,9 +128,66 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
     return () => catalogTrackerRef.current.cancel(request)
   }, [catalogAttempt, props.document.id, props.generateService, props.generateService.catalogVersion, scopeId])
 
+  const selectedTool = projection.selectedTool
+  const describedToolId = selectedTool?.id
+  const descriptionScope = describedToolId
+    ? JSON.stringify([
+        scopeId,
+        props.document.id,
+        props.generateService.catalogVersion ?? null,
+        describedToolId,
+      ])
+    : ""
+  const currentDescription =
+    descriptionScope && description.scope === descriptionScope ? description : undefined
+  const toolInputValidation =
+    currentDescription?.status === "ready"
+      ? validateToolInputValues(currentDescription.value.fields, toolInput)
+      : undefined
+
+  useEffect(() => {
+    setToolInput({})
+    if (!describedToolId || !descriptionScope) {
+      setDescription({ scope: "", status: "idle" })
+      return undefined
+    }
+    const controller = new AbortController()
+    setDescription({ scope: descriptionScope, status: "loading" })
+    void props.generateService.describeTool(describedToolId, controller.signal).then(
+      (result) => {
+        if (controller.signal.aborted) return
+        if (result.toolId !== describedToolId) {
+          setDescription({
+            error: "The generation tool returned a stale configuration.",
+            scope: descriptionScope,
+            status: "error",
+          })
+          return
+        }
+        setToolInput(createToolInputDefaultValues(result.fields))
+        setDescription({ scope: descriptionScope, status: "ready", value: result })
+      },
+      (error) => {
+        if (controller.signal.aborted) return
+        setDescription({
+          error: error instanceof Error ? error.message : String(error),
+          scope: descriptionScope,
+          status: "error",
+        })
+      },
+    )
+    return () => controller.abort()
+  }, [describedToolId, descriptionAttempt, descriptionScope, props.generateService])
+
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (props.disabled || props.submitting) return
+    if (
+      props.disabled ||
+      props.submitting ||
+      currentDescription?.status !== "ready" ||
+      !toolInputValidation?.valid
+    )
+      return
     const submission = createCanvasGenerationComposerSubmission({
       catalogStatus,
       document: props.document,
@@ -112,15 +195,16 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       prompt,
       scopeId,
       selectedNodeIds: props.selectedNodeIds,
+      toolInput: toolInputValidation.input,
     })
     if (submission) props.onSubmit(submission)
   }
 
   const referenceImageNodes = projection.inferredReferences.filter((reference) => reference.role === "reference_image")
   const nodeById = new Map(props.document.nodes.map((node) => [node.id, node]))
-  const selectedTool = projection.selectedTool
   const inputDisabled =
     Boolean(props.disabled) || Boolean(props.submitting) || catalogStatus !== "ready" || !selectedTool
+  const submissionDisabled = inputDisabled || currentDescription?.status !== "ready" || !toolInputValidation?.valid
 
   return (
     <div className={cn("flex min-w-0 flex-col", props.className)}>
@@ -229,6 +313,40 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             ) : null}
           </div>
         ) : null}
+        {currentDescription?.status === "loading" ? (
+          <div
+            className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
+            role="status"
+          >
+            <LoaderCircle className="size-4 animate-spin" />
+            Loading generation options…
+          </div>
+        ) : null}
+        {currentDescription?.status === "error" ? (
+          <div
+            className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 px-3 py-2 text-xs text-destructive"
+            role="alert"
+          >
+            <span className="min-w-0 truncate">{currentDescription.error}</span>
+            <Button
+              onClick={() => setDescriptionAttempt((attempt) => attempt + 1)}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {currentDescription?.status === "ready" && currentDescription.value.fields.length > 0 ? (
+          <ToolInputForm
+            className="grid-cols-1"
+            disabled={props.disabled || props.submitting}
+            fields={currentDescription.value.fields}
+            onValuesChange={setToolInput}
+            values={toolInput}
+          />
+        ) : null}
         <div className="flex gap-2">
           <Input
             autoFocus={props.autoFocus}
@@ -240,7 +358,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           />
           <Button
             aria-label="Run generation"
-            disabled={inputDisabled || (!prompt.trim() && projection.promptContextNodeIds.length === 0)}
+            disabled={submissionDisabled || (!prompt.trim() && projection.promptContextNodeIds.length === 0)}
             size="icon"
             type="submit"
           >

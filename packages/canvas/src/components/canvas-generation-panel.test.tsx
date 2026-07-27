@@ -3,7 +3,11 @@ import { Window } from "happy-dom"
 import { type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createCanvasDocument, createTextNode } from "../document"
-import type { CanvasGenerateService, CanvasGenerationToolSummary } from "../services"
+import type {
+  CanvasGenerateService,
+  CanvasGenerationToolDescription,
+  CanvasGenerationToolSummary,
+} from "../services"
 import { CanvasGenerationPanel } from "./canvas-generation-panel"
 
 const testWindow = new Window({ url: "https://convax.test/" })
@@ -44,6 +48,12 @@ function render(element: ReactNode) {
   return container
 }
 
+async function flushEffects() {
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+}
+
 function createService(listTools: CanvasGenerateService["listTools"]): CanvasGenerateService {
   return {
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
@@ -58,6 +68,64 @@ function createService(listTools: CanvasGenerateService["listTools"]): CanvasGen
 }
 
 describe("CanvasGenerationPanel", () => {
+  test("renders the selected tool's live model field and submits the chosen value", async () => {
+    const onSubmit = mock(() => undefined)
+    const service = createService(
+      mock(async () => [
+        {
+          acceptedInputs: [],
+          description: "Creates an image",
+          id: "tool.image",
+          output: "image" as const,
+          title: "Image",
+        },
+      ]),
+    )
+    service.describeTool = mock(async (toolId) => ({
+      fields: [
+        {
+          choices: [
+            { label: "Image Alpha", value: "provider/image-alpha" },
+            { label: "Image Beta", value: "provider/image-beta" },
+          ],
+          defaultValue: "provider/image-beta",
+          id: "model",
+          kind: "select" as const,
+          label: "Model",
+          required: true,
+        },
+      ],
+      toolId,
+    }))
+    const container = render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-model" })}
+        generateService={service}
+        initialPrompt="Create an image"
+        onSubmit={onSubmit}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    expect(service.describeTool).toHaveBeenCalledWith("tool.image", expect.any(AbortSignal))
+    const modelLabel = [...container.querySelectorAll("label")].find((label) => label.textContent?.includes("Model"))
+    expect(modelLabel).toBeDefined()
+    const modelSelect = modelLabel?.htmlFor ? document.getElementById(modelLabel.htmlFor) : null
+    expect(modelSelect?.getAttribute("role")).toBe("combobox")
+    expect(modelSelect?.textContent).toContain("Image Beta")
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Run generation"]')?.disabled).toBe(false)
+
+    await act(async () => {
+      container.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+    })
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolInput: { model: "provider/image-beta" },
+      }),
+    )
+  })
+
   test("submits a bounded Canvas scope snapshot through the external operation owner", async () => {
     let acceptedOperationSignal: AbortSignal | undefined
     const onSubmit = mock(() => {
@@ -246,5 +314,40 @@ describe("CanvasGenerationPanel", () => {
     root = undefined
     expect(catalogSignal?.aborted).toBe(true)
     expect(service.generate).not.toHaveBeenCalled()
+  })
+
+  test("aborts live tool description when the composer unmounts", async () => {
+    let descriptionSignal: AbortSignal | undefined
+    const service = createService(
+      mock(async () => [
+        {
+          acceptedInputs: [],
+          description: "Creates an image",
+          id: "tool.image",
+          output: "image" as const,
+          title: "Image",
+        },
+      ]),
+    )
+    service.describeTool = mock(
+      (_toolId, signal) =>
+        new Promise<CanvasGenerationToolDescription>(() => {
+          descriptionSignal = signal
+        }),
+    )
+    render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-description" })}
+        generateService={service}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    expect(descriptionSignal?.aborted).toBe(false)
+    await act(async () => root?.unmount())
+    root = undefined
+    expect(descriptionSignal?.aborted).toBe(true)
   })
 })

@@ -2507,6 +2507,9 @@ function CanvasEditorContent(
           references: submission.references,
           signal: controller.signal,
           toolId: submission.tool.id,
+          ...(submission.toolInput && Object.keys(submission.toolInput).length > 0
+            ? { toolInput: submission.toolInput }
+            : {}),
         })
       })()
         .then(
