@@ -635,6 +635,7 @@ function startApplication() {
       pluginServiceExternalAuthorization,
       createElectronPluginServiceCheckoutNavigation(),
       () => refreshAgentConfiguration?.(),
+      activateMainWindow,
     )
     const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
     const generationOperations = new GenerationOperationStore(

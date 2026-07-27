@@ -120,6 +120,7 @@ export class PluginServiceHost {
     private readonly externalAuthorization?: PluginServiceExternalAuthorizationBroker,
     private readonly checkoutNavigation?: PluginServiceCheckoutNavigation,
     private readonly onServiceMutation?: () => Promise<void> | void,
+    private readonly onExternalAuthorizationComplete?: () => Promise<void> | void,
   ) {}
 
   listServices() {
@@ -356,6 +357,9 @@ export class PluginServiceHost {
         throw new Error(`Plugin service authorization did not persist a credential: ${pluginId}`)
       }
       if (commitBrowserCheckpoint) await this.browserAuthorization?.commitPlugin?.(pluginId)
+      if (result.structuredContent.schema === pluginServiceExternalAuthorizationRequestSchema) {
+        this.#notifyExternalAuthorizationComplete()
+      }
       return status
     } catch (error) {
       await this.#cancelFailedAuthorization(before)
@@ -405,6 +409,16 @@ export class PluginServiceHost {
       // Cleanup is best effort and must never replace the original failure.
     } finally {
       clearTimeout(timeout)
+    }
+  }
+
+  #notifyExternalAuthorizationComplete() {
+    try {
+      void Promise.resolve(this.onExternalAuthorizationComplete?.()).catch((error) => {
+        console.warn("Could not focus Convax after external Plugin service authorization", error)
+      })
+    } catch (error) {
+      console.warn("Could not focus Convax after external Plugin service authorization", error)
     }
   }
 

@@ -245,18 +245,27 @@ describe("PluginServiceHost", () => {
       listServices: async () => [authorizationSummary],
     }
     const opened: string[] = []
-    const host = new PluginServiceHost(runtime, undefined, {
-      async authorize(_pluginId, request) {
-        opened.push(request.authorizationUrl)
-        return {
-          authorization_id: request.authorizationId,
-          schema: pluginServiceExternalAuthorizationCompletionSchema,
-        }
+    const completed = mock(() => undefined)
+    const host = new PluginServiceHost(
+      runtime,
+      undefined,
+      {
+        async authorize(_pluginId, request) {
+          opened.push(request.authorizationUrl)
+          return {
+            authorization_id: request.authorizationId,
+            schema: pluginServiceExternalAuthorizationCompletionSchema,
+          }
+        },
+        async disposePlugin() {},
       },
-      async disposePlugin() {},
-    })
+      undefined,
+      undefined,
+      completed,
+    )
 
     expect(await host.authorize("account-tools")).toEqual(status)
+    expect(completed).toHaveBeenCalledTimes(1)
     expect(opened).toEqual([
       "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
     ])
@@ -266,6 +275,47 @@ describe("PluginServiceHost", () => {
         schema: pluginServiceExternalAuthorizationCompletionSchema,
       },
     ])
+  })
+
+  test("does not focus Convax when external authorization completion fails", async () => {
+    const authorizationSummary: PluginServiceSummary = {
+      ...summary,
+      actions: ["authorize", "authorization.cancel"],
+    }
+    const focused = mock(() => undefined)
+    const host = new PluginServiceHost(
+      {
+        async callService(_pluginId, call) {
+          if (call === "authorization.cancel") return { structuredContent: status }
+          return {
+            completeAuthorization: async () => ({ isError: true }),
+            structuredContent: {
+              authorization_id: "request_0123456789abcdef",
+              authorization_url:
+                "https://nexus.microvoid.io/workspace/convax/auth/sign-in?state=state&code_challenge=challenge",
+              schema: pluginServiceExternalAuthorizationRequestSchema,
+            },
+          }
+        },
+        listServices: async () => [authorizationSummary],
+      },
+      undefined,
+      {
+        async authorize(_pluginId, request) {
+          return {
+            authorization_id: request.authorizationId,
+            schema: pluginServiceExternalAuthorizationCompletionSchema,
+          }
+        },
+        async disposePlugin() {},
+      },
+      undefined,
+      undefined,
+      focused,
+    )
+
+    await expect(host.authorize("account-tools")).rejects.toThrow("authorization completion failed")
+    expect(focused).not.toHaveBeenCalled()
   })
 
   test("fails closed before opening a browser for an invalid request", async () => {
