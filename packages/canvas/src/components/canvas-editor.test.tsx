@@ -988,7 +988,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(pasteOnCanvas).toBeFunction()
   })
 
-  test("offers plugin cards without source-less built-in file or agent roles", () => {
+  test("offers empty image and video cards plus plugin cards without source-backed or agent roles", () => {
     const fileRenderers = createDefaultCanvasFileRendererRegistry()
     const nodes = createDefaultCanvasNodeRegistry()
     fileRenderers.register({
@@ -1004,10 +1004,23 @@ describe("CanvasEditor insertion surfaces", () => {
       matches: (data) => data.kind === "diagram",
     })
 
-    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual(["diagram"])
+    expect(getCanvasNodeInsertionItems(fileRenderers, nodes).map((item) => item.type)).toEqual([
+      "diagram",
+      "image",
+      "video",
+    ])
   })
 
-  test("shows file-backed text and host generation actions without source-less media or Agent", () => {
+  test("shows image and video in the shared Canvas context-menu insertion list", () => {
+    const markup = renderEditor()
+
+    expect(markup).toContain("Add Text")
+    expect(markup).toContain("Add Image")
+    expect(markup).toContain("Add Video")
+    expect(markup).not.toContain("Add Audio")
+  })
+
+  test("keeps the compact header focused on text, upload, and host generation actions", () => {
     renderEditor(
       createCanvasServices({
         generate: {

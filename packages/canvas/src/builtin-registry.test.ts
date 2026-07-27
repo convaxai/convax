@@ -1,19 +1,38 @@
 import { describe, expect, test } from "bun:test"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "./builtin-registry"
+import { createCanvasFileNode } from "./file-renderer-registry"
 
 describe("default Canvas file renderer registry", () => {
-  test("hides media and generic file creation until a resource source exists", () => {
-    const definitions = createDefaultCanvasFileRendererRegistry().list()
-    for (const id of ["image", "video", "audio", "file"]) {
-      expect(definitions.find((definition) => definition.id === id)?.hidden).toBe(true)
+  test("creates durable empty image and video cards without inventing resource references", () => {
+    const registry = createDefaultCanvasFileRendererRegistry()
+    for (const kind of ["image", "video"] as const) {
+      const definition = registry.get(kind)
+      expect(definition?.hidden).not.toBe(true)
+      expect(definition?.create).toBeFunction()
+      if (!definition) throw new Error(`Missing ${kind} renderer`)
+
+      const node = createCanvasFileNode(definition, { position: { x: 12, y: 24 } })
+      expect(node).toMatchObject({
+        data: {
+          kind,
+          label: kind[0]!.toUpperCase() + kind.slice(1),
+          metadata: {},
+          resourceState: { status: "ready" },
+          status: "idle",
+        },
+        position: { x: 12, y: 24 },
+        type: "file",
+      })
     }
-    expect(definitions.find((definition) => definition.id === "text")?.hidden).not.toBe(true)
   })
 
-  test("keeps built-in resource renderers and the file node definition render-only", () => {
+  test("keeps source-backed and special roles out of insertion menus", () => {
     const fileRenderers = createDefaultCanvasFileRendererRegistry()
-    for (const id of ["text", "image", "video", "audio", "file"]) {
+    for (const id of ["text", "audio", "file", "folder"]) {
       expect(fileRenderers.get(id)?.create).toBeUndefined()
+    }
+    for (const id of ["audio", "file"]) {
+      expect(fileRenderers.get(id)?.hidden).toBe(true)
     }
 
     const nodeRegistry = createDefaultCanvasNodeRegistry()
