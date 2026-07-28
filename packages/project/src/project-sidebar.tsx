@@ -43,6 +43,7 @@ import {
   InlineInput,
   getFilePreviewKind,
 } from "./project-sidebar-items"
+import { bindProjectSwitcherDismissal } from "./project-switcher-dismissal"
 
 export interface ProjectSidebarProps {
   className?: string
@@ -116,6 +117,8 @@ export function ProjectSidebar({
   const [confirmForget, setConfirmForget] = useState<ProjectRecord | null>(null)
   const suppressClickAfterDragRef = useRef(false)
   const sectionsRef = useRef<HTMLDivElement | null>(null)
+  const projectSwitcherRef = useRef<HTMLDivElement | null>(null)
+  const projectSwitcherTriggerRef = useRef<HTMLButtonElement | null>(null)
   const openCreateProject = () => {
     controller.clearError()
     setCreateProjectOpen(true)
@@ -131,6 +134,27 @@ export function ProjectSidebar({
     setDropTargetPath(null)
     setTreeDragActive(false)
   }, [projectSnapshot.activeProjectId])
+
+  useEffect(() => {
+    if (!switcherOpen) return
+    const ownerDocument = projectSwitcherRef.current?.ownerDocument
+      ?? projectSwitcherTriggerRef.current?.ownerDocument
+    const switcher = projectSwitcherRef.current
+    const trigger = projectSwitcherTriggerRef.current
+    if (!ownerDocument || !switcher || !trigger) return
+
+    return bindProjectSwitcherDismissal({
+      document: ownerDocument,
+      onDismiss: () => setSwitcherOpen(false),
+      onEscape: () => {
+        setSwitcherOpen(false)
+        trigger.focus({ preventScroll: true })
+      },
+      switcher,
+      trigger,
+      window: ownerDocument.defaultView,
+    })
+  }, [switcherOpen])
 
   useEffect(() => {
     const projectId = projectSnapshot.activeProjectId
@@ -257,8 +281,11 @@ export function ProjectSidebar({
       >
       {!embeddedFiles ? <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
         <button
+          aria-expanded={switcherOpen}
+          aria-haspopup="dialog"
           className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => setSwitcherOpen((open) => !open)}
+          ref={projectSwitcherTriggerRef}
           type="button"
         >
           <span className="min-w-0 flex-1">
@@ -286,14 +313,24 @@ export function ProjectSidebar({
           <ProjectSwitcher
             activeProjectId={projectSnapshot.activeProjectId}
             projects={projectSnapshot.projects}
-            onActivate={(projectId) => void controller.activate(projectId)}
+            rootRef={projectSwitcherRef}
+            onActivate={(projectId) => {
+              setSwitcherOpen(false)
+              void controller.activate(projectId)
+            }}
             onClose={() => setSwitcherOpen(false)}
             onCreate={() => {
               setSwitcherOpen(false)
               openCreateProject()
             }}
-            onForget={setConfirmForget}
-            onOpen={() => void controller.openProject()}
+            onForget={(project) => {
+              setSwitcherOpen(false)
+              setConfirmForget(project)
+            }}
+            onOpen={() => {
+              setSwitcherOpen(false)
+              void controller.openProject()
+            }}
           />
         ) : null}
       </header> : null}
@@ -829,9 +866,16 @@ function ProjectSwitcher(props: {
   onForget: (project: ProjectRecord) => void
   onOpen: () => void
   projects: ProjectRecord[]
+  rootRef: { current: HTMLDivElement | null }
 }) {
   return (
-    <div className="absolute left-3 right-3 top-[50px] z-50 overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl">
+    <div
+      aria-label="Projects"
+      className="absolute left-3 right-3 top-[50px] z-50 overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+      data-project-switcher
+      ref={props.rootRef}
+      role="dialog"
+    >
       <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         <span>Projects</span>
         <button aria-label="Close projects" onClick={props.onClose} type="button"><X className="size-3.5" /></button>
