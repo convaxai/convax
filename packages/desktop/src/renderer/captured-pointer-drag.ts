@@ -1,0 +1,149 @@
+export interface CapturedPointerDragClock {
+  cancelFrame(frameId: number): void
+  requestFrame(callback: () => void): number
+}
+
+export interface CapturedPointerTarget extends EventTarget {
+  hasPointerCapture(pointerId: number): boolean
+  releasePointerCapture(pointerId: number): void
+  setPointerCapture(pointerId: number): void
+}
+
+export interface CapturedPointerDragSession {
+  cancel(): void
+}
+
+export interface CapturedPointerDragOptions {
+  cancel(): void
+  captureTarget?: CapturedPointerTarget
+  clock?: CapturedPointerDragClock
+  commit(): void
+  eventSource?: EventTarget
+  onSettled?(): void
+  pointerId: number
+  update(clientX: number): void
+}
+
+/** Keeps the originating separator alive until its resize transaction settles. */
+export function shouldMountResizeHandle(partVisible: boolean, resizing: boolean) {
+  return partVisible || resizing
+}
+
+function browserClock(): CapturedPointerDragClock {
+  return {
+    cancelFrame: (frameId) => window.cancelAnimationFrame(frameId),
+    requestFrame: (callback) => window.requestAnimationFrame(callback),
+  }
+}
+
+/**
+ * Owns one horizontal drag, optionally with pointer capture. Raw moves are
+ * reduced to the last coordinate in each animation frame; the exact pointer-up
+ * coordinate is always flushed before commit.
+ */
+export function startCapturedPointerDrag(options: CapturedPointerDragOptions): CapturedPointerDragSession | null {
+  const source = options.eventSource ?? window
+  const clock = options.clock ?? browserClock()
+  let frameId: number | null = null
+  let pendingClientX: number | null = null
+  let settled = false
+
+  const flushPending = () => {
+    frameId = null
+    const clientX = pendingClientX
+    pendingClientX = null
+    if (clientX === null) return
+    try {
+      options.update(clientX)
+    } catch (error) {
+      cancel()
+      throw error
+    }
+  }
+  const cancelPending = () => {
+    if (frameId !== null) clock.cancelFrame(frameId)
+    frameId = null
+    pendingClientX = null
+  }
+  const schedule = (clientX: number) => {
+    pendingClientX = clientX
+    if (frameId === null) frameId = clock.requestFrame(flushPending)
+  }
+  const pointerEvent = (event: Event) => {
+    if (
+      !("pointerId" in event) ||
+      typeof event.pointerId !== "number" ||
+      !("clientX" in event) ||
+      typeof event.clientX !== "number"
+    ) {
+      return null
+    }
+    return { clientX: event.clientX, pointerId: event.pointerId }
+  }
+  const move = (event: Event) => {
+    const pointer = pointerEvent(event)
+    if (!pointer || pointer.pointerId !== options.pointerId) return
+    schedule(pointer.clientX)
+  }
+  const finish = (event: Event) => {
+    const pointer = pointerEvent(event)
+    if (!pointer || pointer.pointerId !== options.pointerId || settled) return
+    settled = true
+    cancelPending()
+    detach()
+    releaseCapture()
+    try {
+      options.update(pointer.clientX)
+      options.commit()
+    } catch (error) {
+      options.cancel()
+      throw error
+    } finally {
+      options.onSettled?.()
+    }
+  }
+  const cancel = (event?: Event) => {
+    if (settled) return
+    if (event?.type === "pointercancel" || event?.type === "lostpointercapture") {
+      const pointer = pointerEvent(event)
+      if (!pointer || pointer.pointerId !== options.pointerId) return
+    }
+    settled = true
+    cancelPending()
+    detach()
+    releaseCapture()
+    try {
+      options.cancel()
+    } finally {
+      options.onSettled?.()
+    }
+  }
+  const detach = () => {
+    source.removeEventListener("pointermove", move, true)
+    source.removeEventListener("pointerup", finish, true)
+    source.removeEventListener("pointercancel", cancel, true)
+    source.removeEventListener("blur", cancel, true)
+    options.captureTarget?.removeEventListener("lostpointercapture", cancel)
+  }
+  const releaseCapture = () => {
+    if (options.captureTarget?.hasPointerCapture(options.pointerId)) {
+      options.captureTarget.releasePointerCapture(options.pointerId)
+    }
+  }
+
+  source.addEventListener("pointermove", move, true)
+  source.addEventListener("pointerup", finish, true)
+  source.addEventListener("pointercancel", cancel, true)
+  source.addEventListener("blur", cancel, true)
+  if (options.captureTarget) {
+    options.captureTarget.addEventListener("lostpointercapture", cancel)
+    try {
+      options.captureTarget.setPointerCapture(options.pointerId)
+    } catch {
+      cancel()
+      return null
+    }
+  }
+
+  return { cancel }
+}

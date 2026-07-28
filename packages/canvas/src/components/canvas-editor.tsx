@@ -197,9 +197,10 @@ import {
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { CanvasGenerationPanel } from "./canvas-generation-panel"
 import { bindCanvasSearchDismissal } from "./canvas-search-dismissal"
-import { createCanvasCardConnection, PendingConnectionMenu } from "./connection-node-menu"
+import { createCanvasCardConnection } from "./connection-node-menu"
 import { createCanvasDuplicateDragPlan, remapCanvasDuplicateDragChanges } from "./duplicate-drag"
 import { getCanvasNodeInsertionItems } from "./insertion-items"
+import { PendingConnectionMenu } from "./pending-connection-menu"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
 const CANVAS_FIT_DURATION = 220
@@ -213,6 +214,19 @@ const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_
 const CANVAS_PAN_ON_DRAG = [1]
 const CANVAS_SNAP_GRID: [number, number] = [8, 8]
 const CANVAS_ZOOM_ACTIVATION_KEYS = ["Meta", "Control"]
+const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "a",
+  "audio",
+  "video",
+  "iframe",
+  "[contenteditable]:not([contenteditable='false'])",
+  ".nodrag",
+  "[data-canvas-shortcuts='ignore']",
+].join(", ")
 type CanvasDirectedAutoLayoutStrategy = Extract<
   CanvasAutoLayoutStrategy,
   "horizontal-directed-cluster" | "vertical-directed-cluster"
@@ -311,12 +325,10 @@ function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
 interface PendingConnection {
   nodeId: string
   side: "left" | "right"
-  sourceScreen: CanvasPoint
   targetPosition: CanvasPoint
-  targetScreen: CanvasPoint
 }
 
-interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side" | "sourceScreen"> {
+interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side"> {
   pointerScreen: CanvasPoint
 }
 
@@ -2745,13 +2757,10 @@ function CanvasEditorContent(
         connectionStartRef.current = null
         return
       }
-      const handle = event.target instanceof Element ? event.target.closest(".react-flow__handle") : null
-      const bounds = handle?.getBoundingClientRect()
       connectionStartRef.current = {
         nodeId: params.nodeId,
         pointerScreen,
         side: params.handleId.includes("left") ? "left" : "right",
-        sourceScreen: bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : pointerScreen,
       }
     },
     [updateConnectionTargetNode],
@@ -2797,9 +2806,7 @@ function CanvasEditorContent(
       setPendingConnection({
         nodeId: start.nodeId,
         side: start.side,
-        sourceScreen: start.sourceScreen,
         targetPosition: reactFlow.screenToFlowPosition(targetScreen),
-        targetScreen,
       })
     },
     [commit, reactFlow, updateConnectionTargetNode],
@@ -2842,7 +2849,10 @@ function CanvasEditorContent(
     boxSelectionActiveRef.current = false
     boxSelectionBaselineRef.current = null
   }, [])
-  const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
+  const searchResults = useMemo(
+    () => (searchOpen ? queryCanvasNodes(history.document, { limit: 8, text: query }) : []),
+    [history.document, query, searchOpen],
+  )
 
   return (
     <CanvasEditorProvider controller={controller}>
@@ -2889,6 +2899,17 @@ function CanvasEditorContent(
                   boxSelectionBaselineRef.current = null
                 }}
                 onPointerDownCapture={(event) => {
+                  const canvasRoot = rootRef.current
+                  const interactiveTarget =
+                    event.target instanceof Element
+                      ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
+                      : null
+                  if (
+                    event.button === 0 &&
+                    (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))
+                  ) {
+                    canvasRoot?.focus({ preventScroll: true })
+                  }
                   if (
                     event.button === 0 &&
                     event.target instanceof HTMLElement &&
@@ -3013,8 +3034,8 @@ function CanvasEditorContent(
                       quickConnect(connection.nodeId, connection.side, type, connection.targetPosition)
                     }}
                     side={pendingConnection.side}
-                    sourceScreen={pendingConnection.sourceScreen}
-                    targetScreen={pendingConnection.targetScreen}
+                    sourceNodeId={pendingConnection.nodeId}
+                    targetPosition={pendingConnection.targetPosition}
                   />
                 ) : null}
 

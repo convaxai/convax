@@ -29,18 +29,21 @@ describe("Canvas file-card assistant sizing", () => {
     expect(mediaSurfaceRule).toContain("background: transparent")
   })
 
-  test("gives the text editor a borderless side-drawer document surface", async () => {
+  test("gives the expanded editor a centered full-canvas document surface", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const drawerEditorRule =
-      styles.match(/\.convax-canvas \.convax-text-editor--drawer \.convax-text-editor__prosemirror \{[^}]+\}/s)?.[0] ??
+    const expandedEditorRule =
+      styles.match(/\.convax-canvas \.convax-text-editor--expanded \.convax-text-editor__prosemirror \{[^}]+\}/s)?.[0] ??
       ""
 
-    expect(drawerEditorRule).toContain("width: 100%")
-    expect(drawerEditorRule).toContain("min-height: 100%")
-    expect(drawerEditorRule).toContain("padding: 32px 48px 96px")
-    expect(drawerEditorRule).toContain("font-size: 15px")
-    expect(drawerEditorRule).not.toContain("box-shadow")
-    expect(styles).not.toContain(".convax-text-editor-drawer__toolbar")
+    expect(expandedEditorRule).toContain("width: min(920px, 100%)")
+    expect(expandedEditorRule).toContain("min-height: 100%")
+    expect(expandedEditorRule).toContain("margin: 0 auto")
+    expect(expandedEditorRule).toContain("padding: 48px clamp(28px, 6vw, 80px) 120px")
+    expect(expandedEditorRule).toContain("font-size: 16px")
+    expect(expandedEditorRule).toContain("box-shadow")
+    const toolbarInnerRule = cssRule(styles, ".convax-canvas .convax-text-editor-dialog__toolbar-inner")
+    expect(toolbarInnerRule).toContain("width: min(920px, 100%)")
+    expect(toolbarInnerRule).toContain("margin: 0 auto")
     expect(styles).toContain(".convax-text-block-handle-anchor")
     expect(styles).toContain(".convax-text-inline-menu")
     expect(styles).toMatch(
@@ -77,6 +80,26 @@ describe("Canvas-first visual hierarchy", () => {
     const backgroundRule = styles.match(/\.convax-canvas \.react-flow__background \{[^}]+\}/s)?.[0] ?? ""
 
     expect(backgroundRule).toContain("opacity: 0.78")
+  })
+
+  test("keeps Canvas-owned node chrome available as a drag target", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const titleRule = cssRule(styles, ".convax-canvas .convax-node__title")
+
+    expect(titleRule).toContain("pointer-events: auto")
+    expect(titleRule).toContain("touch-action: none")
+    expect(titleRule).toContain("user-select: none")
+  })
+
+  test("removes the node surface shadow immediately while dragging", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const draggingSurfaceRule = cssRule(
+      styles,
+      ".convax-canvas .react-flow__node.dragging .convax-node__surface",
+    )
+
+    expect(draggingSurfaceRule).toContain("box-shadow: none")
+    expect(draggingSurfaceRule).toContain("transition: none")
   })
 
   test("anchors creation at bottom center and moves viewport tools above it on narrow screens", async () => {
@@ -119,6 +142,16 @@ describe("Canvas-first visual hierarchy", () => {
 })
 
 describe("Canvas theme closure", () => {
+  test("keeps the pending connection overlay inside the Canvas coordinate space", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const overlayRule = cssRule(styles, ".convax-pending-connection")
+    const menuRule = cssRule(styles, ".convax-pending-connection__menu")
+
+    expect(overlayRule).toContain("position: absolute")
+    expect(menuRule).toContain("position: absolute")
+    expect(`${overlayRule}\n${menuRule}`).not.toContain("position: fixed")
+  })
+
   test("inherits host theme materials instead of pinning light defaults on the canvas element", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const defaultsRule = cssRule(styles, ":root")

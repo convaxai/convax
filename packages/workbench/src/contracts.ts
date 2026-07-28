@@ -16,6 +16,7 @@ export type WorkbenchInput = WorkbenchCanvasInput | WorkbenchFileInput
 
 export interface WorkbenchCanvasNodesSelection {
   kind: "canvas-nodes"
+  /** A serialized set of unique node ids. Array order has no selection semantics. */
   nodeIds: readonly string[]
 }
 

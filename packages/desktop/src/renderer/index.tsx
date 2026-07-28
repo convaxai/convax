@@ -1,5 +1,4 @@
 import {
-  CanvasOutline,
   CanvasEditor,
   CanvasGenerationPanel,
   CanvasInspector,
@@ -65,8 +64,13 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
+import {
+  shouldMountResizeHandle,
+  startCapturedPointerDrag,
+  type CapturedPointerDragSession,
+} from "./captured-pointer-drag"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
-import { createInitialCanvasDocument } from "./canvas-document"
+import { createInitialCanvasDocument, promoteCanvasDocumentProjection } from "./canvas-document"
 import {
   CanvasCardConversationPanel,
   canvasCardAgentContextNodeIds,
@@ -113,8 +117,8 @@ import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
 import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
-import { ProjectDetailsPanel } from "./project-details-panel"
 import { ProjectHome } from "./project-home"
+import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController } from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
@@ -142,7 +146,7 @@ import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 import "./appearance-themes.css"
 
-const primarySidebarBounds = { defaultSize: 320, defaultVisible: false, maxSize: 480, minSize: 260 }
+const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
 const secondarySidebarBounds = { defaultSize: 380, defaultVisible: false, maxSize: 4096, minSize: 300 }
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
@@ -180,6 +184,8 @@ function App() {
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const workspaceShellRef = useRef<HTMLElement>(null)
+  const workbenchResizeSessionRef = useRef<CapturedPointerDragSession | null>(null)
   const canvasEditorScopeRef = useRef<{
     canvasId: string
     handle: CanvasEditorHandle
@@ -190,7 +196,6 @@ function App() {
     handle: AgentPanelHandle
     projectId: string
   } | null>(null)
-  const projectDetailsTriggerRef = useRef<HTMLButtonElement>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
@@ -270,7 +275,6 @@ function App() {
       secondarySidebar: secondarySidebarBounds,
     }),
   )
-  const [projectDetailsPinned, setProjectDetailsPinned] = useState(initialLayoutPreferences.primarySidebar.pinned)
   const workbenchLayoutController = useMemo(() => {
     return new WorkbenchLayoutController({
       parts: {
@@ -347,6 +351,13 @@ function App() {
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
   )
+  useEffect(
+    () => () => {
+      workbenchResizeSessionRef.current?.cancel()
+      workbenchResizeSessionRef.current = null
+    },
+    [],
+  )
   useEffect(() => () => projectController.dispose(), [projectController])
   useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
   useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
@@ -403,9 +414,9 @@ function App() {
   }, [settingsSection])
   useEffect(() => {
     if (!workbenchLayoutSnapshot.resize) {
-      writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot, { projectDetailsPinned })
+      writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
     }
-  }, [projectDetailsPinned, workbenchLayoutSnapshot])
+  }, [workbenchLayoutSnapshot])
   useEffect(() => {
     const projectId = projectSnapshot.activeProjectId
     workbenchController.setProject(projectId)
@@ -828,6 +839,12 @@ function App() {
   useEffect(() => {
     setCanvasOutlineDocument(initialDocument)
   }, [initialDocument])
+  const handleCanvasDocumentChange = useCallback(
+    (document: CanvasDocument) => {
+      setCanvasOutlineDocument((current) => promoteCanvasDocumentProjection(current, document, activeCanvasId))
+    },
+    [activeCanvasId],
+  )
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
       cancel(operationId) {
@@ -1309,9 +1326,13 @@ function App() {
 
   const startWorkbenchPartResize = useCallback(
     (partId: string, event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !event.isPrimary || workbenchResizeSessionRef.current) return
+      const captureTarget = workspaceShellRef.current
+      if (!captureTarget) return
       const part = workbenchLayoutController.getSnapshot().parts[partId]
       if (!part || !workbenchLayoutController.beginResize(partId)) return
       event.preventDefault()
+      event.currentTarget.focus({ preventScroll: true })
       const startX = event.clientX
       const startSize = part.size
       const direction = partId === WorkbenchLayoutParts.PrimarySidebar ? 1 : -1
@@ -1322,11 +1343,10 @@ function App() {
         const secondary = layout.parts[WorkbenchLayoutParts.SecondarySidebar]!
         const presentation = resolveWorkspaceLayout({
           agentVisible: secondary.visible,
-          projectDetailsPinned,
-          projectDetailsVisible: primary.visible,
+          projectSidebarVisible: primary.visible,
           viewportWidth: window.innerWidth,
         })
-        const occupiedByPrimary = presentation.projectDetails === "dock" ? primary.size : 0
+        const occupiedByPrimary = primary.visible ? primary.size : 0
         const occupiedBySecondary = presentation.agent === "dock" ? secondary.size : 0
         const available =
           partId === WorkbenchLayoutParts.PrimarySidebar
@@ -1339,33 +1359,24 @@ function App() {
         workbenchLayoutController.updateResize(constrained - startSize)
       }
 
-      let settled = false
-      const cleanup = () => {
-        window.removeEventListener("pointermove", move)
-        window.removeEventListener("pointerup", finish)
-        window.removeEventListener("pointercancel", cancel)
-        window.removeEventListener("blur", cancel)
-      }
-      const move = (moveEvent: PointerEvent) => update(moveEvent.clientX)
-      const finish = (finishEvent: PointerEvent) => {
-        if (settled) return
-        settled = true
-        update(finishEvent.clientX)
-        cleanup()
-        workbenchLayoutController.endResize()
-      }
-      const cancel = () => {
-        if (settled) return
-        settled = true
-        cleanup()
-        workbenchLayoutController.cancelResize()
-      }
-      window.addEventListener("pointermove", move)
-      window.addEventListener("pointerup", finish)
-      window.addEventListener("pointercancel", cancel)
-      window.addEventListener("blur", cancel)
+      let session: CapturedPointerDragSession | null = null
+      session = startCapturedPointerDrag({
+        cancel: () => {
+          workbenchLayoutController.cancelResize()
+        },
+        captureTarget,
+        commit: () => {
+          workbenchLayoutController.endResize()
+        },
+        onSettled: () => {
+          if (workbenchResizeSessionRef.current === session) workbenchResizeSessionRef.current = null
+        },
+        pointerId: event.pointerId,
+        update,
+      })
+      if (session) workbenchResizeSessionRef.current = session
     },
-    [projectDetailsPinned, workbenchLayoutController],
+    [workbenchLayoutController],
   )
 
   const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
@@ -1389,11 +1400,10 @@ function App() {
   }, [activeProjectId, canvasInspector, workspaceUtilityDrawer.mode])
   const workspaceLayout = resolveWorkspaceLayout({
     agentVisible: secondarySidebar.visible,
-    projectDetailsPinned,
-    projectDetailsVisible: primarySidebar.visible,
+    projectSidebarVisible: primarySidebar.visible,
     viewportWidth,
   })
-  const primarySidebarOccupiedSize = workspaceLayout.projectDetails === "dock" ? primarySidebar.size : 0
+  const primarySidebarOccupiedSize = activeProject && primarySidebar.visible ? primarySidebar.size : 0
   const secondarySidebarAvailableSize = Math.max(
     secondarySidebarBounds.minSize,
     workspaceLayout.agent !== "dock"
@@ -1591,10 +1601,13 @@ function App() {
     workbenchLayoutSnapshot.resize,
   ])
 
-  const projectDetails =
-    activeProject && workspaceLayout.projectDetails !== "hidden" ? (
-      <ProjectDetailsPanel
-        canvases={
+  const projectSidebar = activeProject ? (
+    <ProjectSidebar
+      className="w-full"
+      controller={projectController}
+      extension={{
+        busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
+        content: (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
             controller={projectCanvasController}
@@ -1605,52 +1618,16 @@ function App() {
             onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
             onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
           />
-        }
-        mode={workspaceLayout.projectDetails}
-        onClose={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
-        onPinnedChange={setProjectDetailsPinned}
-        open={primarySidebar.visible}
-        outline={
-          canvasOutlineDocument && canvasOutlineDocument.id === activeCanvasId ? (
-            <CanvasOutline
-              document={canvasOutlineDocument}
-              onActivationError={(error) =>
-                setNotification({
-                  description: error instanceof Error ? error.message : String(error),
-                  kind: "warning",
-                  title: locale === "zh-CN" ? "无法定位画布内容" : "Could not reveal Canvas item",
-                })
-              }
-              viewSession={{
-                execute: (command) =>
-                  canvasViewRegistry.execute({
-                    command,
-                    expectedDocumentId: canvasOutlineDocument.id,
-                    expectedScopeId: activeProject.id,
-                    viewId: "desktop-main",
-                  }),
-              }}
-            />
-          ) : (
-            <div className="grid min-h-40 place-items-center px-6 text-center text-xs text-muted-foreground">
-              {locale === "zh-CN" ? "正在载入画布大纲…" : "Loading Canvas outline…"}
-            </div>
-          )
-        }
-        pinned={projectDetailsPinned}
-        projectName={activeProject.name}
-        resources={
-          <ProjectSidebar
-            className="w-full"
-            controller={projectController}
-            filesController={projectFilesController}
-            hideWhenNoProject
-            presentation="embedded-files"
-          />
-        }
-        returnFocusRef={projectDetailsTriggerRef}
-      />
-    ) : null
+        ),
+        count: projectCanvasSnapshot.canvases.length,
+        createLabel: "New canvas",
+        label: "Canvases",
+        onCreate: () => void projectCanvasWorkbench.createCanvas(activeProject.id),
+      }}
+      filesController={projectFilesController}
+      hideWhenNoProject
+    />
+  ) : null
   const agentPanelWidth = workspaceLayout.agent === "sheet" ? viewportWidth : secondarySidebar.size
   const agentPanelClassName =
     workspaceLayout.agent === "sheet"
@@ -1768,19 +1745,11 @@ function App() {
                 ? "Convax"
                 : ""
           }
-          detailsButtonRef={projectDetailsTriggerRef}
-          detailsOpen={primarySidebar.visible}
           commandsLabel={locale === "zh-CN" ? "打开命令" : "Open commands"}
           homeLabel={locale === "zh-CN" ? "返回项目主页" : "Back to Projects"}
           onBackToProjects={openProjectHomeFromTitlebar}
           onOpenCommands={() => setCommandPaletteOpen(true)}
           onOpenSettings={openWorkspaceSettings}
-          onToggleDetails={
-            !settingsSection && primaryDesktopSurface === "workspace" && activeProject
-              ? () =>
-                  workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, !primarySidebar.visible)
-              : undefined
-          }
           platform={window.convax.platform}
           projectName={!settingsSection && primaryDesktopSurface === "workspace" ? activeProject?.name : undefined}
           settingsLabel={locale === "zh-CN" ? "打开设置" : "Open Settings"}
@@ -1825,44 +1794,51 @@ function App() {
                 />
               }
               utilityMode={workspaceUtilityDrawer.mode}
+              workspaceRef={workspaceShellRef}
             >
-              {workspaceLayout.projectDetails === "dock" ? (
+              {activeProject ? (
                 <div
-                  className={`relative h-full shrink-0 overflow-hidden border-r border-border${
-                    !resizingPrimarySidebar
+                  className={`relative h-full shrink-0 overflow-hidden${
+                    !resizingPrimarySidebar || !primarySidebar.visible
                       ? " transition-[width] duration-200 ease-out motion-reduce:transition-none"
                       : ""
                   }`}
-                  style={{ width: primarySidebar.size }}
+                  style={{ width: primarySidebarOccupiedSize }}
                 >
-                  {projectDetails}
-                  <div
-                    aria-label="Resize Project Details"
-                    aria-orientation="vertical"
-                    aria-valuemax={primarySidebarBounds.maxSize}
-                    aria-valuemin={primarySidebarBounds.minSize}
-                    aria-valuenow={primarySidebar.size}
-                    className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
-                    onKeyDown={(keyEvent) => {
-                      if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                      keyEvent.preventDefault()
-                      resizeWorkbenchPartBy(
-                        WorkbenchLayoutParts.PrimarySidebar,
-                        keyEvent.key === "ArrowLeft" ? -24 : 24,
-                      )
-                    }}
-                    onPointerDown={(pointerEvent) =>
-                      startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
-                    }
-                    role="separator"
-                    tabIndex={0}
-                  />
+                  {primarySidebar.visible ? projectSidebar : null}
+                  {shouldMountResizeHandle(primarySidebar.visible, resizingPrimarySidebar) ? (
+                    <div
+                      aria-label="Resize project sidebar"
+                      aria-orientation="vertical"
+                      aria-valuemax={primarySidebarBounds.maxSize}
+                      aria-valuemin={primarySidebarBounds.minSize}
+                      aria-valuenow={primarySidebar.size}
+                      className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
+                      onKeyDown={(keyEvent) => {
+                        if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
+                        keyEvent.preventDefault()
+                        resizeWorkbenchPartBy(
+                          WorkbenchLayoutParts.PrimarySidebar,
+                          keyEvent.key === "ArrowLeft" ? -24 : 24,
+                        )
+                      }}
+                      onPointerDown={(pointerEvent) =>
+                        startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
+                      }
+                      role="separator"
+                      tabIndex={0}
+                    />
+                  ) : null}
                 </div>
               ) : null}
               <section className="relative min-w-0 flex-1">
-                {workspaceLayout.projectDetails === "overlay" || workspaceLayout.projectDetails === "sheet"
-                  ? projectDetails
-                  : null}
+                {activeProject && !primarySidebar.visible && !resizingPrimarySidebar ? (
+                  <aside aria-label="Project sidebar" className="pointer-events-none absolute left-3 top-3 z-40">
+                    <ProjectSidebarTrigger
+                      onOpen={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, true)}
+                    />
+                  </aside>
+                ) : null}
                 {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
                   <ProjectEmptyState controller={projectController} initialized={projectSnapshot.initialized} />
                 ) : workbenchSnapshot.surface.kind === "file" ? (
@@ -1910,9 +1886,7 @@ function App() {
                       fileRendererRegistry={canvasFileRendererRegistry}
                       initialDocument={initialDocument}
                       nodeRegistry={canvasNodeRegistry}
-                      onDocumentChange={(document) => {
-                        if (document.id === activeCanvas.id) setCanvasOutlineDocument(document)
-                      }}
+                      onDocumentChange={handleCanvasDocumentChange}
                       onInspectorRequest={openCanvasInspector}
                       onGenerateRequest={openGenerateDrawer}
                       onGenerationStateChange={setCanvasGenerationRunning}

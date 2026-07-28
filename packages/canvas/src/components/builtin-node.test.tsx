@@ -57,6 +57,7 @@ const {
   BuiltinTextFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
+  CanvasTextFormattingToolbar,
   canOpenCanvasTextLineMenu,
   ExpandedTextEditorDialog,
   TextEditorDrawer,
@@ -193,6 +194,14 @@ function renderWithEditor(
 
 function toolbarCount(markup: string) {
   return markup.match(/data-node-toolbar/g)?.length ?? 0
+}
+
+function openingTagContaining(markup: string, marker: string) {
+  const markerIndex = markup.indexOf(marker)
+  if (markerIndex < 0) return ""
+  const start = markup.lastIndexOf("<", markerIndex)
+  const end = markup.indexOf(">", markerIndex)
+  return start < 0 || end < 0 ? "" : markup.slice(start, end + 1)
 }
 
 describe("built-in text file drafts", () => {
@@ -412,30 +421,39 @@ describe("built-in text file drafts", () => {
 })
 
 describe("built-in node toolbar visibility", () => {
-  test("preserves the published expanded-editor export as a compatibility alias", () => {
-    expect(ExpandedTextEditorDialog).toBe(TextEditorDrawer)
+  test("preserves the side-drawer export as a compatibility alias", () => {
+    expect(TextEditorDrawer).toBe(ExpandedTextEditorDialog)
   })
 
-  test("renders a non-modal side drawer for text-node editing", () => {
+  test("renders an almost full-canvas modal for text-node editing", () => {
     const markup = renderToStaticMarkup(
-      <TextEditorDrawer editor={null} label="Story outline" onClose={() => {}} onSave={() => {}} />,
+      <ExpandedTextEditorDialog
+        editor={null}
+        label="Story outline"
+        onClose={() => {}}
+        onSave={() => {}}
+        toolbar={<div data-rich-text-toolbar="true" />}
+      />,
     )
 
     expect(markup).toContain('role="dialog"')
-    expect(markup).not.toContain('aria-modal="true"')
+    expect(markup).toContain('aria-modal="true"')
     expect(markup).toContain("Story outline")
-    expect(markup).toContain("convax-text-editor-drawer")
-    expect(markup).toContain("w-[min(520px,calc(100%-12px))]")
+    expect(markup).toContain("Expanded text editor")
+    expect(markup).toContain("convax-text-editor-dialog")
+    expect(markup).toContain("size-full")
+    expect(markup).not.toContain("convax-text-editor-drawer")
     expect(markup).toContain('aria-label="Open block handle menu"')
-    expect(markup).not.toContain("Text formatting")
+    expect(markup).toContain('aria-label="Text formatting"')
+    expect(markup).toContain('data-rich-text-toolbar="true"')
     expect(markup).not.toContain(">Save<")
     expect(markup).not.toContain(">Discard<")
-    expect(markup).toContain('aria-label="Close text editor"')
+    expect(markup).toContain('aria-label="Close expanded editor"')
   })
 
-  test("keeps save conflicts actionable inside the drawer without restoring a fixed toolbar", () => {
+  test("keeps save conflicts actionable inside the expanded editor", () => {
     const markup = renderToStaticMarkup(
-      <TextEditorDrawer
+      <ExpandedTextEditorDialog
         editor={null}
         discardLabel="Discard and reload"
         error="This file changed outside Convax. Your draft was kept."
@@ -449,7 +467,35 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain('role="alert"')
     expect(markup).toContain("Reload latest")
     expect(markup).toContain("Discard and reload")
-    expect(markup).not.toContain("Text formatting")
+  })
+
+  test("restores the complete fixed rich-text command bar", () => {
+    const editor = {
+      isActive: (nameOrAttributes: string | Record<string, unknown>) => nameOrAttributes === "bold",
+    } as unknown as Editor
+    const markup = renderToStaticMarkup(
+      <CanvasTextFormattingToolbar editor={editor} onCommand={() => {}} />,
+    )
+
+    for (const label of [
+      "Paragraph",
+      "Heading 1",
+      "Heading 2",
+      "Bold",
+      "Italic",
+      "Strikethrough",
+      "Inline code",
+      "Bullet list",
+      "Numbered list",
+      "Quote",
+      "Align left",
+      "Align center",
+      "Align right",
+    ]) {
+      expect(markup).toContain(`aria-label="${label}"`)
+    }
+    expect(markup).toContain('data-canvas-text-formatting-toolbar="true"')
+    expect(markup).toContain('aria-label="Bold" aria-pressed="true"')
   })
 
   test("can show a compact visible label for commands without a meaningful icon", () => {
@@ -527,6 +573,7 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).toContain('aria-label="Relink selected Project resource"')
     expect(imageMarkup).toContain('aria-label="Relink local file"')
     expect(imageMarkup).not.toContain("Relink is not available yet")
+    expect(imageMarkup).toContain('class="convax-media-empty__action"')
     expect(folderMarkup).toContain('aria-label="Relink selected Project directory"')
     expect(folderMarkup).not.toContain('aria-label="Relink local file"')
     expect(textMarkup).toContain('aria-label="Save editable copy"')
@@ -587,6 +634,9 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).toContain('aria-busy="true"')
     expect(pending).toContain("正在生成…")
     expect(pending).not.toContain("data-assistant-toolbar")
+    expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain(
+      "nodrag",
+    )
 
     const failed = renderWithEditor(selection([]), false, (props) => (
       <BuiltinCanvasNode
@@ -599,6 +649,7 @@ describe("built-in node toolbar visibility", () => {
     expect(failed).toContain("Generation could not be completed")
     expect(failed).not.toContain("修改并重试")
     expect(failed).not.toContain("data-assistant-toolbar")
+    expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
   })
 
   test("uses React Flow default visibility for the editable sole selected node", () => {
@@ -610,6 +661,7 @@ describe("built-in node toolbar visibility", () => {
 
     expect(toolbarCount(markup)).toBe(1)
     expect(markup).toContain('data-visibility="default"')
+    expect(markup).toContain('data-canvas-node-drag-handle="true"')
   })
 
   test("exposes host-neutral kind and status hooks for semantic appearance", () => {
@@ -1060,6 +1112,10 @@ describe("built-in node toolbar visibility", () => {
     expect(activeMarkup).toContain("正在生成")
     expect(activeMarkup).toContain("取消")
     expect(activeMarkup).not.toContain("data-assistant-toolbar")
+    expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain(
+      "nodrag",
+    )
+    expect(activeMarkup).toContain("nodrag nowheel")
 
     const failed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one", "failed", "safe")
     const failedMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
@@ -1068,6 +1124,10 @@ describe("built-in node toolbar visibility", () => {
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
     expect(failedMarkup).toContain("修改并重试")
+    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain(
+      "nodrag",
+    )
+    expect(failedMarkup).toContain("nodrag nowheel")
 
     const indeterminate = finishCanvasNodeGenerationRun(
       running,
@@ -1091,6 +1151,13 @@ describe("built-in node toolbar visibility", () => {
     expect(indeterminateMarkup).toContain("避免重复计费")
     expect(indeterminateMarkup).not.toContain("修改并重试")
     expect(indeterminateMarkup).not.toContain("data-assistant-toolbar")
+    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-file-generation-activity="interrupted"')).not.toContain(
+      "nodrag",
+    )
+    expect(
+      openingTagContaining(indeterminateMarkup, 'data-canvas-generation-retry-blocked="true"'),
+    ).toContain('class="nodrag nowheel"')
+    expect(openingTagContaining(indeterminateMarkup, "暂不可重试")).toContain('disabled=""')
 
     const succeeded = succeedCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     let request: CanvasAssistantRequest | undefined

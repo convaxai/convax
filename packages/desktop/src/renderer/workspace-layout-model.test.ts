@@ -6,67 +6,55 @@ describe("workspace layout policy", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: false,
-        projectDetailsPinned: false,
-        projectDetailsVisible: false,
+        projectSidebarVisible: false,
         viewportWidth: 1600,
       }),
     ).toEqual({
       agent: "hidden",
       canvasHasFullWidth: true,
-      projectDetails: "hidden",
+      projectSidebar: "hidden",
       tier: "wide",
     })
   })
 
-  test("docks only explicitly pinned Project Details on wide viewports", () => {
+  test("keeps the restored Project sidebar docked on the left", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 1440,
       }),
     ).toMatchObject({
       agent: "dock",
       canvasHasFullWidth: false,
-      projectDetails: "dock",
+      projectSidebar: "dock",
       tier: "wide",
     })
-    expect(
-      resolveWorkspaceLayout({
-        agentVisible: false,
-        projectDetailsPinned: false,
-        projectDetailsVisible: true,
-        viewportWidth: 1440,
-      }).projectDetails,
-    ).toBe("overlay")
   })
 
-  test("uses temporary overlays at medium width and sheets at the minimum window width", () => {
+  test("keeps Project navigation on the left while adapting the Agent panel", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 1100,
       }),
     ).toMatchObject({
       agent: "overlay",
-      canvasHasFullWidth: true,
-      projectDetails: "overlay",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "medium",
     })
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 720,
       }),
     ).toMatchObject({
       agent: "sheet",
-      canvasHasFullWidth: true,
-      projectDetails: "sheet",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "small",
     })
   })
@@ -76,8 +64,7 @@ describe("workspace layout policy", () => {
       expect(
         resolveWorkspaceLayout({
           agentVisible: false,
-          projectDetailsPinned: false,
-          projectDetailsVisible: true,
+          projectSidebarVisible: true,
           viewportWidth,
         }).tier,
       ).toBe("small")

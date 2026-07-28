@@ -75,7 +75,9 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 20px;
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
 }
 
 .convax-canvas .convax-node__surface {
@@ -115,6 +117,11 @@
   box-shadow:
     0 0 0 1px var(--canvas-accent),
     0 14px 32px -14px color-mix(in srgb, var(--canvas-accent) 34%, transparent);
+}
+
+.convax-canvas .react-flow__node.dragging .convax-node__surface {
+  box-shadow: none;
+  transition: none;
 }
 
 .convax-canvas .react-flow__node.is-connection-target .convax-node__surface {
@@ -274,14 +281,26 @@
   cursor: text;
 }
 
-.convax-canvas .convax-text-editor-drawer-layer {
-  pointer-events: none;
+.convax-canvas .convax-text-editor-dialog-layer {
+  pointer-events: auto;
 }
 
-.convax-canvas .convax-text-editor-drawer {
+.convax-canvas .convax-text-editor-dialog {
   min-width: 0;
   min-height: 0;
   pointer-events: auto;
+}
+
+.convax-canvas .convax-text-editor-dialog__toolbar-inner {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.convax-canvas .convax-text-editor-dialog__toolbar .convax-node-toolbar__surface {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .convax-text-block-handle-anchor {
@@ -310,17 +329,19 @@
   animation: convax-text-inline-menu-enter 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.convax-canvas .convax-text-editor--drawer {
+.convax-canvas .convax-text-editor--expanded {
   cursor: text;
-  background: var(--canvas-node-background);
+  background: var(--canvas-background);
 }
 
-.convax-canvas .convax-text-editor--drawer .convax-text-editor__prosemirror {
-  width: 100%;
+.convax-canvas .convax-text-editor--expanded .convax-text-editor__prosemirror {
+  width: min(920px, 100%);
   min-height: 100%;
-  padding: 32px 48px 96px;
+  margin: 0 auto;
+  padding: 48px clamp(28px, 6vw, 80px) 120px;
   background: var(--canvas-node-background);
-  font-size: 15px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas-border) 80%, transparent);
+  font-size: 16px;
 }
 
 .convax-canvas .convax-text-editor__prosemirror {
@@ -727,7 +748,7 @@
 }
 
 .convax-pending-connection {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 1000;
   pointer-events: none;
@@ -762,7 +783,7 @@
 }
 
 .convax-pending-connection__menu {
-  position: fixed;
+  position: absolute;
   z-index: 1;
   pointer-events: auto;
 }

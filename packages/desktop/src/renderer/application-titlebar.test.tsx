@@ -9,12 +9,10 @@ describe("ApplicationTitlebar", () => {
         canvasName="Synthesis map"
         contextLabel="Workspace"
         commandsLabel="Open commands"
-        detailsOpen
         homeLabel="Back to Projects"
         onBackToProjects={() => undefined}
         onOpenCommands={() => undefined}
         onOpenSettings={() => undefined}
-        onToggleDetails={() => undefined}
         platform="darwin"
         projectName="Atlas research"
         settingsLabel="Open Settings"
@@ -28,8 +26,9 @@ describe("ApplicationTitlebar", () => {
     expect(markup).toContain('data-convax-brand="true"')
     expect(markup).toContain('aria-label="Open Settings"')
     expect(markup).toContain('aria-label="Open commands"')
-    expect(markup).toContain('aria-label="Close details for Atlas research, Synthesis map"')
-    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('aria-label="Atlas research, Synthesis map"')
+    expect(markup).not.toContain("aria-expanded=")
+    expect(markup).not.toContain("Open details")
     expect(markup).not.toContain("border-b")
   })
 

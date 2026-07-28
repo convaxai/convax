@@ -28,6 +28,62 @@ describe("WorkbenchController", () => {
     expect(controller.getSnapshot().surface.kind).toBe("file")
   })
 
+  test("does not publish an unchanged Canvas node set regardless of order or duplicates", async () => {
+    const controller = new WorkbenchController()
+    const listener = mock(() => undefined)
+    const input = { canvasId: "canvas-1", kind: "canvas", projectId: "project-1" } as const
+    controller.setProject("project-1")
+    await controller.open(input)
+    controller.subscribe(listener)
+    controller.setSelection(input, { kind: "canvas-nodes", nodeIds: ["node-1", "node-2"] })
+    const selectedSnapshot = controller.getSnapshot()
+    listener.mockClear()
+
+    controller.setSelection(
+      { ...input },
+      { kind: "canvas-nodes", nodeIds: ["node-2", "node-1", "node-2"] },
+    )
+
+    expect(controller.getSnapshot()).toBe(selectedSnapshot)
+    expect(listener).not.toHaveBeenCalled()
+
+    controller.setSelection(input, { kind: "canvas-nodes", nodeIds: ["node-2", "node-3"] })
+    expect(controller.getSnapshot()).not.toBe(selectedSnapshot)
+    expect(controller.getSnapshot().selection?.selection).toEqual({
+      kind: "canvas-nodes",
+      nodeIds: ["node-2", "node-3"],
+    })
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not publish unchanged file ranges or an already empty selection", async () => {
+    const controller = new WorkbenchController()
+    const listener = mock(() => undefined)
+    const input = { kind: "file", path: "notes/brief.md", projectId: "project-1" } as const
+    controller.setProject("project-1")
+    await controller.open(input)
+    controller.subscribe(listener)
+    controller.setSelection(input, { endLine: 8, kind: "file-range", startLine: 3 })
+    const selectedSnapshot = controller.getSnapshot()
+    listener.mockClear()
+
+    controller.setSelection({ ...input }, { endLine: 8, kind: "file-range", startLine: 3 })
+
+    expect(controller.getSnapshot()).toBe(selectedSnapshot)
+    expect(listener).not.toHaveBeenCalled()
+
+    controller.setSelection(input, { endLine: 9, kind: "file-range", startLine: 3 })
+    expect(listener).toHaveBeenCalledTimes(1)
+    controller.setSelection(input, null)
+    expect(listener).toHaveBeenCalledTimes(2)
+    const clearedSnapshot = controller.getSnapshot()
+
+    controller.setSelection(input, null)
+
+    expect(controller.getSnapshot()).toBe(clearedSnapshot)
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
   test("reveals a selection without forbidding focus and fit-view effects", async () => {
     const controller = new WorkbenchController()
     const requests: unknown[] = []
@@ -154,6 +210,13 @@ describe("WorkbenchController", () => {
     await expect(controller.open({ canvasId: "canvas-1", kind: "canvas", projectId: "project-2" })).rejects.toThrow()
     const input = { canvasId: "canvas-1", kind: "canvas", projectId: "project-1" } as const
     await controller.open(input)
+    controller.setSelection(input, { kind: "canvas-nodes", nodeIds: ["node-1"] })
+    expect(() =>
+      controller.setSelection(
+        { canvasId: "canvas-2", kind: "canvas", projectId: "project-1" },
+        { kind: "canvas-nodes", nodeIds: ["node-1"] },
+      )
+    ).toThrow("Workbench selection target is not the active input.")
     expect(() => controller.setSelection(input, { kind: "file-range", startLine: 1 })).toThrow()
   })
 })

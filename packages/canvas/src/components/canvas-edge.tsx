@@ -9,6 +9,7 @@ import {
 } from "@xyflow/react"
 import type { CSSProperties } from "react"
 import type { CanvasEdge, CanvasNode, CanvasSelection } from "../types"
+import { resolveCanvasCardHandlePoint, type CanvasNodeBounds } from "./card-connection-geometry"
 
 const METEOR_DURATION_SECONDS = 1
 
@@ -130,13 +131,6 @@ function getAnimationPhase(id: string) {
   )
 }
 
-interface CanvasNodeBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
 interface CanvasEdgeGeometry {
   sourceX: number
   sourceY: number
@@ -168,12 +162,14 @@ export function resolveCanvasEdgeGeometry(input: {
   }
   const source = input.sourceBounds
   const target = input.targetBounds
+  const sourcePoint = resolveCanvasCardHandlePoint(source, "right")
+  const targetPoint = resolveCanvasCardHandlePoint(target, "left")
   return {
-    sourceX: source.x + source.width,
-    sourceY: source.y + source.height / 2,
+    sourceX: sourcePoint.x,
+    sourceY: sourcePoint.y,
     sourcePosition: Position.Right,
-    targetX: target.x,
-    targetY: target.y + target.height / 2,
+    targetX: targetPoint.x,
+    targetY: targetPoint.y,
     targetPosition: Position.Left,
   }
 }

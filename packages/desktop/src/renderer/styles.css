@@ -295,6 +295,22 @@ body {
   overflow: hidden;
 }
 
+/*
+ * A pointer stream cannot cross an iframe browsing-context boundary. Keep all
+ * Plugin frames out of hit testing while a gesture that began in the host DOM
+ * is active, including Workbench resize and Canvas drag/selection gestures.
+ */
+[data-host-pointer-gesture] iframe[data-web-plugin-iframe],
+[data-workbench-resizing] iframe[data-web-plugin-iframe] {
+  pointer-events: none !important;
+}
+
+[data-workbench-resizing],
+[data-workbench-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 button,
 input,
 textarea {

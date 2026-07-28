@@ -92,6 +92,16 @@ export class WorkbenchController {
     if (selection && !isSelectionCompatible(input, selection)) {
       throw new Error("Workbench selection is not compatible with its input.")
     }
+    const current = this.snapshot.selection
+    if (
+      (!selection && !current) ||
+      (selection &&
+        current &&
+        sameWorkbenchInput(current.input, input) &&
+        sameWorkbenchSelection(current.selection, selection))
+    ) {
+      return
+    }
     this.update({ selection: selection ? { input, selection } : null })
   }
 
@@ -171,4 +181,18 @@ export class WorkbenchController {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function sameWorkbenchSelection(left: WorkbenchSelection, right: WorkbenchSelection) {
+  if (left === right) return true
+  if (left.kind !== right.kind) return false
+  if (left.kind === "canvas-nodes" && right.kind === "canvas-nodes") {
+    const leftNodeIds = new Set(left.nodeIds)
+    const rightNodeIds = new Set(right.nodeIds)
+    return leftNodeIds.size === rightNodeIds.size && [...leftNodeIds].every((nodeId) => rightNodeIds.has(nodeId))
+  }
+  return left.kind === "file-range"
+    && right.kind === "file-range"
+    && left.startLine === right.startLine
+    && left.endLine === right.endLine
 }
