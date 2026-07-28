@@ -1,5 +1,4 @@
-import { ChevronRight, LayoutPanelLeft, Search, Settings } from "lucide-react"
-import type { RefObject } from "react"
+import { ChevronRight, Search, Settings } from "lucide-react"
 import { ConvaxBrand } from "./convax-brand"
 
 export type ApplicationTitlebarSurface = "home" | "settings" | "workspace"
@@ -7,13 +6,10 @@ export type ApplicationTitlebarSurface = "home" | "settings" | "workspace"
 export interface ApplicationTitlebarProps {
   canvasName?: string | null
   contextLabel: string
-  detailsButtonRef?: RefObject<HTMLButtonElement | null>
-  detailsOpen?: boolean
   homeLabel: string
   onBackToProjects: () => void
   onOpenCommands: () => void
   onOpenSettings: () => void
-  onToggleDetails?: () => void
   platform: NodeJS.Platform
   projectName?: string
   commandsLabel: string
@@ -24,13 +20,10 @@ export interface ApplicationTitlebarProps {
 export function ApplicationTitlebar({
   canvasName,
   contextLabel,
-  detailsButtonRef,
-  detailsOpen = false,
   homeLabel,
   onBackToProjects,
   onOpenCommands,
   onOpenSettings,
-  onToggleDetails,
   platform,
   projectName,
   commandsLabel,
@@ -38,7 +31,7 @@ export function ApplicationTitlebar({
   surface,
 }: ApplicationTitlebarProps) {
   const visibleCanvasName = canvasName || "No canvas"
-  const workspaceContext = surface === "workspace" && projectName && onToggleDetails
+  const workspaceContext = surface === "workspace" && projectName
 
   return (
     <header
@@ -59,16 +52,11 @@ export function ApplicationTitlebar({
       </button>
 
       {workspaceContext ? (
-        <button
-          aria-expanded={detailsOpen}
-          aria-label={`${detailsOpen ? "Close" : "Open"} details for ${projectName}, ${visibleCanvasName}`}
-          className="absolute left-1/2 flex h-8 max-w-[min(32rem,calc(100%-11rem))] -translate-x-1/2 items-center gap-1.5 rounded-md px-2.5 text-xs outline-none transition-[background-color,transform] duration-100 [@media(hover:hover)]:hover:bg-accent active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
-          onClick={onToggleDetails}
-          ref={detailsButtonRef}
+        <div
+          aria-label={`${projectName}, ${visibleCanvasName}`}
+          className="pointer-events-none absolute left-1/2 flex h-8 max-w-[min(32rem,calc(100%-11rem))] -translate-x-1/2 items-center gap-1.5 px-2.5 text-xs"
           title={`${projectName} / ${visibleCanvasName}`}
-          type="button"
         >
-          <LayoutPanelLeft aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="min-w-0 max-w-48 truncate font-medium" title={projectName}>
             {projectName}
           </span>
@@ -76,7 +64,7 @@ export function ApplicationTitlebar({
           <span className="min-w-0 max-w-56 truncate text-muted-foreground" title={canvasName ?? undefined}>
             {visibleCanvasName}
           </span>
-        </button>
+        </div>
       ) : (
         <div
           className="pointer-events-none absolute left-1/2 max-w-[min(24rem,calc(100%-11rem))] -translate-x-1/2 truncate px-3 text-xs font-medium text-muted-foreground"

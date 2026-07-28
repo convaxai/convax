@@ -3,15 +3,14 @@ export type WorkspacePanelPresentation = "hidden" | "dock" | "overlay" | "sheet"
 
 export interface WorkspaceLayoutInput {
   agentVisible: boolean
-  projectDetailsPinned: boolean
-  projectDetailsVisible: boolean
+  projectSidebarVisible: boolean
   viewportWidth: number
 }
 
 export interface WorkspaceLayoutModel {
   agent: WorkspacePanelPresentation
   canvasHasFullWidth: boolean
-  projectDetails: WorkspacePanelPresentation
+  projectSidebar: WorkspacePanelPresentation
   tier: WorkspaceLayoutTier
 }
 
@@ -23,13 +22,7 @@ export function resolveWorkspaceLayout(input: WorkspaceLayoutInput): WorkspaceLa
   const viewportWidth = Number.isFinite(input.viewportWidth) && input.viewportWidth >= 0 ? input.viewportWidth : 0
   const tier: WorkspaceLayoutTier = viewportWidth >= 1360 ? "wide" : viewportWidth >= 900 ? "medium" : "small"
 
-  const projectDetails: WorkspacePanelPresentation = !input.projectDetailsVisible
-    ? "hidden"
-    : tier === "small"
-      ? "sheet"
-      : tier === "medium" || !input.projectDetailsPinned
-        ? "overlay"
-        : "dock"
+  const projectSidebar: WorkspacePanelPresentation = input.projectSidebarVisible ? "dock" : "hidden"
   const agent: WorkspacePanelPresentation = !input.agentVisible
     ? "hidden"
     : tier === "small"
@@ -40,8 +33,8 @@ export function resolveWorkspaceLayout(input: WorkspaceLayoutInput): WorkspaceLa
 
   return {
     agent,
-    canvasHasFullWidth: projectDetails !== "dock" && agent !== "dock",
-    projectDetails,
+    canvasHasFullWidth: projectSidebar !== "dock" && agent !== "dock",
+    projectSidebar,
     tier,
   }
 }

@@ -85,6 +85,35 @@ describe("ProjectSidebar", () => {
     expect(pathIndex).toBeGreaterThan(-1)
     expect(pathIndex).toBeLessThan(markup.indexOf('aria-label="Example files"'))
     expect(markup).toContain('aria-label="Project path: /project"')
+    expect(markup).not.toContain('aria-label="Open folder"')
+  })
+
+  test("keeps Files and an injected capability in the original vertical split", () => {
+    const activeController = {
+      getSnapshot: () => activeSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ProjectController
+    const activeFilesController = {
+      getSnapshot: () => activeFilesSnapshot,
+      subscribe: () => () => undefined,
+    } as unknown as ProjectFilesController
+
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar
+        controller={activeController}
+        extension={{
+          content: <div>Canvas catalog projection</div>,
+          count: 2,
+          label: "Canvases",
+        }}
+        filesController={activeFilesController}
+      />,
+    )
+
+    expect(markup.indexOf(">Files<")).toBeLessThan(markup.indexOf(">Canvases<"))
+    expect(markup).toContain('aria-label="Resize Files and Canvases sections"')
+    expect(markup).toContain("Canvas catalog projection")
+    expect(markup).not.toContain('role="tablist"')
   })
 
   test("embeds the original file capability without Project switcher or host footer chrome", () => {

@@ -304,11 +304,6 @@ export function ProjectSidebar({
           </span>
           <ChevronDown className="size-4 text-muted-foreground" />
         </button>
-        <Tooltip content="Open folder">
-          <Button aria-label="Open folder" onClick={() => void controller.openProject()} size="icon-sm" variant="ghost">
-            <FolderPlus />
-          </Button>
-        </Tooltip>
         {switcherOpen ? (
           <ProjectSwitcher
             activeProjectId={projectSnapshot.activeProjectId}
