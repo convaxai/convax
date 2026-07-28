@@ -124,7 +124,7 @@ import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } fro
 import { ProjectHome } from "./project-home"
 import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
-import { ServiceCatalogController } from "./service-catalog-controller"
+import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
@@ -209,22 +209,6 @@ function App() {
     [installedPlugins],
   )
   const generationToolCatalogVersionRef = useRef("")
-  const generationToolCatalogVersion = JSON.stringify([
-    modelCatalogEpoch,
-    installedPlugins.flatMap((plugin) =>
-      plugin.contributes.generation
-        ? [
-            {
-              id: plugin.id,
-              generation: plugin.contributes.generation,
-              runtime: plugin.runtime,
-              version: plugin.version,
-            },
-          ]
-        : [],
-    ),
-  ])
-  generationToolCatalogVersionRef.current = generationToolCatalogVersion
   const pluginHostContextRef = useRef<{
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
@@ -352,6 +336,27 @@ function App() {
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
   )
+  const generationPlugins = installedPlugins.flatMap((plugin) =>
+    plugin.contributes.generation
+      ? [
+          {
+            id: plugin.id,
+            generation: plugin.contributes.generation,
+            runtime: plugin.runtime,
+            version: plugin.version,
+          },
+        ]
+      : [],
+  )
+  const generationToolCatalogVersion = JSON.stringify([
+    modelCatalogEpoch,
+    generationPlugins,
+    serviceGenerationAvailabilityVersion(
+      serviceCatalogSnapshot,
+      generationPlugins.map((plugin) => plugin.id),
+    ),
+  ])
+  generationToolCatalogVersionRef.current = generationToolCatalogVersion
   useEffect(
     () => () => {
       workbenchResizeSessionRef.current?.cancel()

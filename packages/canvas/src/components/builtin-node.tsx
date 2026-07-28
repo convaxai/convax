@@ -322,10 +322,7 @@ function NodeChrome(props: {
           {toolbar}
         </NodeToolbar>
       ) : null}
-      <div
-        className="convax-node__title flex items-center gap-1.5"
-        data-canvas-node-drag-handle="true"
-      >
+      <div className="convax-node__title flex items-center gap-1.5" data-canvas-node-drag-handle="true">
         <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
         <span className="truncate">{props.label}</span>
         {props.node.data.status === "pending" ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
@@ -2111,7 +2108,8 @@ function FileGenerationActivityOverlay(props: {
         ) : (
           <>
             <span className="max-w-64 text-[11px] leading-4 text-muted-foreground">
-              外部任务结果未知。为避免重复计费，暂不能发起新任务。
+              外部任务结果未知，此卡片已锁定以避免重复计费。切换 Agent
+              默认模型不会改变该任务；如需重试，请新建同类型卡片（新任务可能另行计费）。
             </span>
             <span
               className="nodrag nowheel"
@@ -2119,7 +2117,7 @@ function FileGenerationActivityOverlay(props: {
               onPointerDown={(event) => event.stopPropagation()}
             >
               <Button disabled size="sm" type="button" variant="outline">
-                暂不可重试
+                本卡片不可重试
               </Button>
             </span>
           </>

@@ -1,25 +1,29 @@
-import {
-  createCanvasDocument,
-  createMediaNode,
-  createTextNode,
-  type CanvasAssistantRequest,
-  type CanvasGenerateRequest,
-  type CanvasGenerateService,
-} from "@convax/canvas"
+import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
+import type { CanvasAssistantRequest, CanvasGenerateRequest, CanvasGenerateService } from "@convax/canvas"
 import { expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { CanvasCardGenerationPanel } from "./canvas-card-conversation-panel"
 
-function installTestWindow() {
+async function installTestWindow() {
   const testWindow = new Window({ url: "https://convax.test/" })
   const globals = {
+    cancelAnimationFrame: testWindow.cancelAnimationFrame.bind(testWindow),
+    CustomEvent: testWindow.CustomEvent,
     Element: testWindow.Element,
     Event: testWindow.Event,
+    FocusEvent: testWindow.FocusEvent,
+    getComputedStyle: testWindow.getComputedStyle.bind(testWindow),
     HTMLElement: testWindow.HTMLElement,
+    HTMLIFrameElement: testWindow.HTMLIFrameElement,
+    KeyboardEvent: testWindow.KeyboardEvent,
+    MouseEvent: testWindow.MouseEvent,
+    MutationObserver: testWindow.MutationObserver,
     Node: testWindow.Node,
+    PointerEvent: testWindow.PointerEvent,
+    requestAnimationFrame: testWindow.requestAnimationFrame.bind(testWindow),
     document: testWindow.document,
+    navigator: testWindow.navigator,
     window: testWindow,
   }
   const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
@@ -36,13 +40,15 @@ function installTestWindow() {
     value: true,
     writable: true,
   })
-  return async () => {
+  const { CanvasCardGenerationPanel } = await import("./canvas-card-conversation-panel")
+  const restoreWindow = async () => {
     await testWindow.happyDOM.close()
     for (const [name, descriptor] of originalDescriptors) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor)
       else Reflect.deleteProperty(globalThis, name)
     }
   }
+  return { CanvasCardGenerationPanel, restoreWindow }
 }
 
 async function settle() {
@@ -52,7 +58,7 @@ async function settle() {
 }
 
 test("removes a default generation @ input from the submitted references", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   let root: Root | undefined
   let submitted: CanvasGenerateRequest | undefined
   const owner = createMediaNode({
@@ -178,7 +184,7 @@ test("removes a default generation @ input from the submitted references", async
 })
 
 test("shows the first real compatible model without writing a node override", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   const onOwnerToolIdChange = mock(() => undefined)
   const described: string[] = []
   let root: Root | undefined
@@ -251,8 +257,185 @@ test("shows the first real compatible model without writing a node override", as
   }
 })
 
+test("submits the latest card model across delayed preference acknowledgements", async () => {
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
+  let root: Root | undefined
+  let submitted: CanvasGenerateRequest | undefined
+  const onOwnerToolIdChange = mock(() => undefined)
+  const owner = createMediaNode({
+    id: "owner",
+    position: { x: 0, y: 0 },
+    resource: {
+      id: "owner-resource",
+      kind: "image",
+      metadata: {},
+      name: "Output",
+      state: { status: "ready", url: "asset://output" },
+    },
+  })
+  const promptContext = createTextNode({
+    id: "prompt-context",
+    label: "Prompt context",
+    metadata: {},
+    position: { x: -320, y: 0 },
+    resourceState: { status: "ready", text: "Keep the same scene direction" },
+  })
+  const request: CanvasAssistantRequest = {
+    document: createCanvasDocument({
+      edges: [{ id: "prompt-edge", source: promptContext.id, target: owner.id }],
+      id: "canvas",
+      nodes: [owner, promptContext],
+    }),
+    generation: {
+      initialPrompt: "Create a new scene",
+      onOwnerToolIdChange,
+      output: "image",
+      ownerToolId: "tools/first-image",
+    },
+    mentionedNodeIds: [promptContext.id],
+    mode: "file",
+    ownerNodeId: owner.id,
+  }
+  const service: CanvasGenerateService = {
+    describeTool: mock(async (toolId) => ({ fields: [], toolId })),
+    generate: mock(async (generationRequest) => {
+      submitted = generationRequest
+      return { createdNodeIds: [], revision: 1, toolId: generationRequest.toolId!, warnings: [] }
+    }),
+    listTools: mock(async () => [
+      {
+        acceptedInputs: [] as const,
+        description: "First image model",
+        id: "tools/first-image",
+        output: "image" as const,
+        title: "First image",
+      },
+      {
+        acceptedInputs: [] as const,
+        description: "Second image model",
+        id: "tools/second-image",
+        output: "image" as const,
+        title: "Second image",
+      },
+      {
+        acceptedInputs: [] as const,
+        description: "Third image model",
+        id: "tools/third-image",
+        output: "image" as const,
+        title: "Third image",
+      },
+      {
+        acceptedInputs: [] as const,
+        description: "External image model",
+        id: "tools/external-image",
+        output: "image" as const,
+        title: "External image",
+      },
+    ]),
+  }
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(<CanvasCardGenerationPanel generation={request.generation!} request={request} service={service} />)
+      await settle()
+    })
+
+    const model = document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')
+    expect(model?.textContent).toContain("First image")
+    await act(async () => {
+      model?.click()
+      await settle()
+    })
+    expect(model?.getAttribute("aria-expanded")).toBe("true")
+    const second = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+      option.textContent?.includes("Second image"),
+    )
+    expect(second).toBeDefined()
+    await act(async () => {
+      second?.click()
+      await settle()
+    })
+
+    expect(onOwnerToolIdChange).toHaveBeenCalledWith("tools/second-image")
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.textContent).toContain(
+      "Second image",
+    )
+    const generate = document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')
+    expect(generate?.disabled).toBeFalse()
+    await act(async () => {
+      generate?.click()
+      await settle()
+    })
+    expect(submitted?.toolId).toBe("tools/second-image")
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.click()
+      await settle()
+    })
+    const third = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+      option.textContent?.includes("Third image"),
+    )
+    await act(async () => {
+      third?.click()
+      await settle()
+    })
+    expect(onOwnerToolIdChange).toHaveBeenLastCalledWith("tools/third-image")
+
+    // The earlier second-model persistence may resolve after the user has already
+    // chosen the third model. It is an acknowledgement, not an external override.
+    await act(async () => {
+      root?.render(
+        <CanvasCardGenerationPanel
+          generation={{ ...request.generation!, ownerToolId: "tools/second-image" }}
+          request={{
+            ...request,
+            generation: { ...request.generation!, ownerToolId: "tools/second-image" },
+          }}
+          service={service}
+        />,
+      )
+      await settle()
+    })
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.textContent).toContain(
+      "Third image",
+    )
+    await act(async () => {
+      const latestGenerate = document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')
+      expect(latestGenerate?.disabled).toBeFalse()
+      latestGenerate?.click()
+      await settle()
+    })
+    expect(submitted?.toolId).toBe("tools/third-image")
+
+    // A value that was never part of this local selection sequence is an external
+    // edit/undo and wins immediately over the optimistic choice.
+    await act(async () => {
+      root?.render(
+        <CanvasCardGenerationPanel
+          generation={{ ...request.generation!, ownerToolId: "tools/external-image" }}
+          request={{
+            ...request,
+            generation: { ...request.generation!, ownerToolId: "tools/external-image" },
+          }}
+          service={service}
+        />,
+      )
+      await settle()
+    })
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.textContent).toContain(
+      "External image",
+    )
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("uses a text @ input as prompt context without requiring model reference support", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   const onOpenServices = mock(() => undefined)
   let root: Root | undefined
   let submitted: CanvasGenerateRequest | undefined
@@ -358,7 +541,7 @@ test("uses a text @ input as prompt context without requiring model reference su
 })
 
 test("keeps models visible but blocks a genuinely incompatible media @ input", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   let root: Root | undefined
   const owner = createMediaNode({
     id: "owner",
@@ -435,7 +618,7 @@ test("keeps models visible but blocks a genuinely incompatible media @ input", a
 })
 
 test("blocks an oversized mix of prompt context and media inputs before IPC", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   let root: Root | undefined
   const owner = createMediaNode({
     id: "owner",
@@ -510,7 +693,7 @@ test("blocks an oversized mix of prompt context and media inputs before IPC", as
 })
 
 test("opens Services when the card output has no available model", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   const onOpenServices = mock(() => undefined)
   let root: Root | undefined
   const owner = createMediaNode({
@@ -568,7 +751,7 @@ test("opens Services when the card output has no available model", async () => {
 })
 
 test("reloads an open card when a service becomes available or disconnects", async () => {
-  const restoreWindow = installTestWindow()
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   let root: Root | undefined
   let catalogReady = false
   const owner = createMediaNode({

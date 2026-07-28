@@ -220,6 +220,7 @@ function setup(
   options: {
     assets?: GenerationCanvasManagedAssetPort
     beforeExternalStarted?: () => Promise<void> | void
+    dispatchGuard?: () => Promise<void> | void
     document?: CanvasDocument
     loadDocument?: () => Promise<{ document: CanvasDocument | null }> | { document: CanvasDocument | null }
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
@@ -241,8 +242,18 @@ function setup(
   const selectedTool = options.selectedTool ?? tool()
   const calls: Record<string, unknown>[] = []
   const operationMetadata: Array<GenerationToolOperationMetadata | undefined> = []
-  const call: PreparedGenerationToolExecution["call"] = async (input, signal, lifecycleObserver, operation) => {
+  const call: PreparedGenerationToolExecution["call"] = async (
+    input,
+    signal,
+    lifecycleObserver,
+    operation,
+    dispatchHooks,
+  ) => {
     await options.beforeExternalStarted?.()
+    await dispatchHooks?.validate?.()
+    await options.dispatchGuard?.()
+    await dispatchHooks?.guard?.()
+    await dispatchHooks?.validate?.()
     await lifecycleObserver?.({ type: "external-started" })
     calls.push(input)
     operationMetadata.push(operation)
@@ -431,6 +442,7 @@ async function setupPendingGeneration(
     inputSnapshots?: GenerationInputSnapshotStore
     operations?: GenerationOperationStore
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
+    dispatchGuard?: () => Promise<void> | void
     recovery?: PreparedGenerationRecovery
     roundTripPending?: boolean
     taskId?: string
@@ -456,6 +468,7 @@ async function setupPendingGeneration(
   const pendingNodeId = "pending-one"
 
   const harness = setup({
+    dispatchGuard: options.dispatchGuard,
     document: currentDocument,
     loadDocument: () => ({ document: currentDocument }),
     prepareTool: options.prepareTool,
@@ -1641,6 +1654,288 @@ describe("GenerationCanvasService", () => {
     expect(acknowledgements).toHaveLength(1)
   })
 
+  test("does not supervise a live prepared operation during Canvas reconciliation", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    let enterDispatchGuard!: () => void
+    let releaseDispatchGuard!: () => void
+    const dispatchGuardEntered = new Promise<void>((resolve) => {
+      enterDispatchGuard = resolve
+    })
+    const dispatchGuardGate = new Promise<void>((resolve) => {
+      releaseDispatchGuard = resolve
+    })
+    const pngResult: McpToolCallResult = {
+      content: [
+        {
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
+    }
+    const digestDirectory = path.join(privateRoot, "digest-output")
+    await fs.mkdir(digestDirectory, { mode: 0o700 })
+    const resultDigest = await generationRecoveryResultDigest(pngResult, digestDirectory)
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {},
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        throw new Error("A live prepared operation must not be cancelled by reconciliation")
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        return {
+          resultDigest,
+          schema: "convax.generation-lro-snapshot/1",
+          status: "succeeded",
+          taskId: "task_live_prepared_123",
+        }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        return { result: pngResult, resultDigest }
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("A completed live operation must not be awaited")
+      },
+    }
+    const harness = await setupPendingGeneration(pngResult, {
+      async dispatchGuard() {
+        enterDispatchGuard()
+        await dispatchGuardGate
+      },
+      inputSnapshots,
+      operations,
+      recovery,
+      taskId: "task_live_prepared_123",
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      actor,
+    )
+
+    await dispatchGuardEntered
+    try {
+      expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
+
+      await harness.service.reconcileCanvas({ canvasId: "canvas-one", scopeId: "project-one" }, actor)
+
+      expect(harness.runRequests.interruptInactive).toHaveLength(1)
+      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
+        nodeId: harness.pendingNodeId,
+        operationId: "operation-one",
+      })
+      expect(harness.runRequests.finish).toEqual([])
+      expect(harness.calls).toEqual([])
+      expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
+    } finally {
+      releaseDispatchGuard()
+    }
+    await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
+    expect(harness.calls).toHaveLength(1)
+    expect(await operations.list()).toEqual([])
+  })
+
+  test("does not supervise a live operation that acquires its target while recovery ledgers are loading", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    let enterLedgerList!: () => void
+    let releaseLedgerList!: () => void
+    const ledgerListEntered = new Promise<void>((resolve) => {
+      enterLedgerList = resolve
+    })
+    const ledgerListGate = new Promise<void>((resolve) => {
+      releaseLedgerList = resolve
+    })
+    const originalList = operations.list.bind(operations)
+    let listCalls = 0
+    const listSpy = spyOn(operations, "list").mockImplementation(async () => {
+      listCalls += 1
+      if (listCalls === 2) {
+        enterLedgerList()
+        await ledgerListGate
+      }
+      return originalList()
+    })
+    let enterDispatchGuard!: () => void
+    let releaseDispatchGuard!: () => void
+    const dispatchGuardEntered = new Promise<void>((resolve) => {
+      enterDispatchGuard = resolve
+    })
+    const dispatchGuardGate = new Promise<void>((resolve) => {
+      releaseDispatchGuard = resolve
+    })
+    const pngResult: McpToolCallResult = {
+      content: [
+        {
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString("base64"),
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
+    }
+    const digestDirectory = path.join(privateRoot, "digest-output")
+    await fs.mkdir(digestDirectory, { mode: 0o700 })
+    const resultDigest = await generationRecoveryResultDigest(pngResult, digestDirectory)
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {},
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        throw new Error("A live prepared operation must not be cancelled by reconciliation")
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        return {
+          resultDigest,
+          schema: "convax.generation-lro-snapshot/1",
+          status: "succeeded",
+          taskId: "task_live_interleaved_123",
+        }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        return { result: pngResult, resultDigest }
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("A live prepared operation must not be awaited by reconciliation")
+      },
+    }
+    const harness = await setupPendingGeneration(pngResult, {
+      async dispatchGuard() {
+        enterDispatchGuard()
+        await dispatchGuardGate
+      },
+      inputSnapshots,
+      operations,
+      recovery,
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const reconciliation = harness.service.reconcileCanvas({ canvasId: "canvas-one", scopeId: "project-one" }, actor)
+
+    await ledgerListEntered
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      actor,
+    )
+    await dispatchGuardEntered
+    releaseLedgerList()
+
+    try {
+      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
+      expect(harness.runRequests.finish).toEqual([])
+      expect(harness.calls).toEqual([])
+    } finally {
+      releaseDispatchGuard()
+      listSpy.mockRestore()
+    }
+    await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
+    expect(await operations.list()).toEqual([])
+  })
+
+  test("keeps an active Canvas run live when its execution acquires a target during recovery loading", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const owner = createTextNode({ id: "active-owner", position: { x: 0, y: 0 }, text: "Existing output" })
+    const document = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
+      owner.id,
+      {
+        operationId: "operation-one",
+        prompt: "Continue writing",
+        toolId: "creative-tools/write",
+      },
+    )
+    let enterLedgerList!: () => void
+    let releaseLedgerList!: () => void
+    const ledgerListEntered = new Promise<void>((resolve) => {
+      enterLedgerList = resolve
+    })
+    const ledgerListGate = new Promise<void>((resolve) => {
+      releaseLedgerList = resolve
+    })
+    const originalList = operations.list.bind(operations)
+    let listCalls = 0
+    const listSpy = spyOn(operations, "list").mockImplementation(async () => {
+      listCalls += 1
+      if (listCalls === 2) {
+        enterLedgerList()
+        await ledgerListGate
+      }
+      return originalList()
+    })
+    let enterRunStart!: () => void
+    let releaseRunStart!: () => void
+    const runStartEntered = new Promise<void>((resolve) => {
+      enterRunStart = resolve
+    })
+    const runStartGate = new Promise<void>((resolve) => {
+      releaseRunStart = resolve
+    })
+    const harness = setup({
+      document,
+      inputSnapshots,
+      operations,
+      run: {
+        async interruptInactive() {
+          return persistedCommandResult(document, [], [])
+        },
+        async start() {
+          enterRunStart()
+          await runStartGate
+          return persistedCommandResult(document, [], [owner.id])
+        },
+      },
+    })
+    const actor = { id: "renderer:1", kind: "ui" as const }
+    const reconciliation = harness.service.reconcileCanvas({ canvasId: "canvas-one", scopeId: "project-one" }, actor)
+
+    await ledgerListEntered
+    const controller = new AbortController()
+    const generation = harness.service.generate(
+      request({
+        prompt: "Continue writing",
+        resultMode: { nodeId: owner.id, type: "replace-node" },
+        toolId: "creative-tools/write",
+      }),
+      actor,
+      controller.signal,
+    )
+    await runStartEntered
+    releaseLedgerList()
+
+    try {
+      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      expect(harness.runRequests.interruptInactive).toHaveLength(1)
+      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
+        nodeId: owner.id,
+        operationId: "operation-one",
+      })
+    } finally {
+      controller.abort("Test cleanup")
+      releaseRunStart()
+      listSpy.mockRestore()
+    }
+    await expect(generation).rejects.toMatchObject({ name: "AbortError" })
+  })
+
   test("does not create a pending node when cancellation wins during preflight", async () => {
     let markLoadStarted!: () => void
     let releaseLoad!: () => void
@@ -1855,6 +2150,138 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
     expect(harness.getDocument().nodes.filter((node) => node.id === harness.pendingNodeId)).toHaveLength(1)
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
+  })
+
+  test("treats a final dispatch guard rejection as safely not dispatched", async () => {
+    const harness = await setupPendingGeneration(
+      { content: [{ text: "Unused output", type: "text" }] },
+      {
+        dispatchGuard() {
+          throw new Error("Generation model service disconnected")
+        },
+      },
+    )
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("service disconnected")
+
+    expect(harness.calls).toEqual([])
+    expect(harness.runRequests.markRunning).toEqual([])
+    expect(harness.runRequests.finish).toEqual([
+      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+    ])
+    const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
+    expect(pending.data).toMatchObject({ error: "Generation could not be completed", status: "error" })
+    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({ retrySafety: "safe", status: "failed" })
+  })
+
+  test("rechecks the replacement target after bounded runtime and service guards", async () => {
+    const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
+    let currentDocument = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
+    const { calls, runRequests, service } = setup({
+      async dispatchGuard() {
+        currentDocument = {
+          ...currentDocument,
+          nodes: currentDocument.nodes.map((node) =>
+            node.id === owner.id
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    resourceState: { status: "ready", text: "Edited during service check" },
+                  },
+                }
+              : node,
+          ),
+          revision: currentDocument.revision + 1,
+        }
+      },
+      document: currentDocument,
+      loadDocument: () => ({ document: currentDocument }),
+    })
+
+    await expect(
+      service.generate(request({ resultMode: { nodeId: owner.id, type: "replace-node" } }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
+    ).rejects.toThrow("replacement target changed")
+
+    expect(calls).toEqual([])
+    expect(runRequests.markRunning).toEqual([])
+    expect(runRequests.finish).toEqual([
+      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+    ])
+  })
+
+  test("cleans a prepared recovery ledger when the final dispatch guard rejects", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    let observedPhase: string | undefined
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {
+        throw new Error("A non-dispatched operation must not be acknowledged through the sidecar")
+      },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        throw new Error("A non-dispatched operation must not be cancelled")
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        throw new Error("A non-dispatched operation must not be queried")
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        throw new Error("A non-dispatched operation has no result")
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("A non-dispatched operation must not be awaited")
+      },
+    }
+    const harness = await setupPendingGeneration(
+      { content: [{ text: "Unused output", type: "text" }] },
+      {
+        async dispatchGuard() {
+          observedPhase = (await operations.list())[0]?.phase
+          throw new Error("Generation model service disconnected")
+        },
+        inputSnapshots,
+        operations,
+        recovery,
+      },
+    )
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toThrow("service disconnected")
+
+    expect(observedPhase).toBe("prepared")
+    expect(harness.calls).toEqual([])
+    expect(harness.runRequests.markRunning).toEqual([])
+    expect(harness.runRequests.finish).toEqual([
+      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+    ])
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
   })
 
   test("marks a canceled pending node without deleting it", async () => {
@@ -2123,6 +2550,81 @@ describe("GenerationCanvasService", () => {
     ).rejects.toThrow("replacement target changed")
     expect(runRequests.markRunning).toHaveLength(1)
     expect(calls).toEqual([])
+  })
+
+  test("rechecks the replacement target after dispatch authorization is persisted", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 42 })
+    const inputSnapshots = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    let recoveryGets = 0
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {},
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        return { schema: "convax.generation-lro-snapshot/1", status: "absent" }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        recoveryGets += 1
+        return { schema: "convax.generation-lro-snapshot/1", status: "absent" }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        throw new Error("A non-dispatched operation has no result")
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        throw new Error("A non-dispatched operation must not be awaited")
+      },
+    }
+    let harness!: Awaited<ReturnType<typeof setupPendingGeneration>>
+    const transition = operations.transition.bind(operations)
+    const transitionSpy = spyOn(operations, "transition").mockImplementation(async (identity, update) => {
+      const ledger = await transition(identity, update)
+      if (update.phase === "dispatching") {
+        harness.mutateDocument((document) => ({
+          ...document,
+          nodes: document.nodes.map((node) =>
+            node.id === harness.pendingNodeId
+              ? {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    resourceState: { status: "ready", url: "edited-during-dispatch-persistence" },
+                  },
+                }
+              : node,
+          ),
+          revision: document.revision + 1,
+        }))
+      }
+      return ledger
+    })
+    harness = await setupPendingGeneration(
+      { content: [{ text: "Unused output", type: "text" }] },
+      { inputSnapshots, operations, recovery },
+    )
+
+    try {
+      await expect(
+        harness.service.generate(
+          request({
+            output: "image",
+            references: [{ nodeId: harness.reference.id, role: "text" }],
+            resultMode: { type: "create-pending-node" },
+            toolId: "creative-tools/draw",
+          }),
+          { id: "renderer:1", kind: "ui" },
+        ),
+      ).rejects.toThrow("replacement target changed")
+    } finally {
+      transitionSpy.mockRestore()
+    }
+
+    expect(recoveryGets).toBe(1)
+    expect(harness.calls).toEqual([])
+    expect(harness.runRequests.markRunning).toHaveLength(1)
+    expect(await operations.list()).toEqual([])
   })
 
   test("keeps legacy tools compatible without a task receipt and persists failed terminal state", async () => {
@@ -2429,6 +2931,125 @@ describe("GenerationCanvasService", () => {
     expect(recoveryWaitCalls).toBe(10)
   })
 
+  test("never replays a prepared recovery ledger after restart", async () => {
+    const privateRoot = await temporaryDirectory()
+    const operations = new GenerationOperationStore(path.join(privateRoot, "operations"), { now: () => 100 })
+    const inputs = new GenerationInputSnapshotStore(path.join(privateRoot, "inputs"))
+    const owner = createTextNode({ id: "owner", position: { x: 0, y: 0 }, text: "Before" })
+    const active = startCanvasNodeGenerationRun(
+      createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
+      owner.id,
+      {
+        operationId: "operation-never-dispatched",
+        prompt: "Must not be replayed",
+        toolId: "creative-tools/write",
+      },
+    )
+    const guard = createCanvasGenerationTargetGuard(active.nodes[0]!)
+    const storedInput = await inputs.create({
+      files: [],
+      request: {
+        canvasRequest: {
+          references: [],
+          relationAnchorNodeIds: [],
+          resultMode: { nodeId: owner.id, type: "replace-node" },
+        },
+        input: {},
+        operationId: "operation-never-dispatched",
+        output: "text",
+        prompt: "Must not be replayed",
+        referenceSnapshot: stableJsonForTest({ constraint: null, references: [], relationAnchors: [] }),
+        references: [],
+        schema: "convax.generation-lro-call/1",
+        targetGuard: guard,
+        toolId: "creative-tools/write",
+      },
+    })
+    await operations.create({
+      canvasId: "canvas-one",
+      createdAt: 0,
+      executionBindingDigest: "a".repeat(64),
+      inputSnapshotId: storedInput.id,
+      nodeId: owner.id,
+      operationId: "operation-never-dispatched",
+      phase: "prepared",
+      pluginPackageDigest: "c".repeat(64),
+      projectId: "project-one",
+      requestDigest: storedInput.requestDigest,
+      runtimeAuthorizationDigest: "e".repeat(64),
+      schema: "convax.generation-operation-ledger/1",
+      sidecarRecoveryBindingDigest: "f".repeat(64),
+      targetGuardDigest: generationOperationRequestDigest(guard),
+      toolId: "creative-tools/write",
+      updatedAt: 0,
+    })
+    let recoveryCalls = 0
+    const recovery: PreparedGenerationRecovery = {
+      async acknowledge() {
+        recoveryCalls += 1
+      },
+      bindingDigest: "f".repeat(64),
+      async cancel() {
+        recoveryCalls += 1
+        return { schema: "convax.generation-lro-snapshot/1", status: "cancelled" }
+      },
+      executionBindingDigest: "a".repeat(64),
+      async get() {
+        recoveryCalls += 1
+        return { schema: "convax.generation-lro-snapshot/1", status: "prepared" }
+      },
+      pluginPackageDigest: "c".repeat(64),
+      async result() {
+        recoveryCalls += 1
+        throw new Error("A prepared Main ledger has no replayable result")
+      },
+      runtimeAuthorizationDigest: "e".repeat(64),
+      async wait() {
+        recoveryCalls += 1
+        return { schema: "convax.generation-lro-snapshot/1", status: "prepared" }
+      },
+    }
+    const harness = setup({
+      document: active,
+      inputSnapshots: inputs,
+      loadDocument: () => ({ document: active }),
+      operations,
+      recovery,
+      run: {
+        async interruptInactive() {
+          return { ...commandResult(active, []), affectedNodeIds: [] }
+        },
+      },
+      selectedTool: tool({
+        id: "creative-tools/write",
+        output: "text",
+        recovery: "long-running-operation",
+        toolId: "write",
+      }),
+    })
+
+    await harness.service.reconcileCanvas(
+      { canvasId: "canvas-one", scopeId: "project-one" },
+      { id: "desktop:startup", kind: "system" },
+    )
+    for (let index = 0; index < 2_000; index += 1) {
+      if ((await operations.list()).length === 0) break
+      await Bun.sleep(1)
+    }
+
+    expect(recoveryCalls).toBe(0)
+    expect(harness.calls).toEqual([])
+    expect(harness.runRequests.finish).toEqual([
+      expect.objectContaining({
+        operationId: "operation-never-dispatched",
+        retrySafety: "safe",
+        status: "failed",
+      }),
+    ])
+    expect(await operations.list()).toEqual([])
+    expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
+  })
+
   test("replays the exact stored prompt context and rechecks it at external start", async () => {
     const privateRoot = await temporaryDirectory()
     const projectRoot = await temporaryDirectory()
@@ -2507,7 +3128,7 @@ describe("GenerationCanvasService", () => {
       inputSnapshotId: storedInput.id,
       nodeId: owner.id,
       operationId: "operation-context-recover",
-      phase: "prepared",
+      phase: "dispatching",
       pluginPackageDigest: "c".repeat(64),
       projectId: "project-one",
       requestDigest: storedInput.requestDigest,
@@ -2625,7 +3246,7 @@ describe("GenerationCanvasService", () => {
       inputSnapshotId: staleInput.id,
       nodeId: owner.id,
       operationId: "operation-context-recover",
-      phase: "prepared",
+      phase: "dispatching",
       pluginPackageDigest: "c".repeat(64),
       projectId: "project-one",
       requestDigest: staleInput.requestDigest,
@@ -2736,7 +3357,7 @@ describe("GenerationCanvasService", () => {
       inputSnapshotId: storedInput.id,
       nodeId: owner.id,
       operationId: "operation-legacy-context",
-      phase: "prepared",
+      phase: "dispatching",
       pluginPackageDigest: "c".repeat(64),
       projectId: "project-one",
       requestDigest: storedInput.requestDigest,

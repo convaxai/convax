@@ -6,12 +6,12 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import { Button, SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
-import { Check, ChevronRight, LoaderCircle, Settings2 } from "lucide-react"
+import { Check, LoaderCircle, Settings2 } from "lucide-react"
 import { useEffect, useId, useRef } from "react"
 import {
   agentGenerationOutputs,
   agentGenerationModelDisplayTitle,
-  groupAgentGenerationToolsByService,
+  agentGenerationToolsForOutput,
   type AgentGenerationOutput,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
@@ -75,21 +75,16 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     value: tab,
   })) satisfies readonly SegmentedTabItem<AgentModelPickerTab>[]
   const activeOutput = props.activeTab === "llm" ? undefined : props.activeTab
-  const services = activeOutput ? groupAgentGenerationToolsByService(props.tools, activeOutput) : []
-  const defaultGenerationModel = services[0]?.models[0]
+  const generationModels = activeOutput ? agentGenerationToolsForOutput(props.tools, activeOutput) : []
+  const defaultGenerationModel = generationModels[0]
   const selectedGenerationModel =
     activeOutput && props.selected?.output === activeOutput
-      ? services.flatMap((service) => service.models).find((model) => model.id === props.selected?.id)
+      ? generationModels.find((model) => model.id === props.selected?.id)
       : undefined
   const llmProviders = availableAgentLlmProviders(props.llmCatalog)
-  const selectedServiceId = services.find((service) =>
-    service.models.some((model) => model.id === props.selected?.id && model.output === props.selected?.output),
-  )?.id
-  const selectedLlmProviderId = llmProviders.find((provider) =>
-    provider.models.some(
-      (model) => model.modelId === props.llmSelected?.modelId && provider.providerId === props.llmSelected?.providerId,
-    ),
-  )?.providerId
+  const llmModels = llmProviders.flatMap((provider) =>
+    provider.models.map((model) => ({ model, providerId: provider.providerId, providerName: provider.providerName })),
+  )
   const activeTab = tabs.find((tab) => tab.value === props.activeTab)!
 
   useEffect(() => {
@@ -114,7 +109,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
 
   return (
     <div
-      aria-label="Models"
+      aria-label="Agent models"
       className="absolute inset-x-0 bottom-full z-30 mb-2 overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
       data-agent-generation-model-picker
       onKeyDown={(event) => {
@@ -128,7 +123,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       tabIndex={-1}
     >
       <div className="mb-2 flex items-center justify-between px-1">
-        <span className="text-sm font-semibold">Models</span>
+        <span className="text-sm font-semibold">Agent models</span>
         <span className="text-[10px] text-muted-foreground">
           {props.activeTab === "llm" ? "Agent runtime" : "Generation services"}
         </span>
@@ -160,42 +155,27 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
                 onOpenServices={props.onOpenServices}
               />
             ) : (
-              llmProviders.map((provider) => (
-                <details
-                  className="group/service rounded-xl border border-transparent open:border-border/60 open:bg-muted/25"
-                  key={provider.providerId}
-                  open={llmProviders.length === 1 || selectedLlmProviderId === provider.providerId}
-                >
-                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-2.5 py-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/service:rotate-90" />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{provider.providerName}</span>
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                      {provider.models.length}
+              llmModels.map(({ model, providerId, providerName }) => {
+                const selected =
+                  props.llmSelected?.providerId === providerId && props.llmSelected.modelId === model.modelId
+                return (
+                  <button
+                    aria-checked={selected}
+                    aria-label={`${model.modelName} by ${providerName}`}
+                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                    key={`${providerId}/${model.modelId}`}
+                    onClick={() => props.onLlmSelect({ modelId: model.modelId, providerId })}
+                    role="radio"
+                    type="button"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{model.modelName}</span>
+                      <span className="block truncate text-[10px] text-muted-foreground">{providerName}</span>
                     </span>
-                  </summary>
-                  <div className="mb-1 ml-4 border-l border-border/70 pl-2">
-                    {provider.models.map((model) => {
-                      const selected =
-                        props.llmSelected?.providerId === provider.providerId &&
-                        props.llmSelected.modelId === model.modelId
-                      return (
-                        <button
-                          aria-checked={selected}
-                          aria-label={`${model.modelName} by ${provider.providerName}`}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                          key={model.modelId}
-                          onClick={() => props.onLlmSelect({ modelId: model.modelId, providerId: provider.providerId })}
-                          role="radio"
-                          type="button"
-                        >
-                          <span className="min-w-0 flex-1 truncate text-sm">{model.modelName}</span>
-                          {selected ? <Check className="size-4 shrink-0" /> : null}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </details>
-              ))
+                    {selected ? <Check className="size-4 shrink-0" /> : null}
+                  </button>
+                )
+              })
             )}
           </div>
         ) : (
@@ -207,47 +187,33 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
               </div>
             ) : props.error ? (
               <OpenServicesPrompt error message={props.error} onOpenServices={props.onOpenServices} />
-            ) : services.length === 0 ? (
+            ) : generationModels.length === 0 ? (
               <OpenServicesPrompt
                 message={`No available ${outputLabels[activeOutput!].toLocaleLowerCase()} generation service provides a model.`}
                 onOpenServices={props.onOpenServices}
               />
             ) : (
-              services.map((service) => (
-                <details
-                  className="group/service rounded-xl border border-transparent open:border-border/60 open:bg-muted/25"
-                  key={service.id}
-                  open={services.length === 1 || selectedServiceId === service.id}
-                >
-                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-2.5 py-2 outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
-                    <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/service:rotate-90" />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{service.name}</span>
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                      {service.models.length}
+              generationModels.map((tool) => {
+                const selected = props.selected?.id === tool.id && props.selected.output === tool.output
+                const modelName = agentGenerationModelDisplayTitle(tool)
+                return (
+                  <button
+                    aria-checked={selected}
+                    aria-label={`${modelName} by ${tool.pluginName}`}
+                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                    key={tool.id}
+                    onClick={() => props.onSelect({ id: tool.id, output: activeOutput! })}
+                    role="radio"
+                    type="button"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">{modelName}</span>
+                      <span className="block truncate text-[10px] text-muted-foreground">{tool.pluginName}</span>
                     </span>
-                  </summary>
-                  <div className="mb-1 ml-4 border-l border-border/70 pl-2">
-                    {service.models.map((tool) => {
-                      const selected = props.selected?.id === tool.id && props.selected.output === tool.output
-                      const modelName = agentGenerationModelDisplayTitle(tool)
-                      return (
-                        <button
-                          aria-checked={selected}
-                          aria-label={`${modelName} by ${tool.pluginName}`}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                          key={tool.id}
-                          onClick={() => props.onSelect({ id: tool.id, output: activeOutput! })}
-                          role="radio"
-                          type="button"
-                        >
-                          <span className="min-w-0 flex-1 truncate text-sm">{modelName}</span>
-                          {selected ? <Check className="size-4 shrink-0" /> : null}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </details>
-              ))
+                    {selected ? <Check className="size-4 shrink-0" /> : null}
+                  </button>
+                )
+              })
             )}
           </div>
         )}

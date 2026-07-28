@@ -473,9 +473,7 @@ describe("built-in node toolbar visibility", () => {
     const editor = {
       isActive: (nameOrAttributes: string | Record<string, unknown>) => nameOrAttributes === "bold",
     } as unknown as Editor
-    const markup = renderToStaticMarkup(
-      <CanvasTextFormattingToolbar editor={editor} onCommand={() => {}} />,
-    )
+    const markup = renderToStaticMarkup(<CanvasTextFormattingToolbar editor={editor} onCommand={() => {}} />)
 
     for (const label of [
       "Paragraph",
@@ -634,9 +632,7 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).toContain('aria-busy="true"')
     expect(pending).toContain("正在生成…")
     expect(pending).not.toContain("data-assistant-toolbar")
-    expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain(
-      "nodrag",
-    )
+    expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain("nodrag")
 
     const failed = renderWithEditor(selection([]), false, (props) => (
       <BuiltinCanvasNode
@@ -1112,9 +1108,7 @@ describe("built-in node toolbar visibility", () => {
     expect(activeMarkup).toContain("正在生成")
     expect(activeMarkup).toContain("取消")
     expect(activeMarkup).not.toContain("data-assistant-toolbar")
-    expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain(
-      "nodrag",
-    )
+    expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain("nodrag")
     expect(activeMarkup).toContain("nodrag nowheel")
 
     const failed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one", "failed", "safe")
@@ -1124,9 +1118,7 @@ describe("built-in node toolbar visibility", () => {
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
     expect(failedMarkup).toContain("修改并重试")
-    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain(
-      "nodrag",
-    )
+    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain("nodrag")
     expect(failedMarkup).toContain("nodrag nowheel")
 
     const indeterminate = finishCanvasNodeGenerationRun(
@@ -1147,17 +1139,19 @@ describe("built-in node toolbar visibility", () => {
       },
     )
     expect(indeterminateMarkup).toContain('data-canvas-file-generation-activity="interrupted"')
-    expect(indeterminateMarkup).toContain("暂不可重试")
+    expect(indeterminateMarkup).toContain("本卡片不可重试")
     expect(indeterminateMarkup).toContain("避免重复计费")
+    expect(indeterminateMarkup).toContain("切换 Agent 默认模型不会改变该任务")
+    expect(indeterminateMarkup).toContain("新任务可能另行计费")
     expect(indeterminateMarkup).not.toContain("修改并重试")
     expect(indeterminateMarkup).not.toContain("data-assistant-toolbar")
-    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-file-generation-activity="interrupted"')).not.toContain(
-      "nodrag",
-    )
     expect(
-      openingTagContaining(indeterminateMarkup, 'data-canvas-generation-retry-blocked="true"'),
-    ).toContain('class="nodrag nowheel"')
-    expect(openingTagContaining(indeterminateMarkup, "暂不可重试")).toContain('disabled=""')
+      openingTagContaining(indeterminateMarkup, 'data-canvas-file-generation-activity="interrupted"'),
+    ).not.toContain("nodrag")
+    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-generation-retry-blocked="true"')).toContain(
+      'class="nodrag nowheel"',
+    )
+    expect(openingTagContaining(indeterminateMarkup, "本卡片不可重试")).toContain('disabled=""')
 
     const succeeded = succeedCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     let request: CanvasAssistantRequest | undefined

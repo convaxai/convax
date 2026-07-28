@@ -19,6 +19,7 @@ export interface GenerationRecoveryRuntimeRecord {
   executablePath: string
   executableRuntime?: "bun"
   executionBindingDigest: string
+  modelBindingDigest?: string
   plugin: InstalledWebPluginSummary
   pluginPackageDigest: string
   recoveryBindingDigest: string
@@ -40,10 +41,11 @@ function stableExecutionBindingDigest(
   pluginPackageDigest: string,
   runtimeAuthorizationDigest: string,
   recoveryBindingDigest: string,
+  modelBindingDigest?: string,
 ) {
-  return createHash("sha256")
-    .update(JSON.stringify([pluginPackageDigest, runtimeAuthorizationDigest, recoveryBindingDigest]))
-    .digest("hex")
+  const parts = [pluginPackageDigest, runtimeAuthorizationDigest, recoveryBindingDigest]
+  if (modelBindingDigest !== undefined) parts.push(modelBindingDigest)
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex")
 }
 
 async function ensurePrivateDirectory(directory: string, label: string) {
@@ -83,10 +85,12 @@ async function hashFile(filePath: string, maximumBytes = defaultMaximumExecutabl
 
 function parseRecord(value: unknown, executablePath: string): GenerationRecoveryRuntimeRecord {
   if (!isRecord(value)) throw new Error("Pinned generation recovery runtime record is invalid")
+  const modelBindingDigest = value.modelBindingDigest
   const allowed = new Set([
     "bindingKind",
     "executableRuntime",
     "executionBindingDigest",
+    "modelBindingDigest",
     "plugin",
     "pluginPackageDigest",
     "recoveryBindingDigest",
@@ -101,6 +105,8 @@ function parseRecord(value: unknown, executablePath: string): GenerationRecovery
     (value.bindingKind !== "managed" && value.bindingKind !== "path") ||
     (value.executableRuntime !== undefined && value.executableRuntime !== "bun") ||
     !digestPattern.test(String(value.executionBindingDigest)) ||
+    (modelBindingDigest !== undefined &&
+      (typeof modelBindingDigest !== "string" || !digestPattern.test(modelBindingDigest))) ||
     !digestPattern.test(String(value.pluginPackageDigest)) ||
     !digestPattern.test(String(value.recoveryBindingDigest)) ||
     !digestPattern.test(String(value.runtimeAuthorizationDigest)) ||
@@ -135,6 +141,7 @@ function parseRecord(value: unknown, executablePath: string): GenerationRecovery
       value.pluginPackageDigest as string,
       value.runtimeAuthorizationDigest as string,
       value.recoveryBindingDigest as string,
+      modelBindingDigest,
     ) !== value.executionBindingDigest
   ) {
     throw new Error("Pinned generation recovery execution binding changed")
@@ -144,6 +151,7 @@ function parseRecord(value: unknown, executablePath: string): GenerationRecovery
     executablePath,
     ...(value.executableRuntime === undefined ? {} : { executableRuntime: value.executableRuntime }),
     executionBindingDigest: value.executionBindingDigest as string,
+    ...(modelBindingDigest === undefined ? {} : { modelBindingDigest }),
     plugin,
     pluginPackageDigest: value.pluginPackageDigest as string,
     recoveryBindingDigest: value.recoveryBindingDigest as string,
@@ -186,6 +194,7 @@ export class GenerationRecoveryRuntimeStore {
     executablePath: string
     executableRuntime?: "bun"
     executionBindingDigest: string
+    modelBindingDigest?: string
     plugin: InstalledWebPluginSummary
     pluginPackageDigest: string
     recoveryBindingDigest: string
@@ -193,7 +202,10 @@ export class GenerationRecoveryRuntimeStore {
     sourceBinding: ToolPluginExecutableBinding
     tool: GenerationToolSummary
   }) {
-    if (!digestPattern.test(input.executionBindingDigest)) {
+    if (
+      !digestPattern.test(input.executionBindingDigest) ||
+      (input.modelBindingDigest !== undefined && !digestPattern.test(input.modelBindingDigest))
+    ) {
       throw new Error("Pinned generation recovery execution binding is invalid")
     }
     const parent = await ensurePrivateDirectory(path.dirname(this.rootPath), "Generation recovery runtime parent")
@@ -241,6 +253,7 @@ export class GenerationRecoveryRuntimeStore {
         bindingKind: input.bindingKind,
         ...(input.executableRuntime === undefined ? {} : { executableRuntime: input.executableRuntime }),
         executionBindingDigest: input.executionBindingDigest,
+        ...(input.modelBindingDigest === undefined ? {} : { modelBindingDigest: input.modelBindingDigest }),
         plugin: structuredClone(input.plugin),
         pluginPackageDigest: input.pluginPackageDigest,
         recoveryBindingDigest: input.recoveryBindingDigest,

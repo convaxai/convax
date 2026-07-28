@@ -193,6 +193,13 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
   never raw JSON Schema, across preload; revalidate them in Main immediately before
   execution and never allow them to replace the fixed generation-call envelope.
+- One required top-level bounded string select on a manifest-declared model tool may
+  explicitly opt into `x-convax-role: generation-model-id`. Check the owning service
+  first, then let Main project its choices as concrete opaque model selections.
+  `describeTool` must omit that selector, and preparation must reload the live schema,
+  reject stale choices and bind the value without accepting a renderer override.
+  Unmarked fields remain ordinary custom controls; do not guess by field name or
+  branch on Plugin/provider identity.
 - Keep the Agent-selected generation model as the user-global renderer default.
   A generation model is available only when its owning Plugin contributes the same
   model through a service and Main's bounded live status reports that service

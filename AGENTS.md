@@ -285,6 +285,14 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   generic display metadata. Desktop may translate its verified sidecar's Main-only,
   ephemeral loopback gateway into host-injected OpenCode configuration, while the
   Agent runtime remains unaware of Plugin identity and vendor credentials.
+- A manifest-declared generation model may expose runtime model variants only by
+  marking exactly one required top-level bounded string select in its MCP
+  `tools/list.inputSchema` with `x-convax-role: generation-model-id`. Main expands
+  that explicit catalog only after the owning service is connected, issues opaque
+  concrete selection ids, removes the selector from ordinary custom controls, and
+  revalidates plus binds its exact value immediately before execution. Never infer
+  model identity from a field name, title, Plugin id, provider, or vendor value, and
+  never let renderer `toolInput` override the Main-owned binding.
 - A v6 Agent MCP contribution is a validated HTTPS remote-server declaration passed
   to OpenCode's native MCP client. Desktop owns installed-Plugin authority and a
   stable server-key mapping; `@convax/agent-runtime` owns only generic configuration

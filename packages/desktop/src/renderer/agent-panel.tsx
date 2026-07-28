@@ -2343,7 +2343,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     <button
                       aria-expanded={generationModelPickerOpen}
                       aria-haspopup="dialog"
-                      aria-label={`Select models, ${displayedModelLabel}`}
+                      aria-label={`Select Agent models, ${displayedModelLabel}`}
                       className="flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
                       disabled={!props.projectId || interactionDisabled}
                       onClick={() => {
@@ -2359,7 +2359,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       type="button"
                     >
                       <Sparkles className="size-3.5 shrink-0" />
-                      <span className="shrink-0 font-medium text-foreground">Models</span>
+                      <span className="shrink-0 font-medium text-foreground">Agent models</span>
                       <span className="truncate">{displayedModelLabel}</span>
                       <ChevronDown className="size-3 shrink-0" />
                     </button>

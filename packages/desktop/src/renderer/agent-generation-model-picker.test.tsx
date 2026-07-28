@@ -37,7 +37,7 @@ describe("Agent generation model picker", () => {
       />,
     )
 
-    expect(markup).toContain("Models")
+    expect(markup).toContain("Agent models")
     expect(markup).toContain("Image")
     expect(markup).toContain("Video")
     expect(markup).toContain("Audio")
@@ -93,7 +93,7 @@ describe("Agent generation model picker", () => {
     expect(empty).toContain("Open Services")
   })
 
-  test("renders services as the first level and their supported models as the second level", () => {
+  test("renders generation models as one flat choice list with service metadata", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
         activeTab="image"
@@ -118,11 +118,13 @@ describe("Agent generation model picker", () => {
       />,
     )
 
-    expect(markup.match(/<details/g)).toHaveLength(2)
+    expect(markup).not.toContain("<details")
+    expect(markup.match(/role="radio"/g)).toHaveLength(3)
     expect(markup).toContain("小云雀生成")
     expect(markup).toContain("即梦")
     expect(markup).toContain("GPT Image 2")
     expect(markup).toContain("Nano Banana Pro 1")
+    expect(markup).toContain('aria-label="Seedream 4 by 即梦"')
     expect(markup).not.toContain("Image Model</span>")
   })
 
@@ -231,6 +233,7 @@ describe("Agent generation model picker", () => {
 
     expect(markup).toContain("Agent runtime")
     expect(markup).not.toContain("Auto")
+    expect(markup).not.toContain("<details")
     expect(markup).toContain("小云雀生成")
     expect(markup).toMatch(/aria-checked="true" aria-label="Pippit GLM Main by 小云雀生成"/)
     expect(markup).not.toContain("Offline model")

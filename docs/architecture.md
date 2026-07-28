@@ -593,7 +593,14 @@ If Canvas insertion fails, the generated file remains available for a later retr
 unpublished staging is best-effort cleanup rather than a durable transaction. Tool-
 specific controls come only from the selected MCP tool's current
 `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
-validates them again immediately before execution.
+validates them again immediately before execution. A manifest-declared model tool
+may explicitly mark one required bounded string select with
+`x-convax-role: generation-model-id`. Once the owning service is connected, Main
+projects those choices into concrete opaque model selections instead of a second
+renderer control. The marker field is absent from ordinary tool options; Main
+reloads the live schema, rejects a removed choice and binds the exact value before
+the external call. No Plugin id, provider name, field name or choice value changes
+this behavior without that explicit role.
 
 On execution Desktop silently resolves and fingerprints the binding again and
 requires the matching persisted receipt; missing, tampered or drifted state fails
@@ -665,9 +672,22 @@ same live tool definition before execution. Those validated fields extend the
 `convax.generation-call/1` object without being allowed to replace its fixed
 host-reserved envelope; tools without extensions keep the original payload.
 
-The Agent generation model is a user-global renderer preference. Without an owning
-node override, a file card inherits that preference only when its output matches the
-card's intrinsic text/image/video/audio kind and accepts the current media references.
+Dynamic model identity is the one semantic projection on that schema. A declared
+model tool may mark exactly one required bounded string select with
+`x-convax-role: generation-model-id`. Service availability is established before
+Main starts or expands the family. Each choice receives a stable host-opaque
+selection id while retaining the same manifest tool id for service authorization.
+The selector is removed from `describeTool`; preparation enumerates it again and
+merges the Main-owned value only if the exact choice remains live. Renderer input
+cannot name or override that binding. Unmarked model tools keep their single static
+selection, and unmarked schema fields remain ordinary tool options.
+
+The Agent generation model is a user-global renderer preference. Agent and card
+pickers present concrete models in one selection layer; the contributing service is
+display metadata, not a provider choice that exposes a second model control.
+Without an owning node override, a file card inherits that preference only when its
+output matches the card's intrinsic text/image/video/audio kind and accepts the
+current media references.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
 catalog only when the owning Plugin contributes the same model through a service and

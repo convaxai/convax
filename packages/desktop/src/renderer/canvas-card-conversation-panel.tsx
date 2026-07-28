@@ -292,19 +292,29 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const generationInputError = getCanvasGenerationInputError(generationInputs)
   const ownerOutput = props.generation.output
   const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
+  const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
+  const [optimisticOwnerTool, setOptimisticOwnerTool] = useState<{
+    pendingOwnerToolIds: readonly (string | undefined)[]
+    scope: string
+    toolId: string
+  }>()
   const catalogScope = JSON.stringify([
     props.request.document.id,
     props.request.ownerNodeId,
     ownerOutput ?? null,
     catalogVersion,
   ])
-  const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
   const currentCatalog = catalog.scope === catalogScope ? catalog : undefined
   // The owner output chooses the model directory. @ references may gate one
   // submission, but must never make an installed Image/Video directory disappear.
   const currentTools = currentCatalog?.status === "ready" ? currentCatalog.value : []
   const compatibleTools = compatibleCanvasCardGenerationTools(currentTools, ownerOutput, references)
-  const ownerToolId = props.generation.ownerToolId
+  const optimisticOwnerToolIsCurrent = Boolean(
+    optimisticOwnerTool?.scope === operationScope &&
+      (optimisticOwnerTool.toolId === props.generation.ownerToolId ||
+        optimisticOwnerTool.pendingOwnerToolIds.includes(props.generation.ownerToolId)),
+  )
+  const ownerToolId = optimisticOwnerToolIsCurrent ? optimisticOwnerTool?.toolId : props.generation.ownerToolId
   const selectedOwnerTool = ownerToolId
     ? currentTools.find((tool) => tool.id === ownerToolId && (!ownerOutput || tool.output === ownerOutput))
     : undefined
@@ -361,6 +371,17 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     setOperationError(undefined)
     setOperationMessage(undefined)
   }, [operationScope])
+
+  useEffect(() => {
+    if (
+      optimisticOwnerTool &&
+      (optimisticOwnerTool.scope !== operationScope ||
+        props.generation.ownerToolId === optimisticOwnerTool.toolId ||
+        !optimisticOwnerTool.pendingOwnerToolIds.includes(props.generation.ownerToolId))
+    ) {
+      setOptimisticOwnerTool(undefined)
+    }
+  }, [operationScope, optimisticOwnerTool, props.generation.ownerToolId])
 
   useEffect(() => {
     const isLatest = catalogRequestRef.current.begin(catalogScope)
@@ -556,6 +577,14 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
               <ModelSelect
                 disabled={generating}
                 onValueChange={(toolId) => {
+                  setOptimisticOwnerTool((current) => {
+                    const pendingOwnerToolIds = [
+                      ...(current?.scope === operationScope ? current.pendingOwnerToolIds : []),
+                      ...(current?.scope === operationScope ? [current.toolId] : []),
+                      props.generation.ownerToolId,
+                    ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index)
+                    return { pendingOwnerToolIds, scope: operationScope, toolId }
+                  })
                   props.generation.onOwnerToolIdChange?.(toolId)
                   setToolInput({})
                   setOperationError(undefined)

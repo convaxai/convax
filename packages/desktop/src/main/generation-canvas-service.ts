@@ -115,12 +115,20 @@ export interface GenerationCanvasRunPort {
   start(request: CanvasStartNodeGenerationRunRequest): Promise<CanvasApplicationCommandResult>
 }
 
+export interface GenerationToolDispatchHooks {
+  /** Mutable host/Canvas checks run before and after bounded runtime/service checks. */
+  validate?: () => void | Promise<void>
+  /** Bounded service authorization check between the two host validations. */
+  guard?: () => void | Promise<void>
+}
+
 export interface PreparedGenerationToolExecution {
   call(
     input: Record<string, unknown>,
     signal?: AbortSignal,
     lifecycleObserver?: GenerationToolLifecycleObserver,
     operation?: GenerationToolOperationMetadata,
+    dispatchHooks?: GenerationToolDispatchHooks,
   ): Promise<McpToolCallResult>
   recovery?: PreparedGenerationRecovery
   validateInput(input?: GenerationToolInput): Record<string, GenerationToolInputValue>
@@ -1260,6 +1268,11 @@ export class GenerationCanvasService {
       operationId: ledger.operationId,
       projectId: ledger.projectId,
     }
+    if (ledger.phase === "prepared") {
+      await this.#persistRecoveredTerminal(ledger, "cancelled", "safe", actor)
+      await this.#finalizeNeverDispatchedOperation(ledger, "cancelled")
+      return
+    }
     const { execution } = await this.#prepareStoredRecoveryRuntime(ledger)
     const recovery = execution.recovery!
     const state = await recovery.cancel({
@@ -1387,10 +1400,30 @@ export class GenerationCanvasService {
       }),
     )
     const ledgers = await this.#operations.list()
+    // A generation can acquire its exact Canvas target and persist a ledger
+    // while the store listing is in flight. Snapshot live executions only after
+    // that await so a same-process run is never mistaken for restart recovery.
+    const liveExecutionKeys = new Set(
+      [...this.#executions.values()].flatMap((execution) => {
+        const target = execution.state.target
+        return !execution.state.settled && target?.scopeId === ref.scopeId && target.canvasId === ref.canvasId
+          ? [`${target.nodeId}\0${target.operationId}`]
+          : []
+      }),
+    )
     for (const ledger of ledgers) {
       if (ledger.projectId !== ref.scopeId || ledger.canvasId !== ref.canvasId) continue
+      if (liveExecutionKeys.has(`${ledger.nodeId}\0${ledger.operationId}`)) continue
       const owner = owners.get(`${ledger.nodeId}\0${ledger.operationId}`)
       const ownerRun = owner ? getCanvasNodeGenerationRun(owner) : undefined
+      if (ledger.phase === "prepared") {
+        this.#ensureStoredSupervision(
+          ledger,
+          actor,
+          ownerRun === undefined || !isCanvasNodeGenerationRunActive(ownerRun),
+        )
+        continue
+      }
       if (!ownerRun) {
         this.#ensureStoredSupervision(ledger, actor, true)
         continue
@@ -1434,6 +1467,14 @@ export class GenerationCanvasService {
     await acknowledge()
     const acknowledged =
       ledger.phase === "acknowledged" ? ledger : await this.#operations.transition(ledger, { phase: "acknowledged" })
+    await this.#withRecoveryStoreLock(() => this.#cleanupAcknowledgedOperationUnlocked(acknowledged))
+  }
+
+  async #finalizeNeverDispatchedOperation(ledger: GenerationOperationLedger, terminalPhase: "cancelled" | "failed") {
+    if (!this.#operations || !this.#inputSnapshots) return
+    const terminal =
+      ledger.phase === terminalPhase ? ledger : await this.#operations.transition(ledger, { phase: terminalPhase })
+    const acknowledged = await this.#operations.transition(terminal, { phase: "acknowledged" })
     await this.#withRecoveryStoreLock(() => this.#cleanupAcknowledgedOperationUnlocked(acknowledged))
   }
 
@@ -1500,6 +1541,15 @@ export class GenerationCanvasService {
 
   async #superviseStoredOperation(initial: GenerationOperationLedger, actor: CanvasCommandActor) {
     if (!this.#operations || !this.#inputSnapshots) return
+    if (initial.phase === "prepared") {
+      // The durable dispatching transition happens inside the final
+      // external-started callback and strictly before the stdio write. A
+      // surviving prepared record therefore proves that no external request
+      // was authorized; fail it safely without starting or querying a sidecar.
+      await this.#persistRecoveredTerminal(initial, "failed", "safe", actor)
+      await this.#finalizeNeverDispatchedOperation(initial, "failed")
+      return
+    }
     let ledger = initial
     const identity = {
       canvasId: ledger.canvasId,
@@ -1656,6 +1706,10 @@ export class GenerationCanvasService {
 
   async #superviseOrphanedStoredOperation(initial: GenerationOperationLedger) {
     if (!this.#operations || !this.#inputSnapshots) return
+    if (initial.phase === "prepared") {
+      await this.#finalizeNeverDispatchedOperation(initial, "failed")
+      return
+    }
     let ledger = initial
     const identity = {
       canvasId: ledger.canvasId,
@@ -2408,15 +2462,26 @@ export class GenerationCanvasService {
       }
       releaseRecoveryStore?.()
       releaseRecoveryStore = undefined
-      const lifecycleObserver: GenerationToolLifecycleObserver = async (event) => {
-        if (event.type === "external-started") {
-          retainOperation()
-          externalStarted = true
-          if (operationLedger && this.#operations) {
-            operationLedger = await this.#operations.transition(operationLedger, { phase: "dispatching" })
-          }
+      const validateDispatchCanvas = async () => {
+        await this.#assertStableReferences(
+          workingRequest,
+          referenceSnapshot,
+          promptContexts,
+          references,
+          requiresStableRevision,
+        )
+        if (replacementGuard) {
+          await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
         }
-        if (!runStarted || resultMode.type !== "replace-node") return
+        assertNotAborted(signal)
+      }
+      const dispatchHooks: GenerationToolDispatchHooks | undefined =
+        runStarted && resultMode.type === "replace-node" ? { validate: validateDispatchCanvas } : undefined
+      const lifecycleObserver: GenerationToolLifecycleObserver = async (event) => {
+        if (!runStarted || resultMode.type !== "replace-node") {
+          if (event.type === "external-started") retainOperation()
+          return
+        }
         if (event.type === "submitted" && recordedTaskId === event.taskId) return
         if (event.type === "submitted" && operationLedger && this.#operations) {
           operationLedger = await this.#operations.transition(operationLedger, {
@@ -2443,15 +2508,20 @@ export class GenerationCanvasService {
         workingRequest = { ...workingRequest, expectedRevision: runRevision }
         if (event.type === "submitted") recordedTaskId = event.taskId
         if (event.type === "external-started") {
-          await this.#assertStableReferences(
-            workingRequest,
-            referenceSnapshot,
-            promptContexts,
-            references,
-            requiresStableRevision,
-          )
-          if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
-          assertNotAborted(signal)
+          // markRunning may reconcile a newer Canvas revision. Verify the exact
+          // staged references and replacement owner once more before granting
+          // durable dispatch authorization.
+          await validateDispatchCanvas()
+          retainOperation()
+          if (operationLedger && this.#operations) {
+            operationLedger = await this.#operations.transition(operationLedger, { phase: "dispatching" })
+          }
+          // The durable transition above is the final persistence boundary
+          // before tools/call. Recheck mutable Canvas state once more after it
+          // completes so edits during persistence cannot cross into the paid
+          // external dispatch.
+          await validateDispatchCanvas()
+          externalStarted = true
         }
       }
       let toolResult = await preparedTool.call(
@@ -2497,6 +2567,7 @@ export class GenerationCanvasService {
                 }),
             }
           : undefined,
+        dispatchHooks,
       )
       let recoveryResultDigest: string | undefined
       if (operationLedger && preparedTool.recovery && this.#operations) {
@@ -2708,23 +2779,27 @@ export class GenerationCanvasService {
             : "failed"
           let retrySafety: "safe" | "unknown" = externalStarted ? "unknown" : "safe"
           const recovery = preparedTool?.recovery
+          const definitelyNotDispatched =
+            !externalStarted && operationLedger !== undefined && operationLedger.phase === "prepared"
           let recoveryTerminal:
             | { status: "absent" | "prepared" | "unknown" }
             | { status: "submitted" | "running" | "succeeded"; taskId: string }
             | { status: "failed" | "cancelled"; taskId?: string }
             | undefined
           if (operationLedger && recovery && this.#operations) {
-            recoveryTerminal = await (isAbortFailure(error, signal)
-              ? recovery.cancel({
-                  operationId: operationLedger.operationId,
-                  requestDigest: operationLedger.requestDigest,
-                  ...(recordedTaskId === undefined ? {} : { taskId: recordedTaskId }),
-                })
-              : recovery.get({
-                  operationId: operationLedger.operationId,
-                  requestDigest: operationLedger.requestDigest,
-                  ...(recordedTaskId === undefined ? {} : { taskId: recordedTaskId }),
-                }))
+            recoveryTerminal = definitelyNotDispatched
+              ? { status: "prepared" }
+              : await (isAbortFailure(error, signal)
+                  ? recovery.cancel({
+                      operationId: operationLedger.operationId,
+                      requestDigest: operationLedger.requestDigest,
+                      ...(recordedTaskId === undefined ? {} : { taskId: recordedTaskId }),
+                    })
+                  : recovery.get({
+                      operationId: operationLedger.operationId,
+                      requestDigest: operationLedger.requestDigest,
+                      ...(recordedTaskId === undefined ? {} : { taskId: recordedTaskId }),
+                    }))
             if (recoveryTerminal.status === "succeeded") {
               // The exact terminal result remains replayable. Keep the Canvas run
               // active so startup recovery can finish the guarded commit.
@@ -2788,13 +2863,22 @@ export class GenerationCanvasService {
               recoveryTerminal.status === "failed" ||
               recoveryTerminal.status === "cancelled")
           ) {
-            await this.#acknowledgeAndCleanup(operationLedger, () =>
-              recovery.acknowledge({
-                operationId: operationLedger!.operationId,
-                requestDigest: operationLedger!.requestDigest,
-                ...("taskId" in recoveryTerminal && recoveryTerminal.taskId ? { taskId: recoveryTerminal.taskId } : {}),
-              }),
-            )
+            if (definitelyNotDispatched) {
+              await this.#finalizeNeverDispatchedOperation(
+                operationLedger,
+                terminalStatus === "cancelled" ? "cancelled" : "failed",
+              )
+            } else {
+              await this.#acknowledgeAndCleanup(operationLedger, () =>
+                recovery.acknowledge({
+                  operationId: operationLedger!.operationId,
+                  requestDigest: operationLedger!.requestDigest,
+                  ...("taskId" in recoveryTerminal && recoveryTerminal.taskId
+                    ? { taskId: recoveryTerminal.taskId }
+                    : {}),
+                }),
+              )
+            }
           }
         } catch (terminalError) {
           if (terminalError === error) throw error

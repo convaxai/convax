@@ -1039,7 +1039,7 @@ try {
         "the hosted workspace Agent panel",
       )
       const modelButton = await waitFor(
-        () => agentPanel.querySelector('button[aria-label^="Select models,"]'),
+        () => agentPanel.querySelector('button[aria-label^="Select Agent models,"]'),
         "the standalone Agent model selector",
       )
       modelButton.click()
@@ -1078,7 +1078,7 @@ try {
   if (
     agentGenerationModel.model !== "Smoke Image by Smoke Service" ||
     agentGenerationModel.pickerHadAuto !== false ||
-    agentGenerationModel.selector !== "Select models, Smoke Service · Smoke Image"
+    agentGenerationModel.selector !== "Select Agent models, Smoke Service · Smoke Image"
   ) {
     throw new Error(`Unexpected standalone Agent model selection: ${JSON.stringify(agentGenerationModel)}`)
   }

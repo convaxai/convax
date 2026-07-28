@@ -26,11 +26,15 @@ export type GenerationInputRole =
   | "audio"
 
 export interface GenerationToolSummary {
-  /** Host-stable id composed from the installed Plugin and its declared tool. */
+  /**
+   * Host-stable selection id. Static tools use the installed Plugin/tool id;
+   * runtime-catalog models use an opaque host-derived id that does not expose
+   * the Plugin's model selector value.
+   */
   id: string
   /** Declarative v3 classification; legacy v2 generation tools are models. */
   kind: GenerationToolKind
-  /** Present only for v3 models and intentionally excludes the service name. */
+  /** Concrete model display name, intentionally excluding the owning service name. */
   modelName?: string
   pluginId: string
   pluginName: string
@@ -40,6 +44,7 @@ export interface GenerationToolSummary {
   delivery?: GenerationToolDelivery
   /** Optional host-enforced binding for Canvas reference inputs. */
   inputBinding?: GenerationToolInputBinding
+  /** Plugin-local manifest tool id. Runtime model variants retain their shared base tool id. */
   toolId: string
   title: string
   description: string

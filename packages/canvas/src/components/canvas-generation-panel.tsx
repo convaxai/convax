@@ -26,11 +26,7 @@ import {
   type CanvasGenerationComposerSubmission,
   type CanvasGenerationImageRole,
 } from "../generation-composer"
-import type {
-  CanvasGenerateService,
-  CanvasGenerationToolDescription,
-  CanvasGenerationToolSummary,
-} from "../services"
+import type { CanvasGenerateService, CanvasGenerationToolDescription, CanvasGenerationToolSummary } from "../services"
 import type { CanvasDocument } from "../types"
 
 export interface CanvasGenerationPanelProps {
@@ -51,6 +47,14 @@ type CanvasGenerationDescriptionState =
   | { scope: string; status: "idle" | "loading" }
   | { error: string; scope: string; status: "error" }
   | { scope: string; status: "ready"; value: CanvasGenerationToolDescription }
+
+function canvasGenerationToolSelectionTitle(tool: CanvasGenerationToolSummary) {
+  const modelName = tool.modelName?.trim() || tool.title
+  const serviceName = tool.serviceName?.trim()
+  return !serviceName || modelName === serviceName || modelName.startsWith(`${serviceName} · `)
+    ? modelName
+    : `${serviceName} · ${modelName}`
+}
 
 /**
  * Canvas-owned whole-document generation composer.
@@ -131,15 +135,9 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const selectedTool = projection.selectedTool
   const describedToolId = selectedTool?.id
   const descriptionScope = describedToolId
-    ? JSON.stringify([
-        scopeId,
-        props.document.id,
-        props.generateService.catalogVersion ?? null,
-        describedToolId,
-      ])
+    ? JSON.stringify([scopeId, props.document.id, props.generateService.catalogVersion ?? null, describedToolId])
     : ""
-  const currentDescription =
-    descriptionScope && description.scope === descriptionScope ? description : undefined
+  const currentDescription = descriptionScope && description.scope === descriptionScope ? description : undefined
   const toolInputValidation =
     currentDescription?.status === "ready"
       ? validateToolInputValues(currentDescription.value.fields, toolInput)
@@ -181,12 +179,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (
-      props.disabled ||
-      props.submitting ||
-      currentDescription?.status !== "ready" ||
-      !toolInputValidation?.valid
-    )
+    if (props.disabled || props.submitting || currentDescription?.status !== "ready" || !toolInputValidation?.valid)
       return
     const submission = createCanvasGenerationComposerSubmission({
       catalogStatus,
@@ -274,13 +267,15 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             value={selectedToolId}
           >
             <SelectTrigger aria-label="Generation tool" className="w-full" data-canvas-shortcuts="ignore">
-              <SelectValue>{selectedTool?.title ?? "Choose a generation tool"}</SelectValue>
+              <SelectValue>
+                {selectedTool ? canvasGenerationToolSelectionTitle(selectedTool) : "Choose a generation tool"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {projection.compatibleTools.map((tool) => (
                 <SelectItem key={tool.id} value={tool.id}>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{tool.title}</span>
+                    <span className="truncate">{canvasGenerationToolSelectionTitle(tool)}</span>
                     <span className="truncate text-xs text-muted-foreground">
                       {tool.output} · {tool.description}
                     </span>
@@ -292,7 +287,11 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
         ) : null}
         {catalogStatus === "ready" && projection.compatibleTools.length === 1 ? (
           <div className="rounded-md border border-border px-3 py-2">
-            <div className="text-sm font-medium">{projection.compatibleTools[0]?.title}</div>
+            <div className="text-sm font-medium">
+              {projection.compatibleTools[0]
+                ? canvasGenerationToolSelectionTitle(projection.compatibleTools[0])
+                : undefined}
+            </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
               {projection.compatibleTools[0]?.output} · {projection.compatibleTools[0]?.description}
             </div>
