@@ -1,11 +1,13 @@
 import {
   canonicalJson,
   classifyServerPackageForCatalog,
+  legacyShowcaseAssetName,
   parseBuiltinBundleArchive,
   parseMarketplaceDescriptor,
   parseMcpServerExtension,
   parseRegistryV1,
   parseRegistryV2,
+  parseShowcaseV1,
   parseShowcaseV2,
   projectRegistryV1,
   sha256Hex,
@@ -16,6 +18,7 @@ import {
   type RegistryPackage,
   type RegistryV1,
   type RegistryV2,
+  type ShowcaseV1,
   type ShowcaseV2,
 } from "@convax/marketplace"
 import { chmod, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
@@ -23,6 +26,17 @@ import { constants } from "node:fs"
 import { basename, dirname, join, relative, resolve, sep } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import {
+  MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
+  assertSelectiveMarketplaceClosure,
+  inheritedShowcasePackages,
+  mergeSelectedRegistry,
+  packageIdentity,
+  parsePublishIdentities,
+  selectionBaselineRegistry,
+  type MarketplaceSelectionContext,
+} from "./selective"
+import { releaseTagForPackage } from "./release"
 
 export type StarterKind = "plugin" | "skill" | "mcp-server"
 
@@ -34,22 +48,37 @@ export interface StarterOptions {
   starter: StarterKind
 }
 
+export interface MarketplacePublishSelection {
+  kind: StarterKind
+  id: string
+  version: string
+  previousVersion?: string
+  releaseTag: string
+}
+
 export interface BuildMarketplaceOptions {
   root: string
   outDir: string
   official?: boolean
   sequence?: number
+  previousDescriptorPath?: string
   previousRegistryPath?: string
+  previousShowcasePath?: string
+  previousRegistryV1Path?: string
+  previousShowcaseV1Path?: string
   bootstrapPreviousV1Path?: string
   initialOfficial?: boolean
   v1Revision?: string
   publishIdentities?: readonly string[]
+  publishSelections?: readonly MarketplacePublishSelection[]
+  fetchArtifact?: (artifact: { url: string; size: number; sha256: string }) => Promise<Uint8Array>
 }
 
 export interface MarketplaceBuildResult {
   registry: RegistryV2
   registrySha256: string
   registryV1?: RegistryV1
+  showcaseV1?: ShowcaseV1
   showcase: ShowcaseV2
   artifacts: Array<{
     path: string
@@ -69,6 +98,7 @@ export interface MarketplaceBuildResult {
     }>
   }
   productLockInput: Record<string, unknown>
+  selectionContext?: MarketplaceSelectionContext
 }
 
 interface DiscoveredPackage {
@@ -372,7 +402,7 @@ export async function discoverMarketplacePackages(root: string): Promise<Discove
 export async function changedMarketplaceVersions(
   root: string,
   baseRevision: string,
-): Promise<Array<{ kind: StarterKind; id: string; version: string; releaseTag: string }>> {
+): Promise<MarketplacePublishSelection[]> {
   const effectiveBaseRevision = /^0{40}$/.test(baseRevision) ? "4b825dc642cb6eb9a060e54bf8d69288fbee4904" : baseRevision
   const packages = await discoverMarketplacePackages(root)
   const git = async (args: string[]): Promise<string> => {
@@ -474,21 +504,15 @@ export async function changedMarketplaceVersions(
     basePackages.set(identity, { version, yanked })
   }
   const currentByIdentity = new Map(packages.map((entry) => [`${entry.kind}\0${entry.id}`, entry]))
-  const changed: Array<{ kind: StarterKind; id: string; version: string; releaseTag: string }> = []
+  const changed: MarketplacePublishSelection[] = []
   for (const [identity, previous] of basePackages) {
     if (!currentByIdentity.has(identity) && !previous.yanked) {
       const [kind, id] = identity.split("\0")
       throw new TypeError(`removed ${kind}/${id} must be published as yanked before deletion`)
     }
-    if (!currentByIdentity.has(identity) && previous.yanked) {
-      const [kind, id] = identity.split("\0") as [StarterKind, string]
-      changed.push({
-        kind,
-        id,
-        version: previous.version,
-        releaseTag: releaseTagForPackage({ kind, id, version: previous.version }),
-      })
-    }
+    // Once a package is already yanked in production, deleting its source does
+    // not create another immutable package Release. The deployed baseline keeps
+    // the yanked entry until a separate catalog-policy change removes it.
   }
   for (const entry of packages) {
     const previous = basePackages.get(`${entry.kind}\0${entry.id}`)
@@ -497,6 +521,7 @@ export async function changedMarketplaceVersions(
         kind: entry.kind,
         id: entry.id,
         version: entry.version,
+        ...(previous ? { previousVersion: previous.version } : {}),
         releaseTag: releaseTagForPackage(entry),
       })
       continue
@@ -724,15 +749,49 @@ function mcpAssetStem(entry: Pick<DiscoveredPackage, "id" | "version">): string 
   return `${identityKeyForMcpServer(entry.id).slice(0, 16)}-${versionKeyForMcpServer(entry.id, entry.version)}`
 }
 
-function releaseTagForPackage(entry: Pick<DiscoveredPackage, "kind" | "id" | "version">): string {
-  if (entry.kind === "mcp-server") {
-    return `mcp-server-${identityKeyForMcpServer(entry.id).slice(0, 16)}-v${versionKeyForMcpServer(entry.id, entry.version)}`
-  }
-  return `${entry.kind}-${safeAssetSegment(entry.id)}-v${safeAssetSegment(entry.version)}`
-}
-
 function releaseUrl(descriptor: ReturnType<typeof parseMarketplaceDescriptor>, tag: string, asset: string): string {
   return `https://github.com/${descriptor.repository.owner}/${descriptor.repository.name}/releases/download/${tag}/${asset}`
+}
+
+function releaseAssetCoordinates(
+  descriptor: ReturnType<typeof parseMarketplaceDescriptor>,
+  urlValue: string,
+): { tag: string; name: string } {
+  const url = new URL(urlValue)
+  const expectedPrefix = `/${descriptor.repository.owner}/${descriptor.repository.name}/releases/download/`
+  if (
+    url.protocol !== "https:" ||
+    url.hostname.toLowerCase() !== "github.com" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    !url.pathname.startsWith(expectedPrefix)
+  ) {
+    throw new TypeError("artifact URL must belong to the declared immutable GitHub Release origin")
+  }
+  const [tag, name, ...extra] = url.pathname.slice(expectedPrefix.length).split("/")
+  if (!tag || !name || extra.length > 0 || !SAFE_SEGMENT.test(tag) || !SAFE_SEGMENT.test(name)) {
+    throw new TypeError("artifact URL must contain one safe immutable Release tag and asset name")
+  }
+  return { tag, name }
+}
+
+async function fetchVerifiedArtifact(
+  fetchArtifact: NonNullable<BuildMarketplaceOptions["fetchArtifact"]>,
+  artifact: { url: string; size: number; sha256: string },
+  label: string,
+): Promise<Uint8Array> {
+  if (!Number.isSafeInteger(artifact.size) || artifact.size < 1 || artifact.size > 128 * 1024 * 1024) {
+    throw new TypeError(`${label} has an invalid bounded size`)
+  }
+  const bytes = await fetchArtifact(artifact)
+  if (!(bytes instanceof Uint8Array)) throw new TypeError(`${label} fetch did not return bytes`)
+  if (bytes.byteLength !== artifact.size || sha256Hex(bytes) !== artifact.sha256) {
+    throw new TypeError(`${label} fetched bytes do not match their immutable size and SHA-256`)
+  }
+  return bytes
 }
 
 async function packageInventory(
@@ -957,12 +1016,107 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   const descriptor = parseMarketplaceDescriptor(
     await readJson(join(options.root, "marketplace.json"), "marketplace.json"),
   )
+  if (options.publishIdentities && options.publishSelections) {
+    throw new TypeError("build must not combine identity-only and version-bound selections")
+  }
+  const publishSelections = options.publishSelections
+    ? options.publishSelections.map((selection) => {
+        if (
+          !selection ||
+          typeof selection !== "object" ||
+          (selection.kind !== "plugin" && selection.kind !== "skill" && selection.kind !== "mcp-server") ||
+          typeof selection.id !== "string" ||
+          typeof selection.version !== "string" ||
+          (selection.previousVersion !== undefined && typeof selection.previousVersion !== "string") ||
+          typeof selection.releaseTag !== "string"
+        ) {
+          throw new TypeError("publish selection is invalid")
+        }
+        return { ...selection }
+      })
+    : undefined
+  const selectedIdentities = parsePublishIdentities(
+    publishSelections?.map(packageIdentity) ?? options.publishIdentities,
+  )
+  const previousDescriptor = options.previousDescriptorPath
+    ? parseMarketplaceDescriptor(await readJson(options.previousDescriptorPath, "previous Marketplace descriptor"))
+    : undefined
+  if (options.previousShowcasePath && !options.previousRegistryPath) {
+    throw new TypeError("previous Showcase v2 requires a previous Registry v2")
+  }
+  if (options.previousShowcaseV1Path && !options.previousRegistryV1Path && !options.bootstrapPreviousV1Path) {
+    throw new TypeError("previous Showcase v1 requires a matching Registry v1")
+  }
+  if (options.previousRegistryV1Path && !options.previousShowcaseV1Path) {
+    throw new TypeError("previous Registry v1 requires a previous Showcase v1")
+  }
+  if (options.previousRegistryV1Path && !options.previousRegistryPath) {
+    throw new TypeError("legacy Registry v1 preservation requires a previous Registry v2")
+  }
+  const previousRegistryV2 = options.previousRegistryPath
+    ? parseRegistryV2(await readJson(options.previousRegistryPath, "previous Registry"))
+    : undefined
+  if (previousRegistryV2 && previousRegistryV2.marketplaceId !== descriptor.id) {
+    throw new TypeError("previous Registry belongs to another Marketplace")
+  }
+  const bootstrapRegistryV1 = options.bootstrapPreviousV1Path
+    ? parseRegistryV1(await readJson(options.bootstrapPreviousV1Path, "bootstrap Official Registry v1"))
+    : undefined
+  if (previousRegistryV2 && bootstrapRegistryV1) {
+    throw new TypeError("Official build cannot combine v2 previous and v1 bootstrap")
+  }
+  const previousShowcaseV2 = options.previousShowcasePath
+    ? parseShowcaseV2(
+        await readJson(options.previousShowcasePath, "previous Showcase v2"),
+        previousRegistryV2!,
+        descriptor,
+      )
+    : undefined
+  const previousRegistryV1 = options.previousRegistryV1Path
+    ? parseRegistryV1(await readJson(options.previousRegistryV1Path, "previous Registry v1"))
+    : undefined
+  if (
+    options.initialOfficial &&
+    (previousDescriptor || previousRegistryV2 || bootstrapRegistryV1 || previousRegistryV1 || previousShowcaseV2)
+  ) {
+    throw new TypeError("initial Official build cannot consume a previous publication")
+  }
+  const previousShowcaseV1Value = options.previousShowcaseV1Path
+    ? await readJson(options.previousShowcaseV1Path, "previous Showcase v1")
+    : undefined
+  const bootstrapShowcaseV1 =
+    bootstrapRegistryV1 && previousShowcaseV1Value
+      ? parseShowcaseV1(previousShowcaseV1Value, bootstrapRegistryV1, descriptor)
+      : undefined
+  const legacyShowcaseV1 =
+    previousRegistryV1 && previousShowcaseV1Value
+      ? parseShowcaseV1(previousShowcaseV1Value, previousRegistryV1, descriptor)
+      : undefined
+  if (selectedIdentities) {
+    if (!previousDescriptor) {
+      throw new TypeError("selective build requires a trusted previous Marketplace descriptor")
+    }
+    if (previousRegistryV2 && !previousShowcaseV2) {
+      throw new TypeError("selective build from Registry v2 requires its previous Showcase v2")
+    }
+    if (bootstrapRegistryV1 && !bootstrapShowcaseV1) {
+      throw new TypeError("selective v1 bootstrap requires its previous Showcase v1")
+    }
+    if (!previousRegistryV2 && !bootstrapRegistryV1) {
+      throw new TypeError("selective build requires an explicit production Registry baseline")
+    }
+    if (options.official && descriptor.registry.v1 && previousRegistryV2) {
+      if (!previousRegistryV1 || !legacyShowcaseV1) {
+        throw new TypeError("selective Official build requires the legacy Registry and Showcase v1 baseline")
+      }
+    }
+    if (!options.fetchArtifact) {
+      throw new TypeError("selective build requires a bounded artifact fetch port")
+    }
+  }
   let sequence = options.sequence ?? 1
-  if (!options.official && options.previousRegistryPath) {
-    const previous = parseRegistryV2(await readJson(options.previousRegistryPath, "previous Registry"))
-    if (previous.marketplaceId !== descriptor.id)
-      throw new TypeError("previous Registry belongs to another Marketplace")
-    const nextSequence = previous.sequence + 1
+  if (!options.official && previousRegistryV2) {
+    const nextSequence = previousRegistryV2.sequence + 1
     if (options.sequence !== undefined && options.sequence !== nextSequence) {
       throw new TypeError("Registry explicit sequence does not match previous next sequence")
     }
@@ -985,19 +1139,10 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       throw new TypeError("Official Registry config must strictly declare sequence and yanked")
     }
     let previousSequence: number | undefined
-    if (options.previousRegistryPath && options.bootstrapPreviousV1Path) {
-      throw new TypeError("Official build cannot combine v2 previous and v1 bootstrap")
-    }
-    if (options.previousRegistryPath) {
-      const previous = parseRegistryV2(await readJson(options.previousRegistryPath, "previous Official Registry"))
-      if (previous.marketplaceId !== descriptor.id)
-        throw new TypeError("previous Official Registry belongs to another Marketplace")
-      previousSequence = previous.sequence
-    } else if (options.bootstrapPreviousV1Path) {
-      const previous = parseRegistryV1(
-        await readJson(options.bootstrapPreviousV1Path, "bootstrap Official Registry v1"),
-      )
-      previousSequence = previous.sequence
+    if (previousRegistryV2) {
+      previousSequence = previousRegistryV2.sequence
+    } else if (bootstrapRegistryV1) {
+      previousSequence = bootstrapRegistryV1.sequence
     } else if (!options.initialOfficial) {
       throw new TypeError("Official build requires an explicit previous Registry or initial-candidate flag")
     }
@@ -1124,21 +1269,95 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     }
   }
   registryPackages.sort((left, right) => compareAscii(`${left.kind}/${left.id}`, `${right.kind}/${right.id}`))
-  const revision = sha256Hex(canonicalJson(registryPackages))
-  const registry = parseRegistryV2({
+  const candidateRevision = sha256Hex(canonicalJson(registryPackages))
+  const candidateRegistry = parseRegistryV2({
     schema: "convax.registry/2",
     marketplaceId: descriptor.id,
     sequence,
-    revision,
+    revision: candidateRevision,
     packages: registryPackages,
   })
+  const selectionContext: MarketplaceSelectionContext | undefined = selectedIdentities
+    ? (() => {
+        const baseline = previousRegistryV2
+          ? { mode: "v2" as const, registry: previousRegistryV2, showcase: previousShowcaseV2! }
+          : { mode: "v1" as const, registry: bootstrapRegistryV1!, showcase: bootstrapShowcaseV1! }
+        const baselineRegistry = selectionBaselineRegistry(
+          {
+            schema: MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
+            descriptor: previousDescriptor!,
+            selectedPackages: [],
+            baseline,
+          },
+          descriptor,
+        )
+        const candidateByIdentity = new Map(
+          candidateRegistry.packages.map((entry) => [packageIdentity(entry), entry] as const),
+        )
+        const baselineByIdentity = new Map(
+          baselineRegistry.packages.map((entry) => [packageIdentity(entry), entry] as const),
+        )
+        const requestedByIdentity = new Map(
+          (publishSelections ?? []).map((selection) => [packageIdentity(selection), selection] as const),
+        )
+        return {
+          schema: MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
+          descriptor: previousDescriptor!,
+          selectedPackages: selectedIdentities.map((identity) => {
+            const entry = candidateByIdentity.get(identity)
+            if (!entry) throw new TypeError(`selected package ${identity.replace("\0", "/")} is absent from source`)
+            const requested = requestedByIdentity.get(identity)
+            if (
+              requested &&
+              (requested.version !== entry.version || requested.releaseTag !== releaseTagForPackage(entry))
+            ) {
+              throw new TypeError(`selected package ${identity.replace("\0", "/")} does not match its source plan`)
+            }
+            const productionPreviousVersion = baselineByIdentity.get(identity)?.version
+            return {
+              kind: entry.kind,
+              id: entry.id,
+              version: entry.version,
+              ...(requested?.previousVersion === undefined ? {} : { sourcePreviousVersion: requested.previousVersion }),
+              ...(productionPreviousVersion === undefined ? {} : { productionPreviousVersion }),
+              releaseTag: releaseTagForPackage(entry),
+            }
+          }),
+          baseline,
+          ...(previousRegistryV1 && legacyShowcaseV1
+            ? { legacy: { registry: previousRegistryV1, showcase: legacyShowcaseV1 } }
+            : {}),
+        }
+      })()
+    : undefined
+  const registry = selectionContext
+    ? mergeSelectedRegistry(
+        selectionBaselineRegistry(selectionContext, descriptor),
+        candidateRegistry,
+        selectedIdentities!,
+      )
+    : candidateRegistry
+  if (options.official) {
+    for (const entry of registry.packages) {
+      if (entry.delivery.kind === "artifact") releaseAssetCoordinates(descriptor, entry.delivery.url)
+      if (entry.delivery.kind === "mcp-managed-stdio") {
+        for (const companion of entry.delivery.companions) releaseAssetCoordinates(descriptor, companion.url)
+      }
+      for (const companion of entry.companions ?? []) {
+        for (const target of companion.targets) releaseAssetCoordinates(descriptor, target.artifact.url)
+      }
+    }
+  }
+  const revision = registry.revision
   const registryBytes = jsonBytes(registry)
   await atomicWrite(join(outDir, "registry-v2.json"), registryBytes)
   const metadataTag = `registry-v2-${revision}`
   const showcaseReleaseAssets: MarketplaceBuildResult["releasePlan"]["releases"][number]["assets"] = []
+  const showcaseBytesByUrl = new Map<string, Uint8Array>()
   const showcasePackages: ShowcaseV2["packages"] = []
   for (const entry of packages) {
     if (entry.kind === "mcp-server" && entry.catalogSupported === false) continue
+    if (selectionContext && !selectedIdentities!.includes(packageIdentity(entry))) continue
     const showcaseValue = entry.authoring?.showcase
     if (showcaseValue === undefined) continue
     if (!showcaseValue || typeof showcaseValue !== "object" || Array.isArray(showcaseValue)) {
@@ -1205,6 +1424,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       const path = join(outDir, "releases", metadataTag, assetName)
       const url = releaseUrl(descriptor, metadataTag, assetName)
       await atomicWrite(path, bytes)
+      showcaseBytesByUrl.set(url, bytes)
       const asset = {
         path: relative(outDir, path).split(sep).join("/"),
         name: assetName,
@@ -1235,6 +1455,30 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       },
     })
   }
+  if (selectionContext) {
+    for (const inherited of inheritedShowcasePackages(selectionContext, descriptor, registry)) {
+      for (const { source, targetUrl } of inherited.sources) {
+        const bytes = await fetchVerifiedArtifact(options.fetchArtifact!, source, "inherited Showcase asset")
+        const { tag, name } = releaseAssetCoordinates(descriptor, targetUrl)
+        if (tag !== metadataTag) throw new TypeError("inherited Showcase asset targets the wrong metadata Release")
+        if (showcaseReleaseAssets.some((asset) => asset.name === name)) {
+          throw new TypeError(`duplicate Showcase Release asset ${name}`)
+        }
+        const path = join(outDir, "releases", metadataTag, name)
+        await atomicWrite(path, bytes)
+        showcaseBytesByUrl.set(targetUrl, bytes)
+        showcaseReleaseAssets.push({
+          path: relative(outDir, path).split(sep).join("/"),
+          name,
+          size: source.size,
+          sha256: source.sha256,
+          url: targetUrl,
+        })
+      }
+      showcasePackages.push(inherited.package)
+    }
+  }
+  showcasePackages.sort((left, right) => compareAscii(packageIdentity(left), packageIdentity(right)))
   const showcase = parseShowcaseV2(
     {
       schema: "convax.showcase/2",
@@ -1245,6 +1489,9 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     registry,
     descriptor,
   )
+  if (selectionContext) {
+    await atomicWrite(join(outDir, "selection-context.json"), jsonBytes(selectionContext))
+  }
   const showcaseBytes = jsonBytes(showcase)
   await atomicWrite(join(outDir, "showcase-v2.json"), showcaseBytes)
   const { bytes: descriptorBytes } = await readStableRegularFile(
@@ -1268,18 +1515,144 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     return join(outDir, "site", ...segments)
   }
   const registryV1 = options.official ? projectRegistryV1(registry, options.v1Revision!) : undefined
+  const legacyShowcaseReleaseAssets = new Map<
+    string,
+    MarketplaceBuildResult["releasePlan"]["releases"][number]["assets"]
+  >()
+  const showcaseV1 = registryV1
+    ? await (async (): Promise<ShowcaseV1> => {
+        const selected = new Set(selectedIdentities ?? registry.packages.map(packageIdentity))
+        const projectedByIdentity = new Map(
+          registryV1.packages.map((entry) => [packageIdentity(entry), entry] as const),
+        )
+        const packagesV1: ShowcaseV1["packages"] = []
+        const legacyBaseline = selectionContext
+          ? (selectionContext.legacy ??
+            (selectionContext.baseline.mode === "v1"
+              ? {
+                  registry: selectionContext.baseline.registry,
+                  showcase: selectionContext.baseline.showcase,
+                }
+              : undefined))
+          : undefined
+        if (legacyBaseline) {
+          for (const entry of legacyBaseline.showcase.packages) {
+            const identity = packageIdentity(entry)
+            const projected = projectedByIdentity.get(identity)
+            if (!selected.has(identity) && projected?.version === entry.version && !projected.yanked) {
+              packagesV1.push(entry)
+            }
+          }
+        }
+        const legacyMimes = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4"])
+        const projectAsset = async (
+          entry: ShowcaseV2["packages"][number],
+          role: "poster" | "animation",
+          source: ShowcaseV2["packages"][number]["presentation"]["poster"],
+        ) => {
+          if (
+            !legacyMimes.has(source.mime) ||
+            source.alt === undefined ||
+            source.width === undefined ||
+            source.height === undefined
+          ) {
+            throw new TypeError(
+              `Official Showcase v1 ${entry.kind}/${entry.id} ${role} requires compatible mime, alt, and dimensions`,
+            )
+          }
+          const bytes = showcaseBytesByUrl.get(source.url)
+          if (!bytes) throw new TypeError(`Official Showcase v1 ${entry.kind}/${entry.id} ${role} has no local bytes`)
+          const tag = releaseTagForPackage(entry)
+          const name = legacyShowcaseAssetName(
+            { kind: entry.kind as "plugin" | "skill", id: entry.id, version: entry.version },
+            role,
+            source.mime as "image/png" | "image/jpeg" | "image/webp" | "video/mp4",
+          )
+          const url = releaseUrl(descriptor, tag, name)
+          const path = join(outDir, "releases", tag, name)
+          await atomicWrite(path, bytes)
+          const assets = legacyShowcaseReleaseAssets.get(tag) ?? []
+          if (assets.some((asset) => asset.name === name)) {
+            throw new TypeError(`duplicate legacy Showcase Release asset ${name}`)
+          }
+          assets.push({
+            path: relative(outDir, path).split(sep).join("/"),
+            name,
+            size: source.size,
+            sha256: source.sha256,
+            url,
+          })
+          legacyShowcaseReleaseAssets.set(tag, assets)
+          return {
+            url,
+            mime: source.mime,
+            size: source.size,
+            sha256: source.sha256,
+            width: source.width,
+            height: source.height,
+            alt: source.alt,
+          }
+        }
+        for (const entry of showcase.packages) {
+          const identity = packageIdentity(entry)
+          if (!selected.has(identity) || (entry.kind !== "plugin" && entry.kind !== "skill")) continue
+          const projected = projectedByIdentity.get(identity)
+          if (!projected || projected.version !== entry.version || projected.yanked) continue
+          const poster = (await projectAsset(
+            entry,
+            "poster",
+            entry.presentation.poster,
+          )) as ShowcaseV1["packages"][number]["poster"]
+          const animation = entry.presentation.animation
+            ? ((await projectAsset(entry, "animation", entry.presentation.animation)) as NonNullable<
+                ShowcaseV1["packages"][number]["animation"]
+              >)
+            : undefined
+          packagesV1.push({
+            kind: entry.kind,
+            id: entry.id,
+            version: entry.version,
+            poster,
+            ...(animation ? { animation } : {}),
+          })
+        }
+        packagesV1.sort((left, right) => compareAscii(packageIdentity(left), packageIdentity(right)))
+        return parseShowcaseV1(
+          {
+            schema: "convax.showcase/1",
+            sequence: registryV1.sequence,
+            revision: registryV1.revision,
+            packages: packagesV1,
+          },
+          registryV1,
+          descriptor,
+        )
+      })()
+    : undefined
+  if (selectionContext) {
+    assertSelectiveMarketplaceClosure({
+      context: selectionContext,
+      descriptor,
+      registry,
+      showcase,
+      ...(registryV1 ? { registryV1 } : {}),
+      ...(showcaseV1 ? { showcaseV1 } : {}),
+    })
+  }
   if (registryV1) await atomicWrite(join(outDir, "registry-v1.json"), jsonBytes(registryV1))
+  if (showcaseV1) await atomicWrite(join(outDir, "showcase-v1.json"), jsonBytes(showcaseV1))
   await atomicWrite(join(outDir, "marketplace.json"), descriptorBytes)
   await atomicWrite(join(outDir, "site", "marketplace.json"), descriptorBytes)
   await atomicWrite(sitePathForPagesUrl(descriptor.registry.v2.url), registryBytes)
   await atomicWrite(sitePathForPagesUrl(descriptor.showcase.v2.url), showcaseBytes)
   if (registryV1 && descriptor.registry.v1) {
     await atomicWrite(sitePathForPagesUrl(descriptor.registry.v1.url), jsonBytes(registryV1))
+    await atomicWrite(join(outDir, "site", "showcase", "v1", "index.json"), jsonBytes(showcaseV1))
   }
   const releases = new Map<string, MarketplaceBuildResult["releasePlan"]["releases"][number]>()
   for (const artifact of artifacts) {
-    if (options.publishIdentities && !options.publishIdentities.includes(`${artifact.kind}\0${artifact.id}`)) {
-      if (!options.official) await unlink(artifact.path)
+    if (selectedIdentities && !selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`)) {
+      await unlink(artifact.path)
       continue
     }
     const release = releases.get(artifact.releaseTag) ?? { tag: artifact.releaseTag, assets: [] }
@@ -1291,6 +1664,16 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       url: artifact.url,
     })
     releases.set(artifact.releaseTag, release)
+  }
+  for (const [tag, assets] of legacyShowcaseReleaseAssets) {
+    const release = releases.get(tag) ?? { tag, assets: [] }
+    for (const asset of assets) {
+      if (release.assets.some((existing) => existing.name === asset.name)) {
+        throw new TypeError(`duplicate Release asset ${tag}/${asset.name}`)
+      }
+      release.assets.push(asset)
+    }
+    releases.set(tag, release)
   }
   const metadataAssets = [
     { name: "marketplace.json", bytes: descriptorBytes },
@@ -1329,19 +1712,31 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     url: asset.url,
   })
   const metadataByName = new Map(metadataRelease.assets.map((asset) => [asset.name, asset]))
-  const artifactByUrl = new Map(
-    artifacts.map((artifact) => [
-      artifact.url,
-      { path: relative(outDir, artifact.path).split(sep).join("/"), url: artifact.url },
-    ]),
-  )
-  const packageArtifactByIdentity = new Map(
-    registryPackages.flatMap((entry) =>
-      entry.delivery.kind === "artifact"
-        ? [[`${entry.kind}\0${entry.id}`, artifactByUrl.get(entry.delivery.url)!] as const]
-        : [],
+  const lockedArtifactByUrl = new Map(
+    artifacts.flatMap((artifact) =>
+      selectedIdentities && !selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`)
+        ? []
+        : [[artifact.url, { path: relative(outDir, artifact.path).split(sep).join("/"), url: artifact.url }] as const],
     ),
   )
+  const lockRegistryArtifact = async (
+    artifact: { url: string; size: number; sha256: string },
+    label: string,
+  ): Promise<{ path: string; url: string }> => {
+    const local = lockedArtifactByUrl.get(artifact.url)
+    if (local) return local
+    if (!options.fetchArtifact) throw new TypeError(`${label} is inherited but no artifact fetch port was provided`)
+    const bytes = await fetchVerifiedArtifact(options.fetchArtifact, artifact, label)
+    const sourceUrl = new URL(artifact.url)
+    const name = sourceUrl.pathname.slice(sourceUrl.pathname.lastIndexOf("/") + 1)
+    if (!SAFE_SEGMENT.test(name)) throw new TypeError(`${label} has an unsafe Release asset name`)
+    const path = join(outDir, "inherited", artifact.sha256, name)
+    await atomicWrite(path, bytes)
+    const locked = { path: relative(outDir, path).split(sep).join("/"), url: artifact.url }
+    lockedArtifactByUrl.set(artifact.url, locked)
+    return locked
+  }
+  const registryByIdentity = new Map(registry.packages.map((entry) => [packageIdentity(entry), entry] as const))
   const preinstalled = options.official
     ? (() => {
         return readJson(join(options.root, "catalogs", "preinstalled.json"), "preinstalled config")
@@ -1375,27 +1770,21 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   } else if (preinstalledConfig.packages.length !== 0) {
     throw new TypeError("third-party Marketplace cannot emit a Convax product preinstalled policy")
   }
-  const productLockInput = {
-    schema: "convax.product-lock-catalog-input/1",
-    official: {
-      descriptor: lockArtifact(metadataByName.get("marketplace.json")!),
-      registry: lockArtifact(metadataByName.get("registry-v2.json")!),
-      revision,
-      showcase: lockArtifact(metadataByName.get("showcase-v2.json")!),
-    },
-    packages: preinstalledConfig.packages.map((rawPreinstalled) => {
+  const lockedPreinstalledPackages = await Promise.all(
+    preinstalledConfig.packages.map(async (rawPreinstalled) => {
       if (!rawPreinstalled || typeof rawPreinstalled !== "object" || Array.isArray(rawPreinstalled)) {
         throw new TypeError("invalid preinstalled package")
       }
       const selected = rawPreinstalled as Record<string, unknown>
-      const entry = registryPackages.find(
-        (candidate) => candidate.kind === selected.kind && candidate.id === selected.id,
-      )
+      const identity = `${String(selected.kind)}\0${String(selected.id)}`
+      const entry = registryByIdentity.get(identity)
       if (!entry || entry.kind !== "plugin" || entry.delivery.kind !== "artifact") {
         throw new TypeError(`preinstalled package ${String(selected.kind)}/${String(selected.id)} is unavailable`)
       }
-      const packageArtifact = packageArtifactByIdentity.get(`${entry.kind}\0${entry.id}`)
-      if (!packageArtifact) throw new TypeError(`preinstalled package ${entry.id} has no locked artifact`)
+      const packageArtifact = await lockRegistryArtifact(
+        entry.delivery,
+        `preinstalled package ${entry.kind}/${entry.id}`,
+      )
       const ownedSkillNames =
         entry.manifest?.contributes &&
         typeof entry.manifest.contributes === "object" &&
@@ -1411,25 +1800,32 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
             )
           : []
       const selectedTargets = selected.targets as string[]
-      const companions = (entry.companions ?? []).flatMap((companion) =>
-        companion.targets
-          .filter((target) => selectedTargets.includes(`${target.platform}-${target.arch}`))
-          .map((target) => {
-            const artifact = artifactByUrl.get(target.artifact.url)
-            if (!artifact)
-              throw new TypeError(
-                `preinstalled companion ${entry.id}/${target.platform}-${target.arch} has no locked artifact`,
-              )
-            return {
-              ...artifact,
+      const companions = await Promise.all(
+        (entry.companions ?? []).flatMap((companion) =>
+          companion.targets
+            .filter((target) => selectedTargets.includes(`${target.platform}-${target.arch}`))
+            .map(async (target) => ({
+              ...(await lockRegistryArtifact(
+                target.artifact,
+                `preinstalled companion ${entry.id}/${target.platform}-${target.arch}`,
+              )),
               platform: target.platform,
               arch: target.arch,
-            }
-          }),
+            })),
+        ),
       )
       if (companions.length !== selectedTargets.length) {
         throw new TypeError(`preinstalled package ${entry.id} does not close its selected companion targets`)
       }
+      const ownedSkills = await Promise.all(
+        ownedSkillNames.map(async (name) => {
+          const skill = registryByIdentity.get(`skill\0${name}`)
+          if (!skill || skill.kind !== "skill" || skill.delivery.kind !== "artifact") {
+            throw new TypeError(`owned Skill ${name} has no independently locked artifact`)
+          }
+          return lockRegistryArtifact(skill.delivery, `owned Skill ${name}`)
+        }),
+      )
       return {
         marketplaceId: selected.marketplaceId,
         kind: entry.kind,
@@ -1437,24 +1833,34 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
         version: entry.version,
         setup: selected.setup,
         artifact: packageArtifact,
-        ownedSkills: ownedSkillNames.map((name) => {
-          const artifact = packageArtifactByIdentity.get(`skill\0${name}`)
-          if (!artifact) throw new TypeError(`owned Skill ${name} has no independently locked artifact`)
-          return artifact
-        }),
+        ownedSkills,
         companions,
       }
     }),
+  )
+  const productLockInput = {
+    schema: "convax.product-lock-catalog-input/1",
+    official: {
+      descriptor: lockArtifact(metadataByName.get("marketplace.json")!),
+      registry: lockArtifact(metadataByName.get("registry-v2.json")!),
+      revision,
+      showcase: lockArtifact(metadataByName.get("showcase-v2.json")!),
+    },
+    packages: lockedPreinstalledPackages,
   }
   await atomicWrite(join(outDir, "product-lock-input.catalog.json"), jsonBytes(productLockInput))
   return {
     registry,
     registrySha256: sha256Hex(registryBytes),
     ...(registryV1 ? { registryV1 } : {}),
+    ...(showcaseV1 ? { showcaseV1 } : {}),
     showcase,
-    artifacts,
+    artifacts: selectedIdentities
+      ? artifacts.filter((artifact) => selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`))
+      : artifacts,
     releasePlan,
     productLockInput,
+    ...(selectionContext ? { selectionContext } : {}),
   }
 }
 
@@ -1462,7 +1868,15 @@ export async function buildRegistryV2(options: BuildMarketplaceOptions): Promise
   return (await buildMarketplace(options)).registry
 }
 
-export { parseRegistryV1, parseRegistryV2, projectRegistryV1 }
+export { parseRegistryV1, parseRegistryV2, projectRegistryV1, releaseTagForPackage }
+export {
+  MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
+  assertSelectiveMarketplaceClosure,
+  packageIdentity,
+  parseMarketplaceSelectionContext,
+  parsePublishIdentities,
+} from "./selective"
+export type { MarketplaceSelectionContext } from "./selective"
 
 export async function composeProductLockInput(options: {
   catalogDir: string
@@ -1762,7 +2176,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.1.0",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.1.1",
         },
       },
       null,
@@ -1772,7 +2186,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
   await atomicWrite(join(root, "bunfig.toml"), "install.ignoreScripts = true\n")
   await atomicWrite(
     join(root, ".gitignore"),
-    "node_modules/\n.bun-cache/\ndist/\nprevious-registry.json\nchanged-packages.json\n",
+    "node_modules/\n.bun-cache/\ndist/\nprevious-marketplace.json\nprevious-registry.json\nprevious-showcase.json\nchanged-packages.json\n",
   )
   await createMarketplaceTemplate(
     root,
@@ -1840,15 +2254,23 @@ jobs:
       - if: steps.versions.outputs.changed == 'true'
         run: |
           set -euo pipefail
+          pages_base="https://$(jq -r '.repository.owner' marketplace.json | tr '[:upper:]' '[:lower:]').github.io/$(jq -r '.repository.name' marketplace.json)"
+          descriptor_url="$pages_base/marketplace.json"
           registry_url="$(jq -r '.registry.v2.url' marketplace.json)"
-          status="$(curl --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --output previous-registry.json --write-out '%{http_code}' "$registry_url")"
-          if [ "$status" = "200" ]; then
-            bun marketplace build-index . --out dist --changed changed-packages.json --previous previous-registry.json
-          elif [ "$status" = "404" ]; then
-            rm -f previous-registry.json
-            bun marketplace build-index . --out dist --changed changed-packages.json --initial
+          showcase_url="$(jq -r '.showcase.v2.url' marketplace.json)"
+          descriptor_status="$(curl --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --output previous-marketplace.json --write-out '%{http_code}' "$descriptor_url")"
+          registry_status="$(curl --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --output previous-registry.json --write-out '%{http_code}' "$registry_url")"
+          showcase_status="$(curl --proto '=https' --max-redirs 0 --connect-timeout 10 --max-time 30 --output previous-showcase.json --write-out '%{http_code}' "$showcase_url")"
+          if [ "$descriptor_status/$registry_status/$showcase_status" = "200/200/200" ]; then
+            bun marketplace build-index . --out dist --changed changed-packages.json \
+              --previous-descriptor previous-marketplace.json \
+              --previous previous-registry.json \
+              --previous-showcase previous-showcase.json
+          elif [ "$descriptor_status/$registry_status/$showcase_status" = "404/404/404" ]; then
+            rm -f previous-marketplace.json previous-registry.json previous-showcase.json
+            bun marketplace build-index . --out dist --initial
           else
-            echo "Registry fetch failed with HTTP $status" >&2
+            echo "Marketplace baseline is inconsistent: descriptor=$descriptor_status registry=$registry_status showcase=$showcase_status" >&2
             exit 1
           fi
       - if: steps.versions.outputs.changed == 'true'

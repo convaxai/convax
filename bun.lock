@@ -138,7 +138,7 @@
     },
     "packages/marketplace": {
       "name": "@convax/marketplace",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "ajv": "8.20.0",
       },
@@ -151,7 +151,7 @@
     },
     "packages/marketplace-kit": {
       "name": "@convax/marketplace-kit",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "convax-marketplace": "./dist/cli.js",
       },

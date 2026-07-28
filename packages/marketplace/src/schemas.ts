@@ -209,6 +209,32 @@ export interface ShowcaseAsset {
   height?: number
 }
 
+export type ShowcaseV1PosterMime = "image/jpeg" | "image/png" | "image/webp"
+export type ShowcaseV1AnimationMime = "image/gif" | "video/mp4"
+
+export interface ShowcaseV1Asset<Mime extends ShowcaseV1PosterMime | ShowcaseV1AnimationMime> {
+  url: string
+  mime: Mime
+  size: number
+  sha256: Sha256
+  width: number
+  height: number
+  alt: string
+}
+
+export interface ShowcaseV1 {
+  schema: "convax.showcase/1"
+  sequence: number
+  revision: string
+  packages: Array<{
+    kind: "plugin" | "skill"
+    id: string
+    version: string
+    poster: ShowcaseV1Asset<ShowcaseV1PosterMime>
+    animation?: ShowcaseV1Asset<ShowcaseV1AnimationMime>
+  }>
+}
+
 export interface ShowcaseV2 {
   schema: "convax.showcase/2"
   marketplaceId: string
@@ -1192,6 +1218,184 @@ export function parseRegistryV1(value: unknown): RegistryV1 {
     identities.add(identity)
   }
   return { schema: "convax.registry/1", sequence, revision, packages }
+}
+
+const V1_SHOWCASE_POSTER_EXTENSIONS: Readonly<Record<ShowcaseV1PosterMime, string>> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+}
+const V1_SHOWCASE_ANIMATION_EXTENSIONS: Readonly<Record<ShowcaseV1AnimationMime, string>> = {
+  "image/gif": ".gif",
+  "video/mp4": ".mp4",
+}
+
+function legacyReleaseSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_")
+}
+
+export function legacyPackageReleaseTag(identity: { kind: "plugin" | "skill"; id: string; version: string }): string {
+  return `${identity.kind}-${legacyReleaseSegment(identity.id)}-v${legacyReleaseSegment(identity.version)}`
+}
+
+export function legacyShowcaseAssetName(
+  identity: { kind: "plugin" | "skill"; id: string; version: string },
+  role: "poster" | "animation",
+  mime: ShowcaseV1PosterMime | ShowcaseV1AnimationMime,
+): string {
+  const extensions: Readonly<Record<string, string>> = {
+    ...V1_SHOWCASE_POSTER_EXTENSIONS,
+    ...V1_SHOWCASE_ANIMATION_EXTENSIONS,
+  }
+  const extension = extensions[mime]
+  if (!extension) throw new TypeError("Showcase v1 asset mime is unsupported")
+  return `convax-showcase-${identity.kind}-${legacyReleaseSegment(identity.id)}-${legacyReleaseSegment(identity.version)}-${role}${extension}`
+}
+
+function hasOwnKey<Key extends PropertyKey>(value: Readonly<Record<Key, unknown>>, key: PropertyKey): key is Key {
+  return Object.hasOwn(value, key)
+}
+
+function parseShowcaseV1Asset<Mime extends ShowcaseV1PosterMime | ShowcaseV1AnimationMime>(
+  value: unknown,
+  identity: { kind: "plugin" | "skill"; id: string; version: string },
+  role: "poster" | "animation",
+  extensions: Readonly<Record<Mime, string>>,
+  maxSize: number,
+  descriptor: MarketplaceDescriptor,
+): ShowcaseV1Asset<Mime> {
+  const label = `Showcase v1 ${role}`
+  const asset = record(value, label)
+  strictKeys(
+    asset,
+    ["url", "mime", "size", "sha256", "width", "height", "alt"],
+    ["url", "mime", "size", "sha256", "width", "height", "alt"],
+    label,
+  )
+  const mime = string(asset.mime, `${label}.mime`, 80)
+  if (!hasOwnKey(extensions, mime)) throw new TypeError(`${label}.mime is unsupported`)
+  const size = integer(asset.size, `${label}.size`, maxSize)
+  if (size < 1) throw new TypeError(`${label}.size must be positive`)
+  const width = integer(asset.width, `${label}.width`, 8_192)
+  const height = integer(asset.height, `${label}.height`, 8_192)
+  if (width < 1 || height < 1) throw new TypeError(`${label} dimensions must be positive`)
+  const alt = string(asset.alt, `${label}.alt`, 500)
+  if (alt !== alt.trim() || /[\u0000-\u001f\u007f]/.test(alt)) {
+    throw new TypeError(`${label}.alt must be a non-empty trimmed string without control characters`)
+  }
+  const assetName = legacyShowcaseAssetName(identity, role, mime)
+  const expectedUrl =
+    `https://github.com/${descriptor.repository.owner}/${descriptor.repository.name}/releases/download/` +
+    `${legacyPackageReleaseTag(identity)}/${assetName}`
+  let url: string
+  try {
+    url = httpsUrl(asset.url, `${label}.url`)
+  } catch {
+    throw new TypeError(`${label}.url must be an immutable package Release asset in the declared repository`)
+  }
+  if (url !== expectedUrl) {
+    throw new TypeError(`${label}.url must be an immutable package Release asset in the declared repository`)
+  }
+  return {
+    url,
+    mime,
+    size,
+    sha256: sha256(asset.sha256, `${label}.sha256`),
+    width,
+    height,
+    alt,
+  }
+}
+
+export function parseShowcaseV1(value: unknown, registry: RegistryV1, descriptor: MarketplaceDescriptor): ShowcaseV1 {
+  const parsed = record(value, "Showcase v1")
+  strictKeys(
+    parsed,
+    ["schema", "sequence", "revision", "packages"],
+    ["schema", "sequence", "revision", "packages"],
+    "Showcase v1",
+  )
+  if (parsed.schema !== "convax.showcase/1") throw new TypeError("unsupported Showcase v1 schema")
+  const sequence = integer(parsed.sequence, "Showcase v1 sequence")
+  if (sequence < 1) throw new TypeError("Showcase v1 sequence must be positive")
+  const revision = string(parsed.revision, "Showcase v1 revision", 40)
+  if (!/^[a-f0-9]{40}$/.test(revision)) {
+    throw new TypeError("Showcase v1 revision must be a 40-character lowercase hex digest")
+  }
+  if (sequence !== registry.sequence || revision !== registry.revision) {
+    throw new TypeError("Showcase v1 sequence/revision does not match Registry")
+  }
+  if (
+    !Array.isArray(parsed.packages) ||
+    parsed.packages.length > 10_000 ||
+    parsed.packages.length > registry.packages.length
+  ) {
+    throw new TypeError("Showcase v1 packages must be bounded by the Registry")
+  }
+  const registryByIdentity = new Map(registry.packages.map((entry) => [`${entry.kind}\0${entry.id}`, entry]))
+  const identities = new Set<string>()
+  const urls = new Set<string>()
+  const packages = parsed.packages.map((packageValue): ShowcaseV1["packages"][number] => {
+    const entry = record(packageValue, "Showcase v1 package")
+    strictKeys(
+      entry,
+      ["kind", "id", "version", "poster", "animation"],
+      ["kind", "id", "version", "poster"],
+      "Showcase v1 package",
+    )
+    if (entry.kind !== "plugin" && entry.kind !== "skill") {
+      throw new TypeError("Showcase v1 package kind must be plugin or skill")
+    }
+    const kind: "plugin" | "skill" = entry.kind
+    const id = string(entry.id, "Showcase v1 package id", kind === "plugin" ? 80 : 64)
+    if (!V1_SLUG.test(id)) throw new TypeError("Showcase v1 package id must be a lowercase slug")
+    const version = string(entry.version, "Showcase v1 package version", 255)
+    if (!V1_SEMVER.test(version)) throw new TypeError("Showcase v1 package version must be SemVer")
+    const identity = `${kind}\0${id}`
+    if (identities.has(identity)) throw new TypeError(`duplicate Showcase v1 identity ${kind}/${id}`)
+    identities.add(identity)
+    const registryEntry = registryByIdentity.get(identity)
+    if (!registryEntry || registryEntry.yanked || registryEntry.version !== version) {
+      throw new TypeError(`Showcase v1 package ${kind}/${id}@${version} does not match Registry`)
+    }
+    const packageIdentity = { kind, id, version }
+    const poster = parseShowcaseV1Asset(
+      entry.poster,
+      packageIdentity,
+      "poster",
+      V1_SHOWCASE_POSTER_EXTENSIONS,
+      5 * 1024 * 1024,
+      descriptor,
+    )
+    const animation =
+      entry.animation === undefined
+        ? undefined
+        : parseShowcaseV1Asset(
+            entry.animation,
+            packageIdentity,
+            "animation",
+            V1_SHOWCASE_ANIMATION_EXTENSIONS,
+            20 * 1024 * 1024,
+            descriptor,
+          )
+    for (const url of [poster.url, ...(animation ? [animation.url] : [])]) {
+      if (urls.has(url)) throw new TypeError(`Showcase v1 reuses media URL ${url}`)
+      urls.add(url)
+    }
+    return {
+      kind,
+      id,
+      version,
+      poster,
+      ...(animation ? { animation } : {}),
+    }
+  })
+  return {
+    schema: "convax.showcase/1",
+    sequence: registry.sequence,
+    revision: registry.revision,
+    packages,
+  }
 }
 
 export function parseBuiltinBundle(value: unknown): BuiltinBundle {

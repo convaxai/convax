@@ -1,0 +1,109 @@
+name: Publish Marketplace packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact convax-next commit to stage
+        required: true
+        type: string
+      marketplace_version:
+        description: Expected @convax/marketplace version
+        required: true
+        default: 0.1.1
+        type: string
+      kit_version:
+        description: Expected @convax/marketplace-kit version
+        required: true
+        default: 0.1.1
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-marketplace-packages
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: github.ref == 'refs/heads/convax-next'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+      - name: Verify protected source identity
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT" ]
+          git merge-base --is-ancestor HEAD origin/convax-next
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - run: npm install --global npm@11.18.0
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun check
+      - name: Pack and verify immutable tarballs
+        env:
+          MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
+          KIT_VERSION: ${{ inputs.kit_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-release"
+          (cd packages/marketplace && bun pm pack --destination "$RUNNER_TEMP/npm-release")
+          (cd packages/marketplace-kit && bun pm pack --destination "$RUNNER_TEMP/npm-release")
+          marketplace_tarball="$RUNNER_TEMP/npm-release/convax-marketplace-$MARKETPLACE_VERSION.tgz"
+          kit_tarball="$RUNNER_TEMP/npm-release/convax-marketplace-kit-$KIT_VERSION.tgz"
+          [ -f "$marketplace_tarball" ]
+          [ -f "$kit_tarball" ]
+          [ "$(tar -xOf "$marketplace_tarball" package/package.json | jq -r '.name + "@" + .version')" = "@convax/marketplace@$MARKETPLACE_VERSION" ]
+          [ "$(tar -xOf "$kit_tarball" package/package.json | jq -r '.name + "@" + .version')" = "@convax/marketplace-kit@$KIT_VERSION" ]
+          [ "$(tar -xOf "$kit_tarball" package/package.json | jq -r '.dependencies["@convax/marketplace"]')" = "^$MARKETPLACE_VERSION" ]
+          ! tar -xOf "$kit_tarball" package/package.json | grep -Eq 'workspace:|catalog:'
+          sha512sum "$marketplace_tarball" "$kit_tarball" > "$RUNNER_TEMP/npm-release/SHA512SUMS"
+      - name: Refuse version reuse
+        env:
+          MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
+          KIT_VERSION: ${{ inputs.kit_version }}
+        run: |
+          set -euo pipefail
+          assert_version_available() {
+            local package="$1"
+            local version="$2"
+            local output
+            if output="$(npm view "$package@$version" version --json 2>&1)"; then
+              echo "$package@$version already exists and cannot be reused" >&2
+              exit 1
+            fi
+            if [[ "$output" != *"E404"* ]]; then
+              echo "Could not safely verify $package@$version availability" >&2
+              printf '%s\n' "$output" >&2
+              exit 1
+            fi
+          }
+          assert_version_available "@convax/marketplace" "$MARKETPLACE_VERSION"
+          assert_version_available "@convax/marketplace-kit" "$KIT_VERSION"
+      - name: Stage packages for maintainer approval
+        env:
+          NPM_CONFIG_PROVENANCE: "false"
+          MARKETPLACE_VERSION: ${{ inputs.marketplace_version }}
+          KIT_VERSION: ${{ inputs.kit_version }}
+        run: |
+          set -euo pipefail
+          npm stage publish "$RUNNER_TEMP/npm-release/convax-marketplace-$MARKETPLACE_VERSION.tgz" --access public
+          npm stage publish "$RUNNER_TEMP/npm-release/convax-marketplace-kit-$KIT_VERSION.tgz" --access public
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: marketplace-npm-tarballs
+          path: ${{ runner.temp }}/npm-release
+          if-no-files-found: error
+          retention-days: 7

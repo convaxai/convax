@@ -13,8 +13,11 @@ import {
   parseMarketplaceDescriptor,
   parseMarketplaceProductLock,
   parseBuiltinBundle,
+  legacyPackageReleaseTag,
+  legacyShowcaseAssetName,
   parseRegistryV1,
   parseRegistryV2,
+  parseShowcaseV1,
   parseShowcaseV2,
   parseServerPackage,
   projectRegistryV1,
@@ -23,6 +26,7 @@ import {
   resolveSourceRegistration,
   resolveInstallConflict,
   sha256Hex,
+  type ShowcaseV1,
   versionKeyForMcpServer,
 } from "./index"
 import { OFFICIAL_SERVER_SCHEMA_SHA256, OFFICIAL_SERVER_SCHEMA_BYTES } from "./server-schema"
@@ -868,6 +872,93 @@ describe("@convax/marketplace strict contracts", () => {
                   ...showcase.packages[0].presentation.poster,
                   url: "https://github.com/evil/market/releases/download/registry-v2-a/poster.png",
                 },
+              },
+            },
+          ],
+        },
+        registry,
+        descriptor,
+      ),
+    ).toThrow("declared repository")
+  })
+
+  test("strictly binds legacy Showcase v1 to its Registry and package Releases", () => {
+    expect(legacyPackageReleaseTag({ kind: "skill", id: "storyboard", version: "1.0.0+build.1" })).toBe(
+      "skill-storyboard-v1.0.0_build.1",
+    )
+    expect(
+      legacyShowcaseAssetName({ kind: "skill", id: "storyboard", version: "1.0.0+build.1" }, "poster", "image/png"),
+    ).toBe("convax-showcase-skill-storyboard-1.0.0_build.1-poster.png")
+    const descriptor = parseMarketplaceDescriptor({
+      schema: "convax.marketplace/1",
+      id: "convax-official",
+      name: "Convax Official",
+      publisher: { name: "Microvoid" },
+      repository: { owner: "microvoid", name: "convax-plugins" },
+      registry: {
+        v1: { url: "https://microvoid.github.io/convax-plugins/registry/v1/index.json" },
+        v2: { url: "https://microvoid.github.io/convax-plugins/registry/v2/index.json" },
+      },
+      showcase: { v2: { url: "https://microvoid.github.io/convax-plugins/showcase/v2/index.json" } },
+      compatibility: { convax: ">=0.1.0" },
+      delivery: { kind: "github-pages-releases" },
+    })
+    const registry = parseRegistryV1({
+      schema: "convax.registry/1",
+      sequence: 49,
+      revision: "a".repeat(40),
+      packages: [
+        {
+          kind: "skill",
+          id: "storyboard",
+          name: "Storyboard",
+          description: "Storyboard workflow",
+          version: "1.0.0",
+          compatibility: { skillSchema: "opencode.skill/1" },
+          artifact: {
+            url: "https://github.com/microvoid/convax-plugins/releases/download/skill-storyboard-v1.0.0/convax-skill-storyboard-1.0.0.zip",
+            size: 10,
+            sha256: "a".repeat(64),
+          },
+          yanked: false,
+        },
+      ],
+    })
+    const showcase: ShowcaseV1 = {
+      schema: "convax.showcase/1",
+      sequence: registry.sequence,
+      revision: registry.revision,
+      packages: [
+        {
+          kind: "skill",
+          id: "storyboard",
+          version: "1.0.0",
+          poster: {
+            url: "https://github.com/microvoid/convax-plugins/releases/download/skill-storyboard-v1.0.0/convax-showcase-skill-storyboard-1.0.0-poster.png",
+            mime: "image/png",
+            size: 10,
+            sha256: "b".repeat(64),
+            width: 1280,
+            height: 720,
+            alt: "Storyboard preview",
+          },
+        },
+      ],
+    }
+    expect(parseShowcaseV1(showcase, registry, descriptor)).toEqual(showcase)
+    expect(() => parseShowcaseV1({ ...showcase, sequence: 48 }, registry, descriptor)).toThrow(
+      "does not match Registry",
+    )
+    expect(() =>
+      parseShowcaseV1(
+        {
+          ...showcase,
+          packages: [
+            {
+              ...showcase.packages[0],
+              poster: {
+                ...showcase.packages[0].poster,
+                url: showcase.packages[0].poster.url.replace("microvoid/convax-plugins", "evil/fork"),
               },
             },
           ],

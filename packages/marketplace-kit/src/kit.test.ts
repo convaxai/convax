@@ -21,6 +21,7 @@ import {
   createMarketplaceStarter,
   createMarketplaceTemplate,
   composeProductLockInput,
+  parseMarketplaceSelectionContext,
 } from "./index"
 import { runMarketplaceCli } from "./cli"
 
@@ -78,6 +79,11 @@ describe("@convax/marketplace-kit", () => {
     expect(releaseWorkflow).toContain(".registry.v1.url")
     expect(releaseWorkflow).toContain(".registry.v2.url")
     expect(releaseWorkflow).toContain(".showcase.v2.url")
+    expect(releaseWorkflow).toContain("--previous-descriptor previous-marketplace.json")
+    expect(releaseWorkflow).toContain("--previous-showcase previous-showcase.json")
+    expect(releaseWorkflow).toContain("200/200/200")
+    expect(releaseWorkflow).toContain("404/404/404")
+    expect(releaseWorkflow).not.toContain("--changed changed-packages.json --initial")
     expect(releaseWorkflow).not.toContain("dist/site/$name")
     expect(releaseWorkflow).toContain("actions/deploy-pages@")
     expect(releaseWorkflow).toContain("cancel-in-progress: false")
@@ -130,6 +136,8 @@ describe("@convax/marketplace-kit", () => {
     await git("add", ".")
     await git("commit", "-m", "initial marketplace")
     const base = await git("rev-parse", "HEAD")
+    const deployedDir = await mkdtemp(join(tmpdir(), "convax-market-version-deployed-"))
+    await buildMarketplace({ root, outDir: deployedDir, official: false })
     expect(
       (await changedMarketplaceVersions(root, "0".repeat(40))).map(({ kind, id, version }) => ({
         kind,
@@ -157,10 +165,34 @@ describe("@convax/marketplace-kit", () => {
     const build = await buildMarketplace({
       root,
       outDir: join(root, "dist"),
-      publishIdentities: changed.map(({ kind, id }) => `${kind}\0${id}`),
+      previousDescriptorPath: join(deployedDir, "marketplace.json"),
+      previousRegistryPath: join(deployedDir, "registry-v2.json"),
+      previousShowcasePath: join(deployedDir, "showcase-v2.json"),
+      publishSelections: changed,
+      fetchArtifact: async ({ url }) => {
+        throw new Error(`unexpected inherited artifact fetch ${url}`)
+      },
     })
     expect(build.releasePlan.releases.some(({ tag }) => tag === "plugin-imported-plugin-v1.1.0")).toBe(true)
     expect(build.releasePlan.releases.some(({ tag }) => tag === `registry-v2-${build.registry.revision}`)).toBe(true)
+    const changedPath = join(root, "changed-cli.json")
+    await Bun.write(changedPath, `${JSON.stringify(changed)}\n`)
+    const cliOut = join(root, "dist-cli")
+    await runMarketplaceCli([
+      "build-index",
+      root,
+      "--out",
+      cliOut,
+      "--changed",
+      changedPath,
+      "--previous-descriptor",
+      join(deployedDir, "marketplace.json"),
+      "--previous",
+      join(deployedDir, "registry-v2.json"),
+      "--previous-showcase",
+      join(deployedDir, "showcase-v2.json"),
+    ])
+    expect(JSON.parse(await readFile(join(cliOut, "registry-v2.json"), "utf8"))).toEqual(build.registry)
     expect((await stat(join(root, "dist/site/marketplace.json"))).isFile()).toBe(true)
     expect((await stat(join(root, "dist/site/registry-v2.json"))).isFile()).toBe(true)
     expect((await stat(join(root, "dist/site/showcase-v2.json"))).isFile()).toBe(true)
@@ -168,6 +200,168 @@ describe("@convax/marketplace-kit", () => {
     await git("add", ".")
     await git("commit", "-m", "remove package without yanking")
     await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("yanked")
+  })
+
+  test("selectively replaces one package while preserving the deployed Registry and Showcase", async () => {
+    const root = await mkdtemp(join(tmpdir(), "convax-market-selective-"))
+    await createMarketplaceStarter(root, {
+      id: "acme-market",
+      name: "Acme Market",
+      owner: "acme",
+      repository: "extensions",
+      starter: "skill",
+    })
+    await rm(join(root, "packages/skills/example-skill"), { recursive: true })
+
+    const writeSkill = async (id: string, version: string, description: string, poster: Uint8Array) => {
+      const packageRoot = join(root, "packages/skills", id)
+      await mkdir(join(packageRoot, "package"), { recursive: true })
+      await mkdir(join(packageRoot, "showcase"), { recursive: true })
+      await Bun.write(
+        join(packageRoot, "convax-package.json"),
+        `${JSON.stringify(
+          {
+            schema: "convax.package/1",
+            kind: "skill",
+            id,
+            name: id,
+            description,
+            version,
+            showcase: { poster: { path: "showcase/poster.png", mime: "image/png" } },
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      await Bun.write(
+        join(packageRoot, "package/SKILL.md"),
+        `---\nname: ${id}\nversion: ${version}\ndescription: ${description}\n---\n`,
+      )
+      await Bun.write(join(packageRoot, "showcase/poster.png"), poster)
+    }
+    const writePlugin = async (id: string, version: string, description: string) => {
+      const packageRoot = join(root, "packages/plugins", id)
+      await mkdir(join(packageRoot, "package"), { recursive: true })
+      await Bun.write(
+        join(packageRoot, "convax-package.json"),
+        `${JSON.stringify(
+          {
+            schema: "convax.package/1",
+            kind: "plugin",
+            id,
+            name: id,
+            description,
+            version,
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      await Bun.write(
+        join(packageRoot, "package/manifest.json"),
+        `${JSON.stringify(
+          {
+            schema: "convax.plugin/6",
+            id,
+            name: id,
+            description,
+            version,
+          },
+          null,
+          2,
+        )}\n`,
+      )
+    }
+
+    await writeSkill("steady-skill", "1.0.0", "deployed steady metadata", new Uint8Array([1, 2, 3]))
+    await writePlugin("nexus-service", "0.3.8", "deployed Nexus")
+    const deployedDir = join(root, "deployed")
+    const deployed = await buildMarketplace({ root, outDir: deployedDir, official: false })
+
+    await writeSkill("steady-skill", "1.0.0", "unselected source mutation", new Uint8Array([9, 9, 9]))
+    await writePlugin("nexus-service", "0.3.12", "selected Nexus")
+    await writePlugin("source-only", "1.0.0", "must not enter production")
+    const deployedAssets = new Map(
+      await Promise.all(
+        deployed.releasePlan.releases
+          .flatMap(({ assets }) => assets)
+          .map(async (asset) => [asset.url, new Uint8Array(await readFile(join(deployedDir, asset.path)))] as const),
+      ),
+    )
+    const fetchArtifact = async ({ url }: { url: string }) => {
+      const bytes = deployedAssets.get(url)
+      if (!bytes) throw new Error(`unexpected artifact fetch ${url}`)
+      return bytes
+    }
+    const output = await buildMarketplace({
+      root,
+      outDir: join(root, "selective"),
+      official: false,
+      previousDescriptorPath: join(deployedDir, "marketplace.json"),
+      previousRegistryPath: join(deployedDir, "registry-v2.json"),
+      previousShowcasePath: join(deployedDir, "showcase-v2.json"),
+      publishSelections: [
+        {
+          kind: "plugin",
+          id: "nexus-service",
+          version: "0.3.12",
+          previousVersion: "0.3.8",
+          releaseTag: "plugin-nexus-service-v0.3.12",
+        },
+      ],
+      fetchArtifact,
+    })
+
+    expect(output.registry.packages.map(({ kind, id, version }) => `${kind}/${id}@${version}`)).toEqual([
+      "plugin/nexus-service@0.3.12",
+      "skill/steady-skill@1.0.0",
+    ])
+    expect(output.registry.packages.find(({ id }) => id === "steady-skill")?.presentation.description).toBe(
+      "deployed steady metadata",
+    )
+    expect(output.showcase.packages).toHaveLength(1)
+    expect(output.showcase.packages[0]?.presentation.poster.sha256).toBe(
+      deployed.showcase.packages[0]?.presentation.poster.sha256,
+    )
+    expect(new URL(output.showcase.packages[0]!.presentation.poster.url).pathname).toContain(
+      `/registry-v2-${output.registry.revision}/`,
+    )
+    expect(output.releasePlan.releases.map(({ tag }) => tag).sort()).toEqual(
+      ["plugin-nexus-service-v0.3.12", `registry-v2-${output.registry.revision}`].sort(),
+    )
+    const descriptor = parseMarketplaceDescriptor(JSON.parse(await readFile(join(root, "marketplace.json"), "utf8")))
+    const context = JSON.parse(await readFile(join(root, "selective/selection-context.json"), "utf8"))
+    expect(parseMarketplaceSelectionContext(context, descriptor)).toEqual(output.selectionContext!)
+    expect(() =>
+      parseMarketplaceSelectionContext(
+        {
+          ...context,
+          descriptor: { ...context.descriptor, name: "Changed descriptor" },
+        },
+        descriptor,
+      ),
+    ).toThrow("cannot change")
+    await writePlugin("nexus-service", "0.3.7", "regressed Nexus")
+    await expect(
+      buildMarketplace({
+        root,
+        outDir: join(root, "regressed"),
+        official: false,
+        previousDescriptorPath: join(deployedDir, "marketplace.json"),
+        previousRegistryPath: join(deployedDir, "registry-v2.json"),
+        previousShowcasePath: join(deployedDir, "showcase-v2.json"),
+        publishSelections: [
+          {
+            kind: "plugin",
+            id: "nexus-service",
+            version: "0.3.7",
+            previousVersion: "0.3.6",
+            releaseTag: "plugin-nexus-service-v0.3.7",
+          },
+        ],
+        fetchArtifact,
+      }),
+    ).rejects.toThrow("advance beyond 0.3.8")
   })
 
   test("dogfoods Official parent metadata, source-controlled sequence, v1 projection, bundle and composed lock input", async () => {
@@ -202,7 +396,15 @@ describe("@convax/marketplace-kit", () => {
           description: "Storyboard workflow",
           version: "0.1.0",
           compatibility: { skillSchema: "opencode.skill/1" },
-          showcase: { poster: { path: "showcase/poster.png", mime: "image/png" } },
+          showcase: {
+            poster: {
+              path: "showcase/poster.png",
+              mime: "image/png",
+              alt: "Storyboard preview",
+              width: 1280,
+              height: 720,
+            },
+          },
           yanked: false,
         },
         null,
@@ -303,6 +505,40 @@ describe("@convax/marketplace-kit", () => {
         2,
       )}\n`,
     )
+    const nexusRoot = join(root, "packages/plugins/nexus-service")
+    await mkdir(join(nexusRoot, "package"), { recursive: true })
+    const writeNexus = async (version: string, description: string) => {
+      await Bun.write(
+        join(nexusRoot, "convax-package.json"),
+        `${JSON.stringify(
+          {
+            schema: "convax.package/1",
+            kind: "plugin",
+            id: "nexus-service",
+            name: "Nexus Service",
+            description,
+            version,
+          },
+          null,
+          2,
+        )}\n`,
+      )
+      await Bun.write(
+        join(nexusRoot, "package/manifest.json"),
+        `${JSON.stringify(
+          {
+            schema: "convax.plugin/6",
+            id: "nexus-service",
+            name: "Nexus Service",
+            description,
+            version,
+          },
+          null,
+          2,
+        )}\n`,
+      )
+    }
+    await writeNexus("0.3.8", "deployed Nexus")
     const catalogDir = join(root, "dist/catalog")
     const first = await buildMarketplace({
       root,
@@ -319,9 +555,133 @@ describe("@convax/marketplace-kit", () => {
     expect((await stat(join(catalogDir, "site/showcase/v2/index.json"))).isFile()).toBe(true)
     expect(first.registryV1?.packages.map(({ kind, id }) => `${kind}/${id}`).sort()).toEqual([
       "plugin/ffmpeg-tools",
+      "plugin/nexus-service",
       "skill/canvas-storyboard",
       "skill/ffmpeg-canvas",
     ])
+    await writeNexus("0.3.12", "selected Nexus")
+    const storyboardMetadata = JSON.parse(await readFile(join(skillRoot, "convax-package.json"), "utf8"))
+    storyboardMetadata.description = "unselected source mutation"
+    await Bun.write(join(skillRoot, "convax-package.json"), `${JSON.stringify(storyboardMetadata, null, 2)}\n`)
+    await Bun.write(join(skillRoot, "showcase/poster.png"), new Uint8Array([9, 9, 9]))
+    const deployedAssets = new Map(
+      await Promise.all(
+        first.releasePlan.releases
+          .flatMap(({ assets }) => assets)
+          .map(async (asset) => [asset.url, new Uint8Array(await readFile(join(catalogDir, asset.path)))] as const),
+      ),
+    )
+    const fetchArtifact = async ({ url }: { url: string }) => {
+      const bytes = deployedAssets.get(url)
+      if (!bytes) throw new Error(`unexpected production artifact ${url}`)
+      return bytes
+    }
+    const bootstrapDir = join(root, "dist/selective-bootstrap-v1")
+    const bootstrapped = await buildMarketplace({
+      root,
+      outDir: bootstrapDir,
+      official: true,
+      previousDescriptorPath: join(catalogDir, "marketplace.json"),
+      bootstrapPreviousV1Path: join(catalogDir, "registry-v1.json"),
+      previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
+      publishSelections: [
+        {
+          kind: "plugin",
+          id: "nexus-service",
+          version: "0.3.12",
+          previousVersion: "0.3.11",
+          releaseTag: "plugin-nexus-service-v0.3.12",
+        },
+      ],
+      fetchArtifact,
+      v1Revision: "b".repeat(40),
+    })
+    expect(bootstrapped.registry.sequence).toBe(46)
+    expect(bootstrapped.registry.packages.find(({ id }) => id === "nexus-service")?.version).toBe("0.3.12")
+    expect(bootstrapped.registry.packages.find(({ id }) => id === "canvas-storyboard")?.presentation.description).toBe(
+      "Storyboard workflow",
+    )
+    expect(bootstrapped.showcase.packages[0]?.presentation.poster.sha256).toBe(
+      first.showcaseV1!.packages[0]!.poster.sha256,
+    )
+    expect(new URL(bootstrapped.showcase.packages[0]!.presentation.poster.url).pathname).toContain(
+      `/registry-v2-${bootstrapped.registry.revision}/`,
+    )
+    expect(bootstrapped.showcaseV1?.packages).toEqual(first.showcaseV1?.packages)
+    expect(bootstrapped.releasePlan.releases.map(({ tag }) => tag).sort()).toEqual(
+      ["plugin-nexus-service-v0.3.12", `registry-v2-${bootstrapped.registry.revision}`].sort(),
+    )
+    expect(bootstrapped.productLockInput).toMatchObject({
+      packages: [{ id: "ffmpeg-tools", artifact: { path: expect.stringContaining("inherited/") } }],
+    })
+    const selectiveDir = join(root, "dist/selective")
+    const selective = await buildMarketplace({
+      root,
+      outDir: selectiveDir,
+      official: true,
+      previousDescriptorPath: join(catalogDir, "marketplace.json"),
+      previousRegistryPath: join(catalogDir, "registry-v2.json"),
+      previousShowcasePath: join(catalogDir, "showcase-v2.json"),
+      previousRegistryV1Path: join(catalogDir, "registry-v1.json"),
+      previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
+      publishSelections: [
+        {
+          kind: "plugin",
+          id: "nexus-service",
+          version: "0.3.12",
+          previousVersion: "0.3.8",
+          releaseTag: "plugin-nexus-service-v0.3.12",
+        },
+      ],
+      fetchArtifact,
+      v1Revision: "b".repeat(40),
+    })
+    expect(selective.registry.sequence).toBe(46)
+    expect(selective.registry.packages.find(({ id }) => id === "nexus-service")?.version).toBe("0.3.12")
+    expect(selective.registry.packages.find(({ id }) => id === "canvas-storyboard")?.presentation.description).toBe(
+      "Storyboard workflow",
+    )
+    expect(selective.showcase.packages[0]?.presentation.poster.sha256).toBe(
+      first.showcase.packages[0]?.presentation.poster.sha256,
+    )
+    expect(selective.showcaseV1?.sequence).toBe(selective.registryV1?.sequence)
+    expect(selective.showcaseV1?.revision).toBe("b".repeat(40))
+    expect(selective.showcaseV1?.packages).toEqual(first.showcaseV1?.packages)
+    expect((await stat(join(selectiveDir, "site/showcase/v1/index.json"))).isFile()).toBe(true)
+    expect(selective.releasePlan.releases.map(({ tag }) => tag).sort()).toEqual(
+      ["plugin-nexus-service-v0.3.12", `registry-v2-${selective.registry.revision}`].sort(),
+    )
+    expect(selective.productLockInput).toMatchObject({
+      packages: [{ id: "ffmpeg-tools", artifact: { path: expect.stringContaining("inherited/") } }],
+    })
+    await expect(
+      buildMarketplace({
+        root,
+        outDir: join(root, "dist/selective-tampered"),
+        official: true,
+        previousDescriptorPath: join(catalogDir, "marketplace.json"),
+        previousRegistryPath: join(catalogDir, "registry-v2.json"),
+        previousShowcasePath: join(catalogDir, "showcase-v2.json"),
+        previousRegistryV1Path: join(catalogDir, "registry-v1.json"),
+        previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
+        publishSelections: [
+          {
+            kind: "plugin",
+            id: "nexus-service",
+            version: "0.3.12",
+            previousVersion: "0.3.8",
+            releaseTag: "plugin-nexus-service-v0.3.12",
+          },
+        ],
+        fetchArtifact: async (artifact) => {
+          const bytes = await fetchArtifact(artifact)
+          const tampered = bytes.slice()
+          tampered[0] ^= 1
+          return tampered
+        },
+        v1Revision: "b".repeat(40),
+      }),
+    ).rejects.toThrow("do not match")
     const fromV2 = await buildMarketplace({
       root,
       outDir: join(root, "dist/from-v2"),

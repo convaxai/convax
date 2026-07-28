@@ -8,12 +8,61 @@ import {
   changedMarketplaceVersions,
   createMarketplaceTemplate,
   composeProductLockInput,
+  type MarketplacePublishSelection,
   type StarterKind,
 } from "./index"
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(name)
   return index >= 0 ? args[index + 1] : undefined
+}
+
+async function fetchReleaseArtifact(artifact: { url: string; size: number; sha256: string }): Promise<Uint8Array> {
+  let url = new URL(artifact.url)
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    const allowedHost =
+      url.hostname.toLowerCase() === "github.com" || url.hostname.toLowerCase().endsWith(".githubusercontent.com")
+    if (url.protocol !== "https:" || !allowedHost || url.port || url.username || url.password || url.hash) {
+      throw new TypeError("artifact fetch URL left the bounded GitHub HTTPS origin")
+    }
+    const response = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(30_000),
+      headers: { accept: "application/octet-stream" },
+    })
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location")
+      if (!location || redirects === 5) throw new TypeError("artifact fetch exceeded safe redirects")
+      url = new URL(location, url)
+      continue
+    }
+    if (!response.ok || !response.body) {
+      throw new TypeError(`artifact fetch failed with HTTP ${response.status}`)
+    }
+    const contentLength = response.headers.get("content-length")
+    if (contentLength !== null && Number(contentLength) > artifact.size) {
+      throw new TypeError("artifact response exceeds its declared immutable size")
+    }
+    const bytes = new Uint8Array(artifact.size)
+    let offset = 0
+    const reader = response.body.getReader()
+    try {
+      while (true) {
+        const { done, value: chunk } = await reader.read()
+        if (done) break
+        if (offset + chunk.byteLength > bytes.byteLength) {
+          throw new TypeError("artifact response exceeds its declared immutable size")
+        }
+        bytes.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    if (offset !== bytes.byteLength) throw new TypeError("artifact response size is incomplete")
+    return bytes
+  }
+  throw new TypeError("artifact fetch failed")
 }
 
 export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<void> {
@@ -24,19 +73,22 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
   }
   if (command === "build-index") {
     const changedPath = option(rest, "--changed")
-    const changed = changedPath
-      ? ((await Bun.file(changedPath).json()) as Array<{ kind: string; id: string }>)
-      : undefined
+    const changed = changedPath ? ((await Bun.file(changedPath).json()) as MarketplacePublishSelection[]) : undefined
     await buildMarketplace({
       root: rootArgument ?? ".",
       outDir: option(rest, "--out") ?? "dist",
       official: rest.includes("--official"),
       sequence: option(rest, "--sequence") ? Number(option(rest, "--sequence")) : undefined,
+      previousDescriptorPath: option(rest, "--previous-descriptor"),
       previousRegistryPath: option(rest, "--previous"),
+      previousShowcasePath: option(rest, "--previous-showcase"),
+      previousRegistryV1Path: option(rest, "--previous-v1"),
+      previousShowcaseV1Path: option(rest, "--previous-showcase-v1"),
       bootstrapPreviousV1Path: option(rest, "--bootstrap-previous-v1"),
       initialOfficial: rest.includes("--initial"),
       v1Revision: option(rest, "--v1-revision"),
-      publishIdentities: changed?.map(({ kind, id }) => `${kind}\0${id}`),
+      publishSelections: changed,
+      fetchArtifact: changed ? fetchReleaseArtifact : undefined,
     })
     return
   }

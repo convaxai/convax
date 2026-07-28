@@ -73,7 +73,7 @@ try {
   await mkdir(consumerRoot)
   const marketplaceTarball = await pack(marketplaceRoot, tarballRoot)
   const kitTarball = await pack(packageRoot, tarballRoot)
-  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.1.0")
+  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.1.1")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(
@@ -94,9 +94,46 @@ try {
   )
   await writeFile(
     join(consumerRoot, "index.ts"),
-    `import { buildMarketplace, createMarketplaceStarter } from "@convax/marketplace-kit"
+    `import {
+  assertSelectiveMarketplaceClosure,
+  buildMarketplace,
+  createMarketplaceStarter,
+  parseMarketplaceSelectionContext,
+  releaseTagForPackage,
+} from "@convax/marketplace-kit"
+import type {
+  BuildMarketplaceOptions,
+  MarketplaceSelectionContext,
+} from "@convax/marketplace-kit"
 import { runMarketplaceCli } from "@convax/marketplace-kit/cli"
-void [buildMarketplace, createMarketplaceStarter, runMarketplaceCli]
+const options: BuildMarketplaceOptions = {
+  root: ".",
+  outDir: "dist",
+  previousDescriptorPath: "previous-marketplace.json",
+  previousRegistryPath: "previous-registry.json",
+  previousShowcasePath: "previous-showcase.json",
+  previousRegistryV1Path: "previous-registry-v1.json",
+  previousShowcaseV1Path: "previous-showcase-v1.json",
+  publishSelections: [{
+    kind: "plugin",
+    id: "example",
+    version: "1.1.0",
+    previousVersion: "1.0.0",
+    releaseTag: "plugin-example-v1.1.0",
+  }],
+  fetchArtifact: async () => new Uint8Array([1]),
+}
+const context: MarketplaceSelectionContext | undefined = undefined
+void [
+  assertSelectiveMarketplaceClosure,
+  buildMarketplace,
+  context,
+  createMarketplaceStarter,
+  options,
+  parseMarketplaceSelectionContext,
+  releaseTagForPackage,
+  runMarketplaceCli,
+]
 `,
   )
   await writeFile(
