@@ -249,14 +249,14 @@ export function SettingsView({
     <section
       aria-labelledby="settings-view-title"
       className={cn(
-        "grid size-full min-h-0 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden bg-surface-canvas text-text-primary md:grid-cols-[15rem_minmax(0,1fr)]",
+        "convax-settings-shell grid size-full min-h-0 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden text-text-primary md:grid-cols-[15rem_minmax(0,1fr)]",
         className,
       )}
       data-settings-layout="rail-content"
+      data-settings-section={section}
       data-settings-view="true"
-      style={{ backgroundColor: "var(--ui-surface-canvas)" }}
     >
-      <aside className="flex min-h-0 min-w-0 flex-col border-r border-border-subtle bg-surface-panel px-4 py-5">
+      <aside className="convax-settings-rail flex min-h-0 min-w-0 flex-col border-r border-border-subtle px-4 py-5">
         <Button autoFocus className="mb-7 w-fit active:scale-95" onClick={onClose} size="sm" variant="ghost">
           <ArrowLeft />
           {appMessage(locale, "settings.back")}
@@ -287,11 +287,23 @@ export function SettingsView({
         </div>
       </aside>
 
-      <main className="min-w-0 overflow-y-auto">
-        <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-8 py-10 lg:px-14 lg:py-12">
-          <header className="mb-7 border-b border-border-subtle pb-5">
+      <main className="convax-settings-content min-w-0 overflow-y-auto">
+        <div
+          className={cn(
+            "mx-auto flex min-h-full w-full flex-col",
+            section === "services" ? "max-w-none px-5 py-6 lg:px-8 lg:py-7" : "max-w-5xl px-8 py-10 lg:px-14 lg:py-12",
+          )}
+        >
+          <header className={cn("border-b border-border-subtle", section === "services" ? "mb-4 pb-4" : "mb-7 pb-5")}>
             <h2 className="text-2xl font-semibold tracking-[-0.015em]">{sectionTitle}</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-text-secondary">{sectionDescriptions[section]}</p>
+            <p
+              className={cn(
+                "max-w-2xl text-text-secondary",
+                section === "services" ? "mt-1.5 text-xs leading-5" : "mt-2 text-sm leading-6",
+              )}
+            >
+              {sectionDescriptions[section]}
+            </p>
           </header>
           {section === "general" ? (
             <LanguageSettings
