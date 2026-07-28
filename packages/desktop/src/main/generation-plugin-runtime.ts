@@ -850,8 +850,11 @@ export class GenerationPluginRuntime {
                 ? pluginServiceMcpTools.checkout
                 : pluginServiceMcpTools.signOut
     try {
-      const availableTools = await this.#availableTools(runtime, signal)
-      if (!availableTools.has(toolName)) {
+      // Service status is a fixed contribution contract, so call it directly.
+      // Enumerating every tool first can block on an unrelated dynamic generation
+      // catalog and consume the bounded service-availability budget.
+      const availableTools = call === "status" ? undefined : await this.#availableTools(runtime, signal)
+      if (availableTools && !availableTools.has(toolName)) {
         throw new Error(`Plugin service ${pluginId} did not expose its fixed MCP tool: ${toolName}`)
       }
       if (signal?.aborted) throw abortError(signal.reason)
@@ -870,7 +873,7 @@ export class GenerationPluginRuntime {
       result.authorizationIdentity = runtime.authorizationIdentity
       if (
         (call === "authorize" || call === "reauthorize") &&
-        availableTools.has(pluginServiceMcpTools.completeAuthorization)
+        availableTools?.has(pluginServiceMcpTools.completeAuthorization)
       ) {
         let completionStarted = false
         result.completeAuthorization = async (input, completionSignal) => {

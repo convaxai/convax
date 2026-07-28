@@ -906,6 +906,7 @@ describe("GenerationPluginRuntime", () => {
 
     const firstStatus = await runtime.callService("account-tools", "status")
     const secondStatus = await runtime.callService("account-tools", "status")
+    expect(clients[0]!.listSignals).toEqual([])
     await runtime.callService("account-tools", "sign_out")
     expect(firstStatus.authorizationIdentity).toBe(
       toolPluginAuthorizationIdentity(installedService, "path", executable),
@@ -913,6 +914,7 @@ describe("GenerationPluginRuntime", () => {
     expect(secondStatus.authorizationIdentity).toBe(firstStatus.authorizationIdentity)
     expect(verifications).toBe(1)
     expect(clients).toHaveLength(1)
+    expect(clients[0]!.listSignals).toHaveLength(1)
     expect(clients[0].calls.map(({ input, name, requestTimeoutMs }) => ({ input, name, requestTimeoutMs }))).toEqual([
       { input: {}, name: "service.status", requestTimeoutMs: undefined },
       { input: {}, name: "service.status", requestTimeoutMs: undefined },
