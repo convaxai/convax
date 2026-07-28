@@ -71,7 +71,7 @@ import {
   type CapturedPointerDragSession,
 } from "./captured-pointer-drag"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
-import { createInitialCanvasDocument } from "./canvas-document"
+import { createInitialCanvasDocument, promoteCanvasDocumentProjection } from "./canvas-document"
 import {
   CanvasCardConversationPanel,
   canvasCardAgentContextNodeIds,
@@ -842,6 +842,12 @@ function App() {
   useEffect(() => {
     setCanvasOutlineDocument(initialDocument)
   }, [initialDocument])
+  const handleCanvasDocumentChange = useCallback(
+    (document: CanvasDocument) => {
+      setCanvasOutlineDocument((current) => promoteCanvasDocumentProjection(current, document, activeCanvasId))
+    },
+    [activeCanvasId],
+  )
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
       cancel(operationId) {
@@ -1922,9 +1928,7 @@ function App() {
                       fileRendererRegistry={canvasFileRendererRegistry}
                       initialDocument={initialDocument}
                       nodeRegistry={canvasNodeRegistry}
-                      onDocumentChange={(document) => {
-                        if (document.id === activeCanvas.id) setCanvasOutlineDocument(document)
-                      }}
+                      onDocumentChange={handleCanvasDocumentChange}
                       onInspectorRequest={openCanvasInspector}
                       onGenerateRequest={openGenerateDrawer}
                       onGenerationStateChange={setCanvasGenerationRunning}
