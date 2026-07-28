@@ -403,7 +403,7 @@ describe("registerPluginManagementIpc", () => {
     expect(handlers).toHaveLength(0)
   })
 
-  test("does not route remote catalog changes through the installed Plugin lifecycle", async () => {
+  test("publishes remote catalog changes without routing them through the installed Plugin lifecycle", async () => {
     const { registerPluginManagementIpc } = await import("./plugin-management-ipc")
     const remote = createRemoteCatalog()
     const live = testWindow()
@@ -411,10 +411,10 @@ describe("registerPluginManagementIpc", () => {
     const dispose = registerPluginManagementIpc(createManager(), [], () => true, remote)
 
     remote.emitChange()
-    expect(remote.subscribe).not.toHaveBeenCalled()
-    expect(live.webContents.send).not.toHaveBeenCalled()
+    expect(remote.subscribe).toHaveBeenCalledTimes(1)
+    expect(live.webContents.send).toHaveBeenCalledTimes(1)
     dispose()
-    expect(remote.unsubscribe).not.toHaveBeenCalled()
+    expect(remote.unsubscribe).toHaveBeenCalledTimes(1)
   })
 
   test("does not publish change lifecycle when install-time executable authorization fails", async () => {

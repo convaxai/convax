@@ -49,6 +49,8 @@ export interface RemotePluginCatalogPort {
     options?: { allowCurrent?: boolean; allowHooks?: boolean },
   ): Promise<InstalledWebPluginSummary>
   listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]>
+  /** Shared remote Registry invalidation for the Plugin catalog UI. */
+  subscribe?(listener: () => void): () => void
 }
 
 export interface RemoteSkillCatalogPort {

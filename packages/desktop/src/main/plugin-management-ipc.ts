@@ -125,6 +125,7 @@ export function registerPluginManagementIpc(
       window.webContents.send(pluginManagementIpcChannels.changed)
     }
   }
+  const unsubscribeRemote = remoteCatalog?.subscribe?.(publishChange)
   const listPlugins = async (): ReturnType<WebPluginClient["listPlugins"]> => {
     const installed = await manager.list()
     const installedById = new Map(installed.map((plugin) => [plugin.id, plugin]))
@@ -310,6 +311,7 @@ export function registerPluginManagementIpc(
     ),
   ]
   return () => {
+    unsubscribeRemote?.()
     disposers.forEach((dispose) => dispose())
   }
 }
