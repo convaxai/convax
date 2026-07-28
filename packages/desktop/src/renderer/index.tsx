@@ -65,6 +65,11 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
+import {
+  shouldMountResizeHandle,
+  startCapturedPointerDrag,
+  type CapturedPointerDragSession,
+} from "./captured-pointer-drag"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
 import { createInitialCanvasDocument } from "./canvas-document"
 import {
@@ -180,6 +185,8 @@ function App() {
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const workspaceShellRef = useRef<HTMLElement>(null)
+  const workbenchResizeSessionRef = useRef<CapturedPointerDragSession | null>(null)
   const canvasEditorScopeRef = useRef<{
     canvasId: string
     handle: CanvasEditorHandle
@@ -346,6 +353,13 @@ function App() {
     serviceCatalogController.subscribe,
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
+  )
+  useEffect(
+    () => () => {
+      workbenchResizeSessionRef.current?.cancel()
+      workbenchResizeSessionRef.current = null
+    },
+    [],
   )
   useEffect(() => () => projectController.dispose(), [projectController])
   useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
@@ -1309,9 +1323,13 @@ function App() {
 
   const startWorkbenchPartResize = useCallback(
     (partId: string, event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !event.isPrimary || workbenchResizeSessionRef.current) return
+      const captureTarget = workspaceShellRef.current
+      if (!captureTarget) return
       const part = workbenchLayoutController.getSnapshot().parts[partId]
       if (!part || !workbenchLayoutController.beginResize(partId)) return
       event.preventDefault()
+      event.currentTarget.focus({ preventScroll: true })
       const startX = event.clientX
       const startSize = part.size
       const direction = partId === WorkbenchLayoutParts.PrimarySidebar ? 1 : -1
@@ -1339,31 +1357,22 @@ function App() {
         workbenchLayoutController.updateResize(constrained - startSize)
       }
 
-      let settled = false
-      const cleanup = () => {
-        window.removeEventListener("pointermove", move)
-        window.removeEventListener("pointerup", finish)
-        window.removeEventListener("pointercancel", cancel)
-        window.removeEventListener("blur", cancel)
-      }
-      const move = (moveEvent: PointerEvent) => update(moveEvent.clientX)
-      const finish = (finishEvent: PointerEvent) => {
-        if (settled) return
-        settled = true
-        update(finishEvent.clientX)
-        cleanup()
-        workbenchLayoutController.endResize()
-      }
-      const cancel = () => {
-        if (settled) return
-        settled = true
-        cleanup()
-        workbenchLayoutController.cancelResize()
-      }
-      window.addEventListener("pointermove", move)
-      window.addEventListener("pointerup", finish)
-      window.addEventListener("pointercancel", cancel)
-      window.addEventListener("blur", cancel)
+      let session: CapturedPointerDragSession | null = null
+      session = startCapturedPointerDrag({
+        cancel: () => {
+          workbenchLayoutController.cancelResize()
+        },
+        captureTarget,
+        commit: () => {
+          workbenchLayoutController.endResize()
+        },
+        onSettled: () => {
+          if (workbenchResizeSessionRef.current === session) workbenchResizeSessionRef.current = null
+        },
+        pointerId: event.pointerId,
+        update,
+      })
+      if (session) workbenchResizeSessionRef.current = session
     },
     [projectDetailsPinned, workbenchLayoutController],
   )
@@ -1825,6 +1834,7 @@ function App() {
                 />
               }
               utilityMode={workspaceUtilityDrawer.mode}
+              workspaceRef={workspaceShellRef}
             >
               {workspaceLayout.projectDetails === "dock" ? (
                 <div
@@ -1836,27 +1846,29 @@ function App() {
                   style={{ width: primarySidebar.size }}
                 >
                   {projectDetails}
-                  <div
-                    aria-label="Resize Project Details"
-                    aria-orientation="vertical"
-                    aria-valuemax={primarySidebarBounds.maxSize}
-                    aria-valuemin={primarySidebarBounds.minSize}
-                    aria-valuenow={primarySidebar.size}
-                    className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
-                    onKeyDown={(keyEvent) => {
-                      if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                      keyEvent.preventDefault()
-                      resizeWorkbenchPartBy(
-                        WorkbenchLayoutParts.PrimarySidebar,
-                        keyEvent.key === "ArrowLeft" ? -24 : 24,
-                      )
-                    }}
-                    onPointerDown={(pointerEvent) =>
-                      startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
-                    }
-                    role="separator"
-                    tabIndex={0}
-                  />
+                  {shouldMountResizeHandle(primarySidebar.visible, resizingPrimarySidebar) ? (
+                    <div
+                      aria-label="Resize Project Details"
+                      aria-orientation="vertical"
+                      aria-valuemax={primarySidebarBounds.maxSize}
+                      aria-valuemin={primarySidebarBounds.minSize}
+                      aria-valuenow={primarySidebar.size}
+                      className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
+                      onKeyDown={(keyEvent) => {
+                        if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
+                        keyEvent.preventDefault()
+                        resizeWorkbenchPartBy(
+                          WorkbenchLayoutParts.PrimarySidebar,
+                          keyEvent.key === "ArrowLeft" ? -24 : 24,
+                        )
+                      }}
+                      onPointerDown={(pointerEvent) =>
+                        startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
+                      }
+                      role="separator"
+                      tabIndex={0}
+                    />
+                  ) : null}
                 </div>
               ) : null}
               <section className="relative min-w-0 flex-1">

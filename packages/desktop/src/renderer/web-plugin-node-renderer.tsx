@@ -45,6 +45,7 @@ import {
 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry, type DesktopPluginFrameRef } from "./plugin-frame-registry"
 import { isProjectCanvasCapabilityRequest, RendererPluginHostConnection } from "./plugin-host-connection"
+import { HostPointerReleaseGate } from "./host-pointer-gesture"
 
 export const webPluginIframeSandbox = "allow-scripts" as const
 export const webPluginIframePermissions = [
@@ -64,6 +65,7 @@ export {
   webPluginIdentityMetadataKey,
   webPluginStateMetadataKey,
 } from "../plugin-canvas-node"
+export { HostPointerReleaseGate as WebPluginPointerReleaseGate } from "./host-pointer-gesture"
 
 const webPluginIframeBaseClassName = "size-full border-0 bg-background"
 
@@ -75,46 +77,13 @@ export function webPluginIframeInteractionProps(input: {
 }) {
   const interactive = input.selected && !input.dragging && !input.pointerReleasePending
   return {
+    "data-web-plugin-iframe": "",
     className: interactive ? `nodrag nowheel ${webPluginIframeBaseClassName}` : webPluginIframeBaseClassName,
     style: {
       pointerEvents: interactive ? "auto" : "none",
       visibility: "visible",
     } as const,
     tabIndex: interactive ? 0 : -1,
-  }
-}
-
-/** Tracks pointer gestures that began on the Canvas-owned host chrome, outside the iframe. */
-export class WebPluginPointerReleaseGate {
-  private pointerIds = new Set<number>()
-  private waiting = false
-
-  get pending() {
-    return this.waiting
-  }
-
-  begin(pointerId: number) {
-    const size = this.pointerIds.size
-    this.waiting = true
-    this.pointerIds.add(pointerId)
-    return this.pointerIds.size !== size
-  }
-
-  release(pointerId: number) {
-    if (!this.pointerIds.delete(pointerId)) return false
-    return this.pointerIds.size === 0
-  }
-
-  releaseAll() {
-    if (!this.waiting) return false
-    this.pointerIds.clear()
-    return true
-  }
-
-  complete() {
-    if (!this.waiting || this.pointerIds.size > 0) return false
-    this.waiting = false
-    return true
   }
 }
 
@@ -280,6 +249,32 @@ export function webPluginFrameKey(plugin: Pick<InstalledWebPluginCanvasSurface, 
   return `${requireWebPluginId(plugin.id)}:${plugin.version}:${requireWebPluginRelativePath(plugin.entry, "Plugin entry")}`
 }
 
+const webPluginNodeDataIdentity = new WeakMap<object, number>()
+const webPluginNodeDataVectorScope = new WeakMap<CanvasDocument["nodes"], string>()
+let nextWebPluginNodeDataIdentity = 1
+
+function nodeDataIdentity(data: CanvasDocument["nodes"][number]["data"]) {
+  const cached = webPluginNodeDataIdentity.get(data)
+  if (cached !== undefined) return cached
+  const identity = nextWebPluginNodeDataIdentity++
+  webPluginNodeDataIdentity.set(data, identity)
+  return identity
+}
+
+/**
+ * Geometry-only gesture previews retain node data references, while resource
+ * hydration and semantic node updates replace them. Cache the vector once per
+ * nodes array so every Plugin on the Canvas shares the same O(n) scan.
+ */
+export function webPluginDocumentFingerprintScope(document: Pick<CanvasDocument, "id" | "nodes" | "revision">) {
+  let dataVector = webPluginNodeDataVectorScope.get(document.nodes)
+  if (dataVector === undefined) {
+    dataVector = JSON.stringify(document.nodes.map((node) => [node.id, nodeDataIdentity(node.data)]))
+    webPluginNodeDataVectorScope.set(document.nodes, dataVector)
+  }
+  return JSON.stringify([document.id, document.revision, dataVector])
+}
+
 function WebPluginCanvasNode(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
@@ -298,7 +293,7 @@ function WebPluginCanvasNode(
   const nodeStateWriteGateRef = useRef({ active: false })
   const connectedImageFingerprintRef = useRef<string | null>(null)
   const connectedInputFingerprintRef = useRef<string | null>(null)
-  const pointerGateRef = useRef(new WebPluginPointerReleaseGate())
+  const pointerGateRef = useRef(new HostPointerReleaseGate())
   const pointerReleaseFrameRef = useRef<number | null>(null)
   const pointerReleaseListenersRef = useRef<(() => void) | null>(null)
   const [pointerReleasePending, setPointerReleasePending] = useState(false)
@@ -314,6 +309,7 @@ function WebPluginCanvasNode(
   const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
   const canReadConnectedInputs = props.plugin.capabilities.includes("canvas.connectedInputs.read")
   const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
+  const documentFingerprintScope = webPluginDocumentFingerprintScope(editor.document)
 
   useEffect(
     () => () => {
@@ -418,7 +414,7 @@ function WebPluginCanvasNode(
     }
   }, [
     canReadConnectedImages,
-    editor.document,
+    documentFingerprintScope,
     props.id,
     props.options.frameRegistry,
     props.options.host,
@@ -461,7 +457,7 @@ function WebPluginCanvasNode(
     }
   }, [
     canReadConnectedInputs,
-    editor.document,
+    documentFingerprintScope,
     props.id,
     props.options.frameRegistry,
     props.options.host,

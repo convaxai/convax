@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, type CanvasNode } from "@convax/canvas"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
+import { readFileSync } from "node:fs"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { InstalledWebPluginCanvasSurface, WebPluginCapability } from "../plugin-contracts"
 import {
@@ -33,6 +34,7 @@ import {
   updateWebPluginNodeState,
   waitForWebPluginCanvasStateWrite,
   webPluginIframeAllow,
+  webPluginDocumentFingerprintScope,
   WebPluginDragShield,
   WebPluginPointerReleaseGate,
   webPluginCanvasRendererId,
@@ -494,6 +496,7 @@ describe("Canvas Web Plugin contribution", () => {
     const inactiveAgain = webPluginIframeInteractionProps({ selected: false })
 
     expect(inactive).toMatchObject({
+      "data-web-plugin-iframe": "",
       style: { pointerEvents: "none", visibility: "visible" },
       tabIndex: -1,
     })
@@ -511,6 +514,7 @@ describe("Canvas Web Plugin contribution", () => {
     expect(pointerGate.complete()).toBe(true)
     expect(pointerGate.pending).toBe(false)
     expect(active).toMatchObject({
+      "data-web-plugin-iframe": "",
       style: { pointerEvents: "auto", visibility: "visible" },
       tabIndex: 0,
     })
@@ -527,6 +531,50 @@ describe("Canvas Web Plugin contribution", () => {
     expect(markup).toContain("pointer-events-none")
     expect(markup).toContain("bg-transparent")
     expect(markup).not.toContain("Moving plugin surface")
+  })
+
+  test("marks Plugin frames for the workspace-wide host gesture blocker", () => {
+    const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8")
+
+    expect(webPluginIframeInteractionProps({ selected: true })["data-web-plugin-iframe"]).toBe("")
+    expect(styles).toContain("[data-host-pointer-gesture] iframe[data-web-plugin-iframe]")
+    expect(styles).toContain("[data-workbench-resizing] iframe[data-web-plugin-iframe]")
+    expect(styles).toContain("pointer-events: none !important")
+  })
+
+  test("scopes connected-input fingerprints to revisions and semantic node data, not geometry previews", () => {
+    const image = connectedImageNode()
+    const document = createCanvasDocument({ id: "canvas-1", nodes: [canvasNode(), image] })
+    const preview = {
+      ...document,
+      nodes: document.nodes.map((node) => ({ ...node, position: { x: node.position.x + 40, y: node.position.y } })),
+    }
+    const dataChanged = {
+      ...document,
+      nodes: document.nodes.map((node) => (node.id === "node-1" ? { ...node, data: { ...node.data } } : node)),
+    }
+    const resourceStateChanged = {
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === image.id
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                resourceState: { contentRevision: "b".repeat(64), status: "ready" as const },
+              },
+            }
+          : node,
+      ),
+    }
+    const committed = { ...preview, revision: document.revision + 1 }
+
+    expect(webPluginDocumentFingerprintScope(preview)).toBe(webPluginDocumentFingerprintScope(document))
+    expect(webPluginDocumentFingerprintScope(dataChanged)).not.toBe(webPluginDocumentFingerprintScope(document))
+    expect(webPluginDocumentFingerprintScope(resourceStateChanged)).not.toBe(
+      webPluginDocumentFingerprintScope(document),
+    )
+    expect(webPluginDocumentFingerprintScope(committed)).not.toBe(webPluginDocumentFingerprintScope(document))
   })
 
   test("waits for every tracked pointer and can recover from pointer cancellation", () => {
