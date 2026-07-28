@@ -1,370 +1,106 @@
 import { Button, cn } from "@convax/ui"
-import { Bot, CircleAlert, Cloud, LoaderCircle, LogOut, RefreshCw, Settings2 } from "lucide-react"
-import { useState } from "react"
+import { Bot, Cloud, LoaderCircle, RefreshCw } from "lucide-react"
+import { useEffect, useId, useRef, useState } from "react"
 
-import type { PluginServiceStatus, ServiceCapability } from "../plugin-service-contracts"
+import type { PluginServiceStatus } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import { appMessage, type AppLocale } from "./app-language"
+import { ServiceDetail, PluginServiceSignOutConfirmation } from "./plugin-service-detail"
+import { capabilityLabel, serviceStateLabel } from "./service-display-format"
 import { type ServiceCatalogEntry, type ServiceCatalogSnapshot } from "./service-catalog-controller"
 
-function stateLabel(locale: AppLocale, state: PluginServiceStatus["state"]) {
-  return appMessage(
-    locale,
-    state === "connected"
-      ? "services.connected"
-      : state === "disconnected"
-        ? "services.disconnected"
-        : state === "attention"
-          ? "services.attention"
-          : "services.unknown",
-  )
+export { PluginServiceSignOutConfirmation }
+
+function serviceStateDot(state: PluginServiceStatus["state"]) {
+  return state === "connected" ? "bg-status-success" : state === "attention" ? "bg-status-warning" : "bg-text-disabled"
 }
 
-function credentialLabel(locale: AppLocale, status: PluginServiceStatus) {
-  if (!status.credential.configured) return appMessage(locale, "services.notConfigured")
-  return appMessage(
-    locale,
-    status.credential.verification === "verified"
-      ? "services.verified"
-      : status.credential.verification === "failed"
-        ? "services.failed"
-        : status.credential.verification === "unverified"
-          ? "services.unverified"
-          : "services.unknown",
-  )
-}
-
-function metricValue(value: number, locale: AppLocale) {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 4 }).format(value)
-}
-
-function capabilityLabel(locale: AppLocale, capability: ServiceCapability) {
-  return appMessage(locale, `services.capability.${capability}`)
-}
-
-function billingLabel(locale: AppLocale, service: ServiceCatalogEntry) {
-  if (service.billing.kind === "free") return appMessage(locale, "services.free")
-  if (service.billing.kind === "subscription") {
-    return service.billing.name ?? appMessage(locale, "services.subscription")
-  }
-  if (service.billing.kind === "credits" && service.billing.remaining !== undefined && service.billing.unit) {
-    return appMessage(locale, "services.remaining", {
-      unit: service.billing.unit,
-      value: metricValue(service.billing.remaining, locale),
-    })
-  }
-  return appMessage(locale, "services.unavailableData")
-}
-
-function authenticationLabel(locale: AppLocale, service: ServiceCatalogEntry) {
-  return appMessage(
-    locale,
-    service.authentication === "authenticated"
-      ? "services.authenticated"
-      : service.authentication === "required"
-        ? "services.authRequired"
-        : service.authentication === "not-applicable"
-          ? "services.authNotApplicable"
-          : "services.unknown",
-  )
-}
-
-function StatusPill({ children, state }: { children: React.ReactNode; state?: PluginServiceStatus["state"] }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full border px-2 py-0.5 text-[11px] font-medium",
-        state === "connected"
-          ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-          : state === "attention"
-            ? "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-            : "border-border bg-muted/70 text-muted-foreground",
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-border bg-muted/20 px-3 py-2.5">
-      <dt className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{label}</dt>
-      <dd className="mt-1 truncate text-sm text-foreground">{value}</dd>
-    </div>
-  )
-}
-
-export function PluginServiceSignOutConfirmation({
-  busy,
+function ServiceDirectoryItem({
+  controls,
+  itemRef,
   locale,
-  onCancel,
-  onConfirm,
-}: {
-  busy: boolean
-  locale: AppLocale
-  onCancel(): void
-  onConfirm(): void
-}) {
-  return (
-    <div
-      aria-label={appMessage(locale, "services.signOutConfirm")}
-      className="mt-4 rounded-lg border border-destructive/25 bg-destructive/5 p-3"
-      role="alertdialog"
-    >
-      <p className="text-xs text-foreground">{appMessage(locale, "services.signOutConfirm")}</p>
-      <div className="mt-3 flex justify-end gap-2">
-        <Button disabled={busy} onClick={onCancel} size="sm" variant="ghost">
-          {appMessage(locale, "services.signOutCancel")}
-        </Button>
-        <Button disabled={busy} onClick={onConfirm} size="sm" variant="destructive">
-          {appMessage(locale, "services.signOutConfirmAction")}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function ServiceCard({
-  busy,
-  locale,
-  onAction,
-  onCheckout,
+  onNavigate,
+  onSelect,
+  selected,
   service,
+  tabId,
 }: {
-  busy?: WebPluginServiceAction
+  controls: string
+  itemRef(element: HTMLButtonElement | null): void
   locale: AppLocale
-  onAction(action: WebPluginServiceAction): void
-  onCheckout(planKey: string): void
+  onNavigate(key: "first" | "last" | "next" | "previous"): void
+  onSelect(): void
+  selected: boolean
   service: ServiceCatalogEntry
+  tabId: string
 }) {
-  const [confirmSignOut, setConfirmSignOut] = useState(false)
-  const actions = service.kind === "plugin" ? service.actions : []
-  const status = service.kind === "plugin" ? service.status : undefined
-  const canAuthorize = actions.includes("authorize") && !status?.credential.configured
-  const canReauthorize = actions.includes("reauthorize") && Boolean(status?.credential.configured)
-  const authorizationPending = busy === "authorize" || busy === "reauthorize"
-  const canCancel = actions.includes("authorization.cancel") && (authorizationPending || status?.state === "attention")
-  const canSignOut = actions.includes("sign_out") && Boolean(status?.credential.configured)
-  const checkout = status?.billing.availability === "available" ? status.billing.checkout : undefined
-  const checkoutPlans = actions.includes("checkout") && checkout?.availability === "available" ? checkout.plans : []
-  const checkoutPending = checkout?.availability === "available" ? checkout.pending : undefined
-  const unavailable = appMessage(locale, "services.unavailableData")
   return (
-    <article className="rounded-xl border border-border bg-card p-5 text-card-foreground shadow-sm">
-      <div className="flex items-start gap-3">
-        <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          {service.kind === "builtin" ? <Bot className="size-5" /> : <Cloud className="size-5" />}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold">{service.name}</h3>
-            {service.kind === "plugin" ? (
-              <StatusPill>{appMessage(locale, "services.version", { version: service.version })}</StatusPill>
-            ) : null}
-            <StatusPill state={service.state}>{stateLabel(locale, service.state)}</StatusPill>
-            {service.billing.kind === "free" || service.billing.kind === "subscription" ? (
-              <StatusPill>{billingLabel(locale, service)}</StatusPill>
-            ) : null}
-          </div>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-            {service.kind === "builtin" ? appMessage(locale, "services.openCodeDescription") : service.description}
-          </p>
-        </div>
-      </div>
-
-      {service.loading ? (
-        <div
-          className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-3 text-xs text-muted-foreground"
-          role="status"
-        >
-          <LoaderCircle className="size-4 animate-spin" />
-          {appMessage(locale, "services.loadingStatus")}
-        </div>
-      ) : service.error ? (
-        <div
-          className="mt-4 flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-3 text-xs text-destructive"
-          role="alert"
-        >
-          <CircleAlert className="mt-0.5 size-4 shrink-0" />
-          <span className="break-words">{service.error}</span>
-        </div>
-      ) : service.kind === "plugin" && status ? (
-        <dl className="mt-4 grid gap-2 sm:grid-cols-2">
-          <Detail
-            label={appMessage(locale, "services.account")}
-            value={status.account.availability === "available" ? status.account.displayName : unavailable}
-          />
-          <Detail label={appMessage(locale, "services.credential")} value={credentialLabel(locale, status)} />
-          <Detail
-            label={appMessage(locale, "services.plan")}
-            value={
-              status.plan.availability === "available"
-                ? `${status.plan.name}${
-                    status.plan.billingInterval
-                      ? ` · ${appMessage(locale, `services.interval.${status.plan.billingInterval}`)}`
-                      : ""
-                  }`
-                : unavailable
-            }
-          />
-          <Detail
-            label={appMessage(locale, "services.subscriptionStatus")}
-            value={
-              status.billing.availability === "available"
-                ? (status.billing.subscriptionStatus ?? appMessage(locale, "services.noSubscription"))
-                : unavailable
-            }
-          />
-          <Detail
-            label={appMessage(locale, "services.credits")}
-            value={
-              status.credits.availability === "available"
-                ? appMessage(locale, "services.remaining", {
-                    unit: status.credits.unit,
-                    value: metricValue(status.credits.remaining, locale),
-                  })
-                : unavailable
-            }
-          />
-          <Detail
-            label={appMessage(locale, "services.usage")}
-            value={
-              status.usage.availability === "available"
-                ? appMessage(locale, "services.consumed", {
-                    period: status.usage.period ? ` · ${status.usage.period}` : "",
-                    unit: status.usage.unit,
-                    value: metricValue(status.usage.consumed, locale),
-                  })
-                : unavailable
-            }
-          />
-        </dl>
-      ) : service.kind === "builtin" ? (
-        <dl className="mt-4 grid gap-2 sm:grid-cols-2">
-          <Detail label={appMessage(locale, "services.billing")} value={billingLabel(locale, service)} />
-          <Detail label={appMessage(locale, "services.authentication")} value={authenticationLabel(locale, service)} />
-        </dl>
-      ) : null}
-
-      <div className="mt-4 border-t border-border pt-4">
-        <h4 className="text-xs font-semibold text-foreground">{appMessage(locale, "services.capabilities")}</h4>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {service.capabilities.length ? (
-            service.capabilities.map((capability) => (
-              <span
-                className="rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
-                key={capability}
-              >
-                {capabilityLabel(locale, capability)}
-              </span>
-            ))
-          ) : (
-            <span className="text-xs text-muted-foreground">{unavailable}</span>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4">
-        <div className="flex items-center justify-between gap-3">
-          <h4 className="text-xs font-semibold text-foreground">{appMessage(locale, "services.models")}</h4>
-          <span className="text-[11px] tabular-nums text-muted-foreground">{service.models.length}</span>
-        </div>
-        {service.models.length ? (
-          <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-lg border border-border bg-muted/10 p-1.5">
-            {service.models.map((model) => (
-              <li className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs" key={model.id}>
-                <span className="min-w-0 flex-1 truncate font-medium text-foreground">{model.name}</span>
-                {model.providerName ? (
-                  <span className="truncate text-[11px] text-muted-foreground">{model.providerName}</span>
-                ) : null}
-                {model.default ? <StatusPill>{appMessage(locale, "services.defaultModel")}</StatusPill> : null}
-                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {capabilityLabel(locale, model.capability)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {service.loading ? appMessage(locale, "services.loadingModels") : appMessage(locale, "services.noModels")}
-          </p>
+    <button
+      aria-controls={controls}
+      aria-current={selected ? "page" : undefined}
+      aria-selected={selected}
+      className={cn(
+        "convax-service-directory-item group flex min-w-0 items-start gap-2.5 rounded-md px-2.5 py-2.5 text-left outline-none",
+        "hover:bg-interactive-hover focus-visible:ring-2 focus-visible:ring-focus-ring/55",
+        selected && "bg-interactive-selected",
+      )}
+      data-service-directory-item={service.serviceId}
+      id={tabId}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        const navigationKey =
+          event.key === "ArrowDown" || event.key === "ArrowRight"
+            ? "next"
+            : event.key === "ArrowUp" || event.key === "ArrowLeft"
+              ? "previous"
+              : event.key === "Home"
+                ? "first"
+                : event.key === "End"
+                  ? "last"
+                  : undefined
+        if (!navigationKey) return
+        event.preventDefault()
+        onNavigate(navigationKey)
+      }}
+      ref={itemRef}
+      role="tab"
+      tabIndex={selected ? 0 : -1}
+      title={service.name}
+      type="button"
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "grid size-8 shrink-0 place-items-center rounded-md bg-surface-inset text-text-secondary [&>svg]:size-3.5",
+          selected && "text-primary",
         )}
-      </div>
-
-      {service.kind === "plugin" && !actions.includes("authorize") && !actions.includes("reauthorize") ? (
-        <p className="mt-3 text-xs text-muted-foreground">{appMessage(locale, "services.authorizationUnavailable")}</p>
-      ) : null}
-
-      {confirmSignOut ? (
-        <PluginServiceSignOutConfirmation
-          busy={Boolean(busy)}
-          locale={locale}
-          onCancel={() => setConfirmSignOut(false)}
-          onConfirm={() => {
-            setConfirmSignOut(false)
-            onAction("sign_out")
-          }}
-        />
-      ) : null}
-
-      {checkoutPending ? (
-        <p className="mt-3 text-xs text-muted-foreground" role="status">
-          {appMessage(locale, "services.checkoutPending", {
-            plan: checkoutPending.planKey,
-            status: checkoutPending.status,
-          })}
-        </p>
-      ) : null}
-
-      {canAuthorize || canReauthorize || canCancel || canSignOut || checkoutPlans.length > 0 ? (
-        <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-border pt-4">
-          {checkoutPlans.map((plan) => (
-            <Button
-              disabled={Boolean(busy) || Boolean(checkoutPending)}
-              key={plan.key}
-              onClick={() => onCheckout(plan.key)}
-              size="sm"
-            >
-              {busy === "checkout" ? <LoaderCircle className="animate-spin" /> : null}
-              {appMessage(locale, "services.upgrade", { plan: plan.name })}
-            </Button>
-          ))}
-          {canCancel ? (
-            <Button
-              disabled={Boolean(busy) && !authorizationPending}
-              onClick={() => onAction("authorization.cancel")}
-              size="sm"
-              variant="outline"
-            >
-              {busy === "authorization.cancel" ? <LoaderCircle className="animate-spin" /> : null}
-              {appMessage(locale, "services.cancelAuthorization")}
-            </Button>
+      >
+        {service.kind === "builtin" ? <Bot /> : <Cloud />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-text-primary">
+            {service.name}
+          </span>
+          {service.kind === "plugin" ? (
+            <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
+              {appMessage(locale, "services.version", { version: service.version })}
+            </span>
           ) : null}
-          {canAuthorize || canReauthorize ? (
-            <Button
-              disabled={Boolean(busy)}
-              onClick={() => onAction(canAuthorize ? "authorize" : "reauthorize")}
-              size="sm"
-              variant="outline"
-            >
-              {busy === "authorize" || busy === "reauthorize" ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Settings2 />
-              )}
-              {appMessage(locale, canAuthorize ? "services.configure" : "services.reconfigure")}
-            </Button>
-          ) : null}
-          {canSignOut ? (
-            <Button disabled={Boolean(busy)} onClick={() => setConfirmSignOut(true)} size="sm" variant="outline">
-              {busy === "sign_out" ? <LoaderCircle className="animate-spin" /> : <LogOut />}
-              {appMessage(locale, "services.signOut")}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-    </article>
+        </span>
+        <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-text-tertiary">
+          <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", serviceStateDot(service.state))} />
+          <span>{serviceStateLabel(locale, service.state)}</span>
+          <span aria-hidden="true">·</span>
+          <span className="truncate tabular-nums">
+            {appMessage(locale, "services.modelCount", { count: service.models.length })}
+          </span>
+        </span>
+        <span className="sr-only">
+          {service.capabilities.map((capability) => capabilityLabel(locale, capability)).join(", ")}
+        </span>
+      </span>
+    </button>
   )
 }
 
@@ -385,12 +121,48 @@ export function ServicesSurface({
   onRefresh(): void
   snapshot: ServiceCatalogSnapshot
 }) {
+  const [selectedServiceId, setSelectedServiceId] = useState(snapshot.services[0]?.serviceId)
+  const selectedService =
+    snapshot.services.find((service) => service.serviceId === selectedServiceId) ?? snapshot.services[0]
+  const totalModels = snapshot.services.reduce((total, service) => total + service.models.length, 0)
+  const generatedId = useId()
+  const panelId = `${generatedId}-service-detail`
+  const itemRefs = useRef(new Map<string, HTMLButtonElement>())
+
+  useEffect(() => {
+    if (selectedService?.serviceId !== selectedServiceId) setSelectedServiceId(selectedService?.serviceId)
+  }, [selectedService?.serviceId, selectedServiceId])
+
+  function navigateFrom(serviceId: string, key: "first" | "last" | "next" | "previous") {
+    const index = snapshot.services.findIndex((service) => service.serviceId === serviceId)
+    if (index < 0 || snapshot.services.length === 0) return
+    const nextIndex =
+      key === "first"
+        ? 0
+        : key === "last"
+          ? snapshot.services.length - 1
+          : key === "next"
+            ? (index + 1) % snapshot.services.length
+            : (index - 1 + snapshot.services.length) % snapshot.services.length
+    const nextService = snapshot.services[nextIndex]
+    if (!nextService) return
+    setSelectedServiceId(nextService.serviceId)
+    itemRefs.current.get(nextService.serviceId)?.focus()
+  }
+
   return (
-    <section aria-label={appMessage(locale, "services.title")} className={cn("space-y-5", className)}>
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm text-muted-foreground">{appMessage(locale, "services.description")}</p>
-        </div>
+    <section
+      aria-label={appMessage(locale, "services.title")}
+      className={cn("convax-services-surface space-y-3", className)}
+      data-services-layout="adaptive-master-detail"
+    >
+      <div className="convax-services-toolbar flex flex-wrap items-center justify-between gap-3">
+        <p aria-live="polite" className="text-xs tabular-nums text-text-tertiary">
+          {appMessage(locale, "services.inventorySummary", {
+            models: totalModels,
+            services: snapshot.services.length,
+          })}
+        </p>
         <div className="flex shrink-0 items-center gap-2">
           {onInstallServices ? (
             <Button onClick={onInstallServices} size="sm">
@@ -399,53 +171,88 @@ export function ServicesSurface({
             </Button>
           ) : null}
           <Button disabled={snapshot.loading} onClick={onRefresh} size="sm" variant="outline">
-            <RefreshCw className={snapshot.loading ? "animate-spin" : undefined} />
+            <RefreshCw className={snapshot.loading ? "animate-spin motion-reduce:animate-none" : undefined} />
             {appMessage(locale, "services.retry")}
           </Button>
         </div>
       </div>
+
       {snapshot.error ? (
         <div
-          className="rounded-xl border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          className="border-l-2 border-status-danger bg-status-danger-surface px-3 py-3 text-sm text-status-danger"
           role="alert"
         >
           {snapshot.error}
         </div>
       ) : null}
+
       {snapshot.loading && snapshot.services.length === 0 ? (
         <div
-          className="flex min-h-32 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-sm text-muted-foreground"
+          className="flex items-center justify-center gap-2 border-y border-border-subtle bg-surface-raised px-5 py-12 text-sm text-text-tertiary"
           role="status"
         >
-          <LoaderCircle className="size-4 animate-spin" />
+          <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
           {appMessage(locale, "services.loading")}
         </div>
       ) : snapshot.services.length === 0 ? (
-        <div className="grid min-h-32 place-items-center rounded-xl border border-dashed border-border px-5 text-center text-sm text-muted-foreground">
+        <div
+          className="border-y border-border-subtle bg-surface-raised px-5 py-12 text-center text-sm text-text-tertiary"
+          role="status"
+        >
           {appMessage(locale, "services.empty")}
         </div>
-      ) : (
-        <div className="grid gap-4 xl:grid-cols-2">
-          {snapshot.services.map((service) => (
-            <ServiceCard
-              busy={
-                service.kind === "plugin" && snapshot.action?.pluginId === service.pluginId
-                  ? snapshot.action.action
-                  : undefined
-              }
-              key={service.serviceId}
-              locale={locale}
-              onAction={(action) => {
-                if (service.kind === "plugin") onAction(service.pluginId, action)
-              }}
-              onCheckout={(planKey) => {
-                if (service.kind === "plugin") onCheckout?.(service.pluginId, planKey)
-              }}
-              service={service}
-            />
-          ))}
+      ) : selectedService ? (
+        <div className="convax-services-workspace">
+          <nav aria-label={appMessage(locale, "services.catalog")} className="convax-services-directory">
+            <h3 className="px-3 pb-2 pt-3 text-[11px] font-semibold text-text-tertiary">
+              {appMessage(locale, "services.catalog")}
+            </h3>
+            <div
+              aria-label={appMessage(locale, "services.catalog")}
+              className="convax-service-directory-tabs"
+              role="tablist"
+            >
+              {snapshot.services.map((service, index) => {
+                const tabId = `${generatedId}-service-tab-${index}`
+                return (
+                  <ServiceDirectoryItem
+                    controls={panelId}
+                    itemRef={(element) => {
+                      if (element) itemRefs.current.set(service.serviceId, element)
+                      else itemRefs.current.delete(service.serviceId)
+                    }}
+                    key={service.serviceId}
+                    locale={locale}
+                    onNavigate={(key) => navigateFrom(service.serviceId, key)}
+                    onSelect={() => setSelectedServiceId(service.serviceId)}
+                    selected={service.serviceId === selectedService.serviceId}
+                    service={service}
+                    tabId={tabId}
+                  />
+                )
+              })}
+            </div>
+          </nav>
+          <ServiceDetail
+            busy={
+              selectedService.kind === "plugin" && snapshot.action?.pluginId === selectedService.pluginId
+                ? snapshot.action.action
+                : undefined
+            }
+            key={selectedService.serviceId}
+            labelledBy={`${generatedId}-service-tab-${snapshot.services.indexOf(selectedService)}`}
+            locale={locale}
+            onAction={(action) => {
+              if (selectedService.kind === "plugin") onAction(selectedService.pluginId, action)
+            }}
+            onCheckout={(planKey) => {
+              if (selectedService.kind === "plugin") onCheckout?.(selectedService.pluginId, planKey)
+            }}
+            panelId={panelId}
+            service={selectedService}
+          />
         </div>
-      )}
+      ) : null}
     </section>
   )
 }

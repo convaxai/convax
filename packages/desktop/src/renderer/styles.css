@@ -71,6 +71,216 @@
   padding-inline-start: 2.25rem;
 }
 
+.convax-settings-shell {
+  /*
+   * Settings uses a deliberate low-to-high material stack:
+   * navigation rail -> workspace canvas -> focused management surface.
+   * These colors stay derived from the active theme instead of introducing a
+   * second palette that would drift across light, dark, and high-contrast modes.
+   */
+  --convax-settings-content-surface: var(--ui-surface-canvas);
+  --convax-settings-rail-surface: color-mix(in oklab, var(--ui-surface-canvas) 86%, var(--ui-surface-inset));
+  --convax-settings-directory-surface: color-mix(in oklab, var(--ui-surface-panel) 78%, var(--ui-surface-canvas));
+  --convax-settings-workspace-border: color-mix(in oklab, var(--ui-border-default) 82%, var(--ui-surface-canvas));
+
+  background: var(--convax-settings-content-surface);
+}
+
+.convax-settings-rail {
+  background: var(--convax-settings-rail-surface);
+}
+
+.convax-settings-content {
+  background: var(--convax-settings-content-surface);
+}
+
+.convax-services-surface {
+  container: service-surface / inline-size;
+}
+
+.convax-services-workspace {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--convax-settings-workspace-border, var(--ui-border-default));
+  border-color: var(--convax-settings-workspace-border, var(--ui-border-default));
+  background: var(--ui-surface-raised);
+}
+
+.convax-services-directory {
+  min-width: 0;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  background: var(--convax-settings-directory-surface, var(--ui-surface-panel));
+}
+
+.convax-service-directory-tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding: 0 0.5rem 0.625rem;
+  scrollbar-gutter: stable;
+}
+
+.convax-service-directory-item {
+  flex: 0 0 min(15rem, 82cqw);
+  transition:
+    background-color var(--ui-motion-fast, 120ms) ease,
+    box-shadow var(--ui-motion-fast, 120ms) ease;
+}
+
+.convax-service-directory-item[aria-selected="true"] {
+  box-shadow: inset 3px 0 0 var(--ui-brand);
+}
+
+.convax-services-detail {
+  container: service-detail / inline-size;
+  background: var(--ui-surface-raised);
+}
+
+.convax-service-detail-header {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  padding: 1.25rem;
+}
+
+.convax-service-detail-heading {
+  min-width: 0;
+}
+
+.convax-service-actions {
+  align-self: start;
+  justify-content: flex-start;
+}
+
+.convax-service-confirmation {
+  grid-column: 1 / -1;
+}
+
+.convax-service-detail-body {
+  display: grid;
+  gap: 1.5rem;
+  min-width: 0;
+  padding: 1.25rem;
+}
+
+.convax-service-section {
+  min-width: 0;
+}
+
+.convax-service-detail-grid {
+  display: grid;
+  min-width: 0;
+  gap: 1rem 2rem;
+}
+
+.convax-service-model-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.convax-service-model-list {
+  max-height: min(24rem, 50vh);
+  border-top: 1px solid var(--ui-border-subtle);
+  scrollbar-gutter: stable;
+}
+
+.convax-service-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.25rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--ui-border-subtle) 62%, var(--ui-surface-raised));
+}
+
+.convax-service-model-row:hover {
+  background: color-mix(in oklab, var(--ui-interactive-hover) 58%, transparent);
+}
+
+.convax-service-model-provider {
+  grid-column: 1 / -1;
+}
+
+@container service-surface (min-width: 44rem) {
+  .convax-services-workspace {
+    grid-template-columns: 15rem minmax(0, 1fr);
+  }
+
+  .convax-services-directory {
+    border-right: 1px solid var(--ui-border-subtle);
+    border-bottom: 0;
+  }
+
+  .convax-service-directory-tabs {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0 0.5rem 0.75rem;
+  }
+
+  .convax-service-directory-item {
+    flex: none;
+    width: 100%;
+  }
+}
+
+@container service-detail (min-width: 29rem) {
+  .convax-service-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container service-detail (min-width: 36rem) {
+  .convax-service-model-row {
+    grid-template-columns: minmax(0, 1.4fr) minmax(7rem, 0.8fr) auto;
+    gap: 0.75rem;
+  }
+
+  .convax-service-model-provider {
+    grid-column: auto;
+  }
+}
+
+@container service-detail (min-width: 44rem) {
+  .convax-service-detail-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 1.5rem;
+  }
+
+  .convax-service-actions {
+    justify-content: flex-end;
+  }
+
+  .convax-service-detail-body {
+    gap: 1.75rem;
+    padding: 1.5rem;
+  }
+}
+
+:root[data-high-contrast="true"] .convax-service-directory-item[aria-selected="true"] {
+  outline: 2px solid var(--ui-interactive-selected-border);
+  outline-offset: -2px;
+}
+
+@media (prefers-contrast: more) {
+  :root:not([data-high-contrast="false"]) .convax-service-directory-item[aria-selected="true"] {
+    outline: 2px solid var(--ui-interactive-selected-border);
+    outline-offset: -2px;
+  }
+}
+
+@media (forced-colors: active) {
+  .convax-service-directory-item[aria-selected="true"] {
+    border-left: 3px solid Highlight;
+    box-shadow: none;
+  }
+}
+
 html,
 body,
 #app {
