@@ -122,6 +122,33 @@ function fixture(
 }
 
 describe("PetProviderController", () => {
+  test("ignores a pre-initialize Marketplace refresh and discovers the installed provider on startup", async () => {
+    const value = fixture({ installed: [provider("soft-companion")] })
+
+    await expect(value.controller.refresh()).resolves.toBeUndefined()
+    expect(value.controller.getProvider()).toBeUndefined()
+
+    await value.controller.initialize()
+    expect(value.controller.getProvider()).toMatchObject({ pluginId: "soft-companion" })
+    expect(value.stateStore.state).toMatchObject({ awake: false, providerId: "soft-companion" })
+  })
+
+  test("adopts a Marketplace-installed provider after initialization and restores it after restart", async () => {
+    const value = fixture()
+    await value.controller.initialize()
+    value.install(provider("soft-companion"))
+
+    await value.controller.refresh()
+
+    expect(value.controller.getProvider()).toMatchObject({ pluginId: "soft-companion" })
+    expect(value.stateStore.state).toMatchObject({ awake: false, providerId: "soft-companion" })
+
+    const restarted = fixture({ installed: [provider("soft-companion")], state: value.stateStore.state })
+    await restarted.controller.initialize()
+    expect(restarted.controller.getProvider()).toMatchObject({ pluginId: "soft-companion" })
+    expect(restarted.controller.getPreferences()).toEqual({ awake: false })
+  })
+
   test("keeps the feature dormant when no provider is installed", async () => {
     const value = fixture()
     await value.controller.initialize()

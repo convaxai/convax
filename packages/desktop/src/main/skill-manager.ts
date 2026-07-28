@@ -1,4 +1,5 @@
 import type { AgentSkill } from "@convax/agent-runtime"
+import { createHash } from "node:crypto"
 import {
   inspectAgentSkillDirectory,
   type ManagedAgentSkill,
@@ -150,6 +151,11 @@ export class DesktopSkillManager {
     const [skills, bindings] = await Promise.all([this.store.list(), this.ownership.reservations()])
     const bindingsByName = new Map(bindings.map((binding) => [binding.skillName, binding]))
     return skills.map((skill) => this.summary(skill, bindingsByName.get(skill.name)))
+  }
+
+  async exactManagedTreeDigest(name: string) {
+    const inspection = await this.store.inspect(name)
+    return exactSkillTreeDigest(inspection.files)
   }
 
   /**
@@ -329,6 +335,18 @@ export class DesktopSkillManager {
   private emit() {
     this.listeners.forEach((listener) => listener())
   }
+}
+
+export function exactSkillTreeDigest(files: readonly { content: Uint8Array; path: string }[]) {
+  const digest = createHash("sha256")
+  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path, "en"))) {
+    const pathBytes = Buffer.from(file.path, "utf8")
+    digest.update(`${pathBytes.byteLength}:`)
+    digest.update(pathBytes)
+    digest.update(`:${file.content.byteLength}:`)
+    digest.update(file.content)
+  }
+  return digest.digest("hex")
 }
 
 function hasExpectedShowcaseSignature(bytes: Uint8Array, mimeType: "image/png" | "video/mp4") {

@@ -36,16 +36,17 @@ import {
   requireProjectResourceReference,
   type ProjectResourceReference,
 } from "@convax/project/canvas"
-import type {
-  GenerationCanvasRequest,
-  GenerationCanvasReconcileResult,
-  GenerationCanvasResult,
-  GenerationInputRole,
-  GenerationOutputModality,
-  GenerationToolDescription,
-  GenerationToolInput,
-  GenerationToolInputValue,
-  GenerationToolSummary,
+import {
+  generationCanvasRevisionConflictCode,
+  type GenerationCanvasRequest,
+  type GenerationCanvasReconcileResult,
+  type GenerationCanvasResult,
+  type GenerationInputRole,
+  type GenerationOutputModality,
+  type GenerationToolDescription,
+  type GenerationToolInput,
+  type GenerationToolInputValue,
+  type GenerationToolSummary,
 } from "../generation-contracts"
 import { matchesWebPluginCanvasNodeIdentity } from "../plugin-canvas-node"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
@@ -2163,7 +2164,7 @@ export class GenerationCanvasService {
     if (!snapshot.document) throw new Error(`Canvas document was not found: ${request.ref.canvasId}`)
     if (snapshot.document.revision !== request.expectedRevision) {
       throw new Error(
-        `Generation expected Canvas revision ${request.expectedRevision}, received ${snapshot.document.revision}`,
+        `${generationCanvasRevisionConflictCode}: Generation expected Canvas revision ${request.expectedRevision}, received ${snapshot.document.revision}`,
       )
     }
     let workingRequest = request

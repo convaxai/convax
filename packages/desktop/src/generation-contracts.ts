@@ -11,6 +11,12 @@ export const generationIpcChannels = {
   reconcileCanvas: "generation:reconcile-canvas",
 } as const
 
+export const generationCanvasRevisionConflictCode = "CONVAX_GENERATION_CANVAS_REVISION_CONFLICT"
+
+export function isGenerationCanvasRevisionConflictFailure(failure: unknown) {
+  return failure instanceof Error && failure.message.includes(generationCanvasRevisionConflictCode)
+}
+
 export type GenerationInputRole =
   | "text"
   | "reference_image"

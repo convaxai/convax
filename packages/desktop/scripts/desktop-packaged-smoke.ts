@@ -8,6 +8,13 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 
 import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
+import { assertEmptyPersistedCanvasV2 } from "./desktop-packaged-smoke-canvas"
+import {
+  assertAutomaticPreinstalledAuthorization,
+  assertLocalMarketplaceIdentity,
+  assertMarketplaceSmokeSnapshot,
+  assertNoLegacyDefaultCapabilityReceipt,
+} from "./desktop-packaged-smoke-marketplace"
 
 const desktopRoot = path.resolve(import.meta.dirname, "..")
 const distRoot = path.join(desktopRoot, "dist")
@@ -535,11 +542,14 @@ try {
         "the packaged Home or Canvas",
       )
       if (document.querySelector('[data-project-home="true"]')) {
-        const projectEntry =
-          document.querySelector('[data-project-id="' + project.id + '"]') ??
-          [...document.querySelectorAll("button")].find((button) =>
-            ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
-          )
+        const projectEntry = await waitFor(
+          () =>
+            document.querySelector('[data-project-id="' + project.id + '"]') ??
+            [...document.querySelectorAll("button")].find((button) =>
+              ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
+            ),
+          "the seeded Project entry",
+        )
         if (!(projectEntry instanceof HTMLElement)) {
           throw new Error("The packaged Home did not expose the seeded Project")
         }
@@ -552,6 +562,49 @@ try {
       if (!packagedDefault) {
         throw new Error("Packaged default Plugin did not install from the offline seed: " + defaultRemotePluginId)
       }
+      const settingsSources = await window.convax.marketplaces.listMarketplaces()
+      const marketplaceCatalog = await window.convax.marketplaces.listCatalog()
+      const catalogCard = marketplaceCatalog.cards.find(
+        (card) => card.kind === "skill" && card.id === "canvas-storyboard",
+      )
+      const storyboardChoices = await window.convax.marketplaces.beginInstall({
+        id: "canvas-storyboard",
+        kind: "skill",
+      })
+      const storyboardChoice = storyboardChoices.find(
+        (choice) => choice.marketplaceLabel === "convax-builtin",
+      )
+      if (!storyboardChoice) {
+        throw new Error(
+          "Packaged canvas-storyboard did not expose its Builtin source: " + JSON.stringify(storyboardChoices),
+        )
+      }
+      const marketplaceInventory = await window.convax.marketplaces.listInstalled()
+      const storyboardInstalled = marketplaceInventory.capabilities.find(
+        (capability) => capability.kind === "skill" && capability.id === "canvas-storyboard",
+      )
+      const ffmpegInstalled = marketplaceInventory.capabilities.find(
+        (capability) => capability.kind === "plugin" && capability.id === defaultRemotePluginId,
+      )
+      const titlebar = document.querySelector('[data-application-titlebar="true"]')
+      const titlebarButtons = titlebar ? [...titlebar.querySelectorAll("button")] : []
+      const settingsButton = titlebarButtons.at(-1)
+      if (!(settingsButton instanceof HTMLElement)) {
+        throw new Error("The packaged titlebar did not expose Settings")
+      }
+      settingsButton.click()
+      const capabilitiesNavigation = await waitFor(
+        () => document.querySelector('[data-settings-navigation-item="capabilities"]'),
+        "the Marketplace Settings navigation",
+      )
+      if (!(capabilitiesNavigation instanceof HTMLElement)) {
+        throw new Error("The packaged Settings did not expose Marketplace navigation")
+      }
+      capabilitiesNavigation.click()
+      await waitFor(
+        () => document.querySelector('[data-marketplace-surface="true"]'),
+        "the packaged Marketplace Settings surface",
+      )
       const loaded = await window.convax.canvas.documents.load({ canvasId, scopeId: project.id })
       if (!loaded.document) throw new Error("The packaged Canvas document did not load")
       if (loaded.document.nodes.length !== 0) {
@@ -560,6 +613,19 @@ try {
       return {
         canvasId,
         defaultRemote: { id: packagedDefault.id, version: packagedDefault.version },
+        marketplace: {
+          catalogCard,
+          ffmpegInstalled,
+          marketplaceSurfaceVisible: Boolean(document.querySelector('[data-marketplace-surface="true"]')),
+          settingsSources,
+          storyboardSources: storyboardChoices.map((choice) => choice.marketplaceLabel),
+          storyboardChoice: {
+            marketplaceLabel: storyboardChoice.marketplaceLabel,
+            setup: storyboardChoice.setup,
+            version: storyboardChoice.version,
+          },
+          storyboardInstalled,
+        },
         projectId: project.id,
         protocol: mainProtocol,
       }
@@ -567,6 +633,7 @@ try {
   )) as {
     canvasId?: string
     defaultRemote?: { id?: string; version?: string }
+    marketplace?: unknown
     projectId?: string
     protocol?: string
   }
@@ -579,6 +646,7 @@ try {
   ) {
     throw new Error(`Unexpected packaged seed result: ${JSON.stringify(seeded)}`)
   }
+  assertMarketplaceSmokeSnapshot(seeded.marketplace)
   const agent = (await renderer.evaluate(
     `(async () => {
       const projects = await window.convax.projects.listProjects()
@@ -605,8 +673,8 @@ try {
   }
 
   const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
-  const persisted = JSON.parse(await fs.readFile(documentFile, "utf8")) as { nodes?: unknown[] }
-  if (persisted.nodes?.length !== 0) throw new Error(`Packaged Canvas was not empty: ${JSON.stringify(persisted)}`)
+  assertEmptyPersistedCanvasV2(await fs.readFile(documentFile, "utf8"))
+  await assertLocalMarketplaceIdentity(userDataRoot)
   const ffmpegManifest = JSON.parse(
     await fs.readFile(path.join(userDataRoot, "plugins", defaultRemotePluginId, "manifest.json"), "utf8"),
   ) as { id?: string; runtime?: { command?: string }; version?: string }
@@ -645,36 +713,11 @@ try {
   ) {
     throw new Error(`Packaged FFmpeg companion receipt is invalid: ${JSON.stringify(companionReceipt)}`)
   }
-  const authorizationFiles = await fs.readdir(path.join(userDataRoot, "plugin-authorizations", defaultRemotePluginId))
-  const authorizationReceipts = (await Promise.all(
-    authorizationFiles
-      .filter((file) => file.endsWith(".json"))
-      .map(async (file) =>
-        JSON.parse(
-          await fs.readFile(path.join(userDataRoot, "plugin-authorizations", defaultRemotePluginId, file), "utf8"),
-        ),
-      ),
-  )) as Array<{ bindingKind?: string; pluginId?: string; pluginVersion?: string; schema?: string }>
-  if (
-    !authorizationReceipts.some(
-      (receipt) =>
-        receipt.schema === "convax.tool-plugin-authorization/1" &&
-        receipt.bindingKind === "managed" &&
-        receipt.pluginId === defaultRemotePluginId &&
-        receipt.pluginVersion === ffmpegManifest.version,
-    )
-  ) {
-    throw new Error("Packaged FFmpeg authorization receipt was not published")
-  }
-  const defaultReceipt = JSON.parse(
-    await fs.readFile(path.join(userDataRoot, "default-capabilities.json"), "utf8"),
-  ) as { plugins?: string[]; schema?: string }
-  if (
-    defaultReceipt.schema !== "convax.default-capabilities/1" ||
-    !defaultReceipt.plugins?.includes(defaultRemotePluginId)
-  ) {
-    throw new Error(`Packaged default capability receipt is invalid: ${JSON.stringify(defaultReceipt)}`)
-  }
+  await assertAutomaticPreinstalledAuthorization(userDataRoot, {
+    id: defaultRemotePluginId,
+    version: ffmpegManifest.version,
+  })
+  await assertNoLegacyDefaultCapabilityReceipt(userDataRoot)
 
   console.log(
     `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${defaultRemotePluginId}, ${agent.providerCount} OpenCode providers)`,

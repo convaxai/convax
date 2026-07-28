@@ -339,6 +339,22 @@ describe("generation IPC", () => {
     dispose()
   })
 
+  test("passes the exact host-owned return result mode to Main for declared bounded operations", async () => {
+    const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
+    const returnResult = { ...result, createdNodeIds: [], outputText: "Imported one media file." }
+    const generate = mock(async () => returnResult)
+    const dispose = registerGenerationIpc(
+      { describeTool: async () => description, generate, listTools: async () => [] },
+      { isTrustedSender: () => true },
+    )
+    const returned = { ...request, expectedOutputCount: 1, resultMode: { type: "return" as const } }
+
+    await expect(Promise.resolve(invoke(generationIpcChannels.generate, returned))).resolves.toEqual(returnResult)
+    expect(generate).toHaveBeenCalledWith(returned, expect.any(AbortSignal))
+
+    dispose()
+  })
+
   test("scopes duplicate ids and cancellation to the originating renderer", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
     const capturedSignals: AbortSignal[] = []

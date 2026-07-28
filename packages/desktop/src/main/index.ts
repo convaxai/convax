@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto"
+import { stat as statFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { ManagedAgentSkillStore, OpenCodeAgentRuntime } from "@convax/agent-runtime/node"
+import {
+  builtinSourceKey,
+  canonicalJson,
+  computeSourceKey,
+  sha256Hex,
+  type SourceKey,
+  type SourceQualifiedItem,
+} from "@convax/marketplace"
 import {
   CanvasNodeGenerationRunBusinessService,
   CanvasApplicationService,
@@ -59,6 +68,25 @@ import {
 import { desktopDeepLinkScheme, findDesktopDeepLink, parseDesktopDeepLink } from "./desktop-deep-link"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
+import { ManagedMcpAgentToolRegistry, type ManagedMcpPrincipalState } from "./managed-mcp-agent-tools"
+import { ManagedMcpRuntimeManager } from "./managed-mcp-runtime-manager"
+import { MarketplaceMcpMetadataStore, marketplaceMcpServerKey } from "./marketplace-mcp-metadata"
+import { PackagedMarketplaceProduct } from "./packaged-marketplace-product"
+import { NetworkMarketplaceManager } from "./network-marketplace-manager"
+import { FileLocalMarketplaceImportTransition, LocalMarketplaceStore } from "./local-marketplace-store"
+import { CapabilityMutationCoordinator, FileMarketplaceStateStore } from "./marketplace-state"
+import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-installer"
+import { MarketplaceApplicationService } from "./marketplace-application-service"
+import { MarketplaceLegacyMigration } from "./marketplace-legacy-migration"
+import { authorizeMarketplacePluginSetup } from "./marketplace-plugin-setup-authorization"
+import { registerMarketplaceIpc } from "./marketplace-ipc"
+import { provisionMarketplaceForStartup } from "./marketplace-startup-provisioning"
+import { builtinMarketplaceReservation } from "./builtin-marketplace-bundle"
+import { isMarketplacePluginRuntimeAdmitted } from "./marketplace-plugin-runtime-gate"
+import { unpackSafeZip } from "./safe-zip"
+import { exactSkillTreeDigest } from "./skill-manager"
+import { PinnedHttpsFetcher } from "./pinned-https-fetch"
+import { DevelopmentOfficialMarketplaceArtifacts } from "./development-official-marketplace-artifacts"
 import { createGenerationAgentToolProvider } from "./generation-agent-tools"
 import { GenerationCanvasService } from "./generation-canvas-service"
 import { GenerationInputSnapshotStore } from "./generation-input-snapshot-store"
@@ -84,8 +112,6 @@ import { CanvasExternalMediaDragService } from "./canvas-external-media-drag-ser
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
 import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
-import { desktopBuiltinSkillCatalog } from "./builtin-skill-catalog"
-import { desktopBuiltinSkillPresentations } from "./builtin-skill-presentations"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
 import { registerWorkspaceSystemStatusIpc } from "./workspace-system-status-ipc"
 import {
@@ -139,8 +165,6 @@ import { PetStateStore } from "./pet-state-store"
 import { registerPetPluginSessionProtocol } from "./pet-session"
 import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
-import { provisionDefaultCapabilities } from "./default-capability-provisioner"
-import { desktopDefaultRemoteCapabilityCatalog } from "./default-remote-capability-catalog"
 import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
 import { FileRemoteArtifactCache, FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
 import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
@@ -153,14 +177,17 @@ import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 import { registerPluginConnectedMediaIpc } from "./plugin-connected-media-ipc"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
-import { createPackagedDefaultCapabilityRegistry } from "./packaged-default-capabilities"
 import {
   composePluginPublicationTransactions,
   DesktopSkillMutationCoordinator,
   PluginSkillLifecycle,
   PluginSkillOwnershipStore,
 } from "./plugin-skill-lifecycle"
-import { createProjectResourceUrl, resolveProjectResourceProtocolPath } from "./project-resource-protocol"
+import {
+  createProjectResourceProtocolResponse,
+  createProjectResourceUrl,
+  resolveProjectResourceProtocolPath,
+} from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
 const trustedWebContents = new Set<number>()
@@ -582,8 +609,26 @@ function startApplication() {
       projects: projectFilePublisher,
       resources: canvasResources,
     })
+    let marketplaceRuntimeState: FileMarketplaceStateStore | undefined
+    const isMarketplacePluginEnabled = async (pluginId: string) => {
+      const plugin = (await pluginManager.list()).find((entry) => entry.id === pluginId)
+      if (!plugin) return false
+      const [tool, hook] = await Promise.all([
+        toolPluginAuthorizations.verifyInstalledIdentity(plugin).catch(() => null),
+        pluginHookAuthorizations.verifyInstalledIdentity(plugin).catch(() => null),
+      ])
+      const authorizationContractDigest = tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
+      const state = await marketplaceRuntimeState?.read()
+      return isMarketplacePluginRuntimeAdmitted({
+        authorizationContractDigest,
+        pluginId,
+        pluginVersion: plugin.version,
+        state,
+      })
+    }
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({
+        applicationDirectory: app.getAppPath(),
         isPackaged: app.isPackaged,
         resourcesDirectory: process.resourcesPath,
       }),
@@ -592,6 +637,7 @@ function startApplication() {
         principals: pluginPrincipals,
       },
       environment: generationEnvironment,
+      isPluginEnabled: isMarketplacePluginEnabled,
       plugins: pluginManager,
       recoveryRuntimeDirectory: join(userDataDirectory, "generation-sidecars", "runtime-v1"),
       recoveryStateDirectory: join(userDataDirectory, "generation-sidecars", "operation-v1"),
@@ -662,6 +708,19 @@ function startApplication() {
     } catch (error) {
       logGenerationRecoveryFailure("startup", error)
     }
+    let resolveManagedMcpPrincipal: (serverKey: string) => Promise<ManagedMcpPrincipalState | null> = async () => null
+    const managedMcpAgentTools = new ManagedMcpAgentToolRegistry({
+      resolvePrincipal: (serverKey) => resolveManagedMcpPrincipal(serverKey),
+    })
+    const managedMcpRuntimes = new ManagedMcpRuntimeManager({
+      agentTools: managedMcpAgentTools,
+      bunRuntime: desktopBunRuntime({
+        applicationDirectory: app.getAppPath(),
+        isPackaged: app.isPackaged,
+        resourcesDirectory: process.resourcesPath,
+      }),
+      root: join(userDataDirectory, "mcp-server-runtime"),
+    })
     const agentRuntime = new OpenCodeAgentRuntime({
       binaryDirectory: desktopOpenCodeBinaryDirectory({
         isPackaged: app.isPackaged,
@@ -669,7 +728,13 @@ function startApplication() {
       }),
       configDirectory: openCodeConfigDirectory,
       async resolveMcpServers() {
-        return installedPluginAgentMcpServers(await pluginManager.list())
+        const configured = installedPluginAgentMcpServers(await pluginManager.list())
+        if (Object.keys(configured).length > 0) {
+          console.warn(
+            "Internet MCP servers remain disabled because OpenCode does not expose a socket-level outbound-policy boundary",
+          )
+        }
+        return {}
       },
       async resolveHookModules() {
         const modules: Array<{ fileUrl: string }> = []
@@ -678,6 +743,7 @@ function startApplication() {
           .map((plugin) => plugin.id)
           .sort()
         for (const pluginId of ids) {
+          if (!(await isMarketplacePluginEnabled(pluginId))) continue
           try {
             const fileUrl = await pluginManager.withPluginMutation(pluginId, async () => {
               const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
@@ -727,6 +793,7 @@ function startApplication() {
       // request and propagates through the host AbortSignal.
       toolCallTimeout: agentHostToolInactivityTimeout,
       toolProvider: createCompositeAgentToolProvider([
+        managedMcpAgentTools,
         createCanvasAgentToolProvider({
           application: canvasApplication,
           canvases: projectCanvases,
@@ -859,20 +926,24 @@ function startApplication() {
       managedSkillStore,
       agentRuntime,
       userDataDirectory,
-      desktopBuiltinSkillCatalog,
-      desktopBuiltinSkillPresentations,
+      [],
+      [],
       pluginSkillOwnership,
       skillMutations,
     )
-    const createRemoteCapabilityInstaller = (registry: RemoteCapabilityRegistryPort) =>
+    const createRemoteCapabilityInstaller = (
+      registry: RemoteCapabilityRegistryPort,
+      deferExecutionAuthorization = false,
+    ) =>
       new RemoteCapabilityInstaller({
         authorizationStore: toolPluginAuthorizations,
         beforePluginPublish: async (pluginId) => {
           await pluginServices.discardPlugin(pluginId)
         },
         builtinPlugins: desktopBuiltinPluginCatalog,
-        builtinSkills: desktopBuiltinSkillCatalog,
+        builtinSkills: [],
         companionStore,
+        deferExecutionAuthorization,
         hookAuthorizationStore: pluginHookAuthorizations,
         pluginManager,
         pluginSkillLifecycle,
@@ -880,35 +951,17 @@ function startApplication() {
         registry,
         skillManager,
       })
-    const remoteCapabilities = createRemoteCapabilityInstaller(
-      new RemoteCapabilityRegistryClient({
-        artifactCache: new FileRemoteArtifactCache(join(userDataDirectory, "capability-registry", "artifact-v1")),
-        cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
-        fetch: createElectronRemoteCapabilityFetch(net),
-        showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),
-        showcaseMediaCache: new FileRemoteShowcaseMediaCache(
-          join(userDataDirectory, "capability-registry", "showcase-media-v1"),
-        ),
-      }),
-    )
-    let packagedDefaultCapabilities: RemoteCapabilityInstaller | undefined
-    if (app.isPackaged) {
-      const packagedDefault = desktopDefaultRemoteCapabilityCatalog[0]
-      if (packagedDefault) {
-        try {
-          const registry = await createPackagedDefaultCapabilityRegistry({
-            pluginId: packagedDefault.pluginId,
-            root: join(process.resourcesPath, "default-capabilities"),
-          })
-          if (registry) packagedDefaultCapabilities = createRemoteCapabilityInstaller(registry)
-          else console.error("Packaged default capability seed is missing")
-        } catch (error) {
-          // A damaged packaged seed never weakens Registry verification. Convax
-          // still opens and the ordinary network phase can recover it later.
-          console.error("Could not load the packaged default capability seed", error)
-        }
-      }
-    }
+    const remoteCapabilityRegistry = new RemoteCapabilityRegistryClient({
+      artifactCache: new FileRemoteArtifactCache(join(userDataDirectory, "capability-registry", "artifact-v1")),
+      cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
+      fetch: createElectronRemoteCapabilityFetch(net),
+      showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),
+      showcaseMediaCache: new FileRemoteShowcaseMediaCache(
+        join(userDataDirectory, "capability-registry", "showcase-media-v1"),
+      ),
+    })
+    const remoteCapabilities = createRemoteCapabilityInstaller(remoteCapabilityRegistry)
+    const marketplaceRemoteCapabilities = createRemoteCapabilityInstaller(remoteCapabilityRegistry, true)
     const prepareLocalPluginPublication = async (
       plugin: InstalledWebPluginSummary,
       candidate: WebPluginPublicationCandidate,
@@ -932,29 +985,447 @@ function startApplication() {
         throw error
       }
     }
-    await provisionDefaultCapabilities({
-      catalog: desktopBuiltinPluginCatalog,
-      pluginManager,
-      preparePluginPublication: prepareLocalPluginPublication,
-      remote: {
-        ...(packagedDefaultCapabilities ? { bootstrapInstaller: packagedDefaultCapabilities } : {}),
-        catalog: desktopDefaultRemoteCapabilityCatalog,
-        installer: remoteCapabilities,
-        mode: "bootstrap",
+    const marketplaceProductRoot = app.isPackaged
+      ? join(process.resourcesPath, "marketplace-product")
+      : join(app.getAppPath(), ".packaging", "marketplace-product")
+    let marketplaceProduct: PackagedMarketplaceProduct | null = null
+    try {
+      marketplaceProduct = await PackagedMarketplaceProduct.load(marketplaceProductRoot)
+    } catch (error) {
+      console.error("Packaged Marketplace product is unavailable; fixed sources remain reserved", error)
+    }
+    let developmentOfficialArtifacts: DevelopmentOfficialMarketplaceArtifacts | null = null
+    const developmentOfficialArtifactRoot = process.env.CONVAX_OFFICIAL_MARKETPLACE_ARTIFACT_ROOT
+    if (!app.isPackaged && developmentOfficialArtifactRoot) {
+      try {
+        developmentOfficialArtifacts =
+          await DevelopmentOfficialMarketplaceArtifacts.load(developmentOfficialArtifactRoot)
+      } catch (error) {
+        console.warn("Development Official Marketplace artifacts are unavailable", {
+          errorType: error instanceof Error ? error.name : "UnknownError",
+        })
+      }
+    }
+    const marketplaceFetcher = new PinnedHttpsFetcher()
+    const marketplaceState = new FileMarketplaceStateStore(join(userDataDirectory, "marketplaces", "state-v1.json"))
+    marketplaceRuntimeState = marketplaceState
+    const networkMarketplaces = new NetworkMarketplaceManager({
+      fetcher: marketplaceFetcher,
+      reservedMarketplaceIds: new Set(["convax-builtin", "convax-local", "convax-official"]),
+      root: join(userDataDirectory, "marketplaces", "network"),
+    })
+    const officialSourceKey = computeSourceKey({
+      deliveryPolicy: "github-pages-releases",
+      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+      kind: "network",
+      marketplaceId: "convax-official",
+      repository: { name: "convax-plugins", owner: "microvoid" },
+    })
+    let localMarketplaceSourceKey: SourceKey | undefined
+    let localMarketplace: LocalMarketplaceStore | undefined
+    const localCandidate = new LocalMarketplaceStore({
+      hasRetainedReferences: async () => {
+        const state = await marketplaceState.read()
+        if (!localMarketplaceSourceKey) {
+          const knownNonLocal = new Set<SourceKey>([
+            builtinSourceKey(),
+            officialSourceKey,
+            ...(await networkMarketplaces.listSources()).map((entry) => entry.sourceKey),
+          ])
+          return (
+            state.installations.some((entry) => !knownNonLocal.has(entry.sourceKey)) ||
+            state.transitions.some(
+              (entry) =>
+                (entry.previous && !knownNonLocal.has(entry.previous.sourceKey)) ||
+                (entry.next && !knownNonLocal.has(entry.next.sourceKey)),
+            )
+          )
+        }
+        return (
+          state.installations.some((entry) => entry.sourceKey === localMarketplaceSourceKey) ||
+          state.transitions.some(
+            (entry) =>
+              entry.previous?.sourceKey === localMarketplaceSourceKey ||
+              entry.next?.sourceKey === localMarketplaceSourceKey,
+          )
+        )
       },
-      skillManager,
-      stateFile: join(userDataDirectory, "default-capabilities.json"),
-    }).then(
-      ({ failures }) => {
-        for (const failure of failures) {
-          console.error(`Could not provision default remote ${failure.kind} ${failure.id}`, failure.error)
+      marketplaceId: "convax-local",
+      root: join(userDataDirectory, "marketplaces", "local", "primary"),
+      transition: new FileLocalMarketplaceImportTransition(
+        join(userDataDirectory, "marketplaces", "local", "primary-import-transition-v1.json"),
+      ),
+    })
+    try {
+      const localIdentity = await localCandidate.initialize()
+      localMarketplaceSourceKey = computeSourceKey({
+        kind: "local",
+        marketplaceId: localIdentity.marketplaceId,
+        policyVersion: localIdentity.policyVersion,
+        sourceInstanceId: localIdentity.sourceInstanceId,
+      })
+      localMarketplace = localCandidate
+    } catch (error) {
+      console.error("Local Marketplace is degraded; fixed and Network sources remain available", error)
+    }
+    const marketplaceMcp = new MarketplaceMcpMetadataStore({
+      companionRoot: join(userDataDirectory, "marketplaces", "mcp-companions"),
+      file: join(userDataDirectory, "marketplaces", "mcp-metadata-v1.json"),
+      refreshAgentConfiguration: () => agentRuntime.refreshConfiguration(),
+      runtimes: managedMcpRuntimes,
+    })
+    resolveManagedMcpPrincipal = async (serverKey) => {
+      const metadata = (await marketplaceMcp.read()).records.find(
+        (record) => marketplaceMcpServerKey(record.id) === serverKey,
+      )
+      if (!metadata) return null
+      const state = await marketplaceState.read()
+      const installed = state.installations.find(
+        (record) =>
+          record.kind === "mcp-server" &&
+          record.id === metadata.id &&
+          record.sourceKey === metadata.sourceKey &&
+          record.version === metadata.version,
+      )
+      const grant = state.executionGrants.find(
+        (record) =>
+          record.identity.kind === "mcp-server" &&
+          record.identity.id === metadata.id &&
+          record.sourceKey === metadata.sourceKey,
+      )
+      const preference = state.runtimePreferences.find(
+        (record) =>
+          record.identity.kind === "mcp-server" &&
+          record.identity.id === metadata.id &&
+          record.sourceKey === metadata.sourceKey,
+      )
+      if (
+        !installed ||
+        !grant ||
+        preference?.desired === "disabled" ||
+        !(await marketplaceMcp.verifyAuthorization(metadata, grant.authorizationContractDigest))
+      )
+        return null
+      return {
+        authorizationContractDigest: grant.authorizationContractDigest,
+        enabled: true,
+        principalRevision: metadata.revision,
+      }
+    }
+    const resolveMarketplacePackage = async (item: SourceQualifiedItem) => {
+      const fixed =
+        marketplaceProduct &&
+        item.marketplaceId === marketplaceProduct.descriptor.id &&
+        item.sourceKey === officialSourceKey
+          ? marketplaceProduct.registry.packages.find(
+              (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version,
+            )
+          : undefined
+      return fixed ?? networkMarketplaces.resolvePackage(item)
+    }
+    const repositoryAuthority = async (item: SourceQualifiedItem) => {
+      if (marketplaceProduct && item.marketplaceId === marketplaceProduct.descriptor.id) {
+        return {
+          owner: marketplaceProduct.descriptor.repository.owner,
+          repository: marketplaceProduct.descriptor.repository.name,
+        }
+      }
+      return networkMarketplaces.repositoryAuthority(item.sourceKey)
+    }
+    const marketplaceInstaller = new DesktopMarketplaceCapabilityInstaller({
+      authorizePlugin: async (id, mode) => {
+        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
+        if (!plugin) throw new Error("Installed Plugin is unavailable")
+        return authorizeMarketplacePluginSetup(plugin, mode, {
+          authorizeHook: (candidate) => pluginHookAuthorizations.authorizeInstalled(candidate),
+          authorizeTool: (candidate, options) => toolPluginAuthorizations.authorizeInstalled(candidate, options),
+        })
+      },
+      currentPluginAuthorization: async (id) => {
+        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
+        if (!plugin) throw new Error("Installed Plugin is unavailable")
+        const [tool, hook] = await Promise.all([
+          toolPluginAuthorizations.verifyInstalledIdentity(plugin),
+          pluginHookAuthorizations.verifyInstalledIdentity(plugin),
+        ])
+        return tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
+      },
+      disablePlugin: async (id) => {
+        generationRuntime.disposePlugin(id)
+        await pluginServices.discardPlugin(id)
+      },
+      enablePlugin: async () => {
+        // The durable RuntimePreference is committed before the hard refresh.
+      },
+      hardRefreshPlugin: async (pluginId) => {
+        generationRuntime.disposePlugin(pluginId)
+        await pluginServices.discardPlugin(pluginId)
+        skillManager.notifyInventoryChanged()
+        await agentRuntime.refreshConfiguration()
+        await reconcileToolPluginExecutionStateForPlugin(pluginId)
+        const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
+        try {
+          await pluginHookAuthorizations.reconcilePlugin(pluginId, current)
+        } catch (error) {
+          console.warn(`Could not reconcile changed Marketplace Plugin Hook authorization: ${pluginId}`, error)
         }
       },
-      (error) => {
-        console.error("Could not provision default Convax capabilities", error)
-        if (error instanceof WebPluginPublicationDeferredError) throw error
+      refreshPetProvider: () => pets.refresh(),
+      fetchArtifact: async (item, artifact) => {
+        const repository = await repositoryAuthority(item)
+        return marketplaceFetcher.fetch(artifact.url, "release", {
+          maxBytes: artifact.size,
+          repository,
+        })
       },
-    )
+      installLocalPlugin: async (directory, options) => {
+        await pluginManager.install(directory, {
+          beforePublish: options.authorizeExecution
+            ? prepareLocalPluginPublication
+            : async (plugin, candidate) =>
+                composePluginPublicationTransactions([
+                  petIpc.prepareProviderChange(plugin.id),
+                  await pluginSkillLifecycle.prepareInstall(plugin, candidate),
+                ]),
+          updateExisting: true,
+        })
+      },
+      installLocalSkill: async (directory) => {
+        await skillManager.importFromDirectory(directory)
+      },
+      mcp: marketplaceMcp,
+      remote: marketplaceRemoteCapabilities,
+      resolveInstalledTransition: async (transition) => {
+        if (transition.identity.kind === "plugin") {
+          const current = (await pluginManager.list()).find((entry) => entry.id === transition.identity.id)
+          if (!current) return transition.next === null ? "next" : "previous"
+          if (transition.next?.version === current.version) return "next"
+          if (transition.previous?.version === current.version) return "previous"
+          return "unknown"
+        }
+        const installed = (await skillManager.listManaged()).some((entry) => entry.name === transition.identity.id)
+        return installed ? (transition.next ? "next" : "previous") : transition.next ? "previous" : "next"
+      },
+      resolvePackage: resolveMarketplacePackage,
+      uninstallPlugin: async (id) => {
+        await pluginManager.uninstall(id, {
+          beforeRemove: async (plugin) =>
+            composePluginPublicationTransactions([
+              petIpc.prepareProviderChange(plugin.id),
+              await pluginSkillLifecycle.prepareUninstall(plugin),
+            ]),
+        })
+      },
+      uninstallSkill: async (id) => {
+        await skillManager.uninstall(id)
+      },
+      verifyPluginAuthorization: async (id, expected) => {
+        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
+        if (!plugin) return false
+        const [tool, hook] = await Promise.all([
+          toolPluginAuthorizations.verifyInstalledIdentity(plugin),
+          pluginHookAuthorizations.verifyInstalledIdentity(plugin),
+        ])
+        return sha256Hex(canonicalJson({ hook, tool })) === expected
+      },
+    })
+    const marketplace = new MarketplaceApplicationService({
+      fixedCatalog: async () => marketplaceProduct?.catalog() ?? [],
+      fixedSources: async () =>
+        marketplaceProduct
+          ? [
+              {
+                health: "available",
+                id: marketplaceProduct.descriptor.id,
+                label: marketplaceProduct.descriptor.name,
+                packageCount: marketplaceProduct.registry.packages.filter((entry) => !entry.yanked).length,
+                publisher: marketplaceProduct.descriptor.publisher.name,
+                removable: false,
+                repository: `${marketplaceProduct.descriptor.repository.owner}/${marketplaceProduct.descriptor.repository.name}`,
+              },
+            ]
+          : [
+              {
+                health: "attention",
+                id: "convax-official",
+                label: "Convax Official",
+                packageCount: 0,
+                publisher: "microvoid",
+                removable: false,
+                repository: "microvoid/convax-plugins",
+              },
+            ],
+      installer: marketplaceInstaller,
+      local: localMarketplace,
+      ...(localMarketplaceSourceKey ? { localSourceKey: localMarketplaceSourceKey } : {}),
+      mutations: new CapabilityMutationCoordinator(),
+      network: networkMarketplaces,
+      networkFetch: marketplaceFetcher,
+      prepareFixedArtifact: async (item) => {
+        if (item.sourceKey !== officialSourceKey) return null
+        const registryItem = marketplaceProduct?.registry.packages.find(
+          (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version,
+        )
+        if (!registryItem || registryItem.delivery.kind !== "artifact") return null
+        const selected = marketplaceProduct?.lock.resolved.packages.find(
+          (entry) =>
+            entry.id === item.id &&
+            entry.kind === item.kind &&
+            entry.version === item.version &&
+            entry.marketplaceId === item.marketplaceId,
+        )
+        const candidate = selected
+          ? await marketplaceProduct!.verifiedCandidate(registryItem)
+          : await developmentOfficialArtifacts?.verifiedCandidate(registryItem)
+        if (!candidate) return null
+        return {
+          artifactBytes: candidate.artifactBytes,
+          companionBytes: candidate.companionBytes ?? {},
+        }
+      },
+      refreshFixedSource: async (id) => {
+        if (id !== "convax-official") return false
+        const refreshedProduct = await PackagedMarketplaceProduct.load(marketplaceProductRoot)
+        if (refreshedProduct.descriptor.id !== id) {
+          throw new Error("Fixed Marketplace identity changed during refresh")
+        }
+        let refreshedDevelopmentArtifacts = developmentOfficialArtifacts
+        if (!app.isPackaged && developmentOfficialArtifactRoot) {
+          refreshedDevelopmentArtifacts =
+            await DevelopmentOfficialMarketplaceArtifacts.load(developmentOfficialArtifactRoot)
+        }
+        marketplaceProduct = refreshedProduct
+        developmentOfficialArtifacts = refreshedDevelopmentArtifacts
+        return true
+      },
+      preinstalledPolicy: (identity) => {
+        const entry = marketplaceProduct?.lock.policy.preinstalledPackages.find(
+          (candidate) => candidate.id === identity.id && candidate.kind === identity.kind,
+        )
+        const resolved = marketplaceProduct?.lock.resolved.packages.find(
+          (candidate) => candidate.id === identity.id && candidate.kind === identity.kind,
+        )
+        if (!entry || !resolved || identity.sourceKey !== officialSourceKey || identity.version !== resolved.version)
+          return undefined
+        return {
+          marketplaceId: entry.marketplaceId,
+          observedPolicyRevision: marketplaceProduct!.lock.policy.revision,
+          policyEntryDigest: sha256Hex(canonicalJson({ entry, resolved })),
+          setup: entry.setup,
+        }
+      },
+      readFixedArtifact: (item) => {
+        if (!marketplaceProduct) throw new Error("Builtin Marketplace bundle is unavailable")
+        return Promise.resolve(marketplaceProduct.readBuiltinArtifact(item))
+      },
+      reservedBuiltinIdentities: builtinMarketplaceReservation.members,
+      repositoryAuthority,
+      state: marketplaceState,
+    })
+    const legacyMigration = new MarketplaceLegacyMigration({
+      defaultCapabilitiesFile: join(userDataDirectory, "default-capabilities.json"),
+      preinstalledPolicies:
+        marketplaceProduct?.lock.policy.preinstalledPackages.flatMap((entry) => {
+          const resolved = marketplaceProduct?.lock.resolved.packages.find(
+            (candidate) =>
+              candidate.id === entry.id &&
+              candidate.kind === entry.kind &&
+              candidate.marketplaceId === entry.marketplaceId,
+          )
+          return resolved
+            ? [
+                {
+                  identity: { id: entry.id, kind: entry.kind },
+                  marketplaceId: entry.marketplaceId,
+                  observedPolicyRevision: marketplaceProduct!.lock.policy.revision,
+                  policyEntryDigest: sha256Hex(canonicalJson({ entry, resolved })),
+                  sourceKey: officialSourceKey,
+                },
+              ]
+            : []
+        }) ?? [],
+      proveInstallations: async () => {
+        if (!marketplaceProduct) return []
+        const proofs = []
+        const storyboard = marketplaceProduct
+          .catalog()
+          .find((item) => item.kind === "skill" && item.id === "canvas-storyboard" && item.sourceKind === "builtin")
+        const installedStoryboard = storyboard
+          ? (await skillManager.listManaged()).find(
+              (skill) => skill.name === storyboard.id && skill.management.kind === "standalone",
+            )
+          : undefined
+        if (storyboard && installedStoryboard) {
+          const archive = marketplaceProduct.readBuiltinArtifact(storyboard)
+          const expectedFiles = Object.entries(unpackSafeZip(archive)).map(([filePath, content]) => ({
+            content,
+            path: filePath,
+          }))
+          const [actualDigest, expectedDigest] = await Promise.all([
+            skillManager.exactManagedTreeDigest(storyboard.id),
+            Promise.resolve(exactSkillTreeDigest(expectedFiles)),
+          ])
+          if (actualDigest === expectedDigest) {
+            proofs.push({
+              record: {
+                artifactDigest: sha256Hex(canonicalJson(storyboard.delivery)),
+                id: storyboard.id,
+                kind: storyboard.kind,
+                revision: 1,
+                runtimeSurface: storyboard.runtimeSurface,
+                sourceKey: storyboard.sourceKey,
+                version: storyboard.version,
+              },
+            })
+          }
+        }
+        const ffmpegRegistry = marketplaceProduct.registry.packages.find(
+          (item) => item.kind === "plugin" && item.id === "ffmpeg-tools" && item.delivery.kind === "artifact",
+        )
+        const ffmpegCatalog = marketplaceProduct
+          .catalog()
+          .find(
+            (item) =>
+              item.kind === "plugin" &&
+              item.id === "ffmpeg-tools" &&
+              item.sourceKey === officialSourceKey &&
+              item.version === ffmpegRegistry?.version,
+          )
+        const installedFfmpeg = (await pluginManager.list()).find(
+          (plugin) => plugin.id === "ffmpeg-tools" && plugin.version === ffmpegRegistry?.version,
+        )
+        if (ffmpegRegistry && ffmpegCatalog && installedFfmpeg) {
+          const verified = await marketplaceProduct.verifiedCandidate(ffmpegRegistry)
+          if (await pluginManager.isBundleInstalled({ files: unpackSafeZip(verified.artifactBytes) })) {
+            const [tool, hook] = await Promise.all([
+              toolPluginAuthorizations.verifyInstalledIdentity(installedFfmpeg).catch(() => null),
+              pluginHookAuthorizations.verifyInstalledIdentity(installedFfmpeg).catch(() => null),
+            ])
+            const authorizationContractDigest = tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : undefined
+            proofs.push({
+              ...(authorizationContractDigest ? { authorizationContractDigest } : {}),
+              record: {
+                artifactDigest: sha256Hex(canonicalJson(ffmpegCatalog.delivery)),
+                id: ffmpegCatalog.id,
+                kind: ffmpegCatalog.kind,
+                revision: 1,
+                runtimeSurface: ffmpegCatalog.runtimeSurface,
+                sourceKey: ffmpegCatalog.sourceKey,
+                version: ffmpegCatalog.version,
+              },
+            })
+          }
+        }
+        return proofs
+      },
+      state: marketplaceState,
+    })
+    await legacyMigration.run()
+    await marketplace.recoverTransitions()
+    await provisionMarketplaceForStartup({
+      provision: () => marketplace.provisionDefaults(),
+      report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
+    })
     const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
     const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager, customPets, fetchPetAsset)
     await pets.initialize()
@@ -984,6 +1455,7 @@ function startApplication() {
       petActivityNotifier.dispose()
     }
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
+    const disposeMarketplaceIpc = registerMarketplaceIpc(marketplace, ipcSecurity.isTrustedSender)
     const disposeWorkspaceSystemStatusIpc = registerWorkspaceSystemStatusIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
@@ -1172,17 +1644,23 @@ function startApplication() {
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
+        }
         const resolved = await resolveProjectResourceProtocolPath(request.url, projectManager, projectAssets)
-        const response = await net.fetch(pathToFileURL(resolved.absolutePath).href, { headers: request.headers })
-        const headers = new Headers(response.headers)
-        headers.set(
-          "Cache-Control",
-          resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
-        )
-        return new Response(response.body, {
-          headers,
-          status: response.status,
-          statusText: response.statusText,
+        const [response, file] = await Promise.all([
+          net.fetch(pathToFileURL(resolved.absolutePath).href, {
+            headers: request.headers,
+            method: request.method,
+          }),
+          statFile(resolved.absolutePath),
+        ])
+        if (!file.isFile()) throw new Error("Project resource is not a file")
+        return createProjectResourceProtocolResponse({
+          cacheControl: resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+          request,
+          response,
+          size: file.size,
         })
       } catch {
         return new Response("Asset was not found", { status: 404 })
@@ -1198,6 +1676,7 @@ function startApplication() {
         () => protocol.unhandle(webPluginAssetScheme),
         () => protocol.unhandle(pluginConnectedMediaScheme),
         disposeDesktopProtocolIpc,
+        disposeMarketplaceIpc,
         disposeWorkspaceSystemStatusIpc,
         disposeProjectIpc,
         disposeProjectCanvasIpc,
@@ -1223,6 +1702,7 @@ function startApplication() {
         () => pluginServiceBrowserAuthorization.dispose(),
         () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
+        () => managedMcpRuntimes.close(),
         () => pluginConnectedMedia.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
@@ -1239,6 +1719,7 @@ function startApplication() {
         .then(async () => {
           await disposePetApplication()
           await agentRuntime.dispose()
+          await managedMcpRuntimes.close()
           await canvasExternalMediaDrag.dispose().catch((error) => {
             console.warn("Could not dispose Canvas native drag media during shutdown", error)
           })
@@ -1259,33 +1740,6 @@ function startApplication() {
     })
 
     createWindow(projectManager, projectAssetGcScheduler)
-    // Registry updates are intentionally outside the first-window critical
-    // path. A packaged first install comes from the verified local seed above;
-    // dev and damaged/offline packages remain usable while network recovery or
-    // a newer immutable Registry release is checked in the background.
-    void provisionDefaultCapabilities({
-      catalog: desktopBuiltinPluginCatalog,
-      pluginManager,
-      preparePluginPublication: prepareLocalPluginPublication,
-      remote: {
-        catalog: desktopDefaultRemoteCapabilityCatalog,
-        installer: remoteCapabilities,
-        mode: "network",
-      },
-      skillManager,
-      stateFile: join(userDataDirectory, "default-capabilities.json"),
-    }).then(
-      async ({ failures }) => {
-        for (const failure of failures) {
-          console.error(`Could not update default remote ${failure.kind} ${failure.id}`, failure.error)
-        }
-        // Background Registry publication bypasses Plugin management IPC. Rebuild
-        // the lazy OpenCode configuration so provider and Agent MCP changes share
-        // the same post-publication convergence path.
-        await agentRuntime.refreshConfiguration()
-      },
-      (error) => console.error("Could not update default Convax capabilities", error),
-    )
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
         void removeQuarantinedDevelopmentCaches(userDataDirectory).catch((error) => {

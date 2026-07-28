@@ -17,6 +17,7 @@ import type { PluginConnectedMediaRendererClient } from "../plugin-connected-med
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import type { PetSettingsHostClient } from "./pet-settings-host"
 import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
+import type { MarketplaceClient } from "../marketplace-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -36,6 +37,7 @@ declare global {
         textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
+      marketplaces: MarketplaceClient
       pets: PetSettingsHostClient & {
         markDisplayed(input: PetNavigationRequest): Promise<void>
         markSessionDisplayed(input: PetDisplayedSession): Promise<void>

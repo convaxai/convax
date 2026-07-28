@@ -1,0 +1,144 @@
+import { describe, expect, test } from "bun:test"
+import { link, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+import {
+  canonicalProductPolicyDigest,
+  parseMarketplaceProductLock,
+  readMarketplaceProductLock,
+  type MarketplaceProductLock,
+  type MarketplaceProductPolicy,
+} from "./marketplace-product-lock"
+
+function artifact(name: string, tag: string) {
+  return {
+    name,
+    sha256: "a".repeat(64),
+    size: 12,
+    url: `https://github.com/microvoid/convax-plugins/releases/download/${tag}/${name}`,
+  }
+}
+
+function validLock(): MarketplaceProductLock {
+  const officialRevision = "b".repeat(64)
+  const metadataTag = `registry-v2-${officialRevision}`
+  const pluginTag = "plugin-ffmpeg-tools-v1.0.0"
+  const policy: MarketplaceProductPolicy = {
+    builtin: {
+      marketplaceId: "convax-builtin",
+      repository: "microvoid/convax-plugins",
+    },
+    official: {
+      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+      marketplaceId: "convax-official",
+      repository: "microvoid/convax-plugins",
+    },
+    preinstalledPackages: [
+      {
+        id: "ffmpeg-tools",
+        kind: "plugin" as const,
+        marketplaceId: "convax-official",
+        setup: "automatic" as const,
+        targets: ["darwin-arm64"],
+      },
+    ],
+    revision: 1,
+  }
+  return {
+    policy,
+    resolved: {
+      builtinBundle: artifact("convax-builtin-v1.zip", "builtin-v1"),
+      builtinReservations: [{ id: "canvas-storyboard", kind: "skill" }],
+      official: {
+        descriptor: artifact("marketplace.json", metadataTag),
+        registry: artifact("registry-v2.json", metadataTag),
+        revision: officialRevision,
+        showcase: artifact("showcase-v2.json", metadataTag),
+      },
+      packages: [
+        {
+          artifact: artifact("plugin-ffmpeg-tools-v1.zip", pluginTag),
+          companions: [
+            {
+              ...artifact("plugin-ffmpeg-tools-v1-darwin-arm64", pluginTag),
+              arch: "arm64",
+              platform: "darwin",
+            },
+          ],
+          id: "ffmpeg-tools",
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          ownedSkills: [artifact("skill-ffmpeg-canvas-v1.zip", "skill-ffmpeg-canvas-v1.0.0")],
+          setup: "explicit",
+          version: "1.0.0",
+        },
+      ],
+      policyDigest: canonicalProductPolicyDigest(policy),
+    },
+    schema: "convax.marketplace-product-lock/1",
+  }
+}
+
+describe("Marketplace product lock", () => {
+  test("accepts the exact v1 Builtin and Official closure", () => {
+    expect(parseMarketplaceProductLock(validLock())).toEqual(validLock())
+  })
+
+  test("rejects a policy edit until resolved is explicitly refreshed", () => {
+    const lock = validLock()
+    lock.policy.revision += 1
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("policyDigest")
+  })
+
+  test("rejects preinstalled entries outside the approved darwin-arm64 ffmpeg policy", () => {
+    const lock = validLock()
+    lock.policy.preinstalledPackages[0]!.targets.push("linux-x64" as never)
+    lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("preinstalledPackages")
+  })
+
+  test("rejects weakening the product-locked automatic setup policy back to an interactive grant", () => {
+    const lock = validLock()
+    lock.policy.preinstalledPackages[0]!.setup = "explicit" as never
+    lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("preinstalledPackages")
+  })
+
+  test("rejects mutable URLs and malformed immutable byte identities", () => {
+    const lock = validLock()
+    lock.resolved.official.registry.url = "https://microvoid.github.io/convax-plugins/latest.json"
+    lock.resolved.official.registry.sha256 = "not-a-digest"
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("immutable")
+    const nonDefaultPort = validLock()
+    nonDefaultPort.resolved.official.registry.url = nonDefaultPort.resolved.official.registry.url.replace(
+      "github.com/",
+      "github.com:8443/",
+    )
+    expect(() => parseMarketplaceProductLock(nonDefaultPort)).toThrow("immutable")
+  })
+
+  test("rejects a missing owned closure or target companion", () => {
+    const lock = validLock()
+    lock.resolved.packages[0]!.companions = []
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("darwin-arm64")
+    const missingSkill = validLock()
+    missingSkill.resolved.packages[0]!.ownedSkills = []
+    expect(() => parseMarketplaceProductLock(missingSkill)).toThrow("owned Skill")
+  })
+
+  test("reads the tracked authority through a bounded single-link no-follow handle", async () => {
+    const root = await mkdtemp(join(tmpdir(), "convax-marketplace-lock-"))
+    try {
+      const stableRoot = await realpath(root)
+      const lockPath = join(stableRoot, "marketplaces.lock.json")
+      const secondPath = join(stableRoot, "second-name.json")
+      await writeFile(lockPath, `${JSON.stringify(validLock())}\n`)
+      await expect(readMarketplaceProductLock(lockPath)).resolves.toEqual(validLock())
+      await link(lockPath, secondPath)
+      await expect(readMarketplaceProductLock(lockPath)).rejects.toThrow("single-link")
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+})

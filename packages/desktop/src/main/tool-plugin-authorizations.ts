@@ -323,15 +323,18 @@ export class ToolPluginAuthorizationStore {
     return directory
   }
 
-  async #binding(plugin: InstalledWebPluginSummary): Promise<ResolvedToolPluginExecutable> {
+  async #binding(
+    plugin: InstalledWebPluginSummary,
+    options: { requireManaged?: true } = {},
+  ): Promise<ResolvedToolPluginExecutable> {
     try {
       const managed = await this.#resolveManagedExecutable?.(plugin.id, plugin.version, plugin.runtime!.command)
-      return managed
-        ? { binding: requireBinding(managed), kind: "managed" }
-        : {
-            binding: requireBinding(await this.#resolveExecutable(plugin.runtime!.command, this.#environment)),
-            kind: "path",
-          }
+      if (managed) return { binding: requireBinding(managed), kind: "managed" }
+      if (options.requireManaged) throw new Error("required managed executable is unavailable")
+      return {
+        binding: requireBinding(await this.#resolveExecutable(plugin.runtime!.command, this.#environment)),
+        kind: "path",
+      }
     } catch (error) {
       throw new Error(
         `Tool Plugin executable could not be verified during installation; reinstall Plugin: ${plugin.id}`,
@@ -416,6 +419,27 @@ export class ToolPluginAuthorizationStore {
         if (created) await fs.rm(target, { force: true })
       },
     }
+  }
+
+  async authorizeInstalled(plugin: InstalledWebPluginSummary, options: { requireManaged?: true } = {}) {
+    if (!isExecutableToolPlugin(plugin)) return null
+    const resolved = await this.#binding(plugin, options)
+    const transaction = await this.prepareInstall(plugin, resolved)
+    try {
+      await transaction.publish()
+      await transaction.commit()
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined)
+      throw error
+    }
+    return toolPluginAuthorizationIdentity(plugin, resolved.kind, resolved.binding)
+  }
+
+  async verifyInstalledIdentity(plugin: InstalledWebPluginSummary) {
+    if (!isExecutableToolPlugin(plugin)) return null
+    const resolved = await this.#binding(plugin)
+    await this.verify(plugin, resolved.kind, resolved.binding)
+    return toolPluginAuthorizationIdentity(plugin, resolved.kind, resolved.binding)
   }
 
   async verify(

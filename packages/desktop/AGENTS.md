@@ -98,6 +98,16 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   then reacquire it to converge current receipts and remove obsolete snapshots.
   Default/background provisioning must never authorize new Hook bytes and must
   recheck the parsed publication candidate rather than catalog metadata alone.
+- Startup installs every member of the product-lock-verified Builtin bundle before
+  applying the target-specific Official preinstall policy. Both paths use the
+  normal installation transaction. Builtin installation never grants execution
+  authority. An exact preinstall with `setup: automatic` additionally uses the
+  normal durable setup transition to authorize only its verified managed Tool
+  companion; it must reject PATH fallback, Hooks, Services, extra Plugin
+  capabilities, credentials, and any source/version/target mismatch. Refreshing
+  the fixed Official source revalidates the packaged product closure but cannot
+  silently widen or replace that grant; never pass its reserved identity to the
+  user Network Marketplace manager.
 - Plugin-owned Skill publication has three ordered phases. Prepare validates and
   stages without exposing new bytes. `publish` rechecks external names and journals
   exact rollback receipts before the Plugin directory switch. `activate` publishes
@@ -259,6 +269,12 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   constrain every reference to live direct incoming edges before staging and again
   before execution. A return-delivery text operation reuses all normal execution
   guards but creates no Canvas resource or node.
+- A v6-or-later return-delivery selection action is confirmation-only, has exactly
+  one step, has no input binding, and accepts the exact image or video role declared
+  by its target. Project one such action only while Main admits the exact installed,
+  version-bound, authorized and enabled operation. Flush the authoritative Canvas,
+  revalidate one Project-backed selected node, and cross cancellation before
+  staging; never turn this into a provider-specific renderer call.
 - Grant fullscreen or any future iframe feature-policy exception only when the
   installed manifest declares it; keep all unrelated denials unchanged.
 - Trusted built-in native integrations stay in main and are never loaded from the
@@ -314,3 +330,18 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 Run `bun typecheck && bun test`. Run `bun run build` for main/preload/renderer changes
 and `bun run smoke:open-project` for Project open, persistence, IPC, migration or
 breaking-cutover work.
+
+Marketplace authority is Main-only. Persist Network and Local source graphs with
+strict SourceKeys and accepted sequence/revision high-water decisions; cache bytes
+are repairable only from an exact accepted catalog. Bind preview, confirmation and
+install tokens to the invoking `webContents`, and never expose SourceKeys, receipts,
+native paths, transport choices or raw failures to renderer. Installation must
+preflight same-source identity, serialize its participants and leave a durable
+recovery transition before any canonical Plugin, Skill or MCP publication side
+effect. Network bytes use the pinned HTTPS transport (all DNS answers public,
+socket address pinned and every redirect revalidated). Managed-stdio launches only
+verified private snapshots with the app-owned absolute Bun runtime and a fixed
+environment; product actions are the intersection of validated declarations,
+advertised tools, fixed host handlers and durable grants. Packaging consumes only
+the verified Marketplace product lock and its exact immutable bytes; it must not
+reintroduce a mutable default-capability download.

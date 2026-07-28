@@ -27,13 +27,10 @@ import {
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
-  Crop,
   FileOutput,
-  ImageDown,
   Info,
   Layers3,
   MessageSquarePlus,
-  Scissors,
   TriangleAlert,
   XCircle,
 } from "lucide-react"
@@ -46,7 +43,10 @@ import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
 import { isGenerationModelTool } from "./agent-generation-models"
 import { resolveAgentCompactStatus, type AgentCompactStatus } from "./agent-panel-state"
-import { subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
+import {
+  combineInstalledPluginInventoryChanges,
+  subscribeInstalledPluginInventory,
+} from "./installed-plugin-inventory"
 import { createAddSelectionToConversationAction } from "./agent-selection-action"
 import { ApplicationCommandPalette } from "./application-command-palette"
 import type { ApplicationCommand } from "./application-command-model"
@@ -89,10 +89,13 @@ import {
   openDesktopWorkspace,
 } from "./desktop-surface-state"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import { reconcileGenerationExpectedRevision } from "./generation-expected-revision"
+import { MediaOperationActionIcon } from "./media-operation-action-icon"
 import {
   canResumeMediaOperation,
   canRunMediaOperation,
   createMediaOperationGenerateRequests,
+  createMediaOperationReturnRequest,
   isMediaOperationDialogInScope,
   listInstalledMediaOperationActions,
   localizedMediaOperationText,
@@ -110,6 +113,7 @@ import {
   MediaOperationPartialError,
   type MediaOperationProgress,
   runMediaOperationSequence,
+  runMediaOperationReturn,
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
@@ -151,13 +155,6 @@ const secondarySidebarBounds = { defaultSize: 380, defaultVisible: false, maxSiz
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
 const minimumCanvasPeekSize = 160
-
-function mediaOperationActionIcon(editor: MediaOperationEditor) {
-  if (editor === "time-point") return <ImageDown />
-  if (editor === "time-range") return <Scissors />
-  if (editor === "crop-region") return <Crop />
-  return <Layers3 />
-}
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -202,7 +199,11 @@ function App() {
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const webPluginGenerationProjection = useMemo(() => new WebPluginGenerationProjectionCoordinator(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
-  const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
+  const [admittedOperationToolIds, setAdmittedOperationToolIds] = useState<ReadonlySet<string>>(() => new Set())
+  const mediaOperationActions = useMemo(
+    () => listInstalledMediaOperationActions(installedPlugins, admittedOperationToolIds),
+    [admittedOperationToolIds, installedPlugins],
+  )
   const pluginMaterializationActions = useMemo(
     () => listInstalledPluginMaterializationActions(installedPlugins),
     [installedPlugins],
@@ -731,10 +732,38 @@ function App() {
   }, [flushAuthoritativeCanvas, webPluginGenerationProjection])
 
   useEffect(() => {
-    return subscribeInstalledPluginInventory(window.convax.plugins, setInstalledPlugins, (error) =>
-      console.error("Could not load installed Canvas Plugins", error),
+    return subscribeInstalledPluginInventory(
+      combineInstalledPluginInventoryChanges(window.convax.plugins, window.convax.marketplaces, () =>
+        setModelCatalogEpoch((current) => current + 1),
+      ),
+      setInstalledPlugins,
+      (error) => console.error("Could not load installed Canvas Plugins", error),
     )
   }, [])
+
+  useEffect(() => {
+    let active = true
+    if (!activeProjectId) {
+      setAdmittedOperationToolIds(new Set())
+      return () => {
+        active = false
+      }
+    }
+    void window.convax.generation
+      .listTools({ scopeId: activeProjectId })
+      .then((tools) => {
+        if (!active) return
+        setAdmittedOperationToolIds(new Set(tools.filter((tool) => tool.kind === "operation").map((tool) => tool.id)))
+      })
+      .catch((error) => {
+        if (!active) return
+        setAdmittedOperationToolIds(new Set())
+        console.error("Could not load admitted Plugin operations", error)
+      })
+    return () => {
+      active = false
+    }
+  }, [activeProjectId, generationToolCatalogVersion])
 
   useEffect(() => {
     const disposers: Array<() => void> = []
@@ -906,7 +935,10 @@ function App() {
         const result = await window.convax.generation.generate({
           anchor: request.anchor,
           ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-          expectedRevision: authoritativeDocument.revision,
+          expectedRevision: reconcileGenerationExpectedRevision(
+            request.expectedRevision,
+            authoritativeDocument.revision,
+          ),
           operationId,
           ...(request.output ? { output: request.output } : {}),
           prompt: request.prompt,
@@ -1165,6 +1197,29 @@ function App() {
               ? `已完成部分结果，但后续步骤失败。可直接重试，已完成的步骤不会重复执行。\n${detail}`
               : `Some results were created, but a later step failed. Retry without repeating completed steps.\n${detail}`
           },
+          refreshProgress: async (current) => {
+            await flushCanvasForAgent()
+            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+            const snapshot = await window.convax.canvas.documents.load({
+              canvasId: request.canvasId,
+              scopeId: request.projectId,
+            })
+            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+            if (!snapshot.document || !canResumeMediaOperation(request, snapshot.document, current.createdNodeIds)) {
+              mediaOperationProgressRef.current.delete(request)
+              setMediaOperationDialog((active) => (active === request ? null : active))
+              setNotification({
+                description:
+                  locale === "zh-CN"
+                    ? "源视频或已创建的结果发生了变化，请重新选择源视频后再执行此操作。"
+                    : "The source video or a completed result changed. Select the source video and start the operation again.",
+                kind: "warning",
+                title: locale === "zh-CN" ? "无法继续媒体操作" : "Media operation cannot continue",
+              })
+              throw new Error("The Plugin media operation cannot continue because its Canvas inputs changed")
+            }
+            return { ...current, revision: snapshot.document.revision }
+          },
           requests,
           signal,
         })
@@ -1215,12 +1270,58 @@ function App() {
       ...mediaOperationActions.map((action) => ({
         id: `plugin-selection-action:${action.pluginId}/${action.id}`,
         label: localizedMediaOperationText(action.title, locale),
-        icon: mediaOperationActionIcon(action.editor),
+        icon: <MediaOperationActionIcon editor={action.editor} />,
         visible(context: CanvasSelectionActionContext) {
           return canRunMediaOperation(context, action)
         },
-        execute(context: CanvasSelectionActionContext) {
+        async execute(context: CanvasSelectionActionContext) {
           if (!activeCanvasId || !activeProjectId) return
+          if (action.delivery === "return") {
+            const sourceNodeId = context.selectedNodeIds[0]
+            if (!sourceNodeId) throw new Error("Select one Project media file before running this action")
+            const authoritative = await flushAuthoritativeCanvas()
+            if (context.signal.aborted) {
+              throw context.signal.reason ?? new DOMException("Canceled", "AbortError")
+            }
+            const live = pluginHostContextRef.current
+            if (
+              !authoritative ||
+              authoritative.id !== activeCanvasId ||
+              live.activeProject?.id !== activeProjectId ||
+              live.activeCanvas?.id !== activeCanvasId
+            ) {
+              throw new Error("The active Canvas changed before the media operation could start")
+            }
+            const authoritativeContext: CanvasSelectionActionContext = {
+              document: authoritative,
+              selectedEdgeIds: [],
+              selectedNodeIds: [sourceNodeId],
+              selectedNodes: authoritative.nodes.filter((node) => node.id === sourceNodeId),
+              signal: context.signal,
+            }
+            const request = createMediaOperationReturnRequest(
+              { action, canvasId: activeCanvasId, context: authoritativeContext, projectId: activeProjectId },
+              globalThis.crypto.randomUUID(),
+            )
+            const result = await runMediaOperationReturn({
+              cancel: (cancelRequest) => window.convax.generation.cancel(cancelRequest),
+              generate: (generateRequest) => window.convax.generation.generate(generateRequest),
+              request,
+              signal: context.signal,
+            })
+            if (context.signal.aborted) return
+            setNotification({
+              description:
+                result.warnings.length > 0
+                  ? result.warnings.join("\n")
+                  : locale === "zh-CN"
+                    ? "已完成操作。"
+                    : "The operation completed.",
+              kind: result.warnings.length > 0 ? "warning" : "success",
+              title: localizedMediaOperationText(action.title, locale),
+            })
+            return
+          }
           setMediaOperationDialog({ action, canvasId: activeCanvasId, context, projectId: activeProjectId })
         },
       })),

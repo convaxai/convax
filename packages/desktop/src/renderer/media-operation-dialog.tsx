@@ -101,9 +101,15 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
   const durationHintSeconds = normalizeMediaTimelineDuration(
     typeof durationHintMs === "number" ? durationHintMs / 1_000 : undefined,
   )
+  const resourceState = selectedVideo?.data.resourceState
   const sourceUrl =
-    selectedVideo && "url" in selectedVideo.data && typeof selectedVideo.data.url === "string"
-      ? selectedVideo.data.url
+    resourceState !== null &&
+    typeof resourceState === "object" &&
+    "status" in resourceState &&
+    resourceState.status === "ready" &&
+    "url" in resourceState &&
+    typeof resourceState.url === "string"
+      ? resourceState.url
       : ""
   const sourceWidth = evenDimension(selectedVideo?.data.width, 1_280)
   const sourceHeight = evenDimension(selectedVideo?.data.height, 720)

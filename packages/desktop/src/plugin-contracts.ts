@@ -234,7 +234,7 @@ export interface WebPluginCanvasGenerationSelectionActionContribution {
   editor: WebPluginCanvasSelectionActionEditor
   id: string
   steps: WebPluginCanvasSelectionActionStep[]
-  target: "video"
+  target: "image" | "video"
   title: WebPluginLocalizedText
 }
 
@@ -613,7 +613,10 @@ function parseSelectionActions(
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) {
       throw new Error(`Invalid Canvas selection action id: ${id}`)
     }
-    if (input.target !== "video") throw new Error(`${label} target must be video`)
+    if (input.target !== "image" && input.target !== "video") {
+      throw new Error(`${label} target must be image or video`)
+    }
+    const target = input.target as "image" | "video"
     if (!allowedSelectionActionEditors.has(input.editor as WebPluginCanvasSelectionActionEditor)) {
       throw new Error(`${label} editor is not supported`)
     }
@@ -634,7 +637,7 @@ function parseSelectionActions(
       editor: input.editor as WebPluginCanvasSelectionActionEditor,
       id,
       steps,
-      target: "video" as const,
+      target,
       title: parseLocalizedText(input.title, `${label} title`, 120),
     }
   })
@@ -1059,14 +1062,25 @@ function validateDeclarativeToolReferences(input: {
       if (modelToolIds.has(step.tool)) {
         throw new Error(`Canvas selection action must reference an operation, not a generation model: ${step.tool}`)
       }
-      if (tool.delivery === "return") {
-        throw new Error(`Canvas selection action cannot reference a return-delivery operation: ${step.tool}`)
-      }
       if (tool.inputBinding !== undefined) {
         throw new Error(`Canvas selection action cannot reference an input-bound operation: ${step.tool}`)
       }
-      if (!tool.acceptedInputs.includes("reference_video")) {
-        throw new Error(`Canvas video selection action tool must accept reference_video: ${step.tool}`)
+      const referenceRole = action.target === "image" ? "reference_image" : "reference_video"
+      if (!tool.acceptedInputs.includes(referenceRole)) {
+        throw new Error(`Canvas ${action.target} selection action tool must accept ${referenceRole}: ${step.tool}`)
+      }
+      if (tool.delivery === "return") {
+        if (action.editor !== "confirmation") {
+          throw new Error(`Canvas return-delivery operation requires a confirmation editor: ${step.tool}`)
+        }
+        if (action.steps.length !== 1) {
+          throw new Error(`Canvas return-delivery operation requires exactly one step: ${step.tool}`)
+        }
+        if (tool.output !== "text") {
+          throw new Error(`Canvas return-delivery operation must return text: ${step.tool}`)
+        }
+      } else if (action.target === "image") {
+        throw new Error(`Canvas image selection action requires a return-delivery operation: ${step.tool}`)
       }
     }
   }

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@convax/marketplace",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microvoid/convax.git",
+    "directory": "packages/marketplace"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.3.0"
+  },
+  "packageManager": "bun@1.3.14",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.ts",
+      "import": "./dist/schemas.js",
+      "default": "./dist/schemas.js"
+    },
+    "./server-schema": {
+      "types": "./dist/server-schema.d.ts",
+      "import": "./dist/server-schema.js",
+      "default": "./dist/server-schema.js"
+    },
+    "./product-lock": {
+      "types": "./dist/product-lock.d.ts",
+      "import": "./dist/product-lock.js",
+      "default": "./dist/product-lock.js"
+    },
+    "./builtin-archive": {
+      "types": "./dist/builtin-archive.d.ts",
+      "import": "./dist/builtin-archive.js",
+      "default": "./dist/builtin-archive.js"
+    }
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build:js": "for entry in src/index.ts src/schemas.ts src/server-schema.ts src/canonical.ts src/product-lock.ts src/builtin-archive.ts; do bun build --production --keep-names --target=node --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "pack:check": "bun run build && bun scripts/pack-check.ts",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

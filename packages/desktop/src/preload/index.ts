@@ -32,6 +32,7 @@ import {
   type CanvasRendererResponseEnvelope,
 } from "../canvas-renderer-contracts"
 import { workspaceSystemStatusIpcChannel, type WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
+import { marketplaceIpcChannels, type MarketplaceClient } from "../marketplace-contracts"
 
 const channels = {
   createProject: "project:create",
@@ -433,6 +434,32 @@ const pluginClient = {
   uninstallPlugin: (input) => ipcRenderer.invoke(pluginChannels.uninstallPlugin, input),
 } satisfies WebPluginClient
 
+const marketplaceClient = {
+  addMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.addMarketplace, input),
+  beginInstall: (input) => ipcRenderer.invoke(marketplaceIpcChannels.beginInstall, input),
+  beginUpdate: (input) => ipcRenderer.invoke(marketplaceIpcChannels.beginUpdate, input),
+  confirmInstall: (input) => ipcRenderer.invoke(marketplaceIpcChannels.confirmInstall, input),
+  confirmUpdate: (input) => ipcRenderer.invoke(marketplaceIpcChannels.confirmUpdate, input),
+  disable: (input) => ipcRenderer.invoke(marketplaceIpcChannels.disable, input),
+  enable: (input) => ipcRenderer.invoke(marketplaceIpcChannels.enable, input),
+  importCapability: () => ipcRenderer.invoke(marketplaceIpcChannels.importCapability),
+  install: (input) => ipcRenderer.invoke(marketplaceIpcChannels.install, input),
+  listCatalog: () => ipcRenderer.invoke(marketplaceIpcChannels.listCatalog),
+  listInstalled: () => ipcRenderer.invoke(marketplaceIpcChannels.listInstalled),
+  listMarketplaces: () => ipcRenderer.invoke(marketplaceIpcChannels.listMarketplaces),
+  onDidChange(listener) {
+    const handleChange = () => listener()
+    ipcRenderer.on(marketplaceIpcChannels.changed, handleChange)
+    return () => ipcRenderer.removeListener(marketplaceIpcChannels.changed, handleChange)
+  },
+  previewMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.previewMarketplace, input),
+  refreshMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.refreshMarketplace, input),
+  removeMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.removeMarketplace, input),
+  setup: (input) => ipcRenderer.invoke(marketplaceIpcChannels.setup, input),
+  uninstall: (input) => ipcRenderer.invoke(marketplaceIpcChannels.uninstall, input),
+  update: (input) => ipcRenderer.invoke(marketplaceIpcChannels.update, input),
+} satisfies MarketplaceClient
+
 const pluginCanvasImageClient = {
   cancel: (input) => ipcRenderer.send(pluginCanvasImageIpcChannels.cancel, input),
   create: (input) => ipcRenderer.invoke(pluginCanvasImageIpcChannels.create, input),
@@ -565,6 +592,7 @@ contextBridge.exposeInMainWorld("convax", {
     textResources: canvasTextResourceClient,
   },
   generation: generationClient,
+  marketplaces: marketplaceClient,
   pets: petSettingsClient,
   platform: process.platform,
   pluginCapabilities: pluginCapabilityClient,

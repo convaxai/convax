@@ -22,13 +22,14 @@ files under `packages/` add local rules and inherit this contract.
 ## Repository ownership boundary
 
 - This repository owns the Convax host and platform: Plugin ABI/contracts,
-  validation, installation and lifecycle, runtime bridges, IPC/UI, and the Registry
-  client.
+  validation, installation and lifecycle, runtime bridges, IPC/UI, Marketplace
+  protocol/validation, Registry consumption, and generic authoring tooling.
 - Concrete Plugin, Plugin-owned Skill, standalone Skill, and companion-tool source
   belongs in the `microvoid/convax-plugins` repository (normally checked out as the
   sibling `../convax-plugins`) under `packages/plugins/<id>`,
-  `packages/skills/<id>`, and `packages/tools/<id>`. This includes official,
-  default-catalog, and vendor integrations such as ChatCut.
+  `packages/skills/<id>`, `packages/mcp-servers/<id>`, and `packages/tools/<id>`.
+  This includes Builtin, Official, default-catalog, and vendor integrations such as
+  ChatCut.
 - Do not author a new concrete Plugin under
   `packages/desktop/resources/plugins/`. Existing packages there are legacy or
   bootstrap migration inputs, not an authoring precedent. Convax may consume
@@ -48,6 +49,9 @@ files under `packages/` add local rules and inherit this contract.
 | `@convax/canvas`        | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
 | `@convax/workbench`     | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
 | `@convax/agent-runtime` | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
+| `@convax/marketplace`   | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution   |
+| `@convax/marketplace-kit` | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                   | Desktop runtime, concrete marketplace content, credentials, or executing package bytes   |
+| `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                     | Runtime Marketplace state, publishing credentials, or a second validator                 |
 | `@convax/ui`            | Product-agnostic visual primitives and theme                                                                                                                                                           | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                     |
 | `@convax/desktop`       | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                         |
 
@@ -61,10 +65,12 @@ The allowed internal runtime dependency graph is enforced by
 `bun run package:boundaries`:
 
 ```text
-desktop ──> agent-runtime, canvas, project, project-files, ui, workbench
+desktop ──> agent-runtime, canvas, marketplace, project, project-files, ui, workbench
+create-convax-marketplace ──> marketplace-kit
+marketplace-kit ──> marketplace
 project ──> canvas, project-files, ui
 canvas  ──> ui
-agent-runtime, project-files, ui, workbench ──> no Convax package
+agent-runtime, marketplace, project-files, ui, workbench ──> no Convax package
 ```
 
 - Import another package only through an exported package subpath.
@@ -128,6 +134,29 @@ source, or ambient application state.
   host-owned native or `convax-bun` script companions; never Plugin package assets or renderer paths.
 - Electron `userData/capability-registry/artifact-v1/<sha256>`: bounded, verified,
   non-authoritative cache of immutable Plugin ZIP, Skill ZIP, and companion bytes.
+- Electron `userData/marketplace-sources/index-v1.json`: user-added Network
+  Marketplace declarations only; Builtin, Official, and Local are Host-defined.
+- Electron `userData/marketplace-source-security/<source-key>.json`: authoritative
+  per-source accepted Catalog identity, sequence, digest, and version-contract
+  high-water. It is never cleared with cache or source removal.
+- Electron `userData/marketplace-cache/<source-key>/`: disposable immutable Catalog,
+  Showcase, presentation, package, and companion cache snapshots.
+- Electron `userData/marketplace-installations/index-v1.json`: authoritative
+  `InstallRecord` bindings from each installed `{kind,id}` to one exact `SourceKey`.
+- Electron `userData/marketplace-provisioning-decisions/index-v1.json`: explicit
+  per-policy-entry user removal decisions for preinstalled capabilities.
+- Electron `userData/marketplace-runtime-preferences/index-v1.json`: durable
+  enable/disable intent for installed runtime surfaces.
+- Electron `userData/marketplace-transitions/<transition-id>.json`: bounded
+  `CapabilityTransition` recovery envelopes; existing Plugin and Skill decision
+  owners remain canonical.
+- Electron `userData/marketplaces/local-v1/sources/<source-instance-id>/`: immutable
+  Local Marketplace snapshots, index, and staging. Local is multi-instance in the
+  model even though the first product declaration creates one.
+- Electron `userData/mcp-servers/<identity-key>/`,
+  `mcp-server-companions/<identity-key>/<version-key>/`, and
+  `mcp-server-execution-grants/<identity-key>/`: MCP metadata, exact managed
+  companions, and setup grants. Raw MCP names/versions never form native paths.
 - Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
   execution receipts bound to the normalized manifest and exact executable source/bytes.
 - Electron `userData/plugin-hook-authorizations/<plugin-id>/`: install-time
@@ -283,6 +312,11 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   stale-source and at-most-once execution boundary. A manifest-declared
   direct-incoming binding requires an owning node of the same installed Plugin and
   revalidates every input edge; neither behavior may branch on Plugin id.
+- A v6-or-later confirmation selection action may reuse a return-delivery text
+  operation only for one authoritative Project-backed image or video selection,
+  with one step and no input binding. Renderer visibility derives from Main's exact
+  installed-version, execution-grant, runtime-preference and transition gate; the
+  action never creates a Canvas node or branches on Plugin id.
 - Do not expire an accepted generation job merely because it remains queued or
   running. Generation sidecars own vendor polling, bound individual network
   requests, and keep non-terminal work alive until success, explicit terminal
@@ -308,9 +342,15 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   requesting runtime. Cancellation, timeout, sign-out, close and Plugin change clear
   the temporary session and fail closed; no request URL or cookie crosses preload.
 - Treat an explicit Tool Plugin install/update as consent for only the normalized
-  manifest and executable binding verified during that publication. Persist the
-  binding kind, real path, size and SHA-256; runtime silently rechecks it and asks
-  for reinstall on missing or changed state, never for first-call approval.
+  manifest and executable binding verified during that publication. The sole
+  implicit-consent exception is an exact product-lock preinstall whose policy says
+  `setup: automatic`: it must use the normal durable setup transition, may authorize
+  only its verified managed companion, and must reject PATH fallback, Hooks,
+  Services, extra Plugin capabilities, credentials, and any candidate that differs
+  from the locked source, id, version, or target. Persist the binding kind, real
+  path, size and SHA-256; runtime silently rechecks it and asks for reinstall on
+  missing or changed state, never for first-call approval. Source refresh and
+  background update never expand an existing automatic grant.
 - Treat an explicit Hook-bearing Plugin install/update as consent to the normalized
   manifest and exact Hook bytes. Load only a private host-owned snapshot, never the
   mutable installed package path. Default provisioning and background updates must

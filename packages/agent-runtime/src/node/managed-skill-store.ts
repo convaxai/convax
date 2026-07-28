@@ -356,6 +356,11 @@ function skillMetadata(files: readonly SkillFile[]) {
   return parseFrontmatter(skillFiles[0]!.content)
 }
 
+/** Strict metadata validator for hosts that already own a bounded immutable file inventory. */
+export function parseAgentSkillMarkdown(content: string) {
+  return parseFrontmatter(new TextEncoder().encode(content))
+}
+
 function inspectedFiles(files: readonly SkillFile[]): AgentSkillInspectionFile[] {
   return files
     .map((file) => ({ content: Uint8Array.from(file.content), path: file.path }))

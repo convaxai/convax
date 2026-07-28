@@ -1,0 +1,95 @@
+{
+  "policy": {
+    "builtin": {
+      "marketplaceId": "convax-builtin",
+      "repository": "microvoid/convax-plugins"
+    },
+    "official": {
+      "descriptorUrl": "https://microvoid.github.io/convax-plugins/marketplace.json",
+      "marketplaceId": "convax-official",
+      "repository": "microvoid/convax-plugins"
+    },
+    "preinstalledPackages": [
+      {
+        "id": "ffmpeg-tools",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "setup": "automatic",
+        "targets": [
+          "darwin-arm64"
+        ]
+      }
+    ],
+    "revision": 1
+  },
+  "resolved": {
+    "builtinBundle": {
+      "name": "convax-builtin-bundle.zip",
+      "sha256": "fcafccafec15594a8aa63e947ca707dc266d21a20cfca196d943249877648325",
+      "size": 673690,
+      "url": "https://github.com/microvoid/convax-plugins/releases/download/builtin-e8c6f2953e748130fcecfe29ed5559279e62150426f55fe0dcd92b416ab490a4/convax-builtin-bundle.zip"
+    },
+    "builtinReservations": [
+      {
+        "kind": "skill",
+        "id": "canvas-storyboard"
+      }
+    ],
+    "official": {
+      "descriptor": {
+        "name": "marketplace.json",
+        "sha256": "c84777bb1ab45707a4bfbd24b9fafaabc314f49bea7dc80f8581ca2a18c9dd76",
+        "size": 666,
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-225dc5e55448e7a0fec90e4bd4a72198d6e236655e369b4f802eb46f3cea3f7a/marketplace.json"
+      },
+      "registry": {
+        "name": "registry-v2.json",
+        "sha256": "d4d09b21a9930152f8e9d0d10d49c9ffd1e256c7f625f4fa46d59ec0e41c2a8a",
+        "size": 32118,
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-225dc5e55448e7a0fec90e4bd4a72198d6e236655e369b4f802eb46f3cea3f7a/registry-v2.json"
+      },
+      "revision": "225dc5e55448e7a0fec90e4bd4a72198d6e236655e369b4f802eb46f3cea3f7a",
+      "showcase": {
+        "name": "showcase-v2.json",
+        "sha256": "6f4a9022f67ecc32cbb713ba51f85747d7eb739c8ad6d28e96810cf9d32b3031",
+        "size": 16207,
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-225dc5e55448e7a0fec90e4bd4a72198d6e236655e369b4f802eb46f3cea3f7a/showcase-v2.json"
+      }
+    },
+    "packages": [
+      {
+        "artifact": {
+          "name": "plugin-ffmpeg-tools-0.3.1.zip",
+          "sha256": "2c45ec81a20cc993e58770643c102184c8cc17c23720146bcb2c609c4a194893",
+          "size": 53869,
+          "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.3.1/plugin-ffmpeg-tools-0.3.1.zip"
+        },
+        "companions": [
+          {
+            "name": "ffmpeg-tools-0.2.0-darwin-arm64-convax-ffmpeg-mcp",
+            "sha256": "0a69c59bb9327ab12f214ddba563610ea4e7fda9f01472a05c37515c3a91c3e5",
+            "size": 21801728,
+            "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.3.1/ffmpeg-tools-0.2.0-darwin-arm64-convax-ffmpeg-mcp",
+            "arch": "arm64",
+            "platform": "darwin"
+          }
+        ],
+        "id": "ffmpeg-tools",
+        "kind": "plugin",
+        "marketplaceId": "convax-official",
+        "ownedSkills": [
+          {
+            "name": "skill-ffmpeg-canvas-0.3.1.zip",
+            "sha256": "b1547f4e27fe68b104c894657e0332adc7630b37656b5107537eb86e9c04a1d3",
+            "size": 10575,
+            "url": "https://github.com/microvoid/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.3.1/skill-ffmpeg-canvas-0.3.1.zip"
+          }
+        ],
+        "setup": "explicit",
+        "version": "0.3.1"
+      }
+    ],
+    "policyDigest": "ddd78ddb809166be2698ebd718d2947429bfb17a9071e9c72be655a7713d143e"
+  },
+  "schema": "convax.marketplace-product-lock/1"
+}

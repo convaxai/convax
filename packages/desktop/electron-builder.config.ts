@@ -54,8 +54,8 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     files: ["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"],
     extraResources: [
       {
-        from: ".packaging/default-capabilities",
-        to: "default-capabilities",
+        from: ".packaging/marketplace-product",
+        to: "marketplace-product",
         filter: ["**/*"],
       },
       {

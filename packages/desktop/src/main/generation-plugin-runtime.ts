@@ -148,6 +148,8 @@ export interface GenerationPluginRuntimeOptions {
   /** Source environment. Only the explicit host allowlist is inherited. */
   environment?: Readonly<Record<string, string | undefined>>
   plugins: GenerationPluginSource
+  /** Main-owned activation gate for source-bound Marketplace runtime capabilities. */
+  isPluginEnabled?(pluginId: string): Promise<boolean>
   /** Resolves and fingerprints the host-owned executable before receipt verification. */
   resolveExecutable?: GenerationPluginExecutableResolver
   /** Copies the install-authorized entrypoint to a unique host-owned launch snapshot. */
@@ -663,6 +665,7 @@ export class GenerationPluginRuntime {
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
+  readonly #isPluginEnabled: (pluginId: string) => Promise<boolean>
   readonly #resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
   readonly #resolveExecutable: GenerationPluginExecutableResolver
   readonly #recoveryStateDirectory?: string
@@ -684,6 +687,7 @@ export class GenerationPluginRuntime {
     }
     this.#bunRuntime = options.bunRuntime
     this.#plugins = options.plugins
+    this.#isPluginEnabled = options.isPluginEnabled ?? (async () => true)
     this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
@@ -1379,6 +1383,7 @@ export class GenerationPluginRuntime {
     if (this.#disposed) throw new Error("Generation Plugin runtime is disposed")
     for (const plugin of installed) {
       if (!isExecutablePlugin(plugin)) continue
+      if (!(await this.#isPluginEnabled(plugin.id))) continue
       requireBareCommand(plugin.runtime.command)
       if (discovered.has(plugin.id)) throw new Error(`Duplicate installed Plugin id: ${plugin.id}`)
       for (const tool of plugin.contributes.generation?.tools ?? []) requireGenerationToolId(tool.id)

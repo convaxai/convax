@@ -11,7 +11,10 @@ const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
 // and animation-driven viewport state enough time to quiesce on a saturated CI
 // host; every wait below still requires the exact observable state.
 const timeoutMs = 45_000
-const evaluationTimeoutMs = timeoutMs * 2 + 10_000
+// The primary renderer evaluation intentionally covers several independent
+// CAS/recovery/UI paths. Its outer debugger deadline must not expire before
+// the final exact-state wait can report its own bounded failure.
+const evaluationTimeoutMs = timeoutMs * 4 + 30_000
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
@@ -791,55 +794,15 @@ try {
       "the live Chinese Settings interface",
     )
     buttonWithText("技能与插件").click()
-    await waitFor(
-      () => document.querySelector('section[aria-label="技能与插件"] [role="tablist"]'),
-      "Skill and Plugin management inside Settings",
+    const marketplaceSurface = await waitFor(
+      () => document.querySelector('[data-marketplace-surface="true"]'),
+      "Marketplace management inside Settings",
     )
-    const installedSkillCard = await waitFor(
-      () => [...document.querySelectorAll("article")]
-        .find((article) => article.textContent?.includes("Storyboard Builder")
-          && article.textContent?.includes("由 Convax 管理")),
-      "the installed Storyboard Skill card",
-    )
-    const installedSkillVideo = await waitFor(
-      () => {
-        const video = installedSkillCard.querySelector("video")
-        return video && video.readyState >= 2 ? video : null
-      },
-      "the installed Skill showcase video",
-    )
-    await waitFor(() => !installedSkillVideo.paused && installedSkillVideo.currentTime > 0, "the in-view Skill video to play")
-    const installedSkillDetails = await waitFor(
-      () => [...installedSkillCard.querySelectorAll("button")]
-        .find((button) => button.textContent?.trim() === "查看详情"),
-      "the installed Skill detail action",
-    )
-    installedSkillDetails.click()
-    const skillDetailDialog = await waitFor(
-      () => [...document.querySelectorAll('[role="dialog"]')]
-        .find((dialog) => dialog.textContent?.includes("Storyboard Builder")
-          && dialog.textContent?.includes("SKILL.md")),
-      "the installed Skill detail dialog",
-    )
-    const detailLayer = skillDetailDialog.parentElement
-    if (!detailLayer || Number.parseInt(getComputedStyle(detailLayer).zIndex, 10) <= 100) {
-      throw new Error("The Skill detail dialog did not render above Settings")
+    for (const label of ["扩展", "已安装", "Marketplace", "导入…"]) {
+      if (![...marketplaceSurface.querySelectorAll("button")].some((button) => button.textContent?.trim() === label)) {
+        throw new Error("Marketplace management did not expose " + label)
+      }
     }
-    const closeSkillDetails = await waitFor(
-      () => skillDetailDialog.querySelector('button[aria-label="关闭技能详情"]'),
-      "the installed Skill detail close action",
-    )
-    closeSkillDetails.click()
-    await waitFor(() => !document.body.contains(skillDetailDialog), "the installed Skill detail dialog to close")
-    if (!document.querySelector('[data-settings-view="true"]')) {
-      throw new Error("Closing Skill details also closed Settings")
-    }
-    const pluginTab = await waitFor(
-      () => [...document.querySelectorAll('[role="tab"]')]
-        .find((tab) => tab.textContent?.trim() === "插件"),
-      "the Plugin management tab",
-    )
-    pluginTab.click()
     const storedLanguage = JSON.parse(localStorage.getItem("convax.desktop.app-language.v1") ?? "null")
     if (storedLanguage?.language !== "zh-CN") throw new Error("The global language preference was not persisted")
     const backToApp = await waitFor(() => buttonWithText("返回应用"), "the Settings return action")
@@ -1121,7 +1084,7 @@ try {
   }
 
   console.log(
-    `Desktop workspace, diagnostics, standalone Agent model, Canvas generation CAS/late-callback/restart races, installed Skill showcase/detail, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
+    `Desktop workspace, diagnostics, standalone Agent model, Canvas generation CAS/late-callback/restart races, Marketplace Settings, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
   )
 } catch (error) {
   child.kill("SIGKILL")
