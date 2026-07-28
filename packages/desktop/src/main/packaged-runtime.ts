@@ -5,6 +5,7 @@ export function desktopOpenCodeBinaryDirectory(input: { isPackaged: boolean; res
 }
 
 export function desktopBunRuntime(input: {
+  applicationDirectory?: string
   isPackaged: boolean
   platform?: NodeJS.Platform
   resourcesDirectory: string
@@ -16,6 +17,13 @@ export function desktopBunRuntime(input: {
         "bin",
         (input.platform ?? process.platform) === "win32" ? "opencode.exe" : "opencode",
       )
-    : "bun"
+    : join(
+        input.applicationDirectory ?? process.cwd(),
+        ".packaging",
+        "runtime",
+        "opencode",
+        "bin",
+        (input.platform ?? process.platform) === "win32" ? "opencode.exe" : "opencode",
+      )
   return { command, env: { BUN_BE_BUN: "1" } } as const
 }

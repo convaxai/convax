@@ -721,6 +721,27 @@ function deferred<Value>() {
 }
 
 describe("PetSettingsProviderLoader", () => {
+  test("loads a Marketplace-installed provider after the main process publishes providerChanged", async () => {
+    let installed = false
+    let changed = () => undefined
+    const client = createClient()
+    client.getProvider = mock(async () => (installed ? provider : undefined))
+    client.onProviderChanged = mock((listener) => {
+      changed = listener
+      return () => undefined
+    })
+    const loader = new PetSettingsProviderLoader(client)
+
+    loader.start()
+    await Promise.resolve()
+    expect(loader.getSnapshot()).toEqual({ status: "absent" })
+
+    installed = true
+    changed()
+    await Promise.resolve()
+    expect(loader.getSnapshot()).toEqual({ provider, status: "ready" })
+  })
+
   test("clears the provider to loading immediately and only accepts the newest request", async () => {
     const first = deferred<PetSettingsProvider | undefined>()
     const second = deferred<PetSettingsProvider | undefined>()

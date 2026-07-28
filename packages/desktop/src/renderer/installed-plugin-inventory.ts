@@ -1,6 +1,28 @@
 import type { InstalledWebPluginSummary, WebPluginClient } from "../plugin-contracts"
 
 type InstalledPluginInventoryClient = Pick<WebPluginClient, "listPlugins" | "onDidChange">
+type ChangeClient = Pick<WebPluginClient, "onDidChange">
+
+export function combineInstalledPluginInventoryChanges(
+  plugins: InstalledPluginInventoryClient,
+  marketplace: ChangeClient,
+  onMarketplaceRuntimeChange: () => void,
+): InstalledPluginInventoryClient {
+  return {
+    listPlugins: () => plugins.listPlugins(),
+    onDidChange(listener) {
+      const disposePlugin = plugins.onDidChange(listener)
+      const disposeMarketplace = marketplace.onDidChange(() => {
+        onMarketplaceRuntimeChange()
+        listener()
+      })
+      return () => {
+        disposeMarketplace()
+        disposePlugin()
+      }
+    },
+  }
+}
 
 export function subscribeInstalledPluginInventory(
   client: InstalledPluginInventoryClient,

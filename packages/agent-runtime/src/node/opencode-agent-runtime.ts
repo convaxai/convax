@@ -107,6 +107,12 @@ export interface AgentRemoteMcpOAuthConfig {
 export interface AgentRemoteMcpServerConfig {
   enabled?: boolean
   headers?: Readonly<Record<string, string>>
+  /**
+   * Internet MCP is intentionally fail-closed until OpenCode exposes a socket-level
+   * outbound-policy hook. Desktop-managed stdio is bridged through an authenticated
+   * exact loopback address and is the only admitted host-provided transport.
+   */
+  networkBoundary?: "host-authenticated-loopback" | "internet"
   oauth?: AgentRemoteMcpOAuthConfig | false
   timeout?: number
   type: "remote"
@@ -404,11 +410,64 @@ function mcpServerName(name: string): string {
 }
 
 function copyRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
-  return {
-    ...config,
-    ...(config.headers === undefined ? {} : { headers: { ...config.headers } }),
-    ...(typeof config.oauth === "object" ? { oauth: { ...config.oauth } } : {}),
+  if (config.networkBoundary !== "host-authenticated-loopback") {
+    throw new Error(
+      "Internet MCP execution is disabled because the runtime cannot enforce outbound policy at OpenCode's socket boundary",
+    )
   }
+  let url: URL
+  try {
+    url = new URL(config.url)
+  } catch {
+    throw new Error("Managed MCP bridge must use an exact loopback URL")
+  }
+  const exactLoopback = /^http:\/\/(?:127\.0\.0\.1|\[::1\]):[1-9]\d{0,4}\/[^\s?#]*$/u
+  if (
+    !exactLoopback.test(config.url) ||
+    url.protocol !== "http:" ||
+    (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") ||
+    url.port === "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("Managed MCP bridge must use an exact loopback URL")
+  }
+  const headers = Object.entries(config.headers ?? {})
+  const authorizationHeaders = headers.filter(([name]) => name.toLowerCase() === "authorization")
+  const authorization = authorizationHeaders[0]?.[1]
+  if (
+    headers.length !== 1 ||
+    authorizationHeaders.length !== 1 ||
+    typeof authorization !== "string" ||
+    !/^Bearer [A-Za-z0-9_-]{32,256}$/u.test(authorization)
+  ) {
+    throw new Error("Managed MCP bridge requires exactly one Main-owned bearer Authorization header")
+  }
+  if (config.oauth !== false) {
+    throw new Error("Managed MCP bridge must not delegate authentication to OpenCode OAuth")
+  }
+  const { networkBoundary: _networkBoundary, ...openCodeConfig } = config
+  return {
+    ...openCodeConfig,
+    ...(openCodeConfig.headers === undefined ? {} : { headers: { ...openCodeConfig.headers } }),
+    ...(typeof openCodeConfig.oauth === "object" ? { oauth: { ...openCodeConfig.oauth } } : {}),
+  }
+}
+
+function copyConfiguredMcpServers(
+  configured: NonNullable<NonNullable<ServerOptions["config"]>["mcp"]>,
+) {
+  return Object.fromEntries(
+    Object.entries(configured).map(([name, config]) => {
+      const serverName = mcpServerName(name)
+      if (!("type" in config) || config.type === "local") {
+        throw new Error("Local MCP commands are not admitted into Agent Runtime")
+      }
+      return [serverName, copyRemoteMcpServerConfig(config as AgentRemoteMcpServerConfig)]
+    }),
+  )
 }
 
 function copyMcpStatus(status: McpStatus): AgentMcpServerStatus {
@@ -954,11 +1013,14 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
     if (conflicts.length > 0) {
       throw new Error(`Resolved MCP server conflicts with base OpenCode config: ${conflicts.join(", ")}`)
     }
+    const admittedConfiguredMcpServers = copyConfiguredMcpServers(configuredMcpServers)
     const mcp =
       resolvedEntries.length === 0
-        ? this.options.config?.mcp
+        ? Object.keys(admittedConfiguredMcpServers).length === 0
+          ? undefined
+          : admittedConfiguredMcpServers
         : {
-            ...configuredMcpServers,
+            ...admittedConfiguredMcpServers,
             ...Object.fromEntries(
               resolvedEntries.map(([name, config]) => [mcpServerName(name), copyRemoteMcpServerConfig(config)]),
             ),

@@ -25,20 +25,27 @@ const applicationPackageNames = new Set(["@convax/desktop"])
 const publishablePackageNames = new Set([
   "@convax/agent-runtime",
   "@convax/canvas",
+  "@convax/marketplace",
+  "@convax/marketplace-kit",
   "@convax/project",
   "@convax/project-files",
   "@convax/ui",
   "@convax/workbench",
+  "create-convax-marketplace",
 ])
 const reservedWorkspacePackageName = "@convax/workspace"
 const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>([
   ["@convax/agent-runtime", new Set()],
   ["@convax/canvas", new Set(["@convax/ui"])],
+  ["@convax/marketplace", new Set()],
+  ["@convax/marketplace-kit", new Set(["@convax/marketplace"])],
+  ["create-convax-marketplace", new Set(["@convax/marketplace-kit"])],
   [
     "@convax/desktop",
     new Set([
       "@convax/agent-runtime",
       "@convax/canvas",
+      "@convax/marketplace",
       "@convax/project",
       "@convax/project-files",
       "@convax/ui",
@@ -73,6 +80,11 @@ function canImportNodeBuiltins(packageName: string, sourcePath: string): boolean
   if (packageName === "@convax/agent-runtime") return normalized.startsWith("src/node/")
   if (packageName === "@convax/project") return normalized.startsWith("src/node/")
   if (packageName === "@convax/desktop") return normalized.startsWith("src/main/")
+  if (
+    packageName === "@convax/marketplace"
+    || packageName === "@convax/marketplace-kit"
+    || packageName === "create-convax-marketplace"
+  ) return true
   return false
 }
 
@@ -141,8 +153,8 @@ for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(re
 
 const packagesByName = new Map(packages.map((workspacePackage) => [workspacePackage.name, workspacePackage]))
 for (const workspacePackage of packages) {
-  if (!workspacePackage.name.startsWith("@convax/")) {
-    throw new Error(`${workspacePackage.name}: workspace packages must use the @convax scope`)
+  if (!workspacePackage.name.startsWith("@convax/") && workspacePackage.name !== "create-convax-marketplace") {
+    throw new Error(`${workspacePackage.name}: workspace packages must use the @convax scope except the create CLI`)
   }
   if (!allowedInternalRuntimeDependencies.has(workspacePackage.name)) {
     throw new Error(

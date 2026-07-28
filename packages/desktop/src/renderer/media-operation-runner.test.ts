@@ -1,10 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import type { CanvasGenerateRequest, CanvasGenerateResult } from "@convax/canvas"
 import {
+  generationCanvasRevisionConflictCode,
+  type GenerationCanvasRequest,
+  type GenerationCanvasResult,
+} from "../generation-contracts"
+import {
   mediaOperationCancellationNotice,
   MediaOperationPartialError,
   type MediaOperationProgress,
   runMediaOperationSequence,
+  runMediaOperationReturn,
 } from "./media-operation-runner"
 
 const signal = new AbortController().signal
@@ -71,6 +77,71 @@ describe("runMediaOperationSequence", () => {
       nextRequestIndex: 2,
       revision: 5,
       warnings: [],
+    })
+  })
+
+  test("refreshes the authoritative Canvas revision before each later step", async () => {
+    const calls: CanvasGenerateRequest[] = []
+    const refreshed: MediaOperationProgress[] = []
+    const progress = await runMediaOperationSequence({
+      generate: async (current) => {
+        calls.push(current)
+        return calls.length === 1 ? result("silent-video", 4) : result("audio", 6)
+      },
+      initialProgress: initialProgress(),
+      onProgress: () => undefined,
+      partialFailureMessage: () => "partial",
+      refreshProgress: async (current) => {
+        refreshed.push(current)
+        return { ...current, revision: 5 }
+      },
+      requests: [request("video"), request("audio")],
+      signal,
+    })
+
+    expect(refreshed).toEqual([
+      {
+        createdNodeIds: ["silent-video"],
+        nextRequestIndex: 1,
+        revision: 4,
+        warnings: [],
+      },
+    ])
+    expect(calls[1]).toMatchObject({
+      expectedRevision: 5,
+      relationAnchorNodeIds: ["silent-video"],
+    })
+    expect(progress.revision).toBe(6)
+  })
+
+  test("safely retries a later step when Main rejects its revision before execution", async () => {
+    const calls: CanvasGenerateRequest[] = []
+    let refreshes = 0
+    const progress = await runMediaOperationSequence({
+      generate: async (current) => {
+        calls.push(current)
+        if (calls.length === 1) return result("silent-video", 4)
+        if (calls.length === 2) {
+          throw new Error(`${generationCanvasRevisionConflictCode}: expected 4, received 5`)
+        }
+        return result("audio", 6)
+      },
+      initialProgress: initialProgress(),
+      onProgress: () => undefined,
+      partialFailureMessage: () => "partial",
+      refreshProgress: async (current) => {
+        refreshes += 1
+        return { ...current, revision: refreshes === 1 ? 4 : 5 }
+      },
+      requests: [request("video"), request("audio")],
+      signal,
+    })
+
+    expect(calls.map((call) => call.expectedRevision)).toEqual([3, 4, 5])
+    expect(progress).toMatchObject({
+      createdNodeIds: ["silent-video", "audio"],
+      nextRequestIndex: 2,
+      revision: 6,
     })
   })
 
@@ -161,5 +232,67 @@ describe("runMediaOperationSequence", () => {
     await operation.catch(() => undefined)
     expect(calls).toBe(1)
     expect(saved.at(-1)).toMatchObject({ createdNodeIds: ["silent-video"], nextRequestIndex: 1, revision: 4 })
+  })
+})
+
+describe("runMediaOperationReturn", () => {
+  const returnRequest = {
+    anchor: { x: 0, y: 0 },
+    expectedOutputCount: 1,
+    expectedRevision: 3,
+    operationId: "return-operation",
+    output: "text",
+    prompt: "Import selected media",
+    ref: { canvasId: "canvas", scopeId: "project" },
+    references: [{ nodeId: "source", role: "reference_image" }],
+    resultMode: { type: "return" },
+    toolId: "media/import-selected",
+  } satisfies GenerationCanvasRequest
+
+  test("returns only the bounded text result produced by Main", async () => {
+    const result = await runMediaOperationReturn({
+      cancel: async () => undefined,
+      generate: async () =>
+        ({
+          createdNodeIds: [],
+          outputText: "Imported 1 media file.",
+          revision: 3,
+          toolId: "media/import-selected",
+          warnings: [],
+        }) satisfies GenerationCanvasResult,
+      request: returnRequest,
+      signal,
+    })
+
+    expect(result).toEqual({ outputText: "Imported 1 media file.", warnings: [] })
+  })
+
+  test("crosses cancellation to Main and ignores a stale successful completion", async () => {
+    const controller = new AbortController()
+    let resolve!: (result: GenerationCanvasResult) => void
+    const pending = new Promise<GenerationCanvasResult>((done) => {
+      resolve = done
+    })
+    const canceled: string[] = []
+    const operation = runMediaOperationReturn({
+      cancel: async ({ operationId }) => {
+        canceled.push(operationId)
+      },
+      generate: async () => pending,
+      request: returnRequest,
+      signal: controller.signal,
+    })
+
+    controller.abort(new DOMException("Canceled", "AbortError"))
+    resolve({
+      createdNodeIds: [],
+      outputText: "stale success",
+      revision: 3,
+      toolId: "media/import-selected",
+      warnings: [],
+    })
+
+    await expect(operation).rejects.toBeInstanceOf(DOMException)
+    expect(canceled).toEqual(["return-operation"])
   })
 })

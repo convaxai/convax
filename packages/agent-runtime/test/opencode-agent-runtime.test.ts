@@ -305,21 +305,16 @@ describe("OpenCode agent runtime boundaries", () => {
   })
 
   test("lazily merges host-owned remote MCP servers without mutating resolver values", async () => {
-    const baseServer = {
-      oauth: false as const,
-      type: "remote" as const,
-      url: "https://base.example/mcp",
-    }
     const resolvedServer = {
-      headers: { "X-Public-Client": "convax" },
-      oauth: { clientId: "public-client", scope: "video:edit" },
+      headers: { Authorization: `Bearer ${"a".repeat(32)}` },
+      networkBoundary: "host-authenticated-loopback" as const,
+      oauth: false as const,
       timeout: 12_345,
       type: "remote" as const,
-      url: "https://editor.example/mcp",
+      url: "http://127.0.0.1:43127/mcp",
     }
     const resolveMcpServers = mock(async () => ({ "plugin-remote-editor--main": resolvedServer }))
     const runtime = new OpenCodeAgentRuntime({
-      config: { mcp: { base: baseServer } },
       resolveMcpServers,
     })
     const serverConfig = () =>
@@ -337,8 +332,13 @@ describe("OpenCode agent runtime boundaries", () => {
       const config = await serverConfig()
       expect(resolveMcpServers).toHaveBeenCalledTimes(1)
       expect(config.mcp).toEqual({
-        base: baseServer,
-        "plugin-remote-editor--main": resolvedServer,
+        "plugin-remote-editor--main": {
+          headers: resolvedServer.headers,
+          oauth: false,
+          timeout: resolvedServer.timeout,
+          type: resolvedServer.type,
+          url: resolvedServer.url,
+        },
       })
       const configuredPlugin = config.mcp?.["plugin-remote-editor--main"]
       expect(configuredPlugin).not.toBe(resolvedServer)
@@ -346,14 +346,165 @@ describe("OpenCode agent runtime boundaries", () => {
         throw new Error("Resolved MCP server was not copied into OpenCode configuration")
       }
       expect("headers" in configuredPlugin ? configuredPlugin.headers : undefined).not.toBe(resolvedServer.headers)
-      expect("oauth" in configuredPlugin ? configuredPlugin.oauth : undefined).not.toBe(resolvedServer.oauth)
+      expect("oauth" in configuredPlugin ? configuredPlugin.oauth : undefined).toBe(false)
       expect(resolvedServer).toEqual({
-        headers: { "X-Public-Client": "convax" },
-        oauth: { clientId: "public-client", scope: "video:edit" },
+        headers: { Authorization: `Bearer ${"a".repeat(32)}` },
+        networkBoundary: "host-authenticated-loopback",
+        oauth: false,
         timeout: 12_345,
         type: "remote",
-        url: "https://editor.example/mcp",
+        url: "http://127.0.0.1:43127/mcp",
       })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("fails closed for internet MCP because OpenCode owns the socket boundary", async () => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        "marketplace-http": {
+          networkBoundary: "internet",
+          oauth: false,
+          type: "remote",
+          url: "https://mcp.example.com/mcp",
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+
+    try {
+      await expect(serverConfig()).rejects.toThrow(
+        "Internet MCP execution is disabled because the runtime cannot enforce outbound policy at OpenCode's socket boundary",
+      )
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("admits only authenticated Main-owned loopback MCP bridges", async () => {
+    const token = "a".repeat(32)
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          headers: { Authorization: `Bearer ${token}` },
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url: "http://127.0.0.1:43127/mcp",
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<{ mcp?: Record<string, unknown> }>
+        }
+      ).serverConfig()
+
+    try {
+      const config = await serverConfig()
+      expect(config.mcp?.managed).toEqual({
+        headers: { Authorization: `Bearer ${token}` },
+        oauth: false,
+        type: "remote",
+        url: "http://127.0.0.1:43127/mcp",
+      })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test.each([
+    ["hostname", "http://localhost:43127/mcp"],
+    ["unspecified IPv4", "http://0.0.0.0:43127/mcp"],
+    ["non-loopback IPv4", "http://127.0.0.2:43127/mcp"],
+    ["IPv6 unspecified", "http://[::]:43127/mcp"],
+    ["credentials", "http://user:pass@127.0.0.1:43127/mcp"],
+    ["fragment", "http://127.0.0.1:43127/mcp#fragment"],
+  ])("rejects a managed MCP bridge with an unsafe %s URL", async (_case, url) => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          headers: { Authorization: "Bearer opaque" },
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url,
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+
+    try {
+      await expect(serverConfig()).rejects.toThrow("Managed MCP bridge must use an exact loopback URL")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("rejects a managed MCP bridge without bearer authentication", async () => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url: "http://[::1]:43127/mcp",
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+
+    try {
+      await expect(serverConfig()).rejects.toThrow(
+        "Managed MCP bridge requires exactly one Main-owned bearer Authorization header",
+      )
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test.each([
+    ["short", "Bearer opaque"],
+    ["space", `Bearer ${"a".repeat(16)} ${"b".repeat(16)}`],
+    ["CRLF", `Bearer ${"a".repeat(32)}\r\nX-Injected: yes`],
+    ["unicode", `Bearer ${"界".repeat(32)}`],
+  ])("rejects a %s managed MCP bearer token", async (_case, authorization) => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          headers: { Authorization: authorization },
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url: "http://127.0.0.1:43127/mcp",
+        },
+      }),
+    })
+    try {
+      await expect(
+        (
+          runtime as unknown as {
+            serverConfig(): Promise<Record<string, unknown>>
+          }
+        ).serverConfig(),
+      ).rejects.toThrow("exactly one Main-owned bearer Authorization header")
     } finally {
       await runtime.dispose()
     }
@@ -386,6 +537,90 @@ describe("OpenCode agent runtime boundaries", () => {
 
     try {
       await expect(serverConfig()).rejects.toThrow("Resolved MCP server conflicts with base OpenCode config: shared")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test.each([
+    [
+      "internet remote",
+      { oauth: false, type: "remote" as const, url: "https://mcp.example.com/mcp" },
+      "Internet MCP execution is disabled",
+    ],
+    [
+      "local command",
+      { command: ["/usr/bin/example"], type: "local" as const },
+      "Local MCP commands are not admitted into Agent Runtime",
+    ],
+  ])("rejects a base OpenCode %s MCP config before server creation", async (_case, config, message) => {
+    const runtime = new OpenCodeAgentRuntime({ config: { mcp: { bypass: config } } })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+    try {
+      await expect(serverConfig()).rejects.toThrow(message)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test.each([
+    ["query", "http://127.0.0.1:43127/mcp?token=secret"],
+    ["integer IPv4", "http://2130706433:43127/mcp"],
+    ["hex IPv4", "http://0x7f000001:43127/mcp"],
+    ["IPv4-mapped IPv6", "http://[::ffff:127.0.0.1]:43127/mcp"],
+  ])("rejects an encoded or ambiguous managed MCP %s URL", async (_case, url) => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          headers: { Authorization: `Bearer ${"a".repeat(32)}` },
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url,
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+    try {
+      await expect(serverConfig()).rejects.toThrow("Managed MCP bridge must use an exact loopback URL")
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("rejects duplicate or additional managed MCP headers", async () => {
+    const runtime = new OpenCodeAgentRuntime({
+      resolveMcpServers: async () => ({
+        managed: {
+          headers: {
+            Authorization: "Bearer first-opaque-main-token",
+            authorization: "Bearer second-opaque-main-token",
+          },
+          networkBoundary: "host-authenticated-loopback",
+          oauth: false,
+          type: "remote",
+          url: "http://127.0.0.1:43127/mcp",
+        },
+      }),
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<Record<string, unknown>>
+        }
+      ).serverConfig()
+    try {
+      await expect(serverConfig()).rejects.toThrow("exactly one Main-owned bearer Authorization header")
     } finally {
       await runtime.dispose()
     }

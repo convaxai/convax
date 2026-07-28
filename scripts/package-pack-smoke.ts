@@ -241,11 +241,13 @@ try {
   const packageScopeDirectory = join(consumerDirectory, "node_modules", "@convax")
   mkdirSync(packageScopeDirectory, { recursive: true })
   for (const workspacePackage of publishablePackages) {
-    const packageLinkName = workspacePackage.name.slice("@convax/".length)
     const linkType = process.platform === "win32" ? "junction" : "dir"
+    const packageLink = workspacePackage.name.startsWith("@convax/")
+      ? join(packageScopeDirectory, workspacePackage.name.slice("@convax/".length))
+      : join(consumerDirectory, "node_modules", workspacePackage.name)
     symlinkSync(
       join(repositoryRoot, "packages", workspacePackage.directory),
-      join(packageScopeDirectory, packageLinkName),
+      packageLink,
       linkType,
     )
   }

@@ -44,6 +44,7 @@ function request(editor: MediaOperationEditor): MediaOperationDialogRequest {
 function action(editor: MediaOperationEditor): MediaOperationAction {
   const confirmation = editor === "confirmation"
   return {
+    delivery: "canvas",
     description: {
       default: confirmation ? "Create separate video and audio results." : "Edit the selected video.",
       "zh-CN": confirmation ? "创建独立的视频和音频结果，两张卡片会彼此关联。" : "编辑所选视频。",
@@ -57,6 +58,7 @@ function action(editor: MediaOperationEditor): MediaOperationAction {
           { output: "audio", toolId: "acme-media/audio.extract" },
         ]
       : [{ output: editor === "time-point" ? "image" : "video", toolId: `acme-media/${editor}` }],
+    target: "video",
     title: {
       default: confirmation ? "Separate audio and video" : "Video operation",
       "zh-CN": confirmation ? "音视频分离" : editor === "crop-region" ? "裁剪视频" : "截取视频",
@@ -82,6 +84,7 @@ describe("MediaOperationDialog", () => {
     expect(markup.match(/type="range"/gu)).toHaveLength(2)
     expect(markup).not.toContain('type="number"')
     expect(markup).toContain("00:00.000 – 00:10.000")
+    expect(markup).toContain('src="convax-asset://project/source.mp4"')
   })
 
   test("renders a declared two-step operation without knowing the Plugin identity", () => {
@@ -115,6 +118,7 @@ describe("MediaOperationDialog", () => {
     expect(markup).toContain("拖动画面中的选框调整位置")
     expect(markup).toContain("输出尺寸: 1280 × 720")
     expect(markup).toContain('autoPlay=""')
+    expect(markup).toContain('src="convax-asset://project/source.mp4"')
     expect(markup).not.toContain('type="number"')
   })
 

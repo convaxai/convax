@@ -8,6 +8,7 @@ import {
   type CanvasSelectionActionContext,
 } from "@convax/canvas"
 import { getProjectResourceReference } from "@convax/project/canvas"
+import type { GenerationCanvasRequest } from "../generation-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
 export type MediaOperationEditor = "confirmation" | "crop-region" | "time-point" | "time-range"
@@ -23,11 +24,13 @@ export interface MediaOperationStep {
 }
 
 export interface MediaOperationAction {
+  delivery: "canvas" | "return"
   description: MediaOperationLocalizedText
   editor: MediaOperationEditor
   id: string
   pluginId: string
   steps: readonly MediaOperationStep[]
+  target: "image" | "video"
   title: MediaOperationLocalizedText
 }
 
@@ -74,6 +77,7 @@ export function localizedMediaOperationText(text: MediaOperationLocalizedText, l
 
 export function listInstalledMediaOperationActions(
   installedPlugins: readonly InstalledWebPluginSummary[],
+  admittedToolIds?: ReadonlySet<string>,
 ): readonly MediaOperationAction[] {
   return installedPlugins.flatMap((plugin) => {
     if (
@@ -89,22 +93,39 @@ export function listInstalledMediaOperationActions(
     const actions = plugin.contributes.canvas?.selectionActions ?? []
     return actions.flatMap((action) => {
       if (!("steps" in action)) return []
-      if (!("target" in action) || action.target !== "video") return []
+      if (!("target" in action) || (action.target !== "image" && action.target !== "video")) return []
+      const referenceRole = action.target === "image" ? "reference_image" : "reference_video"
       const steps = action.steps.flatMap((step) => {
         if (!("tool" in step)) return []
         const tool = generationTools.find((candidate) => candidate.id === step.tool)
-        return tool?.acceptedInputs.includes("reference_video")
-          ? [{ output: tool.output, toolId: `${plugin.id}/${tool.id}` }]
+        const toolId = `${plugin.id}/${step.tool}`
+        if (admittedToolIds && !admittedToolIds.has(toolId)) return []
+        return tool?.acceptedInputs.includes(referenceRole)
+          ? [{ output: tool.output, toolId }]
           : []
       })
       if (steps.length !== action.steps.length || steps.length === 0) return []
+      const tools = action.steps.map((step) => generationTools.find((candidate) => candidate.id === step.tool))
+      const returnDelivery = tools.every((tool) => tool?.delivery === "return")
+      if (
+        tools.some((tool) => tool?.inputBinding !== undefined) ||
+        (returnDelivery &&
+          (action.editor !== "confirmation" ||
+            action.steps.length !== 1 ||
+            tools.some((tool) => tool?.output !== "text"))) ||
+        (!returnDelivery && (action.target === "image" || tools.some((tool) => tool?.delivery === "return")))
+      ) {
+        return []
+      }
       return [
         {
+          delivery: returnDelivery ? "return" : "canvas",
           description: action.description,
           editor: action.editor,
           id: action.id,
           pluginId: plugin.id,
           steps,
+          target: action.target,
           title: action.title,
         },
       ]
@@ -121,6 +142,13 @@ export function isMediaOperationDialogInScope(
 }
 
 export function isManagedProjectVideoSelection(context: CanvasSelectionActionContext) {
+  return isManagedProjectMediaSelection(context, "video")
+}
+
+export function isManagedProjectMediaSelection(
+  context: CanvasSelectionActionContext,
+  target: "image" | "video",
+) {
   if (
     context.selectedEdgeIds.length !== 0 ||
     context.selectedNodeIds.length !== 1 ||
@@ -128,11 +156,11 @@ export function isManagedProjectVideoSelection(context: CanvasSelectionActionCon
   ) {
     return false
   }
-  return projectMediaReferenceIdentity(context.selectedNodes[0], "video") !== undefined
+  return projectMediaReferenceIdentity(context.selectedNodes[0], target) !== undefined
 }
 
 export function canRunMediaOperation(context: CanvasSelectionActionContext, action: MediaOperationAction) {
-  return action.steps.length > 0 && isManagedProjectVideoSelection(context)
+  return action.steps.length > 0 && isManagedProjectMediaSelection(context, action.target)
 }
 
 export function canResumeMediaOperation(
@@ -236,6 +264,9 @@ export function createMediaOperationGenerateRequests(
   input: MediaOperationInput,
   signal: AbortSignal = request.context.signal,
 ): readonly CanvasGenerateRequest[] {
+  if (request.action.delivery !== "canvas") {
+    throw new Error("Return-delivery media operations must use the bounded Host return request")
+  }
   const validationError = validateMediaOperationInput(request.action.editor, input)
   if (validationError) throw new Error(validationError)
   const node = requireRequestVideoNode(request)
@@ -257,6 +288,41 @@ export function createMediaOperationGenerateRequests(
     toolId: step.toolId,
     ...(toolInput ? { toolInput } : {}),
   }))
+}
+
+export function createMediaOperationReturnRequest(
+  request: MediaOperationDialogRequest,
+  operationId: string,
+): GenerationCanvasRequest {
+  if (
+    request.action.delivery !== "return" ||
+    request.action.editor !== "confirmation" ||
+    request.action.steps.length !== 1
+  ) {
+    throw new Error("The selected media operation is not one bounded return-delivery action")
+  }
+  const node = requireRequestMediaNode(request)
+  const step = request.action.steps[0]
+  if (!step || step.output !== "text") {
+    throw new Error("Return-delivery media operations must produce one bounded text result")
+  }
+  return {
+    anchor: mediaOperationResultAnchor(node, request.context.document.nodes),
+    expectedOutputCount: 1,
+    expectedRevision: request.context.document.revision,
+    operationId,
+    output: "text",
+    prompt: request.action.description.default,
+    ref: { canvasId: request.canvasId, scopeId: request.projectId },
+    references: [
+      {
+        nodeId: node.id,
+        role: request.action.target === "image" ? "reference_image" : "reference_video",
+      },
+    ],
+    resultMode: { type: "return" },
+    toolId: step.toolId,
+  }
 }
 
 export function mediaOperationResultAnchor(node: CanvasNode, nodes: readonly CanvasNode[] = [node]): CanvasPoint {
@@ -297,6 +363,13 @@ function editorToolInput(
 function requireRequestVideoNode(request: MediaOperationDialogRequest) {
   if (!isManagedProjectVideoSelection(request.context)) {
     throw new Error("The selected video is no longer available as a Project-backed file.")
+  }
+  return request.context.selectedNodes[0]
+}
+
+function requireRequestMediaNode(request: MediaOperationDialogRequest) {
+  if (!isManagedProjectMediaSelection(request.context, request.action.target)) {
+    throw new Error(`The selected ${request.action.target} is no longer available as a Project-backed file.`)
   }
   return request.context.selectedNodes[0]
 }

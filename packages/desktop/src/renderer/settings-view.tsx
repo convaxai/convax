@@ -8,6 +8,8 @@ import { AppearanceSettings, type AppearanceSaveState } from "./appearance-setti
 import type { AppearancePreferences } from "./appearance-preferences"
 import { CapabilityManagementSurface, type CapabilityCenterTab } from "./capability-center"
 import { desktopFeatureFlags, type DesktopFeatureFlags } from "./feature-flags"
+import { MarketplaceSurface } from "./marketplace-view"
+import type { MarketplaceClient } from "../marketplace-contracts"
 import { ServicesSurface } from "./plugin-services-view"
 import {
   PetSettingsHost,
@@ -31,6 +33,7 @@ export interface SettingsViewProps {
   initialSkillName?: string
   languagePreference: AppLanguagePreference
   locale: AppLocale
+  marketplaceClient?: MarketplaceClient
   onAppearancePreferencesChange: (preferences: AppearancePreferences) => void
   onClose: () => void
   onLanguageChange: (preference: AppLanguagePreference) => void
@@ -103,6 +106,7 @@ export function SettingsView({
   initialSkillName,
   languagePreference,
   locale,
+  marketplaceClient: injectedMarketplaceClient,
   onAppearancePreferencesChange,
   onClose,
   onLanguageChange,
@@ -131,6 +135,8 @@ export function SettingsView({
       : initialSection
   const [section, setSection] = useState<SettingsSection>(enabledInitialSection)
   const [capabilityInitialTab, setCapabilityInitialTab] = useState<CapabilityCenterTab>("skills")
+  const marketplaceClient =
+    injectedMarketplaceClient ?? (typeof window === "undefined" ? undefined : window.convax?.marketplaces)
 
   useEffect(() => {
     setSection(enabledInitialSection)
@@ -335,18 +341,22 @@ export function SettingsView({
               snapshot={serviceSnapshot}
             />
           ) : section === "capabilities" ? (
-            <CapabilityManagementSurface
-              activeCanvasId={activeCanvasId}
-              activeProjectId={activeProjectId}
-              className="min-h-[32rem]"
-              initialSkillName={initialSkillName}
-              initialTab={capabilityInitialTab}
-              locale={locale}
-              onUsePluginOnCanvas={onUsePluginOnCanvas}
-              onUsePluginInAgent={onUsePluginInAgent}
-              pluginClient={pluginClient}
-              skillClient={skillClient}
-            />
+            marketplaceClient ? (
+              <MarketplaceSurface className="min-h-[32rem]" client={marketplaceClient} locale={locale} />
+            ) : (
+              <CapabilityManagementSurface
+                activeCanvasId={activeCanvasId}
+                activeProjectId={activeProjectId}
+                className="min-h-[32rem]"
+                initialSkillName={initialSkillName}
+                initialTab={capabilityInitialTab}
+                locale={locale}
+                onUsePluginOnCanvas={onUsePluginOnCanvas}
+                onUsePluginInAgent={onUsePluginInAgent}
+                pluginClient={pluginClient}
+                skillClient={skillClient}
+              />
+            )
           ) : petProviderSnapshot.status === "ready" ? (
             <PetSettingsHost client={petClient} provider={petProviderSnapshot.provider} />
           ) : petProviderSnapshot.status === "loading" ? (

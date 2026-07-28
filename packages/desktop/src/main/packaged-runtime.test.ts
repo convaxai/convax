@@ -31,8 +31,12 @@ describe("Desktop packaged runtime composition", () => {
       command: join(resourcesDirectory, "opencode", "bin", "opencode.exe"),
       env: { BUN_BE_BUN: "1" },
     })
-    expect(desktopBunRuntime({ isPackaged: false, resourcesDirectory: "unused" })).toEqual({
-      command: "bun",
+    expect(desktopBunRuntime({
+      applicationDirectory: "/repo/packages/desktop",
+      isPackaged: false,
+      resourcesDirectory: "unused",
+    })).toEqual({
+      command: "/repo/packages/desktop/.packaging/runtime/opencode/bin/opencode",
       env: { BUN_BE_BUN: "1" },
     })
   })

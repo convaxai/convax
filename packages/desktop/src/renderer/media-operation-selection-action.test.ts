@@ -13,6 +13,8 @@ import {
   canRunMediaOperation,
   createMediaOperationGenerateRequest,
   createMediaOperationGenerateRequests,
+  createMediaOperationReturnRequest,
+  isManagedProjectMediaSelection,
   isManagedProjectVideoSelection,
   isMediaOperationDialogInScope,
   listInstalledMediaOperationActions,
@@ -53,6 +55,26 @@ const projectFileVideo = createMediaNode({
     state: { status: "ready", url: "convax-project://Media/project-file-video.mp4" },
   },
 })
+const managedImage = createMediaNode({
+  id: "managed-image",
+  position: { x: 20, y: 30 },
+  resource: {
+    height: 720,
+    id: "managed-image-resource",
+    kind: "image",
+    metadata: {
+      [projectResourceReferenceKey]: {
+        kind: "managed-asset",
+        mediaType: "image/png",
+        name: "source.png",
+        sha256: "b".repeat(64),
+      },
+    },
+    mimeType: "image/png",
+    state: { status: "ready", url: "convax-asset://project/source.png" },
+    width: 1_280,
+  },
+})
 const remoteVideo = createMediaNode({
   id: "remote-video",
   position: { x: 0, y: 0 },
@@ -73,7 +95,7 @@ const text = createTextNode({
 function selection(nodeIds: string[], edgeIds: string[] = []) {
   const document = createCanvasDocument({ id: "canvas", title: "Canvas" })
   return createCanvasSelectionActionContext(
-    { ...document, nodes: [managedVideo, projectFileVideo, remoteVideo, text], revision: 7 },
+    { ...document, nodes: [managedImage, managedVideo, projectFileVideo, remoteVideo, text], revision: 7 },
     nodeIds,
     edgeIds,
     signal,
@@ -158,6 +180,49 @@ function tool(id: string, output: "audio" | "image" | "video") {
   }
 }
 
+function returnOperationPlugin(): InstalledWebPluginSummary {
+  const plugin = operationPlugin("convax.plugin/6")
+  return {
+    ...plugin,
+    contributes: {
+      ...plugin.contributes,
+      canvas: {
+        selectionActions: [
+          {
+            description: { default: "Import the selected media.", "zh-CN": "导入选中的素材。" },
+            editor: "confirmation",
+            id: "import-image",
+            steps: [{ tool: "media.import-selected" }],
+            target: "image",
+            title: { default: "Import", "zh-CN": "导入" },
+          },
+          {
+            description: { default: "Import the selected media.", "zh-CN": "导入选中的素材。" },
+            editor: "confirmation",
+            id: "import-video",
+            steps: [{ tool: "media.import-selected" }],
+            target: "video",
+            title: { default: "Import", "zh-CN": "导入" },
+          },
+        ],
+      },
+      generation: {
+        models: [],
+        tools: [
+          {
+            acceptedInputs: ["reference_image", "reference_video"],
+            delivery: "return",
+            description: "Import selected media",
+            id: "media.import-selected",
+            output: "text",
+            title: "Import selected media",
+          },
+        ],
+      },
+    },
+  }
+}
+
 describe("manifest-driven media operation visibility", () => {
   test("discovers actions from an arbitrary installed Plugin without knowing its id", () => {
     const actions = listInstalledMediaOperationActions([operationPlugin()])
@@ -192,6 +257,33 @@ describe("manifest-driven media operation visibility", () => {
     expect(isManagedProjectVideoSelection(selection([managedVideo.id], ["edge"]))).toBe(false)
     expect(isManagedProjectVideoSelection(selection([remoteVideo.id]))).toBe(false)
   })
+
+  test("discovers bounded return actions for one Project-backed image or video", () => {
+    const actions = listInstalledMediaOperationActions([returnOperationPlugin()])
+    const imageAction = actions.find((action) => action.id === "import-image")!
+    const videoAction = actions.find((action) => action.id === "import-video")!
+
+    expect(imageAction).toMatchObject({
+      delivery: "return",
+      steps: [{ output: "text", toolId: "acme-media/media.import-selected" }],
+      target: "image",
+    })
+    expect(canRunMediaOperation(selection([managedImage.id]), imageAction)).toBe(true)
+    expect(canRunMediaOperation(selection([managedVideo.id]), imageAction)).toBe(false)
+    expect(canRunMediaOperation(selection([managedVideo.id]), videoAction)).toBe(true)
+    expect(isManagedProjectMediaSelection(selection([managedImage.id]), "image")).toBe(true)
+    expect(isManagedProjectMediaSelection(selection([remoteVideo.id]), "video")).toBe(false)
+  })
+
+  test("hides executable actions unless Main currently admits their exact operation tools", () => {
+    const plugin = returnOperationPlugin()
+    expect(listInstalledMediaOperationActions([plugin], new Set())).toEqual([])
+    expect(
+      listInstalledMediaOperationActions([plugin], new Set(["acme-media/media.import-selected"])).map(
+        (action) => action.id,
+      ),
+    ).toEqual(["import-image", "import-video"])
+  })
 })
 
 describe("manifest-driven media operation requests", () => {
@@ -215,6 +307,29 @@ describe("manifest-driven media operation requests", () => {
       toolInput: { duration_seconds: 3, start_seconds: 1 },
     })
     expect(request.toolInput).not.toHaveProperty("arguments_json")
+  })
+
+  test("creates a host-only return request for the exact selected Project media reference", () => {
+    const context = selection([managedImage.id])
+    const action = listInstalledMediaOperationActions([returnOperationPlugin()]).find(
+      (candidate) => candidate.id === "import-image",
+    )!
+    expect(
+      createMediaOperationReturnRequest(
+        { action, canvasId: "canvas", context, projectId: "project" },
+        "operation-1",
+      ),
+    ).toMatchObject({
+      expectedOutputCount: 1,
+      expectedRevision: 7,
+      operationId: "operation-1",
+      output: "text",
+      prompt: "Import the selected media.",
+      ref: { canvasId: "canvas", scopeId: "project" },
+      references: [{ nodeId: managedImage.id, role: "reference_image" }],
+      resultMode: { type: "return" },
+      toolId: "acme-media/media.import-selected",
+    })
   })
 
   test("creates a generic linked multi-step workflow from the declaration", () => {

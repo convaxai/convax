@@ -67,8 +67,8 @@ describe("Desktop package contents", () => {
     expect(config.files).toEqual(["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"])
     expect(config.npmRebuild).toBe(false)
     expect(config.extraResources).toContainEqual({
-      from: ".packaging/default-capabilities",
-      to: "default-capabilities",
+      from: ".packaging/marketplace-product",
+      to: "marketplace-product",
       filter: ["**/*"],
     })
     expect(config.extraResources).toContainEqual({
