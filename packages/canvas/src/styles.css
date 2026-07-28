@@ -75,7 +75,9 @@
   font-size: 11px;
   font-weight: 500;
   line-height: 20px;
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
 }
 
 .convax-canvas .convax-node__surface {
@@ -115,6 +117,11 @@
   box-shadow:
     0 0 0 1px var(--canvas-accent),
     0 14px 32px -14px color-mix(in srgb, var(--canvas-accent) 34%, transparent);
+}
+
+.convax-canvas .react-flow__node.dragging .convax-node__surface {
+  box-shadow: none;
+  transition: none;
 }
 
 .convax-canvas .react-flow__node.is-connection-target .convax-node__surface {

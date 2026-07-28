@@ -79,6 +79,26 @@ describe("Canvas-first visual hierarchy", () => {
     expect(backgroundRule).toContain("opacity: 0.78")
   })
 
+  test("keeps Canvas-owned node chrome available as a drag target", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const titleRule = cssRule(styles, ".convax-canvas .convax-node__title")
+
+    expect(titleRule).toContain("pointer-events: auto")
+    expect(titleRule).toContain("touch-action: none")
+    expect(titleRule).toContain("user-select: none")
+  })
+
+  test("removes the node surface shadow immediately while dragging", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const draggingSurfaceRule = cssRule(
+      styles,
+      ".convax-canvas .react-flow__node.dragging .convax-node__surface",
+    )
+
+    expect(draggingSurfaceRule).toContain("box-shadow: none")
+    expect(draggingSurfaceRule).toContain("transition: none")
+  })
+
   test("anchors creation at bottom center and moves viewport tools above it on narrow screens", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const creationRule = styles.match(/\.convax-canvas \.convax-creation-toolbar \{[^}]+\}/s)?.[0] ?? ""

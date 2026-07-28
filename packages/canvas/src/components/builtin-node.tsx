@@ -318,7 +318,10 @@ function NodeChrome(props: {
           {toolbar}
         </NodeToolbar>
       ) : null}
-      <div className="convax-node__title flex items-center gap-1.5">
+      <div
+        className="convax-node__title flex items-center gap-1.5"
+        data-canvas-node-drag-handle="true"
+      >
         <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
         <span className="truncate">{props.label}</span>
         {props.node.data.status === "pending" ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
@@ -1664,7 +1667,7 @@ function EmptyMedia(props: { kind: CanvasMediaKind }) {
   const label = mediaLabel(props.kind)
   return (
     <div className="convax-media-empty size-full">
-      <div className="convax-media-empty__action nodrag nowheel">
+      <div className="convax-media-empty__action">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
         <span className="convax-media-empty__title">{label} unavailable</span>
         <span className="convax-media-empty__hint">Relink a selected Project resource or choose a local file</span>
@@ -1872,7 +1875,7 @@ function FileGenerationActivityOverlay(props: {
       <div
         aria-busy="true"
         aria-live="polite"
-        className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/85 p-4 text-center backdrop-blur-sm"
+        className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/85 p-4 text-center backdrop-blur-sm"
         data-canvas-file-generation-activity={props.run.status}
         data-canvas-generation-run-tool-id={props.run.toolId}
         role="status"
@@ -1882,6 +1885,7 @@ function FileGenerationActivityOverlay(props: {
           <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
           <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">{props.run.toolId}</span>
           <Button
+            className="nodrag nowheel"
             onClick={(event) => {
               event.stopPropagation()
               props.onCancel()
@@ -1902,7 +1906,7 @@ function FileGenerationActivityOverlay(props: {
   const retryIsSafe = props.run.retrySafety === "safe"
   return (
     <div
-      className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
       data-canvas-file-generation-activity={props.run.status}
       data-canvas-generation-run-tool-id={props.run.toolId}
       role="alert"
@@ -1912,6 +1916,7 @@ function FileGenerationActivityOverlay(props: {
         <span className="max-w-full truncate text-[11px] text-muted-foreground">{props.run.toolId}</span>
         {retryIsSafe ? (
           <Button
+            className="nodrag nowheel"
             onClick={(event) => {
               event.stopPropagation()
               props.onRecover()
@@ -1928,9 +1933,15 @@ function FileGenerationActivityOverlay(props: {
             <span className="max-w-64 text-[11px] leading-4 text-muted-foreground">
               外部任务结果未知。为避免重复计费，暂不能发起新任务。
             </span>
-            <Button disabled size="sm" type="button" variant="outline">
-              暂不可重试
-            </Button>
+            <span
+              className="nodrag nowheel"
+              data-canvas-generation-retry-blocked="true"
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <Button disabled size="sm" type="button" variant="outline">
+                暂不可重试
+              </Button>
+            </span>
           </>
         )}
       </div>
@@ -1944,7 +1955,7 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
       <div
         aria-busy="true"
         aria-live="polite"
-        className="nodrag nowheel pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
+        className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
         data-canvas-persisted-resource-status="pending"
         role="status"
       >
@@ -1957,7 +1968,7 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
   }
   return (
     <div
-      className="nodrag nowheel absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
       data-canvas-persisted-resource-status="error"
       role="alert"
     >

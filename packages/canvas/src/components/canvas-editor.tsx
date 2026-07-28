@@ -214,6 +214,19 @@ const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_
 const CANVAS_PAN_ON_DRAG = [1]
 const CANVAS_SNAP_GRID: [number, number] = [8, 8]
 const CANVAS_ZOOM_ACTIVATION_KEYS = ["Meta", "Control"]
+const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "a",
+  "audio",
+  "video",
+  "iframe",
+  "[contenteditable]:not([contenteditable='false'])",
+  ".nodrag",
+  "[data-canvas-shortcuts='ignore']",
+].join(", ")
 type CanvasDirectedAutoLayoutStrategy = Extract<
   CanvasAutoLayoutStrategy,
   "horizontal-directed-cluster" | "vertical-directed-cluster"
@@ -2836,7 +2849,10 @@ function CanvasEditorContent(
     boxSelectionActiveRef.current = false
     boxSelectionBaselineRef.current = null
   }, [])
-  const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
+  const searchResults = useMemo(
+    () => (searchOpen ? queryCanvasNodes(history.document, { limit: 8, text: query }) : []),
+    [history.document, query, searchOpen],
+  )
 
   return (
     <CanvasEditorProvider controller={controller}>
@@ -2883,6 +2899,17 @@ function CanvasEditorContent(
                   boxSelectionBaselineRef.current = null
                 }}
                 onPointerDownCapture={(event) => {
+                  const canvasRoot = rootRef.current
+                  const interactiveTarget =
+                    event.target instanceof Element
+                      ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
+                      : null
+                  if (
+                    event.button === 0 &&
+                    (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))
+                  ) {
+                    canvasRoot?.focus({ preventScroll: true })
+                  }
                   if (
                     event.button === 0 &&
                     event.target instanceof HTMLElement &&

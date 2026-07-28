@@ -1,9 +1,10 @@
 import { afterAll, expect, mock, test } from "bun:test"
-import { Window } from "happy-dom"
+import { Window as HappyDOMWindow } from "happy-dom"
 import { StrictMode, type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { CanvasDocument, CanvasNode } from "../types"
 
-const testWindow = new Window({ url: "https://convax.test/" })
+const testWindow = new HappyDOMWindow({ url: "https://convax.test/" })
 const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
 const globals = {
   DOMRect: testWindow.DOMRect,
@@ -61,7 +62,24 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
-  Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  Button: (props: {
+    children?: ReactNode
+    className?: string
+    disabled?: boolean
+    onClick?: React.MouseEventHandler<HTMLButtonElement>
+    onPointerDown?: React.PointerEventHandler<HTMLButtonElement>
+    type?: "button" | "submit" | "reset"
+  }) => (
+    <button
+      className={props.className}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      onPointerDown={props.onPointerDown}
+      type={props.type}
+    >
+      {props.children}
+    </button>
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: Passthrough,
@@ -85,6 +103,11 @@ mock.module("@convax/ui", () => ({
 
 const { createCanvasDocument, createTextNode } = await import("../document")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
+const {
+  finishCanvasNodeGenerationRun,
+  markCanvasNodeGenerationRunRunning,
+  startCanvasNodeGenerationRun,
+} = await import("../generation-run")
 const { useCanvasEditor } = await import("../editor-context")
 const { createCanvasNodeRegistry } = await import("../node-registry")
 const { createCanvasServices } = await import("../services")
@@ -157,6 +180,7 @@ test("box-selects connected nodes without feeding controlled selection back into
     return rect(0, 0, 1000, 800)
   }
   let root: Root | undefined
+  let focusProbe: HTMLInputElement | undefined
 
   try {
     const first = {
@@ -191,6 +215,7 @@ test("box-selects connected nodes without feeding controlled selection back into
       },
     ])
     const container = document.createElement("div")
+    container.className = "nodrag"
     document.body.append(container)
     root = createRoot(container, {
       onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
@@ -212,15 +237,68 @@ test("box-selects connected nodes without feeding controlled selection back into
     })
 
     expect(errors).toEqual([])
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
     const pane = container.querySelector<HTMLElement>(".react-flow__pane")
     const firstNode = container.querySelector<HTMLElement>('.react-flow__node[data-id="first"]')
+    expect(canvasRoot).not.toBeNull()
     expect(pane).not.toBeNull()
     expect(firstNode).not.toBeNull()
     expect(emitConnectedEdgeSelection).toBeFunction()
+
+    focusProbe = document.createElement("input")
+    document.body.append(focusProbe)
+    const pointerDown = (target: Element, pointerId: number, button = 0) =>
+      target.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button,
+          clientX: 20,
+          clientY: 20,
+          isPrimary: true,
+          pointerId,
+        }),
+      )
+    const editableTarget = document.createElement("div")
+    editableTarget.contentEditable = "true"
+    const noDragTarget = document.createElement("div")
+    noDragTarget.className = "nodrag"
+    const shortcutIgnoredTarget = document.createElement("div")
+    shortcutIgnoredTarget.dataset.canvasShortcuts = "ignore"
+    const interactiveTargets = [
+      document.createElement("button"),
+      document.createElement("input"),
+      document.createElement("textarea"),
+      document.createElement("select"),
+      document.createElement("a"),
+      document.createElement("audio"),
+      document.createElement("video"),
+      document.createElement("iframe"),
+      editableTarget,
+      noDragTarget,
+      shortcutIgnoredTarget,
+    ]
+    for (const [index, target] of interactiveTargets.entries()) {
+      canvasRoot?.append(target)
+      focusProbe.focus()
+      pointerDown(target, 20 + index)
+      expect(document.activeElement).toBe(focusProbe)
+      target.remove()
+    }
+    const passiveTarget = document.createElement("div")
+    canvasRoot?.append(passiveTarget)
+    focusProbe.focus()
+    pointerDown(passiveTarget, 40)
+    expect(document.activeElement).toBe(canvasRoot)
+    focusProbe.focus()
+    pointerDown(passiveTarget, 41, 1)
+    expect(document.activeElement).toBe(focusProbe)
+    passiveTarget.remove()
+
     await act(async () => {
       firstNode?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     })
     expect(observedSelection).toEqual({ edgeIds: [], nodeIds: ["first"] })
+    focusProbe.focus()
     await act(async () => {
       pane?.dispatchEvent(
         new PointerEvent("pointerdown", {
@@ -243,6 +321,7 @@ test("box-selects connected nodes without feeding controlled selection back into
         }),
       )
     })
+    expect(document.activeElement).toBe(canvasRoot)
     await act(async () => {
       pane?.dispatchEvent(
         new PointerEvent("pointerup", {
@@ -328,5 +407,197 @@ test("box-selects connected nodes without feeding controlled selection back into
   } finally {
     HTMLElement.prototype.getBoundingClientRect = originalRect
     if (root) await act(async () => root?.unmount())
+    focusProbe?.remove()
+  }
+})
+
+test("drags a generating card from its overlay while generation controls keep the node fixed", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const originalRect = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.classList.contains("react-flow__node")) {
+      return this.getAttribute("data-id") === "generating"
+        ? rect(80, 80, 240, 160)
+        : rect(400, 80, 240, 160)
+    }
+    return rect(0, 0, 1000, 800)
+  }
+
+  const generatingNode: CanvasNode = {
+    data: { kind: "image", label: "Generating image", metadata: {} },
+    id: "generating",
+    measured: { height: 160, width: 240 },
+    position: { x: 80, y: 80 },
+    type: "file",
+  }
+  const blockedNode: CanvasNode = {
+    data: { kind: "image", label: "Interrupted image", metadata: {} },
+    id: "blocked",
+    measured: { height: 160, width: 240 },
+    position: { x: 400, y: 80 },
+    type: "file",
+  }
+  let initialDocument = createCanvasDocument({
+    id: "generation-overlay-drag",
+    nodes: [generatingNode, blockedNode],
+  })
+  initialDocument = markCanvasNodeGenerationRunRunning(
+    startCanvasNodeGenerationRun(initialDocument, generatingNode.id, {
+      operationId: "generating-operation",
+      prompt: "Generate",
+      toolId: "plugin.example:image",
+    }),
+    generatingNode.id,
+    "generating-operation",
+    "generating-task",
+  )
+  initialDocument = markCanvasNodeGenerationRunRunning(
+    startCanvasNodeGenerationRun(initialDocument, blockedNode.id, {
+      operationId: "blocked-operation",
+      prompt: "Generate",
+      toolId: "plugin.example:image",
+    }),
+    blockedNode.id,
+    "blocked-operation",
+    "blocked-task",
+  )
+  initialDocument = finishCanvasNodeGenerationRun(
+    initialDocument,
+    blockedNode.id,
+    "blocked-operation",
+    "interrupted",
+    "unknown",
+  )
+
+  const container = document.createElement("div")
+  document.body.append(container)
+  let latestDocument: CanvasDocument = initialDocument
+  let root: Root | undefined
+
+  const dragWithMouse = async (
+    target: Element,
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+  ) => {
+    const eventWindow = window
+    const thresholdPoint = {
+      x: start.x + (end.x - start.x) / 2,
+      y: start.y + (end.y - start.y) / 2,
+    }
+    await act(async () => {
+      target.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: start.x,
+          clientY: start.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: thresholdPoint.x,
+          clientY: thresholdPoint.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: end.x,
+          clientY: end.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          clientX: end.x,
+          clientY: end.y,
+          view: eventWindow,
+        }),
+      )
+      await Promise.resolve()
+    })
+  }
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          onlyRenderVisibleElements={false}
+          onDocumentChange={(document) => {
+            latestDocument = document
+          }}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    expect(errors).toEqual([])
+    const activeOverlay = container.querySelector<HTMLElement>(
+      '[data-canvas-file-generation-activity="running"]',
+    )
+    const cancelButton = [...(activeOverlay?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "取消",
+    )
+    const blockedWrapper = container.querySelector<HTMLElement>(
+      '[data-canvas-generation-retry-blocked="true"]',
+    )
+    expect(activeOverlay).not.toBeNull()
+    expect(cancelButton).toBeDefined()
+    expect(blockedWrapper).not.toBeNull()
+    expect(blockedWrapper?.classList.contains("nodrag")).toBe(true)
+    expect(blockedWrapper?.querySelector("button")?.disabled).toBe(true)
+    const generatingNodeElement = activeOverlay?.closest<HTMLElement>(".react-flow__node")
+    expect(generatingNodeElement?.classList.contains("draggable")).toBe(true)
+
+    await dragWithMouse(activeOverlay!, { x: 120, y: 120 }, { x: 184, y: 168 })
+    const movedPosition = latestDocument.nodes.find((node) => node.id === generatingNode.id)?.position
+    expect(movedPosition).not.toEqual(generatingNode.position)
+
+    const positionBeforeCancelDrag = { ...movedPosition! }
+    await dragWithMouse(cancelButton!, { x: 184, y: 168 }, { x: 248, y: 216 })
+    expect(latestDocument.nodes.find((node) => node.id === generatingNode.id)?.position).toEqual(
+      positionBeforeCancelDrag,
+    )
+
+    const blockedPosition = latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position
+    await dragWithMouse(blockedWrapper!, { x: 440, y: 120 }, { x: 504, y: 168 })
+    expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).toEqual(blockedPosition)
+    expect(errors).toEqual([])
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = originalRect
+    if (root) await act(async () => root?.unmount())
+    container.remove()
   }
 })
