@@ -80,22 +80,22 @@ class TestErrorBoundary extends Component<
   }
 }
 
-test("mounting the text editor drawer does not feed BubbleMenu option updates back into editor transactions", async () => {
+test("mounting the expanded text editor does not feed BubbleMenu option updates back into editor transactions", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let optionUpdateTransactions = 0
   let root: Root | undefined
 
   try {
-    const [{ TextEditorDrawer }, { useEditor }, { default: StarterKit }] = await Promise.all([
+    const [{ ExpandedTextEditorDialog }, { useEditor }, { default: StarterKit }] = await Promise.all([
       import("./builtin-node"),
       import("@tiptap/react"),
       import("@tiptap/starter-kit"),
     ])
-    function TextEditorDrawerHarness() {
+    function ExpandedTextEditorHarness() {
       const [rerenderCount, setRerenderCount] = useState(0)
       const editor = useEditor({
-        content: "<p>Stable drawer</p>",
+        content: "<p>Stable expanded editor</p>",
         extensions: [StarterKit],
         shouldRerenderOnTransaction: true,
       })
@@ -119,7 +119,7 @@ test("mounting the text editor drawer does not feed BubbleMenu option updates ba
           setRerenderCount((count) => count + 1)
         }
       }, [rerenderCount])
-      return <TextEditorDrawer editor={editor} label="Stable drawer" onClose={() => {}} />
+      return <ExpandedTextEditorDialog editor={editor} label="Stable expanded editor" onClose={() => {}} />
     }
     const container = document.createElement("div")
     document.body.append(container)
@@ -131,7 +131,7 @@ test("mounting the text editor drawer does not feed BubbleMenu option updates ba
     await act(async () => {
       root?.render(
         <TestErrorBoundary onError={(error) => errors.push(error)}>
-          <TextEditorDrawerHarness />
+          <ExpandedTextEditorHarness />
         </TestErrorBoundary>,
       )
     })

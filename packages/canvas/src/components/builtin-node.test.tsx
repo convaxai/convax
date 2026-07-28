@@ -57,6 +57,7 @@ const {
   BuiltinTextFileNode,
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
+  CanvasTextFormattingToolbar,
   canOpenCanvasTextLineMenu,
   ExpandedTextEditorDialog,
   TextEditorDrawer,
@@ -420,30 +421,39 @@ describe("built-in text file drafts", () => {
 })
 
 describe("built-in node toolbar visibility", () => {
-  test("preserves the published expanded-editor export as a compatibility alias", () => {
-    expect(ExpandedTextEditorDialog).toBe(TextEditorDrawer)
+  test("preserves the side-drawer export as a compatibility alias", () => {
+    expect(TextEditorDrawer).toBe(ExpandedTextEditorDialog)
   })
 
-  test("renders a non-modal side drawer for text-node editing", () => {
+  test("renders an almost full-canvas modal for text-node editing", () => {
     const markup = renderToStaticMarkup(
-      <TextEditorDrawer editor={null} label="Story outline" onClose={() => {}} onSave={() => {}} />,
+      <ExpandedTextEditorDialog
+        editor={null}
+        label="Story outline"
+        onClose={() => {}}
+        onSave={() => {}}
+        toolbar={<div data-rich-text-toolbar="true" />}
+      />,
     )
 
     expect(markup).toContain('role="dialog"')
-    expect(markup).not.toContain('aria-modal="true"')
+    expect(markup).toContain('aria-modal="true"')
     expect(markup).toContain("Story outline")
-    expect(markup).toContain("convax-text-editor-drawer")
-    expect(markup).toContain("w-[min(520px,calc(100%-12px))]")
+    expect(markup).toContain("Expanded text editor")
+    expect(markup).toContain("convax-text-editor-dialog")
+    expect(markup).toContain("size-full")
+    expect(markup).not.toContain("convax-text-editor-drawer")
     expect(markup).toContain('aria-label="Open block handle menu"')
-    expect(markup).not.toContain("Text formatting")
+    expect(markup).toContain('aria-label="Text formatting"')
+    expect(markup).toContain('data-rich-text-toolbar="true"')
     expect(markup).not.toContain(">Save<")
     expect(markup).not.toContain(">Discard<")
-    expect(markup).toContain('aria-label="Close text editor"')
+    expect(markup).toContain('aria-label="Close expanded editor"')
   })
 
-  test("keeps save conflicts actionable inside the drawer without restoring a fixed toolbar", () => {
+  test("keeps save conflicts actionable inside the expanded editor", () => {
     const markup = renderToStaticMarkup(
-      <TextEditorDrawer
+      <ExpandedTextEditorDialog
         editor={null}
         discardLabel="Discard and reload"
         error="This file changed outside Convax. Your draft was kept."
@@ -457,7 +467,35 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain('role="alert"')
     expect(markup).toContain("Reload latest")
     expect(markup).toContain("Discard and reload")
-    expect(markup).not.toContain("Text formatting")
+  })
+
+  test("restores the complete fixed rich-text command bar", () => {
+    const editor = {
+      isActive: (nameOrAttributes: string | Record<string, unknown>) => nameOrAttributes === "bold",
+    } as unknown as Editor
+    const markup = renderToStaticMarkup(
+      <CanvasTextFormattingToolbar editor={editor} onCommand={() => {}} />,
+    )
+
+    for (const label of [
+      "Paragraph",
+      "Heading 1",
+      "Heading 2",
+      "Bold",
+      "Italic",
+      "Strikethrough",
+      "Inline code",
+      "Bullet list",
+      "Numbered list",
+      "Quote",
+      "Align left",
+      "Align center",
+      "Align right",
+    ]) {
+      expect(markup).toContain(`aria-label="${label}"`)
+    }
+    expect(markup).toContain('data-canvas-text-formatting-toolbar="true"')
+    expect(markup).toContain('aria-label="Bold" aria-pressed="true"')
   })
 
   test("can show a compact visible label for commands without a meaningful icon", () => {
