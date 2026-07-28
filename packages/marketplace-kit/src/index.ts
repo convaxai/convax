@@ -526,11 +526,40 @@ export async function changedMarketplaceVersions(
       })
       continue
     }
-    const closurePaths = new Set([relative(root, entry.root).split(sep).join("/")])
+    const closurePath = (absolutePath: string, label: string): string => {
+      const value = relative(root, absolutePath)
+      if (!value || value === ".." || value.startsWith(`..${sep}`)) {
+        throw new TypeError(`${label} escapes the Marketplace root`)
+      }
+      return value.split(sep).join("/")
+    }
+    const trackedClosurePaths = new Set([closurePath(entry.root, `${entry.kind}/${entry.id}`)])
+    const materializedClosurePaths = new Set<string>()
+    const addMaterializedPackagePaths = (item: DiscoveredPackage, label: string): void => {
+      materializedClosurePaths.add(closurePath(item.contentRoot, `${label} content`))
+      if (!item.authoring) return
+      materializedClosurePaths.add(
+        closurePath(join(item.root, "convax-package.json"), `${label} authoring metadata`),
+      )
+      const showcaseValue = item.authoring.showcase
+      if (!showcaseValue || typeof showcaseValue !== "object" || Array.isArray(showcaseValue)) return
+      const showcase = showcaseValue as Record<string, unknown>
+      for (const slot of ["poster", "animation"] as const) {
+        const value = showcase[slot]
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue
+        const metadata = value as Record<string, unknown>
+        if (typeof metadata.path !== "string") continue
+        materializedClosurePaths.add(
+          closurePath(resolve(item.root, metadata.path), `${label} Showcase ${slot}`),
+        )
+      }
+    }
+    addMaterializedPackagePaths(entry, `${entry.kind}/${entry.id}`)
     if (entry.kind === "plugin") {
       for (const ownedSkill of packages) {
         if (ownedSkill.kind === "skill" && ownedSkill.authoring?.ownerPluginId === entry.id) {
-          closurePaths.add(relative(root, ownedSkill.root).split(sep).join("/"))
+          trackedClosurePaths.add(closurePath(ownedSkill.root, `owned Skill ${ownedSkill.id}`))
+          addMaterializedPackagePaths(ownedSkill, `owned Skill ${ownedSkill.id}`)
         }
       }
       const companions = entry.authoring?.companions
@@ -538,33 +567,37 @@ export async function changedMarketplaceVersions(
         for (const companionValue of companions) {
           if (!companionValue || typeof companionValue !== "object" || Array.isArray(companionValue)) continue
           const companion = companionValue as Record<string, unknown>
-          if (typeof companion.source !== "string" || !Array.isArray(companion.targets)) continue
-          for (const targetValue of companion.targets) {
-            if (!targetValue || typeof targetValue !== "object" || Array.isArray(targetValue)) continue
-            const target = targetValue as Record<string, unknown>
-            if (typeof target.path !== "string") continue
-            closurePaths.add(
-              relative(root, resolve(root, companion.source, target.path))
-                .split(sep)
-                .join("/"),
-            )
-          }
+          if (typeof companion.source !== "string") continue
+          trackedClosurePaths.add(
+            closurePath(resolve(root, companion.source), `Plugin ${entry.id} companion source`),
+          )
         }
       }
     } else if (entry.kind === "mcp-server" && entry.extension) {
-      closurePaths.add(`.marketplace/companion-inputs/${sha256Hex(`mcp-server\0${entry.id}`)}`)
+      const companionInput = `.marketplace/companion-inputs/${sha256Hex(`mcp-server\0${entry.id}`)}`
+      trackedClosurePaths.add(companionInput)
+      materializedClosurePaths.add(companionInput)
     }
-    const paths = [...closurePaths].sort()
+    const trackedPaths = [...trackedClosurePaths].sort()
+    const materializedPaths = [...materializedClosurePaths].sort()
+    const untrackedPaths = [...new Set([...trackedPaths, ...materializedPaths])].sort()
     let trackedChanged = false
     try {
-      await execFileAsync("git", ["-C", root, "diff", "--quiet", effectiveBaseRevision, "--", ...paths])
+      await execFileAsync("git", ["-C", root, "diff", "--quiet", effectiveBaseRevision, "--", ...trackedPaths])
     } catch (error) {
       const code = (error as { code?: unknown }).code
       if (code === 1 || code === "1") trackedChanged = true
       else throw error
     }
-    const untracked = await git(["ls-files", "--others", "--exclude-standard", "--", ...paths])
-    const ignored = await git(["ls-files", "--others", "--ignored", "--exclude-standard", "--", ...paths])
+    const untracked = await git(["ls-files", "--others", "--exclude-standard", "--", ...untrackedPaths])
+    const ignored = await git([
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--",
+      ...materializedPaths,
+    ])
     if (trackedChanged || untracked.trim() || ignored.trim()) {
       throw new TypeError(
         `immutable ${entry.kind}/${entry.id}@${entry.version} closure changed without a version change`,

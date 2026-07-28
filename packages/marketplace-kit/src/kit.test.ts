@@ -202,6 +202,115 @@ describe("@convax/marketplace-kit", () => {
     await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("yanked")
   })
 
+  test("separates installed and built workspace outputs from immutable package closure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "convax-market-version-closure-"))
+    const pluginRoot = join(root, "packages/plugins/example-plugin")
+    const contentRoot = join(pluginRoot, "package")
+    const companionRoot = join(root, "packages/tools/example-companion")
+    const companionTarget = join(companionRoot, "dist/darwin-arm64/example-companion")
+    await mkdir(contentRoot, { recursive: true })
+    await mkdir(join(companionRoot, "src"), { recursive: true })
+    await Bun.write(join(root, ".gitignore"), "node_modules/\ndist/\n")
+    await Bun.write(
+      join(pluginRoot, "convax-package.json"),
+      `${JSON.stringify({
+        schema: "convax.package/1",
+        kind: "plugin",
+        id: "example-plugin",
+        name: "Example Plugin",
+        description: "Example Plugin",
+        version: "1.0.0",
+        showcase: {
+          poster: { path: "assets/poster.bin", mime: "image/png" },
+        },
+        companions: [{
+          command: "example-companion",
+          version: "1.0.0",
+          source: "packages/tools/example-companion",
+          targets: [{
+            platform: "darwin",
+            arch: "arm64",
+            path: "dist/darwin-arm64/example-companion",
+          }],
+        }],
+      }, null, 2)}\n`,
+    )
+    await Bun.write(
+      join(contentRoot, "manifest.json"),
+      `${JSON.stringify({
+        schema: "convax.plugin/2",
+        id: "example-plugin",
+        name: "Example Plugin",
+        description: "Example Plugin",
+        version: "1.0.0",
+      }, null, 2)}\n`,
+    )
+    await Bun.write(join(companionRoot, "src/index.ts"), "export const value = 1\n")
+    const git = async (...args: string[]): Promise<string> => {
+      const process = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+      ])
+      if (code !== 0) throw new Error(`git ${args.join(" ")} failed: ${stderr}`)
+      return stdout.trim()
+    }
+    await git("init", "-b", "main")
+    await git("config", "user.email", "marketplace-test@example.com")
+    await git("config", "user.name", "Marketplace Test")
+    await git("add", ".")
+    await git("commit", "-m", "initial package")
+    const base = await git("rev-parse", "HEAD")
+
+    await mkdir(join(pluginRoot, "node_modules/example"), { recursive: true })
+    await Bun.write(join(pluginRoot, "node_modules/example/index.js"), "ignored\n")
+    await mkdir(join(companionRoot, "node_modules/example"), { recursive: true })
+    await Bun.write(join(companionRoot, "node_modules/example/index.js"), "ignored\n")
+    await mkdir(join(companionTarget, ".."), { recursive: true })
+    await Bun.write(companionTarget, "built output\n")
+    await mkdir(join(pluginRoot, "showcase/dist"), { recursive: true })
+    await Bun.write(join(pluginRoot, "showcase/dist/unreferenced.bin"), "ignored and unreferenced\n")
+    expect(await changedMarketplaceVersions(root, base)).toEqual([])
+
+    await Bun.write(
+      join(root, ".git/info/exclude"),
+      "packages/plugins/example-plugin/assets/poster.bin\n",
+    )
+    await mkdir(join(pluginRoot, "assets"), { recursive: true })
+    await Bun.write(join(pluginRoot, "assets/poster.bin"), "ignored referenced Showcase bytes\n")
+    await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("without a version change")
+    await rm(join(pluginRoot, "assets/poster.bin"))
+
+    await mkdir(join(contentRoot, "dist"), { recursive: true })
+    await Bun.write(join(contentRoot, "dist/injected.js"), "packable ignored bytes\n")
+    await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("without a version change")
+    await rm(join(contentRoot, "dist"), { recursive: true })
+
+    await Bun.write(join(companionRoot, "src/index.ts"), "export const value = 2\n")
+    await git("add", "packages/tools/example-companion/src/index.ts")
+    await git("commit", "-m", "change companion source without version")
+    await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("without a version change")
+
+    const authoringPath = join(pluginRoot, "convax-package.json")
+    const authoring = JSON.parse(await readFile(authoringPath, "utf8"))
+    authoring.version = "1.1.0"
+    await Bun.write(authoringPath, `${JSON.stringify(authoring, null, 2)}\n`)
+    const manifestPath = join(contentRoot, "manifest.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    manifest.version = "1.1.0"
+    await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    await git("add", "packages/plugins/example-plugin")
+    await git("commit", "-m", "advance plugin version")
+    expect(await changedMarketplaceVersions(root, base)).toEqual([{
+      kind: "plugin",
+      id: "example-plugin",
+      version: "1.1.0",
+      previousVersion: "1.0.0",
+      releaseTag: "plugin-example-plugin-v1.1.0",
+    }])
+  })
+
   test("selectively replaces one package while preserving the deployed Registry and Showcase", async () => {
     const root = await mkdtemp(join(tmpdir(), "convax-market-selective-"))
     await createMarketplaceStarter(root, {
