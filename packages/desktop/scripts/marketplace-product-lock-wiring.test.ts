@@ -12,9 +12,13 @@ test("Desktop packaging verifies the one root Marketplace product lock before co
   expect(manifest.scripts?.["marketplace:verify"]).toBe(
     "bun ../../scripts/marketplace-product-lock.ts ../../marketplaces.lock.json",
   )
-  expect(manifest.scripts?.["package:prepare"]?.startsWith("bun run marketplace:verify && ")).toBe(true)
-  expect(manifest.scripts?.["package:prepare"]).toContain("stage-marketplace-product-lock.ts")
-  expect(manifest.scripts?.["package:prepare"]).toContain("materialize-marketplace-product-lock.ts")
+  expect(manifest.scripts?.dev).toMatch(
+    /^bun run build:workspace-dependencies && bun run marketplace:prepare && /,
+  )
+  expect(manifest.scripts?.["marketplace:prepare"]?.startsWith("bun run marketplace:verify && ")).toBe(true)
+  expect(manifest.scripts?.["marketplace:prepare"]).toContain("stage-marketplace-product-lock.ts")
+  expect(manifest.scripts?.["marketplace:prepare"]).toContain("materialize-marketplace-product-lock.ts")
+  expect(manifest.scripts?.["package:prepare"]?.startsWith("bun run marketplace:prepare && ")).toBe(true)
   expect(manifest.scripts?.["package:prepare"]).not.toContain("stage-default-capabilities.ts")
 })
 

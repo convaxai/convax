@@ -406,8 +406,8 @@ export async function resolveMarketplaceProductLock(
       )
     }
     const selected = matches[0]!
-    if (selected.setup !== policyEntry.setup) {
-      throw new Error(`product-lock input setup does not match policy for ${policyEntry.kind}/${policyEntry.id}`)
+    if (selected.setup !== "explicit") {
+      throw new Error(`product-lock input must retain explicit catalog setup for ${policyEntry.kind}/${policyEntry.id}`)
     }
     const companions = selected.companions.filter((companion) =>
       policyEntry.targets.includes(`${companion.platform}-${companion.arch}` as never),
