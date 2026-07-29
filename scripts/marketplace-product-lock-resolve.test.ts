@@ -24,7 +24,7 @@ const policy: MarketplaceProductPolicy = {
       id: "ffmpeg-tools",
       kind: "plugin",
       marketplaceId: "convax-official",
-      setup: "explicit",
+      setup: "automatic",
       targets: ["darwin-arm64"],
     },
   ],
@@ -243,6 +243,8 @@ describe("Marketplace product lock resolution", () => {
     expect(lock.resolved.builtinBundle.size).toBe(builtin.archive.byteLength)
     expect(lock.resolved.builtinReservations).toEqual([{ id: "canvas-storyboard", kind: "skill" }])
     expect(lock.resolved.packages[0]!.companions[0]).toMatchObject({ arch: "arm64", platform: "darwin", size: 9 })
+    expect(lock.policy.preinstalledPackages[0]!.setup).toBe("automatic")
+    expect(lock.resolved.packages[0]!.setup).toBe("explicit")
     expect(lock.resolved.packages.map(({ id }) => id)).toEqual(["ffmpeg-tools"])
     expect(() => parseMarketplaceProductLock(lock)).not.toThrow()
 

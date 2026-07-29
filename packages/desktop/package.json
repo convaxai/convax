@@ -10,10 +10,11 @@
   "main": "./out/main/index.js",
   "scripts": {
     "build:workspace-dependencies": "bun scripts/ensure-workspace-dependencies.ts",
-    "dev": "bun run build:workspace-dependencies && bun scripts/ensure-electron-runtime.ts && electron-vite dev",
+    "dev": "bun run build:workspace-dependencies && bun run marketplace:prepare && bun scripts/ensure-electron-runtime.ts && electron-vite dev",
     "build": "bun run build:workspace-dependencies && electron-vite build",
     "marketplace:verify": "bun ../../scripts/marketplace-product-lock.ts ../../marketplaces.lock.json",
-    "package:prepare": "bun run marketplace:verify && bun run build && bun scripts/ensure-electron-runtime.ts && bun scripts/stage-packaged-runtime.ts && bun scripts/materialize-marketplace-product-lock.ts ../../marketplaces.lock.json .packaging/marketplace-cache && bun scripts/stage-marketplace-product-lock.ts ../../marketplaces.lock.json .packaging/marketplace-cache/artifact-v1",
+    "marketplace:prepare": "bun run marketplace:verify && bun scripts/materialize-marketplace-product-lock.ts ../../marketplaces.lock.json .packaging/marketplace-cache && bun scripts/stage-marketplace-product-lock.ts ../../marketplaces.lock.json .packaging/marketplace-cache/artifact-v1",
+    "package:prepare": "bun run marketplace:prepare && bun run build && bun scripts/ensure-electron-runtime.ts && bun scripts/stage-packaged-runtime.ts",
     "package": "bun run package:prepare && electron-builder --config electron-builder.config.ts",
     "package:dir": "bun run package:prepare && electron-builder --config electron-builder.config.ts --dir",
     "package:mac": "bun run package:prepare && electron-builder --config electron-builder.config.ts --mac",
