@@ -411,6 +411,104 @@ test("box-selects connected nodes without feeding controlled selection back into
   }
 })
 
+test("isolates card-assistant wheel gestures only while its input owns focus", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const imageNode: CanvasNode = {
+    data: {
+      kind: "image",
+      label: "Image",
+      metadata: {},
+      resourceState: { status: "ready", url: "" },
+    },
+    id: "image",
+    measured: { height: 160, width: 240 },
+    position: { x: 80, y: 80 },
+    style: { height: 160, width: 240 },
+    type: "file",
+  }
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [imageNode] })
+  const servicesWithAssistant = createCanvasServices({
+    assistant: {
+      render: () => <textarea aria-label="Card assistant input" />,
+    },
+  })
+  const renderEditor = (services = servicesWithAssistant) => (
+    <CanvasEditor initialDocument={initialDocument} onlyRenderVisibleElements={false} services={services} />
+  )
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+
+    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="image"]')
+    expect(nodeElement).not.toBeNull()
+    await act(async () => {
+      nodeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
+    const toolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Card assistant input"]')
+    expect(canvasRoot).not.toBeNull()
+    expect(toolbar).not.toBeNull()
+    expect(input).not.toBeNull()
+    expect(toolbar?.classList.contains("nodrag")).toBe(true)
+    expect(toolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      input?.focus()
+    })
+    expect(document.activeElement).toBe(input)
+    expect(toolbar?.classList.contains("nowheel")).toBe(true)
+
+    await act(async () => {
+      root?.render(renderEditor(createCanvasServices()))
+    })
+    expect(container.querySelector(".convax-node-assistant")).toBeNull()
+
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+    const reopenedToolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    expect(reopenedToolbar).not.toBeNull()
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      canvasRoot?.focus()
+    })
+    expect(document.activeElement).toBe(canvasRoot)
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+    expect(errors).toEqual([])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
 test("drags a generating card from its overlay while generation controls keep the node fixed", async () => {
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })

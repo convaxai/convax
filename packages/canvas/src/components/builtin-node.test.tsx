@@ -39,8 +39,12 @@ mock.module("@xyflow/react", () => ({
     </div>
   ),
   NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
-  NodeToolbar: (props: { children?: ReactNode; isVisible?: boolean }) => (
-    <div data-node-toolbar data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}>
+  NodeToolbar: (props: { children?: ReactNode; className?: string; isVisible?: boolean }) => (
+    <div
+      className={props.className}
+      data-node-toolbar
+      data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}
+    >
       {props.children}
     </div>
   ),
@@ -968,6 +972,8 @@ describe("built-in node toolbar visibility", () => {
 
       expect(request?.generation?.output).toBe(output)
       expect(markup).toContain("data-assistant-toolbar")
+      expect(markup).toContain('class="convax-node-assistant nodrag"')
+      expect(markup).not.toContain('class="convax-node-assistant nodrag nowheel"')
       expect(markup).not.toContain('aria-label="Open Agent"')
     }
 
