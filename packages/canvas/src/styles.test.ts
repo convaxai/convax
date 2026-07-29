@@ -32,8 +32,9 @@ describe("Canvas file-card assistant sizing", () => {
   test("gives the expanded editor a centered full-canvas document surface", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const expandedEditorRule =
-      styles.match(/\.convax-canvas \.convax-text-editor--expanded \.convax-text-editor__prosemirror \{[^}]+\}/s)?.[0] ??
-      ""
+      styles.match(
+        /\.convax-canvas \.convax-text-editor--expanded \.convax-text-editor__prosemirror \{[^}]+\}/s,
+      )?.[0] ?? ""
 
     expect(expandedEditorRule).toContain("width: min(920px, 100%)")
     expect(expandedEditorRule).toContain("min-height: 100%")
@@ -82,6 +83,18 @@ describe("Canvas-first visual hierarchy", () => {
     expect(backgroundRule).toContain("opacity: 0.78")
   })
 
+  test("renders alignment guides above the viewport without intercepting drag input", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const guidesRule = cssRule(styles, ".convax-canvas .convax-snap-guides")
+    const guideRule = cssRule(styles, ".convax-canvas .convax-snap-guide")
+
+    expect(guidesRule).toContain("position: absolute")
+    expect(guidesRule).toContain("pointer-events: none")
+    expect(guideRule).toContain("background: var(--canvas-accent)")
+    expect(styles).toContain(".convax-canvas .convax-snap-guide.is-vertical")
+    expect(styles).toContain(".convax-canvas .convax-snap-guide.is-horizontal")
+  })
+
   test("keeps Canvas-owned node chrome available as a drag target", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const titleRule = cssRule(styles, ".convax-canvas .convax-node__title")
@@ -93,28 +106,24 @@ describe("Canvas-first visual hierarchy", () => {
 
   test("removes the node surface shadow immediately while dragging", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const draggingSurfaceRule = cssRule(
-      styles,
-      ".convax-canvas .react-flow__node.dragging .convax-node__surface",
-    )
+    const draggingSurfaceRule = cssRule(styles, ".convax-canvas .react-flow__node.dragging .convax-node__surface")
 
     expect(draggingSurfaceRule).toContain("box-shadow: none")
     expect(draggingSurfaceRule).toContain("transition: none")
   })
 
-  test("anchors creation at bottom center and moves viewport tools above it on narrow screens", async () => {
+  test("keeps the viewport toolbar compact without reserving space for a creation bar", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const creationRule = styles.match(/\.convax-canvas \.convax-creation-toolbar \{[^}]+\}/s)?.[0] ?? ""
-    expect(creationRule).toContain("min-height: 42px")
-    expect(styles).toMatch(
-      /@media \(max-width: 720px\)[\s\S]*\.convax-canvas \.convax-viewport-toolbar \{\s*bottom: 64px;/,
-    )
+    const viewportRule = cssRule(styles, ".convax-canvas .convax-viewport-toolbar")
+
+    expect(viewportRule).toContain("min-height: 42px")
+    expect(styles).not.toContain("convax-creation-toolbar")
+    expect(styles).not.toMatch(/\.convax-canvas \.convax-viewport-toolbar \{\s*bottom:/)
   })
 
   test("keeps the node-search glyph clear of its input text across host stylesheet order", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const searchInputRule =
-      styles.match(/\.convax-canvas \.convax-node-search__input \{[^}]+\}/s)?.[0] ?? ""
+    const searchInputRule = styles.match(/\.convax-canvas \.convax-node-search__input \{[^}]+\}/s)?.[0] ?? ""
 
     expect(searchInputRule).toContain("padding-inline-start: 2.25rem")
   })
@@ -122,8 +131,7 @@ describe("Canvas-first visual hierarchy", () => {
   test("makes node search a canvas-wide modal layer without pointer-event passthrough", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const searchLayerRule = styles.match(/\.convax-canvas \.convax-node-search__layer \{[^}]+\}/s)?.[0] ?? ""
-    const searchBackdropRule =
-      styles.match(/\.convax-canvas \.convax-node-search__backdrop \{[^}]+\}/s)?.[0] ?? ""
+    const searchBackdropRule = styles.match(/\.convax-canvas \.convax-node-search__backdrop \{[^}]+\}/s)?.[0] ?? ""
 
     expect(searchLayerRule).toContain("inset: 0")
     expect(searchLayerRule).toContain("z-index: 60")
@@ -169,7 +177,6 @@ describe("Canvas theme closure", () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const selectors = [
       ":is(.convax-canvas, .convax-pending-connection) .convax-connect-menu",
-      ".convax-canvas .convax-canvas-more-menu",
       ".convax-canvas .convax-arrange-menu",
       ".convax-canvas .convax-zoom-menu",
       ".convax-canvas .convax-tool-surface,\n.convax-canvas .convax-floating-panel",
@@ -180,17 +187,12 @@ describe("Canvas theme closure", () => {
     expect(menuRules).toContain("var(--canvas-surface")
     expect(menuRules).toContain("var(--canvas-text")
     expect(menuRules).toContain("var(--canvas-floating-shadow")
-    expect(menuRules).not.toMatch(
-      /#[\da-f]{3,8}\b|rgb\(|(?:background|color|fill|stroke):\s*(?:white|black)\b/i,
-    )
+    expect(menuRules).not.toMatch(/#[\da-f]{3,8}\b|rgb\(|(?:background|color|fill|stroke):\s*(?:white|black)\b/i)
     expect(styles).toMatch(
       /\.convax-arrange-menu__action:hover,[\s\S]*?background:\s*var\(--canvas-interactive-hover,\s*var\(--ui-interactive-hover\)\)/,
     )
     expect(styles).toMatch(
       /\.convax-zoom-menu__item:active\s*\{[^}]*background:\s*var\(--canvas-interactive-pressed,\s*var\(--ui-interactive-pressed\)\)/s,
-    )
-    expect(styles).toMatch(
-      /\.convax-canvas-more-menu > button:hover,[\s\S]*?background:\s*var\(--canvas-interactive-hover,\s*var\(--ui-interactive-hover\)\)/,
     )
   })
 
@@ -207,9 +209,7 @@ describe("Canvas theme closure", () => {
     expect(edgeLabelRule).toContain("var(--canvas-text-muted)")
     expect(endpointRule).toContain("fill: var(--canvas-background)")
     expect(connectionTargetRule).toContain("fill: var(--canvas-background)")
-    expect(rules).not.toMatch(
-      /#[\da-f]{3,8}\b|rgb\(|(?:background|color|fill|stroke):\s*(?:white|black)\b/i,
-    )
+    expect(rules).not.toMatch(/#[\da-f]{3,8}\b|rgb\(|(?:background|color|fill|stroke):\s*(?:white|black)\b/i)
   })
 
   test("themes media and outline empty states while keeping selected rows accent-aware", async () => {

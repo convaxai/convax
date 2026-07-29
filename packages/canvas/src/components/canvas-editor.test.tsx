@@ -12,6 +12,7 @@ const zoomOut = mock(async () => undefined)
 const zoomTo = mock(async () => undefined)
 const buttonActions = new Map<string, () => void>()
 const buttonContents = new Map<string, ReactNode>()
+const contextMenuActions = new Map<string, () => void>()
 let dropOnCanvas:
   | ((event: {
       clientX: number
@@ -63,6 +64,14 @@ function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
 }
 
+function reactNodeText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return ""
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(reactNodeText).join("")
+  if (isValidElement<{ children?: ReactNode }>(node)) return reactNodeText(node.props.children)
+  return ""
+}
+
 function MockReactFlow(props: {
   children?: ReactNode
   colorMode?: string
@@ -85,7 +94,11 @@ mock.module("@convax/ui", () => ({
   },
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
-  ContextMenuItem: Passthrough,
+  ContextMenuItem: (props: { children?: ReactNode; onSelect?: () => void }) => {
+    const label = reactNodeText(props.children).replace(/\s+/g, " ").trim()
+    if (label && props.onSelect) contextMenuActions.set(label, props.onSelect)
+    return <>{props.children}</>
+  },
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: (props: { children?: ReactNode }) => {
@@ -177,6 +190,7 @@ const { createCanvasServices } = await import("../services")
 beforeEach(() => {
   buttonActions.clear()
   buttonContents.clear()
+  contextMenuActions.clear()
   copyOnCanvas = undefined
   dropOnCanvas = undefined
   keyDownOnCanvas = undefined
@@ -837,7 +851,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(notifyError).not.toHaveBeenCalled()
   })
 
-  test("routes header text creation through new-text mutation without fitting the viewport", async () => {
+  test("routes context-menu text creation through new-text mutation without fitting the viewport", async () => {
     const additions: unknown[] = []
     renderEditor(
       createCanvasServices({
@@ -850,8 +864,8 @@ describe("CanvasEditor resource mutation", () => {
       }),
     )
 
-    expect(buttonActions.get("Text")).toBeFunction()
-    buttonActions.get("Text")?.()
+    expect(contextMenuActions.get("Add Text")).toBeFunction()
+    contextMenuActions.get("Add Text")?.()
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
 
     expect(additions).toHaveLength(1)
@@ -1023,7 +1037,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).not.toContain("Add Audio")
   })
 
-  test("keeps the compact header focused on text, upload, and host generation actions", () => {
+  test("keeps secondary creation actions in the context menu instead of a creation toolbar", () => {
     renderEditor(
       createCanvasServices({
         generate: {
@@ -1034,12 +1048,14 @@ describe("CanvasEditor insertion surfaces", () => {
       }),
     )
 
-    expect(buttonActions.get("Text")).toBeFunction()
+    expect(contextMenuActions.get("Add Text")).toBeFunction()
+    expect(contextMenuActions.get("Generate⌘↵")).toBeFunction()
+    expect(buttonActions.get("Text")).toBeUndefined()
     expect(buttonActions.get("Image")).toBeUndefined()
     expect(buttonActions.get("Video")).toBeUndefined()
     expect(buttonActions.get("Audio")).toBeUndefined()
     expect(buttonActions.get("Agent")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeFunction()
+    expect(buttonActions.get("Generate")).toBeUndefined()
   })
 
   test("routes Generate presentation to the host without opening Canvas's legacy overlay", () => {
@@ -1055,7 +1071,7 @@ describe("CanvasEditor insertion surfaces", () => {
       { onGenerateRequest },
     )
 
-    buttonActions.get("Generate")?.()
+    contextMenuActions.get("Generate⌘↵")?.()
 
     expect(onGenerateRequest).toHaveBeenCalledTimes(1)
   })
@@ -1069,15 +1085,12 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain("props.onGenerationStateChange?.(false)")
   })
 
-  test("keeps Search directly available and protects its input from shared padding utilities", async () => {
+  test("moves Search into the bottom-left viewport toolbar and removes the creation bar", async () => {
     const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
-    const markup = renderEditor(
-      createCanvasServices({
-        export: { export: async () => undefined },
-      }),
-    )
+    const markup = renderEditor()
 
-    expect(markup).toContain("convax-creation-toolbar")
+    expect(markup).toContain("convax-viewport-toolbar bottom-3 left-3")
+    expect(markup).not.toContain("convax-creation-toolbar")
     expect(source).toContain('className="convax-node-search__input"')
     expect(source).toContain('className="convax-node-search__backdrop"')
     expect(source).toContain('data-convax-node-search-panel="true"')
@@ -1085,15 +1098,11 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain("const searchResults = useMemo(")
     expect(source).toContain("searchOpen ? queryCanvasNodes(history.document")
     expect(source).toContain("[history.document, query, searchOpen]")
-    expect(markup).toContain('role="menu"')
-    expect(markup).toContain("<span>Undo</span>")
-    expect(markup).toContain("<span>Redo</span>")
-    expect(markup).toContain("<span>Export</span>")
     expect(markup).not.toContain("<span>Search</span>")
-    expect(buttonActions.get("Select")).toBeFunction()
-    expect(buttonActions.get("Text")).toBeFunction()
     expect(buttonActions.get("Search")).toBeFunction()
-    expect(buttonActions.get("More canvas actions")).toBeFunction()
+    expect(buttonActions.get("Fit view")).toBeFunction()
+    expect(buttonActions.get("Snap and alignment guides")).toBeFunction()
+    expect(buttonActions.get("More canvas actions")).toBeUndefined()
   })
 
   test("renders host appearance without producing an editor command", () => {
@@ -1147,7 +1156,7 @@ describe("CanvasEditor external drag mode", () => {
       },
     })
 
-    expect(buttonActions.get("Drag to Other Apps")).toBeFunction()
+    expect(contextMenuActions.get("Drag to Other Apps")).toBeFunction()
   })
 
   test("does not prepare until command-shift is held for a visible drag source", () => {

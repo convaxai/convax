@@ -9,6 +9,10 @@ import {
   type CanvasExternalMediaDragRendererClient,
 } from "../canvas-external-drag-contracts"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
+import {
+  mainWindowControlsIpcChannel,
+  type MainWindowControlsClient,
+} from "../main-window-controls-contracts"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import {
@@ -251,6 +255,14 @@ const desktopProtocolClient = {
   getVersion: () => ipcRenderer.invoke(desktopProtocolChannel),
   version: desktopProtocolVersion,
 } satisfies DesktopProtocolClient
+
+const mainWindowControlsClient = {
+  close: () => ipcRenderer.invoke(mainWindowControlsIpcChannel, { action: "close" }),
+  minimize: () => ipcRenderer.invoke(mainWindowControlsIpcChannel, { action: "minimize" }),
+  setCustomControlsVisible: (visible) =>
+    ipcRenderer.invoke(mainWindowControlsIpcChannel, { action: "set-custom-controls-visible", visible }),
+  toggleFullScreen: () => ipcRenderer.invoke(mainWindowControlsIpcChannel, { action: "toggle-full-screen" }),
+} satisfies MainWindowControlsClient
 
 const workspaceSystemStatusClient = {
   getSnapshot: () => ipcRenderer.invoke(workspaceSystemStatusIpcChannel),
@@ -592,6 +604,7 @@ contextBridge.exposeInMainWorld("convax", {
     textResources: canvasTextResourceClient,
   },
   generation: generationClient,
+  mainWindowControls: mainWindowControlsClient,
   marketplaces: marketplaceClient,
   pets: petSettingsClient,
   platform: process.platform,

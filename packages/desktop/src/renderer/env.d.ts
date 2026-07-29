@@ -18,6 +18,7 @@ import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } f
 import type { PetSettingsHostClient } from "./pet-settings-host"
 import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 import type { MarketplaceClient } from "../marketplace-contracts"
+import type { MainWindowControlsClient } from "../main-window-controls-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -37,6 +38,7 @@ declare global {
         textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
+      mainWindowControls: MainWindowControlsClient
       marketplaces: MarketplaceClient
       pets: PetSettingsHostClient & {
         markDisplayed(input: PetNavigationRequest): Promise<void>

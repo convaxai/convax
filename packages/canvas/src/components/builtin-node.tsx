@@ -2168,13 +2168,28 @@ function FileAssistantAccessory(
 ) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
+  const [focusWithin, setFocusWithin] = useState(false)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
+  const visible = Boolean(props.open && assistant && ownsSingleNodeContext && (!editor.readOnly || editor.hydrating))
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationOutput = props.data.kind === "image" || props.data.kind === "video" ? props.data.kind : undefined
   const mentionedNodeIds = getIncomingConnectedCanvasFileNodeIds(editor.document, props.id)
+  useEffect(() => {
+    if (!visible) setFocusWithin(false)
+  }, [visible])
   if (!props.open || !assistant || !ownsSingleNodeContext || (editor.readOnly && !editor.hydrating)) return null
   return (
-    <NodeToolbar className="convax-node-assistant nodrag nowheel" offset={28} position={Position.Bottom}>
+    <NodeToolbar
+      className={cn("convax-node-assistant nodrag", focusWithin && "nowheel")}
+      offset={28}
+      onBlurCapture={(event) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+          setFocusWithin(false)
+        }
+      }}
+      onFocusCapture={() => setFocusWithin(true)}
+      position={Position.Bottom}
+    >
       <div data-canvas-shortcuts="ignore">
         <fieldset
           aria-busy={editor.hydrating || undefined}

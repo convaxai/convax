@@ -50,7 +50,9 @@ import {
 import { createAddSelectionToConversationAction } from "./agent-selection-action"
 import { ApplicationCommandPalette } from "./application-command-palette"
 import type { ApplicationCommand } from "./application-command-model"
+import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { ApplicationTitlebar } from "./application-titlebar"
+import { CanvasTitle } from "./canvas-title"
 import {
   readAppLanguagePreference,
   resolveAppLocale,
@@ -391,6 +393,13 @@ function App() {
   useEffect(() => {
     applyAppearancePreferences(document.documentElement, appearancePreferences)
   }, [appearancePreferences])
+  useEffect(() => {
+    if (window.convax.platform !== "darwin") return
+    void window.convax.mainWindowControls.setCustomControlsVisible(true).catch(() => undefined)
+    return () => {
+      void window.convax.mainWindowControls.setCustomControlsVisible(false).catch(() => undefined)
+    }
+  }, [])
   useEffect(() => {
     const synchronizeStoredLanguage = () => setLanguagePreference(readAppLanguagePreference(localStorage))
     window.addEventListener("storage", synchronizeStoredLanguage)
@@ -822,10 +831,11 @@ function App() {
     },
     [activeProjectId],
   )
-  const openServices = useCallback(() => {
+  const openSettings = useCallback((target: ApplicationMenuTarget) => {
     closeMediaOperationDialog()
-    setDesktopSurface((current) => openDesktopSettings(current, "services"))
+    setDesktopSurface((current) => openDesktopSettings(current, target))
   }, [closeMediaOperationDialog])
+  const openServices = useCallback(() => openSettings("services"), [openSettings])
   const assistantHostRef = useRef({
     activeCanvas,
     activeProject,
@@ -1524,10 +1534,7 @@ function App() {
         : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
   const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
-  const openWorkspaceSettings = useCallback(() => {
-    closeMediaOperationDialog()
-    setDesktopSurface((current) => openDesktopSettings(current, "general"))
-  }, [closeMediaOperationDialog])
+  const openWorkspaceSettings = useCallback(() => openSettings("general"), [openSettings])
   const openAgentDrawer = useCallback(() => {
     if (!activeProjectId) return
     setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
@@ -1709,7 +1716,7 @@ function App() {
 
   const projectSidebar = activeProject ? (
     <ProjectSidebar
-      className="w-full"
+      className="w-full pt-11"
       controller={projectController}
       extension={{
         busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
@@ -1731,6 +1738,7 @@ function App() {
         onCreate: () => void projectCanvasWorkbench.createCanvas(activeProject.id),
       }}
       filesController={projectFilesController}
+      footerActions={<ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />}
       hideWhenNoProject
     />
   ) : null
@@ -1839,9 +1847,8 @@ function App() {
 
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
-      <div className="flex size-full flex-col overflow-hidden">
+      <div className="relative flex size-full flex-col overflow-hidden">
         <ApplicationTitlebar
-          canvasName={activeCanvas?.name ?? null}
           contextLabel={
             settingsSection
               ? locale === "zh-CN"
@@ -1855,11 +1862,22 @@ function App() {
           homeLabel={locale === "zh-CN" ? "返回项目主页" : "Back to Projects"}
           onBackToProjects={openProjectHomeFromTitlebar}
           onOpenCommands={() => setCommandPaletteOpen(true)}
-          onOpenSettings={openWorkspaceSettings}
           platform={window.convax.platform}
-          projectName={!settingsSection && primaryDesktopSurface === "workspace" ? activeProject?.name : undefined}
-          settingsLabel={locale === "zh-CN" ? "打开设置" : "Open Settings"}
           surface={settingsSection ? "settings" : primaryDesktopSurface}
+          windowControls={
+            window.convax.platform === "darwin"
+              ? {
+                  closeLabel: locale === "zh-CN" ? "关闭窗口" : "Close window",
+                  fullScreenLabel: locale === "zh-CN" ? "切换全屏" : "Toggle full screen",
+                  groupLabel: locale === "zh-CN" ? "窗口控制" : "Window controls",
+                  minimizeLabel: locale === "zh-CN" ? "最小化窗口" : "Minimize window",
+                  onClose: () => void window.convax.mainWindowControls.close().catch(() => undefined),
+                  onMinimize: () => void window.convax.mainWindowControls.minimize().catch(() => undefined),
+                  onToggleFullScreen: () =>
+                    void window.convax.mainWindowControls.toggleFullScreen().catch(() => undefined),
+                }
+              : undefined
+          }
         />
         <ApplicationCommandPalette
           commands={applicationCommands}
@@ -1873,7 +1891,7 @@ function App() {
           {primaryDesktopSurface === "home" ? (
             <div
               aria-hidden={settingsSection ? true : undefined}
-              className="size-full"
+              className="size-full pt-11"
               inert={Boolean(settingsSection) || undefined}
             >
               <ProjectHome controller={projectController} locale={locale} onEnterProject={enterHomeProject} />
@@ -1938,12 +1956,36 @@ function App() {
                 </div>
               ) : null}
               <section className="relative min-w-0 flex-1">
-                {activeProject && !primarySidebar.visible && !resizingPrimarySidebar ? (
-                  <aside aria-label="Project sidebar" className="pointer-events-none absolute left-3 top-3 z-40">
-                    <ProjectSidebarTrigger
-                      onOpen={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, true)}
-                    />
+                {activeCanvas ? (
+                  <aside
+                    aria-label="Canvas title"
+                    className={`absolute top-0 z-40 ${
+                      primarySidebar.visible
+                        ? "left-3"
+                        : window.convax.platform === "darwin"
+                          ? "left-[122px]"
+                          : "left-12"
+                    }`}
+                  >
+                    <CanvasTitle name={activeCanvas.name} />
                   </aside>
+                ) : null}
+                {activeProject && !primarySidebar.visible && !resizingPrimarySidebar ? (
+                  <>
+                    <aside aria-label="Project sidebar" className="pointer-events-none absolute left-3 top-14 z-40">
+                      <ProjectSidebarTrigger
+                        onOpen={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, true)}
+                      />
+                    </aside>
+                    <aside aria-label="Application menu" className="absolute bottom-3 left-3 z-40">
+                      <ApplicationMenu
+                        compact
+                        locale={locale}
+                        onOpenSettings={openSettings}
+                        services={serviceCatalogSnapshot}
+                      />
+                    </aside>
+                  </>
                 ) : null}
                 {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
                   <ProjectEmptyState controller={projectController} initialized={projectSnapshot.initialized} />
@@ -2072,7 +2114,7 @@ function App() {
                     />
                   </RendererErrorBoundary>
                 )}
-                className={`${agentPanelClassName ?? ""} ${
+                className={`${agentPanelClassName ?? ""} pt-11 ${
                   resizingSecondarySidebar
                     ? ""
                     : "transition-[width] duration-200 ease-out motion-reduce:transition-none"
@@ -2080,7 +2122,7 @@ function App() {
                 closeLabel={locale === "zh-CN" ? "关闭工具抽屉" : "Close utility drawer"}
                 collapsedEntry={
                   activeProjectId ? (
-                    <aside aria-label="Agent status" className="pointer-events-none absolute right-3 top-3 z-40">
+                    <aside aria-label="Agent status" className="pointer-events-none absolute right-3 top-14 z-40">
                       <AgentDrawerTrigger onOpen={openAgentDrawer} status={agentCompactStatus} />
                     </aside>
                   ) : null

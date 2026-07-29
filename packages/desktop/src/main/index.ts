@@ -49,7 +49,8 @@ import {
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from "electron"
-import { resolveMainWindowChrome } from "./main-window-chrome"
+import { resolveMainWindowChrome, setNativeMainWindowControlsVisible } from "./main-window-chrome"
+import { registerMainWindowControlsIpc } from "./main-window-controls-ipc"
 import appIcon from "../../resources/icon.png?asset"
 import { registerAgentIpc } from "./agent-ipc"
 import {
@@ -288,6 +289,12 @@ function createWindow(
     projectAssetGcScheduler.closeAll()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+  const restoreNativeMainWindowControls = () =>
+    setNativeMainWindowControlsVisible(process.platform, window, true)
+  window.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) restoreNativeMainWindowControls()
+  })
+  window.webContents.on("render-process-gone", restoreNativeMainWindowControls)
   window.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault()
   })
@@ -1455,6 +1462,11 @@ function startApplication() {
       petActivityNotifier.dispose()
     }
     const disposeDesktopProtocolIpc = registerDesktopProtocolIpc(ipcSecurity.isTrustedSender)
+    const disposeMainWindowControlsIpc = registerMainWindowControlsIpc(
+      () => mainWindow,
+      ipcSecurity.isTrustedSender,
+      process.platform,
+    )
     const disposeMarketplaceIpc = registerMarketplaceIpc(marketplace, ipcSecurity.isTrustedSender)
     const disposeWorkspaceSystemStatusIpc = registerWorkspaceSystemStatusIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
@@ -1675,6 +1687,7 @@ function startApplication() {
         () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
         () => protocol.unhandle(pluginConnectedMediaScheme),
+        disposeMainWindowControlsIpc,
         disposeDesktopProtocolIpc,
         disposeMarketplaceIpc,
         disposeWorkspaceSystemStatusIpc,

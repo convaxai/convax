@@ -742,9 +742,18 @@ try {
       await new Promise(() => {})
     }
 
+    const applicationMenuTrigger = await waitFor(
+      () => document.querySelector('button[aria-label="Open application menu"], button[aria-label="打开应用菜单"]'),
+      "the bottom-left application menu",
+    )
+    applicationMenuTrigger.click()
     const settingsAction = await waitFor(
-      () => document.querySelector('button[aria-label="Open Settings"], button[aria-label="打开设置"]'),
-      "the application-titlebar Settings action",
+      () => [...document.querySelectorAll('[data-ui-menu-surface] button[role="menuitem"]')]
+        .find((button) => {
+          const label = button.textContent?.trim() ?? ""
+          return label.startsWith("Settings") || label.startsWith("设置")
+        }),
+      "the application menu Settings action",
     )
     settingsAction.click()
     const settingsView = await waitFor(

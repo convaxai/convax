@@ -60,7 +60,6 @@ import {
   LoaderCircle,
   Magnet,
   MapPinned,
-  MousePointer2,
   PanelRightOpen,
   Redo2,
   Rows3,
@@ -137,7 +136,9 @@ import {
   type CanvasSelectionProjection,
 } from "../inspector"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
+import { createCanvasNodeSnapSession, type CanvasNodeSnapSession, type CanvasSnapLine } from "../snapping"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
+import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
@@ -213,6 +214,7 @@ const CANVAS_MAX_ZOOM = CANVAS_VIEW_MAX_ZOOM
 const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_FIT_PADDING }
 const CANVAS_PAN_ON_DRAG = [1]
 const CANVAS_SNAP_GRID: [number, number] = [8, 8]
+const CANVAS_SNAP_TOLERANCE_SCREEN_PX = 8
 const CANVAS_ZOOM_ACTIVATION_KEYS = ["Meta", "Control"]
 const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
   "button",
@@ -787,12 +789,12 @@ function CanvasEditorContent(
   const [searchOpen, setSearchOpen] = useState(false)
   const [edgesHidden, setEdgesHidden] = useState(false)
   const [miniMapVisible, setMiniMapVisible] = useState(true)
-  const [snapToGrid, setSnapToGrid] = useState(true)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [snapLines, setSnapLines] = useState<CanvasSnapLine[]>([])
   const [autoLayoutStrategy, setAutoLayoutStrategy] =
     useState<CanvasDirectedAutoLayoutStrategy>("horizontal-directed-cluster")
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempt, setSaveAttempt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -824,6 +826,8 @@ function CanvasEditorContent(
   const connectionTargetNodeIdRef = useRef<string | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ duplicatedNodeIdBySourceId: ReadonlyMap<string, string> } | null>(null)
+  const snapSessionRef = useRef<CanvasNodeSnapSession | null>(null)
+  const snapEnabledRef = useRef(snapEnabled)
   const documentRef = useRef(history.document)
   const resourceMutationScopeRef = useRef<CanvasResourceMutationScopeToken>({
     documentId: history.document.id,
@@ -884,6 +888,7 @@ function CanvasEditorContent(
   historyRef.current = history
   saveErrorRef.current = saveError
   selectionRef.current = selection
+  snapEnabledRef.current = snapEnabled
   const waitForAuthoritativeRender = useCallback(
     (document: CanvasDocument) =>
       new Promise<void>((resolve, reject) => {
@@ -921,7 +926,14 @@ function CanvasEditorContent(
     for (const controller of operationControllersRef.current) controller.abort()
     operationControllersRef.current.clear()
     abortCanvasReload(reloadControllerRef.current)
+    snapSessionRef.current = null
+    setSnapLines([])
   }, [currentViewScopeId, history.document.id])
+  useEffect(() => {
+    if (history.gestureStart) return
+    snapSessionRef.current = null
+    setSnapLines([])
+  }, [history.gestureStart])
   const dispatch = useCallback((action: CanvasHistoryAction) => {
     if (leavingRef.current || hydratingRef.current) return
     if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
@@ -1606,7 +1618,6 @@ function CanvasEditorContent(
       if (saveRevisionRef.current === document.revision && savePromiseRef.current) return savePromiseRef.current
 
       saveControllerRef.current?.abort()
-      setSaveState("saving")
       const controller = new AbortController()
       saveControllerRef.current = controller
       saveRevisionRef.current = document.revision
@@ -1627,7 +1638,6 @@ function CanvasEditorContent(
           }
           saveErrorRef.current = null
           setSaveError(null)
-          setSaveState("saved")
           return persisted
         },
         (error) => {
@@ -1635,7 +1645,6 @@ function CanvasEditorContent(
           const message = error instanceof Error ? error.message : String(error)
           saveErrorRef.current = message
           setSaveError(message)
-          setSaveState("idle")
           notifyError("Could not save canvas", error)
           throw error
         },
@@ -2732,9 +2741,20 @@ function CanvasEditorContent(
   )
   const handleNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
-      const effectiveChanges = altDragRef.current
+      let effectiveChanges = altDragRef.current
         ? remapCanvasDuplicateDragChanges(changes, altDragRef.current.duplicatedNodeIdBySourceId)
         : changes
+      const snapSession = snapSessionRef.current
+      if (snapEnabledRef.current && snapSession) {
+        const zoom = reactFlowRef.current.getViewport().zoom
+        const snapped = snapCanvasNodePositionChanges(
+          effectiveChanges,
+          snapSession,
+          CANVAS_SNAP_TOLERANCE_SCREEN_PX / Math.max(zoom, Number.EPSILON),
+        )
+        effectiveChanges = snapped.changes
+        setSnapLines(snapped.lines)
+      }
       const selectionChanges = effectiveChanges.filter((change) => change.type === "select")
       if (selectionChanges.length > 0) {
         replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
@@ -2832,22 +2852,32 @@ function CanvasEditorContent(
     [commit, reactFlow, updateConnectionTargetNode],
   )
   const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
-    (event, node) => {
+    (event, node, draggedNodes) => {
       dispatch({ type: "begin-gesture" })
       altDragRef.current = null
-      if (!event.altKey) return
-      const currentSelection = selectionRef.current
-      const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
-      const plan = createCanvasDuplicateDragPlan(documentRef.current, nodeIds, event.metaKey || event.ctrlKey)
-      if (!plan) return
-      altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
-      dispatch({ type: "commit", document: plan.document })
-      selectNodes(plan.selectedNodeIds)
+      setSnapLines([])
+      let snapDocument = documentRef.current
+      let draggingIds = draggedNodes.length > 0 ? draggedNodes.map((draggedNode) => draggedNode.id) : [node.id]
+      if (event.altKey) {
+        const currentSelection = selectionRef.current
+        const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
+        const plan = createCanvasDuplicateDragPlan(documentRef.current, nodeIds, event.metaKey || event.ctrlKey)
+        if (plan) {
+          altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
+          snapDocument = plan.document
+          draggingIds = draggingIds.map((id) => plan.duplicatedNodeIdBySourceId.get(id) ?? id)
+          dispatch({ type: "commit", document: plan.document })
+          selectNodes(plan.selectedNodeIds)
+        }
+      }
+      snapSessionRef.current = snapEnabledRef.current ? createCanvasNodeSnapSession(snapDocument, draggingIds) : null
     },
     [dispatch, selectNodes],
   )
   const handleNodeDragStop = useCallback(() => {
     altDragRef.current = null
+    snapSessionRef.current = null
+    setSnapLines([])
     dispatch({ type: "end-gesture" })
   }, [dispatch])
   const handleBoxSelectionStart = useCallback(() => {
@@ -2924,10 +2954,7 @@ function CanvasEditorContent(
                     event.target instanceof Element
                       ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
                       : null
-                  if (
-                    event.button === 0 &&
-                    (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))
-                  ) {
+                  if (event.button === 0 && (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))) {
                     canvasRoot?.focus({ preventScroll: true })
                   }
                   if (
@@ -2991,7 +3018,7 @@ function CanvasEditorContent(
                   selectionOnDrag={!readOnly}
                   selectionMode={SelectionMode.Partial}
                   snapGrid={CANVAS_SNAP_GRID}
-                  snapToGrid={snapToGrid}
+                  snapToGrid={snapEnabled}
                   zoomActivationKeyCode={CANVAS_ZOOM_ACTIVATION_KEYS}
                   zoomOnDoubleClick={false}
                   zoomOnPinch
@@ -3034,6 +3061,7 @@ function CanvasEditorContent(
                       variant={appearance.gridStyle === "lines" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
                     />
                   ) : null}
+                  <CanvasSnapGuides lines={snapLines} />
                   {miniMapVisible ? (
                     <MiniMap
                       className="!bottom-4 !right-4 !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
@@ -3059,37 +3087,14 @@ function CanvasEditorContent(
                   />
                 ) : null}
 
-                <CanvasHeader
-                  canExport={Boolean(exportService)}
-                  canGenerate={Boolean(generateService)}
-                  canRedo={history.future.length > 0}
-                  canUndo={history.past.length > 0}
-                  canUpload={Boolean(mutationService)}
-                  generating={generating}
-                  onAddText={() => addNode("text")}
-                  onExport={exportCanvas}
-                  onGenerate={requestGenerate}
-                  onSelectionDragModeChange={(active) => {
-                    if (active) enterSelectionDragMode()
-                    else exitSelectionDragMode()
-                  }}
-                  onRedo={() => dispatch({ type: "redo" })}
-                  onSearch={() => setSearchOpen(true)}
-                  onSelect={activateSelectTool}
-                  onUndo={() => dispatch({ type: "undo" })}
-                  onUpload={() => uploadInputRef.current?.click()}
-                  readOnly={readOnly}
-                  saveState={saveState}
-                  selectionDragMode={
-                    props.selectionDragSource?.mode
-                      ? {
-                          ...props.selectionDragSource.mode,
-                          active: selectionDragModeActive,
-                          icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
-                        }
-                      : undefined
-                  }
-                />
+                {selectionDragModeActive && props.selectionDragSource?.mode ? (
+                  <CanvasSelectionDragModeStatus
+                    description={props.selectionDragSource.mode.description}
+                    exitLabel={props.selectionDragSource.mode.exitLabel}
+                    icon={props.selectionDragSource.icon ?? <FileOutput className="size-4" />}
+                    onExit={exitSelectionDragMode}
+                  />
+                ) : null}
 
                 {blockingLoad || loadError ? (
                   <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
@@ -3185,10 +3190,16 @@ function CanvasEditorContent(
                   onLayout={layoutCanvas}
                   onLayoutStrategyChange={changeAutoLayoutStrategy}
                   onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
-                  onSnapChange={() => setSnapToGrid((enabled) => !enabled)}
+                  onSearch={() => setSearchOpen(true)}
+                  onSnapChange={() =>
+                    setSnapEnabled((enabled) => {
+                      if (enabled) setSnapLines([])
+                      return !enabled
+                    })
+                  }
                   onZoomIn={() => void reactFlow.zoomIn({ duration: 140 })}
                   onZoomOut={() => void reactFlow.zoomOut({ duration: 140 })}
-                  snapToGrid={snapToGrid}
+                  snapEnabled={snapEnabled}
                 />
 
                 {nodeMenuOpen ? (
@@ -3322,12 +3333,15 @@ function CanvasEditorContent(
             <CanvasContextMenu
               canArrange={hasNodeOnlySelection && canArrangeSelection}
               canDistribute={hasNodeOnlySelection && canDistributeSelection}
+              canExport={Boolean(exportService)}
+              canGenerate={Boolean(generateService)}
               canGroup={selectionContext.kind === "multi-node"}
               canRedo={history.future.length > 0}
               canUngroup={hasSingleGroupSelection}
               canUndo={history.past.length > 0}
               canUpload={Boolean(mutationService)}
               createItems={connectionNodeTypes}
+              generating={generating}
               hasNodeSelection={hasNodeOnlySelection}
               hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
               onAddNode={addNode}
@@ -3336,15 +3350,30 @@ function CanvasEditorContent(
               onDelete={remove}
               onDistribute={distribute}
               onDuplicate={duplicate}
+              onExport={exportCanvas}
               onFit={fitCanvas}
+              onGenerate={requestGenerate}
               onGroup={group}
               onLayout={tidySelection}
               onPaste={paste}
               onRedo={() => dispatch({ type: "redo" })}
+              onSelectionDragModeChange={(active) => {
+                if (active) enterSelectionDragMode()
+                else exitSelectionDragMode()
+              }}
               onUngroup={ungroup}
               onUndo={() => dispatch({ type: "undo" })}
               onUpload={() => uploadInputRef.current?.click()}
               readOnly={readOnly}
+              selectionDragMode={
+                props.selectionDragSource?.mode
+                  ? {
+                      active: selectionDragModeActive,
+                      icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                      label: props.selectionDragSource.mode.label,
+                    }
+                  : undefined
+              }
             />
           </ContextMenu>
         </TooltipProvider>
@@ -3419,156 +3448,23 @@ function FloatingPanel(props: { children: ReactNode; className?: string }) {
   )
 }
 
-function CanvasHeader(props: {
-  canExport: boolean
-  canGenerate: boolean
-  canRedo: boolean
-  canUndo: boolean
-  canUpload: boolean
-  generating: boolean
-  onAddText: () => void
-  onExport: () => void
-  onGenerate: () => void
-  onRedo: () => void
-  onSearch: () => void
-  onSelect: () => void
-  onSelectionDragModeChange: (active: boolean) => void
-  onUndo: () => void
-  onUpload: () => void
-  readOnly: boolean
-  saveState: "idle" | "saving" | "saved"
-  selectionDragMode?: {
-    active: boolean
-    description: string
-    exitLabel: string
-    icon: ReactNode
-    label: string
-  }
+function CanvasSelectionDragModeStatus(props: {
+  description: string
+  exitLabel: string
+  icon: ReactNode
+  onExit: () => void
 }) {
-  const [moreOpen, setMoreOpen] = useState(false)
-  const moreMenuRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!moreOpen) return
-    const close = (event: PointerEvent) => {
-      if (event.target instanceof Element && moreMenuRef.current?.contains(event.target)) return
-      setMoreOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMoreOpen(false)
-    }
-    window.addEventListener("pointerdown", close)
-    window.addEventListener("keydown", closeOnEscape)
-    return () => {
-      window.removeEventListener("pointerdown", close)
-      window.removeEventListener("keydown", closeOnEscape)
-    }
-  }, [moreOpen])
   return (
-    <>
-      <ToolSurface className="convax-creation-toolbar bottom-4 left-1/2 -translate-x-1/2 gap-0.5">
-        <IconButton icon={<MousePointer2 />} label="Select" onClick={props.onSelect} pressed shortcut="V" />
-        {props.selectionDragMode ? (
-          <IconButton
-            disabled={props.readOnly}
-            icon={props.selectionDragMode.icon}
-            label={props.selectionDragMode.label}
-            onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
-            pressed={props.selectionDragMode.active}
-          />
-        ) : null}
-        <span className="mx-1 h-5 w-px bg-border" />
-        <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
-        {props.canUpload ? (
-          <IconButton disabled={props.readOnly} icon={<FileUp />} label="Upload" onClick={props.onUpload} />
-        ) : null}
-        {props.canGenerate ? (
-          <IconButton
-            disabled={props.readOnly || props.generating}
-            icon={props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
-            label="Generate"
-            onClick={props.onGenerate}
-            shortcut="⌘↵"
-          />
-        ) : null}
-        <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="top" />
-        <span className="mx-1 h-5 w-px bg-border" />
-        <div ref={moreMenuRef} className="relative">
-          <IconButton
-            expanded={moreOpen}
-            hasPopup="menu"
-            icon={<Ellipsis />}
-            label="More canvas actions"
-            onClick={() => setMoreOpen((open) => !open)}
-            pressed={moreOpen}
-            tooltipSide="top"
-          />
-          <div className="convax-canvas-more-menu" data-canvas-shortcuts="ignore" hidden={!moreOpen} role="menu">
-            <button
-              disabled={!props.canUndo || props.readOnly}
-              onClick={() => {
-                props.onUndo()
-                setMoreOpen(false)
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Undo2 />
-              <span>Undo</span>
-              <Shortcut>⌘Z</Shortcut>
-            </button>
-            <button
-              disabled={!props.canRedo || props.readOnly}
-              onClick={() => {
-                props.onRedo()
-                setMoreOpen(false)
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Redo2 />
-              <span>Redo</span>
-              <Shortcut>⇧⌘Z</Shortcut>
-            </button>
-            {props.canExport ? (
-              <button
-                onClick={() => {
-                  props.onExport()
-                  setMoreOpen(false)
-                }}
-                role="menuitem"
-                type="button"
-              >
-                <Download />
-                <span>Export</span>
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {props.saveState !== "idle" ? (
-          <span aria-live="polite" className="convax-creation-toolbar__save-state">
-            {props.saveState === "saving" ? "Saving…" : "Saved"}
-          </span>
-        ) : null}
-      </ToolSurface>
-      {props.selectionDragMode?.active ? (
-        <ToolSurface className="bottom-16 left-1/2 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 gap-2 border-primary/30 bg-card/95 px-3 py-2 shadow-md">
-          <span className="shrink-0 text-primary">{props.selectionDragMode.icon}</span>
-          <span aria-live="polite" className="min-w-0 text-xs font-medium" role="status">
-            {props.selectionDragMode.description}
-          </span>
-          <Button
-            aria-label={props.selectionDragMode.exitLabel}
-            className="shrink-0 gap-1"
-            onClick={() => props.onSelectionDragModeChange(false)}
-            size="sm"
-            variant="ghost"
-          >
-            <X className="size-3.5" />
-            {props.selectionDragMode.exitLabel}
-          </Button>
-        </ToolSurface>
-      ) : null}
-    </>
+    <ToolSurface className="bottom-3 left-1/2 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 gap-2 border-primary/30 bg-card/95 px-3 py-2 shadow-md">
+      <span className="shrink-0 text-primary">{props.icon}</span>
+      <span aria-live="polite" className="min-w-0 text-xs font-medium" role="status">
+        {props.description}
+      </span>
+      <Button aria-label={props.exitLabel} className="shrink-0 gap-1" onClick={props.onExit} size="sm" variant="ghost">
+        <X className="size-3.5" />
+        {props.exitLabel}
+      </Button>
+    </ToolSurface>
   )
 }
 
@@ -3859,6 +3755,26 @@ const canvasDirectedLayoutActions = [
   strategy: CanvasDirectedAutoLayoutStrategy
 }[]
 
+function CanvasSnapGuides({ lines }: { lines: readonly CanvasSnapLine[] }) {
+  const viewport = useViewport()
+  if (lines.length === 0) return null
+  return (
+    <div aria-hidden="true" className="convax-snap-guides">
+      {lines.map((line) => {
+        const position = line.value * viewport.zoom + (line.axis === "x" ? viewport.x : viewport.y)
+        return (
+          <div
+            key={`${line.axis}:${line.value}`}
+            className={cn("convax-snap-guide", line.axis === "x" ? "is-vertical" : "is-horizontal")}
+            data-canvas-snap-guide={line.axis}
+            style={line.axis === "x" ? { left: position } : { top: position }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function ViewportToolbar(props: {
   autoLayoutStrategy: CanvasDirectedAutoLayoutStrategy
   canLayout: boolean
@@ -3869,10 +3785,11 @@ function ViewportToolbar(props: {
   onLayout: () => void
   onLayoutStrategyChange: (strategy: CanvasDirectedAutoLayoutStrategy) => void
   onMiniMapChange: () => void
+  onSearch: () => void
   onSnapChange: () => void
   onZoomIn: () => void
   onZoomOut: () => void
-  snapToGrid: boolean
+  snapEnabled: boolean
 }) {
   const viewport = useViewport()
   const reactFlow = useReactFlow<CanvasNode>()
@@ -3907,6 +3824,8 @@ function ViewportToolbar(props: {
   }, [zoomMenuOpen])
   return (
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
+      <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="top" />
+      <span className="mx-1 h-5 w-px bg-border" />
       <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
       <IconButton
         icon={<CanvasEdgeVisibilityIcon />}
@@ -3965,9 +3884,9 @@ function ViewportToolbar(props: {
       </div>
       <IconButton
         icon={<Magnet />}
-        label="Snap to grid"
+        label="Snap and alignment guides"
         onClick={props.onSnapChange}
-        pressed={props.snapToGrid}
+        pressed={props.snapEnabled}
         tooltipSide="top"
       />
       <IconButton
@@ -4022,12 +3941,15 @@ function ViewportToolbar(props: {
 function CanvasContextMenu(props: {
   canArrange: boolean
   canDistribute: boolean
+  canExport: boolean
+  canGenerate: boolean
   canGroup: boolean
   canRedo: boolean
   canUngroup: boolean
   canUndo: boolean
   canUpload: boolean
   createItems: readonly { label: string; type: string }[]
+  generating: boolean
   hasNodeSelection: boolean
   hasSelection: boolean
   onAddNode: (type: string) => void
@@ -4036,15 +3958,23 @@ function CanvasContextMenu(props: {
   onDelete: () => void
   onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
+  onExport: () => void
   onFit: () => void
+  onGenerate: () => void
   onGroup: () => void
   onLayout: () => void
   onPaste: () => void
   onRedo: () => void
+  onSelectionDragModeChange: (active: boolean) => void
   onUngroup: () => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
+  selectionDragMode?: {
+    active: boolean
+    icon: ReactNode
+    label: string
+  }
 }) {
   return (
     <ContextMenuContent className="w-60">
@@ -4073,6 +4003,12 @@ function CanvasContextMenu(props: {
           Upload files
         </ContextMenuItem>
       ) : null}
+      {props.canGenerate && !props.readOnly ? (
+        <ContextMenuItem disabled={props.generating} onSelect={props.onGenerate}>
+          {props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+          Generate<Shortcut>⌘↵</Shortcut>
+        </ContextMenuItem>
+      ) : null}
       {!props.readOnly ? <ContextMenuSeparator /> : null}
       <ContextMenuLabel>Canvas</ContextMenuLabel>
       {!props.readOnly ? (
@@ -4097,6 +4033,19 @@ function CanvasContextMenu(props: {
         <Focus />
         Fit view<Shortcut>⌘0</Shortcut>
       </ContextMenuItem>
+      {props.canExport ? (
+        <ContextMenuItem onSelect={props.onExport}>
+          <Download />
+          Export
+        </ContextMenuItem>
+      ) : null}
+      {props.selectionDragMode && !props.readOnly ? (
+        <ContextMenuItem onSelect={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}>
+          {props.selectionDragMode.icon}
+          {props.selectionDragMode.active ? "Exit " : ""}
+          {props.selectionDragMode.label}
+        </ContextMenuItem>
+      ) : null}
       {props.hasSelection ? <ContextMenuSeparator /> : null}
       {props.hasSelection ? <ContextMenuLabel>Selection</ContextMenuLabel> : null}
       {props.hasNodeSelection ? (

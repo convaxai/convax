@@ -103,11 +103,8 @@ mock.module("@convax/ui", () => ({
 
 const { createCanvasDocument, createTextNode } = await import("../document")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
-const {
-  finishCanvasNodeGenerationRun,
-  markCanvasNodeGenerationRunRunning,
-  startCanvasNodeGenerationRun,
-} = await import("../generation-run")
+const { finishCanvasNodeGenerationRun, markCanvasNodeGenerationRunRunning, startCanvasNodeGenerationRun } =
+  await import("../generation-run")
 const { useCanvasEditor } = await import("../editor-context")
 const { createCanvasNodeRegistry } = await import("../node-registry")
 const { createCanvasServices } = await import("../services")
@@ -411,6 +408,104 @@ test("box-selects connected nodes without feeding controlled selection back into
   }
 })
 
+test("isolates card-assistant wheel gestures only while its input owns focus", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const imageNode: CanvasNode = {
+    data: {
+      kind: "image",
+      label: "Image",
+      metadata: {},
+      resourceState: { status: "ready", url: "" },
+    },
+    id: "image",
+    measured: { height: 160, width: 240 },
+    position: { x: 80, y: 80 },
+    style: { height: 160, width: 240 },
+    type: "file",
+  }
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [imageNode] })
+  const servicesWithAssistant = createCanvasServices({
+    assistant: {
+      render: () => <textarea aria-label="Card assistant input" />,
+    },
+  })
+  const renderEditor = (services = servicesWithAssistant) => (
+    <CanvasEditor initialDocument={initialDocument} onlyRenderVisibleElements={false} services={services} />
+  )
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+
+    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="image"]')
+    expect(nodeElement).not.toBeNull()
+    await act(async () => {
+      nodeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
+    const toolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Card assistant input"]')
+    expect(canvasRoot).not.toBeNull()
+    expect(toolbar).not.toBeNull()
+    expect(input).not.toBeNull()
+    expect(toolbar?.classList.contains("nodrag")).toBe(true)
+    expect(toolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      input?.focus()
+    })
+    expect(document.activeElement).toBe(input)
+    expect(toolbar?.classList.contains("nowheel")).toBe(true)
+
+    await act(async () => {
+      root?.render(renderEditor(createCanvasServices()))
+    })
+    expect(container.querySelector(".convax-node-assistant")).toBeNull()
+
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+    const reopenedToolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    expect(reopenedToolbar).not.toBeNull()
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      canvasRoot?.focus()
+    })
+    expect(document.activeElement).toBe(canvasRoot)
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+    expect(errors).toEqual([])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
 test("drags a generating card from its overlay while generation controls keep the node fixed", async () => {
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
@@ -432,9 +527,7 @@ test("drags a generating card from its overlay while generation controls keep th
   const originalRect = HTMLElement.prototype.getBoundingClientRect
   HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
     if (this.classList.contains("react-flow__node")) {
-      return this.getAttribute("data-id") === "generating"
-        ? rect(80, 80, 240, 160)
-        : rect(400, 80, 240, 160)
+      return this.getAttribute("data-id") === "generating" ? rect(80, 80, 240, 160) : rect(400, 80, 240, 160)
     }
     return rect(0, 0, 1000, 800)
   }
@@ -490,11 +583,7 @@ test("drags a generating card from its overlay while generation controls keep th
   let latestDocument: CanvasDocument = initialDocument
   let root: Root | undefined
 
-  const dragWithMouse = async (
-    target: Element,
-    start: { x: number; y: number },
-    end: { x: number; y: number },
-  ) => {
+  const dragWithMouse = async (target: Element, start: { x: number; y: number }, end: { x: number; y: number }) => {
     const eventWindow = window
     const thresholdPoint = {
       x: start.x + (end.x - start.x) / 2,
@@ -564,15 +653,11 @@ test("drags a generating card from its overlay while generation controls keep th
     })
 
     expect(errors).toEqual([])
-    const activeOverlay = container.querySelector<HTMLElement>(
-      '[data-canvas-file-generation-activity="running"]',
-    )
+    const activeOverlay = container.querySelector<HTMLElement>('[data-canvas-file-generation-activity="running"]')
     const cancelButton = [...(activeOverlay?.querySelectorAll("button") ?? [])].find(
       (button) => button.textContent === "取消",
     )
-    const blockedWrapper = container.querySelector<HTMLElement>(
-      '[data-canvas-generation-retry-blocked="true"]',
-    )
+    const blockedWrapper = container.querySelector<HTMLElement>('[data-canvas-generation-retry-blocked="true"]')
     expect(activeOverlay).not.toBeNull()
     expect(cancelButton).toBeDefined()
     expect(blockedWrapper).not.toBeNull()
@@ -594,6 +679,151 @@ test("drags a generating card from its overlay while generation controls keep th
     const blockedPosition = latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position
     await dragWithMouse(blockedWrapper!, { x: 440, y: 120 }, { x: 504, y: 168 })
     expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).toEqual(blockedPosition)
+    expect(errors).toEqual([])
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = originalRect
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
+test("renders alignment guides while a real React Flow node drag is snapped", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const source = {
+    ...createTextNode({
+      id: "snap-source",
+      metadata: {},
+      position: { x: 80, y: 80 },
+      resourceState: { status: "ready" },
+    }),
+    measured: { height: 80, width: 120 },
+  }
+  const target = {
+    ...createTextNode({
+      id: "snap-target",
+      metadata: {},
+      position: { x: 300, y: 200 },
+      resourceState: { status: "ready" },
+    }),
+    measured: { height: 80, width: 120 },
+  }
+  const initialDocument = createCanvasDocument({
+    id: "node-snap-guides",
+    nodes: [source, target],
+  })
+  const originalRect = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.classList.contains("react-flow__node")) {
+      const node = this.getAttribute("data-id") === source.id ? source : target
+      const transform = this.style.transform.match(/translate\(\s*(-?\d+(?:\.\d+)?)px,\s*(-?\d+(?:\.\d+)?)px\s*\)/)
+      return rect(
+        transform ? Number(transform[1]) : node.position.x,
+        transform ? Number(transform[2]) : node.position.y,
+        node.measured.width,
+        node.measured.height,
+      )
+    }
+    return rect(0, 0, 1000, 800)
+  }
+
+  const container = document.createElement("div")
+  document.body.append(container)
+  let latestDocument: CanvasDocument = initialDocument
+  let root: Root | undefined
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          onlyRenderVisibleElements={false}
+          onDocumentChange={(document) => {
+            latestDocument = document
+          }}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const sourceElement = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${source.id}"]`)
+    expect(sourceElement).not.toBeNull()
+
+    await act(async () => {
+      sourceElement?.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 100,
+          clientY: 100,
+          view: window,
+        }),
+      )
+      window.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 105,
+          clientY: 105,
+          view: window,
+        }),
+      )
+      window.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 205,
+          clientY: 145,
+          view: window,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(latestDocument.nodes.find((node) => node.id === source.id)?.position).toEqual({
+      x: 180,
+      y: 120,
+    })
+    expect(container.querySelector('[data-canvas-snap-guide="x"]')).not.toBeNull()
+    expect(container.querySelector('[data-canvas-snap-guide="y"]')).not.toBeNull()
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          clientX: 205,
+          clientY: 145,
+          view: window,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector("[data-canvas-snap-guide]")).toBeNull()
     expect(errors).toEqual([])
   } finally {
     HTMLElement.prototype.getBoundingClientRect = originalRect
