@@ -40,20 +40,20 @@
         "name": "marketplace.json",
         "sha256": "c84777bb1ab45707a4bfbd24b9fafaabc314f49bea7dc80f8581ca2a18c9dd76",
         "size": 666,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-619ce60a9ea50037e011f74473f46c1836dba438dd84e0144a3740eb739e8e11/marketplace.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "62cb9996b8109a2bd2d03d349e4a9c59fcf48f72ffa4e8b0836705dbec53d562",
+        "sha256": "a606577ee0d4b1c10581e263e42563b060b57b62308956b1b2a0152ab539ff2b",
         "size": 32659,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-619ce60a9ea50037e011f74473f46c1836dba438dd84e0144a3740eb739e8e11/registry-v2.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/registry-v2.json"
       },
-      "revision": "619ce60a9ea50037e011f74473f46c1836dba438dd84e0144a3740eb739e8e11",
+      "revision": "4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "a24e75a39f8eb344b28eec11af2bfabe577639205a339e90888f5f28b936af28",
+        "sha256": "3acc579bece6d74cc7f52518df184c6a79f371c1e93f32ad39c3a72171999419",
         "size": 16547,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-619ce60a9ea50037e011f74473f46c1836dba438dd84e0144a3740eb739e8e11/showcase-v2.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/showcase-v2.json"
       }
     },
     "packages": [
@@ -67,8 +67,8 @@
         "companions": [
           {
             "name": "ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
-            "sha256": "5b2ebd63d7cbbb1264c4f1523f17a02f648998121c5c46529deffa5e2539fb95",
-            "size": 21801728,
+            "sha256": "5d7b34be9de73972978b1e3931ffa48f6ccedb4244638b30627afe9ea3240c48",
+            "size": 21187504,
             "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.3.2/ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
             "arch": "arm64",
             "platform": "darwin"
