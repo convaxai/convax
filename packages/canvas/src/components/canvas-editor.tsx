@@ -852,6 +852,7 @@ function CanvasEditorContent(
   const reloadControllerRef = useRef<AbortController | undefined>(undefined)
   const operationControllersRef = useRef(new Set<AbortController>())
   const authoritativeLoadRequestedRef = useRef(false)
+  const presentedDocumentScopeRef = useRef<CanvasResourceMutationScopeToken | null>(null)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
@@ -876,6 +877,7 @@ function CanvasEditorContent(
     setGenerateOpen(true)
   }, [generateService, props.onGenerateRequest])
   const [hydrating, setHydrating] = useState(Boolean(persistenceService))
+  const [blockingLoad, setBlockingLoad] = useState(Boolean(persistenceService))
   const hydratingRef = useRef(Boolean(persistenceService))
   const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
   documentRef.current = history.document
@@ -1757,10 +1759,16 @@ function CanvasEditorContent(
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
         const reloadScope = resourceMutationScopeRef.current
+        const presentedScope = presentedDocumentScopeRef.current
+        const blockWhileRecovering =
+          Boolean(loadError) ||
+          !presentedScope ||
+          !isCanvasResourceMutationScopeCurrent(() => presentedScope, reloadScope)
         const loadBarrier = createCanvasLoadBarrier()
         loadBarrierRef.current = loadBarrier
         hydratingRef.current = true
         setHydrating(true)
+        if (blockWhileRecovering) setBlockingLoad(true)
         setLoadError(null)
         const controller = new AbortController()
         abortCanvasReload(reloadControllerRef.current)
@@ -1784,6 +1792,7 @@ function CanvasEditorContent(
           }
           rendered = waitForAuthoritativeRender(document)
           acceptHydratedDocument(document)
+          presentedDocumentScopeRef.current = reloadScope
           loadBarrier.resolve()
         } catch (error) {
           if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
@@ -1811,6 +1820,7 @@ function CanvasEditorContent(
             effect: () => {
               hydratingRef.current = false
               setHydrating(false)
+              if (blockWhileRecovering) setBlockingLoad(false)
             },
             reloadScope,
           })
@@ -1819,7 +1829,7 @@ function CanvasEditorContent(
         await rendered
       })
     },
-    [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender],
+    [acceptHydratedDocument, loadError, notifyError, persistenceService, waitForAuthoritativeRender],
   )
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
@@ -1835,7 +1845,9 @@ function CanvasEditorContent(
   useEffect(() => {
     if (!persistenceService) {
       hydratingRef.current = false
+      presentedDocumentScopeRef.current = null
       setHydrating(false)
+      setBlockingLoad(false)
       setLoadError(null)
       loadBarrierRef.current.resolve()
       return
@@ -1849,6 +1861,10 @@ function CanvasEditorContent(
     loadBarrierRef.current = loadBarrier
     previousLoadBarrier.resolve()
     const loadScope = resourceMutationScopeRef.current
+    const presentedScope = presentedDocumentScopeRef.current
+    if (!presentedScope || !isCanvasResourceMutationScopeCurrent(() => presentedScope, loadScope)) {
+      setBlockingLoad(true)
+    }
     const documentId = history.document.id
     const isCurrentLoad = () =>
       !controller.signal.aborted &&
@@ -1860,6 +1876,7 @@ function CanvasEditorContent(
         if (isCurrentLoad() && authoritativeRetry && !document) {
           const error = new Error(`Canvas document was not found: ${documentId}`)
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           setLoadError(error.message)
           loadBarrier.reject(error)
@@ -1878,7 +1895,9 @@ function CanvasEditorContent(
           }
         }
         if (isCurrentLoad()) {
+          presentedDocumentScopeRef.current = loadScope
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           loadBarrier.resolve()
         }
@@ -1886,6 +1905,7 @@ function CanvasEditorContent(
       (error) => {
         if (isCurrentLoad()) {
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           setLoadError(error instanceof Error ? error.message : String(error))
           loadBarrier.reject(error)
@@ -3071,7 +3091,7 @@ function CanvasEditorContent(
                   }
                 />
 
-                {hydrating || loadError ? (
+                {blockingLoad || loadError ? (
                   <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
                     <div className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm">
                       {loadError ? (

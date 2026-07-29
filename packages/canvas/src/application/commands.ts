@@ -23,6 +23,7 @@ import {
   parseCanvasDocument,
 } from "../document"
 import { isCanvasConnectableNode } from "../connections"
+import { sameCanvasJson } from "../json-equality"
 import type {
   CanvasDocument,
   CanvasEdge,
@@ -338,7 +339,7 @@ export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeConten
 
 /** Matches the portable content semantics used by Canvas persistence. */
 export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson(durableCanvasNodeContent(node)) === stableJson(expected)
+  return sameCanvasJson(durableCanvasNodeContent(node), expected)
 }
 
 function durableCanvasNodeContent(node: CanvasNode): CanvasNodeContentGuard {
@@ -359,19 +360,19 @@ export function createCanvasDocumentPatchCommand(
     type: "document.patch",
     addedEdges: next.edges.filter((edge) => !baseEdges.has(edge.id)).map((edge) => structuredClone(edge)),
     addedNodes: next.nodes.filter((node) => !baseNodes.has(node.id)).map((node) => structuredClone(node)),
-    ...(sameJson(base.metadata, next.metadata) ? {} : { metadata: structuredClone(next.metadata) }),
+    ...(sameCanvasJson(base.metadata, next.metadata) ? {} : { metadata: structuredClone(next.metadata) }),
     removedEdgeIds: base.edges.filter((edge) => !nextEdges.has(edge.id)).map((edge) => edge.id),
     removedNodeIds: base.nodes.filter((node) => !nextNodes.has(node.id)).map((node) => node.id),
     updatedEdges: next.edges
       .filter((edge) => {
         const current = baseEdges.get(edge.id)
-        return current !== undefined && !sameJson(current, edge)
+        return current !== undefined && !sameCanvasJson(current, edge)
       })
       .map((edge) => structuredClone(edge)),
     updatedNodes: next.nodes
       .filter((node) => {
         const current = baseNodes.get(node.id)
-        return current !== undefined && !sameJson(current, node)
+        return current !== undefined && !sameCanvasJson(current, node)
       })
       .map((node) => structuredClone(node)),
   }
@@ -744,7 +745,7 @@ function applyDocumentPatch(
   for (const edge of [...command.addedEdges, ...command.updatedEdges]) {
     requireConnectableNodeIds(parsed, [edge.source, edge.target])
   }
-  if (sameJson(document, parsed)) return result(document, document)
+  if (sameCanvasJson(document, parsed)) return result(document, document)
 
   const affectedNodeIds = new Set([...removedNodeIds, ...addedNodeIds, ...updatedNodeIds])
   for (const edgeId of [...removedEdgeIds, ...updatedEdgeIds]) {
@@ -1037,10 +1038,6 @@ function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position
   return createMediaNode({ id: nodeId, position, resource: item })
 }
 
-function sameJson(left: unknown, right: unknown) {
-  return stableJson(left) === stableJson(right)
-}
-
 function requireUniqueIds(ids: readonly string[], label: string) {
   const unique = new Set<string>()
   for (const id of ids) {
@@ -1075,9 +1072,7 @@ function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: read
 }
 
 function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGenerationTargetGuard) {
-  return (
-    stableJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }) === stableJson(expected)
-  )
+  return sameCanvasJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }, expected)
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
@@ -1111,21 +1106,6 @@ function throwGenerationRunValidation(error: unknown): never {
     throw new CanvasCommandValidationError(error.message)
   }
   throw error
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => (item === undefined ? "null" : stableJson(item))).join(",")}]`
-  }
-  if (isRecord(value)) {
-    const record = value
-    return `{${Object.keys(record)
-      .sort()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-      .join(",")}}`
-  }
-  return JSON.stringify(value) ?? "null"
 }
 
 function result(

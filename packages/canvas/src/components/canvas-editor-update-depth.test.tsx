@@ -323,6 +323,83 @@ test("authoritative reload clears a prior load error and resolves after the writ
   }
 })
 
+test("keeps an existing Canvas visible while an authoritative document reload is pending", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const initialDocument = createCanvasDocument({ id: "background-authoritative-reload", title: "Initial" })
+    const authoritativeDocument = {
+      ...initialDocument,
+      metadata: { ...initialDocument.metadata, title: "Authoritative" },
+      revision: 1,
+    }
+    let loadAttempt = 0
+    let resolveReload!: (document: typeof authoritativeDocument) => void
+    const pendingReload = new Promise<typeof authoritativeDocument>((resolve) => {
+      resolveReload = resolve
+    })
+    const load = mock(async () => {
+      loadAttempt += 1
+      if (loadAttempt === 1) return initialDocument
+      return pendingReload
+    })
+    const save = mock(async (document) => document)
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <TestErrorBoundary onError={(error) => errors.push(error)}>
+          <CanvasEditor
+            initialDocument={initialDocument}
+            ref={editorRef}
+            services={createCanvasServices({ persistence: { load, save } })}
+          />
+        </TestErrorBoundary>,
+      )
+    })
+    expect(container.textContent).not.toContain("Loading canvas…")
+
+    let reload: Promise<void> | undefined
+    await act(async () => {
+      reload = editorRef.current?.reloadAuthoritative()
+      await Promise.resolve()
+    })
+
+    expect(observedEditor).toMatchObject({ hydrating: true, readOnly: true })
+    expect(container.textContent).not.toContain("Loading canvas…")
+
+    await act(async () => {
+      resolveReload(authoritativeDocument)
+      await Promise.resolve()
+    })
+    await reload
+
+    expect(observedEditor).toMatchObject({
+      document: { metadata: { title: "Authoritative" }, revision: 1 },
+      hydrating: false,
+      readOnly: false,
+    })
+    expect(container.textContent).not.toContain("Loading canvas…")
+    expect(save).not.toHaveBeenCalled()
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("imperative insertion reuses registered renderer placement, selection, and persistence", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
