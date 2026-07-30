@@ -14,11 +14,11 @@ describe("workspace layout policy", () => {
       canvasHasFullWidth: true,
       projectSidebar: "hidden",
       tier: "wide",
-      utilityPresentation: "overlay",
+      utilityPresentation: "dock",
     })
   })
 
-  test("keeps the restored Project sidebar docked while the wide Agent floats", () => {
+  test("docks both sidebars independently in a wide three-column workspace", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
@@ -26,15 +26,15 @@ describe("workspace layout policy", () => {
         viewportWidth: 1440,
       }),
     ).toMatchObject({
-      agent: "overlay",
+      agent: "dock",
       canvasHasFullWidth: false,
       projectSidebar: "dock",
       tier: "wide",
-      utilityPresentation: "overlay",
+      utilityPresentation: "dock",
     })
   })
 
-  test("floats Project navigation below the wide tier so Canvas keeps its working width", () => {
+  test("keeps a pinned Project sidebar in layout while the utility adapts on small windows", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
@@ -42,11 +42,11 @@ describe("workspace layout policy", () => {
         viewportWidth: 1100,
       }),
     ).toMatchObject({
-      agent: "overlay",
-      canvasHasFullWidth: true,
-      projectSidebar: "overlay",
+      agent: "dock",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "medium",
-      utilityPresentation: "overlay",
+      utilityPresentation: "dock",
     })
     expect(
       resolveWorkspaceLayout({
@@ -56,8 +56,8 @@ describe("workspace layout policy", () => {
       }),
     ).toMatchObject({
       agent: "sheet",
-      canvasHasFullWidth: true,
-      projectSidebar: "overlay",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "small",
       utilityPresentation: "sheet",
     })
@@ -77,31 +77,31 @@ describe("workspace layout policy", () => {
         projectSidebarVisible: false,
         viewportWidth: 900,
       }).utilityPresentation,
-    ).toBe("overlay")
+    ).toBe("dock")
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
         projectSidebarVisible: false,
         viewportWidth: 1359,
       }).utilityPresentation,
-    ).toBe("overlay")
+    ).toBe("dock")
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
         projectSidebarVisible: false,
         viewportWidth: 1360,
       }).utilityPresentation,
-    ).toBe("overlay")
+    ).toBe("dock")
   })
 
-  test("switches the Project sidebar between overlay and dock at the wide boundary", () => {
+  test("keeps click-pinned Project navigation docked at every responsive boundary", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: false,
         projectSidebarVisible: true,
         viewportWidth: 1359,
       }).projectSidebar,
-    ).toBe("overlay")
+    ).toBe("dock")
     expect(
       resolveWorkspaceLayout({
         agentVisible: false,
@@ -120,13 +120,15 @@ describe("workspace layout policy", () => {
       }),
     ).toMatchObject({
       agent: "hidden",
-      utilityPresentation: "overlay",
+      utilityPresentation: "dock",
     })
   })
 
   test("publishes the Desktop-owned shell measurements", () => {
     expect(workspaceShellMetrics).toMatchObject({
       primarySidebar: { defaultSize: 240, maxSize: 480, minSize: 220 },
+      sidebarOverlayInset: 12,
+      titlebarHeight: 44,
       utilityOverlayInset: 16,
       utilitySidebar: { defaultSize: 380 },
     })

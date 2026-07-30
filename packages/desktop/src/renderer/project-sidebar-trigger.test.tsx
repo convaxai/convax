@@ -57,13 +57,14 @@ function installTestWindow() {
 }
 
 describe("ProjectSidebarTrigger", () => {
-  test("opens from a floating entry without rendering a collapsed toolbar", () => {
+  test("opens from a quiet titlebar entry without rendering floating chrome", () => {
     const markup = renderToStaticMarkup(<ProjectSidebarTrigger onOpen={mock(() => undefined)} />)
 
     expect(markup).toContain("data-project-sidebar-entry")
     expect(markup).toContain('aria-label="Open project sidebar"')
-    expect(markup).toContain("shadow-[var(--ui-shadow-low)]")
-    expect(markup).toContain(">Project</span>")
+    expect(markup).not.toContain("shadow")
+    expect(markup).not.toContain(">Project</span>")
+    expect(markup).toContain('title="Open Project"')
     expect(markup).not.toContain("writing-mode")
     expect(markup).not.toContain("h-full")
   })
@@ -89,5 +90,18 @@ describe("ProjectSidebarTrigger", () => {
       await act(async () => root?.unmount())
       await testWindow.restore()
     }
+  })
+
+  test("keeps Project identity stable while exposing the pinned sidebar state", () => {
+    const markup = renderToStaticMarkup(
+      <ProjectSidebarTrigger label="Atlas" onClose={() => undefined} onOpen={() => undefined} open />,
+    )
+
+    expect(markup).not.toContain(">Atlas</span>")
+    expect(markup).toContain('title="Close Atlas"')
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('aria-label="Close project sidebar"')
+    expect(markup).toContain("lucide-panel-left-close")
+    expect(markup).not.toContain("bg-surface-raised")
   })
 })

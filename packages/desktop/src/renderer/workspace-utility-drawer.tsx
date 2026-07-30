@@ -30,6 +30,7 @@ export interface WorkspaceUtilityDrawerProps extends Omit<ComponentPropsWithoutR
   onClose: () => void
   onModeChange: (mode: WorkspaceUtilityActiveMode) => void
   presentation?: WorkspaceVisiblePanelPresentation
+  returnFocusTarget?: HTMLElement | null
   resizeHandle?: ReactNode
   unavailableLabel?: string
 }
@@ -53,6 +54,7 @@ export function WorkspaceUtilityDrawer({
   onClose,
   onModeChange,
   presentation = "dock",
+  returnFocusTarget,
   resizeHandle,
   style,
   unavailableLabel = "This utility is unavailable.",
@@ -60,10 +62,12 @@ export function WorkspaceUtilityDrawer({
 }: WorkspaceUtilityDrawerProps) {
   const id = useId()
   const drawerRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const restoreModeFocusRef = useRef(false)
   const wasOpenRef = useRef(false)
   const open = mode !== "closed"
+  onCloseRef.current = onClose
   const activeMode: WorkspaceUtilityActiveMode | null = mode === "closed" ? null : mode
   const retainedModeRef = useRef<WorkspaceUtilityActiveMode>(activeMode ?? "agent")
   if (activeMode) retainedModeRef.current = activeMode
@@ -103,12 +107,26 @@ export function WorkspaceUtilityDrawer({
   }
   const agentContent = agent(agentChrome)
   const activeContent = presentedMode === "inspector" ? inspector : undefined
+  const drawerStyle =
+    presentation === "dock" && !open
+      ? {
+          ...style,
+          width: 0,
+        }
+      : style
 
   useLayoutEffect(() => {
     if (typeof document === "undefined") return undefined
+    let inertObserver: MutationObserver | undefined
+    let restoreTimer: number | undefined
     if (open && !wasOpenRef.current) {
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      returnFocusRef.current = activeElement && !drawerRef.current?.contains(activeElement) ? activeElement : null
+      returnFocusRef.current =
+        returnFocusTarget?.isConnected === true
+          ? returnFocusTarget
+          : activeElement && !drawerRef.current?.contains(activeElement)
+            ? activeElement
+            : null
       queueMicrotask(() => {
         drawerRef.current
           ?.querySelector<HTMLElement>(
@@ -120,20 +138,46 @@ export function WorkspaceUtilityDrawer({
       const target = returnFocusRef.current
       returnFocusRef.current = null
       queueMicrotask(() => {
-        if (target?.isConnected && !drawerRef.current?.contains(target)) target.focus()
+        if (!target?.isConnected || drawerRef.current?.contains(target)) return
+        const restoreFocus = (attemptsRemaining: number) => {
+          if (!target.isConnected || drawerRef.current?.contains(target)) return
+          const inertAncestor = target.closest<HTMLElement>("[inert]")
+          if (!inertAncestor) {
+            inertObserver?.disconnect()
+            target.focus()
+            return
+          }
+          if (attemptsRemaining > 0) {
+            restoreTimer = window.setTimeout(() => restoreFocus(attemptsRemaining - 1), 16)
+          }
+        }
+        const inertAncestor = target.closest<HTMLElement>("[inert]")
+        if (!inertAncestor) return restoreFocus(0)
+        inertObserver = new window.MutationObserver(() => {
+          restoreFocus(0)
+        })
+        inertObserver.observe(inertAncestor, { attributeFilter: ["inert"], attributes: true })
+        restoreFocus(8)
       })
     }
     wasOpenRef.current = open
-    if (!open || modal) return undefined
+    const cleanUpFocusRestore = () => {
+      inertObserver?.disconnect()
+      if (restoreTimer !== undefined) window.clearTimeout(restoreTimer)
+    }
+    if (!open || modal) return cleanUpFocusRestore
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || !drawerRef.current?.contains(document.activeElement)) return
       event.preventDefault()
       event.stopPropagation()
-      onClose()
+      onCloseRef.current()
     }
     document.addEventListener("keydown", handleKeyDown, true)
-    return () => document.removeEventListener("keydown", handleKeyDown, true)
-  }, [modal, onClose, open])
+    return () => {
+      cleanUpFocusRestore()
+      document.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [modal, open, returnFocusTarget])
 
   useTemporarySurfaceFocus({
     containerRef: drawerRef,
@@ -174,10 +218,9 @@ export function WorkspaceUtilityDrawer({
         aria-label="Workspace utilities"
         aria-modal={modal || undefined}
         className={cn(
-          "workspace-utility-drawer relative z-40 flex min-h-0 shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-surface-panel text-text-primary",
+          "workspace-utility-drawer relative z-40 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-panel text-text-primary",
           presentation === "overlay" && "workspace-utility-drawer--overlay",
           presentation === "sheet" && "workspace-utility-drawer--sheet",
-          !open && presentation === "dock" && "hidden",
           className,
         )}
         aria-hidden={!open || undefined}
@@ -185,11 +228,10 @@ export function WorkspaceUtilityDrawer({
         data-workspace-utility-mode={mode}
         data-workspace-utility-presentation={presentation}
         data-workspace-utility-state={open ? "open" : "closed"}
-        hidden={!open && presentation === "dock"}
         inert={!open || undefined}
         ref={drawerRef}
         role={modal ? "dialog" : undefined}
-        style={style}
+        style={drawerStyle}
         {...props}
       >
         {resizeHandle}
@@ -217,11 +259,7 @@ export function WorkspaceUtilityDrawer({
             id={`${id}-${presentedMode}-panel`}
             role="tabpanel"
           >
-            <WorkspaceUtilityContentHeader
-              closeLabel={closeLabel}
-              modeNavigation={modeNavigation}
-              onClose={onClose}
-            />
+            <WorkspaceUtilityContentHeader closeLabel={closeLabel} modeNavigation={modeNavigation} onClose={onClose} />
             {activeContent ?? (
               <p className="grid min-h-32 place-items-center px-5 text-center text-xs text-text-tertiary" role="status">
                 {unavailableLabel}
@@ -259,13 +297,7 @@ function WorkspaceUtilityContentHeader({
   )
 }
 
-export function WorkspaceUtilityCollapseButton({
-  label,
-  onClose,
-}: {
-  label: string
-  onClose: () => void
-}) {
+export function WorkspaceUtilityCollapseButton({ label, onClose }: { label: string; onClose: () => void }) {
   return (
     <button
       aria-label={label}

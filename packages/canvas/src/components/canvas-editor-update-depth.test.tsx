@@ -1171,3 +1171,50 @@ test("dismisses the zoom menu with Escape and restores trigger focus", async () 
     await restoreWindow()
   }
 })
+
+test("navigates the top creation menu by keyboard and restores its trigger on Escape", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "creation-menu-keyboard" })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
+    const menu = container.querySelector<HTMLElement>(".convax-canvas-create-menu")
+    expect(trigger).not.toBeNull()
+    expect(menu?.hidden).toBeTrue()
+
+    await act(async () => {
+      trigger?.focus()
+      trigger?.click()
+    })
+    expect(menu?.hidden).toBeFalse()
+
+    const text = menu?.querySelector<HTMLButtonElement>('button[aria-label="Add Text"]')
+    text?.focus()
+    await act(async () => {
+      text?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }))
+    })
+    expect((document.activeElement as HTMLElement | null)?.getAttribute("aria-label")).toBe("Add Image")
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+    })
+    expect(menu?.hidden).toBeTrue()
+    expect(document.activeElement).toBe(trigger)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})

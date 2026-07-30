@@ -3,15 +3,17 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { ApplicationTitlebar } from "./application-titlebar"
 
 describe("ApplicationTitlebar", () => {
-  test("overlays one transparent chrome row across the whole workspace", () => {
+  test("renders one quiet chrome row above the three workspace columns", () => {
     const markup = renderToStaticMarkup(
       <ApplicationTitlebar
-        contextLabel="Workspace"
-        commandsLabel="Open commands"
+        centerAction={<div data-canvas-title>Canvas 1</div>}
+        contextLabel="Canvas 1"
         homeLabel="Back to Projects"
+        leadingActionHostRef={() => undefined}
         onBackToProjects={() => undefined}
-        onOpenCommands={() => undefined}
         platform="darwin"
+        productLabel="Atlas"
+        rightAction={<button aria-label="Open agent">Agent</button>}
         surface="workspace"
         windowControls={{
           closeLabel: "Close window",
@@ -27,11 +29,20 @@ describe("ApplicationTitlebar", () => {
 
     expect(markup).toContain('data-application-titlebar="true"')
     expect(markup).toContain("pl-[78px]")
-    expect(markup).toContain("absolute inset-x-0 top-0")
-    expect(markup).toContain("bg-transparent")
-    expect(markup).toContain('aria-label="Back to Projects"')
-    expect(markup).toContain('data-convax-brand="true"')
-    expect(markup).toContain('aria-label="Open commands"')
+    expect(markup).toContain("relative")
+    expect(markup).not.toContain("border-b border-border-subtle")
+    expect(markup).toContain("bg-surface-panel")
+    expect(markup).not.toContain('aria-label="Back to Projects"')
+    expect(markup).not.toContain('data-convax-brand="true"')
+    expect(markup).toContain('data-application-product-name=""')
+    expect(markup).toContain('title="Atlas"')
+    expect(markup).toContain(">Atlas</span>")
+    expect(markup).toContain('data-application-titlebar-leading=""')
+    expect(markup).toContain('data-application-titlebar-center=""')
+    expect(markup).toContain('data-application-titlebar-right=""')
+    expect(markup).toContain('aria-label="Open agent"')
+    expect(markup).toContain('data-canvas-title="true"')
+    expect(markup).not.toContain('aria-label="Open commands"')
     expect(markup).toContain('data-macos-window-controls="true"')
     expect(markup).toContain('aria-label="Close window"')
     expect(markup).toContain("background-color:#ff5f57")
@@ -41,45 +52,25 @@ describe("ApplicationTitlebar", () => {
     expect(markup).not.toContain("Atlas research")
     expect(markup).not.toContain("aria-expanded=")
     expect(markup).not.toContain("Open details")
-    expect(markup).not.toContain(" border-b ")
+    expect(markup).not.toContain("ConvaxBrand")
   })
 
   test("renders a passive Settings context without a second navigation action", () => {
     const markup = renderToStaticMarkup(
       <ApplicationTitlebar
         contextLabel="Settings"
-        commandsLabel="Open commands"
         homeLabel="Back to Projects"
         onBackToProjects={() => undefined}
-        onOpenCommands={() => undefined}
         platform="win32"
         surface="settings"
       />,
     )
 
     expect(markup).toContain(">Settings</div>")
-    expect(markup).not.toContain('aria-current="page"')
+    expect(markup).toContain('aria-label="Back to Projects"')
+    expect(markup).toContain("lucide-arrow-left")
     expect(markup).not.toContain("pl-[78px]")
     expect(markup).not.toContain("data-macos-window-controls")
     expect(markup).not.toContain("Open details")
-  })
-
-  test("keeps the brand passive when Projects are managed inside the workspace", () => {
-    const markup = renderToStaticMarkup(
-      <ApplicationTitlebar
-        brandInteractive={false}
-        commandsLabel="Open commands"
-        contextLabel=""
-        homeLabel="Convax"
-        onBackToProjects={() => undefined}
-        onOpenCommands={() => undefined}
-        platform="win32"
-        surface="workspace"
-      />,
-    )
-
-    expect(markup).toContain('data-application-brand="passive"')
-    expect(markup).toContain('aria-label="Convax"')
-    expect(markup).not.toContain('aria-label="Back to Projects"')
   })
 })

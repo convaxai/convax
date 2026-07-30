@@ -7,16 +7,25 @@ import { workspaceShellMetrics, type WorkspaceVisiblePanelPresentation } from ".
  */
 export function resolveWorkspaceCanvasViewportInsets(input: {
   presentation: WorkspaceVisiblePanelPresentation
-  primarySidebarSize: number
+  projectSidebarOverlaySize: number
   utilityPanelSize: number
   utilityVisible: boolean
   viewportWidth: number
 }): CanvasViewportInsets {
-  if (!input.utilityVisible || input.presentation !== "overlay") return {}
-  const canvasWidth = Math.max(0, normalize(input.viewportWidth) - normalize(input.primarySidebarSize))
-  const unavailableRight = normalize(input.utilityPanelSize) + workspaceShellMetrics.utilityOverlayInset * 2
+  const left = normalize(input.projectSidebarOverlaySize)
+    ? normalize(input.projectSidebarOverlaySize) + workspaceShellMetrics.sidebarOverlayInset
+    : 0
+  const canvasWidth = Math.max(0, normalize(input.viewportWidth))
+  const unavailableRight =
+    input.utilityVisible && input.presentation === "overlay"
+      ? normalize(input.utilityPanelSize) + workspaceShellMetrics.utilityOverlayInset * 2
+      : 0
+  const right = unavailableRight
+    ? Math.min(unavailableRight, Math.max(0, canvasWidth - left - workspaceShellMetrics.minimumCanvasPeekSize))
+    : 0
   return {
-    right: Math.min(unavailableRight, Math.max(0, canvasWidth - workspaceShellMetrics.minimumCanvasPeekSize)),
+    ...(left ? { left } : {}),
+    ...(right ? { right } : {}),
   }
 }
 

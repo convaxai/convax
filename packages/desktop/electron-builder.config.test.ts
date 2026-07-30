@@ -106,10 +106,10 @@ describe("Desktop platform artifacts", () => {
       category: "public.app-category.productivity",
       gatekeeperAssess: false,
       hardenedRuntime: true,
-      icon: "resources/icon.svg",
+      icon: "resources/icon.png",
     })
-    expect(config.win?.icon).toBe("resources/icon.svg")
-    expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.svg" })
+    expect(config.win?.icon).toBe("resources/icon.png")
+    expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.png" })
   })
 
   test("allows unsigned local builds but fails closed for release signing and notarization", () => {

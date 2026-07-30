@@ -583,69 +583,69 @@ body {
 }
 
 .project-sidebar-shell {
-  z-index: 45;
-  overflow: hidden;
-  pointer-events: auto;
-}
-
-.project-sidebar-shell--dock {
   position: relative;
-  width: var(--project-sidebar-size);
+  width: 0;
   height: 100%;
   flex: 0 0 auto;
-  border-right: 1px solid var(--ui-border-default);
-  transition:
-    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    border-color 300ms cubic-bezier(0.78, 0, 0.22, 1);
+  z-index: 45;
+  overflow: visible;
+  pointer-events: auto;
+  transition: width var(--ui-motion-slow) var(--ui-ease-reveal);
 }
 
-.project-sidebar-shell--dock[data-project-sidebar-state="closed"] {
-  width: 0;
-  border-color: transparent;
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] {
+  width: var(--project-sidebar-size);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] {
   pointer-events: none;
 }
 
-.project-sidebar-shell--overlay {
+.project-sidebar-shell__panel {
   position: absolute;
-  inset-block: 16px;
-  left: 16px;
-  width: min(var(--project-sidebar-size), calc(100% - 32px));
-  border: 1px solid color-mix(in srgb, var(--ui-border-default) 72%, transparent);
-  border-radius: 16px;
-  box-shadow:
-    0 18px 50px -20px rgb(0 0 0 / 55%),
-    0 4px 14px -6px rgb(0 0 0 / 35%);
+  inset-block: 0;
+  left: 0;
+  width: min(var(--project-sidebar-size), calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: var(--ui-surface-panel);
   opacity: 1;
   translate: 0;
   visibility: visible;
   transition:
-    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    inset var(--ui-motion-slow) var(--ui-ease-reveal),
+    left var(--ui-motion-slow) var(--ui-ease-reveal),
+    border-color var(--ui-motion-normal) ease-out,
+    border-radius var(--ui-motion-slow) var(--ui-ease-reveal),
+    box-shadow var(--ui-motion-slow) var(--ui-ease-reveal),
+    opacity var(--ui-motion-normal) ease-out,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
     visibility 0s linear 0s;
 }
 
-.project-sidebar-shell--overlay[data-project-sidebar-state="closed"] {
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] .project-sidebar-shell__panel {
+  width: var(--project-sidebar-size);
+  border-right-color: color-mix(in oklab, var(--ui-border-subtle) 72%, transparent);
+  box-shadow: 18px 0 38px -32px rgb(0 0 0 / 58%);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="hover"] .project-sidebar-shell__panel {
+  inset-block: 8px;
+  left: 8px;
+  border-color: color-mix(in oklab, var(--ui-border-default) 68%, transparent);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: var(--ui-shadow-medium);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] .project-sidebar-shell__panel {
   opacity: 0;
   translate: -16px 0;
   visibility: hidden;
   pointer-events: none;
   transition:
-    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    visibility 0s linear 300ms;
-}
-
-.project-sidebar-shell__panel {
-  width: var(--project-sidebar-size);
-  max-width: 100%;
-  height: 100%;
-  opacity: 1;
-  transition: opacity 200ms ease-out 100ms;
-}
-
-.project-sidebar-shell[data-project-sidebar-state="closed"] .project-sidebar-shell__panel {
-  opacity: 0;
-  transition-delay: 0ms;
+    opacity var(--ui-motion-normal) ease-in,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
+    visibility 0s linear var(--ui-motion-slow);
 }
 
 .project-sidebar-entry {
@@ -656,27 +656,8 @@ body {
     translate 300ms cubic-bezier(0.78, 0, 0.22, 1);
 }
 
-.project-sidebar-entry--hidden {
-  opacity: 0;
-  translate: -16px 0;
-}
-
-.project-sidebar-backdrop {
-  animation: project-sidebar-backdrop-enter 300ms cubic-bezier(0.78, 0, 0.22, 1) both;
-}
-
-@keyframes project-sidebar-backdrop-enter {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
 .workspace-utility-drawer--overlay {
-  border: 1px solid color-mix(in srgb, var(--ui-border-default) 60%, transparent);
+  border: 0;
   border-radius: 18px;
   background: color-mix(in srgb, var(--ui-surface-panel) 80%, transparent);
   box-shadow:
@@ -692,6 +673,31 @@ body {
     opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
     translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
     visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"] {
+  box-shadow: -18px 0 38px -32px rgb(0 0 0 / 68%);
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 220ms ease-out,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"][data-workspace-utility-state="closed"] {
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  translate: 12px 0;
+  visibility: hidden;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 180ms ease-in,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 300ms;
 }
 
 .workspace-utility-drawer--sheet {
@@ -768,10 +774,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .project-sidebar-backdrop,
   .project-sidebar-entry,
   .project-sidebar-shell,
   .project-sidebar-shell__panel,
+  .workspace-utility-drawer[data-workspace-utility-presentation="dock"],
   .workspace-utility-drawer--overlay,
   .workspace-utility-drawer--sheet,
   .workspace-utility-entry,
@@ -783,6 +789,12 @@ body {
 }
 
 @media (forced-colors: active) {
+  .project-sidebar-shell__panel {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
   .workspace-utility-drawer--overlay {
     border-color: CanvasText;
     background: Canvas;
@@ -816,9 +828,15 @@ textarea {
 
 .app-titlebar {
   -webkit-app-region: drag;
+  box-shadow: 0 12px 32px -32px rgb(0 0 0 / 72%);
 }
 
 .app-titlebar button {
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-no-drag,
+.app-titlebar-no-drag * {
   -webkit-app-region: no-drag;
 }
 
