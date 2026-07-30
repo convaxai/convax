@@ -816,6 +816,18 @@ graceful for ordinary eviction and escalates to an immediate process-group kill
 when the MCP leader exits or the grace period expires. Windows execution stays
 disabled until a Job Object can provide the equivalent owned-tree guarantee.
 
+When a node-targeted terminal run has `retrySafety: "unknown"`, its original card
+and operation remain unresolved and cannot be retried in place. The card may expose
+an explicit action that restores the old prompt into a composer for a separate
+submission. That submission must use a fresh `operationId` with
+`resultMode: { "type": "create-pending-node" }`; the host creates a new pending
+card and leaves the old run untouched. Its `referenceConstraint` remains bound to
+the old owner's live direct incoming edges; the result relation may connect the new
+card from that owner for lineage but cannot replace it. This may create another
+billable task and is presented as such. It does not reinterpret MCP `isError`, a
+lost response, or an orphaned task as retry-safe. Only a host-classified safe
+failure may submit a fresh operation against the same replacement card.
+
 ## Maintainer checklist
 
 Changes to this boundary must preserve all of the following:

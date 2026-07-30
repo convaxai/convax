@@ -63,11 +63,9 @@ export function canvasCardGenerationPromptContextNodeIds(
 
 /** Builds the host-derived constraint that Main revalidates against authoritative incoming edges. */
 export function canvasCardGenerationReferenceConstraint(
-  request: Pick<CanvasGenerateRequest, "resultMode">,
+  request: Pick<CanvasGenerateRequest, "referenceConstraint">,
 ): { ownerNodeId: string; type: "direct-incoming" } | undefined {
-  return request.resultMode?.type === "replace-node"
-    ? { ownerNodeId: request.resultMode.nodeId, type: "direct-incoming" }
-    : undefined
+  return request.referenceConstraint
 }
 
 export function canvasCardAgentContextNodeIds(
@@ -175,6 +173,7 @@ export function createCanvasCardGenerationRequest(input: {
     throw new Error("Card generation requires a prompt or text context")
   }
   const toolInput = validateCanvasCardGenerationToolInput(input.description, input.toolInput)
+  const createsNewTask = input.request.generation?.submissionMode === "create-pending-node"
   return {
     anchor: canvasCardGenerationAnchor(node, input.request.document.nodes),
     context: {
@@ -189,8 +188,9 @@ export function createCanvasCardGenerationRequest(input: {
     ...(generationInputs.promptContextNodeIds.length > 0
       ? { promptContextNodeIds: generationInputs.promptContextNodeIds }
       : {}),
+    referenceConstraint: { ownerNodeId: node.id, type: "direct-incoming" },
     references: generationInputs.references,
-    resultMode: { nodeId: node.id, type: "replace-node" },
+    resultMode: createsNewTask ? { type: "create-pending-node" } : { nodeId: node.id, type: "replace-node" },
     signal: input.signal,
     toolId: input.tool.id,
     ...(Object.keys(toolInput).length > 0 ? { toolInput } : {}),

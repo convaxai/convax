@@ -85,7 +85,12 @@ import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
 import { CANVAS_FORCED_COLORS_QUERY, CANVAS_MOTION_DURATION, resolveCanvasRectEnterTransform } from "../motion"
 import { partitionCanvasSelectionActions, type CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
-import { CanvasTextResourceConflictError, useCanvasService, type CanvasTextResourceService } from "../services"
+import {
+  CanvasTextResourceConflictError,
+  useCanvasService,
+  type CanvasAssistantGenerationCapability,
+  type CanvasTextResourceService,
+} from "../services"
 import type {
   CanvasFolderNodeData,
   CanvasMediaKind,
@@ -1937,6 +1942,7 @@ function EmptyMedia(props: {
     uploadDisabled: boolean
   }
   kind: CanvasMediaKind
+  state: "blank" | "unavailable"
 }) {
   const label = mediaLabel(props.kind)
   if (props.actions) {
@@ -1986,12 +1992,17 @@ function EmptyMedia(props: {
       </div>
     )
   }
+  const blank = props.state === "blank"
   return (
     <div className="convax-media-empty size-full">
       <div className="convax-media-empty__content">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
-        <span className="convax-media-empty__title">{label} unavailable</span>
-        <span className="convax-media-empty__hint">Relink a selected Project resource or choose a local file</span>
+        <span className="convax-media-empty__title">{blank ? `Empty ${label}` : `${label} unavailable`}</span>
+        <span className="convax-media-empty__hint">
+          {blank
+            ? "Describe what you want to generate below"
+            : "Relink a selected Project resource or choose a local file"}
+        </span>
       </div>
     </div>
   )
@@ -2011,7 +2022,13 @@ function MediaBody(props: {
   const fit = props.data.fit ?? "contain"
   const url = props.data.resourceState?.url ?? ""
   if (!url.trim()) {
-    return <EmptyMedia actions={props.emptyImageActions} kind={props.data.kind} />
+    return (
+      <EmptyMedia
+        actions={props.emptyImageActions}
+        kind={props.data.kind}
+        state={props.data.status === "idle" ? "blank" : "unavailable"}
+      />
+    )
   }
   if (props.data.kind === "image") {
     return (
@@ -2206,7 +2223,7 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 
 function FileGenerationActivityOverlay(props: {
   onCancel: () => void
-  onRecover: () => void
+  onRecover: (submissionMode: NonNullable<CanvasAssistantGenerationCapability["submissionMode"]>) => void
   run: CanvasNodeGenerationRun
 }) {
   const editor = useCanvasEditor()
@@ -2259,7 +2276,7 @@ function FileGenerationActivityOverlay(props: {
             className="nodrag nowheel"
             onClick={(event) => {
               event.stopPropagation()
-              props.onRecover()
+              props.onRecover("replace-owner-node")
             }}
             onPointerDown={(event) => event.stopPropagation()}
             size="sm"
@@ -2271,16 +2288,24 @@ function FileGenerationActivityOverlay(props: {
         ) : (
           <>
             <span className="max-w-64 text-[11px] leading-4 text-muted-foreground">
-              外部任务结果未知，此卡片已锁定以避免重复计费。切换 Agent
-              默认模型不会改变该任务；如需重试，请新建同类型卡片（新任务可能另行计费）。
+              外部任务结果未知，此卡片仍锁定以避免重复计费。切换 Agent
+              默认模型不会改变该任务；可以使用原提示词新建独立任务（可能另行计费）。
             </span>
             <span
               className="nodrag nowheel"
-              data-canvas-generation-retry-blocked="true"
+              data-canvas-generation-new-task="true"
               onPointerDown={(event) => event.stopPropagation()}
             >
-              <Button disabled size="sm" type="button" variant="outline">
-                本卡片不可重试
+              <Button
+                onClick={(event) => {
+                  event.stopPropagation()
+                  props.onRecover("create-pending-node")
+                }}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                使用原提示词新建任务
               </Button>
             </span>
           </>
@@ -2326,6 +2351,7 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
 
 function FileAssistantAccessory(
   props: NodeProps<CanvasNode> & {
+    generationSubmissionMode?: CanvasAssistantGenerationCapability["submissionMode"]
     initialGenerationPrompt?: string
     open: boolean
   },
@@ -2372,6 +2398,9 @@ function FileAssistantAccessory(
             ...(generationOutput
               ? {
                   generation: {
+                    ...(props.generationSubmissionMode === undefined
+                      ? {}
+                      : { submissionMode: props.generationSubmissionMode }),
                     ...(props.initialGenerationPrompt === undefined
                       ? {}
                       : { initialPrompt: props.initialGenerationPrompt }),
@@ -2527,13 +2556,16 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const generation = useCanvasService("generate")
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
-  const [dismissedTerminalOperationId, setDismissedTerminalOperationId] = useState<string>()
+  const [terminalRecovery, setTerminalRecovery] = useState<{
+    operationId: string
+    submissionMode: NonNullable<CanvasAssistantGenerationCapability["submissionMode"]>
+  }>()
   const activeGeneration = Boolean(generationRun && isCanvasNodeGenerationRunActive(generationRun))
   const dismissedTerminal = Boolean(
     generationRun &&
       !activeGeneration &&
       generationRun.status !== "succeeded" &&
-      dismissedTerminalOperationId === generationRun.operationId,
+      terminalRecovery?.operationId === generationRun.operationId,
   )
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
@@ -2607,6 +2639,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
         <FileAssistantAccessory
           {...props}
           open={visualMediaAssistant || assistantOpen}
+          generationSubmissionMode={dismissedTerminal ? terminalRecovery?.submissionMode : undefined}
           initialGenerationPrompt={
             generationRun?.status === "succeeded" || dismissedTerminal ? generationRun?.prompt : undefined
           }
@@ -2615,8 +2648,8 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       {generationRun && generationRun.status !== "succeeded" && !dismissedTerminal ? (
         <FileGenerationActivityOverlay
           onCancel={() => generation?.cancel?.(generationRun.operationId)}
-          onRecover={() => {
-            setDismissedTerminalOperationId(generationRun.operationId)
+          onRecover={(submissionMode) => {
+            setTerminalRecovery({ operationId: generationRun.operationId, submissionMode })
             editor.selectNodes([props.id])
           }}
           run={generationRun}

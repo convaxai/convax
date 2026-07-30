@@ -367,7 +367,10 @@ describe("Canvas theme closure", () => {
     const outlineEmptyRule = cssRule(styles, ".convax-canvas-outline__empty")
 
     expect(mediaEmptyRule).toContain("var(--canvas-node-background)")
+    expect(mediaContentRule).toContain("display: flex")
+    expect(mediaContentRule).toContain("flex-direction: column")
     expect(mediaContentRule).toContain("color: var(--canvas-text)")
+    expect(mediaContentRule).toContain("pointer-events: none")
     expect(mediaIconRule).toContain("background: var(--canvas-node-background)")
     expect(mediaHintRule).toContain("color: var(--canvas-text-muted)")
     expect(mediaActionsRule).toContain("flex-wrap: wrap")

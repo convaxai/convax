@@ -8,7 +8,9 @@ import {
   inferCanvasGenerationReferences,
   CanvasTextResourceConflictError,
   createCanvasPendingDraftRegistry,
+  type CanvasAssistantGenerationCapability,
   type CanvasGenerateService,
+  type CanvasGenerationResultMode,
   type CanvasGenerationReference,
   type CanvasGenerationToolSummary,
 } from "./services"
@@ -162,6 +164,22 @@ describe("Canvas text draft services", () => {
 })
 
 describe("Canvas generation services", () => {
+  test("keeps unknown-result continuation as an explicit separate pending-task contract", () => {
+    const capability = {
+      initialPrompt: "A small rabbit",
+      output: "image",
+      submissionMode: "create-pending-node",
+    } satisfies CanvasAssistantGenerationCapability
+    const resultMode = { type: capability.submissionMode } satisfies CanvasGenerationResultMode
+
+    expect(capability).toEqual({
+      initialPrompt: "A small rabbit",
+      output: "image",
+      submissionMode: "create-pending-node",
+    })
+    expect(resultMode).toEqual({ type: "create-pending-node" })
+  })
+
   test("keeps normalized tool-owned scalar fields behind the host service", async () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({

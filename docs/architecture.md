@@ -742,6 +742,17 @@ running, task-receipt, guarded replacement, terminal and restart-reconciliation
 state machine as an existing card; a restart cannot leave a placeholder permanently
 pending.
 
+A terminal run whose external result is `unknown` remains attached to and locks its
+original card. The UI may restore that run's normalized prompt only through an
+explicit “new task” action. Submitting that composer uses a fresh `operationId` and
+`create-pending-node`, so Main creates a separate host-owned target while retaining
+the original card and unresolved operation unchanged. Its prompt context and media
+references remain constrained to the original card's live direct incoming edges.
+Main may connect the new target from that owner to preserve visible lineage, but it
+must never replace or clear the old unknown owner.
+This is not an in-place retry and must never bypass Canvas's unknown-retry guard.
+Only a run explicitly marked retry-safe may reuse its card through `replace-node`.
+
 The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
 Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is
 the execution Agent/Worker, and its Main-owned reconciliation phase is the
