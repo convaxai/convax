@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Window } from "happy-dom"
-import { act, useState, type ReactNode } from "react"
+import { act, useRef, useState, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
@@ -198,7 +198,10 @@ describe("WorkspaceUtilityDrawer", () => {
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
 
       await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close utilities"]')?.click())
-      expect(container.querySelector("[data-workspace-utility-drawer]")?.hasAttribute("hidden")).toBeTrue()
+      expect(container.querySelector("[data-workspace-utility-drawer]")?.getAttribute("data-workspace-utility-state")).toBe(
+        "closed",
+      )
+      expect(container.querySelector("[data-workspace-utility-drawer]")?.getAttribute("style")).toContain("width: 0")
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
       expect(container.textContent).toContain("Open Agent")
       expect(container.querySelector("[data-workspace-utility-entry-state]")?.getAttribute("aria-hidden")).toBeNull()
@@ -219,7 +222,9 @@ describe("WorkspaceUtilityDrawer", () => {
         document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
         await Promise.resolve()
       })
-      expect(container.querySelector("[data-workspace-utility-drawer]")?.hasAttribute("hidden")).toBeTrue()
+      expect(container.querySelector("[data-workspace-utility-drawer]")?.getAttribute("data-workspace-utility-state")).toBe(
+        "closed",
+      )
       expect(document.activeElement?.textContent).toBe("Open Agent")
     } finally {
       if (root) await act(async () => root?.unmount())
@@ -305,9 +310,7 @@ describe("WorkspaceUtilityDrawer", () => {
       />,
     )
 
-    expect(closedMarkup).toContain(
-      '<div class="workspace-utility-entry" data-workspace-utility-entry-state="visible">',
-    )
+    expect(closedMarkup).toContain('<div class="workspace-utility-entry" data-workspace-utility-entry-state="visible">')
     expect(openMarkup).toContain(
       '<div aria-hidden="true" class="workspace-utility-entry" data-workspace-utility-entry-state="hidden" inert="">',
     )
@@ -315,12 +318,9 @@ describe("WorkspaceUtilityDrawer", () => {
 
   test("coordinates utility drawer and compact-entry motion with a reduced-motion terminal state", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const entryRule =
-      styles.match(/\.workspace-utility-entry \{[\s\S]*?\n\}/)?.[0] ?? ""
+    const entryRule = styles.match(/\.workspace-utility-entry \{[\s\S]*?\n\}/)?.[0] ?? ""
     const hiddenEntryRule =
-      styles.match(
-        /\.workspace-utility-entry\[data-workspace-utility-entry-state="hidden"\] \{[\s\S]*?\n\}/,
-      )?.[0] ?? ""
+      styles.match(/\.workspace-utility-entry\[data-workspace-utility-entry-state="hidden"\] \{[\s\S]*?\n\}/)?.[0] ?? ""
 
     expect(entryRule).toContain("position: absolute")
     expect(entryRule).toContain("inset: 0")
@@ -389,8 +389,72 @@ describe("WorkspaceUtilityDrawer", () => {
       expect(drawer.getAttribute("data-workspace-utility-state")).toBe("closed")
       expect(drawer.getAttribute("aria-hidden")).toBe("true")
       expect(drawer.querySelector('[data-workspace-utility-panel="agent"]')?.hasAttribute("hidden")).toBeFalse()
-      expect(document.activeElement).toBe(opener)
+      expect(document.activeElement === opener).toBeTrue()
       expect(document.body.style.overflow).toBe("")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      await restoreWindow()
+    }
+  })
+
+  test("restores the retained titlebar opener after the dock closes", async () => {
+    const restoreWindow = installTestWindow()
+    let root: Root | undefined
+
+    function Harness() {
+      const [drawerOpen, setDrawerOpen] = useState(false)
+      const [openerHidden, setOpenerHidden] = useState(false)
+      const openerRef = useRef<HTMLButtonElement>(null)
+      return (
+        <>
+          <div aria-hidden={openerHidden || undefined} inert={openerHidden || undefined}>
+            <button
+              data-titlebar-agent
+              onClick={() => {
+                setOpenerHidden(true)
+                setDrawerOpen(true)
+              }}
+              ref={openerRef}
+              type="button"
+            >
+              Open Agent
+            </button>
+          </div>
+          <WorkspaceUtilityDrawer
+            agent={({ closeLabel, onClose }) => <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />}
+            closeLabel="Close utilities"
+            mode={drawerOpen ? "agent" : "closed"}
+            modes={modes}
+            onClose={() => {
+              setOpenerHidden(false)
+              setDrawerOpen(false)
+            }}
+            onModeChange={() => undefined}
+            presentation="dock"
+            returnFocusTarget={openerRef.current}
+          />
+        </>
+      )
+    }
+
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () => root?.render(<Harness />))
+      const opener = container.querySelector<HTMLButtonElement>("[data-titlebar-agent]")!
+      await act(async () => {
+        opener.focus()
+        opener.click()
+        await Promise.resolve()
+      })
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Close utilities"]')?.click()
+        await Promise.resolve()
+      })
+
+      expect(opener.closest("[inert]")).toBeNull()
+      expect(document.activeElement === opener).toBeTrue()
     } finally {
       if (root) await act(async () => root?.unmount())
       await restoreWindow()

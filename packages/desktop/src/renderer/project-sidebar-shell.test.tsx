@@ -60,10 +60,10 @@ function installTestWindow() {
   }
 }
 
-function ShellHarness({ presentation }: { presentation: "dock" | "overlay" }) {
-  const [open, setOpen] = useState(true)
+function ShellHarness({ initialOpen = true }: { initialOpen?: boolean }) {
+  const [open, setOpen] = useState(initialOpen)
   return (
-    <ProjectSidebarShell entryLabel="Example" onOpenChange={setOpen} open={open} presentation={presentation} size={240}>
+    <ProjectSidebarShell entryLabel="Example" onOpenChange={setOpen} open={open} size={240}>
       <aside>
         <button data-project-sidebar-close="" onClick={() => setOpen(false)} type="button">
           Close
@@ -74,15 +74,129 @@ function ShellHarness({ presentation }: { presentation: "dock" | "overlay" }) {
 }
 
 describe("Desktop Project sidebar Shell", () => {
-  test("dismisses a responsive overlay from outside or Escape and returns focus to its entry", async () => {
+  test("ports the single stable Project identity into the application titlebar host", async () => {
+    const testEnvironment = installTestWindow()
+    const container = document.createElement("div")
+    const titlebarHost = document.createElement("div")
+    document.body.append(titlebarHost, container)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebarShell
+            entryLabel="Atlas"
+            entryPortal={titlebarHost}
+            onOpenChange={() => undefined}
+            open={false}
+            size={240}
+          >
+            <aside>Project navigation</aside>
+          </ProjectSidebarShell>,
+        ),
+      )
+
+      expect(container.querySelector("[data-project-sidebar-entry]")).toBeNull()
+      expect(titlebarHost.querySelector("[data-project-sidebar-entry]")?.textContent).toBe("")
+      expect(titlebarHost.querySelector('button[title="Open Atlas"]')).not.toBeNull()
+      expect(titlebarHost.querySelector('button[aria-label="Open project sidebar"]')).not.toBeNull()
+    } finally {
+      await act(async () => root?.unmount())
+      titlebarHost.remove()
+      container.remove()
+      await testEnvironment.restore()
+    }
+  })
+
+  test("reveals the full-height overlay on hover without pinning or consuming layout width", async () => {
     const testEnvironment = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
     let root: Root | undefined
     try {
       root = createRoot(container)
-      await act(async () => root?.render(<ShellHarness presentation="overlay" />))
+      await act(async () =>
+        root?.render(
+          <ProjectSidebarShell
+            entryLabel="Example"
+            onOpenChange={() => undefined}
+            open={false}
+            size={240}
+          >
+            <aside>Project navigation</aside>
+          </ProjectSidebarShell>,
+        ),
+      )
+      const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+
+      const shell = container.querySelector<HTMLElement>(".project-sidebar-shell")!
+      expect(shell.getAttribute("data-project-sidebar-state")).toBe("open")
+      expect(shell.getAttribute("data-project-sidebar-reveal")).toBe("hover")
+      expect(shell.hasAttribute("inert")).toBeFalse()
+      expect(entry.getAttribute("aria-hidden")).toBeNull()
+    } finally {
+      await act(async () => root?.unmount())
+      container.remove()
+      await testEnvironment.restore()
+    }
+  })
+
+  test("stays explicitly closed after a titlebar click until the pointer leaves and enters again", async () => {
+    const testEnvironment = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () => root?.render(<ShellHarness />))
       await act(async () => testEnvironment.runFrames())
+      const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
+      const trigger = entry.querySelector<HTMLButtonElement>('button[aria-label="Close project sidebar"]')!
+      const shell = container.querySelector<HTMLElement>(".project-sidebar-shell")!
+
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+      await act(async () => trigger.click())
+      expect(shell.getAttribute("data-project-sidebar-reveal")).toBe("closed")
+      expect(shell.getAttribute("data-project-sidebar-state")).toBe("closed")
+
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+      expect(shell.getAttribute("data-project-sidebar-state")).toBe("closed")
+
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "mouse" })),
+      )
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+      expect(shell.getAttribute("data-project-sidebar-reveal")).toBe("hover")
+      expect(shell.getAttribute("data-project-sidebar-state")).toBe("open")
+    } finally {
+      await act(async () => root?.unmount())
+      container.remove()
+      await testEnvironment.restore()
+    }
+  })
+
+  test("dismisses a hover overlay from outside or Escape without stealing Canvas focus", async () => {
+    const testEnvironment = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () => root?.render(<ShellHarness initialOpen={false} />))
+      await act(async () => testEnvironment.runFrames())
+      const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
       const close = container.querySelector<HTMLButtonElement>("[data-project-sidebar-close]")!
       close.focus()
       await act(async () =>
@@ -93,17 +207,25 @@ describe("Desktop Project sidebar Shell", () => {
       expect(container.querySelector("[data-project-sidebar-backdrop]")).toBeNull()
       expect(document.activeElement).toBe(trigger)
 
-      await act(async () => trigger.click())
-      expect(container.querySelector("[data-project-sidebar-backdrop]")).not.toBeNull()
-      const backdrop = container.querySelector<HTMLButtonElement>("[data-project-sidebar-backdrop]")!
       await act(async () =>
-        backdrop.dispatchEvent(
+        entry.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "mouse" })),
+      )
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+      const canvasTarget = document.createElement("button")
+      canvasTarget.textContent = "Canvas target"
+      document.body.append(canvasTarget)
+      canvasTarget.focus()
+      await act(async () =>
+        canvasTarget.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, button: 0, cancelable: true, isPrimary: true }),
         ),
       )
       await act(async () => testEnvironment.runFrames())
-      expect(container.querySelector("[data-project-sidebar-backdrop]")).toBeNull()
-      expect(document.activeElement).toBe(trigger)
+      expect(container.querySelector('[data-project-sidebar-state="closed"]')).not.toBeNull()
+      expect(document.activeElement).toBe(canvasTarget)
+      canvasTarget.remove()
     } finally {
       await act(async () => root?.unmount())
       container.remove()
@@ -111,14 +233,44 @@ describe("Desktop Project sidebar Shell", () => {
     }
   })
 
-  test("keeps the wide dock open on outside and Escape", async () => {
+  test("pins a hover preview into a layout-consuming dock", async () => {
     const testEnvironment = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
     let root: Root | undefined
     try {
       root = createRoot(container)
-      await act(async () => root?.render(<ShellHarness presentation="dock" />))
+      await act(async () => root?.render(<ShellHarness initialOpen={false} />))
+      await act(async () => testEnvironment.runFrames())
+      const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
+      await act(async () =>
+        entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
+      )
+      expect(container.querySelector(".project-sidebar-shell")?.getAttribute("data-project-sidebar-reveal")).toBe(
+        "hover",
+      )
+
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Open project sidebar"]')?.click(),
+      )
+      const shell = container.querySelector<HTMLElement>(".project-sidebar-shell")!
+      expect(shell.getAttribute("data-project-sidebar-reveal")).toBe("pinned")
+      expect(shell.getAttribute("data-project-sidebar-presentation")).toBe("dock")
+    } finally {
+      await act(async () => root?.unmount())
+      container.remove()
+      await testEnvironment.restore()
+    }
+  })
+
+  test("keeps the pinned dock open on outside and Escape", async () => {
+    const testEnvironment = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () => root?.render(<ShellHarness />))
       await act(async () =>
         document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })),
       )
@@ -131,12 +283,14 @@ describe("Desktop Project sidebar Shell", () => {
     }
   })
 
-  test("removes sidebar and backdrop motion for reduced-motion users", async () => {
+  test("removes sidebar motion for reduced-motion users", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
 
     expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
     expect(styles).toContain(".project-sidebar-shell__panel")
-    expect(styles).toContain(".project-sidebar-backdrop")
+    expect(styles).not.toContain(".project-sidebar-backdrop")
+    expect(styles).toContain('.project-sidebar-shell[data-project-sidebar-reveal="pinned"]')
+    expect(styles).toContain('.project-sidebar-shell[data-project-sidebar-reveal="hover"]')
     expect(styles).toContain("transition-duration: 0ms")
   })
 

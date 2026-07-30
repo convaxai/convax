@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import type { ProjectFilesController, ProjectFilesControllerSnapshot } from "@convax/project-files"
+import { Window } from "happy-dom"
+import { act } from "react"
+import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { ProjectController, ProjectControllerSnapshot } from "./controller"
 import { ProjectSidebar } from "./project-sidebar"
@@ -57,6 +60,40 @@ const activeFilesSnapshot: ProjectFilesControllerSnapshot = {
   projectId: "project-1",
 }
 
+function installTestWindow() {
+  const testWindow = new Window({ url: "https://convax.test/" })
+  const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, value] of Object.entries({
+    Element: testWindow.Element,
+    Event: testWindow.Event,
+    HTMLElement: testWindow.HTMLElement,
+    MouseEvent: testWindow.MouseEvent,
+    Node: testWindow.Node,
+    document: testWindow.document,
+    localStorage: testWindow.localStorage,
+    window: testWindow,
+  })) {
+    originalDescriptors.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  originalDescriptors.set(
+    "IS_REACT_ACT_ENVIRONMENT",
+    Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT"),
+  )
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  return async () => {
+    await testWindow.happyDOM.close()
+    for (const [name, descriptor] of originalDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+}
+
 describe("ProjectSidebar", () => {
   test("stays mounted for initialization but renders nothing when the host hides an empty project sidebar", () => {
     const markup = renderToStaticMarkup(
@@ -85,6 +122,8 @@ describe("ProjectSidebar", () => {
     )
 
     expect(markup).toContain("Application settings")
+    expect(markup).toContain('data-project-sidebar-footer=""')
+    expect(markup).toContain("mt-auto min-w-0 shrink-0 overflow-hidden")
     const pathIndex = markup.indexOf('data-project-header-path="/project"')
     expect(pathIndex).toBeGreaterThan(-1)
     expect(pathIndex).toBeLessThan(markup.indexOf('aria-label="Example files"'))
@@ -219,10 +258,102 @@ describe("ProjectSidebar", () => {
     )
 
     expect(markup).toContain('aria-label="Search sidebar"')
+    expect(markup).toContain('data-project-sidebar-presentation="workspace"')
+    expect(markup).toContain('data-project-sidebar-section="canvas"')
+    expect(markup).toContain('data-project-sidebar-section="project"')
+    expect(markup).toContain("bg-surface-panel")
     expect(markup).toContain("Canvas region")
     expect(markup.indexOf(">Canvas<")).toBeLessThan(markup.indexOf(">Project<"))
     expect(markup).toContain('aria-label="Resize Canvas and Project sections"')
     expect(markup).toContain('aria-label="Rename Example"')
     expect(markup).toContain('data-canvas-query=""')
+  })
+
+  test("restores asynchronous media thumbnails, hover previews, and host-owned file activation", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    const imageEntry = {
+      kind: "file" as const,
+      modifiedAt: 7,
+      name: "reference.png",
+      parentPath: "",
+      path: "Media/reference.png",
+      size: 128,
+    }
+    const largeVideoEntry = {
+      kind: "file" as const,
+      modifiedAt: 8,
+      name: "source.mp4",
+      parentPath: "",
+      path: "Media/source.mp4",
+      size: 9 * 1024 * 1024,
+    }
+    const selectEntry = mock(() => undefined)
+    const onFileActivate = mock(() => undefined)
+    const resolveFileUrl = mock(async () => "data:image/png;base64,cHJldmlldw==")
+    const filesSnapshot: ProjectFilesControllerSnapshot = {
+      ...activeFilesSnapshot,
+      listings: {
+        "": {
+          entries: [imageEntry, largeVideoEntry],
+          path: "",
+          projectId: "project-1",
+        },
+      },
+    }
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebar
+            controller={
+              {
+                getSnapshot: () => activeSnapshot,
+                initialize: async () => undefined,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectController
+            }
+            filesController={
+              {
+                getSnapshot: () => filesSnapshot,
+                selectEntry,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectFilesController
+            }
+            onFileActivate={onFileActivate}
+            presentation="workspace"
+            resolveFileUrl={resolveFileUrl}
+          />,
+        ),
+      )
+      await act(async () => {
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      const row = container.querySelector<HTMLElement>('[data-project-entry-path="Media/reference.png"]')!
+      const thumbnail = row.querySelector<HTMLImageElement>("img")
+      expect(thumbnail?.src).toBe("data:image/png;base64,cHJldmlldw==")
+      expect(resolveFileUrl).toHaveBeenCalledTimes(1)
+      expect(
+        container.querySelector<HTMLElement>('[data-project-entry-path="Media/source.mp4"]')?.querySelector("video"),
+      ).toBeNull()
+
+      await act(async () => row.click())
+      expect(selectEntry).toHaveBeenCalledWith("Media/reference.png", { range: false, toggle: false })
+      expect(onFileActivate).toHaveBeenCalledWith({ entry: imageEntry, projectId: "project-1" })
+
+      await act(async () => {
+        row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))
+        await Bun.sleep(140)
+      })
+      expect(document.querySelector('[data-project-file-preview="Media/reference.png"]')).not.toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
   })
 })

@@ -1,32 +1,63 @@
-import { useEffect, useRef, type ReactNode } from "react"
+import { useEffect, useReducer, useRef, type ReactNode } from "react"
+import { createPortal } from "react-dom"
+import { transitionProjectSidebarHover } from "./project-sidebar-hover-state"
 import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 
 export interface ProjectSidebarShellProps {
   children: ReactNode
   entryLabel: string
+  entryPortal?: Element | null
   onOpenChange(open: boolean): void
   open: boolean
-  presentation: "dock" | "overlay"
   resizeHandle?: ReactNode
   size: number
 }
 
 /**
  * Desktop-only presentation for the Project-owned sidebar. Workbench owns
- * whether the part is open and its size; this shell only maps that state to a
- * dock or responsive overlay and manages the overlay dismissal boundary.
+ * whether the part is pinned and its size. This shell owns only the transient
+ * hover preview: pinned state consumes layout width, while hover state floats.
  */
 export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
+  const [hoverState, dispatchHover] = useReducer(transitionProjectSidebarHover, "idle")
+  const hoverCloseTimerRef = useRef<number | null>(null)
+  const entryPointerInsideRef = useRef(false)
   const panelRef = useRef<HTMLDivElement>(null)
-  const returnFocusOnCloseRef = useRef(true)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const previousOpenRef = useRef(props.open)
+  const hoverReveal = !props.open && hoverState === "revealed"
+  const reveal = props.open ? "pinned" : hoverReveal ? "hover" : "closed"
+  const revealed = reveal !== "closed"
+  const presentation = props.open ? "dock" : "overlay"
+
+  const cancelHoverClose = () => {
+    if (hoverCloseTimerRef.current === null) return
+    window.clearTimeout(hoverCloseTimerRef.current)
+    hoverCloseTimerRef.current = null
+  }
+
+  const scheduleHoverClose = () => {
+    if (props.open) return
+    cancelHoverClose()
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null
+      if (panelRef.current?.contains(panelRef.current.ownerDocument.activeElement)) return
+      dispatchHover("dismiss")
+    }, 120)
+  }
+
+  useEffect(
+    () => () => {
+      if (hoverCloseTimerRef.current !== null) window.clearTimeout(hoverCloseTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     const wasOpen = previousOpenRef.current
     previousOpenRef.current = props.open
     if (props.open) {
-      returnFocusOnCloseRef.current = true
+      dispatchHover("pin")
       if (wasOpen) return
       const frame = window.requestAnimationFrame(() =>
         panelRef.current?.querySelector<HTMLElement>("[data-project-sidebar-close]")?.focus({ preventScroll: true }),
@@ -34,16 +65,13 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
       return () => window.cancelAnimationFrame(frame)
     }
     if (!wasOpen) return
-    if (!returnFocusOnCloseRef.current) {
-      returnFocusOnCloseRef.current = true
-      return
-    }
+    dispatchHover(entryPointerInsideRef.current ? "unpin-inside-entry" : "unpin-outside-entry")
     const frame = window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }))
     return () => window.cancelAnimationFrame(frame)
   }, [props.open])
 
   useEffect(() => {
-    if (!props.open || props.presentation !== "overlay") return
+    if (!hoverReveal) return
     const ownerDocument = triggerRef.current?.ownerDocument ?? document
     const dismissOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return
@@ -55,8 +83,8 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
         return
       }
       event.preventDefault()
-      returnFocusOnCloseRef.current = true
-      props.onOpenChange(false)
+      dispatchHover("dismiss")
+      triggerRef.current?.focus({ preventScroll: true })
     }
     const dismissOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target
@@ -68,9 +96,7 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
       ) {
         return
       }
-      returnFocusOnCloseRef.current =
-        target instanceof Element && Boolean(target.closest("[data-project-sidebar-backdrop]"))
-      props.onOpenChange(false)
+      dispatchHover("dismiss")
     }
     ownerDocument.addEventListener("keydown", dismissOnEscape)
     ownerDocument.addEventListener("pointerdown", dismissOnOutsidePointer, true)
@@ -78,48 +104,125 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
       ownerDocument.removeEventListener("keydown", dismissOnEscape)
       ownerDocument.removeEventListener("pointerdown", dismissOnOutsidePointer, true)
     }
-  }, [props.onOpenChange, props.open, props.presentation])
+  }, [hoverReveal])
 
-  const dock = props.presentation === "dock"
   return (
     <>
-      {props.open && !dock ? (
-        <button
-          aria-label="Close project sidebar"
-          className="project-sidebar-backdrop absolute inset-0 z-[39] cursor-default bg-foreground/[0.08]"
-          data-project-sidebar-backdrop=""
-          onPointerDown={(event) => {
-            if (event.button !== 0 || !event.isPrimary) return
-            event.preventDefault()
-            returnFocusOnCloseRef.current = true
-            props.onOpenChange(false)
-          }}
-          tabIndex={-1}
-          type="button"
-        />
-      ) : null}
       <div
-        aria-hidden={!props.open || undefined}
-        className={`project-sidebar-shell project-sidebar-shell--${props.presentation}`}
-        data-project-sidebar-presentation={props.presentation}
-        data-project-sidebar-state={props.open ? "open" : "closed"}
-        inert={!props.open || undefined}
+        aria-hidden={!revealed || undefined}
+        className={`project-sidebar-shell project-sidebar-shell--${presentation}`}
+        data-project-sidebar-presentation={presentation}
+        data-project-sidebar-reveal={reveal}
+        data-project-sidebar-state={revealed ? "open" : "closed"}
+        inert={!revealed || undefined}
+        onBlur={(event) => {
+          if (
+            props.open ||
+            (event.relatedTarget instanceof Node &&
+              (panelRef.current?.contains(event.relatedTarget) || triggerRef.current?.contains(event.relatedTarget)))
+            )
+            return
+          cancelHoverClose()
+          dispatchHover("dismiss")
+        }}
+        onPointerEnter={cancelHoverClose}
+        onPointerLeave={scheduleHoverClose}
         ref={panelRef}
         style={{ "--project-sidebar-size": `${props.size}px` } as React.CSSProperties}
       >
         <div className="project-sidebar-shell__panel">{props.children}</div>
-        {dock && props.open ? props.resizeHandle : null}
+        {props.open ? props.resizeHandle : null}
       </div>
-      <aside
-        aria-hidden={props.open || undefined}
-        aria-label="Project sidebar"
-        className={`project-sidebar-entry pointer-events-none absolute left-4 top-4 z-40 ${
-          props.open ? "project-sidebar-entry--hidden" : ""
-        }`}
-        inert={props.open || undefined}
-      >
-        <ProjectSidebarTrigger label={props.entryLabel} onOpen={() => props.onOpenChange(true)} ref={triggerRef} />
-      </aside>
+      {props.entryPortal
+        ? createPortal(
+            <ProjectSidebarEntry
+              entryLabel={props.entryLabel}
+              hoverOpen={hoverReveal}
+              onClose={() => {
+                dispatchHover("dismiss")
+                props.onOpenChange(false)
+              }}
+              onHoverClose={() => {
+                entryPointerInsideRef.current = false
+                dispatchHover("entry-leave")
+                scheduleHoverClose()
+              }}
+              onHoverOpen={() => {
+                entryPointerInsideRef.current = true
+                cancelHoverClose()
+                dispatchHover("entry-enter")
+              }}
+              onOpen={() => {
+                dispatchHover("pin")
+                props.onOpenChange(true)
+              }}
+              open={props.open}
+              triggerRef={triggerRef}
+            />,
+            props.entryPortal,
+          )
+        : null}
+      {props.entryPortal === undefined ? (
+        <ProjectSidebarEntry
+          entryLabel={props.entryLabel}
+          hoverOpen={hoverReveal}
+          onClose={() => {
+            dispatchHover("dismiss")
+            props.onOpenChange(false)
+          }}
+          onHoverClose={() => {
+            entryPointerInsideRef.current = false
+            dispatchHover("entry-leave")
+            scheduleHoverClose()
+          }}
+          onHoverOpen={() => {
+            entryPointerInsideRef.current = true
+            cancelHoverClose()
+            dispatchHover("entry-enter")
+          }}
+          onOpen={() => {
+            dispatchHover("pin")
+            props.onOpenChange(true)
+          }}
+          open={props.open}
+          triggerRef={triggerRef}
+        />
+      ) : null}
     </>
+  )
+}
+
+function ProjectSidebarEntry({
+  entryLabel,
+  hoverOpen,
+  onClose,
+  onHoverClose,
+  onHoverOpen,
+  onOpen,
+  open,
+  triggerRef,
+}: {
+  entryLabel: string
+  hoverOpen: boolean
+  onClose(): void
+  onHoverClose(): void
+  onHoverOpen(): void
+  onOpen(): void
+  open: boolean
+  triggerRef: React.RefObject<HTMLButtonElement | null>
+}) {
+  return (
+    <aside
+      aria-label="Project sidebar"
+      className="project-sidebar-entry pointer-events-auto"
+      data-project-sidebar-entry-state={open ? "open" : hoverOpen ? "hover" : "closed"}
+      onPointerEnter={(event) => {
+        if (event.pointerType === "touch") return
+        onHoverOpen()
+      }}
+      onPointerLeave={onHoverClose}
+    >
+      <ProjectSidebarTrigger label={entryLabel} onClose={onClose} onOpen={onOpen} open={open} ref={triggerRef} />
+    </aside>
   )
 }
