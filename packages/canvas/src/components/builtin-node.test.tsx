@@ -79,6 +79,7 @@ const {
   resolveCanvasTextHandleTarget,
   runCanvasTextInlineCommand,
   saveCanvasTextDraft,
+  shouldUpdateCutoutMediaSize,
   shouldShowCanvasTextInlineMenu,
   startCanvasSelectionDragFromNode,
   updateCanvasTextDraft,
@@ -757,6 +758,12 @@ describe("built-in node toolbar visibility", () => {
     expect(succeededMarkup).toContain('src="convax-asset://cutout-result"')
     expect(succeededMarkup).toContain('src="convax-asset://cutout-source"')
     expect(succeededMarkup).toContain('crossorigin="anonymous"')
+  })
+
+  test("does not resize the pending cutout node from its source-image scan preview", () => {
+    expect(shouldUpdateCutoutMediaSize("")).toBe(false)
+    expect(shouldUpdateCutoutMediaSize("   ")).toBe(false)
+    expect(shouldUpdateCutoutMediaSize("convax-asset://cutout-result")).toBe(true)
   })
 
   test("gives a newly created empty image a clear upload-or-generate choice", () => {

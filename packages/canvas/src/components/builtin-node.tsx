@@ -2011,6 +2011,10 @@ function EmptyMedia(props: {
 const cutoutSourceUrlByNodeId = new Map<string, string>()
 const cutoutDissolveDurationMs = 1_740
 
+export function shouldUpdateCutoutMediaSize(resultUrl: string) {
+  return resultUrl.trim().length > 0
+}
+
 function cutoutParticleNoise(x: number, y: number, seed: number) {
   let value = Math.imul(x + 1_013 * seed, 0x165667b1)
   value = Math.imul(value ^ Math.imul(y + 1_619 * seed, 0x27d4eb2f), 0x4bf19f61)
@@ -2050,6 +2054,7 @@ function CutoutImageBody(props: {
 }) {
   const fit = props.data.fit ?? "contain"
   const resultUrl = props.data.resourceState?.url ?? ""
+  const hasResultMedia = shouldUpdateCutoutMediaSize(resultUrl)
   const url = resultUrl || props.sourceUrl || ""
   const sourceImageRef = useRef<HTMLImageElement>(null)
   const resultImageRef = useRef<HTMLImageElement>(null)
@@ -2093,10 +2098,11 @@ function CutoutImageBody(props: {
   }, [candidate, transition?.phase])
 
   useLayoutEffect(() => {
+    if (!hasResultMedia) return
     const image = resultImageRef.current
     if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return
     onMediaLoadRef.current?.({ height: image.naturalHeight, width: image.naturalWidth })
-  }, [url])
+  }, [hasResultMedia, resultUrl])
 
   useLayoutEffect(() => {
     if (activeTransition?.phase !== "dissolving") return
@@ -2259,10 +2265,12 @@ function CutoutImageBody(props: {
         draggable={false}
         loading="lazy"
         onLoad={(event) => {
-          onMediaLoadRef.current?.({
-            height: event.currentTarget.naturalHeight,
-            width: event.currentTarget.naturalWidth,
-          })
+          if (hasResultMedia) {
+            onMediaLoadRef.current?.({
+              height: event.currentTarget.naturalHeight,
+              width: event.currentTarget.naturalWidth,
+            })
+          }
           beginDissolve()
         }}
         ref={resultImageRef}
