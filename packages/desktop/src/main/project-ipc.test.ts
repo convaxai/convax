@@ -101,6 +101,7 @@ test("watches projects lazily when their files are first used", async () => {
     rename: unsupported,
     renameEntry: unsupported,
     resolveEntryPath: unsupported,
+    touch: unsupported,
     watchProject,
     writeTextFile: unsupported,
   } satisfies DesktopProjectManager
@@ -183,6 +184,7 @@ test("keeps a replacement watcher when a stopped pending watcher later fails", a
     rename: unsupported,
     renameEntry: unsupported,
     resolveEntryPath: unsupported,
+    touch: unsupported,
     watchProject,
     writeTextFile: unsupported,
   } satisfies DesktopProjectManager
@@ -245,6 +247,7 @@ test("creates a named project in the injected user workspace without opening a d
     rename: unsupported,
     renameEntry: unsupported,
     resolveEntryPath: unsupported,
+    touch: unsupported,
     watchProject,
     writeTextFile: unsupported,
   } satisfies DesktopProjectManager
@@ -281,6 +284,120 @@ test("creates a named project in the injected user workspace without opening a d
 
   expect(await invoke(projectIpcChannels.openProject)).toMatchObject({ canceled: true })
   expect(showOpenDialog).toHaveBeenCalledTimes(1)
+
+  dispose()
+})
+
+test("replaces an existing watcher when the same Project id is opened or created again", async () => {
+  let projects = [{ ...project("same"), rootPath: "/projects/original" }]
+  const stops = [mock(() => undefined), mock(() => undefined), mock(() => undefined)]
+  let watcherCall = 0
+  const watchProject = mock(() => stops[watcherCall++])
+  const add = mock(async (rootPath: string) => {
+    projects = [{ ...projects[0], rootPath }]
+    return projects[0]
+  })
+  const create = mock(async (parentPath: string, name: string) => {
+    projects = [{ ...projects[0], name, rootPath: `${parentPath}/${name}` }]
+    return projects[0]
+  })
+  const listDirectory = mock(async (input: { path?: string; projectId: string }) => ({
+    entries: [],
+    path: input.path ?? "",
+    projectId: input.projectId,
+  }))
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Unexpected Project manager call")
+  }
+  const manager = {
+    add,
+    copyEntries: unsupported,
+    create,
+    createEntry: unsupported,
+    deleteEntries: unsupported,
+    forget: unsupported,
+    importEntries: unsupported,
+    list: async () => projects,
+    listDirectory,
+    moveEntries: unsupported,
+    readFile: unsupported,
+    readFileInfo: unsupported,
+    readTextFile: unsupported,
+    readTextPreview: unsupported,
+    rename: unsupported,
+    renameEntry: unsupported,
+    resolveEntryPath: unsupported,
+    touch: unsupported,
+    watchProject,
+    writeTextFile: unsupported,
+  } satisfies DesktopProjectManager
+
+  const { projectFilesIpcChannels, projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
+  const dispose = await registerProjectIpc(manager, {
+    isTrustedSender: () => true,
+    projectCreationDirectory,
+  })
+
+  await invoke(projectFilesIpcChannels.listDirectory, { path: "", projectId: "same" })
+  expect(watchProject).toHaveBeenCalledTimes(1)
+
+  showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: ["/projects/rebound"] })
+  await invoke(projectIpcChannels.openProject)
+  expect(add).toHaveBeenCalledWith("/projects/rebound")
+  expect(stops[0]).toHaveBeenCalledTimes(1)
+  expect(watchProject).toHaveBeenCalledTimes(2)
+
+  await invoke(projectIpcChannels.createProject, { name: "Recreated" })
+  expect(create).toHaveBeenCalledWith(projectCreationDirectory, "Recreated")
+  expect(stops[1]).toHaveBeenCalledTimes(1)
+  expect(watchProject).toHaveBeenCalledTimes(3)
+
+  dispose()
+})
+
+test("touches project recency through a trusted lifecycle channel and returns the refreshed ordering", async () => {
+  let projects = [project("one"), project("two")]
+  const touch = mock(async (projectId: string) => {
+    const current = projects.find((candidate) => candidate.id === projectId)
+    if (!current) throw new Error(`Project was not found: ${projectId}`)
+    const touched = { ...current, lastOpenedAt: 3 }
+    projects = [touched, ...projects.filter((candidate) => candidate.id !== projectId)]
+    return touched
+  })
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Unexpected Project manager call")
+  }
+  const manager = {
+    add: unsupported,
+    copyEntries: unsupported,
+    create: unsupported,
+    createEntry: unsupported,
+    deleteEntries: unsupported,
+    forget: unsupported,
+    importEntries: unsupported,
+    list: async () => projects,
+    listDirectory: unsupported,
+    moveEntries: unsupported,
+    readFile: unsupported,
+    readFileInfo: unsupported,
+    readTextFile: unsupported,
+    readTextPreview: unsupported,
+    rename: unsupported,
+    renameEntry: unsupported,
+    resolveEntryPath: unsupported,
+    touch,
+    watchProject: () => () => undefined,
+    writeTextFile: unsupported,
+  } satisfies DesktopProjectManager
+
+  const { projectIpcChannels, registerProjectIpc } = await import("./project-ipc")
+  const dispose = await registerProjectIpc(manager, { isTrustedSender: () => true, projectCreationDirectory })
+
+  await expect(invoke(projectIpcChannels.touchProject, { projectId: "two" })).resolves.toEqual({
+    project: { ...project("two"), lastOpenedAt: 3 },
+    projects: [{ ...project("two"), lastOpenedAt: 3 }, project("one")],
+  })
+  expect(touch).toHaveBeenCalledWith("two")
 
   dispose()
 })
