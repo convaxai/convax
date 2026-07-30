@@ -339,6 +339,28 @@ describe("Canvas node generation run", () => {
     expect(createCanvasGenerationTargetGuard(running.nodes[0]!)).toEqual(before)
   })
 
+  test("keeps a pending resource target guard stable across runtime-only hydration changes", () => {
+    const source = document()
+    const pending = {
+      ...source.nodes[0]!,
+      data: {
+        ...source.nodes[0]!.data,
+        resourceState: undefined,
+        status: "pending" as const,
+      },
+    }
+    const before = createCanvasGenerationTargetGuard(pending)
+    const hydrated = {
+      ...pending,
+      data: {
+        ...pending.data,
+        resourceState: { status: "ready" as const, url: "" },
+      },
+    }
+
+    expect(createCanvasGenerationTargetGuard(hydrated)).toEqual(before)
+  })
+
   test("lets run and next-preference updates pass the generated guard and atomically succeeds replacement", () => {
     const preference = {
       schema: canvasNodeGenerationPreferenceSchema,

@@ -1130,7 +1130,12 @@ function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGeneratio
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
-  const withoutRun = omitCanvasNodeGenerationRunFromData(data)
+  const clonedData = structuredClone(data)
+  const durableData =
+    clonedData.status === "pending" && isEmptyPendingResourceState(clonedData.resourceState)
+      ? (({ resourceState: _resourceState, ...withoutRuntimeState }) => withoutRuntimeState)(clonedData)
+      : clonedData
+  const withoutRun = omitCanvasNodeGenerationRunFromData(durableData as CanvasNode["data"])
   const metadata = withoutRun.metadata
   if (!isRecord(metadata)) return withoutRun
   const nextMetadata = { ...structuredClone(metadata) }
@@ -1140,6 +1145,14 @@ function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): Ca
     return withoutMetadata as CanvasNode["data"]
   }
   return { ...withoutRun, metadata: nextMetadata }
+}
+
+function isEmptyPendingResourceState(value: unknown) {
+  if (!isRecord(value) || value.status !== "ready") return false
+  if (Object.keys(value).some((key) => key !== "status" && key !== "text" && key !== "url")) return false
+  if ("text" in value && value.text !== "") return false
+  if ("url" in value && value.url !== "") return false
+  return true
 }
 
 function applyGenerationRunMutation(
