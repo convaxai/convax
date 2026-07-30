@@ -195,7 +195,11 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   warm it asynchronously after startup provisioning, invalidate and warm it after
   Plugin or service lifecycle changes, single-flight each epoch, and serve the
   prior same-epoch snapshot while an age-triggered refresh runs. Never persist this
-  snapshot or move its ownership to renderer storage. Revalidate the selected
+  snapshot or move its ownership to renderer storage. A window may retain one
+  display-only projection shared by Agent and card composers, but composer remounts
+  must reuse ready values, bounded age revalidation must refresh Main first, and
+  every committed result must notify both surfaces without replacing Main authority.
+  Revalidate the selected
   tool's live schema in Main immediately before execution and never allow projected
   controls to replace the fixed generation-call envelope. Agent LLM provider
   admission is not display state and must continue to use live, fail-closed service

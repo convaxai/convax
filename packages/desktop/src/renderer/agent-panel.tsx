@@ -61,6 +61,7 @@ import {
   createAgentPromptInstructions,
   findAgentGenerationTool,
   isAgentGenerationOutput,
+  reconcileAgentGenerationToolPreference,
   reconcileAgentGenerationToolSelection,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
@@ -527,7 +528,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           const tools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
           if (!mountedRef.current || activeProjectRef.current !== scopeId) return tools
           const current = generationToolSelectionRef.current
-          const reconciled = reconcileAgentGenerationToolSelection(current, tools)
+          const reconciled = reconcileAgentGenerationToolPreference(current, tools)
           if (current?.id !== reconciled?.id || current?.output !== reconciled?.output) {
             setGenerationToolSelection(reconciled)
           }
@@ -641,6 +642,21 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     void loadGenerationTools()
     return () => generationCatalogRequestRef.current.invalidate()
   }, [loadGenerationTools])
+
+  useEffect(() => {
+    if (!props.projectId || !sharedGenerationSnapshot?.ready) return
+    const current = generationToolSelectionRef.current
+    if (!current) return
+    const reconciled = reconcileAgentGenerationToolPreference(current, generationTools)
+    if (current.id !== reconciled?.id || current.output !== reconciled?.output) {
+      setGenerationToolSelection(reconciled)
+    }
+  }, [
+    generationTools,
+    props.projectId,
+    setGenerationToolSelection,
+    sharedGenerationSnapshot?.ready,
+  ])
 
   useEffect(() => {
     const ownerChanged = generationToolInputOwnerRef.current !== generationToolInputOwner

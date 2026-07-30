@@ -8,6 +8,7 @@ import {
   createAgentPromptInstructions,
   findAgentGenerationTool,
   groupAgentGenerationToolsByService,
+  reconcileAgentGenerationToolPreference,
   reconcileAgentGenerationToolSelection,
 } from "./agent-generation-models"
 
@@ -87,6 +88,23 @@ describe("Agent generation models", () => {
     expect(reconcileAgentGenerationToolSelection(selection, [])).toBeUndefined()
     expect(reconcileAgentGenerationToolSelection(selection, [tool({ output: "video" })])).toBeUndefined()
     expect(reconcileAgentGenerationToolSelection(selection, [tool(), tool()])).toBeUndefined()
+  })
+
+  test("replaces an unavailable saved preference with the first concrete model of the same output", () => {
+    const first = tool({ id: "plugin.example:image.first" })
+    const second = tool({ id: "plugin.example:image.second" })
+    expect(
+      reconcileAgentGenerationToolPreference(
+        { id: "plugin.example:image.removed", output: "image" },
+        [first, second, tool({ id: "plugin.example:video.first", output: "video" })],
+      ),
+    ).toEqual({ id: first.id, output: "image" })
+    expect(reconcileAgentGenerationToolPreference(undefined, [first])).toBeUndefined()
+    expect(
+      reconcileAgentGenerationToolPreference({ id: "plugin.example:image.removed", output: "image" }, [
+        tool({ output: "video" }),
+      ]),
+    ).toBeUndefined()
   })
 
   test("adds only a freshly validated stable tool id and output to Desktop Canvas instructions", () => {

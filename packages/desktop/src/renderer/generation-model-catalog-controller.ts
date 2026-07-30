@@ -45,10 +45,24 @@ interface CatalogRequest {
   promise: Promise<readonly GenerationToolSummary[]>
 }
 
+export interface GenerationModelCatalogControllerOptions {
+  refreshAfterMs?: number
+  scheduleRefresh?: (callback: () => void, delayMs: number) => () => void
+}
+
 const emptyTools: readonly GenerationToolSummary[] = Object.freeze([])
 const emptyDescriptionSnapshot: GenerationToolDescriptionSnapshot = Object.freeze({
   refreshing: false,
 })
+const defaultCatalogRefreshAgeMs = 5 * 60_000
+const maximumCatalogRefreshAgeMs = 24 * 60 * 60_000
+
+function scheduleRefresh(callback: () => void, delayMs: number) {
+  const timer = globalThis.setTimeout(callback, delayMs)
+  const timerWithUnref = timer as typeof timer & { unref?: () => void }
+  timerWithUnref.unref?.()
+  return () => globalThis.clearTimeout(timer)
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
@@ -71,7 +85,10 @@ function sameAuthorityVersion(
 export class GenerationModelCatalogController {
   readonly #descriptions = new Map<string, DescriptionEntry>()
   readonly #listeners = new Set<() => void>()
+  readonly #refreshAfterMs: number
+  readonly #scheduleRefresh: (callback: () => void, delayMs: number) => () => void
   #authorityVersion?: GenerationCatalogAuthorityVersion
+  #cancelScheduledRefresh?: () => void
   #catalogError?: string
   #catalogRequest?: CatalogRequest
   #disposed = false
@@ -87,7 +104,20 @@ export class GenerationModelCatalogController {
   #tools: readonly GenerationToolSummary[] = emptyTools
   #toolsByOutput = new Map<GenerationOutputModality, readonly GenerationToolSummary[]>()
 
-  constructor(private readonly client: GenerationCatalogClient) {}
+  constructor(
+    private readonly client: GenerationCatalogClient,
+    options: GenerationModelCatalogControllerOptions = {},
+  ) {
+    this.#refreshAfterMs = options.refreshAfterMs ?? defaultCatalogRefreshAgeMs
+    if (
+      !Number.isFinite(this.#refreshAfterMs) ||
+      this.#refreshAfterMs < 1 ||
+      this.#refreshAfterMs > maximumCatalogRefreshAgeMs
+    ) {
+      throw new Error("Generation model catalog refresh age is invalid")
+    }
+    this.#scheduleRefresh = options.scheduleRefresh ?? scheduleRefresh
+  }
 
   readonly getSnapshot = () => this.#snapshot
 
@@ -108,6 +138,8 @@ export class GenerationModelCatalogController {
     if (!scopeChanged && !authorityChanged) return
 
     this.#epoch += 1
+    this.#cancelScheduledRefresh?.()
+    this.#cancelScheduledRefresh = undefined
     this.#scopeId = scope.scopeId
     this.#authorityVersion = scope.authorityVersion
     this.#catalogError = undefined
@@ -190,10 +222,7 @@ export class GenerationModelCatalogController {
     if (!scopeId) return Promise.reject(new Error("Open a Project before describing a generation model"))
 
     let entry = this.#descriptions.get(toolId)
-    if (
-      entry?.description &&
-      sameAuthorityVersion(entry.authorityVersion, this.#authorityVersion)
-    ) {
+    if (entry?.description && sameAuthorityVersion(entry.authorityVersion, this.#authorityVersion)) {
       return Promise.resolve(entry.description)
     }
     if (entry?.request?.epoch === this.#epoch) return entry.request.promise
@@ -238,6 +267,8 @@ export class GenerationModelCatalogController {
     if (this.#disposed) return
     this.#disposed = true
     this.#epoch += 1
+    this.#cancelScheduledRefresh?.()
+    this.#cancelScheduledRefresh = undefined
     this.#catalogRequest = undefined
     this.#descriptions.clear()
     this.#listeners.clear()
@@ -255,7 +286,10 @@ export class GenerationModelCatalogController {
     const epoch = this.#epoch
     this.#catalogError = undefined
     const request = this.client
-      .listTools({ scopeId })
+      .listTools({
+        refresh: true,
+        scopeId,
+      })
       .then((tools) => {
         const readyTools = Object.freeze([...tools])
         if (this.#isCurrent(epoch, scopeId)) {
@@ -266,11 +300,15 @@ export class GenerationModelCatalogController {
           for (const toolId of this.#descriptions.keys()) {
             if (!availableToolIds.has(toolId)) this.#descriptions.delete(toolId)
           }
+          this.#scheduleCatalogRefresh(epoch, scopeId)
         }
         return readyTools
       })
       .catch((error: unknown) => {
-        if (this.#isCurrent(epoch, scopeId)) this.#catalogError = errorMessage(error)
+        if (this.#isCurrent(epoch, scopeId)) {
+          this.#catalogError = errorMessage(error)
+          this.#scheduleCatalogRefresh(epoch, scopeId)
+        }
         throw error
       })
       .finally(() => {
@@ -282,6 +320,15 @@ export class GenerationModelCatalogController {
     this.#catalogRequest = { epoch, promise: request }
     this.#publish()
     return request
+  }
+
+  #scheduleCatalogRefresh(epoch: number, scopeId: string) {
+    this.#cancelScheduledRefresh?.()
+    this.#cancelScheduledRefresh = this.#scheduleRefresh(() => {
+      this.#cancelScheduledRefresh = undefined
+      if (!this.#isCurrent(epoch, scopeId)) return
+      void this.#refreshCatalog().catch(() => undefined)
+    }, this.#refreshAfterMs)
   }
 
   #replaceTools(tools: readonly GenerationToolSummary[]) {

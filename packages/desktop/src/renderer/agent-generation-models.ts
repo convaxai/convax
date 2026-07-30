@@ -83,6 +83,21 @@ export function reconcileAgentGenerationToolSelection(
   return tool && isAgentGenerationOutput(tool.output) ? { id: tool.id, output: tool.output } : undefined
 }
 
+/**
+ * Keeps an Agent media preference concrete when a runtime catalog replaces a
+ * removed selection. Submission still uses the strict reconciliation above so
+ * an in-flight request can never silently switch models.
+ */
+export function reconcileAgentGenerationToolPreference(
+  selection: AgentGenerationToolSelection | undefined,
+  tools: readonly GenerationToolSummary[],
+): AgentGenerationToolSelection | undefined {
+  const exact = reconcileAgentGenerationToolSelection(selection, tools)
+  if (exact || !selection) return exact
+  const fallback = agentGenerationToolsForOutput(tools, selection.output)[0]
+  return fallback ? { id: fallback.id, output: selection.output } : undefined
+}
+
 export function createAgentPromptInstructions(input: {
   activeCanvas?: AgentActiveCanvas
   generationSelection?: AgentGenerationToolSelection

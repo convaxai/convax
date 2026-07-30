@@ -134,9 +134,13 @@ function requireResultMode(value: unknown): GenerationResultMode {
 
 export function parseGenerationListToolsRequest(input: unknown): GenerationListToolsRequest {
   const value = requireRecord(input, "Generation tool list request")
-  requireExactKeys(value, ["output", "scopeId"], ["scopeId"], "Generation tool list request")
+  requireExactKeys(value, ["output", "refresh", "scopeId"], ["scopeId"], "Generation tool list request")
+  if (value.refresh !== undefined && typeof value.refresh !== "boolean") {
+    throw new Error("Generation tool list refresh is invalid")
+  }
   return {
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
+    ...(value.refresh === undefined ? {} : { refresh: value.refresh }),
     scopeId: requireOpaqueId(value.scopeId, "Generation scope id"),
   }
 }

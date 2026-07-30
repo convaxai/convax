@@ -1537,7 +1537,11 @@ function startApplication() {
         cancel: (request) => generation.cancel(request.operationId, { id: "desktop:renderer", kind: "ui" }),
         describeTool: (request) => generation.describeTool(request.toolId),
         generate: (request, signal) => generation.generate(request, { id: "desktop:renderer", kind: "ui" }, signal),
-        listTools: (request) => generation.listTools(request.output ? { output: request.output } : {}),
+        listTools: (request) =>
+          generation.listTools({
+            ...(request.output ? { output: request.output } : {}),
+            ...(request.refresh === undefined ? {} : { refresh: request.refresh }),
+          }),
         reconcileCanvas: (request) => generation.reconcileCanvas(request.ref, { id: "desktop:renderer", kind: "ui" }),
       },
       { isTrustedSender: ipcSecurity.isTrustedSender },

@@ -142,7 +142,10 @@ export interface InspectedGenerationModel {
 
 export interface GenerationToolExecutionPort {
   describeTool(toolId: string, signal?: AbortSignal): Promise<GenerationToolDescription>
-  listTools(options?: { output?: GenerationOutputModality }): Promise<readonly GenerationToolSummary[]>
+  listTools(options?: {
+    output?: GenerationOutputModality
+    refresh?: boolean
+  }): Promise<readonly GenerationToolSummary[]>
   prepareRecoveryTool?(
     binding: Pick<
       GenerationOperationLedger,
@@ -1232,7 +1235,7 @@ export class GenerationCanvasService {
     this.#tools = options.tools
   }
 
-  async listTools(options: { output?: GenerationOutputModality } = {}) {
+  async listTools(options: { output?: GenerationOutputModality; refresh?: boolean } = {}) {
     return this.#tools.listTools(options)
   }
 
