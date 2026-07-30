@@ -189,10 +189,17 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   sidecar executes, and startup reconciliation supervises recovery. Legacy tools may
   omit the task receipt or LRO contract; startup then changes orphaned
   submitting/running node runs to `interrupted` and never repeats the call.
-- Tool-custom generation controls come from only the explicitly selected MCP tool's
-  current `tools/list.inputSchema`. Lazily project bounded top-level scalar fields,
-  never raw JSON Schema, across preload; revalidate them in Main immediately before
-  execution and never allow them to replace the fixed generation-call envelope.
+- Tool-custom generation controls come from only the MCP tool's current
+  `tools/list.inputSchema`. Main may keep one bounded, display-only, in-memory
+  session snapshot of concrete generation models and their projected controls:
+  warm it asynchronously after startup provisioning, invalidate and warm it after
+  Plugin or service lifecycle changes, single-flight each epoch, and serve the
+  prior same-epoch snapshot while an age-triggered refresh runs. Never persist this
+  snapshot or move its ownership to renderer storage. Revalidate the selected
+  tool's live schema in Main immediately before execution and never allow projected
+  controls to replace the fixed generation-call envelope. Agent LLM provider
+  admission is not display state and must continue to use live, fail-closed service
+  status.
 - One required top-level bounded string select on a manifest-declared model tool may
   explicitly opt into `x-convax-role: generation-model-id`. Check the owning service
   first, then let Main project its choices as concrete opaque model selections.
@@ -202,12 +209,14 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   branch on Plugin/provider identity.
 - Keep the Agent-selected generation model as the user-global renderer default.
   A generation model is available only when its owning Plugin contributes the same
-  model through a service and Main's bounded live status reports that service
-  connected. Missing, disconnected, attention, unknown, timed-out, or invalid
-  service status hides that service's models; service-independent operations remain
-  manifest-driven. If no model is available, Agent and card composers route to
-  Services and never synthesize an `auto` option. A card's output-scoped available
-  model catalog remains visible regardless of its current `@` inputs. Non-empty text
+  model through a service and Main's bounded status check admits that service into
+  the current display snapshot. Missing, disconnected, attention, unknown,
+  timed-out, or invalid service status hides that service's models;
+  service-independent operations remain manifest-driven. Preparation and dispatch
+  must recheck live service availability even when the picker uses a cached
+  snapshot. If no model is available, Agent and card composers route to Services
+  and never synthesize an `auto` option. A card's output-scoped available model
+  catalog remains visible regardless of its current `@` inputs. Non-empty text
   `@` inputs are authoritative prompt context:
   Main reads and appends their text in order, and they never enter model
   `acceptedInputs` or the sidecar reference array. Media `@` inputs remain typed

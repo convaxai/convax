@@ -658,15 +658,28 @@ function startApplication() {
     )
     const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
     let refreshAgentConfiguration: (() => Promise<void>) | undefined
+    let refreshGenerationCatalogAfterServiceMutation: (() => void) | undefined
     const pluginServices = new PluginServiceHost(
       generationRuntime,
       pluginServiceBrowserAuthorization,
       pluginServiceExternalAuthorization,
       createElectronPluginServiceCheckoutNavigation(),
-      () => refreshAgentConfiguration?.(),
+      async () => {
+        refreshGenerationCatalogAfterServiceMutation?.()
+        await refreshAgentConfiguration?.()
+      },
       activateMainWindow,
     )
     const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
+    const scheduleGenerationCatalogRefresh = (reason: string) => {
+      availableGenerationTools.invalidate()
+      void availableGenerationTools.refresh().catch((error) => {
+        console.warn(`Could not refresh the generation model catalog after ${reason}`, {
+          errorType: error instanceof Error ? error.name : typeof error,
+        })
+      })
+    }
+    refreshGenerationCatalogAfterServiceMutation = () => scheduleGenerationCatalogRefresh("a Plugin service mutation")
     const generationOperations = new GenerationOperationStore(
       join(userDataDirectory, "generation-operations", "operation-v1"),
     )
@@ -1158,17 +1171,21 @@ function startApplication() {
         return tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
       },
       disablePlugin: async (id) => {
+        availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(id)
         await pluginServices.discardPlugin(id)
+        scheduleGenerationCatalogRefresh("a Plugin runtime disable")
       },
       enablePlugin: async () => {
         // The durable RuntimePreference is committed before the hard refresh.
       },
       hardRefreshPlugin: async (pluginId) => {
+        availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(pluginId)
         await pluginServices.discardPlugin(pluginId)
         skillManager.notifyInventoryChanged()
         await agentRuntime.refreshConfiguration()
+        scheduleGenerationCatalogRefresh("a Marketplace Plugin change")
         await reconcileToolPluginExecutionStateForPlugin(pluginId)
         const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
         try {
@@ -1433,6 +1450,7 @@ function startApplication() {
       provision: () => marketplace.provisionDefaults(),
       report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
     })
+    scheduleGenerationCatalogRefresh("startup provisioning")
     const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
     const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager, customPets, fetchPetAsset)
     await pets.initialize()
@@ -1598,9 +1616,11 @@ function startApplication() {
             await pluginSkillLifecycle.prepareUninstall(plugin),
           ]),
         async onDidChange(pluginId) {
+          availableGenerationTools.invalidate()
           generationRuntime.disposePlugin(pluginId)
           skillManager.notifyInventoryChanged()
           await agentRuntime.refreshConfiguration()
+          scheduleGenerationCatalogRefresh("an installed Plugin change")
         },
         async reconcileAfterChange(pluginId, mutation) {
           await reconcileToolPluginExecutionStateForPlugin(pluginId)

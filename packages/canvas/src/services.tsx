@@ -171,7 +171,16 @@ export interface CanvasGenerationReference {
 }
 
 /** Host-neutral Canvas mutation selected by the caller. Omission keeps add semantics. */
-export type CanvasGenerationResultMode = { type: "add" } | { nodeId: string; type: "replace-node" }
+export type CanvasGenerationResultMode =
+  | { type: "add" }
+  | { type: "create-pending-node" }
+  | { nodeId: string; type: "replace-node" }
+
+/** Host-neutral authority that Main must revalidate before staging card-scoped inputs. */
+export interface CanvasGenerationReferenceConstraint {
+  ownerNodeId: string
+  type: "direct-incoming"
+}
 
 export interface CanvasGenerateRequest {
   anchor: CanvasPoint
@@ -192,6 +201,8 @@ export interface CanvasGenerateRequest {
    * must not be staged or exposed as generation-tool inputs.
    */
   relationAnchorNodeIds?: readonly string[]
+  /** Optional live-edge authority for card-scoped prompt context and references. */
+  referenceConstraint?: CanvasGenerationReferenceConstraint
   references: readonly CanvasGenerationReference[]
   resultMode?: CanvasGenerationResultMode
   toolInput?: CanvasGenerationToolInput
@@ -336,10 +347,16 @@ export interface CanvasTelemetryService {
 }
 
 export interface CanvasAssistantGenerationCapability {
-  /** Direct card generation is intentionally limited to visual media replacement. */
+  /** Card-scoped generation is intentionally limited to visual media output. */
   output: "image" | "video"
   /** One-shot raw composer draft hydrated from the Canvas-owned latest run. */
   initialPrompt?: string
+  /**
+   * Missing or `replace-owner-node` keeps the normal in-place flow. A true
+   * unknown external result must use `create-pending-node` so a fresh operation
+   * gets a separate host-owned target without mutating the unresolved owner.
+   */
+  submissionMode?: "create-pending-node" | "replace-owner-node"
   /** Persisted owner-node override. Missing means inherit the host's current default. */
   ownerToolId?: string
   /** File-card-only mutation; clearing the id restores host-default inheritance. */
