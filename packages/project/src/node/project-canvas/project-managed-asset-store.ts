@@ -8,6 +8,7 @@ import {
   requireProjectResourceReference,
   type ProjectResourceReference,
 } from "../../canvas/project-resources"
+import type { ProjectResourceReadHandle } from "../project-resource-reader"
 import { openStableProjectFile } from "../stable-project-file"
 
 export interface ProjectRootResolver {
@@ -100,7 +101,11 @@ export class ProjectManagedAssetStore {
     })
   }
 
-  openForRead(input: { projectId: string; reference: ManagedAssetReference; signal?: AbortSignal }) {
+  openForRead(input: {
+    projectId: string
+    reference: ManagedAssetReference
+    signal?: AbortSignal
+  }): Promise<ProjectResourceReadHandle> {
     return this.runExclusive(input.projectId, async () => {
       const layout = await this.#resolveLayout(input.projectId)
       return (await this.#openVerifiedReferenceUnlocked(layout, input.reference, input.signal)).handle

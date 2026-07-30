@@ -1,15 +1,28 @@
 import { requireProjectResourceReference, type ProjectResourceReference } from "../canvas/project-resources"
 import { mimeTypeForPath } from "./project-manager-helpers"
 import { openStableProjectFile } from "./stable-project-file"
-import type { ProjectManagedAssetStore } from "./project-canvas/project-managed-asset-store"
 
 type ReadableProjectResourceReference = Exclude<ProjectResourceReference, { kind: "project-directory" }>
+type ManagedAssetReference = Extract<ProjectResourceReference, { kind: "managed-asset" }>
 
 interface ProjectResourceFileResolver {
   resolveEntryPath(input: { path?: string; projectId: string }): Promise<string>
 }
 
-type ProjectResourceAssetResolver = Pick<ProjectManagedAssetStore, "openForRead">
+export interface ProjectResourceReadHandle {
+  readonly size: number
+  close(): Promise<void>
+  createReadStream(input: { end: number; signal?: AbortSignal; start: number }): ReadableStream<Uint8Array>
+  digest(signal?: AbortSignal): Promise<string>
+}
+
+export interface ProjectResourceAssetResolver {
+  openForRead(input: {
+    projectId: string
+    reference: ManagedAssetReference
+    signal?: AbortSignal
+  }): Promise<ProjectResourceReadHandle>
+}
 
 export interface ProjectResourceReadInput {
   contentRevision?: string
