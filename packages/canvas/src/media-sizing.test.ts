@@ -104,6 +104,38 @@ describe("Canvas media sizing", () => {
     })
   })
 
+  test("records cutout result dimensions without resizing its pending frame", () => {
+    const image = createMediaNode({
+      id: "cutout-result",
+      position: { x: 384, y: 20 },
+      resource: {
+        id: "cutout-result",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "asset://cutout-result" },
+      },
+    })
+    const pendingFrame = {
+      ...image,
+      measured: { height: 240, width: 320 },
+      style: { height: 240, width: 320 },
+    }
+    const fitted = fitCanvasMediaNodeToIntrinsicSize(createCanvasDocument({ nodes: [pendingFrame] }), {
+      height: 1_600,
+      nodeId: image.id,
+      preserveFrame: true,
+      sourceUrl: "asset://cutout-result",
+      width: 800,
+    })
+
+    expect(fitted.nodes[0]).toMatchObject({
+      data: { height: 1_600, kind: "image", width: 800 },
+      measured: pendingFrame.measured,
+      position: pendingFrame.position,
+      style: pendingFrame.style,
+    })
+  })
+
   test("uses the same bounded sizing for video metadata", () => {
     const video = createMediaNode({
       id: "video",

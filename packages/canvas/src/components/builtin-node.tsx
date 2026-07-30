@@ -2476,6 +2476,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
                   fitCanvasMediaNodeToIntrinsicSize(document, {
                     ...size,
                     nodeId: props.id,
+                    preserveFrame: cutoutPresentation !== "idle",
                     sourceUrl: url ?? "",
                   }),
                 )
