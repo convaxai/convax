@@ -1,5 +1,5 @@
 import type { AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
-import { parseCanvasDocument } from "@convax/canvas/core"
+import { parseStoredCanvasDocument } from "@convax/canvas/application"
 import { isAbsolute, win32 } from "node:path"
 
 export interface AgentProjectResolver {
@@ -7,7 +7,7 @@ export interface AgentProjectResolver {
 }
 
 export interface AgentCanvasSnapshot {
-  /** A serialized, read-only Canvas document. */
+  /** A canonical persisted Canvas document envelope used as a read-only snapshot. */
   content: string
   name?: string
 }
@@ -110,13 +110,12 @@ async function prepareStructuredResource(
   if (!canvasSnapshots) throw new Error("Canvas node resources are unavailable")
   const reference = parseAgentCanvasResourceUri(resource.uri)
   const snapshot = await canvasSnapshots.resolveCanvasSnapshot({ canvasId: reference.canvasId, projectId })
-  let document: ReturnType<typeof parseCanvasDocument>
+  let document: ReturnType<typeof parseStoredCanvasDocument>
   try {
-    document = parseCanvasDocument(JSON.parse(snapshot.content), reference.canvasId)
+    document = parseStoredCanvasDocument(snapshot.content, reference.canvasId)
   } catch {
-    document = null
+    throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
   }
-  if (!document) throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
   const requestedName = resource.name?.trim()
   const node = reference.nodeId ? document.nodes.find((candidate) => candidate.id === reference.nodeId) : undefined
   if (reference.nodeId && !node) throw new Error(`Canvas node was not found: ${reference.nodeId}`)
