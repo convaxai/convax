@@ -85,7 +85,6 @@ import { addCanvasUploadResources } from "./canvas-upload"
 import {
   closeDesktopSettings,
   createDesktopSurfaceState,
-  openDesktopHome,
   openDesktopSettings,
   openDesktopWorkspace,
 } from "./desktop-surface-state"
@@ -119,9 +118,20 @@ import {
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
-import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
+import {
+  ProjectLoadingState,
+  ProjectRecoveryState,
+  ProjectRegistryLoadingState,
+} from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { ProjectHome } from "./project-home"
+import {
+  enterSelectedProjectFromHome,
+  recoveryErrorAfterProjectSelection,
+  resolveProjectBootstrapView,
+  resolveProjectStartup,
+  type ProjectHomeEntryResult,
+} from "./project-home-model"
 import { ProjectSidebarShell } from "./project-sidebar-shell"
 import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
@@ -176,6 +186,20 @@ function App() {
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
   const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
   const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0)
+  const [startupEntryAttempt, setStartupEntryAttempt] = useState(0)
+  const [startupEntryFailure, setStartupEntryFailure] = useState<{
+    message: string
+    projectId: string
+  } | null>(null)
+  const [startupRecoveryPending, setStartupRecoveryPending] = useState<"open" | "retry" | null>(null)
+  const [startupRecoveryError, setStartupRecoveryError] = useState<string | null>(null)
+  const startupAutoRestoreEnabledRef = useRef(true)
+  const startupRecoveryPendingRef = useRef(false)
+  const mountedProjectBindingRef = useRef<{
+    id: string
+    missing: boolean
+    rootPath: string
+  } | null>(null)
   const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const settingsSurface = desktopSurface.kind === "settings" ? desktopSurface : null
@@ -319,6 +343,21 @@ function App() {
     projectController.getSnapshot,
     projectController.getSnapshot,
   )
+  const projectStartup = useMemo(() => resolveProjectStartup(projectSnapshot), [projectSnapshot])
+  const startupProjectId = projectStartup.kind === "restore" ? projectStartup.projectId : null
+  const currentStartupEntryFailure =
+    startupEntryFailure?.projectId === startupProjectId ? startupEntryFailure.message : null
+  const projectBootstrapView = resolveProjectBootstrapView({
+    entryFailure: currentStartupEntryFailure,
+    recoveryError: startupRecoveryError,
+    registryError: projectSnapshot.error,
+    route: projectStartup,
+  })
+  const effectivePrimaryDesktopSurface =
+    projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
+  const activeProject = projectSnapshot.projects.find(
+    (project) => project.id === projectSnapshot.activeProjectId,
+  )
   const projectCanvasSnapshot = useSyncExternalStore(
     projectCanvasController.subscribe,
     projectCanvasController.getSnapshot,
@@ -367,6 +406,18 @@ function App() {
     },
     [],
   )
+  useEffect(() => {
+    void projectController.initialize()
+  }, [projectController])
+  useEffect(() => {
+    if (projectBootstrapView.kind === "opening") return
+    setDesktopSurface((current) => {
+      if (current.kind === "settings") {
+        return current.returnTo === "home" ? current : { ...current, returnTo: "home" }
+      }
+      return current.kind === "home" ? current : createDesktopSurfaceState()
+    })
+  }, [projectBootstrapView.kind])
   useEffect(() => () => projectController.dispose(), [projectController])
   useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
   useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
@@ -412,12 +463,13 @@ function App() {
     const openSettingsShortcut = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
       event.preventDefault()
+      workspaceEntryCoordinator.cancelPendingEntry()
       closeMediaOperationDialog()
       setDesktopSurface((current) => openDesktopSettings(current, "general"))
     }
     window.addEventListener("keydown", openSettingsShortcut)
     return () => window.removeEventListener("keydown", openSettingsShortcut)
-  }, [closeMediaOperationDialog])
+  }, [closeMediaOperationDialog, workspaceEntryCoordinator])
   useEffect(() => {
     if (!settingsSection) return
     const closeSettings = (event: KeyboardEvent) => {
@@ -435,11 +487,98 @@ function App() {
   }, [workbenchLayoutSnapshot])
   useEffect(() => {
     const projectId = projectSnapshot.activeProjectId
+    const binding = activeProject
+      ? {
+          id: activeProject.id,
+          missing: activeProject.missing === true,
+          rootPath: activeProject.rootPath,
+        }
+      : null
+    const previousBinding = mountedProjectBindingRef.current
+    const reboundActiveProject =
+      binding !== null &&
+      previousBinding?.id === binding.id &&
+      (
+        previousBinding.rootPath !== binding.rootPath ||
+        previousBinding.missing !== binding.missing
+      )
+    mountedProjectBindingRef.current = binding
+
+    if (!reboundActiveProject) {
+      workbenchController.setProject(projectId)
+      void projectFilesController.setProject(projectId)
+      void projectCanvasController.setProject(projectId)
+      return
+    }
+
+    workbenchController.setProject(null)
     workbenchController.setProject(projectId)
-    void projectFilesController.setProject(projectId)
-    void projectCanvasController.setProject(projectId)
-  }, [projectCanvasController, projectFilesController, projectSnapshot.activeProjectId, workbenchController])
-  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
+    void Promise.all([
+      projectFilesController.setProject(null),
+      projectCanvasController.setProject(null),
+    ]).then(async () => {
+      const currentBinding = mountedProjectBindingRef.current
+      if (
+        !projectId ||
+        currentBinding?.id !== projectId ||
+        currentBinding.rootPath !== binding.rootPath ||
+        currentBinding.missing !== binding.missing
+      ) {
+        return
+      }
+      await Promise.all([
+        projectFilesController.setProject(projectId),
+        projectCanvasController.setProject(projectId),
+      ])
+    })
+  }, [
+    activeProject?.missing,
+    activeProject?.rootPath,
+    projectCanvasController,
+    projectFilesController,
+    projectSnapshot.activeProjectId,
+    workbenchController,
+  ])
+  useEffect(() => {
+    if (
+      desktopSurface.kind !== "home" ||
+      !startupAutoRestoreEnabledRef.current ||
+      !startupProjectId ||
+      currentStartupEntryFailure ||
+      startupRecoveryPending
+    ) {
+      return
+    }
+    const abortController = new AbortController()
+    void workspaceEntryCoordinator
+      .enter({ projectId: startupProjectId, signal: abortController.signal })
+      .then((entered) => {
+        if (abortController.signal.aborted || entered) return
+        setStartupEntryFailure({
+          message:
+            locale === "zh-CN"
+              ? "Convax 未能恢复这个项目，请重试或重新打开项目文件夹。"
+              : "Convax could not restore this Project. Try again or reopen its folder.",
+          projectId: startupProjectId,
+        })
+      })
+      .catch((error) => {
+        if (abortController.signal.aborted) return
+        setStartupEntryFailure({
+          message: error instanceof Error ? error.message : String(error),
+          projectId: startupProjectId,
+        })
+      })
+    return () => abortController.abort()
+  }, [
+    currentStartupEntryFailure,
+    desktopSurface.kind,
+    locale,
+    startupEntryAttempt,
+    startupProjectId,
+    startupRecoveryPending,
+    workspaceEntryCoordinator,
+  ])
   const activeProjectId = activeProject?.id
   useEffect(() => {
     serviceCatalogController.setScopeId(activeProjectId)
@@ -800,7 +939,7 @@ function App() {
   }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, webPluginHost])
   useEffect(() => {
     if (
-      primaryDesktopSurface !== "workspace" ||
+      effectivePrimaryDesktopSurface !== "workspace" ||
       !activeProjectId ||
       projectCanvasSnapshot.projectId !== activeProjectId
     ) {
@@ -809,7 +948,7 @@ function App() {
     void projectCanvasWorkbench.reconcile(activeProjectId, readLastCanvasPreference(localStorage, activeProjectId))
   }, [
     activeProjectId,
-    primaryDesktopSurface,
+    effectivePrimaryDesktopSurface,
     projectCanvasSnapshot.busy,
     projectCanvasSnapshot.canvases,
     projectCanvasSnapshot.projectId,
@@ -832,9 +971,10 @@ function App() {
     [activeProjectId],
   )
   const openSettings = useCallback((target: ApplicationMenuTarget) => {
+    workspaceEntryCoordinator.cancelPendingEntry()
     closeMediaOperationDialog()
     setDesktopSurface((current) => openDesktopSettings(current, target))
-  }, [closeMediaOperationDialog])
+  }, [closeMediaOperationDialog, workspaceEntryCoordinator])
   const openServices = useCallback(() => openSettings("services"), [openSettings])
   const assistantHostRef = useRef({
     activeCanvas,
@@ -1608,30 +1748,85 @@ function App() {
     applyAppearancePreferences(document.documentElement, preferences)
     setAppearanceSaveState(writeAppearancePreferences(localStorage, preferences) ? "saved" : "error")
   }, [])
-  const enterHomeProject = useCallback(
-    (projectId: string) => workspaceEntryCoordinator.enter({ projectId }),
-    [workspaceEntryCoordinator],
-  )
-  const returnToProjectHome = useCallback(async () => {
-    workspaceEntryCoordinator.cancelPendingEntry()
+  const enterHomeProject = useCallback(async (projectId: string) => {
+    setStartupEntryFailure(null)
     try {
-      await flushAuthoritativeCanvas()
-      setDesktopSurface(openDesktopHome)
+      const entered = await workspaceEntryCoordinator.enter({ projectId })
+      if (!entered) {
+        setStartupEntryFailure({
+          message:
+            locale === "zh-CN"
+              ? "Convax 未能恢复这个项目，请重试或重新打开项目文件夹。"
+              : "Convax could not restore this Project. Try again or reopen its folder.",
+          projectId,
+        })
+      }
+      return entered
     } catch (error) {
-      setNotification({
-        description: error instanceof Error ? error.message : String(error),
-        kind: "warning",
-        title: locale === "zh-CN" ? "返回项目主页前无法保存画布" : "Could not save before returning to Projects",
+      setStartupEntryFailure({
+        message: error instanceof Error ? error.message : String(error),
+        projectId,
       })
+      throw error
     }
-  }, [flushAuthoritativeCanvas, locale, workspaceEntryCoordinator])
-  const openProjectHomeFromTitlebar = useCallback(() => {
-    if (primaryDesktopSurface === "workspace") {
-      void returnToProjectHome()
+  }, [locale, workspaceEntryCoordinator])
+  const openProjectFromRecovery = useCallback(() => {
+    if (startupRecoveryPendingRef.current) return
+    const recoveryErrorBeforeOpen =
+      startupRecoveryError ?? currentStartupEntryFailure ?? projectSnapshot.error
+    startupRecoveryPendingRef.current = true
+    startupAutoRestoreEnabledRef.current = false
+    setStartupRecoveryPending("open")
+    setStartupRecoveryError(null)
+    void enterSelectedProjectFromHome(
+      projectController,
+      () => projectController.openProject(),
+      enterHomeProject,
+    )
+      .then((result: ProjectHomeEntryResult) => {
+        setStartupRecoveryError(
+          recoveryErrorAfterProjectSelection(result, recoveryErrorBeforeOpen),
+        )
+      })
+      .catch((error: unknown) => {
+        setStartupRecoveryError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        startupRecoveryPendingRef.current = false
+        setStartupRecoveryPending(null)
+      })
+  }, [
+    currentStartupEntryFailure,
+    enterHomeProject,
+    projectController,
+    projectSnapshot.error,
+    startupRecoveryError,
+  ])
+  const retryProjectStartup = useCallback(() => {
+    if (startupRecoveryPendingRef.current) return
+    startupRecoveryPendingRef.current = true
+    startupAutoRestoreEnabledRef.current = true
+    setStartupRecoveryPending("retry")
+    setStartupRecoveryError(null)
+    const finishRetry = () => {
+      startupRecoveryPendingRef.current = false
+      setStartupRecoveryPending(null)
+    }
+    if (currentStartupEntryFailure && startupProjectId) {
+      setStartupEntryFailure(null)
+      setStartupEntryAttempt((current) => current + 1)
+      void Promise.resolve().then(finishRetry)
       return
     }
-    setDesktopSurface(openDesktopHome)
-  }, [primaryDesktopSurface, returnToProjectHome])
+    void projectController.initialize().finally(finishRetry)
+  }, [
+    currentStartupEntryFailure,
+    projectController,
+    startupProjectId,
+  ])
+  const handleTitlebarBrand = useCallback(() => {
+    if (desktopSurface.kind === "settings") setDesktopSurface(closeDesktopSettings)
+  }, [desktopSurface.kind])
   const rendererScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
   const rendererFailureCopy =
     locale === "zh-CN"
@@ -1789,13 +1984,6 @@ function App() {
     () => [
       {
         group: "navigation",
-        id: "navigation.home",
-        keywords: ["projects"],
-        label: locale === "zh-CN" ? "返回项目主页" : "Go to Projects",
-        run: openProjectHomeFromTitlebar,
-      },
-      {
-        group: "navigation",
         id: "navigation.settings",
         label: locale === "zh-CN" ? "打开设置" : "Open Settings",
         run: openWorkspaceSettings,
@@ -1832,7 +2020,6 @@ function App() {
       locale,
       openAgentDrawer,
       openCanvasGenerate,
-      openProjectHomeFromTitlebar,
       openWorkspaceSettings,
     ],
   )
@@ -1854,21 +2041,28 @@ function App() {
     <AgentGenerationPreferenceProvider storage={localStorage}>
       <div className="relative flex size-full flex-col overflow-hidden">
         <ApplicationTitlebar
+          brandInteractive={desktopSurface.kind === "settings"}
           contextLabel={
             settingsSection
               ? locale === "zh-CN"
                 ? "设置"
                 : "Settings"
-              : primaryDesktopSurface === "home"
+              : effectivePrimaryDesktopSurface === "home"
                 ? "Convax"
                 : ""
           }
           commandsLabel={locale === "zh-CN" ? "打开命令" : "Open commands"}
-          homeLabel={locale === "zh-CN" ? "返回项目主页" : "Back to Projects"}
-          onBackToProjects={openProjectHomeFromTitlebar}
+          homeLabel={
+            desktopSurface.kind === "settings"
+              ? locale === "zh-CN"
+                ? "返回工作区"
+                : "Back to workspace"
+              : "Convax"
+          }
+          onBackToProjects={handleTitlebarBrand}
           onOpenCommands={() => setCommandPaletteOpen(true)}
           platform={window.convax.platform}
-          surface={settingsSection ? "settings" : primaryDesktopSurface}
+          surface={settingsSection ? "settings" : effectivePrimaryDesktopSurface}
           windowControls={
             window.convax.platform === "darwin"
               ? {
@@ -1893,18 +2087,45 @@ function App() {
           placeholder={locale === "zh-CN" ? "搜索命令…" : "Search commands…"}
         />
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          {primaryDesktopSurface === "home" ? (
+          {effectivePrimaryDesktopSurface === "home" ? (
             <div
               aria-hidden={settingsSection ? true : undefined}
               className="size-full pt-11"
               inert={Boolean(settingsSection) || undefined}
             >
-              <ProjectHome
-                controller={projectController}
-                locale={locale}
-                onEnterProject={enterHomeProject}
-                reducedMotion={appearancePreferences.reducedMotion}
-              />
+              {projectBootstrapView.kind === "registry-loading" ? (
+                <ProjectRegistryLoadingState
+                  locale={locale}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                />
+              ) : projectBootstrapView.kind === "onboarding" ? (
+                <ProjectHome
+                  controller={projectController}
+                  locale={locale}
+                  onEnterProject={enterHomeProject}
+                  onSelectionStart={() => {
+                    startupAutoRestoreEnabledRef.current = false
+                    setStartupEntryFailure(null)
+                    setStartupRecoveryError(null)
+                  }}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                />
+              ) : projectBootstrapView.kind === "recovery" ? (
+                <ProjectRecoveryState
+                  error={projectBootstrapView.error}
+                  locale={locale}
+                  onOpenProject={openProjectFromRecovery}
+                  onRetry={retryProjectStartup}
+                  opening={startupRecoveryPending === "open"}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                  retrying={startupRecoveryPending === "retry"}
+                />
+              ) : (
+                <ProjectLoadingState
+                  projectName={projectBootstrapView.projectName}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                />
+              )}
             </div>
           ) : (
             <WorkspaceShell
@@ -1991,9 +2212,8 @@ function App() {
                   </>
                 ) : null}
                 {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
-                  <ProjectEmptyState
-                    controller={projectController}
-                    initialized={projectSnapshot.initialized}
+                  <ProjectRegistryLoadingState
+                    locale={locale}
                     reducedMotion={appearancePreferences.reducedMotion}
                   />
                 ) : workbenchSnapshot.surface.kind === "file" ? (

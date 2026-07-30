@@ -14,6 +14,7 @@ export interface ApplicationTitlebarWindowControls {
 }
 
 export interface ApplicationTitlebarProps {
+  brandInteractive?: boolean
   contextLabel: string
   homeLabel: string
   onBackToProjects: () => void
@@ -25,6 +26,7 @@ export interface ApplicationTitlebarProps {
 }
 
 export function ApplicationTitlebar({
+  brandInteractive = true,
   contextLabel,
   homeLabel,
   onBackToProjects,
@@ -90,16 +92,27 @@ export function ApplicationTitlebar({
         </div>
       ) : null}
 
-      <button
-        aria-current={surface === "home" ? "page" : undefined}
-        aria-label={homeLabel}
-        className="grid size-8 place-items-center rounded-md text-muted-foreground outline-none transition-[background-color,color,transform] duration-100 [@media(hover:hover)]:hover:bg-accent [@media(hover:hover)]:hover:text-accent-foreground active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
-        onClick={onBackToProjects}
-        title={homeLabel}
-        type="button"
-      >
-        <ConvaxBrand className="text-foreground" />
-      </button>
+      {brandInteractive ? (
+        <button
+          aria-current={surface === "home" ? "page" : undefined}
+          aria-label={homeLabel}
+          className="grid size-8 place-items-center rounded-md text-muted-foreground outline-none transition-[background-color,color,transform] duration-100 [@media(hover:hover)]:hover:bg-accent [@media(hover:hover)]:hover:text-accent-foreground active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-ring/50 motion-reduce:transition-none"
+          onClick={onBackToProjects}
+          title={homeLabel}
+          type="button"
+        >
+          <ConvaxBrand className="text-foreground" />
+        </button>
+      ) : (
+        <span
+          aria-label={homeLabel}
+          className="grid size-8 place-items-center text-muted-foreground"
+          data-application-brand="passive"
+          role="img"
+        >
+          <ConvaxBrand className="text-foreground" />
+        </span>
+      )}
 
       {surface !== "workspace" ? (
         <div

@@ -63,4 +63,23 @@ describe("ApplicationTitlebar", () => {
     expect(markup).not.toContain("data-macos-window-controls")
     expect(markup).not.toContain("Open details")
   })
+
+  test("keeps the brand passive when Projects are managed inside the workspace", () => {
+    const markup = renderToStaticMarkup(
+      <ApplicationTitlebar
+        brandInteractive={false}
+        commandsLabel="Open commands"
+        contextLabel=""
+        homeLabel="Convax"
+        onBackToProjects={() => undefined}
+        onOpenCommands={() => undefined}
+        platform="win32"
+        surface="workspace"
+      />,
+    )
+
+    expect(markup).toContain('data-application-brand="passive"')
+    expect(markup).toContain('aria-label="Convax"')
+    expect(markup).not.toContain('aria-label="Back to Projects"')
+  })
 })

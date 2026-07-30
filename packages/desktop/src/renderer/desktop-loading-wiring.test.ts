@@ -4,25 +4,40 @@ import { fileURLToPath } from "node:url"
 
 const indexSource = readFileSync(fileURLToPath(new URL("./index.tsx", import.meta.url)), "utf8")
 const projectHomeSource = readFileSync(fileURLToPath(new URL("./project-home.tsx", import.meta.url)), "utf8")
+const packagedSmokeSource = readFileSync(
+  fileURLToPath(new URL("../../scripts/desktop-packaged-smoke.ts", import.meta.url)),
+  "utf8",
+)
 
-describe("Desktop loading adoption wiring", () => {
-  test("routes appearance reducedMotion into Desktop-owned loading gates without changing gate predicates", () => {
-    expect(indexSource).toContain(
-      'workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project"',
-    )
-    expect(indexSource).toContain("!initialDocument")
-    expect(indexSource).toContain("<ProjectEmptyState")
-    expect(indexSource).toContain("<ProjectLoadingState")
-    expect(indexSource).toContain("reducedMotion={appearancePreferences.reducedMotion}")
+describe("Desktop Project startup wiring", () => {
+  test("Desktop owns registry initialization and gates first-run onboarding", () => {
+    expect(indexSource).toContain("void projectController.initialize()")
+    expect(indexSource).toContain("resolveProjectBootstrapView")
+    expect(indexSource).toContain('projectBootstrapView.kind === "onboarding"')
+    expect(indexSource).toContain('projectBootstrapView.kind === "recovery"')
+    expect(indexSource).toContain("<ProjectRegistryLoadingState")
+    expect(indexSource).toContain("<ProjectRecoveryState")
     expect(indexSource).toContain("<ProjectHome")
-    expect(indexSource).toContain("onEnterProject={enterHomeProject}")
+    expect(projectHomeSource).not.toContain("controller.initialize()")
   })
 
-  test("ProjectHome registry wait uses the shared Loading status primitive", () => {
-    expect(projectHomeSource).toContain("!model.initialized")
-    expect(projectHomeSource).toContain("<Loading")
-    expect(projectHomeSource).toContain("label={labels.loading}")
-    expect(projectHomeSource).toContain("LoadingSpinner")
-    expect(projectHomeSource).not.toContain("LoaderCircle")
+  test("restores an available Project through the existing workspace coordinator", () => {
+    expect(indexSource).toContain('desktopSurface.kind !== "home"')
+    expect(indexSource).toContain("workspaceEntryCoordinator")
+    expect(indexSource).toContain(".enter({ projectId: startupProjectId")
+    expect(indexSource).toContain("setStartupEntryFailure")
+    expect(indexSource).not.toContain('id: "navigation.home"')
+    expect(indexSource).not.toContain("openDesktopHome")
+  })
+
+  test("packaged smoke requires a seeded Project to bypass onboarding", () => {
+    expect(packagedSmokeSource).toContain(
+      'await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")',
+    )
+    expect(packagedSmokeSource).toContain(
+      "showed first-run onboarding despite having a seeded Project",
+    )
+    expect(packagedSmokeSource).not.toContain("the packaged Home or Canvas")
+    expect(packagedSmokeSource).not.toContain("the seeded Project entry")
   })
 })

@@ -184,6 +184,26 @@ describe("WorkspaceEntryCoordinator", () => {
     expect(state.calls).not.toContain("show")
   })
 
+  test("honors AbortSignal while reconciliation is in flight and never commits", async () => {
+    let finishReconciliation: ((value: boolean) => void) | undefined
+    const reconciliation = new Promise<boolean>((resolve) => {
+      finishReconciliation = resolve
+    })
+    const state = harness({
+      activeProjectId: "project-1",
+      reconcile: async () => reconciliation,
+    })
+    const abort = new AbortController()
+
+    const entered = state.coordinator.enter({ projectId: "project-1", signal: abort.signal })
+    await flushMicrotasks()
+    abort.abort(new Error("Settings opened"))
+    finishReconciliation?.(true)
+
+    await expect(entered).rejects.toThrow("Settings opened")
+    expect(state.calls).not.toContain("show")
+  })
+
   test("returns a scope-bound lease that becomes stale after a newer entry", async () => {
     const state = harness({ activeProjectId: "project-1" })
     const first = await state.coordinator.acquire({ canvasId: "canvas-1", projectId: "project-1" })

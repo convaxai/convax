@@ -67,6 +67,293 @@
   box-sizing: border-box;
 }
 
+/* First-run Project onboarding. This surface is never used as a Project directory. */
+.project-home {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 28rem;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  color: var(--ui-text-primary);
+  background: var(--ui-surface-canvas);
+}
+
+.project-home__atmosphere {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.project-home__bloom,
+.project-home__grid {
+  position: absolute;
+  inset: 0;
+}
+
+.project-home__bloom {
+  background:
+    radial-gradient(
+      circle at 50% 39%,
+      color-mix(in oklab, var(--ui-brand) 13%, transparent) 0,
+      color-mix(in oklab, var(--ui-brand) 5%, transparent) 24rem,
+      transparent 40rem
+    );
+}
+
+.project-home__grid {
+  opacity: 0.56;
+  background-image:
+    radial-gradient(
+      circle,
+      color-mix(in oklab, var(--ui-border-default) 76%, transparent) 0.75px,
+      transparent 0.85px
+    );
+  background-position: center;
+  background-size: 1.5rem 1.5rem;
+  -webkit-mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+  mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+}
+
+.project-home__content {
+  width: min(100%, 34rem);
+  text-align: center;
+  animation: project-home-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
+}
+
+.project-home__canvas-mark {
+  position: relative;
+  width: 14rem;
+  height: 7.5rem;
+  margin: 0 auto 1.25rem;
+}
+
+.project-home__canvas-mark::before {
+  position: absolute;
+  inset: 1rem 3.25rem;
+  border: 1px solid color-mix(in oklab, var(--ui-brand) 25%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-pill);
+  background: color-mix(in oklab, var(--ui-brand) 6%, transparent);
+  content: "";
+  filter: blur(0.2px);
+}
+
+.project-home__connector {
+  position: absolute;
+  z-index: 0;
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--ui-border-strong) 72%, transparent),
+    color-mix(in oklab, var(--ui-brand) 68%, var(--ui-border-default))
+  );
+}
+
+.project-home__connector--left {
+  top: 2.85rem;
+  left: 3.1rem;
+  width: 4.25rem;
+  transform: rotate(15deg);
+}
+
+.project-home__connector--right {
+  top: 3.75rem;
+  left: 7.4rem;
+  width: 4.25rem;
+  transform: rotate(-22deg);
+}
+
+.project-home__node {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  place-items: center;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-text-secondary);
+  background: color-mix(in oklab, var(--ui-surface-raised) 92%, var(--ui-brand));
+  box-shadow: var(--ui-shadow-low);
+}
+
+.project-home__node svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.project-home__node--document {
+  top: 0.7rem;
+  left: 1.2rem;
+  transform: rotate(-4deg);
+}
+
+.project-home__node--brand {
+  top: 2.6rem;
+  left: 50%;
+  width: 3.1rem;
+  height: 3.1rem;
+  transform: translateX(-50%);
+  border-color: color-mix(in oklab, var(--ui-brand) 48%, var(--ui-border-default));
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-surface-raised) 90%, var(--ui-brand));
+  box-shadow:
+    var(--ui-shadow-low),
+    0 0 0 0.35rem color-mix(in oklab, var(--ui-brand) 7%, transparent);
+}
+
+.project-home__node--brand [data-convax-brand] > svg {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.project-home__node--image {
+  top: 0.5rem;
+  right: 1rem;
+  transform: rotate(5deg);
+}
+
+.project-home__node--message {
+  right: 2.35rem;
+  bottom: 0.15rem;
+  width: 2.35rem;
+  height: 2.35rem;
+  transform: rotate(-3deg);
+}
+
+.project-home__wordmark {
+  justify-content: center;
+  color: var(--ui-text-secondary);
+}
+
+.project-home__title {
+  margin: 0.85rem 0 0;
+  font-size: clamp(1.85rem, 4vw, 2.6rem);
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: -0.042em;
+  text-wrap: balance;
+}
+
+.project-home__description {
+  max-width: 29rem;
+  margin: 0.95rem auto 0;
+  color: var(--ui-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+  text-wrap: balance;
+}
+
+.project-home__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 1.75rem;
+}
+
+.project-home__action {
+  min-width: 10.75rem;
+}
+
+.project-home__error {
+  max-width: 28rem;
+  margin: 1rem auto 0;
+  border: 1px solid color-mix(in oklab, var(--ui-status-danger) 28%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-md);
+  padding: 0.7rem 0.85rem;
+  color: var(--ui-status-danger);
+  background: var(--ui-status-danger-surface);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+@keyframes project-home-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-3vh + 0.6rem)) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-3vh) scale(1);
+  }
+}
+
+@media (max-width: 32rem) {
+  .project-home__actions {
+    flex-direction: column;
+  }
+
+  .project-home__action {
+    width: 100%;
+  }
+}
+
+@media (max-height: 36rem) {
+  .project-home__content {
+    animation-name: project-home-reveal-compact;
+  }
+
+  .project-home__canvas-mark {
+    margin-bottom: 0.5rem;
+    transform: scale(0.84);
+  }
+}
+
+@keyframes project-home-reveal-compact {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-project-home-motion="reduce"] .project-home__content {
+  animation: none;
+  transform: translateY(-3vh);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-home__content {
+    animation: none;
+    transform: translateY(-3vh);
+  }
+}
+
+@media (forced-colors: active) {
+  .project-home__bloom,
+  .project-home__grid,
+  .project-home__connector,
+  .project-home__canvas-mark::before {
+    display: none;
+  }
+
+  .project-home__node {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+}
+
 .convax-settings-search__input {
   padding-inline-start: 2.25rem;
 }
