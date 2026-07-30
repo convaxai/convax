@@ -125,10 +125,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function abortError(reason?: unknown) {
   const message =
-    typeof reason === "string" || typeof reason === "number" || typeof reason === "boolean"
-      ? String(reason)
-      : "Operation was canceled"
-  const error = reason instanceof Error ? reason : new Error(message)
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === "string" || typeof reason === "number" || typeof reason === "boolean"
+        ? String(reason)
+        : "Operation was canceled"
+  // AbortSignal.reason may be a DOMException whose name is exposed through a
+  // getter-only property. Always wrap it instead of mutating caller-owned errors.
+  const error = new Error(message)
   error.name = "AbortError"
   return error
 }

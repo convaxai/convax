@@ -1974,10 +1974,11 @@ describe("GenerationCanvasService", () => {
     )
 
     await loadStarted
-    controller.abort("user canceled")
+    const reason = new DOMException("user canceled", "AbortError")
+    expect(() => controller.abort(reason)).not.toThrow()
     releaseLoad()
 
-    await expect(generation).rejects.toMatchObject({ name: "AbortError" })
+    await expect(generation).rejects.toMatchObject({ message: "user canceled", name: "AbortError" })
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(createPendingCalls).toBe(0)
     expect(harness.calls).toEqual([])
@@ -4144,9 +4145,10 @@ describe("GenerationCanvasService", () => {
     await started
     const replayController = new AbortController()
     const replay = service.generate(request(), actor, replayController.signal)
-    replayController.abort("caller stopped waiting")
+    const reason = new DOMException("caller stopped waiting", "AbortError")
+    expect(() => replayController.abort(reason)).not.toThrow()
 
-    await expect(replay).rejects.toMatchObject({ name: "AbortError" })
+    await expect(replay).rejects.toMatchObject({ message: "caller stopped waiting", name: "AbortError" })
     release()
     await expect(first).resolves.toMatchObject({ createdNodeIds: ["generated-one"] })
     expect(calls).toHaveLength(1)

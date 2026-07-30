@@ -108,6 +108,24 @@ describe("StdioMcpClient", () => {
     await expect(result).rejects.toMatchObject({ name: "AbortError" })
   })
 
+  test("does not mutate a read-only DOMException abort reason", async () => {
+    const client = createClient()
+    await client.listTools()
+    const controller = new AbortController()
+    const result = client.callTool("wait", {}, controller.signal)
+    const reason = new DOMException("Plugin service availability check timed out", "AbortError")
+
+    await Bun.sleep(20)
+    expect(() => controller.abort(reason)).not.toThrow()
+    await expect(result).rejects.toMatchObject({
+      message: "Plugin service availability check timed out",
+      name: "AbortError",
+    })
+    await expect(client.callTool("echo", { after: "timeout" })).resolves.toMatchObject({
+      structuredContent: { artifacts: [] },
+    })
+  })
+
   test("does not let one caller cancel shared process initialization", async () => {
     const client = createClient({ fixtureArgs: ["--slow-initialize"] })
     const controller = new AbortController()
