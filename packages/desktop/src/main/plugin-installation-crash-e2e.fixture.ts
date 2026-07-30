@@ -51,7 +51,7 @@ function runtimeCandidate(assetContent: string, version: string): PluginInstalla
     description: "Crash recovery fixture Plugin",
     entry: "index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: ["host.context.get"],
     },

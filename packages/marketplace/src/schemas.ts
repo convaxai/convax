@@ -199,6 +199,7 @@ const PACKAGE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const COMMAND = /^[A-Za-z0-9._-]+$/
 const TARGET = /^(darwin|linux|win32)-(arm64|x64)$/
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const admittedPluginHostApiMajor = 2
 const officialServerAjv = new Ajv({
   strict: true,
   // The published MCP schema uses `required` inside `anyOf` branches while
@@ -597,8 +598,10 @@ function parseRegistryPackage(value: unknown): RegistryPackage {
     const hostApi = record(manifest.hostApi, "Plugin manifest hostApi")
     strictKeys(hostApi, ["major", "required", "optional"], ["major", "required", "optional"], "Plugin manifest hostApi")
     const apiId = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/
+    if (hostApi.major !== admittedPluginHostApiMajor) {
+      throw new TypeError(`Plugin manifest hostApi major must be ${admittedPluginHostApiMajor}`)
+    }
     if (
-      hostApi.major !== 1 ||
       !Array.isArray(hostApi.required) ||
       !Array.isArray(hostApi.optional) ||
       [...hostApi.required, ...hostApi.optional].some((api) => typeof api !== "string" || !apiId.test(api))

@@ -36,10 +36,18 @@ function compareVersions(left: PluginApiVersion, right: PluginApiVersion): numbe
 function unavailable(
   id: string,
   since: PluginApiVersion | undefined,
+  contractSince: PluginApiVersion | undefined,
   reason: PluginApiUnavailableReason,
   recoverable: boolean,
 ): ApiAvailability {
-  return { available: false, id, ...(since ? { since } : {}), reason, recoverable }
+  return {
+    available: false,
+    id,
+    ...(since ? { since } : {}),
+    ...(contractSince ? { contractSince } : {}),
+    reason,
+    recoverable,
+  }
 }
 
 /**
@@ -52,32 +60,35 @@ export function evaluatePluginApiAvailability(
   declaration: PluginApiDeclaration,
   context: PluginApiLiveContext,
 ): ApiAvailability {
-  if (!isPluginApiId(id)) return unavailable(id, undefined, "unsupported-host", false)
+  if (!isPluginApiId(id)) return unavailable(id, undefined, undefined, "unsupported-host", false)
   const definition = getPluginApiDefinition(id)
   if (
     context.catalogMajor !== PLUGIN_API_CATALOG_MAJOR ||
     declaration.major !== context.catalogMajor ||
-    compareVersions(context.catalogVersion, definition.since) < 0
+    compareVersions(context.catalogVersion, definition.contractSince) < 0
   ) {
-    return unavailable(id, definition.since, "unsupported-host", false)
+    return unavailable(id, definition.since, definition.contractSince, "unsupported-host", false)
   }
   if (!declaration.required.includes(id) && !declaration.optional.includes(id)) {
-    return unavailable(id, definition.since, "not-declared", false)
+    return unavailable(id, definition.since, definition.contractSince, "not-declared", false)
   }
   if (!definition.audience.includes(context.audience)) {
-    return unavailable(id, definition.since, "wrong-surface", false)
+    return unavailable(id, definition.since, definition.contractSince, "wrong-surface", false)
   }
   if (definition.grant !== null && !context.grants.includes(definition.grant)) {
-    return unavailable(id, definition.since, "permission-denied", false)
+    return unavailable(id, definition.since, definition.contractSince, "permission-denied", false)
   }
-  if (!context.hasContext) return unavailable(id, definition.since, "missing-context", true)
-  if (!context.setupComplete) return unavailable(id, definition.since, "setup-required", true)
-  if (context.disabled) return unavailable(id, definition.since, "disabled", true)
-  if (context.recovering) return unavailable(id, definition.since, "recovering", true)
+  if (!context.hasContext)
+    return unavailable(id, definition.since, definition.contractSince, "missing-context", true)
+  if (!context.setupComplete)
+    return unavailable(id, definition.since, definition.contractSince, "setup-required", true)
+  if (context.disabled) return unavailable(id, definition.since, definition.contractSince, "disabled", true)
+  if (context.recovering) return unavailable(id, definition.since, definition.contractSince, "recovering", true)
   return {
     available: true,
     id,
     since: definition.since,
+    contractSince: definition.contractSince,
     catalogVersion: context.catalogVersion,
   }
 }

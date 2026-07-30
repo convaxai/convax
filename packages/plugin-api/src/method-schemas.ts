@@ -66,7 +66,7 @@ export interface PluginApiWireContract {
   readonly result: PluginApiWireLimit
 }
 
-/** Wire-schema semantics of the unpublished initial Host API catalog. */
+/** Wire-schema semantics admitted by the current runtime and generated Catalog. */
 export const pluginApiWireSchemaDialect = "convax.plugin-api-wire-schema/3" as const
 
 export type PluginApiWireSchemaDialect = typeof pluginApiWireSchemaDialect
@@ -241,14 +241,16 @@ const availability = union(
     {
       available: literal(true),
       catalogVersion: string(64),
+      contractSince: string(64),
       id: string(128),
       since: string(64),
     },
-    ["available", "catalogVersion", "id", "since"],
+    ["available", "catalogVersion", "contractSince", "id", "since"],
   ),
   object(
     {
       available: literal(false),
+      contractSince: string(64),
       id: string(128),
       reason: enumString([
         "unsupported-host",
@@ -280,7 +282,7 @@ const hostNode = object(
   ["data", "id", "position", "revision", "type"],
 )
 
-const generationReference = object({ nodeId: string(), role: inputRole }, ["nodeId", "role"])
+const generationReference = object({ inputKey: string(), role: inputRole }, ["inputKey", "role"])
 const nodeQuery = object(
   {
     ids: stringList(),

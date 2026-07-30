@@ -38,7 +38,7 @@ const installed: ResolvedPluginPrincipal = {
     "canvas.events.subscribe",
   ],
   hostApi: {
-    major: 1,
+    major: 2,
     optional: [],
     required: [
       "projects.list",

@@ -42,7 +42,7 @@ export interface PluginAgentPromptResult {
 export interface PluginConnectedInputDescriptor {
   durationMs?: number
   height?: number
-  id: string
+  inputKey: string
   kind: string
   label: string
   mediaRevision?: string

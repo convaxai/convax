@@ -70,7 +70,7 @@ function pluginIdentity(
       contributes: { canvas: { renderer: { create: true, height: 640, width: 980 } } },
       description: "Capture one viewport",
       entry: "index.html",
-      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+      hostApi: { major: 2, optional: [], required: ["host.context.get"] },
       id: "capture-surface",
       name: "Capture Surface",
       schema: "convax.plugin/8",

@@ -82,7 +82,7 @@ function pluginPackage(id: string, contributes: Record<string, unknown>) {
       contributes,
       description: id,
       entry: "index.html",
-      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+      hostApi: { major: 2, optional: [], required: ["host.context.get"] },
       id,
       name: id,
       schema: "convax.plugin/8",
@@ -166,7 +166,7 @@ test("keeps accepted Network metadata for diagnosis but refuses guessed legacy f
   const legacy = pluginPackage("legacy-fields", { tools: [{ id: "guess-me" }] })
   delete (legacy.manifest as Record<string, unknown>).entry
   ;(legacy.manifest as Record<string, unknown>).hostApi = {
-    major: 1,
+    major: 2,
     optional: [],
     required: [],
   }

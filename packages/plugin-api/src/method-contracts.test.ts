@@ -163,6 +163,21 @@ describe("portable Plugin Host API method contracts", () => {
     })
     expect(() => parsePluginApiParams("agent.prompt", { text: " padded " })).toThrow("bounded string")
     expect(() => parsePluginApiParams("generation.execute", { prompt: "\ncreate a scene" })).toThrow("bounded string")
+    expect(
+      parsePluginApiParams("generation.execute", {
+        prompt: "create a scene",
+        references: [{ inputKey: "opaque-input-key", role: "reference_image" }],
+      }),
+    ).toEqual({
+      prompt: "create a scene",
+      references: [{ inputKey: "opaque-input-key", role: "reference_image" }],
+    })
+    expect(() =>
+      parsePluginApiParams("generation.execute", {
+        prompt: "create a scene",
+        references: [{ nodeId: "must-not-cross-wire", role: "reference_image" }],
+      }),
+    ).toThrow("unsupported")
 
     expect(() =>
       parsePluginApiParams("canvas.node.state.replace", {

@@ -1,5 +1,5 @@
 import type { CanvasNodeData, CanvasPoint } from "@convax/canvas/core"
-import type { PluginApiCall, PluginApiId } from "@convax/plugin-api"
+import type { PluginApiCall, PluginApiGenerationReference, PluginApiId } from "@convax/plugin-api"
 
 import type {
   PluginCanvasCapabilityClient,
@@ -13,7 +13,6 @@ import type {
   PluginCanvasImageResult,
   PluginConnectedInputDescriptor,
   PluginGenerationCanvasResult,
-  PluginGenerationReference,
   PluginGenerationResultMode,
   PluginGenerationToolSummary,
   PluginProjectTextResult,
@@ -140,7 +139,7 @@ export interface PluginHostNodeOperationsPort {
     operationId: string
     principal: PluginPrincipal
     prompt: string
-    references?: readonly PluginGenerationReference[]
+    references?: readonly PluginApiGenerationReference[]
     resultMode?: PluginGenerationResultMode
     signal?: AbortSignal
     toolId?: string

@@ -48,14 +48,15 @@ try {
   await Bun.write(
     join(consumerRoot, "index.ts"),
     [
-      'import { PLUGIN_API_CATALOG_ARTIFACT_SCHEMA, PLUGIN_API_CATALOG_VERSION, getPluginApiWireContract, isPluginApiCommitPreserving, parsePluginApiParams, parsePluginApiRemoteFailure, parsePluginApiResult, renderPluginApiReference, type PluginApiId, type PluginApiParams, type PluginApiResult } from "@convax/plugin-api"',
+      'import { PLUGIN_API_CATALOG_ARTIFACT_SCHEMA, PLUGIN_API_CATALOG_VERSION, getPluginApiDefinition, getPluginApiWireContract, isPluginApiCommitPreserving, parsePluginApiParams, parsePluginApiRemoteFailure, parsePluginApiResult, renderPluginApiReference, type PluginApiId, type PluginApiParams, type PluginApiResult, type PluginApiVersion } from "@convax/plugin-api"',
       'import { parsePluginApiCatalogArtifact, renderPluginApiJson } from "@convax/plugin-api/generator"',
       'const id: PluginApiId = "host.context.get"',
       'const prompt: PluginApiParams<"agent.prompt"> = parsePluginApiParams("agent.prompt", { text: "hello" })',
       'const prompted: PluginApiResult<"agent.prompt"> = parsePluginApiResult("agent.prompt", { text: "accepted" })',
       'const remote = parsePluginApiRemoteFailure("agent.prompt", { code: "permission-denied", kind: "api", message: "denied", recoverable: false })',
+      'const contractSince: PluginApiVersion = getPluginApiDefinition("generation.execute").contractSince',
       "const artifact = parsePluginApiCatalogArtifact(JSON.parse(renderPluginApiJson()))",
-      'void [id, prompt, prompted, remote, artifact, PLUGIN_API_CATALOG_ARTIFACT_SCHEMA, getPluginApiWireContract("canvas.resource.image.create"), isPluginApiCommitPreserving("agent.prompt"), PLUGIN_API_CATALOG_VERSION, renderPluginApiReference({ requiredIds: [], optionalIds: [] })]',
+      'void [id, prompt, prompted, remote, contractSince, artifact, PLUGIN_API_CATALOG_ARTIFACT_SCHEMA, getPluginApiWireContract("canvas.resource.image.create"), isPluginApiCommitPreserving("agent.prompt"), PLUGIN_API_CATALOG_VERSION, renderPluginApiReference({ requiredIds: [], optionalIds: [] })]',
       "",
     ].join("\n"),
   )

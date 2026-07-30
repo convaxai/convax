@@ -333,7 +333,7 @@ async function main() {
     const skillSource = path.join(root, "imports", "skill")
     const mcpSource = path.join(root, "imports", "mcp-server")
     const pluginManifest =
-      '{"schema":"convax.plugin/8","id":"local-smoke-plugin","name":"Local Smoke Plugin","description":"Local immutable Plugin snapshot","version":"1.0.0","hostApi":{"major":1,"required":["projects.list"],"optional":[]},"capabilities":["projects.read"],"contributes":{}}\n'
+      '{"schema":"convax.plugin/8","id":"local-smoke-plugin","name":"Local Smoke Plugin","description":"Local immutable Plugin snapshot","version":"1.0.0","hostApi":{"major":2,"required":["projects.list"],"optional":[]},"capabilities":["projects.read"],"contributes":{}}\n'
     const skillMarkdown =
       "---\nname: local-smoke-skill\ndescription: Local immutable Skill snapshot.\n---\n\nUse the installed snapshot.\n"
     const serverJson =

@@ -115,6 +115,10 @@ A Plugin has two orthogonal surfaces:
    Generated-Catalog consumers import the canonical artifact schema constant and
    strict `parsePluginApiCatalogArtifact` entry from `@convax/plugin-api`; they do
    not copy a `convax.plugin-api-catalog/*` token or validator.
+   API SemVer, Catalog artifact schema and wire-schema dialect are independent
+   version axes. The current runtime admits one exact artifact/dialect pair. A
+   retired major remains only as digest-bound opaque history and is never routed
+   through the current Host or SDK interpreter.
    Cancellation delivery is explicit Catalog metadata (`cancelable` or
    `commit-preserving`) and is never inferred from side-effect class.
 
@@ -182,7 +186,7 @@ only bounded in-flight duplicate state; completed/billable replay safety belongs
 the provider's durable `operationId`/LRO contract.
 
 Plugin ABI releases roll out in dependency order: publish
-`@convax/plugin-api@1.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
+`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
 Marketplace authoring line (`@convax/marketplace`,
 `@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.0`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
@@ -236,7 +240,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
 | `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell                                                     |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                   |
+| `@convax/web`               | Public marketing site and responsive product storytelling                                                                    |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                    |
 
 Allowed internal runtime dependencies:
@@ -689,6 +693,17 @@ tree. Scope, revision, placement, native Project paths, Canvas persistence and
 generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
+Web Plugin generation references carry only opaque `inputKey` values issued by the
+Host. Each key is process-ephemeral and cryptographically bound to the exact Plugin
+snapshot, Project/Canvas/owning node, source node, direct edge identity and resource
+revision. It is intentionally not bound to the whole Canvas revision, so unrelated
+node edits and geometry changes do not revoke an otherwise unchanged input. Main
+resolves the key to an internal node reference, and the shared generation service
+then reloads and revalidates the owner, direct edge, resource snapshot and staged
+bytes immediately before a potentially billable external call. Plugins never
+receive or submit that internal node id through the connected-input generation
+reference path; separately granted document projections remain an orthogonal
+capability and cannot substitute a node id for `inputKey`.
 
 A return-delivery operation reuses the same verified executable, input staging,
 revision/source rechecks, cancellation, and at-most-once execution boundary, but
@@ -1133,6 +1148,18 @@ Canvas, owning node and frame. Every call revalidates the generated Host API
 declaration, manifest grant, live scope, sender and cancellation state before
 using the same application service as UI and Agent. Plugin instance-state writes
 may update only that node's namespaced portable state.
+
+The same protocol has one payload-free `disconnect` control envelope. It is
+lifecycle, not a Catalog Host API or Plugin capability: `client.close()` first
+settles local in-flight calls, posts that envelope best-effort, and then closes its
+MessagePort synchronously. The renderer may close only the exact connection already
+bound to that port; the envelope cannot name a frame, Plugin, Project, Canvas, node,
+or renderer/Main connection id. It marks that connection closed immediately and
+awaits the existing fixed renderer/Main disconnect before finishing envelope
+dispatch; Main's handler closes the connection, aborts its work, and revokes all
+sender/frame-owned media sessions before it resolves. Teardown never waits for an
+asynchronous `beforeunload` handler, and malformed or replayed disconnect-shaped
+messages cannot select or widen authority.
 
 Verified Tool sidecars use a separate fixed reverse-MCP adapter with the same exact
 principal rules. Runtime disposal closes the connection and all subscriptions.

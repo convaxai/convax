@@ -25,7 +25,7 @@ const remoteEditor = {
   },
   description: "Edit remote media projects.",
   entry: "index.html",
-  hostApi: { major: 1 as const, optional: [], required: ["host.context.get"] },
+  hostApi: { major: 2 as const, optional: [], required: ["host.context.get"] },
   id: "remote-editor",
   name: "Remote Editor",
   schema: "convax.plugin/8" as const,

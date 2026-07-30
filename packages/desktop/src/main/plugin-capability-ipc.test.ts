@@ -199,7 +199,7 @@ function createAuthority(
           activeSetDigest: issuedPrincipal.activeSetDigest,
           capabilities: options.capabilities ?? [],
           hostApi: {
-            major: 1,
+            major: 2,
             optional: [],
             required: [
               "projects.list",

@@ -68,9 +68,35 @@ export interface PluginApiGeneratorResult {
 
 type Snapshot = PluginApiCatalogSnapshot
 type CatalogInput = PluginApiCatalog | PluginApiCatalogSnapshot
+type HistoryLineageEntry = Readonly<Pick<PluginApiDefinition, "id" | "since">>
+
+interface PluginApiHistoryEntry {
+  readonly version: PluginApiVersion
+  readonly lineage: readonly HistoryLineageEntry[]
+  readonly snapshot?: Snapshot
+}
+
+interface RetiredPluginApiHistoryReceipt {
+  readonly artifactSchema: string
+  readonly sha256: string
+  readonly version: PluginApiVersion
+  readonly wireSchemaDialect: string
+}
+
+const PLUGIN_API_HISTORY_LEDGER_FILE = "ledger.json"
+const PLUGIN_API_HISTORY_LEDGER_SCHEMA = "convax.plugin-api-history-ledger/1"
+const MAXIMUM_HISTORY_ARTIFACT_BYTES = 16 * 1024 * 1024
+const MAXIMUM_RETIRED_HISTORY_RECEIPTS = 32
+const SHA256 = /^[a-f0-9]{64}$/
+const CATALOG_ARTIFACT_TOKEN = /^convax\.plugin-api-catalog\/[1-9][0-9]*$/
+const WIRE_SCHEMA_DIALECT_TOKEN = /^convax\.plugin-api-wire-schema\/[1-9][0-9]*$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function historyLineage(snapshot: Snapshot): readonly HistoryLineageEntry[] {
+  return snapshot.apis.map(({ id, since }) => ({ id, since }))
 }
 
 function sortRecord(value: unknown): unknown {
@@ -138,6 +164,7 @@ function normalizedDefinition(
   return {
     id: definition.id,
     since: definition.since,
+    contractSince: definition.contractSince,
     audience: [...definition.audience].sort(),
     completion: definition.completion,
     grant: definition.grant,
@@ -208,12 +235,12 @@ export function renderPluginApiMarkdown(catalog: CatalogInput = pluginApiCatalog
     "The code and recoverability must match the exact API error table below; malformed requests and transport failures use the separate SDK protocol-error namespace.",
     "Request and response byte limits are UTF-8 JSON envelope limits and are enforced per API.",
     "",
-    "| API | Since | Audience | Grant | Scope | Side effect | Completion | Errors |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| API | Introduced | Current contract | Audience | Grant | Scope | Side effect | Completion | Errors |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ]
   for (const definition of snapshot.apis) {
     lines.push(
-      `| \`${definition.id}\` | ${definition.since} | ${definition.audience.join(", ")} | ${
+      `| \`${definition.id}\` | ${definition.since} | ${definition.contractSince} | ${definition.audience.join(", ")} | ${
         definition.grant ? `\`${definition.grant}\`` : "none"
       } | ${definition.scope} | ${definition.sideEffect} | ${definition.completion} | ${definition.errors.map((error) => `\`${error.code}\``).join(", ")} |`,
     )
@@ -228,7 +255,8 @@ export function renderPluginApiMarkdown(catalog: CatalogInput = pluginApiCatalog
       "",
       definition.docs.description,
       "",
-      `- Since: ${definition.since}`,
+      `- Introduced: ${definition.since}`,
+      `- Current contract since: ${definition.contractSince}`,
       `- Audience: ${definition.audience.join(", ")}`,
       `- Grant: ${definition.grant ? `\`${definition.grant}\`` : "none"}`,
       `- Scope: ${definition.scope}`,
@@ -296,6 +324,10 @@ function breakingProjection(definition: PluginApiDefinition): unknown {
   }
 }
 
+function contractDigestOf(definition: PluginApiDefinitionSnapshot): string {
+  return definition.contract.digest
+}
+
 /**
  * Compares two catalog snapshots using the package's conservative SemVer policy.
  *
@@ -344,6 +376,23 @@ export function checkPluginApiCompatibility(
       })
       continue
     }
+    const contractChanged = contractDigestOf(definition) !== contractDigestOf(nextDefinition)
+    if (contractChanged && nextDefinition.contractSince !== next.version) {
+      issues.push({
+        kind: "api-changed",
+        apiId: definition.id,
+        message: `Plugin API ${definition.id} changed contract must set contractSince to ${next.version}`,
+      })
+      continue
+    }
+    if (!contractChanged && definition.contractSince !== nextDefinition.contractSince) {
+      issues.push({
+        kind: "api-changed",
+        apiId: definition.id,
+        message: `Plugin API ${definition.id} unchanged contract must preserve contractSince`,
+      })
+      continue
+    }
     if (
       stableJson(breakingProjection(definition)) !== stableJson(breakingProjection(nextDefinition)) &&
       !majorChanged
@@ -357,6 +406,22 @@ export function checkPluginApiCompatibility(
   }
 
   for (const definition of next.apis) {
+    if (!previousById.has(definition.id) && definition.since !== next.version) {
+      issues.push({
+        kind: "api-added",
+        apiId: definition.id,
+        message: `New Plugin API ${definition.id} since must equal Catalog ${next.version}`,
+      })
+      continue
+    }
+    if (!previousById.has(definition.id) && definition.contractSince !== next.version) {
+      issues.push({
+        kind: "api-added",
+        apiId: definition.id,
+        message: `New Plugin API ${definition.id} contractSince must equal Catalog ${next.version}`,
+      })
+      continue
+    }
     if (!previousById.has(definition.id) && !majorChanged && !minorChanged) {
       issues.push({
         kind: "api-added",
@@ -568,18 +633,44 @@ function assertSnapshot(value: unknown, label: string): asserts value is Snapsho
     const definition = entry
     assertExactKeys(
       definition,
-      ["id", "since", "audience", "completion", "grant", "scope", "sideEffect", "errors", "docs", "contract"],
+      [
+        "id",
+        "since",
+        "contractSince",
+        "audience",
+        "completion",
+        "grant",
+        "scope",
+        "sideEffect",
+        "errors",
+        "docs",
+        "contract",
+      ],
       `${label} API`,
     )
     if (typeof definition.id !== "string" || ids.has(definition.id)) throw new TypeError(`${label} API id is invalid`)
     const id = definition.id
     ids.add(id)
-    if (typeof definition.since !== "string") {
+    if (typeof definition.since !== "string" || typeof definition.contractSince !== "string") {
       throw new TypeError(`${label} API ${id} is incomplete`)
     }
     pluginApiContractInternals.assertVersion(definition.since, `${label} API ${id} since`)
+    pluginApiContractInternals.assertVersion(
+      definition.contractSince,
+      `${label} API ${id} contractSince`,
+    )
     if (pluginApiContractInternals.compareVersions(definition.since, record.version) > 0) {
       throw new TypeError(`${label} API ${id} has a future since version`)
+    }
+    if (
+      pluginApiContractInternals.compareVersions(definition.contractSince, definition.since) < 0
+    ) {
+      throw new TypeError(`${label} API ${id} contractSince precedes since`)
+    }
+    if (
+      pluginApiContractInternals.compareVersions(definition.contractSince, record.version) > 0
+    ) {
+      throw new TypeError(`${label} API ${id} has a future contractSince version`)
     }
     if (
       !Array.isArray(definition.audience) ||
@@ -629,6 +720,7 @@ function assertSnapshot(value: unknown, label: string): asserts value is Snapsho
     parseContractSnapshot(definition.contract, `${label} API ${id} contract`)
     definePluginApi({
       id,
+      contractSince: definition.contractSince,
       audience,
       completion,
       grant: definition.grant,
@@ -700,36 +792,225 @@ function isMissingFileError(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT"
 }
 
-async function readHistory(historyDirectory: string): Promise<Snapshot[]> {
+function parseHistoryLedger(value: unknown): readonly RetiredPluginApiHistoryReceipt[] {
+  if (!isRecord(value)) throw new TypeError("Plugin API history ledger must be an object")
+  assertExactKeys(value, ["schema", "retired"], "Plugin API history ledger")
+  if (value.schema !== PLUGIN_API_HISTORY_LEDGER_SCHEMA || !Array.isArray(value.retired)) {
+    throw new TypeError("Plugin API history ledger is invalid")
+  }
+  if (value.retired.length > MAXIMUM_RETIRED_HISTORY_RECEIPTS) {
+    throw new TypeError("Plugin API history ledger exceeds its retired receipt bound")
+  }
+  const versions = new Set<string>()
+  return value.retired.map((candidate, index) => {
+    const label = `Plugin API history ledger retired receipt ${index}`
+    if (!isRecord(candidate)) throw new TypeError(`${label} must be an object`)
+    assertExactKeys(candidate, ["artifactSchema", "sha256", "version", "wireSchemaDialect"], label)
+    if (
+      typeof candidate.artifactSchema !== "string" ||
+      !CATALOG_ARTIFACT_TOKEN.test(candidate.artifactSchema) ||
+      typeof candidate.wireSchemaDialect !== "string" ||
+      !WIRE_SCHEMA_DIALECT_TOKEN.test(candidate.wireSchemaDialect) ||
+      typeof candidate.sha256 !== "string" ||
+      !SHA256.test(candidate.sha256) ||
+      typeof candidate.version !== "string"
+    ) {
+      throw new TypeError(`${label} is invalid`)
+    }
+    pluginApiContractInternals.assertVersion(candidate.version, `${label} version`)
+    if (versions.has(candidate.version)) throw new TypeError(`${label} duplicates version ${candidate.version}`)
+    versions.add(candidate.version)
+    return {
+      artifactSchema: candidate.artifactSchema,
+      sha256: candidate.sha256,
+      version: candidate.version,
+      wireSchemaDialect: candidate.wireSchemaDialect,
+    }
+  })
+}
+
+function parseRetiredHistory(
+  value: unknown,
+  bytes: string,
+  receipt: RetiredPluginApiHistoryReceipt,
+  label: string,
+): PluginApiHistoryEntry {
+  const actualDigest = createHash("sha256").update(bytes).digest("hex")
+  if (actualDigest !== receipt.sha256) throw new TypeError(`${label} differs from its immutable ledger digest`)
+  if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
+  assertExactKeys(value, ["schema", "version", "apis"], label)
+  if (value.schema !== receipt.artifactSchema || value.version !== receipt.version || !Array.isArray(value.apis)) {
+    throw new TypeError(`${label} does not match its retired ledger identity`)
+  }
+  if (value.apis.length < 1 || value.apis.length > 1_024) {
+    throw new TypeError(`${label} APIs are outside the retired audit bound`)
+  }
+  const ids = new Set<string>()
+  const lineage = value.apis.map((candidate, index) => {
+    const apiLabel = `${label} API ${index}`
+    if (!isRecord(candidate) || !isRecord(candidate.contract)) {
+      throw new TypeError(`${apiLabel} is incomplete`)
+    }
+    assertExactKeys(candidate.contract, ["dialect", "digest", "request", "result"], `${apiLabel} contract`)
+    if (
+      typeof candidate.id !== "string" ||
+      !/^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/.test(candidate.id) ||
+      ids.has(candidate.id) ||
+      typeof candidate.since !== "string" ||
+      candidate.contract.dialect !== receipt.wireSchemaDialect ||
+      typeof candidate.contract.digest !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(candidate.contract.digest)
+    ) {
+      throw new TypeError(`${apiLabel} has invalid retired audit tokens`)
+    }
+    const opaqueContract = {
+      dialect: candidate.contract.dialect,
+      request: candidate.contract.request,
+      result: candidate.contract.result,
+    }
+    const opaqueDigest = `sha256:${createHash("sha256").update(stableJson(opaqueContract)).digest("hex")}`
+    if (candidate.contract.digest !== opaqueDigest) {
+      throw new TypeError(`${apiLabel} digest does not match its opaque contract bytes`)
+    }
+    pluginApiContractInternals.assertVersion(candidate.since, `${apiLabel} since`)
+    if (pluginApiContractInternals.compareVersions(candidate.since, receipt.version) > 0) {
+      throw new TypeError(`${apiLabel} has a future since version`)
+    }
+    ids.add(candidate.id)
+    return { id: candidate.id, since: candidate.since }
+  })
+  return { version: receipt.version, lineage }
+}
+
+function historyMajor(version: PluginApiVersion): number {
+  return Number(version.split(".")[0])
+}
+
+function checkOpaqueMajorLineage(
+  previous: PluginApiHistoryEntry,
+  next: PluginApiHistoryEntry,
+): readonly PluginApiCompatibilityIssue[] {
+  if (historyMajor(next.version) <= historyMajor(previous.version)) {
+    return [
+      {
+        kind: "invalid-version",
+        message: `Retired Plugin API history ${previous.version} can only transition to a later major, received ${next.version}`,
+      },
+    ]
+  }
+  const previousById = new Map(previous.lineage.map((definition) => [definition.id, definition]))
+  const nextById = new Map(next.lineage.map((definition) => [definition.id, definition]))
+  const issues: PluginApiCompatibilityIssue[] = []
+  for (const definition of previous.lineage) {
+    const nextDefinition = nextById.get(definition.id)
+    if (nextDefinition && nextDefinition.since !== definition.since) {
+      issues.push({
+        kind: "api-changed",
+        apiId: definition.id,
+        message: `Plugin API ${definition.id} since is immutable`,
+      })
+    }
+  }
+  for (const definition of next.lineage) {
+    if (
+      !previousById.has(definition.id) &&
+      pluginApiContractInternals.compareVersions(definition.since, previous.version) <= 0
+    ) {
+      issues.push({
+        kind: "api-added",
+        apiId: definition.id,
+        message: `Plugin API ${definition.id} cannot claim introduction before retired history ${previous.version}`,
+      })
+    }
+  }
+  return issues
+}
+
+function checkHistoryCompatibility(
+  previous: PluginApiHistoryEntry,
+  next: PluginApiHistoryEntry,
+): readonly PluginApiCompatibilityIssue[] {
+  if (previous.snapshot && next.snapshot) return checkPluginApiCompatibility(previous.snapshot, next.snapshot)
+  return checkOpaqueMajorLineage(previous, next)
+}
+
+function assertHistoryContractReleases(history: readonly PluginApiHistoryEntry[]): void {
+  const releases = new Set(history.map(({ version }) => version))
+  for (const entry of history) {
+    if (!entry.snapshot) continue
+    for (const definition of entry.snapshot.apis) {
+      if (!releases.has(definition.contractSince)) {
+        throw new TypeError(
+          `Plugin API ${definition.id} contractSince ${definition.contractSince} has no corresponding history release`,
+        )
+      }
+    }
+  }
+}
+
+async function readHistory(historyDirectory: string): Promise<PluginApiHistoryEntry[]> {
   const entries = await readdir(historyDirectory, { withFileTypes: true }).catch((error: unknown) => {
     if (isMissingFileError(error)) return []
     throw error
   })
-  const snapshots: Snapshot[] = []
+  const ledgerPath = join(historyDirectory, PLUGIN_API_HISTORY_LEDGER_FILE)
+  const ledgerValue = await readFile(ledgerPath, "utf8")
+    .then((bytes) => JSON.parse(bytes) as unknown)
+    .catch((error: unknown) => {
+      if (isMissingFileError(error)) return { schema: PLUGIN_API_HISTORY_LEDGER_SCHEMA, retired: [] }
+      if (error instanceof SyntaxError)
+        throw new TypeError(`Plugin API history ledger is not valid JSON: ${ledgerPath}`)
+      throw error
+    })
+  const receipts = parseHistoryLedger(ledgerValue)
+  const receiptsByVersion = new Map(receipts.map((receipt) => [receipt.version, receipt]))
+  const seenReceipts = new Set<string>()
+  const snapshots: PluginApiHistoryEntry[] = []
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue
+    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === PLUGIN_API_HISTORY_LEDGER_FILE) {
+      continue
+    }
     const path = join(historyDirectory, entry.name)
+    const bytes = await readFile(path, "utf8")
+    if (new TextEncoder().encode(bytes).byteLength > MAXIMUM_HISTORY_ARTIFACT_BYTES) {
+      throw new TypeError(`Plugin API history exceeds its byte bound: ${path}`)
+    }
     let value: unknown
     try {
-      value = JSON.parse(await readFile(path, "utf8"))
+      value = JSON.parse(bytes)
     } catch {
       throw new TypeError(`Plugin API history is not valid JSON: ${path}`)
     }
+    const version = basename(entry.name, ".json")
+    pluginApiContractInternals.assertVersion(version, `Plugin API history filename ${entry.name}`)
+    const receipt = receiptsByVersion.get(version as PluginApiVersion)
+    if (receipt) {
+      snapshots.push(parseRetiredHistory(value, bytes, receipt, `Plugin API history ${entry.name}`))
+      seenReceipts.add(receipt.version)
+      continue
+    }
     assertSnapshot(value, `Plugin API history ${entry.name}`)
-    if (basename(entry.name, ".json") !== value.version) {
+    if (version !== value.version) {
       throw new TypeError(`Plugin API history filename must match version: ${entry.name}`)
     }
-    snapshots.push(snapshotPluginApiCatalog(value))
+    const snapshot = snapshotPluginApiCatalog(value)
+    snapshots.push({ version: snapshot.version, lineage: historyLineage(snapshot), snapshot })
+  }
+  for (const receipt of receipts) {
+    if (!seenReceipts.has(receipt.version)) {
+      throw new TypeError(`Plugin API history ledger receipt is missing artifact ${receipt.version}.json`)
+    }
   }
   snapshots.sort((left, right) => pluginApiContractInternals.compareVersions(left.version, right.version))
   for (let index = 1; index < snapshots.length; index += 1) {
-    const issues = checkPluginApiCompatibility(snapshots[index - 1], snapshots[index])
+    const issues = checkHistoryCompatibility(snapshots[index - 1], snapshots[index])
     if (issues.length > 0) throw new TypeError(issues.map((issue) => issue.message).join("\n"))
   }
+  assertHistoryContractReleases(snapshots)
   return snapshots
 }
 
-function assertCurrentHistory(history: readonly Snapshot[], catalog: CatalogInput): void {
+function assertCurrentHistory(history: readonly PluginApiHistoryEntry[], catalog: CatalogInput): void {
   if (history.length === 0) throw new TypeError("Plugin API history is empty; append the current catalog first")
   const current = snapshotPluginApiCatalog(catalog)
   const latest = history[history.length - 1]
@@ -737,11 +1018,12 @@ function assertCurrentHistory(history: readonly Snapshot[], catalog: CatalogInpu
   if (comparison > 0)
     throw new TypeError(`Plugin API history ${latest.version} is newer than catalog ${current.version}`)
   if (comparison < 0) {
-    const issues = checkPluginApiCompatibility(latest, current)
+    const currentEntry = { version: current.version, lineage: historyLineage(current), snapshot: current }
+    const issues = checkHistoryCompatibility(latest, currentEntry)
     if (issues.length > 0) throw new TypeError(issues.map((issue) => issue.message).join("\n"))
     throw new TypeError(`Plugin API history is missing current catalog ${current.version}; run history:append`)
   }
-  if (renderPluginApiJson(latest) !== renderPluginApiJson(current)) {
+  if (!latest.snapshot || renderPluginApiJson(latest.snapshot) !== renderPluginApiJson(current)) {
     throw new TypeError(`Plugin API catalog ${current.version} differs from its immutable history snapshot`)
   }
 }
@@ -804,6 +1086,7 @@ export async function checkPluginApiHistory(historyDirectory: string): Promise<v
 export async function appendPluginApiHistory(historyDirectory: string): Promise<string> {
   const history = await readHistory(historyDirectory)
   const current = snapshotPluginApiCatalog(pluginApiCatalog)
+  const currentEntry = { version: current.version, lineage: historyLineage(current), snapshot: current }
   const latest = history.at(-1)
   if (latest) {
     const comparison = pluginApiContractInternals.compareVersions(latest.version, current.version)
@@ -813,11 +1096,11 @@ export async function appendPluginApiHistory(historyDirectory: string): Promise<
       assertCurrentHistory(history, current)
       return join(historyDirectory, `${current.version}.json`)
     }
-    const issues = checkPluginApiCompatibility(latest, current)
+    const issues = checkHistoryCompatibility(latest, currentEntry)
     if (issues.length > 0) throw new TypeError(issues.map((issue) => issue.message).join("\n"))
   }
   await mkdir(historyDirectory, { recursive: true })
   const path = join(historyDirectory, `${current.version}.json`)
-  await atomicWrite(path, renderPluginApiJson(current))
+  await writeFile(path, renderPluginApiJson(current), { encoding: "utf8", flag: "wx", mode: 0o644 })
   return path
 }

@@ -10,7 +10,7 @@ function manifest(overrides: Record<string, unknown> = {}) {
     capabilities: ["projects.read"],
     contributes: {},
     description: "Runtime surface fixture",
-    hostApi: { major: 1, optional: [], required: [] },
+    hostApi: { major: 2, optional: [], required: [] },
     id: "runtime-surface-fixture",
     name: "Runtime surface fixture",
     schema: "convax.plugin/8",
@@ -29,7 +29,7 @@ describe("Marketplace runtime-surface projection", () => {
         capabilities: [],
         contributes: { canvas: { renderer: { create: true } } },
         entry: "index.html",
-        hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+        hostApi: { major: 2, optional: [], required: ["host.context.get"] },
       }),
     ],
   ] as const)("projects canonical v8 manifests to %s", (expected, value) => {

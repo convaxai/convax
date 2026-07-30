@@ -129,7 +129,7 @@ function manifest(
       ? { entry: "index.html" }
       : { hooks: "hook.mjs" }),
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: surface === "canvas" ? ["host.context.get"] : [],
     },

@@ -122,13 +122,13 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
     lines.push(
       "## Host APIs",
       "",
-      "| API | Requirement | Since | Grant | Scope | Side effect | Completion |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| API | Requirement | Introduced | Current contract | Grant | Scope | Side effect | Completion |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
     )
     for (const entry of selected) {
       const definition: PluginApiDefinition<PluginApiId> = definitionsById.get(entry.id)!
       lines.push(
-        `| \`${definition.id}\` | ${entry.requirement} | ${definition.since} | ${
+        `| \`${definition.id}\` | ${entry.requirement} | ${definition.since} | ${definition.contractSince} | ${
           definition.grant ? `\`${definition.grant}\`` : "none"
         } | ${definition.scope} | ${definition.sideEffect} | ${definition.completion} |`,
       )
@@ -144,7 +144,8 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
         definition.docs.description,
         "",
         `- Requirement: ${entry.requirement}`,
-        `- Available since: Host API ${definition.since}`,
+        `- API introduced: Host API ${definition.since}`,
+        `- Current contract available since: Host API ${definition.contractSince}`,
         `- Required grant: ${definition.grant ? `\`${definition.grant}\`` : "none"}`,
         `- Scope: ${definition.scope}`,
         `- Side effect: ${definition.sideEffect}`,

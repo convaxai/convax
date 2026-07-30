@@ -1,0 +1,11 @@
+{
+  "schema": "convax.plugin-api-history-ledger/1",
+  "retired": [
+    {
+      "artifactSchema": "convax.plugin-api-catalog/2",
+      "sha256": "5647290670309c550c144b2746a17bc0fa0dd504484fb137952620896dc889e4",
+      "version": "1.0.0",
+      "wireSchemaDialect": "convax.plugin-api-wire-schema/2"
+    }
+  ]
+}

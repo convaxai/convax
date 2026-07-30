@@ -32,7 +32,7 @@ function plugin(
     capabilities,
     contributes: { service: { actions: [] } },
     description: "Host API sidecar",
-    hostApi: { major: 1, optional: [], required: hostApis },
+    hostApi: { major: 2, optional: [], required: hostApis },
     id: "host-api-sidecar",
     name: "Host API Sidecar",
     runtime: { command: "host-api-sidecar-mcp", type: "mcp-stdio" },

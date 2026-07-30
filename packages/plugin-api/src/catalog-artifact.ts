@@ -1,7 +1,7 @@
 import type { PluginApiDefinition, PluginApiVersion } from "./contracts"
 import type { PluginApiWireContract } from "./method-schemas"
 
-/** Artifact token for the unpublished initial Catalog candidate. */
+/** Artifact token for the only Catalog format admitted by the current package. */
 export const PLUGIN_API_CATALOG_ARTIFACT_SCHEMA = "convax.plugin-api-catalog/3" as const
 
 export interface PluginApiContractSnapshot extends PluginApiWireContract {

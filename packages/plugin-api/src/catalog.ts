@@ -1,4 +1,9 @@
-import { definePluginApi, definePluginApiCatalog, definePluginApiRelease } from "./contracts"
+import {
+  definePluginApi,
+  definePluginApiCatalog,
+  definePluginApiRelease,
+  type PluginApiDefinitionInput,
+} from "./contracts"
 import { pluginApiContractIds, type PluginApiContractId } from "./method-contracts"
 
 const contextErrors = [
@@ -34,9 +39,17 @@ const partialSuccessErrors = [
   },
 ] as const
 
+const defineV2Contract = <const Definition extends Omit<PluginApiDefinitionInput, "contractSince">>(
+  definition: Definition,
+) =>
+  definePluginApi({
+    ...definition,
+    contractSince: "2.0.0",
+  })
+
 export const pluginApiCatalog = definePluginApiCatalog(
   definePluginApiRelease("1.0.0", [
-    definePluginApi({
+    defineV2Contract({
       id: "host.context.get",
       completion: "cancelable",
       grant: null,
@@ -51,7 +64,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The current Plugin, Project, Canvas, node, and negotiated Host API context when present.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.inputs.list",
       completion: "cancelable",
       grant: "canvas.connectedInputs.read",
@@ -66,7 +79,253 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of direct incoming input descriptors and opaque input keys.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
+      id: "canvas.inputs.open",
+      completion: "cancelable",
+      grant: "canvas.connectedMedia.stream",
+      scope: "own-node",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors, ...resourceErrors],
+      docs: {
+        summary: "Open a bounded stream for one previously listed direct input.",
+        description:
+          "Opens host-owned access to the exact authoritative input after topology and resource identity are revalidated.",
+        request: "`{ inputKey }`, using an opaque key returned by canvas.inputs.list.",
+        response: "A connection-bound stream descriptor and safe media metadata.",
+        remarks: "Call canvas.inputs.close when the stream is no longer needed.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.inputs.close",
+      completion: "cancelable",
+      grant: "canvas.connectedMedia.stream",
+      scope: "own-node",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Close one connection-bound input stream.",
+        description: "Releases a stream created by canvas.inputs.open without changing Canvas or Project state.",
+        request: "The stream handle returned by canvas.inputs.open.",
+        response: "An acknowledgement; closing an already closed handle is idempotent.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.node.get",
+      completion: "cancelable",
+      grant: "canvas.node.read",
+      scope: "own-node",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Read the owning Plugin node projection.",
+        description: "Returns a bounded renderer-safe projection of the exact node bound to the connection.",
+        request: "No parameters; the owning node comes from the bound connection.",
+        response: "The owning node identity, revision, geometry, and Plugin state projection.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.node.state.replace",
+      completion: "commit-preserving",
+      grant: "canvas.node.write",
+      scope: "own-node",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Replace the owning node's bounded Plugin state.",
+        description:
+          "Commits only the namespaced Plugin state through the authoritative Canvas application service with revision checks.",
+        request: "`{ state }`, where state is a bounded JSON value.",
+        response: "`{ updated: true }` after the authoritative state replacement commits.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.resource.image.create",
+      completion: "commit-preserving",
+      grant: "canvas.image.write",
+      scope: "own-node",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors, ...partialSuccessErrors],
+      docs: {
+        summary: "Create a Project-backed Canvas image through the host lifecycle.",
+        description:
+          "Admits bounded image content as a user-visible Project resource and commits its Canvas reference without exposing native paths.",
+        request: "`{ dataUrl, name }`, containing a bounded validated image data URL and safe file name.",
+        response: "The created renderer-safe image result after Project publication and Canvas commit.",
+      },
+    }),
+    defineV2Contract({
+      id: "project.file.text.read",
+      completion: "cancelable",
+      grant: "project.files.read",
+      scope: "project",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Read one bounded UTF-8 Project file.",
+        description:
+          "Reads through the scoped Project Files capability using a normalized Project-relative path and never exposes a native path.",
+        request: "`{ path }`, using a normalized Project-relative portable path.",
+        response: "The bounded UTF-8 file text.",
+      },
+    }),
+    defineV2Contract({
+      id: "agent.prompt",
+      completion: "commit-preserving",
+      grant: "agent.prompt",
+      scope: "connection",
+      sideEffect: "execute",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Submit a bounded prompt through the host Agent capability.",
+        description:
+          "Uses the current host-owned Agent context; it does not grant direct OpenCode, filesystem, model, or credential access.",
+        request: "`{ text }`, containing the bounded prompt text.",
+        response: "`{ text }`, containing the bounded host acknowledgement.",
+      },
+    }),
+    defineV2Contract({
+      id: "generation.tools.list",
+      completion: "cancelable",
+      grant: "generation.execute",
+      scope: "plugin",
+      sideEffect: "read",
+      errors: permissionErrors,
+      docs: {
+        summary: "List generation tools available to the installed Plugin principal.",
+        description:
+          "Returns normalized tool metadata derived from active verified contributions without exposing executable paths or credentials.",
+        request: "Optional `{ output }` modality filter; omitting params lists every admitted modality.",
+        response: "A bounded list of available generation tools and their public input contracts.",
+      },
+    }),
+    defineV2Contract({
+      id: "generation.execute",
+      completion: "commit-preserving",
+      grant: "generation.execute",
+      scope: "plugin",
+      sideEffect: "execute",
+      errors: [...contextErrors, ...permissionErrors, ...resourceErrors, ...partialSuccessErrors],
+      docs: {
+        summary: "Execute one selected generation tool through the shared host executor.",
+        description:
+          "Revalidates the active Plugin, authorized executable, inputs, cancellation, and live resource guards immediately before execution.",
+        request:
+          "`{ output?, prompt, references?: Array<{ inputKey, role }>, resultMode?, toolId? }`; every opaque input key must come from the current owning node's canvas.inputs.list result.",
+        response: "The bounded selected tool result, created node ids, authoritative revision, and warnings.",
+      },
+    }),
+    defineV2Contract({
+      id: "projects.list",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "projects.read",
+      scope: "plugin",
+      sideEffect: "read",
+      errors: permissionErrors,
+      docs: {
+        summary: "List Projects visible to the installed Plugin principal.",
+        description:
+          "Returns portable Project identities and display metadata without native paths or private Project state.",
+        request: "No parameters.",
+        response: "A bounded list of renderer-safe Project summaries.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.catalog.list",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.catalog.read",
+      scope: "project",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "List Canvas catalog entries for one authorized Project.",
+        description: "Reads the Project-owned Canvas catalog without selecting a Project or Canvas in the Workbench.",
+        request: "`{ projectId }`, naming one explicit portable Project.",
+        response: "A bounded list of portable Canvas catalog entries.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.document.get",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.document.read",
+      scope: "canvas",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Read one authorized Canvas document projection.",
+        description:
+          "Returns a bounded portable structure or geometry projection from Main's authoritative Canvas application service.",
+        request: "`{ ref, projection }`, using an explicit portable Project/Canvas reference and supported projection.",
+        response: "The requested pathless document projection and authoritative revision.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.nodes.query",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.document.read",
+      scope: "canvas",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Query bounded node projections in one authorized Canvas.",
+        description: "Executes a host-defined bounded query without exposing native paths or resource bytes.",
+        request: "`{ ref, query }`, using an explicit portable Project/Canvas reference and bounded query.",
+        response: "Matching node projections and the authoritative Canvas revision.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.transaction.execute",
+      completion: "commit-preserving",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.document.write",
+      scope: "canvas",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Commit one non-empty revision-bound Canvas transaction.",
+        description:
+          "Validates bounded commands against one authoritative revision and persists the accepted transaction atomically.",
+        request: "`{ ref, expectedRevision, commands, transactionId }` with a bounded non-empty command list.",
+        response: "The committed authoritative revision and bounded command results.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.events.subscribe",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.events.subscribe",
+      scope: "canvas",
+      sideEffect: "subscribe",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Subscribe to bounded events for one authorized Canvas.",
+        description:
+          "Creates a connection-scoped subscription; events are revisioned invalidations or safe projections, never native data.",
+        request: "`{ ref }`, using an explicit portable Project/Canvas reference.",
+        response: "A connection-bound subscription identifier.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.events.unsubscribe",
+      completion: "cancelable",
+      audience: ["web-plugin", "companion"],
+      grant: "canvas.events.subscribe",
+      scope: "canvas",
+      sideEffect: "subscribe",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Close one connection-bound Canvas event subscription.",
+        description: "Releases a subscription created by canvas.events.subscribe without changing Canvas state.",
+        request: "The subscription identifier returned by canvas.events.subscribe.",
+        response: "An acknowledgement; closing an already closed subscription is idempotent.",
+      },
+    }),
+  ]),
+  definePluginApiRelease("2.0.0", [
+    defineV2Contract({
       id: "canvas.inputs.image.open",
       completion: "cancelable",
       grant: "canvas.connectedImages.read",
@@ -84,7 +343,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
           "Electron protocol GET/HEAD requests have no trusted sender or frame principal. Possession of the convax-connected-media URL therefore carries bearer authority until the Host revokes the session or its principal/edge revalidation fails; the URL must be kept secret and closed promptly. The response contains no image bytes, native path, or unrestricted URL. The Host rejects images above 16 MiB, dimensions above 8192 pixels, or more than 33,554,432 pixels.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.inputs.image.close",
       completion: "cancelable",
       grant: "canvas.connectedImages.read",
@@ -97,249 +356,6 @@ export const pluginApiCatalog = definePluginApiCatalog(
           "Revokes a session and bearer URL created by canvas.inputs.image.open after validating the calling Plugin principal, without changing Canvas or Project state.",
         request: "`{ sessionId }`, using the opaque handle returned by canvas.inputs.image.open.",
         response: "An acknowledgement that the caller's image session is closed; repeated close calls are idempotent.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.inputs.open",
-      completion: "cancelable",
-      grant: "canvas.connectedMedia.stream",
-      scope: "own-node",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors, ...resourceErrors],
-      docs: {
-        summary: "Open a bounded stream for one previously listed direct input.",
-        description:
-          "Opens host-owned access to the exact authoritative input after topology and resource identity are revalidated.",
-        request: "`{ inputKey }`, using an opaque key returned by canvas.inputs.list.",
-        response: "A connection-bound stream descriptor and safe media metadata.",
-        remarks: "Call canvas.inputs.close when the stream is no longer needed.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.inputs.close",
-      completion: "cancelable",
-      grant: "canvas.connectedMedia.stream",
-      scope: "own-node",
-      sideEffect: "write",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Close one connection-bound input stream.",
-        description: "Releases a stream created by canvas.inputs.open without changing Canvas or Project state.",
-        request: "The stream handle returned by canvas.inputs.open.",
-        response: "An acknowledgement; closing an already closed handle is idempotent.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.node.get",
-      completion: "cancelable",
-      grant: "canvas.node.read",
-      scope: "own-node",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Read the owning Plugin node projection.",
-        description: "Returns a bounded renderer-safe projection of the exact node bound to the connection.",
-        request: "No parameters; the owning node comes from the bound connection.",
-        response: "The owning node identity, revision, geometry, and Plugin state projection.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.node.state.replace",
-      completion: "commit-preserving",
-      grant: "canvas.node.write",
-      scope: "own-node",
-      sideEffect: "write",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Replace the owning node's bounded Plugin state.",
-        description:
-          "Commits only the namespaced Plugin state through the authoritative Canvas application service with revision checks.",
-        request: "`{ state }`, where state is a bounded JSON value.",
-        response: "`{ updated: true }` after the authoritative state replacement commits.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.resource.image.create",
-      completion: "commit-preserving",
-      grant: "canvas.image.write",
-      scope: "own-node",
-      sideEffect: "write",
-      errors: [...contextErrors, ...permissionErrors, ...partialSuccessErrors],
-      docs: {
-        summary: "Create a Project-backed Canvas image through the host lifecycle.",
-        description:
-          "Admits bounded image content as a user-visible Project resource and commits its Canvas reference without exposing native paths.",
-        request: "`{ dataUrl, name }`, containing a bounded validated image data URL and safe file name.",
-        response: "The created renderer-safe image result after Project publication and Canvas commit.",
-      },
-    }),
-    definePluginApi({
-      id: "project.file.text.read",
-      completion: "cancelable",
-      grant: "project.files.read",
-      scope: "project",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Read one bounded UTF-8 Project file.",
-        description:
-          "Reads through the scoped Project Files capability using a normalized Project-relative path and never exposes a native path.",
-        request: "`{ path }`, using a normalized Project-relative portable path.",
-        response: "The bounded UTF-8 file text.",
-      },
-    }),
-    definePluginApi({
-      id: "agent.prompt",
-      completion: "commit-preserving",
-      grant: "agent.prompt",
-      scope: "connection",
-      sideEffect: "execute",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Submit a bounded prompt through the host Agent capability.",
-        description:
-          "Uses the current host-owned Agent context; it does not grant direct OpenCode, filesystem, model, or credential access.",
-        request: "`{ text }`, containing the bounded prompt text.",
-        response: "`{ text }`, containing the bounded host acknowledgement.",
-      },
-    }),
-    definePluginApi({
-      id: "generation.tools.list",
-      completion: "cancelable",
-      grant: "generation.execute",
-      scope: "plugin",
-      sideEffect: "read",
-      errors: permissionErrors,
-      docs: {
-        summary: "List generation tools available to the installed Plugin principal.",
-        description:
-          "Returns normalized tool metadata derived from active verified contributions without exposing executable paths or credentials.",
-        request: "Optional `{ output }` modality filter; omitting params lists every admitted modality.",
-        response: "A bounded list of available generation tools and their public input contracts.",
-      },
-    }),
-    definePluginApi({
-      id: "generation.execute",
-      completion: "commit-preserving",
-      grant: "generation.execute",
-      scope: "plugin",
-      sideEffect: "execute",
-      errors: [...contextErrors, ...permissionErrors, ...resourceErrors, ...partialSuccessErrors],
-      docs: {
-        summary: "Execute one selected generation tool through the shared host executor.",
-        description:
-          "Revalidates the active Plugin, authorized executable, inputs, cancellation, and live resource guards immediately before execution.",
-        request: "`{ output?, prompt, references?, resultMode?, toolId? }`, validated against the selected tool.",
-        response: "The bounded selected tool result, created node ids, authoritative revision, and warnings.",
-      },
-    }),
-    definePluginApi({
-      id: "projects.list",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "projects.read",
-      scope: "plugin",
-      sideEffect: "read",
-      errors: permissionErrors,
-      docs: {
-        summary: "List Projects visible to the installed Plugin principal.",
-        description:
-          "Returns portable Project identities and display metadata without native paths or private Project state.",
-        request: "No parameters.",
-        response: "A bounded list of renderer-safe Project summaries.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.catalog.list",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.catalog.read",
-      scope: "project",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "List Canvas catalog entries for one authorized Project.",
-        description: "Reads the Project-owned Canvas catalog without selecting a Project or Canvas in the Workbench.",
-        request: "`{ projectId }`, naming one explicit portable Project.",
-        response: "A bounded list of portable Canvas catalog entries.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.document.get",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.document.read",
-      scope: "canvas",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Read one authorized Canvas document projection.",
-        description:
-          "Returns a bounded portable structure or geometry projection from Main's authoritative Canvas application service.",
-        request: "`{ ref, projection }`, using an explicit portable Project/Canvas reference and supported projection.",
-        response: "The requested pathless document projection and authoritative revision.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.nodes.query",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.document.read",
-      scope: "canvas",
-      sideEffect: "read",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Query bounded node projections in one authorized Canvas.",
-        description: "Executes a host-defined bounded query without exposing native paths or resource bytes.",
-        request: "`{ ref, query }`, using an explicit portable Project/Canvas reference and bounded query.",
-        response: "Matching node projections and the authoritative Canvas revision.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.transaction.execute",
-      completion: "commit-preserving",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.document.write",
-      scope: "canvas",
-      sideEffect: "write",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Commit one non-empty revision-bound Canvas transaction.",
-        description:
-          "Validates bounded commands against one authoritative revision and persists the accepted transaction atomically.",
-        request: "`{ ref, expectedRevision, commands, transactionId }` with a bounded non-empty command list.",
-        response: "The committed authoritative revision and bounded command results.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.events.subscribe",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.events.subscribe",
-      scope: "canvas",
-      sideEffect: "subscribe",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Subscribe to bounded events for one authorized Canvas.",
-        description:
-          "Creates a connection-scoped subscription; events are revisioned invalidations or safe projections, never native data.",
-        request: "`{ ref }`, using an explicit portable Project/Canvas reference.",
-        response: "A connection-bound subscription identifier.",
-      },
-    }),
-    definePluginApi({
-      id: "canvas.events.unsubscribe",
-      completion: "cancelable",
-      audience: ["web-plugin", "companion"],
-      grant: "canvas.events.subscribe",
-      scope: "canvas",
-      sideEffect: "subscribe",
-      errors: [...contextErrors, ...permissionErrors],
-      docs: {
-        summary: "Close one connection-bound Canvas event subscription.",
-        description: "Releases a subscription created by canvas.events.subscribe without changing Canvas state.",
-        request: "The subscription identifier returned by canvas.events.subscribe.",
-        response: "An acknowledgement; closing an already closed subscription is idempotent.",
       },
     }),
   ]),
