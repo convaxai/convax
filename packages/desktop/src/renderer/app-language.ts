@@ -1,3 +1,6 @@
+import { createInstance } from "i18next"
+import { initReactI18next } from "react-i18next"
+
 export type AppLanguagePreference = "zh-CN" | "en"
 export type AppLocale = AppLanguagePreference
 
@@ -353,15 +356,29 @@ const chineseMessages = {
   "services.version": "v{version}",
 } satisfies Record<AppMessageKey, string>
 
-const messages: Record<AppLocale, Record<AppMessageKey, string>> = {
-  en: englishMessages,
-  "zh-CN": chineseMessages,
+export const appI18n = createInstance()
+
+void appI18n.use(initReactI18next).init({
+  fallbackLng: "en",
+  initAsync: false,
+  interpolation: {
+    escapeValue: false,
+    prefix: "{",
+    suffix: "}",
+  },
+  keySeparator: false,
+  lng: "en",
+  resources: {
+    en: { translation: englishMessages },
+    "zh-CN": { translation: chineseMessages },
+  },
+  supportedLngs: languagePreferences,
+})
+
+export function changeAppLanguage(locale: AppLocale) {
+  return appI18n.changeLanguage(locale)
 }
 
 export function appMessage(locale: AppLocale, key: AppMessageKey, values?: Readonly<Record<string, string | number>>) {
-  const message = messages[locale][key]
-  if (!values) return message
-  return message.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name: string) =>
-    Object.hasOwn(values, name) ? String(values[name]) : match,
-  )
+  return appI18n.getFixedT(locale)(key, values)
 }
