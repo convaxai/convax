@@ -19,10 +19,16 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
+      - name: Test Plugin API release evidence and workflow policy
+        run: bun test scripts/plugin-api-release-evidence.test.ts scripts/plugin-api-release-workflows.test.ts
+      - name: Enforce append-only Plugin API history
+        if: github.event_name == 'pull_request'
+        run: bun run plugin-api:history-policy --base "${{ github.event.pull_request.base.sha }}"
       - run: bun run package:boundaries
 
   quality:

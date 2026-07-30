@@ -7,12 +7,17 @@ const CATALOG_SCHEMA = "convax.plugin-api-catalog/3"
 export const PLUGIN_API_RUNTIME_CONFORMANCE_SCHEMA = "convax.plugin-api-runtime-conformance/1" as const
 export const PLUGIN_API_RUNTIME_CONFORMANCE_PROFILE = "convax.plugin-api-host-runtime/1" as const
 export const PLUGIN_API_CHECK_RESULTS_SCHEMA = "convax.plugin-api-check-results/1" as const
+export const SIGSTORE_BUNDLE_MEDIA_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json" as const
+export const SIGSTORE_BUNDLE_SUFFIX = ".sigstore.json" as const
+export const SIGSTORE_OIDC_ISSUER = "https://token.actions.githubusercontent.com" as const
+export const CONVAX_REPOSITORY_ID = "1293264965" as const
+export const CONVAX_REPOSITORY_OWNER_ID = "125447777" as const
+const PROTECTED_WORKFLOW_REF = "refs/heads/convax-next"
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024
 const MAX_PACKAGE_JSON_BYTES = 128 * 1024
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
 const STABLE_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u
 const COMMIT = /^[a-f0-9]{40}$/u
-const POSITIVE_INTEGER = /^[1-9][0-9]*$/u
 const NPM_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/u
 
 export const pluginApiReleaseCheckDefinitions = [
@@ -43,8 +48,8 @@ export const pluginApiReleaseCheckDefinitions = [
   },
   {
     id: "release-evidence-policy",
-    command: "bun test scripts/plugin-api-release-evidence.test.ts",
-    argv: ["test", "scripts/plugin-api-release-evidence.test.ts"],
+    command: "bun test scripts/plugin-api-release-evidence.test.ts scripts/plugin-api-release-workflows.test.ts",
+    argv: ["test", "scripts/plugin-api-release-evidence.test.ts", "scripts/plugin-api-release-workflows.test.ts"],
   },
   {
     id: "host-runtime-conformance",
@@ -87,8 +92,8 @@ type EvidenceInput = {
   readonly packageCatalogBytes: Uint8Array
   readonly packageJson: unknown
   readonly repository: string
-  readonly runAttempt: string
-  readonly runId: string
+  readonly repositoryId: string
+  readonly repositoryOwnerId: string
   readonly tarballIntegrity: string
   readonly tarballBytes: Uint8Array
   readonly version: string
@@ -187,17 +192,30 @@ function catalogContractCoverage(catalog: Record<string, unknown>): readonly {
 
 export function buildPluginApiReleaseEvidence(input: EvidenceInput): Record<string, unknown> {
   if (input.repository !== "microvoid/convax") fail("repository must be microvoid/convax")
+  if (input.repositoryId !== CONVAX_REPOSITORY_ID) {
+    fail("repository id must match the immutable Convax repository id")
+  }
+  if (input.repositoryOwnerId !== CONVAX_REPOSITORY_OWNER_ID) {
+    fail("repository owner id must match the immutable Convax owner id")
+  }
   if (!COMMIT.test(input.commit)) fail("commit must be one lowercase full SHA")
   if (!STABLE_VERSION.test(input.version)) fail("version must be one stable SemVer")
-  if (!POSITIVE_INTEGER.test(input.runId) || !POSITIVE_INTEGER.test(input.runAttempt)) {
-    fail("workflow run id and attempt must be positive integers")
-  }
-  const allowedWorkflowRefs = new Set([
-    `${input.repository}/.github/workflows/plugin-api-bootstrap.yml@refs/heads/convax-next`,
-    `${input.repository}/.github/workflows/plugin-api-npm-stage.yml@refs/heads/convax-next`,
-    `${input.repository}/.github/workflows/plugin-api-release.yml@refs/heads/convax-next`,
+  const allowedWorkflows = new Map([
+    [
+      `${input.repository}/.github/workflows/plugin-api-bootstrap.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Prepare Plugin API bootstrap",
+    ],
+    [
+      `${input.repository}/.github/workflows/plugin-api-npm-stage.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Stage Plugin API npm package",
+    ],
+    [
+      `${input.repository}/.github/workflows/plugin-api-release.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Publish Plugin API immutable evidence",
+    ],
   ])
-  if (!allowedWorkflowRefs.has(input.workflowRef)) {
+  const workflowName = allowedWorkflows.get(input.workflowRef)
+  if (!workflowName) {
     fail("workflow ref must identify a protected Plugin API publication workflow")
   }
   if (input.catalogBytes.byteLength === 0 || input.catalogBytes.byteLength > MAX_CATALOG_BYTES) {
@@ -234,12 +252,30 @@ export function buildPluginApiReleaseEvidence(input: EvidenceInput): Record<stri
     profile: PLUGIN_API_RUNTIME_CONFORMANCE_PROFILE,
     host: {
       repository: input.repository,
+      repositoryId: input.repositoryId,
+      repositoryOwnerId: input.repositoryOwnerId,
       commit: input.commit,
     },
     workflow: {
       ref: input.workflowRef,
-      runId: input.runId,
-      runAttempt: input.runAttempt,
+    },
+    sigstore: {
+      bundle: {
+        mediaType: SIGSTORE_BUNDLE_MEDIA_TYPE,
+        suffix: SIGSTORE_BUNDLE_SUFFIX,
+      },
+      certificate: {
+        identity: `https://github.com/${input.workflowRef}`,
+        oidcIssuer: SIGSTORE_OIDC_ISSUER,
+        workflowName,
+        workflowRef: PROTECTED_WORKFLOW_REF,
+        repository: input.repository,
+        sourceSha: input.commit,
+        trigger: "workflow_dispatch",
+      },
+      transparencyLog: {
+        inclusionRequired: true,
+      },
     },
     pluginApi: {
       package: PACKAGE_NAME,
@@ -266,8 +302,8 @@ type Arguments = {
   readonly packageCatalog: string
   readonly packageJson: string
   readonly repository: string
-  readonly runAttempt: string
-  readonly runId: string
+  readonly repositoryId: string
+  readonly repositoryOwnerId: string
   readonly tarballIntegrity: string
   readonly tarball: string
   readonly version: string
@@ -283,8 +319,8 @@ function parseArguments(argv: readonly string[]): Arguments {
     "--package-catalog",
     "--package-json",
     "--repository",
-    "--run-attempt",
-    "--run-id",
+    "--repository-id",
+    "--repository-owner-id",
     "--tarball",
     "--tarball-integrity",
     "--version",
@@ -308,8 +344,8 @@ function parseArguments(argv: readonly string[]): Arguments {
     packageCatalog: values.get("--package-catalog")!,
     packageJson: values.get("--package-json")!,
     repository: values.get("--repository")!,
-    runAttempt: values.get("--run-attempt")!,
-    runId: values.get("--run-id")!,
+    repositoryId: values.get("--repository-id")!,
+    repositoryOwnerId: values.get("--repository-owner-id")!,
     tarballIntegrity: values.get("--tarball-integrity")!,
     tarball: values.get("--tarball")!,
     version: values.get("--version")!,
@@ -338,8 +374,8 @@ async function main(): Promise<void> {
     packageCatalogBytes,
     packageJson: parseJson(packageJsonBytes, "package.json"),
     repository: args.repository,
-    runAttempt: args.runAttempt,
-    runId: args.runId,
+    repositoryId: args.repositoryId,
+    repositoryOwnerId: args.repositoryOwnerId,
     tarballIntegrity: args.tarballIntegrity,
     tarballBytes,
     version: args.version,

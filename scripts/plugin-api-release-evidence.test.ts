@@ -6,7 +6,7 @@ import { buildPluginApiReleaseEvidence, pluginApiReleaseConformanceChecks } from
 const catalogBytes = new TextEncoder().encode(
   `${JSON.stringify({
     schema: "convax.plugin-api-catalog/3",
-    version: "1.0.0",
+    version: "2.0.0",
     apis: [
       {
         id: "host.context.get",
@@ -28,13 +28,13 @@ function input(overrides: Record<string, unknown> = {}) {
     },
     commit: "a".repeat(40),
     packageCatalogBytes: catalogBytes,
-    packageJson: { name: "@convax/plugin-api", version: "1.0.0" },
+    packageJson: { name: "@convax/plugin-api", version: "2.0.0" },
     repository: "microvoid/convax",
-    runAttempt: "1",
-    runId: "123",
+    repositoryId: "1293264965",
+    repositoryOwnerId: "125447777",
     tarballIntegrity: npmIntegrity,
     tarballBytes,
-    version: "1.0.0",
+    version: "2.0.0",
     workflowRef: "microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
     ...overrides,
   }
@@ -47,16 +47,35 @@ describe("Plugin API release evidence", () => {
       profile: "convax.plugin-api-host-runtime/1",
       host: {
         repository: "microvoid/convax",
+        repositoryId: "1293264965",
+        repositoryOwnerId: "125447777",
         commit: "a".repeat(40),
       },
       workflow: {
         ref: "microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
-        runId: "123",
-        runAttempt: "1",
+      },
+      sigstore: {
+        bundle: {
+          mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+          suffix: ".sigstore.json",
+        },
+        certificate: {
+          identity:
+            "https://github.com/microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
+          oidcIssuer: "https://token.actions.githubusercontent.com",
+          workflowName: "Publish Plugin API immutable evidence",
+          workflowRef: "refs/heads/convax-next",
+          repository: "microvoid/convax",
+          sourceSha: "a".repeat(40),
+          trigger: "workflow_dispatch",
+        },
+        transparencyLog: {
+          inclusionRequired: true,
+        },
       },
       pluginApi: {
         package: "@convax/plugin-api",
-        version: "1.0.0",
+        version: "2.0.0",
         catalogSchema: "convax.plugin-api-catalog/3",
         catalogSha256: createHash("sha256").update(catalogBytes).digest("hex"),
         tarballSha256: createHash("sha256").update(tarballBytes).digest("hex"),
@@ -119,5 +138,18 @@ describe("Plugin API release evidence", () => {
         }),
       ),
     ).toThrow("release conformance profile")
+  })
+
+  test("rejects mutable repository-name reuse through immutable repository identifiers", () => {
+    expect(() => buildPluginApiReleaseEvidence(input({ repositoryId: "1" }))).toThrow("immutable Convax repository id")
+    expect(() => buildPluginApiReleaseEvidence(input({ repositoryOwnerId: "1" }))).toThrow("immutable Convax owner id")
+  })
+
+  test("emits retry-stable evidence for one version and commit", () => {
+    const first = JSON.stringify(buildPluginApiReleaseEvidence(input()))
+    const retry = JSON.stringify(buildPluginApiReleaseEvidence(input()))
+    expect(retry).toBe(first)
+    expect(first).not.toContain("runId")
+    expect(first).not.toContain("runAttempt")
   })
 })

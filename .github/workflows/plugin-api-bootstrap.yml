@@ -6,7 +6,7 @@ on:
       version:
         description: Initial @convax/plugin-api version
         required: true
-        default: 1.0.0
+        default: 2.0.0
         type: string
 
 permissions:
@@ -24,6 +24,8 @@ jobs:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
       REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -35,10 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
           test "$GITHUB_REF" = refs/heads/convax-next
           [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
           test "$COMMIT" = "$GITHUB_SHA"
-          test "$VERSION" = 1.0.0
+          test "$VERSION" = 2.0.0
           test "$(git rev-parse HEAD)" = "$COMMIT"
           git fetch --no-tags origin refs/heads/convax-next:refs/remotes/origin/convax-next
           git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/convax-next
@@ -109,8 +113,8 @@ jobs:
             --package-catalog "$inspection/package-plugin-api.json" \
             --package-json "$inspection/package.json" \
             --repository "$REPOSITORY" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --run-id "$GITHUB_RUN_ID" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID" \
             --tarball "$tarball" \
             --tarball-integrity "$npm_integrity" \
             --version "$VERSION" \
@@ -125,10 +129,10 @@ jobs:
           )
           {
             echo "This workflow does not publish the initial package."
-            echo "An independent @convax npm maintainer must verify the attestation and checksums,"
+            echo "An independent @convax npm maintainer must verify every Sigstore bundle and checksum,"
             echo "then publish this exact tarball with interactive 2FA:"
             echo
-            echo "npm publish ./convax-plugin-api-$VERSION.tgz --access public --registry=https://registry.npmjs.org"
+            echo "NPM_CONFIG_PROVENANCE=false npm publish ./convax-plugin-api-$VERSION.tgz --access public --registry=https://registry.npmjs.org"
           } > "$evidence/PUBLISH-INSTRUCTIONS.txt"
           echo "directory=$evidence" >> "$GITHUB_OUTPUT"
       - name: Upload unprivileged bootstrap candidate
@@ -139,41 +143,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  attest:
+  sign:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    environment: plugin-api-bootstrap
     permissions:
-      attestations: write
       contents: read
       id-token: write
     env:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
       REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
     steps:
-      - name: Verify protected attestation identity
+      - name: Verify protected signing identity
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
           test "$GITHUB_REF" = refs/heads/convax-next
           test "$COMMIT" = "$GITHUB_SHA"
-          test "$VERSION" = 1.0.0
-      - name: Check artifact-attestation availability
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRIVATE_ATTESTATIONS_ACK: ${{ vars.CONVAX_PRIVATE_ATTESTATIONS_ENABLED }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          visibility="$(gh api "repos/$REPOSITORY" --jq '.visibility')"
-          case "$visibility" in
-            public) ;;
-            private | internal) test "$PRIVATE_ATTESTATIONS_ACK" = true ;;
-            *) exit 1 ;;
-          esac
+          test "$VERSION" = 2.0.0
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: plugin-api-bootstrap-candidate
@@ -183,32 +176,128 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/plugin-api-bootstrap"
+          test "$(stat -c '%s' "$evidence/runtime-conformance.json")" -le 262144
+          test "$(stat -c '%s' "$evidence/plugin-api.json")" -le 16777216
+          test "$(stat -c '%s' "$evidence/SHA256SUMS")" -le 65536
+          test "$(stat -c '%s' "$evidence/SHA512SUMS")" -le 65536
+          tarball="$evidence/convax-plugin-api-$VERSION.tgz"
+          test "$(stat -c '%s' "$tarball")" -le 33554432
           (
             cd "$evidence"
             sha256sum --check SHA256SUMS
             sha512sum --check SHA512SUMS
           )
+          package_json="$RUNNER_TEMP/plugin-api-package.json"
+          package_catalog="$RUNNER_TEMP/plugin-api-catalog.json"
+          tar -xOzf "$tarball" package/package.json |
+            head -c 131073 > "$package_json"
+          tar -xOzf "$tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$package_catalog"
+          test "$(stat -c '%s' "$package_json")" -le 131072
+          test "$(stat -c '%s' "$package_catalog")" -le 16777216
           jq -e \
+            --arg version "$VERSION" \
+            '.name == "@convax/plugin-api" and .version == $version' \
+            "$package_json" >/dev/null
+          cmp "$package_catalog" "$evidence/plugin-api.json"
+          tarball_sha256="$(sha256sum "$tarball" | awk '{ print $1 }')"
+          catalog_sha256="$(sha256sum "$evidence/plugin-api.json" | awk '{ print $1 }')"
+          tarball_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          contract_coverage="$(jq -c '[.apis[] | { id, digest: .contract.digest }] | sort_by(.id)' "$evidence/plugin-api.json")"
+          contract_coverage_sha256="$(printf %s "$contract_coverage" | sha256sum | awk '{ print $1 }')"
+          jq -e \
+            --arg catalog_sha256 "$catalog_sha256" \
             --arg commit "$COMMIT" \
+            --arg contract_coverage_sha256 "$contract_coverage_sha256" \
+            --arg repository_id "$REPOSITORY_ID" \
+            --arg repository_owner_id "$REPOSITORY_OWNER_ID" \
+            --arg tarball_integrity "$tarball_integrity" \
+            --arg tarball_sha256 "$tarball_sha256" \
             --arg version "$VERSION" \
             --arg workflow "$GITHUB_WORKFLOW_REF" \
+            --slurpfile catalog "$evidence/plugin-api.json" \
             '
               .schema == "convax.plugin-api-runtime-conformance/1" and
               .profile == "convax.plugin-api-host-runtime/1" and
-              .host == { repository: "microvoid/convax", commit: $commit } and
+              keys == ["checks", "host", "pluginApi", "profile", "schema", "sigstore", "workflow"] and
+              (.host | keys) == ["commit", "repository", "repositoryId", "repositoryOwnerId"] and
+              (.workflow | keys) == ["ref"] and
+              .host == {
+                repository: "microvoid/convax",
+                repositoryId: $repository_id,
+                repositoryOwnerId: $repository_owner_id,
+                commit: $commit
+              } and
               .workflow.ref == $workflow and
+              .sigstore == {
+                bundle: {
+                  mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+                  suffix: ".sigstore.json"
+                },
+                certificate: {
+                  identity: ("https://github.com/" + $workflow),
+                  oidcIssuer: "https://token.actions.githubusercontent.com",
+                  workflowName: "Prepare Plugin API bootstrap",
+                  workflowRef: "refs/heads/convax-next",
+                  repository: "microvoid/convax",
+                  sourceSha: $commit,
+                  trigger: "workflow_dispatch"
+                },
+                transparencyLog: { inclusionRequired: true }
+              } and
               .pluginApi.package == "@convax/plugin-api" and
+              (.pluginApi | keys) == ["catalogSchema", "catalogSha256", "contractCoverage", "contractCoverageSha256", "package", "tarballIntegrity", "tarballSha256", "version"] and
               .pluginApi.version == $version and
               .pluginApi.catalogSchema == "convax.plugin-api-catalog/3" and
-              ([.checks[].id] | unique | length) == (.checks | length) and
-              all(.checks[]; .status == "passed")
+              .pluginApi.catalogSha256 == $catalog_sha256 and
+              .pluginApi.tarballSha256 == $tarball_sha256 and
+              .pluginApi.tarballIntegrity == $tarball_integrity and
+              .pluginApi.contractCoverage == ($catalog[0].apis | map({ id, digest: .contract.digest }) | sort_by(.id)) and
+              .pluginApi.contractCoverageSha256 == $contract_coverage_sha256 and
+              [.checks[].id] == ["plugin-api-typecheck", "plugin-api-test", "plugin-api-compat", "plugin-api-generate-check", "plugin-api-pack-check", "release-evidence-policy", "host-runtime-conformance"] and
+              all(.checks[]; (keys == ["command", "id", "status"]) and .status == "passed")
             ' "$evidence/runtime-conformance.json" >/dev/null
-      - name: Attest exact bootstrap inputs
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
         with:
-          subject-path: |
-            ${{ runner.temp }}/plugin-api-bootstrap/convax-plugin-api-${{ inputs.version }}.tgz
-            ${{ runner.temp }}/plugin-api-bootstrap/plugin-api.json
-            ${{ runner.temp }}/plugin-api-bootstrap/runtime-conformance.json
-            ${{ runner.temp }}/plugin-api-bootstrap/SHA256SUMS
-            ${{ runner.temp }}/plugin-api-bootstrap/SHA512SUMS
+          cosign-release: v3.0.6
+      - name: Sign exact bootstrap inputs into the public transparency log
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-api-bootstrap"
+          identity="$(jq -r '.sigstore.certificate.identity' "$evidence/runtime-conformance.json")"
+          issuer="$(jq -r '.sigstore.certificate.oidcIssuer' "$evidence/runtime-conformance.json")"
+          for artifact in \
+            "convax-plugin-api-$VERSION.tgz" \
+            plugin-api.json \
+            runtime-conformance.json \
+            SHA256SUMS \
+            SHA512SUMS; do
+            bundle="$evidence/$artifact.sigstore.json"
+            cosign sign-blob --yes --bundle "$bundle" "$evidence/$artifact"
+            test "$(stat -c '%s' "$bundle")" -le 1048576
+            jq -e '
+              .mediaType == "application/vnd.dev.sigstore.bundle.v0.3+json" and
+              (.verificationMaterial.certificate.rawBytes | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries | length == 1) and
+              (.verificationMaterial.tlogEntries[0].inclusionPromise.signedEntryTimestamp | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries[0].inclusionProof.rootHash | type == "string" and length > 0)
+            ' "$bundle" >/dev/null
+            cosign verify-blob \
+              --bundle "$bundle" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer "$issuer" \
+              --certificate-github-workflow-name "Prepare Plugin API bootstrap" \
+              --certificate-github-workflow-ref refs/heads/convax-next \
+              --certificate-github-workflow-repository "$REPOSITORY" \
+              --certificate-github-workflow-sha "$COMMIT" \
+              --certificate-github-workflow-trigger workflow_dispatch \
+              "$evidence/$artifact" >/dev/null
+          done
+      - name: Upload signed bootstrap evidence
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: plugin-api-bootstrap-signed-evidence
+          path: ${{ runner.temp }}/plugin-api-bootstrap
+          if-no-files-found: error
+          retention-days: 14
