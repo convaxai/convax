@@ -40,20 +40,20 @@
         "name": "marketplace.json",
         "sha256": "c84777bb1ab45707a4bfbd24b9fafaabc314f49bea7dc80f8581ca2a18c9dd76",
         "size": 666,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/marketplace.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-9e5cc5b3013aeabe0e2504b3be6a9bb13bb2295ad6175019feb1035dde53b2e7/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "a606577ee0d4b1c10581e263e42563b060b57b62308956b1b2a0152ab539ff2b",
-        "size": 32659,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/registry-v2.json"
+        "sha256": "bc414c2acac35e1caf55690031c8c9c10818f525316a0d10f26ce948246432ea",
+        "size": 36514,
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-9e5cc5b3013aeabe0e2504b3be6a9bb13bb2295ad6175019feb1035dde53b2e7/registry-v2.json"
       },
-      "revision": "4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783",
+      "revision": "9e5cc5b3013aeabe0e2504b3be6a9bb13bb2295ad6175019feb1035dde53b2e7",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "3acc579bece6d74cc7f52518df184c6a79f371c1e93f32ad39c3a72171999419",
+        "sha256": "f7726dc5b579d88110412e68c8b89777bedc544c775a8865f15934edce727ce0",
         "size": 16547,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-4b704b6c2d71c45391559b029b10debfdfefc3ce580c274d1181e70ad72aa783/showcase-v2.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-9e5cc5b3013aeabe0e2504b3be6a9bb13bb2295ad6175019feb1035dde53b2e7/showcase-v2.json"
       }
     },
     "packages": [
