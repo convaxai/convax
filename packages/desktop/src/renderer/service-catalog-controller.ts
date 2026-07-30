@@ -58,6 +58,7 @@ export interface ServiceCatalogAgentModelState {
   catalog?: AgentModelCatalog
   error?: string
   loading: boolean
+  scopeId?: string
 }
 
 export interface ServiceCatalogSnapshot {
@@ -66,6 +67,14 @@ export interface ServiceCatalogSnapshot {
   error?: string
   loading: boolean
   services: readonly ServiceCatalogEntry[]
+}
+
+export function serviceCatalogAgentModelsForScope(
+  snapshot: ServiceCatalogSnapshot,
+  scopeId?: string,
+): ServiceCatalogAgentModelState {
+  const current = snapshot.agentModels
+  return current && current.scopeId === scopeId ? current : { loading: Boolean(scopeId), scopeId }
 }
 
 /**
@@ -201,6 +210,8 @@ export class ServiceCatalogController {
   #agentCatalog?: AgentModelCatalog
   #agentError?: string
   #agentLoading = false
+  #agentRefreshQueued = false
+  #agentRequest?: { promise: Promise<AgentModelCatalog | undefined>; scopeId: string }
   #disposed = false
   #modelGeneration = 0
   #pluginSnapshot: PluginServicesSnapshot
@@ -236,10 +247,10 @@ export class ServiceCatalogController {
       this.#publish()
     })
     this.#unsubscribeModelChanges = this.pluginClient.onDidChange(() => {
-      void this.#refreshModels()
+      this.#refreshModelsAfterInFlight()
     })
     this.#plugins.start()
-    void this.#refreshModels()
+    void this.#refreshModels().catch(() => undefined)
   }
 
   setScopeId(scopeId?: string) {
@@ -247,19 +258,23 @@ export class ServiceCatalogController {
     this.#scopeId = scopeId
     this.#agentCatalog = undefined
     this.#agentError = undefined
+    this.#agentRefreshQueued = false
+    this.#agentRequest = undefined
     this.#modelGeneration += 1
-    if (this.#started) void this.#refreshModels()
+    if (this.#started) void this.#refreshModels().catch(() => undefined)
     else this.#publish()
   }
 
   async refresh() {
     if (this.#disposed) return
-    await Promise.all([this.#plugins.refresh(), this.#refreshModels()])
+    await Promise.all([this.#plugins.refresh(), this.#refreshModelsIncludingQueued().catch(() => undefined)])
   }
+
+  readonly refreshAgentModels = () => this.#refreshModelsIncludingQueued()
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
     await this.#plugins.perform(pluginId, action)
-    await this.#refreshModels()
+    await this.#refreshModelsIncludingQueued().catch(() => undefined)
   }
 
   async checkout(pluginId: string, planKey: string) {
@@ -270,6 +285,8 @@ export class ServiceCatalogController {
     if (this.#disposed) return
     this.#disposed = true
     this.#modelGeneration += 1
+    this.#agentRefreshQueued = false
+    this.#agentRequest = undefined
     this.#unsubscribePlugins?.()
     this.#unsubscribePlugins = undefined
     this.#unsubscribeModelChanges?.()
@@ -278,32 +295,86 @@ export class ServiceCatalogController {
     this.#listeners.clear()
   }
 
-  async #refreshModels() {
-    if (this.#disposed) return
+  #refreshModels(): Promise<AgentModelCatalog | undefined> {
+    if (this.#disposed) return Promise.resolve(undefined)
     const scopeId = this.#scopeId
-    const generation = ++this.#modelGeneration
     if (!scopeId) {
+      this.#modelGeneration += 1
+      this.#agentRefreshQueued = false
+      this.#agentRequest = undefined
       this.#agentCatalog = undefined
       this.#agentError = undefined
       this.#agentLoading = false
       this.#publish()
-      return
+      return Promise.resolve(undefined)
     }
+    if (this.#agentRequest?.scopeId === scopeId) return this.#agentRequest.promise
+    const generation = ++this.#modelGeneration
     this.#agentLoading = true
     this.#agentError = undefined
     this.#publish()
-    try {
-      const catalog = await this.agentClient.listModels({ scopeId })
-      if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return
-      this.#agentCatalog = catalog
-      this.#agentLoading = false
-      this.#publish()
-    } catch (error) {
-      if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return
-      this.#agentError = errorMessage(error)
-      this.#agentLoading = false
-      this.#publish()
+    const request = this.agentClient
+      .listModels({ scopeId })
+      .then((catalog) => {
+        if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return undefined
+        this.#agentCatalog = catalog
+        this.#agentLoading = false
+        this.#publish()
+        return catalog
+      })
+      .catch((error: unknown) => {
+        if (!this.#disposed && generation === this.#modelGeneration && scopeId === this.#scopeId) {
+          this.#agentError = errorMessage(error)
+          this.#agentLoading = false
+          this.#publish()
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this.#agentRequest?.promise !== request) return
+        this.#agentRequest = undefined
+        const refreshAgain = this.#agentRefreshQueued && !this.#disposed && scopeId === this.#scopeId
+        this.#agentRefreshQueued = false
+        if (refreshAgain) void this.#refreshModels().catch(() => undefined)
+      })
+    this.#agentRequest = { promise: request, scopeId }
+    return request
+  }
+
+  async #refreshModelsIncludingQueued(): Promise<AgentModelCatalog | undefined> {
+    const scopeId = this.#scopeId
+    let request = this.#refreshModels()
+    for (;;) {
+      let failed = false
+      let failure: unknown
+      let result: AgentModelCatalog | undefined
+      try {
+        result = await request
+      } catch (error) {
+        failed = true
+        failure = error
+      }
+      const trailing =
+        scopeId && this.#agentRequest?.scopeId === scopeId && this.#agentRequest.promise !== request
+          ? this.#agentRequest.promise
+          : undefined
+      if (trailing) {
+        request = trailing
+        continue
+      }
+      if (failed) throw failure
+      return result
     }
+  }
+
+  #refreshModelsAfterInFlight() {
+    if (this.#disposed) return
+    const scopeId = this.#scopeId
+    if (scopeId && this.#agentRequest?.scopeId === scopeId) {
+      this.#agentRefreshQueued = true
+      return
+    }
+    void this.#refreshModels().catch(() => undefined)
   }
 
   #compose(): ServiceCatalogSnapshot {
@@ -313,6 +384,7 @@ export class ServiceCatalogController {
         catalog: this.#agentCatalog,
         error: this.#agentError,
         loading: this.#agentLoading,
+        scopeId: this.#scopeId,
       },
       error: this.#pluginSnapshot.error,
       loading: this.#pluginSnapshot.loading || this.#agentLoading,

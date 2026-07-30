@@ -54,3 +54,15 @@ export function reconcileAgentLlmModelSelection(
     ? { modelId: match.model.modelId, providerId: match.provider.providerId }
     : defaultAgentLlmModelSelection(catalog)
 }
+
+/**
+ * An absent shared catalog means discovery has not completed, not that the
+ * Project has no models. Preserve the remembered choice until one successful
+ * catalog result (including an explicitly empty result) can reconcile it.
+ */
+export function reconcileAgentLlmModelSelectionFromReadyCatalog(
+  selection: AgentLlmModelSelection | undefined,
+  catalog: AgentModelCatalog | undefined,
+): AgentLlmModelSelection | undefined {
+  return catalog === undefined ? selection : reconcileAgentLlmModelSelection(selection, catalog)
+}

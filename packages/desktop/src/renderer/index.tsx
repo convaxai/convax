@@ -132,7 +132,11 @@ import {
 import { ProjectSidebarShell } from "./project-sidebar-shell"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { GenerationModelCatalogController } from "./generation-model-catalog-controller"
-import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
+import {
+  ServiceCatalogController,
+  serviceCatalogAgentModelsForScope,
+  serviceGenerationAvailabilityVersion,
+} from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
@@ -377,6 +381,7 @@ function App() {
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
   )
+  const agentModelCatalog = serviceCatalogAgentModelsForScope(serviceCatalogSnapshot, activeProjectId)
   const generationPlugins = installedPlugins.flatMap((plugin) =>
     plugin.contributes.generation
       ? [
@@ -583,7 +588,7 @@ function App() {
     startupRecoveryPending,
     workspaceEntryCoordinator,
   ])
-  useEffect(() => {
+  useLayoutEffect(() => {
     serviceCatalogController.setScopeId(activeProjectId)
   }, [activeProjectId, serviceCatalogController])
   const activeCanvasId =
@@ -1051,6 +1056,9 @@ function App() {
           serviceName: tool.pluginName,
           title: tool.title,
         }))
+      },
+      subscribeCatalog(listener) {
+        return generationModelCatalogController.subscribe(listener)
       },
       async describeTool(toolId, signal) {
         if (!activeProjectId || !activeCanvasId) {
@@ -2084,7 +2092,8 @@ function App() {
     <AgentGenerationPreferenceProvider storage={localStorage}>
       <AgentModelCatalogProvider
         generationController={generationModelCatalogController}
-        llm={serviceCatalogSnapshot.agentModels}
+        llm={agentModelCatalog}
+        refreshLlmModels={serviceCatalogController.refreshAgentModels}
       >
         <div className="relative flex size-full flex-col overflow-hidden">
         <ApplicationTitlebar

@@ -143,6 +143,29 @@ describe("GenerationModelCatalogController", () => {
     expect(listTools).toHaveBeenCalledTimes(2)
   })
 
+  test("commits explicit send-time revalidation into the shared snapshot", async () => {
+    const listTools = mock()
+      .mockResolvedValueOnce([tool("model-v1")])
+      .mockResolvedValueOnce([tool("model-v2")])
+    const controller = new GenerationModelCatalogController({
+      describeTool: mock(async ({ toolId }) => description(toolId)),
+      listTools,
+    })
+
+    controller.setScope({ authorityVersion: "stable", scopeId: "project-a" })
+    await controller.listTools()
+    expect(controller.peekTools()).toEqual([tool("model-v1")])
+
+    expect(await controller.refresh()).toEqual([tool("model-v2")])
+    expect(controller.getSnapshot()).toMatchObject({
+      ready: true,
+      refreshing: false,
+      tools: [tool("model-v2")],
+    })
+    expect(controller.peekTools()).toEqual([tool("model-v2")])
+    expect(listTools).toHaveBeenCalledTimes(2)
+  })
+
   test("isolates Project scopes and ignores late catalog responses", async () => {
     const projectA = deferred<readonly GenerationToolSummary[]>()
     const projectB = deferred<readonly GenerationToolSummary[]>()

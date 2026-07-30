@@ -6,7 +6,11 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
-import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
+import {
+  ServiceCatalogController,
+  serviceCatalogAgentModelsForScope,
+  serviceGenerationAvailabilityVersion,
+} from "./service-catalog-controller"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -58,6 +62,30 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
+  test("does not expose the previous Project's Agent model catalog during a scope switch", () => {
+    const previousCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "project-a-model", modelName: "Project A Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const snapshot = {
+      agentModels: { catalog: previousCatalog, loading: false, scopeId: "project-a" },
+      loading: false,
+      services: [],
+    }
+
+    expect(serviceCatalogAgentModelsForScope(snapshot, "project-b")).toEqual({
+      loading: true,
+      scopeId: "project-b",
+    })
+    expect(serviceCatalogAgentModelsForScope(snapshot, "project-a").catalog).toBe(previousCatalog)
+  })
+
   test("versions generation availability from stable authority state instead of loading presentation state", async () => {
     const controller = new ServiceCatalogController(pluginClient(), {
       listModels: mock(async () => ({ providers: [] })),
@@ -69,9 +97,7 @@ describe("ServiceCatalogController", () => {
     const loading = {
       ...ready,
       loading: true,
-      services: ready.services.map((service) =>
-        service.kind === "plugin" ? { ...service, loading: true } : service,
-      ),
+      services: ready.services.map((service) => (service.kind === "plugin" ? { ...service, loading: true } : service)),
     }
 
     expect(serviceGenerationAvailabilityVersion(loading, ["creative-service"])).toBe(
@@ -218,6 +244,7 @@ describe("ServiceCatalogController", () => {
       catalog: initialCatalog,
       error: undefined,
       loading: true,
+      scopeId: "project-a",
     })
 
     pendingCatalog.resolve(updatedCatalog)
@@ -226,6 +253,82 @@ describe("ServiceCatalogController", () => {
       catalog: updatedCatalog,
       error: undefined,
       loading: false,
+      scopeId: "project-a",
+    })
+    controller.dispose()
+  })
+
+  test("returns and publishes send-time Agent model revalidation through the shared controller", async () => {
+    const initialCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "initial-model", modelName: "Initial Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const updatedCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "updated-model", modelName: "Updated Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const agentClient = { listModels: mock(async () => initialCatalog) }
+    const controller = new ServiceCatalogController(pluginClient(), agentClient)
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+    agentClient.listModels = mock(async () => updatedCatalog)
+
+    expect(await controller.refreshAgentModels()).toEqual(updatedCatalog)
+    expect(controller.getSnapshot().agentModels).toEqual({
+      catalog: updatedCatalog,
+      error: undefined,
+      loading: false,
+      scopeId: "project-a",
+    })
+    controller.dispose()
+  })
+
+  test("single-flights send-time model refresh and rejects without discarding the ready catalog", async () => {
+    const initialCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "initial-model", modelName: "Initial Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const agentClient = { listModels: mock(async () => initialCatalog) }
+    const controller = new ServiceCatalogController(pluginClient(), agentClient)
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+    const pending = deferred<typeof initialCatalog>()
+    agentClient.listModels = mock(() => pending.promise)
+
+    const first = controller.refreshAgentModels()
+    const second = controller.refreshAgentModels()
+    expect(agentClient.listModels).toHaveBeenCalledTimes(1)
+    pending.reject(new Error("Fresh model catalog unavailable"))
+    const firstError = await first.catch((error: unknown) => error)
+    const secondError = await second.catch((error: unknown) => error)
+
+    expect(firstError).toBeInstanceOf(Error)
+    expect(secondError).toBe(firstError)
+    expect(controller.getSnapshot().agentModels).toEqual({
+      catalog: initialCatalog,
+      error: "Fresh model catalog unavailable",
+      loading: false,
+      scopeId: "project-a",
     })
     controller.dispose()
   })
@@ -260,6 +363,7 @@ describe("ServiceCatalogController", () => {
       catalog: initialCatalog,
       error: "Model catalog unavailable",
       loading: false,
+      scopeId: "project-a",
     })
     controller.dispose()
   })
@@ -319,6 +423,60 @@ describe("ServiceCatalogController", () => {
     expect(controller.getSnapshot().services[0]?.models).toEqual([
       expect.objectContaining({ name: "After authorization" }),
     ])
+    controller.dispose()
+  })
+
+  test("queues one trailing model refresh when service authority changes during an in-flight request", async () => {
+    const listeners = new Set<() => void>()
+    const client = pluginClient()
+    client.onDidChange = mock((listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    })
+    const beforeCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "before", modelName: "Before" }],
+          providerId: "service-provider",
+          providerName: "Service provider",
+        },
+      ],
+    }
+    const afterCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "after", modelName: "After" }],
+          providerId: "service-provider",
+          providerName: "Service provider",
+        },
+      ],
+    }
+    const beforeChange = deferred<typeof beforeCatalog>()
+    const afterChange = deferred<typeof afterCatalog>()
+    let requestCount = 0
+    const listModels = mock(() => (requestCount++ === 0 ? beforeChange.promise : afterChange.promise))
+    const controller = new ServiceCatalogController(client, { listModels })
+    controller.setScopeId("project-a")
+    controller.start()
+
+    for (const listener of listeners) listener()
+    const authoritativeRefresh = controller.refreshAgentModels()
+    let authoritativeSettled = false
+    void authoritativeRefresh.finally(() => {
+      authoritativeSettled = true
+    })
+    expect(listModels).toHaveBeenCalledTimes(1)
+    beforeChange.resolve(beforeCatalog)
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+
+    expect(listModels).toHaveBeenCalledTimes(2)
+    expect(authoritativeSettled).toBe(false)
+    afterChange.resolve(afterCatalog)
+    expect(await authoritativeRefresh).toEqual(afterCatalog)
+
+    expect(controller.getSnapshot().agentModels?.catalog?.providers[0]?.models[0]?.modelName).toBe("After")
     controller.dispose()
   })
 

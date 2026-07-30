@@ -226,6 +226,8 @@ export interface CanvasGenerateService {
   getCachedDescription?: (toolId: string) => CanvasGenerationToolDescription | undefined
   /** Synchronous stale-while-revalidate read used to share one host catalog across Canvas surfaces. */
   getCachedTools?: (query: CanvasGenerationToolQuery) => readonly CanvasGenerationToolSummary[] | undefined
+  /** Notifies mounted Canvas surfaces when the host's shared catalog snapshot changes. */
+  subscribeCatalog?: (listener: () => void) => () => void
   describeTool: (toolId: string, signal?: AbortSignal) => Promise<CanvasGenerationToolDescription>
   generate: (request: CanvasGenerateRequest) => Promise<CanvasGenerateResult>
   listTools: (query: CanvasGenerationToolQuery, signal?: AbortSignal) => Promise<readonly CanvasGenerationToolSummary[]>

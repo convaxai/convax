@@ -83,6 +83,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const [imageRoles, setImageRoles] = useState<Readonly<Record<string, CanvasGenerationImageRole>>>({})
   const catalogTrackerRef = useRef(new CanvasGenerationCatalogRequestTracker())
   const previousScopeRef = useRef({ documentId: props.document.id, scopeId })
+  const toolInputOwnerRef = useRef("")
 
   const projection = useMemo(
     () =>
@@ -146,11 +147,22 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
     return () => catalogTrackerRef.current.cancel(request)
   }, [catalogAttempt, props.document.id, props.generateService, props.generateService.catalogVersion, scopeId])
 
+  useEffect(() => {
+    if (!props.generateService.subscribeCatalog || !props.generateService.getCachedTools) return undefined
+    return props.generateService.subscribeCatalog(() => {
+      const cachedTools = props.generateService.getCachedTools?.({})
+      if (!cachedTools) return
+      setTools(cachedTools)
+      setCatalogStatus("ready")
+    })
+  }, [props.generateService])
+
   const selectedTool = projection.selectedTool
   const describedToolId = selectedTool?.id
   const descriptionScope = describedToolId
     ? JSON.stringify([scopeId, props.document.id, props.generateService.catalogVersion ?? null, describedToolId])
     : ""
+  const toolInputOwner = describedToolId ? JSON.stringify([scopeId, props.document.id, describedToolId]) : ""
   const currentDescription = descriptionScope && description.scope === descriptionScope ? description : undefined
   const toolInputValidation =
     currentDescription?.status === "ready"
@@ -158,7 +170,9 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       : undefined
 
   useEffect(() => {
-    setToolInput({})
+    const ownerChanged = toolInputOwnerRef.current !== toolInputOwner
+    toolInputOwnerRef.current = toolInputOwner
+    if (ownerChanged) setToolInput({})
     if (!describedToolId || !descriptionScope) {
       setDescription({ scope: "", status: "idle" })
       return undefined
@@ -166,7 +180,11 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
     const controller = new AbortController()
     const cachedDescription = props.generateService.getCachedDescription?.(describedToolId)
     if (cachedDescription?.toolId === describedToolId) {
-      setToolInput(createToolInputDefaultValues(cachedDescription.fields))
+      setToolInput((current) =>
+        ownerChanged
+          ? createToolInputDefaultValues(cachedDescription.fields)
+          : validateToolInputValues(cachedDescription.fields, current).input,
+      )
       setDescription({ scope: descriptionScope, status: "ready", value: cachedDescription })
     } else {
       setDescription({ scope: descriptionScope, status: "loading" })
@@ -182,7 +200,14 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           })
           return
         }
-        setToolInput(createToolInputDefaultValues(result.fields))
+        setToolInput((current) =>
+          cachedDescription?.toolId === describedToolId
+            ? validateToolInputValues(result.fields, current).input
+            : {
+                ...createToolInputDefaultValues(result.fields),
+                ...validateToolInputValues(result.fields, current).input,
+              },
+        )
         setDescription({ scope: descriptionScope, status: "ready", value: result })
       },
       (error) => {
@@ -196,7 +221,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       },
     )
     return () => controller.abort()
-  }, [describedToolId, descriptionAttempt, descriptionScope, props.generateService])
+  }, [describedToolId, descriptionAttempt, descriptionScope, props.generateService, toolInputOwner])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()

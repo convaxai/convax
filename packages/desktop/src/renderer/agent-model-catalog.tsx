@@ -7,6 +7,7 @@ interface AgentModelCatalogContextValue {
   generation: ReturnType<GenerationModelCatalogController["getSnapshot"]>
   generationController: GenerationModelCatalogController
   llm: ServiceCatalogAgentModelState
+  refreshLlmModels: () => Promise<ServiceCatalogAgentModelState["catalog"]>
 }
 
 const AgentModelCatalogContext = createContext<AgentModelCatalogContextValue | null>(null)
@@ -15,6 +16,7 @@ export function AgentModelCatalogProvider(props: {
   children: ReactNode
   generationController: GenerationModelCatalogController
   llm?: ServiceCatalogAgentModelState
+  refreshLlmModels: AgentModelCatalogContextValue["refreshLlmModels"]
 }) {
   const generation = useSyncExternalStore(
     props.generationController.subscribe,
@@ -23,8 +25,13 @@ export function AgentModelCatalogProvider(props: {
   )
   const llm = props.llm ?? { loading: false }
   const value = useMemo(
-    () => ({ generation, generationController: props.generationController, llm }),
-    [generation, llm, props.generationController],
+    () => ({
+      generation,
+      generationController: props.generationController,
+      llm,
+      refreshLlmModels: props.refreshLlmModels,
+    }),
+    [generation, llm, props.generationController, props.refreshLlmModels],
   )
 
   return <AgentModelCatalogContext value={value}>{props.children}</AgentModelCatalogContext>

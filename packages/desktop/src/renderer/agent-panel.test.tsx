@@ -709,6 +709,18 @@ describe("Agent composer source contract", () => {
     expect(source).toContain('data-agent-composer-action="model"')
     expect(source).toContain("data-agent-composer-editor")
     expect(source).toContain("data-agent-runtime-state")
+    expect(source).toContain("await sharedGenerationController.refresh()")
+    expect(source).toContain("reconcileReady: false")
+    expect(source).toContain("refreshShared: true")
+    expect(source).toContain("throwOnError: true")
+    expect(source).toContain(
+      "reconcileToolInputValues(result.fields, current, cachedDescription?.toolId !== selectedId)",
+    )
+    expect(source).toContain("generationToolInputOwnerRef.current !== generationToolInputOwner")
+    expect(source).toContain("if (ownerChanged) setGenerationToolInput({})")
+    expect(source).not.toContain(
+      "[generationDescriptionScope, props.projectId, selectedGenerationTool, sharedGenerationController]",
+    )
     expect(styles).toContain("--agent-composer-radius: 24px")
     expect(styles).toContain("--agent-message-enter-duration: 150ms")
     expect(styles).toContain('.agent-composer-frame[data-agent-composer-state="running"]::before')

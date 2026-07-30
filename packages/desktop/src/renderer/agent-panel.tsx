@@ -13,7 +13,7 @@ import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import type { PetDisplayedSession } from "../pet-contracts"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
-import { Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
+import { Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, reconcileToolInputValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
 import type {
   GenerationToolDescription,
   GenerationToolInput,
@@ -138,7 +138,7 @@ import {
 import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { useAgentModelCatalog } from "./agent-model-catalog"
-import { findAgentLlmModel, reconcileAgentLlmModelSelection, type AgentLlmModelSelection } from "./agent-llm-models"
+import { findAgentLlmModel, reconcileAgentLlmModelSelection, reconcileAgentLlmModelSelectionFromReadyCatalog, type AgentLlmModelSelection } from "./agent-llm-models"
 import {
   agentConversationAnnouncementState,
   agentConversationCopyText,
@@ -282,6 +282,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const sharedGenerationController = sharedModelCatalog?.generationController
   const sharedGenerationSnapshot = sharedModelCatalog?.generation
   const sharedLlmCatalog = sharedModelCatalog?.llm.catalog
+  const refreshSharedLlmModels = sharedModelCatalog?.refreshLlmModels
   const usesSharedModelCatalog = sharedModelCatalog !== null
   const sharedGenerationSelection = sharedGenerationPreference?.selection
   const setSharedGenerationSelection = sharedGenerationPreference?.setSelection
@@ -387,6 +388,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const requestTrackerRef = useRef(new AgentComposerRequestTracker())
   const generationCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const generationDescriptionRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
+  const generationToolInputOwnerRef = useRef("")
   const llmCatalogRequestRef = useRef(new AgentGenerationCatalogRequestTracker())
   const llmCatalogValueScopeRef = useRef("")
   const generationToolSelectionRef = useRef(generationToolSelection)
@@ -434,12 +436,16 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     : localLlmCatalogError
 
   const selectedGenerationTool = findAgentGenerationTool(generationToolSelection, generationTools)
+  const selectedGenerationToolId = selectedGenerationTool?.id
   const validatedGenerationToolSelection =
     selectedGenerationTool && isAgentGenerationOutput(selectedGenerationTool.output)
       ? { id: selectedGenerationTool.id, output: selectedGenerationTool.output }
       : undefined
-  const generationDescriptionScope = selectedGenerationTool
-    ? JSON.stringify([generationCatalogScope, selectedGenerationTool.id])
+  const generationDescriptionScope = selectedGenerationToolId
+    ? JSON.stringify([generationCatalogScope, selectedGenerationToolId])
+    : ""
+  const generationToolInputOwner = selectedGenerationToolId
+    ? JSON.stringify([props.projectId ?? null, selectedGenerationToolId])
     : ""
   const currentGenerationDescription =
     generationDescriptionScope && generationDescription.scope === generationDescriptionScope
@@ -565,18 +571,30 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       })
   }, [generationCatalogScope, props.projectId, setGenerationToolSelection, sharedGenerationController])
 
-  const loadLlmModels = useCallback(() => {
+  const loadLlmModels = useCallback((options?: { reconcileReady?: boolean; refreshShared?: boolean; throwOnError?: boolean }) => {
     const scopeId = props.projectId
     if (usesSharedModelCatalog) {
-      const catalog = sharedLlmCatalog ?? { providers: [] }
-      if (scopeId && mountedRef.current) {
-        const current = llmSelectionRef.current
-        const reconciled = reconcileAgentLlmModelSelection(current, catalog)
-        if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
-          setLlmSelection(reconciled)
-        }
-      }
-      return Promise.resolve(catalog)
+      const request = options?.refreshShared ? refreshSharedLlmModels?.() : Promise.resolve(sharedLlmCatalog)
+      return (request ?? Promise.resolve(sharedLlmCatalog))
+        .then((readyCatalog) => {
+          if (
+            options?.reconcileReady !== false &&
+            scopeId &&
+            mountedRef.current &&
+            activeProjectRef.current === scopeId
+          ) {
+            const current = llmSelectionRef.current
+            const reconciled = reconcileAgentLlmModelSelectionFromReadyCatalog(current, readyCatalog)
+            if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
+              setLlmSelection(reconciled)
+            }
+          }
+          return readyCatalog ?? { providers: [] }
+        })
+        .catch((cause) => {
+          if (options?.throwOnError) throw cause
+          return sharedLlmCatalog ?? { providers: [] }
+        })
     }
     const isLatest = llmCatalogRequestRef.current.begin(llmCatalogScope)
     if (llmCatalogValueScopeRef.current !== llmCatalogScope) {
@@ -596,10 +614,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return catalog
         llmCatalogValueScopeRef.current = llmCatalogScope
         setLlmCatalog(catalog)
-        const current = llmSelectionRef.current
-        const reconciled = reconcileAgentLlmModelSelection(current, catalog)
-        if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
-          setLlmSelection(reconciled)
+        if (options?.reconcileReady !== false) {
+          const current = llmSelectionRef.current
+          const reconciled = reconcileAgentLlmModelSelection(current, catalog)
+          if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
+            setLlmSelection(reconciled)
+          }
         }
         return catalog
       })
@@ -607,6 +627,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
           setLlmCatalogError(errorMessage(cause))
         }
+        if (options?.throwOnError) throw cause
         return { providers: [] }
       })
       .finally(() => {
@@ -614,7 +635,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setLlmCatalogLoading(false)
         }
       })
-  }, [llmCatalogScope, props.projectId, setLlmSelection, sharedLlmCatalog, usesSharedModelCatalog])
+  }, [llmCatalogScope, props.projectId, refreshSharedLlmModels, setLlmSelection, sharedLlmCatalog, usesSharedModelCatalog])
 
   useEffect(() => {
     void loadGenerationTools()
@@ -622,29 +643,35 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   }, [loadGenerationTools])
 
   useEffect(() => {
-    setGenerationToolInput({})
-    if (!props.projectId || !selectedGenerationTool || !generationDescriptionScope) {
+    const ownerChanged = generationToolInputOwnerRef.current !== generationToolInputOwner
+    generationToolInputOwnerRef.current = generationToolInputOwner
+    if (ownerChanged) setGenerationToolInput({})
+    if (!props.projectId || !selectedGenerationToolId || !generationDescriptionScope) {
       generationDescriptionRequestRef.current.invalidate()
       setGenerationDescription({ scope: "", status: "loading" })
       return undefined
     }
     const scopeId = props.projectId
-    const selected = selectedGenerationTool
+    const selectedId = selectedGenerationToolId
     const isLatest = generationDescriptionRequestRef.current.begin(generationDescriptionScope)
-    const cachedDescription = sharedGenerationController?.peekDescription(selected.id)
-    if (cachedDescription?.toolId === selected.id) {
-      setGenerationToolInput(createToolInputDefaultValues(cachedDescription.fields))
+    const cachedDescription = sharedGenerationController?.peekDescription(selectedId)
+    if (cachedDescription?.toolId === selectedId) {
+      setGenerationToolInput((current) =>
+        ownerChanged
+          ? createToolInputDefaultValues(cachedDescription.fields)
+          : reconcileToolInputValues(cachedDescription.fields, current),
+      )
       setGenerationDescription({ scope: generationDescriptionScope, status: "ready", value: cachedDescription })
     } else {
       setGenerationDescription({ scope: generationDescriptionScope, status: "loading" })
     }
     const descriptionRequest = sharedGenerationController
-      ? sharedGenerationController.describeTool(selected.id)
-      : window.convax.generation.describeTool({ scopeId, toolId: selected.id })
+      ? sharedGenerationController.describeTool(selectedId)
+      : window.convax.generation.describeTool({ scopeId, toolId: selectedId })
     void descriptionRequest.then(
       (result) => {
         if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
-        if (result.toolId !== selected.id) {
+        if (result.toolId !== selectedId) {
           setGenerationDescription({
             error: "The generation model returned a stale configuration.",
             scope: generationDescriptionScope,
@@ -652,12 +679,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           })
           return
         }
-        setGenerationToolInput(createToolInputDefaultValues(result.fields))
+        setGenerationToolInput((current) =>
+          reconcileToolInputValues(result.fields, current, cachedDescription?.toolId !== selectedId),
+        )
         setGenerationDescription({ scope: generationDescriptionScope, status: "ready", value: result })
       },
       (cause) => {
         if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
-          if (cachedDescription?.toolId === selected.id) return
+          if (cachedDescription?.toolId === selectedId) return
           setGenerationDescription({
             error: errorMessage(cause),
             scope: generationDescriptionScope,
@@ -669,7 +698,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     return () => {
       if (isLatest()) generationDescriptionRequestRef.current.invalidate()
     }
-  }, [generationDescriptionScope, props.projectId, selectedGenerationTool, sharedGenerationController])
+  }, [
+    generationDescriptionScope,
+    generationToolInputOwner,
+    props.projectId,
+    selectedGenerationToolId,
+    sharedGenerationController,
+  ])
 
   const refreshSessions = useCallback(
     async (preferredSessionId?: string) => {
@@ -1640,7 +1675,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       closeComposerSuggestion()
       setModelPickerTab("llm")
       setGenerationModelPickerOpen(true)
-      if (!llmCatalogLoading) void loadLlmModels()
+      if (!llmCatalogLoading && (!llmCatalog || llmCatalogError)) {
+        void loadLlmModels({ refreshShared: true })
+      }
       return
     }
     if (validatedGenerationToolSelection && !generationConfigurationReady) {
@@ -1674,13 +1711,15 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setError(undefined)
     try {
       if (submittedGenerationSelection) {
-        const listed = await window.convax.generation.listTools({ scopeId })
+        const listed = sharedGenerationController
+          ? await sharedGenerationController.refresh()
+          : await window.convax.generation.listTools({ scopeId })
         if (!isCurrentScope()) return
         if (generationCatalogVersionRef.current !== submittedCatalogVersion) {
           throw new Error("Installed generation models changed. Review the model selection and send again.")
         }
         verifiedGenerationTools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
-        setGenerationTools(verifiedGenerationTools)
+        if (!sharedGenerationController) setGenerationTools(verifiedGenerationTools)
         verifiedGenerationSelection = reconcileAgentGenerationToolSelection(
           submittedGenerationSelection,
           verifiedGenerationTools,
@@ -1692,15 +1731,20 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setGenerationToolSelection(verifiedGenerationSelection)
         }
         if (!verifiedGenerationSelection) {
+          setModelPickerTab(submittedGenerationSelection.output)
+          setGenerationModelPickerOpen(true)
           throw new Error("The selected generation model is no longer installed. Choose another available model.")
         }
       }
       if (!submittedLlmSelection) {
         throw new Error("No LLM service provides an available model. Open Services to install or configure one.")
       }
-      const catalog = await window.convax.agent.listModels({ scopeId })
+      const catalog = await loadLlmModels({
+        reconcileReady: false,
+        refreshShared: true,
+        throwOnError: true,
+      })
       if (!isCurrentScope()) return
-      setLlmCatalog(catalog)
       const verifiedLlmModel = findAgentLlmModel(submittedLlmSelection, catalog)
       verifiedLlmSelection = verifiedLlmModel
         ? { modelId: verifiedLlmModel.model.modelId, providerId: verifiedLlmModel.provider.providerId }
@@ -1803,6 +1847,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     generationConfigurationReady,
     generationTools,
     interactionDisabled,
+    llmCatalog,
+    llmCatalogError,
     llmCatalogLoading,
     loadLlmModels,
     props.activeCanvas,
@@ -1817,6 +1863,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     setGenerationToolSelection,
     setLlmSelection,
     setSessionPrompting,
+    sharedGenerationController,
     validatedGenerationToolInput,
     validatedGenerationToolSelection,
     validatedLlmSelection,
@@ -2180,7 +2227,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     }}
                     onTabChange={(tab) => {
                       setModelPickerTab(tab)
-                      if (tab === "llm") void loadLlmModels()
+                      if (tab === "llm" && llmCatalogError && !llmCatalogLoading) {
+                        void loadLlmModels({ refreshShared: true })
+                      }
                     }}
                     onToolInputChange={setGenerationToolInput}
                     selected={validatedGenerationToolSelection}
@@ -2479,7 +2528,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         closeComposerSuggestion()
                         setGenerationModelPickerOpen(true)
                         if (generationToolsError) void loadGenerationTools()
-                        if (modelPickerTab === "llm") void loadLlmModels()
+                        if (modelPickerTab === "llm" && llmCatalogError && !llmCatalogLoading) {
+                          void loadLlmModels({ refreshShared: true })
+                        }
                       }}
                       type="button"
                     >

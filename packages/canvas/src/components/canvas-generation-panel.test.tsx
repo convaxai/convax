@@ -223,6 +223,98 @@ describe("CanvasGenerationPanel", () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Run generation"]')?.disabled).toBe(false)
   })
 
+  test("preserves edits made to cached options while their description refreshes", async () => {
+    const tools: readonly CanvasGenerationToolSummary[] = [
+      {
+        acceptedInputs: [],
+        description: "Cached image model",
+        id: "tools/cached-image",
+        modelName: "Cached Image",
+        output: "image",
+        serviceId: "cached-service",
+        serviceName: "Cached Service",
+        title: "Image model",
+      },
+    ]
+    const fields: CanvasGenerationToolDescription["fields"] = [
+      {
+        choices: [
+          { label: "Draft", value: "draft" },
+          { label: "Final", value: "final" },
+        ],
+        defaultValue: "draft",
+        id: "quality",
+        kind: "select",
+        label: "Quality",
+        required: false,
+      },
+    ]
+    let resolveDescription!: (value: CanvasGenerationToolDescription) => void
+    let catalogVersion = 0
+    const service: CanvasGenerateService = {
+      ...createService(mock(async () => tools)),
+      get catalogVersion() {
+        return catalogVersion
+      },
+      describeTool: mock(
+        () =>
+          new Promise<CanvasGenerationToolDescription>((resolve) => {
+            resolveDescription = resolve
+          }),
+      ),
+      getCachedDescription: mock((toolId) => ({ fields, toolId })),
+      getCachedTools: mock(() => tools),
+    }
+    const panel = () => (
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-cached-options" })}
+        generateService={service}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />
+    )
+    const container = render(panel())
+
+    await flushEffects()
+    const currentQualitySelect = () => {
+      const qualityLabel = [...container.querySelectorAll("label")].find((label) =>
+        label.textContent?.includes("Quality"),
+      )
+      return qualityLabel?.htmlFor ? document.getElementById(qualityLabel.htmlFor) : undefined
+    }
+    let qualitySelect = currentQualitySelect()
+    expect(qualitySelect?.textContent).toContain("Draft")
+
+    await act(async () => qualitySelect?.click())
+    const finalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+      option.textContent?.includes("Final"),
+    )
+    await act(async () => finalOption?.click())
+    expect(qualitySelect?.textContent).toContain("Final")
+
+    catalogVersion += 1
+    await act(async () => root?.render(panel()))
+    await flushEffects()
+    qualitySelect = currentQualitySelect()
+    expect(qualitySelect?.isConnected).toBe(true)
+    expect(qualitySelect?.textContent).toContain("Final")
+
+    await act(async () => qualitySelect?.click())
+    const autoOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.trim() === "Auto",
+    )
+    await act(async () => autoOption?.click())
+    expect(currentQualitySelect()?.textContent).toContain("Auto")
+
+    await act(async () => {
+      resolveDescription({ fields, toolId: "tools/cached-image" })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(currentQualitySelect()?.textContent).toContain("Auto")
+  })
+
   test("replaces a cached model when background catalog revalidation succeeds", async () => {
     const cachedTools: readonly CanvasGenerationToolSummary[] = [
       {
@@ -281,6 +373,61 @@ describe("CanvasGenerationPanel", () => {
     expect(container.textContent).toContain("Refreshed Service · Refreshed Image")
     expect(container.textContent).not.toContain("Cached Service · Cached Image")
     expect(container.textContent).not.toContain("Loading generation tools")
+  })
+
+  test("updates a mounted composer from the host's shared catalog subscription", async () => {
+    let cachedTools: readonly CanvasGenerationToolSummary[] = [
+      {
+        acceptedInputs: [],
+        description: "Initial image model",
+        id: "tools/initial-image",
+        modelName: "Initial Image",
+        output: "image",
+        serviceId: "shared-service",
+        serviceName: "Shared Service",
+        title: "Image model",
+      },
+    ]
+    let notifyCatalog: () => void = () => undefined
+    const service: CanvasGenerateService = {
+      ...createService(() => new Promise(() => undefined)),
+      getCachedDescription: mock((toolId) => ({ fields: [], toolId })),
+      getCachedTools: mock(() => cachedTools),
+      subscribeCatalog(listener) {
+        notifyCatalog = listener
+        return () => {
+          notifyCatalog = () => undefined
+        }
+      },
+    }
+    const container = render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-shared-subscription" })}
+        generateService={service}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    expect(container.textContent).toContain("Shared Service · Initial Image")
+    cachedTools = [
+      {
+        acceptedInputs: [],
+        description: "Fresh image model",
+        id: "tools/fresh-image",
+        modelName: "Fresh Image",
+        output: "image",
+        serviceId: "shared-service",
+        serviceName: "Shared Service",
+        title: "Image model",
+      },
+    ]
+    await act(async () => notifyCatalog())
+    await flushEffects()
+
+    expect(container.textContent).toContain("Shared Service · Fresh Image")
+    expect(container.textContent).not.toContain("Shared Service · Initial Image")
   })
 
   test("renders the selected tool's live model field and submits the chosen value", async () => {
