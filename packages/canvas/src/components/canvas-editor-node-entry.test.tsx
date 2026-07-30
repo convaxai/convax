@@ -1,6 +1,13 @@
 import { expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
-import { type ButtonHTMLAttributes, type ComponentType, type ReactNode, act, createRef } from "react"
+import {
+  type AnimationEventHandler,
+  type ButtonHTMLAttributes,
+  type ComponentType,
+  type ReactNode,
+  act,
+  createRef,
+} from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { NodeProps } from "@xyflow/react"
 import type { CanvasNode } from "../types"
@@ -12,6 +19,12 @@ const setViewport = mock(async (_viewport: unknown, _options?: { duration?: numb
 
 function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
+}
+
+function animationEvent(name: string) {
+  const event = new Event(name.endsWith("-start") ? "animationstart" : "animationend", { bubbles: true })
+  Object.defineProperty(event, "animationName", { value: name.replace(/-(?:start|end)$/, "") })
+  return event
 }
 
 void mock.module("@convax/ui", () => ({
@@ -28,23 +41,16 @@ void mock.module("@convax/ui", () => ({
   }) => <button {...props}>{children}</button>,
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
-  ContextMenuItem: ({
-    children,
-    onSelect,
-  }: {
-    children?: ReactNode
-    onSelect?: () => void
-  }) => <button onClick={onSelect}>{children}</button>,
+  ContextMenuItem: ({ children, onSelect }: { children?: ReactNode; onSelect?: () => void }) => (
+    <button data-test-context-menu-item="" onClick={onSelect}>
+      {children}
+    </button>
+  ),
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
   Input: (props: ButtonHTMLAttributes<HTMLInputElement>) => <input {...props} />,
-  Loading: (props: {
-    className?: string
-    description?: ReactNode
-    label?: ReactNode
-    reducedMotion?: boolean
-  }) => (
+  Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
       aria-live="polite"
       className={props.className}
@@ -98,16 +104,39 @@ void mock.module("@xyflow/react", () => ({
   ),
   MiniMap: () => null,
   NodeResizer: () => null,
-  NodeToolbar: Passthrough,
+  NodeToolbar: (props: {
+    children?: ReactNode
+    className?: string
+    "data-canvas-node-entry-phase"?: string
+    "data-canvas-node-entering"?: boolean
+    onAnimationEnd?: AnimationEventHandler<HTMLDivElement>
+    onAnimationStart?: AnimationEventHandler<HTMLDivElement>
+  }) => (
+    <div
+      className={props.className}
+      data-canvas-node-entry-phase={props["data-canvas-node-entry-phase"]}
+      data-canvas-node-entering={props["data-canvas-node-entering"] || undefined}
+      onAnimationEnd={props.onAnimationEnd}
+      onAnimationStart={props.onAnimationStart}
+    >
+      {props.children}
+    </div>
+  ),
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
   ReactFlow: (props: {
     children?: ReactNode
     nodeTypes?: Record<string, ComponentType<NodeProps<CanvasNode>>>
     nodes?: CanvasNode[]
+    onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
     renderedNodes = props.nodes ?? []
     return (
-      <>
+      <div
+        className="react-flow__pane"
+        onContextMenu={(event) => {
+          props.onPaneContextMenu?.(event)
+        }}
+      >
         {renderNodes
           ? renderedNodes.map((node) => {
               const Component = props.nodeTypes?.[node.type ?? "file"]
@@ -139,7 +168,7 @@ void mock.module("@xyflow/react", () => ({
             })
           : null}
         {props.children}
-      </>
+      </div>
     )
   },
   ReactFlowProvider: Passthrough,
@@ -168,10 +197,11 @@ void mock.module("@xyflow/react", () => ({
 const [
   { CanvasEditor },
   { CanvasNodeChrome },
-  { createCanvasDocument, createMediaNode },
+  { createCanvasDocument, createMediaNode, createTextNode },
   { createCanvasNodeRegistry },
   { createCanvasServices },
   { createCanvasViewRegistry },
+  { CANVAS_MOTION_DURATION },
 ] = await Promise.all([
   import("./canvas-editor"),
   import("./builtin-node"),
@@ -179,6 +209,7 @@ const [
   import("../node-registry"),
   import("../services"),
   import("../view"),
+  import("../motion"),
 ])
 
 let nextNodeId = 0
@@ -311,8 +342,8 @@ test("mounts rapid new nodes with one inner-shell entrance and never replays hyd
     expect(first?.querySelectorAll(":scope > [data-canvas-test-handle]")).toHaveLength(2)
 
     await act(async () => {
-      first?.querySelector(".convax-node__entry-shell")?.dispatchEvent(new Event("animationend", { bubbles: true }))
-      second?.querySelector(".convax-node__entry-shell")?.dispatchEvent(new Event("animationend", { bubbles: true }))
+      first?.querySelector(".convax-node__entry-shell")?.dispatchEvent(animationEvent("convax-node-enter-end"))
+      second?.querySelector(".convax-node__entry-shell")?.dispatchEvent(animationEvent("convax-node-enter-end"))
     })
     expect(first?.hasAttribute("data-canvas-node-entering")).toBeFalse()
     expect(second?.hasAttribute("data-canvas-node-entering")).toBeFalse()
@@ -452,9 +483,7 @@ test("centers an outline reveal before starting the inner-shell focus animation"
 
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 300)).toBeTrue()
     expect(
-      container
-        .querySelector('[data-id="focus-target"] .convax-node')
-        ?.hasAttribute("data-canvas-node-entering"),
+      container.querySelector('[data-id="focus-target"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
     ).toBeFalse()
 
     await act(async () => {
@@ -462,9 +491,7 @@ test("centers an outline reveal before starting the inner-shell focus animation"
       await execution
     })
     expect(
-      container
-        .querySelector('[data-id="focus-target"] .convax-node')
-        ?.getAttribute("data-canvas-node-entering"),
+      container.querySelector('[data-id="focus-target"] .convax-node')?.getAttribute("data-canvas-node-entering"),
     ).toBe("true")
   } finally {
     setViewport.mockReset()
@@ -569,10 +596,11 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
     ).toBeFalse()
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
     expect(
-      container
-        .querySelector('[data-id="header-created"] .convax-node')
-        ?.hasAttribute("data-canvas-node-entering"),
+      container.querySelector('[data-id="header-created"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
     ).toBeFalse()
+    expect(
+      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
+    ).toBe("pending-focus")
 
     await act(async () => {
       resolveCamera()
@@ -580,10 +608,138 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
       await Promise.resolve()
     })
     expect(
-      container
-        .querySelector('[data-id="header-created"] .convax-node')
-        ?.getAttribute("data-canvas-node-entering"),
+      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entering"),
     ).toBe("true")
+    expect(
+      container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
+    ).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("runs the context-menu-created text node through the same camera focus and entry sequence as the top toolbar", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({
+    id: "context-create-entry",
+    nodes: [
+      createMediaNode({
+        id: "hydrated",
+        position: { x: 20, y: 40 },
+        resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+  let authoritative = initial
+  let requestedAnchor: { x: number; y: number } | undefined
+  let resolveCamera!: () => void
+  const cameraFinished = new Promise<void>((resolve) => {
+    resolveCamera = resolve
+  })
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initial}
+          nodeRegistry={createTestRegistry()}
+          selectionActions={[{ execute: () => undefined, id: "test.action", label: "Test action" }]}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                requestedAnchor = input.anchor
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createTextNode({
+                      id: "context-created",
+                      metadata: {},
+                      position: input.anchor,
+                      resourceState: { status: "ready" },
+                    }),
+                  ],
+                  revision: authoritative.revision + 1,
+                }
+                return { createdNodeIds: ["context-created"], revision: authoritative.revision, warnings: [] }
+              },
+            },
+            persistence: {
+              load: async () => authoritative,
+              save: async (document) => document,
+            },
+          })}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
+    })
+
+    const contextAddText = [...container.querySelectorAll<HTMLButtonElement>("[data-test-context-menu-item]")].find(
+      (button) => button.textContent?.includes("Add Text"),
+    )
+    expect(contextAddText).toBeDefined()
+
+    await act(async () => {
+      container
+        .querySelector(".react-flow__pane")
+        ?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 960, clientY: 640 }))
+      await Promise.resolve()
+      contextAddText?.click()
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="context-created"] .convax-node')
+    expect(requestedAnchor).toEqual({ x: 960, y: 640 })
+    const focusCall = setViewport.mock.calls.find((call) => call[1]?.duration === 400)
+    expect(focusCall).toBeDefined()
+    expect(focusCall?.[0]).toMatchObject({ zoom: 1.2 })
+    expect(focusCall?.[0]).not.toMatchObject({ x: 0, y: 0 })
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
+
+    await act(async () => {
+      resolveCamera()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, CANVAS_MOTION_DURATION.nodeEnter + 80))
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+
+    await act(async () => {
+      const shell = created?.querySelector(".convax-node__entry-shell")
+      shell?.dispatchEvent(animationEvent("convax-node-enter-start"))
+      shell?.dispatchEvent(animationEvent("convax-node-enter-end"))
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+
+    await act(async () => {
+      const toolbar = container.querySelector('[data-id="context-created"] .convax-node-toolbar')
+      toolbar?.dispatchEvent(animationEvent("convax-node-chrome-enter-start"))
+      toolbar?.dispatchEvent(animationEvent("convax-node-chrome-enter-end"))
+    })
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)

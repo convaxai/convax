@@ -66,13 +66,13 @@ async function waitForTarget(port: number, predicate: (target: DebugTarget) => b
   throw new Error(`Timed out waiting for debugger target on port ${port}${lastError ? `: ${String(lastError)}` : ""}`)
 }
 
-async function evaluate(webSocketUrl: string, expression: string) {
+async function evaluate(webSocketUrl: string, expression: string, requestTimeoutMs = evaluationTimeoutMs) {
   return new Promise<unknown>((resolve, reject) => {
     const socket = new WebSocket(webSocketUrl)
     const timer = setTimeout(() => {
       socket.close()
       reject(new Error("Timed out waiting for debugger evaluation"))
-    }, evaluationTimeoutMs)
+    }, requestTimeoutMs)
 
     socket.addEventListener("open", () => {
       socket.send(
@@ -154,6 +154,25 @@ async function evaluateStable(webSocketUrl: string, expression: string) {
       await Bun.sleep(100)
     }
   }
+}
+
+async function waitForRendererReload(webSocketUrl: string, previousTimeOrigin: number) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const currentTimeOrigin = await evaluate(webSocketUrl, "performance.timeOrigin", 2_000)
+      if (typeof currentTimeOrigin === "number" && currentTimeOrigin !== previousTimeOrigin) return
+    } catch (error) {
+      if (
+        !isTransientDebuggerEvaluationError(error) &&
+        !String(error).includes("Timed out waiting for debugger evaluation")
+      ) {
+        throw error
+      }
+    }
+    await Bun.sleep(100)
+  }
+  throw new Error("Timed out waiting for the Renderer reload")
 }
 
 async function collectOutput(stream: ReadableStream<Uint8Array>) {
@@ -284,10 +303,11 @@ try {
     return true
   })()`,
   )
-
-  const result = await evaluateStable(
-    rendererDebugger,
-    `(async () => {
+  let result: unknown
+  while (result === undefined) {
+    const evaluationResult = await evaluateStable(
+      rendererDebugger,
+      `(async () => {
     const waitFor = async (read, label) => {
       const deadline = Date.now() + ${timeoutMs}
       while (Date.now() < deadline) {
@@ -403,8 +423,7 @@ try {
       // The command above proves the authoritative cleanup. Reload once more
       // instead of depending on a renderer projection request during a page
       // navigation boundary.
-      location.reload()
-      await new Promise(() => {})
+      return { reloadTimeOrigin: performance.timeOrigin }
     }
     if (persistedGenerationRace?.remountVerified && initialDocument.document?.nodes.length !== 0) {
       throw new Error("Generation smoke cleanup did not survive the second Renderer remount")
@@ -738,8 +757,7 @@ try {
       // second operation registry. Reload the real application to prove that
       // the persisted terminal state survives unmount/remount, then continue
       // the pre-existing UI smoke from a fresh authoritative projection.
-      location.reload()
-      await new Promise(() => {})
+      return { reloadTimeOrigin: performance.timeOrigin }
     }
 
     const applicationMenuTrigger = await waitFor(
@@ -831,8 +849,21 @@ try {
       projectId,
       generationRace: persistedGenerationRace,
     }
-  })()`,
-  )
+      })()`,
+    )
+    if (
+      typeof evaluationResult === "object" &&
+      evaluationResult !== null &&
+      "reloadTimeOrigin" in evaluationResult &&
+      typeof evaluationResult.reloadTimeOrigin === "number"
+    ) {
+      await sendDebuggerCommand(rendererDebugger, "Page.enable", {})
+      await sendDebuggerCommand(rendererDebugger, "Page.navigate", { url: builtRendererUrl })
+      await waitForRendererReload(rendererDebugger, evaluationResult.reloadTimeOrigin)
+      continue
+    }
+    result = evaluationResult
+  }
 
   const summary = result as {
     activeCanvasId?: string
@@ -915,6 +946,8 @@ try {
       window.__convaxSmokeComposerInputTrusted = undefined
       composer.addEventListener("input", (event) => {
         window.__convaxSmokeComposerInputTrusted = event.isTrusted
+        window.__convaxSmokeComposerInputData = event.data
+        window.__convaxSmokeComposerInputType = event.inputType
       }, { once: true })
     })()`,
   )
@@ -932,7 +965,25 @@ try {
       const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
         .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
       const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
-      if (!composer || !picker) throw new Error("Real @ input did not open the Agent composer picker")
+      if (!composer || !picker) {
+        const selection = window.getSelection()
+        const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+        throw new Error("Real @ input did not open the Agent composer picker: " + JSON.stringify({
+          composerHtml: composer?.innerHTML,
+          composerText: composer?.textContent,
+          rangeCollapsed: range?.collapsed,
+          rangeContainerData:
+            range?.startContainer instanceof Text ? range.startContainer.data : undefined,
+          rangeContainerName: range?.startContainer.nodeName,
+          rangeContainerType: range?.startContainer.nodeType,
+          rangeOffset: range?.startOffset,
+          selectionAnchorName: selection?.anchorNode?.nodeName,
+          selectionAnchorOffset: selection?.anchorOffset,
+          inputData: window.__convaxSmokeComposerInputData,
+          inputType: window.__convaxSmokeComposerInputType,
+          trusted: window.__convaxSmokeComposerInputTrusted,
+        }))
+      }
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const composerBounds = composer.getBoundingClientRect()
       const pickerBounds = picker.getBoundingClientRect()
@@ -951,6 +1002,8 @@ try {
           : null,
         pickerTop: pickerBounds.top,
         pickerTransform: pickerStyle.transform,
+        inputData: window.__convaxSmokeComposerInputData,
+        inputType: window.__convaxSmokeComposerInputType,
         trusted: window.__convaxSmokeComposerInputTrusted,
       }
     })()`,
@@ -980,11 +1033,27 @@ try {
   }
   const composerPickerTabPoint = (await evaluateStable(
     rendererDebugger,
-    `(() => {
-      const picker = document.querySelector('[data-agent-composer-picker="true"]')
-      const tab = picker && [...picker.querySelectorAll('[role="tab"]')]
-        .find((candidate) => candidate.textContent?.trim() === "Canvas")
-      if (!tab) throw new Error("The Agent composer Canvas tab is missing")
+    `(async () => {
+      const deadline = Date.now() + ${timeoutMs}
+      let picker
+      let tab
+      while (Date.now() < deadline) {
+        picker = document.querySelector('[data-agent-composer-picker="true"]')
+        tab = picker && [...picker.querySelectorAll('[role="tab"]')]
+          .find((candidate) => candidate.textContent?.trim() === "Canvas")
+        if (tab) break
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      if (!tab) {
+        const composer = document.querySelector(
+          '[contenteditable="true"][aria-label="Message the project agent"]',
+        )
+        throw new Error("The Agent composer Canvas tab is missing: " + JSON.stringify({
+          composerExpanded: composer?.getAttribute("aria-expanded"),
+          composerText: composer?.textContent,
+          pickerHtml: picker?.innerHTML,
+        }))
+      }
       const bounds = tab.getBoundingClientRect()
       return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
     })()`,
@@ -1026,6 +1095,8 @@ try {
       if (!composer) return
       composer.replaceChildren()
       composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward" }))
+      delete window.__convaxSmokeComposerInputData
+      delete window.__convaxSmokeComposerInputType
       delete window.__convaxSmokeComposerInputTrusted
     })()`,
   )

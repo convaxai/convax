@@ -203,6 +203,27 @@ export function findAgentComposerQueryRange(
   return query ? { ...query, node: range.startContainer } : undefined
 }
 
+export function repairAgentComposerInsertedTriggerSelection(
+  root: HTMLElement,
+  input: { data: string | null; inputType: string },
+) {
+  if (input.inputType !== "insertText" || (input.data !== "@" && input.data !== "$")) return false
+  const selection = window.getSelection()
+  if (!selection?.isCollapsed || selection.rangeCount === 0) return false
+  const range = selection.getRangeAt(0)
+  if (!(range.startContainer instanceof Text) || !root.contains(range.startContainer)) return false
+  const node = range.startContainer
+  const offset = range.startOffset
+  if (findAgentComposerQuery(node.data, offset)) return false
+  if (node.data.slice(offset, offset + input.data.length) !== input.data) return false
+  const repairedOffset = offset + input.data.length
+  const repairedQuery = findAgentComposerQuery(node.data, repairedOffset)
+  const expectedTrigger = input.data === "@" ? "reference" : "skill"
+  if (repairedQuery?.trigger !== expectedTrigger) return false
+  placeComposerSelection(root, node, repairedOffset)
+  return true
+}
+
 export function captureAgentComposerSelection(root: HTMLElement) {
   const selection = window.getSelection()
   if (!selection?.rangeCount) return undefined

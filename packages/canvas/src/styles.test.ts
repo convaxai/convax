@@ -42,7 +42,7 @@ describe("Canvas file-card assistant sizing", () => {
     expect(mediaSurfaceRule).toContain("background: transparent")
   })
 
-  test("gives the expanded editor a centered full-canvas document surface", async () => {
+  test("gives the expanded editor a calm global paper surface without fixed toolbar chrome", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const expandedEditorRule =
       styles.match(
@@ -52,12 +52,19 @@ describe("Canvas file-card assistant sizing", () => {
     expect(expandedEditorRule).toContain("width: min(920px, 100%)")
     expect(expandedEditorRule).toContain("min-height: 100%")
     expect(expandedEditorRule).toContain("margin: 0 auto")
-    expect(expandedEditorRule).toContain("padding: 48px clamp(28px, 6vw, 80px) 120px")
+    expect(expandedEditorRule).toContain("padding: 16px 0 120px")
     expect(expandedEditorRule).toContain("font-size: 16px")
-    expect(expandedEditorRule).toContain("box-shadow")
-    const toolbarInnerRule = cssRule(styles, ".convax-canvas .convax-text-editor-dialog__toolbar-inner")
-    expect(toolbarInnerRule).toContain("width: min(920px, 100%)")
-    expect(toolbarInnerRule).toContain("margin: 0 auto")
+    expect(expandedEditorRule).not.toContain("box-shadow")
+    expect(styles).toContain(".convax-text-editor-modal::backdrop")
+    expect(styles).toContain(".convax-canvas .convax-text-editor-dialog__title")
+    expect(styles).toContain(".convax-text-mention-suggestions")
+    expect(styles).toContain(".convax-text-mention-suggestions__thumbnail")
+    expect(styles).toMatch(
+      /@media \(max-width: 600px\) \{[\s\S]*\.convax-canvas \.convax-text-editor-dialog \{[\s\S]*height: 100dvh;/,
+    )
+    expect(styles).toMatch(
+      /@media \(forced-colors: active\) \{[\s\S]*\.convax-canvas \.convax-text-editor-dialog,[\s\S]*border: 1px solid CanvasText;/,
+    )
     expect(styles).toContain(".convax-text-block-handle-anchor")
     expect(styles).toContain(".convax-text-inline-menu")
     expect(styles).toMatch(
@@ -137,6 +144,17 @@ describe("Canvas-first visual hierarchy", () => {
     expect(draggingSurfaceRule).toContain("opacity: 0.94")
     expect(draggingSurfaceRule).not.toContain("transform:")
     expect(draggingSurfaceRule).toContain("--canvas-motion-ease-standard")
+  })
+
+  test("keeps the drag marquee dashed without drawing a second frame around selected nodes", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const marqueeRule = cssRule(styles, ".convax-canvas .react-flow__selection")
+    const selectedBoundsRule = cssRule(styles, ".convax-canvas .react-flow__nodesselection-rect")
+
+    expect(marqueeRule).toContain("border: 1px dashed")
+    expect(selectedBoundsRule).toContain("border: 0")
+    expect(selectedBoundsRule).toContain("background: transparent")
+    expect(selectedBoundsRule).toContain("animation: none")
   })
 
   test("uses one motion hierarchy for nodes, ports, selection, edges, menus, and panels", async () => {
@@ -298,6 +316,11 @@ describe("Canvas-first visual hierarchy", () => {
     expect(reactFlowNodeRule).not.toContain("animation:")
     expect(reactFlowNodeRule).not.toContain("transform:")
     expect(entryRule).toContain("animation: convax-node-enter")
+    expect(styles).toContain(
+      '.convax-canvas .convax-node[data-canvas-node-entering="true"] > .react-flow__resize-control',
+    )
+    expect(styles).toContain('.convax-canvas .react-flow__node-toolbar[data-canvas-node-entering="true"]')
+    expect(styles).toContain("@keyframes convax-node-chrome-enter")
     expect(styles).toMatch(
       /@media \(forced-colors: active\)[\s\S]*data-canvas-node-entering="true"[\s\S]*animation: none;[\s\S]*transform: none;/,
     )

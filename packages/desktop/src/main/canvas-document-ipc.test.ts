@@ -139,6 +139,217 @@ describe("Canvas resource IPC", () => {
     expect(relinkPreparedResource).toHaveBeenCalledTimes(1)
   })
 
+  test("binds one selected local image to a durable empty image placeholder", async () => {
+    const emptyImage = createMediaNode({
+      id: "empty-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "empty-image",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready" },
+      },
+    })
+    emptyImage.data.status = "idle"
+    const document = { ...createCanvasDocument({ id: "canvas-main", nodes: [emptyImage] }), revision: 7 }
+    const prepared = {
+      items: [
+        {
+          id: "relink",
+          kind: "image" as const,
+          metadata: {
+            [projectResourceReferenceKey]: {
+              kind: "managed-asset" as const,
+              mediaType: "image/png",
+              name: "replacement.png",
+              sha256: "a".repeat(64),
+            },
+          },
+          mimeType: "image/png",
+          name: "replacement.png",
+          state: { status: "stale" as const },
+        },
+      ],
+    }
+    const withAdmittedLocalFiles = mock(async (_input, commit) => commit(prepared))
+    const relinkPreparedResource = mock(async () => applicationResult())
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { withAdmittedLocalFiles },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 7 }),
+      },
+    )
+    const event = { sender: { id: 12 } }
+    await handlers.get("canvas:resource-local-file-register")!(event, {
+      sourcePath: "/native/replacement.png",
+      sourceToken: "canvas-resource_empty-image",
+    })
+
+    const result = await handlers.get("canvas:resource-relink")!(event, {
+      canvasId: "canvas-main",
+      commandId: "relink-empty-image",
+      expectedRevision: 7,
+      nodeId: "empty-image",
+      source: {
+        kind: "local-file",
+        mediaType: "image/png",
+        name: "replacement.png",
+        sourceToken: "canvas-resource_empty-image",
+      },
+    })
+
+    expect(withAdmittedLocalFiles).toHaveBeenCalledWith(
+      {
+        files: [
+          {
+            mediaType: "image/png",
+            name: "replacement.png",
+            sourceId: "relink",
+            sourcePath: "/native/replacement.png",
+          },
+        ],
+        projectId: "project-one",
+      },
+      expect.any(Function),
+    )
+    expect(relinkPreparedResource).toHaveBeenCalledWith(
+      {
+        actor: { id: "desktop:renderer", kind: "ui" },
+        canvasId: "canvas-main",
+        commandId: "relink-empty-image",
+        expectedRevision: 7,
+        metadataKeysToRemove: ["convaxProjectResourceBindings"],
+        nodeId: "empty-image",
+        scopeId: "project-one",
+      },
+      prepared,
+    )
+    expect(result).toEqual({ revision: 8, warnings: ["normalized"] })
+  })
+
+  test("does not treat an unreferenced non-empty image as a first-upload placeholder", async () => {
+    const invalidImage = createMediaNode({
+      id: "invalid-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "invalid-image",
+        kind: "image",
+        metadata: {},
+        name: "missing.png",
+        state: { status: "missing" },
+      },
+    })
+    invalidImage.data.status = "idle"
+    const document = { ...createCanvasDocument({ id: "canvas-main", nodes: [invalidImage] }), revision: 7 }
+    const withAdmittedLocalFiles = mock()
+    const relinkPreparedResource = mock()
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { withAdmittedLocalFiles },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one", revision: 7 }),
+      },
+    )
+    const event = { sender: { id: 13 } }
+    await handlers.get("canvas:resource-local-file-register")!(event, {
+      sourcePath: "/native/replacement.png",
+      sourceToken: "canvas-resource_invalid-image",
+    })
+
+    await expect(
+      handlers.get("canvas:resource-relink")!(event, {
+        canvasId: "canvas-main",
+        commandId: "relink-invalid-image",
+        expectedRevision: 7,
+        nodeId: "invalid-image",
+        source: {
+          kind: "local-file",
+          mediaType: "image/png",
+          name: "replacement.png",
+          sourceToken: "canvas-resource_invalid-image",
+        },
+      }),
+    ).rejects.toThrow("reference is invalid")
+    expect(withAdmittedLocalFiles).not.toHaveBeenCalled()
+    expect(relinkPreparedResource).not.toHaveBeenCalled()
+  })
+
+  test("rejects an empty-image first upload when the live Canvas revision changes during admission", async () => {
+    const emptyImage = createMediaNode({
+      id: "empty-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "empty-image",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready" },
+      },
+    })
+    emptyImage.data.status = "idle"
+    const document = { ...createCanvasDocument({ id: "canvas-main", nodes: [emptyImage] }), revision: 7 }
+    const prepared = {
+      items: [
+        {
+          id: "relink",
+          kind: "image" as const,
+          metadata: {
+            [projectResourceReferenceKey]: {
+              kind: "managed-asset" as const,
+              mediaType: "image/png",
+              name: "replacement.png",
+              sha256: "a".repeat(64),
+            },
+          },
+          mimeType: "image/png",
+          name: "replacement.png",
+          state: { status: "stale" as const },
+        },
+      ],
+    }
+    let active = { canvasId: "canvas-main", projectId: "project-one", revision: 7 }
+    const withAdmittedLocalFiles = mock(async (_input, commit) => {
+      active = { ...active, revision: 8 }
+      return commit(prepared)
+    })
+    const relinkPreparedResource = mock()
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      { withAdmittedLocalFiles },
+      {
+        documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => active,
+      },
+    )
+    const event = { sender: { id: 14 } }
+    await handlers.get("canvas:resource-local-file-register")!(event, {
+      sourcePath: "/native/replacement.png",
+      sourceToken: "canvas-resource_stale-empty-image",
+    })
+
+    await expect(
+      handlers.get("canvas:resource-relink")!(event, {
+        canvasId: "canvas-main",
+        commandId: "relink-stale-empty-image",
+        expectedRevision: 7,
+        nodeId: "empty-image",
+        source: {
+          kind: "local-file",
+          mediaType: "image/png",
+          name: "replacement.png",
+          sourceToken: "canvas-resource_stale-empty-image",
+        },
+      }),
+    ).rejects.toThrow("selected local file")
+    expect(withAdmittedLocalFiles).toHaveBeenCalledTimes(1)
+    expect(relinkPreparedResource).not.toHaveBeenCalled()
+  })
+
   test("consumes a sender-scoped local relink token once and rejects stale scope, native fields, and incompatible types", async () => {
     const image = createMediaNode({
       id: "image-node",

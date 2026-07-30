@@ -39,9 +39,15 @@ mock.module("@xyflow/react", () => ({
     </div>
   ),
   NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
-  NodeToolbar: (props: { children?: ReactNode; className?: string; isVisible?: boolean }) => (
+  NodeToolbar: (props: {
+    children?: ReactNode
+    className?: string
+    "data-canvas-node-entering"?: boolean
+    isVisible?: boolean
+  }) => (
     <div
       className={props.className}
+      data-canvas-node-entering={props["data-canvas-node-entering"] || undefined}
       data-node-toolbar
       data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}
     >
@@ -440,31 +446,40 @@ describe("built-in text file drafts", () => {
 describe("built-in node toolbar visibility", () => {
   test("preserves the side-drawer export as a compatibility alias", () => {
     expect(TextEditorDrawer).toBe(ExpandedTextEditorDialog)
+    const markup = renderToStaticMarkup(<TextEditorDrawer editor={null} label="Legacy title" onClose={() => {}} />)
+    expect(markup).toContain(">Legacy title</textarea>")
+    expect(markup).toContain('readOnly=""')
   })
 
-  test("renders an almost full-canvas modal for text-node editing", () => {
+  test("renders a global paper-like modal with an editable title and no permanent chrome row", () => {
     const markup = renderToStaticMarkup(
       <ExpandedTextEditorDialog
         editor={null}
-        label="Story outline"
+        onTitleChange={() => {}}
+        onTitleCommit={() => {}}
         onClose={() => {}}
         onSave={() => {}}
         sourceRect={{ height: 120, left: 20, top: 40, width: 240 }}
+        title="Story outline"
         toolbar={<div data-rich-text-toolbar="true" />}
       />,
     )
 
+    expect(markup).toContain("<dialog")
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
-    expect(markup).toContain("Story outline")
-    expect(markup).toContain("Expanded text editor")
+    expect(markup).toContain('aria-label="Document title"')
+    expect(markup).toContain("<textarea")
+    expect(markup).toContain(">Story outline</textarea>")
+    expect(markup).toContain('rows="1"')
     expect(markup).toContain("convax-text-editor-dialog")
     expect(markup).toContain('data-canvas-rect-enter="true"')
-    expect(markup).toContain("size-full")
+    expect(markup).toContain("convax-text-editor-dialog__title")
     expect(markup).not.toContain("convax-text-editor-drawer")
     expect(markup).toContain('aria-label="Open block handle menu"')
-    expect(markup).toContain('aria-label="Text formatting"')
-    expect(markup).toContain('data-rich-text-toolbar="true"')
+    expect(markup).not.toContain('aria-label="Text formatting"')
+    expect(markup).not.toContain('data-rich-text-toolbar="true"')
+    expect(markup).not.toContain("Expanded text editor")
     expect(markup).not.toContain(">Save<")
     expect(markup).not.toContain(">Discard<")
     expect(markup).toContain('aria-label="Close expanded editor"')
@@ -476,10 +491,12 @@ describe("built-in node toolbar visibility", () => {
         editor={null}
         discardLabel="Discard and reload"
         error="This file changed outside Convax. Your draft was kept."
-        label="Story outline"
         onClose={() => {}}
         onDiscard={() => {}}
         onReload={() => {}}
+        onTitleChange={() => {}}
+        onTitleCommit={() => {}}
+        title="Story outline"
       />,
     )
 
@@ -780,20 +797,14 @@ describe("built-in node toolbar visibility", () => {
       },
     }
 
-    const editable = renderWithEditor(
-      selection([]),
-      false,
-      (props) => <BuiltinMediaFileNode {...props} />,
-      false,
-      { canRelinkResource: true, node: emptyImage },
-    )
-    const readOnly = renderWithEditor(
-      selection([]),
-      true,
-      (props) => <BuiltinMediaFileNode {...props} />,
-      false,
-      { canRelinkResource: true, node: emptyImage },
-    )
+    const editable = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+      canRelinkResource: true,
+      node: emptyImage,
+    })
+    const readOnly = renderWithEditor(selection([]), true, (props) => <BuiltinMediaFileNode {...props} />, false, {
+      canRelinkResource: true,
+      node: emptyImage,
+    })
     const withoutAssistant = renderWithEditor(
       selection([]),
       false,
@@ -826,13 +837,10 @@ describe("built-in node toolbar visibility", () => {
     }
 
     expect(isCanvasEmptyImageNodeData(durableEmptyData)).toBe(true)
-    const markup = renderWithEditor(
-      selection([]),
-      false,
-      (props) => <BuiltinMediaFileNode {...props} />,
-      false,
-      { canRelinkResource: true, node: durableEmptyImage },
-    )
+    const markup = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+      canRelinkResource: true,
+      node: durableEmptyImage,
+    })
     expect(markup).toContain('data-canvas-empty-image="true"')
     expect(markup).toContain('aria-label="Upload image"')
     expect(markup).toContain('aria-label="Generate image"')
@@ -866,6 +874,28 @@ describe("built-in node toolbar visibility", () => {
         label: "Hydrated reference",
         metadata: {},
         resourceState: { status: "ready", url: "convax-resource://photo" },
+        status: "idle",
+      },
+      {
+        kind: "image",
+        label: "Revisioned resource",
+        metadata: {},
+        resourceState: { contentRevision: "a".repeat(64), status: "ready" },
+        status: "idle",
+      },
+      {
+        kind: "image",
+        label: "Runtime poster",
+        metadata: {},
+        resourceState: { posterUrl: "convax-resource://poster", status: "ready" },
+        status: "idle",
+      },
+      {
+        error: "Unexpected resource error",
+        kind: "image",
+        label: "Inconsistent idle error",
+        metadata: {},
+        resourceState: { status: "ready" },
         status: "idle",
       },
       {
@@ -906,13 +936,10 @@ describe("built-in node toolbar visibility", () => {
         position: { x: 0, y: 0 },
         type: "file",
       }
-      const markup = renderWithEditor(
-        selection([]),
-        false,
-        (props) => <BuiltinMediaFileNode {...props} />,
-        false,
-        { canRelinkResource: true, node: target },
-      )
+      const markup = renderWithEditor(selection([]), false, (props) => <BuiltinMediaFileNode {...props} />, false, {
+        canRelinkResource: true,
+        node: target,
+      })
       expect(markup).not.toContain("data-canvas-empty-image")
       expect(markup).not.toContain('aria-label="Generate image"')
     }
@@ -976,10 +1003,10 @@ describe("built-in node toolbar visibility", () => {
 
   test("marks only explicitly presented node chrome and keeps the React Flow position layer untouched", () => {
     const entering = renderWithEditor(
-      selection([]),
+      selection(["node-a"]),
       false,
       (props) => (
-        <CanvasNodeChrome icon={null} label="Test" node={props}>
+        <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={<div data-built-in-toolbar />}>
           <iframe title="Plugin surface" />
         </CanvasNodeChrome>
       ),
@@ -993,6 +1020,7 @@ describe("built-in node toolbar visibility", () => {
     ))
 
     expect(entering).toContain('data-canvas-node-entering="true"')
+    expect(openingTagContaining(entering, "data-node-toolbar")).toContain('data-canvas-node-entering="true"')
     expect(entering).toContain("convax-node__entry-shell")
     expect(entering).toContain("<iframe")
     expect(stable).not.toContain("data-canvas-node-entering")
