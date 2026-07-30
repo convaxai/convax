@@ -1,0 +1,23 @@
+{
+  "name": "@convax/deploy-cloudflare",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "bun run --cwd ../web build",
+    "types": "wrangler types worker-configuration.d.ts",
+    "types:check": "wrangler types --check worker-configuration.d.ts",
+    "typecheck": "bun run types:check && tsc --noEmit",
+    "test": "bun test",
+    "build": "bun run build:web && wrangler deploy --dry-run --outdir dist",
+    "dev": "bun run build:web && wrangler dev",
+    "deploy": "bun run typecheck && bun run test && bun run build:web && wrangler deploy"
+  },
+  "devDependencies": {
+    "@convax/web": "workspace:*",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "wrangler": "^4.115.0"
+  }
+}
