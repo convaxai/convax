@@ -18,6 +18,7 @@ const generationTaskId = process.argv
   .find((argument) => argument.startsWith("--generation-task-id="))
   ?.slice("--generation-task-id=".length)
 const generationRecovery = process.argv.includes("--generation-recovery")
+const pauseStdinAfterToolsList = process.argv.includes("--pause-stdin-after-tools-list")
 const forkDescendantFile = process.argv
   .find((argument) => argument.startsWith("--fork-descendant="))
   ?.slice("--fork-descendant=".length)
@@ -145,6 +146,7 @@ async function handle(request: JsonRpcRequest) {
       fs.writeFileSync(forkDescendantFile, String(descendant.pid))
       setImmediate(() => process.exit(0))
     }
+    if (pauseStdinAfterToolsList) process.stdin.pause()
     return
   }
   if (request.method === "tools/call") {

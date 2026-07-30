@@ -122,5 +122,5 @@ bun run dev:docs
 
 - [Architecture](docs/architecture.md)
 - [Plugin and Skill platform](docs/plugin-skill-platform.md)
-- [FFmpeg Tool Plugin](docs/ffmpeg-tool-plugin.md)
+- [Plugin-to-Host change governance](docs/plugin-host-change-governance.md)
 - [Canvas selection and actions](docs/canvas-selection-context.md)

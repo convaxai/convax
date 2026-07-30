@@ -13,6 +13,7 @@ import {
 const roots: string[] = []
 const fixedNow = Date.UTC(2026, 6, 20, 0, 0, 0)
 const serviceIdentity = "a".repeat(64)
+const snapshotDigest = "f".repeat(64)
 
 async function temporaryRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-service-checkpoint-test-"))
@@ -38,6 +39,7 @@ function binding(
     cookieOrigin: "https://accounts.example.com",
     pluginId: "account-tools",
     serviceIdentity,
+    snapshotDigest,
     ...overrides,
   }
 }
@@ -70,10 +72,16 @@ describe("Plugin service authorization checkpoint store", () => {
 
     const stored = await store.write(checkpoint())
     const restored = await store.read(binding())
-    const summary = await store.inspect({ pluginId: "account-tools", serviceIdentity })
+    const summary = await store.inspect({ pluginId: "account-tools", serviceIdentity, snapshotDigest })
 
     expect(restored).toEqual(stored)
-    expect(summary).toEqual({ action: "authorize", capturedAt: fixedNow, pluginId: "account-tools", serviceIdentity })
+    expect(summary).toEqual({
+      action: "authorize",
+      capturedAt: fixedNow,
+      pluginId: "account-tools",
+      serviceIdentity,
+      snapshotDigest,
+    })
     expect(JSON.stringify(summary)).not.toContain("cookie-value")
     expect(restored?.cookieNames).toEqual(["session_id", "session_id_secure"])
     expect(restored?.cookies.map(({ name }) => name)).toEqual(["session_id", "session_id_secure"])
@@ -92,6 +100,7 @@ describe("Plugin service authorization checkpoint store", () => {
     const invalid: unknown[] = [
       checkpoint({ cookieOrigin: "https://accounts.example.com/" }),
       checkpoint({ serviceIdentity: "not-an-immutable-sha256" }),
+      checkpoint({ snapshotDigest: "not-an-immutable-sha256" }),
       checkpoint({ cookies: [{ name: "not_allowlisted", value: secret }] }),
       checkpoint({
         cookies: [
@@ -118,13 +127,22 @@ describe("Plugin service authorization checkpoint store", () => {
 
     for (const changed of [
       binding({ serviceIdentity: "b".repeat(64) }),
+      binding({ snapshotDigest: "e".repeat(64) }),
       binding({ cookieOrigin: "https://other.example.com" }),
       binding({ cookieNames: ["session_id"] }),
     ]) {
       expect((await failureOf(store.read(changed))).message).toContain("invalid or inaccessible")
     }
     expect(
-      (await failureOf(store.inspect({ pluginId: "account-tools", serviceIdentity: "b".repeat(64) }))).message,
+      (
+        await failureOf(
+          store.inspect({
+            pluginId: "account-tools",
+            serviceIdentity: "b".repeat(64),
+            snapshotDigest,
+          }),
+        )
+      ).message,
     ).toContain("invalid or inaccessible")
     expect(await store.read(binding())).not.toBeNull()
   })
@@ -211,14 +229,28 @@ describe("Plugin service authorization checkpoint store", () => {
     await fs.writeFile(path.join(root, ".checkpoint-orphan.tmp"), "orphan", { mode: 0o600 })
 
     const retained = await store.reconcile([
-      { pluginId: "account-tools", serviceIdentity },
-      { pluginId: "changed-tools", serviceIdentity: "d".repeat(64) },
-      { pluginId: "corrupt-tools", serviceIdentity: "e".repeat(64) },
+      { pluginId: "account-tools", serviceIdentity, snapshotDigest },
+      {
+        pluginId: "changed-tools",
+        serviceIdentity: "d".repeat(64),
+        snapshotDigest,
+      },
+      {
+        pluginId: "corrupt-tools",
+        serviceIdentity: "e".repeat(64),
+        snapshotDigest,
+      },
     ])
 
     expect(await fs.readdir(root)).toEqual(["account-tools.json"])
     expect(retained).toEqual([
-      { action: "authorize", capturedAt: fixedNow, pluginId: "account-tools", serviceIdentity },
+      {
+        action: "authorize",
+        capturedAt: fixedNow,
+        pluginId: "account-tools",
+        serviceIdentity,
+        snapshotDigest,
+      },
     ])
     expect(await store.read(binding())).not.toBeNull()
   })
@@ -228,10 +260,12 @@ describe("Plugin service authorization checkpoint store", () => {
     const root = path.join(await temporaryRoot(), "checkpoints")
     const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => now })
     await store.write(checkpoint())
-    await store.write(checkpoint({
-      ...binding({ pluginId: "removed-tools", serviceIdentity: "b".repeat(64) }),
-      cookies: [{ name: "session_id", value: "removed-cookie" }],
-    }))
+    await store.write(
+      checkpoint({
+        ...binding({ pluginId: "removed-tools", serviceIdentity: "b".repeat(64) }),
+        cookies: [{ name: "session_id", value: "removed-cookie" }],
+      }),
+    )
 
     expect((await store.sweep(["account-tools"])).map(({ pluginId }) => pluginId)).toEqual(["account-tools"])
     expect(await fs.readdir(root)).toEqual(["account-tools.json"])
@@ -246,13 +280,9 @@ describe("Plugin service authorization checkpoint store", () => {
     const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => fixedNow })
     await store.write(checkpoint())
 
-    expect((await store.reconcile([], ["account-tools"])).map(({ pluginId }) => pluginId)).toEqual([
-      "account-tools",
-    ])
+    expect((await store.reconcile([], ["account-tools"])).map(({ pluginId }) => pluginId)).toEqual(["account-tools"])
     expect(await store.read(binding())).not.toBeNull()
-    await expect(store.read(binding({ serviceIdentity: "b".repeat(64) }))).rejects.toThrow(
-      "invalid or inaccessible",
-    )
+    await expect(store.read(binding({ serviceIdentity: "b".repeat(64) }))).rejects.toThrow("invalid or inaccessible")
     expect(await store.read(binding())).not.toBeNull()
   })
 
@@ -272,9 +302,13 @@ describe("Plugin service authorization checkpoint store", () => {
     const store = new PluginServiceAuthorizationCheckpointStore(root, { now: () => fixedNow })
     const originalRename = fs.rename.bind(fs)
     let releasePublish!: () => void
-    const publishGate = new Promise<void>((resolve) => { releasePublish = resolve })
+    const publishGate = new Promise<void>((resolve) => {
+      releasePublish = resolve
+    })
     let observePublish!: () => void
-    const publishObserved = new Promise<void>((resolve) => { observePublish = resolve })
+    const publishObserved = new Promise<void>((resolve) => {
+      observePublish = resolve
+    })
     const rename = spyOn(fs, "rename").mockImplementation(async (source, target) => {
       if (String(source).includes(".checkpoint-other-tools-")) {
         observePublish()
@@ -293,9 +327,7 @@ describe("Plugin service authorization checkpoint store", () => {
       releasePublish()
       await Promise.all([writing, sweeping])
 
-      expect(
-        await store.read(binding({ pluginId: "other-tools", serviceIdentity: "b".repeat(64) })),
-      ).toEqual(other)
+      expect(await store.read(binding({ pluginId: "other-tools", serviceIdentity: "b".repeat(64) }))).toEqual(other)
       expect((await fs.readdir(root)).filter((name) => name.startsWith(".checkpoint-"))).toEqual([])
     } finally {
       releasePublish()

@@ -14,9 +14,10 @@ const plugin = parseWebPluginManifest({
     },
   },
   description: "Remote Agent MCP",
+  hostApi: { major: 1, optional: [], required: [] },
   id: "video-editor",
   name: "Video Editor",
-  schema: "convax.plugin/6",
+  schema: "convax.plugin/8",
   version: "1.0.0",
 })
 
@@ -162,9 +163,7 @@ describe("Plugin Agent MCP connection service", () => {
       "/host/user-data",
     )
 
-    await expect(failedService.connect(plugin)).rejects.toThrow(
-      "Plugin Agent MCP connection failed: video-editor",
-    )
+    await expect(failedService.connect(plugin)).rejects.toThrow("Plugin Agent MCP connection failed: video-editor")
     await expect(failedService.connect(plugin)).rejects.not.toHaveProperty(
       "message",
       expect.stringContaining("/host/user-data"),
@@ -236,16 +235,12 @@ describe("Plugin Agent MCP connection service", () => {
       },
       "/host/user-data",
     )
-    const staticPlugin = parseWebPluginManifest({
-      capabilities: [],
-      contributes: { canvas: { renderer: { create: true } } },
-      description: "Static Plugin",
-      entry: "index.html",
+    const staticPlugin = {
+      ...plugin,
+      contributes: {},
       id: "static",
-      name: "Static",
-      schema: "convax.plugin/1",
-      version: "1.0.0",
-    })
+      schema: "convax.plugin/7",
+    } as unknown as typeof plugin
 
     await expect(service.connect(staticPlugin)).rejects.toThrow("does not contribute")
   })

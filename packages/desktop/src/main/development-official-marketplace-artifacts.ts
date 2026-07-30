@@ -4,7 +4,7 @@ import path from "node:path"
 import { sha256Hex, type RegistryPackage } from "@convax/marketplace"
 
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
-import type { VerifiedMarketplaceCandidate } from "./remote-capability-installer"
+import type { VerifiedMarketplaceCandidate } from "./marketplace-artifact-installer"
 
 const maxArtifactBytes = 128 * 1024 * 1024
 const maxReleasePlanBytes = 4 * 1024 * 1024

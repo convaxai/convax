@@ -1,15 +1,34 @@
 import { randomUUID } from "node:crypto"
 import type { CanvasApplicationService } from "@convax/canvas/application"
 
-import { hasWebPluginCanvasSurface, webPluginManifestSchemaV7 } from "../plugin-contracts"
+import {
+  webPluginManifestSchemaV8,
+  type InstalledWebPluginCanvasSurface,
+  type InstalledWebPluginSummary,
+} from "../plugin-contracts"
 import { createWebPluginCanvasNode } from "../plugin-canvas-node"
-import type {
-  PluginMaterializationInput,
-  PluginMaterializationResult,
-} from "../plugin-materialization-contracts"
-import type { WebPluginManager } from "./plugin-manager"
+import type { PluginMaterializationInput, PluginMaterializationResult } from "../plugin-materialization-contracts"
 
-type MaterializationPluginStore = Pick<WebPluginManager, "resolveCapabilityIdentity" | "withPluginMutation">
+interface MaterializationPluginStore {
+  acquireActivePlugin(pluginId: string): Promise<{
+    identity: {
+      activeRevision: number
+      activeSetDigest: string
+      pluginId: string
+      snapshotDigest: string
+      version: string
+    }
+    plugin: InstalledWebPluginSummary
+    release(): void
+  }>
+  assertCurrentActivePlugin(identity: {
+    activeRevision: number
+    activeSetDigest: string
+    pluginId: string
+    snapshotDigest: string
+    version: string
+  }): Promise<void>
+}
 
 /**
  * Main-only admission path for a declarative "materialize my own renderer"
@@ -26,16 +45,21 @@ export class PluginMaterializationService {
 
   async materialize(request: PluginMaterializationInput): Promise<PluginMaterializationResult> {
     validateMaterializationInput(request)
-    return this.input.plugins.withPluginMutation(request.pluginId, async (mutation) => {
-      const identity = await this.input.plugins.resolveCapabilityIdentity(request.pluginId, mutation)
-      if (!identity || identity.plugin.schema !== webPluginManifestSchemaV7) {
+    const active = await this.input.plugins.acquireActivePlugin(request.pluginId)
+    try {
+      const identity = active.identity
+      if (
+        active.plugin.schema !== webPluginManifestSchemaV8 ||
+        !active.plugin.hostApi ||
+        !hasActivePluginIdentity(identity)
+      ) {
         throw new Error("Plugin materialization contribution is not installed")
       }
-      const plugin = identity.plugin
+      const plugin = active.plugin
       if (plugin.version !== request.pluginVersion) {
         throw new Error("Plugin changed before its Canvas node was materialized")
       }
-      if (!hasWebPluginCanvasSurface(plugin)) {
+      if (!hasInstalledCanvasSurface(plugin)) {
         throw new Error("Plugin materialization renderer is unavailable")
       }
       const contribution = plugin.contributes.canvas.selectionActions?.find(
@@ -55,6 +79,7 @@ export class PluginMaterializationService {
         // Canvas owns the authoritative open placement beside the source.
         position: { x: 0, y: 0 },
       })
+      await this.input.plugins.assertCurrentActivePlugin(identity)
       const result = await this.input.application.execute({
         canvasId: request.canvasId,
         envelope: {
@@ -74,8 +99,33 @@ export class PluginMaterializationService {
         throw new Error("Canvas did not materialize the Plugin node")
       }
       return { createdNodeId: node.id, revision: result.document.revision }
-    })
+    } finally {
+      active.release()
+    }
   }
+}
+
+function hasInstalledCanvasSurface(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginCanvasSurface {
+  return typeof plugin.entry === "string" && plugin.contributes.canvas?.renderer !== undefined
+}
+
+function hasActivePluginIdentity(identity: {
+  activeRevision?: number
+  activeSetDigest?: string
+  snapshotDigest?: string
+}): identity is {
+  activeRevision: number
+  activeSetDigest: string
+  snapshotDigest: string
+} {
+  return (
+    Number.isSafeInteger(identity.activeRevision) &&
+    (identity.activeRevision ?? -1) >= 0 &&
+    typeof identity.activeSetDigest === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.activeSetDigest) &&
+    typeof identity.snapshotDigest === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.snapshotDigest)
+  )
 }
 
 function validateMaterializationInput(input: PluginMaterializationInput) {
@@ -88,7 +138,13 @@ function validateMaterializationInput(input: PluginMaterializationInput) {
     ["projectId", input.projectId, 256],
     ["sourceNodeId", input.sourceNodeId, 256],
   ] as const) {
-    if (typeof value !== "string" || !value || value !== value.trim() || value.length > maximum || value.includes("\0")) {
+    if (
+      typeof value !== "string" ||
+      !value ||
+      value !== value.trim() ||
+      value.length > maximum ||
+      value.includes("\0")
+    ) {
       throw new Error(`Plugin materialization ${label} is invalid`)
     }
   }

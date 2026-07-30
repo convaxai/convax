@@ -9,6 +9,8 @@ import { CapabilityManagementSurface } from "./capability-center"
 
 const emptySkills: DesktopSkillInventory = { catalog: [], skills: [] }
 const remoteEditor = {
+  activeRevision: 1,
+  activeSetDigest: "a".repeat(64),
   capabilities: ["agent.prompt" as const],
   contributes: {
     agent: {
@@ -23,9 +25,11 @@ const remoteEditor = {
   },
   description: "Edit remote media projects.",
   entry: "index.html",
+  hostApi: { major: 1 as const, optional: [], required: ["host.context.get"] },
   id: "remote-editor",
   name: "Remote Editor",
-  schema: "convax.plugin/6" as const,
+  schema: "convax.plugin/8" as const,
+  snapshotDigest: "b".repeat(64),
   version: "1.0.0",
 }
 const pluginInventory: WebPluginInventory = {
@@ -41,9 +45,6 @@ function skillClient(listSkills = mock(async () => emptySkills)): DesktopSkillCl
     getSkillShowcase: mock(async () => null),
     importSkill: mock(async () => null),
     installCatalogSkill: mock(async () => {
-      throw new Error("Not used by this test")
-    }),
-    installPluginSkill: mock(async () => {
       throw new Error("Not used by this test")
     }),
     listSkills,

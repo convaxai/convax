@@ -19,11 +19,21 @@ import type {
 } from "../skill-management-contracts"
 import type { DesktopBuiltinSkillBundle, DesktopBuiltinSkillPresentation } from "./builtin-skill-catalog"
 import { createSkillFilePreviews } from "./skill-details"
-import type {
-  DesktopSkillMutationCoordinator,
-  PluginOwnedSkillBinding,
-  PluginSkillOwnershipStore,
-} from "./plugin-skill-lifecycle"
+import type { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
+
+export interface PluginOwnedSkillBinding {
+  pluginId: string
+  pluginName: string
+  pluginVersion: string
+  skillName: string
+  sourcePath: string
+  sourceSha256: string
+}
+
+export interface PluginOwnedSkillReservationSource {
+  assertSettled(): Promise<void>
+  reservations(): Promise<readonly PluginOwnedSkillBinding[]>
+}
 
 export interface DesktopSkillRuntime {
   listSkills(input: { directory: string }): Promise<AgentSkill[]>
@@ -39,7 +49,7 @@ export class DesktopSkillManager {
     private readonly defaultDirectory: string,
     private readonly catalog: readonly DesktopBuiltinSkillBundle[],
     private readonly presentations: readonly DesktopBuiltinSkillPresentation[],
-    private readonly ownership: Pick<PluginSkillOwnershipStore, "assertSettled" | "reservations">,
+    private readonly ownership: PluginOwnedSkillReservationSource,
     private readonly mutations: Pick<DesktopSkillMutationCoordinator, "run">,
   ) {}
 

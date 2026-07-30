@@ -1,863 +1,133 @@
 # Generation Tool Plugins
 
-Status: implementation contract for maintainers and Plugin authors.
+Convax generation is a Plugin tool boundary, not a provider registry. Concrete
+vendors, credentials, model routing and downstream task APIs live in an installed
+`convax.plugin/8` Tool Plugin and its verified companion. Host packages contain no
+vendor class and never branch on Plugin id.
 
-Convax generation is a tool boundary, not a provider abstraction. Concrete
-services, models, credentials, routing rules and vendor task APIs live entirely in
-an external tool implementation. Convax discovers only the installed tool contract
-and keeps Canvas scope, inputs, output admission and document mutation under host
-control.
+The portable manifest and contribution parser are owned by
+`@convax/plugin-sdk`. Runtime-call availability and stable Host API documentation
+are generated from `@convax/plugin-api`; this file records architecture invariants
+only.
 
-This design has two independent Plugin roles:
+## Contributions
 
-- a **Generation Tool Plugin** declares one external MCP command and the generation
-  tools it implements;
-- a **Generation Caller Plugin** is a sandboxed Canvas Web surface granted the
-  narrow `generation.execute` capability so it can use installed generation tools.
+A v8 Plugin may combine independent contributions:
 
-A `convax.plugin/2`, `/3`, `/4`, or `/5` package may have either role or both. Declaring a
-runtime does not grant its iframe caller authority, and granting caller authority
-does not let an iframe start processes or issue arbitrary MCP calls. V4 preserves
-the v3 generation, operation, service, and execution semantics while adding owned
-Skills. V5 preserves all of those semantics and adds independently granted
-Project/Canvas capabilities over `convax.plugin-capability/1`; it does not create a
-`convax.plugin-host/5` protocol.
+- `runtime.type: "mcp-stdio"` binds one bare command to a verified immutable
+  companion;
+- `contributes.generation` declares generic tool/model display and selection
+  metadata;
+- `contributes.agent.tools` exposes selected contributed tools to Agent;
+- `contributes.canvas.commands` plus toolbar/menu placements expose Host-rendered
+  actions;
+- a Web Plugin may declare the `generation.tools.list` and `generation.execute`
+  Host APIs;
+- `capabilities.exports` may expose exact sidecar operations to other Plugins
+  through the Host broker.
 
-The same executable package may also declare a **Service contribution** for account
-connection and metering status. It shares the exact runtime, install-time executable authorization,
-MCP client, invalidation and process disposal used by generation; it is not a second
-provider or process framework.
+These declarations do not grant each other. An iframe cannot start a process or
+name an arbitrary MCP operation. Agent, UI, Web Plugin and Plugin-to-Plugin callers
+all enter Main-owned typed adapters.
 
-## Ownership and call path
+Host-rendered command and action text is a bounded localized object with a required
+`default` value and optional `zh-CN` value. Desktop resolves that portable text
+through the current application locale; it neither rewrites Plugin-authored text
+nor creates a Desktop-only localization schema.
 
-Desktop main owns the composition, native staging and process boundary. It does not
-own a catalog of providers or models.
+An immediate image action is the strict generic combination
+`editor: "immediate"`, `target: "image"` and
+`presentation: "cutout-scan"`. It has exactly one step referencing a non-model
+image-output operation that accepts `reference_image`. The Host preserves the
+source and creates the generated image as a separate Canvas result. The
+presentation token supplies only a Host-owned visual treatment; it grants no
+execution authority and never identifies a concrete Plugin.
 
-```text
-Toolbar / Canvas UI -------- generation IPC ---------+
-                                                     |
-OpenCode Agent -- model or declared operation adapter +--> GenerationCanvasService
-                                                     |      | validate live scope/revision
-sandboxed Plugin -- versioned host generation calls -+      | stage selected inputs
-                                                            | call installed MCP tool
-                                                            | admit output
-                                                            v
-                                                CanvasResourceBusinessService
-                                                            |
-                                                Generated/ + normal file/text nodes
-```
-
-`GenerationCanvasService` is the one application operation shared by all three
-callers. OpenCode is a client of that operation for Agent turns; it is not the
-execution bus, and Toolbar or Plugin actions do not need an OpenCode session.
-
-Installing a Generation Tool Plugin never creates a vendor-specific Canvas node.
-Toolbar and Agent actions may start generation from ordinary Canvas selections.
-For model generation, non-empty text nodes are authoritative prompt context, while
-image, video and audio nodes become typed references only when the chosen tool
-accepts their roles. Text prompt context is appended by Main and never appears in
-the sidecar `references` array. Explicit operation contracts may still use the
-`text` reference role. Generated results are admitted as the existing normal text
-or `file` nodes. Vendor identity remains an execution detail of the headless tool
-and is never encoded in Canvas node types.
-
-OpenCode's `canvas_generate` tool carries Canvas text through ordered
-`promptContextNodeIds`; its `references` field is media-only. The same Main boundary
-then reads, composes, bounds, and revalidates those inputs used by direct Generate.
-
-The Desktop file-card surface composes one host-rendered **Generate** tab beside
-the existing **Agent** conversation. The Generate tab is a direct caller of this
-same service and groups image, video and audio in one surface. The clicked card is
-never an implicit reference: direct generation includes only nodes the user
-explicitly mentions. Agent mode may prepare its own scoped Canvas context. Its model
-picker is one flat list of concrete installed generation models; service/provider
-names are display metadata rather than an interactive first level. It is not a
-second model or provider registry.
-Tool-specific choices such as aspect ratio, resolution, duration and style come
-only from the selected MCP tool's own `tools/list.inputSchema`; they are not copied
-into the Plugin manifest or a host provider registry. Main projects that schema
-into bounded scalar controls and never exposes the raw JSON Schema to renderer.
-
-Relevant implementation boundaries are:
-
-- [`plugin-contracts.ts`](../packages/desktop/src/plugin-contracts.ts): manifest
-  schema and capability validation;
-- [`generation-plugin-runtime.ts`](../packages/desktop/src/main/generation-plugin-runtime.ts):
-  installed-tool discovery, authorization and MCP process lifecycle;
-- [`managed-plugin-companions.ts`](../packages/desktop/src/main/managed-plugin-companions.ts):
-  verified Registry companion publication, resolution and reconciliation;
-- [`generation-canvas-service.ts`](../packages/desktop/src/main/generation-canvas-service.ts):
-  staging, result admission and Canvas resource mutation;
-- [`generation-agent-tools.ts`](../packages/desktop/src/main/generation-agent-tools.ts):
-  the thin OpenCode-facing `canvas_generate` adapter;
-- [`plugin-operation-agent-tools.ts`](../packages/desktop/src/main/plugin-operation-agent-tools.ts):
-  the generic Agent adapter for manifest-declared operation tools;
-- [`media-operation-selection-action.ts`](../packages/desktop/src/renderer/media-operation-selection-action.ts):
-  manifest-driven discovery and request construction for host-rendered media actions;
-- [`web-plugin-node-renderer.tsx`](../packages/desktop/src/renderer/web-plugin-node-renderer.tsx):
-  the sandboxed iframe/file-renderer transport;
-- [`plugin-canvas-host.ts`](../packages/desktop/src/plugin-canvas-host.ts): the
-  transport-neutral legacy node-scoped capability handler;
-- [`plugin-host-connection.ts`](../packages/desktop/src/renderer/plugin-host-connection.ts):
-  the Web-to-main v5 capability connection. `web-plugin-canvas.tsx` is only a
-  compatibility re-export.
-
-## `convax.plugin/2` manifest
-
-`convax.plugin/1` remains static-only. Executable generation declarations and the
-`generation.execute` caller capability require `convax.plugin/2`, whose mounted Web
-surface uses `convax.plugin-host/2`.
-
-A Tool Plugin must declare `runtime` together with at least one executable
-`contributes.generation` or `contributes.service` entry. A caller-only v2 Plugin
-omits both and requests `generation.execute`. A package that both contributes tools
-and calls generation declares all three.
-
-This headless Tool Plugin example deliberately contains no Web surface, service or
-model identity:
-
-```json
-{
-  "schema": "convax.plugin/2",
-  "id": "creative-tools",
-  "name": "Creative Tools",
-  "description": "Generate Canvas media through an external MCP command",
-  "version": "1.0.0",
-  "contributes": {
-    "generation": {
-      "tools": [
-        {
-          "id": "image.generate",
-          "title": "Generate image",
-          "description": "Generate an image from a prompt and optional visual references",
-          "output": "image",
-          "acceptedInputs": ["text", "reference_image", "first_frame", "last_frame"]
-        },
-        {
-          "id": "video.generate",
-          "title": "Generate video",
-          "description": "Generate a video from typed Canvas references",
-          "output": "video",
-          "acceptedInputs": ["text", "reference_image", "reference_video", "first_frame", "last_frame", "audio"]
-        }
-      ]
-    }
-  },
-  "runtime": {
-    "type": "mcp-stdio",
-    "command": "creative-tools-mcp",
-    "args": ["serve", "--stdio"]
-  }
-}
-```
-
-A Tool-only package does not need a fake HTML entry or Canvas contribution. A
-caller-only package uses v2 with an `entry`, Canvas contribution and
-`capabilities: ["generation.execute"]`, but does not declare `runtime` or
-an executable contribution. A package may declare both roles when it genuinely owns
-both a Web surface and executable tools.
-
-## Declarative `convax.plugin/3`, `/4`, and `/5` catalogs and operations
-
-`convax.plugin/3`, `/4`, and `/5` remove the legacy ambiguity between a generation model and
-a deterministic media operation. Their generation declaration must include `models`,
-which explicitly maps pure model display names to tool ids; an unreferenced tool is
-an operation. Existing v2 tools retain their original model semantics. The v4 host
-uses the same model, Agent-operation, Canvas selection-action, service, executable
-authorization, and output-admission paths as v3; v5 keeps that behavior while its
-separate Canvas grants may be exposed to the same already-running verified Tool
-sidecar. Owned Skills and Canvas grants do not alter generation tool discovery.
-
-```json
-{
-  "schema": "convax.plugin/3",
-  "id": "video-operations",
-  "name": "Video Operations",
-  "description": "Declarative video operations",
-  "version": "1.0.0",
-  "capabilities": [],
-  "contributes": {
-    "generation": {
-      "tools": [
-        {
-          "id": "video.transform",
-          "title": "Transform video",
-          "description": "Create one transformed video",
-          "output": "video",
-          "acceptedInputs": ["reference_video"]
-        }
-      ],
-      "models": []
-    },
-    "agent": {
-      "tools": [{ "id": "transform_video", "tool": "video.transform" }]
-    },
-    "canvas": {
-      "selectionActions": [
-        {
-          "id": "trim",
-          "title": { "default": "Trim", "zh-CN": "截取" },
-          "description": { "default": "Create a video from a selected time range" },
-          "target": "video",
-          "editor": "time-range",
-          "steps": [{ "tool": "video.transform" }]
-        }
-      ]
-    }
-  },
-  "runtime": {
-    "type": "mcp-stdio",
-    "command": "video-operations-mcp"
-  }
-}
-```
-
-Agent and Canvas selection-action references must resolve to declared operations;
-model tools cannot acquire operation surfaces. Host-rendered video selection actions
-accept only `time-point`, `time-range`, `crop-region`, or `confirmation` editors,
-and every step must reference a tool that accepts `reference_video`. The host derives
-scope, revision, assets, relationships, and execution identity exactly as it does for
-all other Tool Plugin calls; no Plugin id receives core special handling.
-
-A service contribution contains only an explicit subset of fixed host actions:
-
-```json
-{
-  "contributes": {
-    "service": {
-      "actions": ["sign_out"]
-    }
-  },
-  "runtime": {
-    "type": "mcp-stdio",
-    "command": "creative-tools-mcp"
-  }
-}
-```
-
-`service.status` is required whenever `contributes.service` exists. Optional action
-values map exactly to `service.authorize`, `service.reauthorize`,
-`service.authorization.cancel`, and `service.sign_out`; a manifest cannot rename a
-method or declare arbitrary calls. An empty action list is valid for a read-only
-status surface. Hosts render only declared actions, so lack of an application-safe
-authorization exchange is represented honestly rather than by a fake reauthorize
-button.
-
-The declaration rules are intentionally small:
-
-- output modalities are `text`, `image`, `video` and `audio`;
-- reference roles are `text`, `reference_image`, `reference_video`, `first_frame`,
-  `last_frame` and `audio`;
-- model-facing Canvas text selections are prompt context rather than references;
-  the `text` role remains available to explicit operation/reference contracts;
-- `acceptedInputs` is the compatibility declaration for optional Canvas
-  references and may be `[]` for a prompt-only tool; the prompt is always passed
-  separately and a call may contain no references;
-- tool ids are unique inside the Plugin. The host-stable id exposed to callers is
-  `<plugin-id>/<tool-id>`, for example `creative-tools/image.generate`;
-- provider, model, credential and routing fields are not part of the manifest and
-  are rejected as unknown fields. A sidecar may own such configuration internally
-  or expose multiple declared tools when the user needs distinct choices.
-
-`runtime.command` is always a bare executable name; it is never an absolute or
-package-relative path. For an official Registry install, Desktop first looks for a
-host-managed companion bound to that exact Plugin id, Plugin version and command.
-If none exists, it preserves the explicit integration path by resolving the command
-only through absolute entries in the Convax process's `PATH`. Convax does not guess
-Homebrew, user-local or vendor-specific locations.
-
-In either case the host resolves the real executable, requires an executable regular
-file, and fingerprints its live bytes during installation. At execution it creates
-and verifies a unique launch snapshot in its own private temporary directory outside
-the immutable companion or `PATH` installation, then runs that snapshot rather than
-resolving the original pathname again. The random verified snapshot protects against ordinary
-replacement of the install-verified entrypoint. It is not a same-account OS sandbox:
-another process already running as the same user can inspect Convax memory, read the
-CLI's login state, or race user-writable directory entries. Stronger isolation still
-requires an OS sandbox, not another provider abstraction.
-An official companion may instead be a bundled Bun program whose first bytes are
-exactly `#!/usr/bin/env convax-bun\n`. Desktop records this byte-derived runtime mode,
-snapshots and authorizes the script itself, then launches that snapshot through the
-single app-owned Bun runtime already packaged for OpenCode. The header is the only
-selector: Plugin ids, filenames and manifests cannot opt into an interpreter. A
-missing shared runtime fails closed. Native companions and explicit `PATH`
-integrations keep their existing direct execution behavior.
-Arguments are static, bounded CLI tokens: whitespace, shell/code metacharacters,
-native paths and traversing paths are rejected. `shell` is disabled.
-Windows declarations still reject `.cmd`, `.bat` and PowerShell shims rather than
-routing through a shell. Actual Tool Plugin execution currently fails closed on
-Windows until Desktop owns the launched process tree with a Job Object; listing and
-installing declarations remains portable.
-
-## Installation, authorization and process lifecycle
-
-The Plugin package remains a validated static package with `manifest.json` plus any
-declared Web entry/assets. A headless Tool Plugin needs only its manifest. An
-executable is separate from the Plugin ZIP and is never served as a Plugin asset.
-
-An optional official Registry `companions` entry contains a command, companion
-SemVer and one or more target records. The command must exactly equal
-`manifest.runtime.command`; targets are limited to `darwin|linux|win32` and
-`arm64|x64`. Each target declares an immutable raw Release asset with exact byte
-size and SHA-256. Its URL must be exactly:
+## Execution path
 
 ```text
-https://github.com/microvoid/convax-plugins/releases/download/plugin-<plugin-id>-v<plugin-version>/convax-companion-<command>-<companion-version>-<platform>-<arch>[.exe]
+UI / Agent / Web Plugin / Plugin capability broker
+  -> Desktop Main generation adapter
+  -> exact ActiveSet and companion byte lease
+  -> tools/list contract validation
+  -> staged bounded Project inputs
+  -> exact MCP tools/call
+  -> no-clobber Generated/ publication
+  -> CanvasResourceBusinessService
 ```
 
-Desktop selects only the exact current platform/architecture, enforces a 128 MiB
-download ceiling, and rechecks size and digest before writing. It publishes the
-executable with private permissions below a host-owned path keyed by Plugin,
-Plugin version, command and companion version. Existing bytes at the same immutable
-identity must match exactly; different bytes require a version bump. A missing
-target, download failure, digest change, symlink, or Plugin publication failure
-leaves the previous installed Plugin/companion pair usable. Startup, update and
-uninstall reconcile stale companion versions and orphan Plugin directories.
-Verified ZIP and companion bytes are also admitted to a bounded content-addressed
-cache. Install/update may reuse only an entry whose length and SHA-256 still match
-the current Registry declaration, and retries one transient transfer failure using
-a fresh validated Release request. Cache loss or corruption falls back to the normal
-verified download and never changes installed state.
-
-Choosing an explicit install or update is consent to execute only the exact Tool
-Plugin identity being published. Before publishing the package, Desktop resolves
-either the managed companion or the explicit `PATH` fallback, fingerprints it, and
-transactionally coordinates a private authorization receipt with the package
-switch. The receipt binds the
-normalized manifest fingerprint, binding kind (`managed` or `path`), real path,
-size and SHA-256. A Registry Plugin with a companion requires that managed binding;
-it cannot silently authorize a same-named PATH executable. An unresolved manual
-import fails before the Plugin appears installed. Listing and installation never
-start the executable.
-
-On every runtime start, Desktop silently resolves the executable and requires the
-matching persisted receipt, then resolves it once more before snapshotting. Missing,
-tampered or changed receipts, declarations, binding sources or bytes fail closed
-with a bounded instruction to reinstall the Plugin; renderer errors never disclose
-the native path. There is no first-call permission dialog. Restart preserves valid
-installation consent. Upgrade keeps old and new immutable receipts usable around
-the package switch and then removes the superseded one; uninstall removes the Plugin
-first and revokes its receipt best-effort. Crash-partial and orphaned states cannot
-execute, and startup reconciliation removes them.
-
-After verification, Desktop starts the command with:
-
-- a private, empty, short-lived host directory as its working directory;
-- no shell;
-- an environment allowlist containing executable lookup, home/config, temporary
-  directory, locale and required platform variables;
-- no ambient API-key or unrelated application-secret variables.
-
-The home/config variables intentionally allow a separately installed CLI to reuse
-its own login or cookie state. This does **not** sandbox the command: it runs with
-the user's OS account and can use that account's filesystem and network authority.
-Authors must make this clear in package documentation and should use the narrowest
-possible sidecar. Installation authorization remains bound to the exact declaration,
-binding source and resolved executable bytes.
-
-The runtime is lazy and reused after a successful start. Before copying potentially
-large references, the host resolves, authorizes, snapshots, starts and verifies the
-exact declared MCP tool. Preparation returns an in-process execution bound to that
-Plugin fingerprint, tool declaration and running sidecar; if the Plugin changes
-during staging, the call fails before sending `tools/call`. Plugin update/removal,
-application shutdown, or a non-cancellation protocol failure closes and evicts the
-process. Declared tools are visible from the validated manifest without starting
-the command, but the first call also verifies that MCP `tools/list` exposes the
-exact declared tool id.
-
-## MCP stdio subset
-
-The command speaks newline-delimited JSON-RPC 2.0 over stdin/stdout. Desktop uses
-MCP protocol version `2025-03-26` and only the following surface:
-
-1. `initialize`, followed by `notifications/initialized`;
-2. paginated `tools/list`;
-3. `tools/call` for the selected declared tool;
-4. `notifications/cancelled` when an in-flight request is canceled.
-
-The sidecar must keep logs and human-readable diagnostics on stderr. Desktop drains
-stderr but never returns its raw content to Toolbar, Agent or Plugin callers, since
-CLI diagnostics may contain cookies, tokens or native paths. Writing non-JSON data
-to stdout, duplicate tool ids, oversized messages, unsupported result content, or a
-missing declared tool fails the call. A single JSON message is currently limited to
-64 MiB, so large media should be returned as files rather than inline base64.
-
-### Service status and actions
-
-Service calls receive exactly `{}` except for the fixed Checkout call described
-below. A successful `service.status` or ordinary service action returns
-`structuredContent` using the breaking `convax.plugin-service-status/2` contract:
-
-```json
-{
-  "schema": "convax.plugin-service-status/2",
-  "state": "connected",
-  "credential": { "configured": true, "verification": "verified" },
-  "account": { "availability": "unavailable" },
-  "plan": {
-    "availability": "available",
-    "key": "free",
-    "name": "Free",
-    "billingInterval": "month"
-  },
-  "billing": {
-    "availability": "available",
-    "checkout": {
-      "availability": "available",
-      "plans": [{ "key": "pro", "name": "Pro", "billingInterval": "month" }]
-    }
-  },
-  "credits": { "availability": "available", "remaining": 80, "unit": "credits" },
-  "usage": { "availability": "unavailable" }
-}
-```
-
-Account availability may instead include one bounded `displayName`. Usage
-availability may include bounded non-negative `consumed`, `unit`, and optional
-`period`. Plan availability may contain one bounded Key, display name and optional
-billing interval. Available Billing contains one Checkout projection, optional
-subscription status, a bounded Plan catalog, and optional pending Checkout status.
-Missing or unsupported account, Plan, Billing, credit, or usage APIs must use
-`availability: "unavailable"`; the host does not infer or scrape those values.
-Status v1 is rejected rather than adapted.
-
-The manifest-authorized `checkout` action is the only service call with input. It
-receives exactly `{ "plan_key": "..." }` for a Plan advertised by the current
-status and returns `convax.plugin-service-checkout/1` with a bounded Checkout id
-and canonical HTTPS URL. Main validates and opens that URL in the system browser,
-then refreshes status. The URL never crosses preload or reaches renderer.
-
-Main rejects unknown fields, impossible credential/connection states, unbounded
-numbers, URLs, native paths and malformed display text. It discards normal MCP
-`content`, stderr, and raw errors rather than forwarding them to preload. The
-renderer can pass only a validated Plugin id to one fixed bridge method per action.
-Checkout is the sole exception and additionally passes one validated advertised
-Plan key; it cannot pass a URL, Product id, amount, or provider payload.
-Plugin updates or uninstalls invalidate in-flight results, and renderer destruction
-cancels outstanding calls. The Services settings page is host-rendered; it never
-loads Plugin HTML. `sign_out` requires an explicit host confirmation because it may
-delete the sidecar's local credential.
-
-The application menu and Services settings share one Desktop-owned read model.
-For a Plugin service, capability badges and model rows are projected from the same
-static `contributes.generation.tools` declarations used by generation execution;
-listing them does not start the sidecar. OpenCode appears as the existing built-in
-LLM runtime and lists only the bounded provider/model projection supplied by
-`@convax/agent-runtime`. This display catalog has no generic execute method and does
-not alter either tool selection or Agent model routing.
-
-Installed rows remain visible in Services for configuration, but they are not proof
-that a model is executable. Main's generation catalog requires an exact
-Plugin/service/model join and a bounded live `service.status` result whose state is
-`connected`. Missing service declarations, disconnected or indeterminate states,
-timeouts, and invalid results hide only that service's models and lead callers to the
-Services route; service-independent operations remain manifest-driven.
-
-An `authorize` or `reauthorize` action may instead request a main-owned browser
-exchange. This is a two-phase fixed protocol, not a general MCP callback. The first
-action still receives `{}` and may return exactly:
-
-```json
-{
-  "schema": "convax.plugin-service-browser-authorization/1",
-  "authorization_id": "request_0123456789abcdef",
-  "login_url": "https://accounts.example.com/sign-in",
-  "cookie_origin": "https://accounts.example.com",
-  "cookie_names": ["session_id"],
-  "timeout_seconds": 300
-}
-```
-
-Both URLs must be canonical HTTPS without credentials or fragments, and the login
-URL must have exactly the requested cookie origin. Cookie names are a unique,
-bounded RFC token allowlist. Main opens the URL in a fresh non-persistent Electron
-session with Node disabled, sandboxing enabled, permissions and downloads denied,
-and non-HTTPS navigation blocked. Installing the Tool Plugin and choosing Configure
-is the explicit consent for this fixed tool flow; completing sign-in continues
-automatically when an allowlisted Cookie appears, with no second command prompt.
-HTTPS login popups retain their real opener while inheriting the same temporary
-session and recursive security guards. A child popup closing never settles the root
-authorization.
-
-Main then queries only that exact origin, drops every cookie whose name is not in
-the request allowlist, enforces per-value and aggregate bounds, and makes the one
-fixed internal `service.authorization.complete` call:
-
-```json
-{
-  "schema": "convax.plugin-service-browser-authorization-completion/1",
-  "authorization_id": "request_0123456789abcdef",
-  "cookie_origin": "https://accounts.example.com",
-  "cookies": [{ "name": "session_id", "value": "..." }]
-}
-```
-
-That tool is not a manifest action and cannot be selected by renderer input. Its
-one-shot continuation is bound to the exact manifest, executable snapshot and MCP
-client that returned the request. Cancellation, timeout, window destruction,
-Plugin update/uninstall, missing approved cookies, or an invalid completion status
-fail closed. A remote root close gets a short bounded exact-origin recheck grace so
-Chromium can publish a final Cookie mutation. Before the temporary browser session
-is cleared, Main atomically stores only the already-filtered envelope in a private
-mode-0600, short-lived recovery checkpoint bound to the manifest and verified executable bytes.
-The checkpoint is deleted only after the sidecar durably accepts it; a crash or
-sidecar restart in between can replay it into a fresh authorization id without
-opening another login page. Explicit cancellation/sign-out and Plugin update or
-uninstall delete it. This is never a persistent Chromium profile. Authorization
-requests, URLs and cookie values remain in main; they never enter preload, renderer
-status, logs, or caller-visible errors. App quit first drains any in-flight
-checkpoint/sidecar handoff, then disposes the shared Tool Plugin runtime.
-
-### Tool input
-
-Every declared generation MCP tool receives a `convax.generation-call/1` object.
-Its host-reserved envelope fields are stable and use snake case where shown:
-
-```json
-{
-  "schema": "convax.generation-call/1",
-  "operation_id": "convax-<opaque-host-scoped-sha256>",
-  "prompt": "Create the next shot",
-  "output": "video",
-  "output_directory": "<absolute short-lived output directory>",
-  "references": [
-    {
-      "kind": "file",
-      "node_id": "frame-node",
-      "role": "first_frame",
-      "name": "frame.png",
-      "mime_type": "image/png",
-      "path": "<absolute path to a staged temporary copy>"
-    },
-    {
-      "kind": "text",
-      "node_id": "notes-node",
-      "role": "text",
-      "text": "Camera and continuity notes"
-    }
-  ]
-}
-```
-
-The fixed host-reserved keys are `schema`, `operation_id`, `prompt`, `output`,
-`output_directory`, and `references`. A tool may add top-level custom inputs only
-by declaring them in that exact MCP tool's current `tools/list.inputSchema`.
-For each connected Plugin, Desktop may inspect all admitted model families from one
-exact `tools/list` response and cache the resulting model summaries and descriptions
-in one bounded, display-only session snapshot. It warms that snapshot asynchronously
-after startup provisioning and Plugin or service lifecycle changes; concurrent
-refreshes are single-flight, and aged reads may use the prior snapshot while a
-same-epoch refresh runs. The snapshot is never persisted. Desktop projects direct
-top-level scalar properties into a bounded renderer-safe form and supports
-string/select, finite number, safe integer, and boolean fields. Raw JSON Schema,
-nested values, native paths, arbitrary MCP methods, and unsupported constraints
-never cross preload.
-
-The current bounded projection accepts at most 32 custom fields from a 64 KiB
-schema. Field ids are 1–64 ASCII alphanumeric/dot/dash/underscore characters and
-must begin with a letter. Strings are capped at 4096 characters; select fields
-accept at most 64 unique string choices from `enum` or `oneOf` string `const`
-entries; numbers are finite within ±10^12; integers are safe integers; and booleans
-are direct toggles. A required custom field using an unsupported shape makes the
-tool non-configurable and non-executable through this boundary. Optional unsupported
-fields are omitted from the host surface and cannot be submitted.
-
-A manifest-declared generation model may turn a dynamic bounded catalog into the
-host's concrete model list by marking exactly one of those properties:
-
-```json
-{
-  "model": {
-    "type": "string",
-    "oneOf": [
-      { "const": "model-a", "title": "Model A" },
-      { "const": "model-b", "title": "Model B" }
-    ],
-    "x-convax-role": "generation-model-id"
-  }
-}
-```
-
-The marked property must be top-level, required, and a string select with 1–64
-unique bounded choices. Exactly one such property may appear, and the role is valid
-only on a tool already classified as a model by the manifest. Main first verifies
-the owning Plugin service is connected, then projects each choice as one stable
-opaque model selection. It never derives the role from `model`, `title`, a provider
-name, or another convention. A missing, duplicated, free-text, optional or malformed
-role fails closed for that dynamic family without changing unmarked models.
-
-The marked selector never appears in the renderer's custom-option form. A cached
-description may serve the picker and custom-option form, but when Main prepares a
-concrete selection it reloads the current tool schema, checks that the same choice
-is still present, and merges the chosen value itself. Caller `toolInput` cannot
-contain or override the selector. Aspect ratio, duration, style and every other
-unmarked field continue through the ordinary validation path.
-
-The caller sends only scalar values for chosen custom fields. Omission is the
-host's Auto state. A UI may present a declared schema default as its explicit
-initial value, but Main never invents or inserts defaults. Immediately before staging/calling, Main reloads the
-selected installed tool definition and validates every custom key, type, choice,
-range, length, and required field against that current schema. Unknown keys and
-all attempts to supply a host-reserved key fail closed. The validated custom fields
-are merged at the top level while the fixed envelope wins defensively. A tool with
-no supported custom fields receives the byte-for-byte same field set it did before
-this extension; no `convax.generation-call/2` exists.
-
-`operation_id` is an opaque, irreversible host-scoped identifier. It is stable only
-for a replay of the same logical request from the same Project, Canvas and actor;
-the renderer- or Agent-supplied raw operation id is never sent to the sidecar. The
-host single-flights and caches that scoped operation, rejects reuse with a different
-payload, and passes the opaque id to the sidecar so it can use a remote idempotency
-key when its service supports one. Sidecars must not infer authority or user-visible
-identity from this value.
-
-For a generation call that requests lifecycle observation, the host also adds an
-opaque per-call `_meta.progressToken`. After the external service has accepted a
-task, a compatible sidecar may publish exactly this notification:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "notifications/convax/generation-lifecycle",
-  "params": {
-    "schema": "convax.generation-lifecycle/1",
-    "progressToken": "<the per-call token>",
-    "event": "submitted",
-    "taskId": "<host-safe opaque handle>"
-  }
-}
-```
-
-`taskId` is distinct from `operation_id`: it is a bounded portable handle suitable
-for Canvas metadata, not a credential, credential-labelled envelope, URL, native
-path or raw provider diagnostic.
-A sidecar whose upstream identifier is unsafe must retain that value privately and
-return a safe handle. The host correlates only the exact live token and validates
-the exact schema, event and task-id alphabet. It never parses logs, progress text or
-stderr. Malformed notifications using this Convax method fail the call closed.
-Legacy Tool Plugins may ignore `_meta` and omit the notification.
-
-The host loads the authoritative live Canvas and validates every reference against
-its declared role. Media and text inputs must already be normal Canvas nodes backed
-by typed Project-file or managed-asset references. Desktop resolves them through the
-bounded Main-owned resource reader and copies verified snapshots into a private
-temporary input directory; Project native paths never cross the renderer, preload,
-Agent or iframe boundary. Text input is read from its file rather than Canvas JSON.
-After staging and immediately before `tools/call`, Desktop rechecks both the persisted
-Canvas document and the live Canvas revision, plus any direct-incoming constraint, so
-a stale request cannot start a paid job.
-
-All request paths in this call object are ephemeral native paths. They must not be
-stored in model metadata, Plugin state or generated files. The request authorizes
-the tool to read only the supplied reference copies and write results only below
-`output_directory`; this protocol scope is not an OS filesystem sandbox.
-
-### Tool result
-
-Return a normal MCP tool result. `isError: true` fails the generation; its raw text
-diagnostic is not exposed across the host boundary. Successful results use one or
-more of these forms:
-
-| Declared output | Accepted result form                                                |
-| --------------- | ------------------------------------------------------------------- |
-| `text`          | MCP `content` entries with `{ "type": "text", "text": "..." }`      |
-| `image`         | inline MCP image content, or a file result below `output_directory` |
-| `audio`         | inline MCP audio content, or a file result below `output_directory` |
-| `video`         | a file result below `output_directory`                              |
-
-A file result can be returned as an MCP `resource_link` whose `uri` is a `file:` URL
-below `output_directory`, or through structured content:
-
-```json
-{
-  "content": [{ "type": "text", "text": "Optional non-media diagnostic" }],
-  "structuredContent": {
-    "artifacts": [
-      {
-        "path": "renders/result.mp4",
-        "mimeType": "video/mp4",
-        "name": "result.mp4"
-      }
-    ]
-  }
-}
-```
-
-Artifact paths are portable relative paths below `output_directory`. Every artifact
-must exist before `tools/call` resolves. Absolute paths, traversal, symbolic links,
-directories, empty files, files outside the output directory and declared
-MIME/extension mismatches are rejected. Desktop detects media signatures rather
-than trusting names.
-
-Currently admitted formats are PNG, JPEG, GIF and WebP images; MP4, QuickTime and
-WebM video; and MP3, WAV, Ogg, FLAC and M4A audio. Default limits are 32 input
-references, 2 GiB total staged input, 16 output files and 2 GiB per input or output
-file. Text input/output is bounded separately. Inline base64 is additionally
-constrained by the MCP message limit.
-
-For a non-text tool, text content is normalized into at most 32 bounded warnings
-rather than inserted as Canvas nodes. After admission, Desktop copies each verified
-result into same-filesystem short-lived staging and publishes it without overwriting
-an existing object under the user-visible `Generated/` directory. Text results are
-UTF-8 Markdown files. Media is streamed from the verified materialized source into
-Project staging while hashing and enforcing the existing 2 GiB ceiling; it is never
-read wholesale into memory. Notes and generated output share the same Project-owned
-no-clobber publisher and directory-identity checks. Desktop then calls
-`CanvasResourceBusinessService.addResources`, creates normal Canvas nodes and
-connects them to the referenced input nodes. A failed Canvas commit retains the
-published files and raises a bounded partial-success error containing only portable
-`Generated/*` paths (with the original failure retained as its cause); it does not
-delete user output. The same rule applies when a later output publication, stale
-reference check, cancellation or live-scope check fails after at least one file was
-published. The sidecar never writes Canvas JSON or chooses Project scope, revision,
-placement or node ids.
-A v5 sidecar with separate Canvas grants may make explicit broker calls, but those
-remain revision-checked application transactions rather than generation result
-admission.
-
-There is no cross-file publication WAL. A crash may leave unpublished staging, which
-is deleted after 24 hours, or a published Project file without a Canvas node, which is
-preserved for the user to add later. Normal completion cleans temporary generation
-input/materialization directories best-effort; Project publication staging aliases
-are left for the shared 24-hour staging GC rather than unlinked by pathname.
-
-## Sandboxed Plugin caller API
-
-A Web surface with `generation.execute` receives exactly two generation methods on
-the protocol matching its manifest (`convax.plugin-host/2`, `/3`, or `/4`; v5 uses
-`convax.plugin-capability/1`):
-
-| Method                      | Params                                                                                                  | Result                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `generation.tools.list`     | optional `{ "output": "image" }` filter                                                                 | sanitized installed tool summaries                                                          |
-| `generation.canvas.execute` | `prompt`, optional `output`, `toolId`, `references` and `resultMode: "create-pending-node" \| "return"` | created node ids or bounded `outputText`, committed revision, selected tool id and warnings |
-
-Tool summaries contain only the bounded `id`, `title`, `description`, `kind`,
-`output` and `acceptedInputs` fields. `kind` is either `model` or `operation`, so a
-generic Plugin can select the intended contribution class without learning provider
-credentials, runtime details or manifest internals.
-
-For `generation.canvas.execute`, `references` contains only `{ nodeId, role }`
-items. Explicit references must be supported nodes connected by a direct incoming
-Canvas edge to the Plugin's owning file node. When the field is omitted, the host
-infers direct incoming text, image, video and audio nodes in edge order using their
-default roles. `first_frame` and `last_frame` are explicit image roles.
-Canvas direction is fixed: the source card's right-side output feeds the target
-card's left-side input. Only edges targeting the owning Plugin node are inputs;
-outgoing neighbors are never inferred as references.
-
-For `generation.canvas.execute`, the iframe cannot supply a Project/Canvas id, native path, revision, placement,
-operation id or mutation actor. The host derives all of them from the live bound
-frame, rejects read-only/stale scope, rechecks scope after asynchronous work and
-allows only one generation call in flight per frame. A caller may omit `toolId` only
-when exactly one installed tool accepts the requested output and reference roles.
-For this direct-incoming mode, any Canvas revision, edge or referenced source change
-during generation fails the operation; it is never replayed onto a newer document.
-
-With `resultMode: "create-pending-node"`, the host commits and reloads one pending
-resource beside the Plugin before the external tool is invoked. The caller cannot
-provide a node id. Success replaces that exact node after normal managed-asset
-admission; failure or cancellation leaves it visible with a safe host-authored error.
-The placeholder commit becomes the guarded generation revision, and later edits or
-deletion of the pending node fail closed instead of recreating it.
-
-With `resultMode: "return"`, the selected manifest tool must declare text output
-with `delivery: "return"`. The host creates no Canvas node, requires the executor to
-return no node ids, and exposes only bounded UTF-8 `outputText` to the same owning
-Plugin frame. Direct-incoming authority, live-edge revalidation, cancellation and
-the one-call frame gate remain unchanged.
-
-The generation capability does not expose process control, environment variables,
-arbitrary MCP methods, unrelated Canvas nodes, or a general function-call bridge.
-A v5 Web Plugin may separately receive bounded Project/Canvas projections when its
-manifest declares those independent grants. The iframe remains static Web content in
-`sandbox="allow-scripts"`.
-
-## Cancellation and long-running work
-
-Generation is one host operation even when the external service uses queued jobs or
-polling. The sidecar owns that service-specific lifecycle and resolves `tools/call`
-only when final output artifacts are ready. Convax does not add a provider job
-registry or duplicate a service's task model.
-
-Desktop does not impose an absolute deadline on a generation `tools/call`. A
-sidecar that has successfully submitted a queued job keeps the call open while the
-service reports a non-terminal state, and resolves only after artifacts are ready
-or an explicit terminal failure occurs. Sidecars should bound each status request
-and retry temporary observation failures without turning a valid queued/running
-state into a job timeout.
-
-Direct UI and sandboxed-Plugin calls wait on the sidecar until completion or
-explicit cancellation. Agent calls cross OpenCode's Streamable HTTP MCP client;
-the host emits bounded, content-free progress heartbeats for every active tool
-call. OpenCode treats its configured timeout as an inactivity window and resets it
-on each heartbeat, so it is not an overall generation deadline. Cancellation
-propagates from:
-
-- a Toolbar/UI `operationId` cancel request or renderer destruction;
-- the OpenCode tool-call `AbortSignal`;
-- closing or replacing a sandboxed Plugin frame;
-- Plugin removal/update and application shutdown.
-
-For an in-flight MCP request Desktop sends `notifications/cancelled` with the JSON-RPC
-request id and rejects the host operation as `AbortError`. Sidecars should stop
-local work and cancel remote work when the remote API can do so safely. They must
-also tolerate the temporary directories disappearing after cancellation. Convax
-does not automatically retry a failed or canceled generation because the external
-tool may already have produced a billable or otherwise irreversible side effect.
-Once `tools/call` was attempted, the operation id remains an at-most-once tombstone
-in the bounded session replay cache; authorization, executable resolution and tool
-readiness failures remain retryable with the same id. A replay caller may stop
-waiting without canceling the already-owned shared execution; an explicit retry of
-an attempted call uses a fresh operation id. Node-targeted calls persist bounded
-Canvas run state, but the task receipt alone is not restart recovery. A v7 tool may
-declare the complete generic Long-Running Operation contract
-`{ "schema": "convax.generation-lro/1", "mode": "long-running-operation" }`.
-That contract uses fixed get/wait/cancel/result/acknowledge methods, an immutable
-pinned runtime binding, and idempotent submission by host `operationId`. Legacy or
-partial implementations still change orphaned `submitting` or `running` runs to
-`interrupted` and never repeat the external call. On macOS/Linux,
-process shutdown is
-graceful for ordinary eviction and escalates to an immediate process-group kill
-when the MCP leader exits or the grace period expires. Windows execution stays
-disabled until a Job Object can provide the equivalent owned-tree guarantee.
-
-When a node-targeted terminal run has `retrySafety: "unknown"`, its original card
-and operation remain unresolved and cannot be retried in place. The card may expose
-an explicit action that restores the old prompt into a composer for a separate
-submission. That submission must use a fresh `operationId` with
-`resultMode: { "type": "create-pending-node" }`; the host creates a new pending
-card and leaves the old run untouched. Its `referenceConstraint` remains bound to
-the old owner's live direct incoming edges; the result relation may connect the new
-card from that owner for lineage but cannot replace it. This may create another
-billable task and is presented as such. It does not reinterpret MCP `isError`, a
-lost response, or an orphaned task as retry-safe. Only a host-classified safe
-failure may submit a fresh operation against the same replacement card.
-
-## Maintainer checklist
-
-Changes to this boundary must preserve all of the following:
-
-- no provider/model registry or concrete service logic in Convax packages;
-- one shared generation application service for UI, Agent and Plugin callers;
-- host-derived Project/Canvas scope, revision, placement and mutation actor;
-- install-authorized and runtime-verified execution before staging, aggregate-bounded
-  temporary inputs and bounded outputs;
-- generated content entering Canvas only through no-clobber user-visible `Generated/`
-  Project files and the shared resource business flow; a later Canvas failure retains
-  the file instead of requiring cross-file rollback;
-- strict v1-v5 manifest compatibility, `plugin-host/1-4` compatibility, and the
-  independent `plugin-capability/1` contract for v5;
-- explicit install/update authorization, no first-call prompt and no shell execution;
-- exact Registry companion target/URL/size/digest checks, atomic rollback and
-  explicit `PATH` fallback, plus exact-header shared Bun execution;
-- cancellation, stale-scope, symlink, signature, size and process-disposal tests.
-
-Run the affected Desktop typecheck/tests and the repository boundary check after a
-contract change:
-
-```sh
-bun --cwd packages/desktop typecheck
-bun --cwd packages/desktop test
-bun check
-```
+Main derives Project, Canvas, revision, placement, actor and operation id. It
+revalidates the current scope, selected tool contract, input references,
+cancellation and exact Plugin identity immediately before the external side
+effect and before every Canvas persistence call. Renderer state is never a
+correctness prerequisite.
+
+## Tool contract
+
+`tools/list` is authoritative for the current runtime generation. The Host accepts
+only bounded closed input/output schemas and matches the exact manifest-declared
+operation. A single explicitly marked top-level selector may represent a dynamic
+generation model id; Main removes it from ordinary controls and binds an opaque
+validated selection immediately before execution.
+
+Main may project all admitted model families from one exact runtime response into
+one bounded, display-only session snapshot. Startup provisioning and Plugin or
+service lifecycle changes invalidate and asynchronously warm a new epoch.
+Concurrent refreshes for one epoch are single-flight and commit atomically. An
+age-triggered refresh serves the prior same-epoch snapshot until replacement
+succeeds. Empty model results and transient failures remain retryable with bounded
+backoff so a still-starting service is not cached as permanently ready. The
+snapshot is never persisted or treated as execution authority: Main reloads the
+selected tool schema and service status immediately before execution.
+
+Plugin-to-Plugin exports name the exact MCP tool operation. Availability and
+execution must use the same lease-derived sidecar session; echoing identity strings
+is not provenance.
+
+## Outputs and partial success
+
+Generated bytes first become no-clobber user-visible Project files under
+`Generated/`, then normal Canvas resources. A Canvas failure after publication
+retains the file and reports bounded partial success. A stale Plugin, sender
+destruction or cancellation before publication produces no user file. Plugins
+never write `.convax` JSON, choose pending node ids or replace arbitrary nodes.
+
+## Long-running work
+
+Accepted queued or running work has no arbitrary overall timeout. Sidecars bound
+individual network requests and keep non-terminal work alive until success,
+explicit terminal failure or caller cancellation.
+
+Restart recovery requires the complete Scheduler–Agent–Supervisor/LRO contract.
+`operationId` is the durable idempotency identity; downstream `taskId` is opaque.
+The recovery record pins the exact ActiveSet/snapshot/companion/tool binding. A
+Plugin without that complete contract is marked interrupted after restart and is
+never silently replayed.
+
+The in-process Plugin capability broker rejects only a concurrent duplicate.
+Billing-grade replay safety belongs to the provider's durable `operationId`/LRO
+implementation; the Host does not retain an unbounded completed-call ledger.
+
+## Security and lifecycle
+
+- install/update consent binds the normalized v8 manifest and exact companion
+  bytes;
+- no PATH fallback, shell invocation, mutable package execution or concrete Plugin
+  privilege exists;
+- process disposal owns the entire process tree and fails closed where the platform
+  cannot guarantee it;
+- cancellation crosses queues, staging, runtime preparation and MCP;
+- no native path, credential, cookie, raw diagnostic or arbitrary MCP name crosses
+  preload;
+- update/uninstall blocks new calls while leases allow already admitted calls to
+  settle safely.
+
+## Authoring and validation
+
+Plugin authors consume generated Skill references. If an API or contribution is
+missing, they submit a structured Host capability request for human review and do
+not inspect or modify Host code.
+
+Contract changes run the package-local SDK/API tests, Desktop typecheck and tests,
+package-boundary check, Registry/pack checks, plus update/uninstall/cancellation,
+crash-recovery, schema-mismatch and partial-success fault tests.

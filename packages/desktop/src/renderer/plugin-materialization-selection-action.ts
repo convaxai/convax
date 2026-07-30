@@ -1,6 +1,6 @@
 import type { CanvasSelectionActionContext } from "@convax/canvas"
 
-import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary } from "../plugin-contracts"
+import { hasWebPluginCanvasSurface, type ActiveInstalledWebPluginSummary } from "../plugin-contracts"
 import { isManagedProjectVideoSelection, type MediaOperationLocalizedText } from "./media-operation-selection-action"
 
 export interface PluginMaterializationAction {
@@ -12,10 +12,10 @@ export interface PluginMaterializationAction {
 }
 
 export function listInstalledPluginMaterializationActions(
-  installedPlugins: readonly InstalledWebPluginSummary[],
+  installedPlugins: readonly ActiveInstalledWebPluginSummary[],
 ): readonly PluginMaterializationAction[] {
   return installedPlugins.flatMap((plugin) => {
-    if (plugin.schema !== "convax.plugin/7" || !hasWebPluginCanvasSurface(plugin)) return []
+    if (plugin.schema !== "convax.plugin/8" || !plugin.hostApi || !hasWebPluginCanvasSurface(plugin)) return []
     return (plugin.contributes.canvas.selectionActions ?? []).flatMap((contribution) =>
       "action" in contribution &&
       contribution.target === "video" &&

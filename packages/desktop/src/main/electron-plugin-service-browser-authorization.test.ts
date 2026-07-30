@@ -173,6 +173,7 @@ function beginAuthorization(signal?: AbortSignal) {
     action: "authorize",
     isCurrent: async () => true,
     serviceIdentity: "a".repeat(64),
+    snapshotDigest: "b".repeat(64),
     signal,
   })
   return { broker, pending }

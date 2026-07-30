@@ -11,6 +11,8 @@ const desktopRoot = path.join(repositoryRoot, "packages", "desktop")
 // and animation-driven viewport state enough time to quiesce on a saturated CI
 // host; every wait below still requires the exact observable state.
 const timeoutMs = 45_000
+const openAgentPanelSelector =
+  '[data-workspace-utility-drawer][data-workspace-utility-state="open"] [data-agent-panel-hosted="true"]'
 // The primary renderer evaluation intentionally covers several independent
 // CAS/recovery/UI paths. Its outer debugger deadline must not expire before
 // the final exact-state wait can report its own bounded failure.
@@ -898,7 +900,7 @@ try {
       let composer
       let requestedAgent = false
       while (Date.now() < deadline) {
-        const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+        const agentPanel = [...document.querySelectorAll(${JSON.stringify(openAgentPanelSelector)})]
           .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
         composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
         if (composer) break
@@ -962,7 +964,7 @@ try {
         if (picker) break
         await new Promise((resolve) => setTimeout(resolve, 25))
       }
-      const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+      const agentPanel = [...document.querySelectorAll(${JSON.stringify(openAgentPanelSelector)})]
         .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
       const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
       if (!composer || !picker) {
@@ -1089,7 +1091,7 @@ try {
   await evaluateStable(
     rendererDebugger,
     `(() => {
-      const agentPanel = [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+      const agentPanel = [...document.querySelectorAll(${JSON.stringify(openAgentPanelSelector)})]
         .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
       const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
       if (!composer) return
@@ -1114,7 +1116,7 @@ try {
         throw new Error("Timed out waiting for " + label)
       }
       const agentPanel = await waitFor(
-        () => [...document.querySelectorAll('[data-agent-panel-hosted="true"]')]
+        () => [...document.querySelectorAll(${JSON.stringify(openAgentPanelSelector)})]
           .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null),
         "the hosted workspace Agent panel",
       )

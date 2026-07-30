@@ -1,7 +1,21 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
 
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import { petHostProtocol, petIpcChannels, type PetHostProviderBinding } from "../pet-contracts"
+
+function pluginUrl(relativePath: string) {
+  return webPluginAssetUrl(
+    {
+      activeRevision: 7,
+      activeSetDigest: "a".repeat(64),
+      id: "soft-companion",
+      snapshotDigest: "b".repeat(64),
+      version: "1.0.0",
+    },
+    relativePath,
+  )
+}
 
 type InvokeHandler = (event: any, input?: unknown) => unknown
 const invokeHandlers = new Map<string, InvokeHandler>()
@@ -131,9 +145,9 @@ function fixture() {
               protocol: petHostProtocol,
               settings: "settings/index.html",
             },
-            libraryUrl: "convax-plugin://soft-companion/pet-library.json",
-            overlayUrl: "convax-plugin://soft-companion/pet/index.html",
-            settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+            libraryUrl: pluginUrl("pet-library.json"),
+            overlayUrl: pluginUrl("pet/index.html"),
+            settingsUrl: pluginUrl("settings/index.html"),
             version: "1.0.0",
           }
         : undefined,
@@ -189,7 +203,6 @@ function fixture() {
   const untrustedSender = new FakeWebContents(12)
   const trustedEvent = { sender: settingsSender }
   const untrustedEvent = { sender: untrustedSender }
-  const restoreProvider = mock(async (_pluginId: string) => undefined)
   return {
     activity,
     activityListeners,
@@ -205,7 +218,6 @@ function fixture() {
       currentBinding = next
       providerListener?.(undefined)
     },
-    restoreProvider,
     settingsSender,
     trustedEvent,
     untrustedEvent,
@@ -224,7 +236,6 @@ function registrationOptions(
     openMainWindow: value.openMainWindow,
     customPets: value.customPets,
     pickCustomPetSource: value.pickCustomPetSource,
-    restoreProvider: value.restoreProvider,
   }
 }
 
@@ -260,7 +271,7 @@ describe("registerPetIpc", () => {
     expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toEqual({
       generation: 4,
       pluginId: "soft-companion",
-      settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+      settingsUrl: pluginUrl("settings/index.html"),
     })
 
     registration.dispose()
@@ -341,76 +352,6 @@ describe("registerPetIpc", () => {
     value.providerChanged({ ...binding, digest: "sha256:provider-two", generation: 5 })
     expect(changed.port1.closed).toBeTrue()
     expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.providerChanged)
-    registration.dispose()
-  })
-
-  test("revokes a changing Plugin before local publication and keeps its host capabilities fail-closed", async () => {
-    const value = fixture()
-    const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
-    const overlaySender = new FakeWebContents(14)
-    const identity = { connectionId: "settings-revoked", generation: 4, pluginId: "soft-companion" }
-
-    registration.connectOverlay(overlaySender, binding)
-    await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
-    const [overlayChannel, settingsChannel] = FakeMessageChannelMain.created
-
-    await registration.prepareProviderChange("soft-companion").publish()
-
-    expect(overlayChannel?.port1.closed).toBeTrue()
-    expect(settingsChannel?.port1.closed).toBeTrue()
-    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
-    expect(() => registration.connectOverlay(overlaySender, binding)).toThrow("changed")
-    expect(() => invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)).toThrow("changed")
-    expect(value.mainWindow.webContents.send).toHaveBeenCalledWith(petIpcChannels.providerChanged)
-
-    const updatedBinding = { ...binding, digest: "sha256:provider-two", generation: 5 }
-    value.providerChanged(updatedBinding)
-    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toMatchObject({
-      generation: 5,
-      pluginId: "soft-companion",
-    })
-    expect(() => registration.connectOverlay(overlaySender, updatedBinding)).not.toThrow()
-    registration.dispose()
-  })
-
-  test("restores a revoked provider and its runtime when local Plugin publication rolls back", async () => {
-    const value = fixture()
-    const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
-    const overlaySender = new FakeWebContents(15)
-    const identity = { connectionId: "settings-rollback", generation: 4, pluginId: "soft-companion" }
-
-    registration.connectOverlay(overlaySender, binding)
-    await invokeHandlers.get(petIpcChannels.settingsConnect)?.(value.trustedEvent, identity)
-    const publication = registration.prepareProviderChange("soft-companion")
-    await publication.publish()
-
-    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
-    await publication.rollback()
-
-    expect(value.restoreProvider).toHaveBeenCalledWith("soft-companion")
-    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toMatchObject({
-      generation: 4,
-      pluginId: "soft-companion",
-    })
-    expect(() => registration.connectOverlay(overlaySender, binding)).not.toThrow()
-    registration.dispose()
-  })
-
-  test("keeps a revoked provider fail-closed when rollback runtime restoration fails", async () => {
-    const value = fixture()
-    value.restoreProvider.mockRejectedValueOnce(new Error("overlay remount failed"))
-    const { registerPetIpc } = await import("./pet-ipc")
-    const registration = registerPetIpc(value.provider, value.activity, value.overlay, registrationOptions(value))
-    const overlaySender = new FakeWebContents(16)
-    const publication = registration.prepareProviderChange("soft-companion")
-
-    await publication.publish()
-    await expect(publication.rollback()).rejects.toThrow("overlay remount failed")
-
-    expect(await invokeHandlers.get(petIpcChannels.provider)?.(value.trustedEvent)).toBeUndefined()
-    expect(() => registration.connectOverlay(overlaySender, binding)).toThrow("changed")
     registration.dispose()
   })
 

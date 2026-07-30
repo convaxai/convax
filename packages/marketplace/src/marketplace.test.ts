@@ -13,21 +13,16 @@ import {
   parseMarketplaceDescriptor,
   parseMarketplaceProductLock,
   parseBuiltinBundle,
-  legacyPackageReleaseTag,
-  legacyShowcaseAssetName,
-  parseRegistryV1,
   parseRegistryV2,
-  parseShowcaseV1,
   parseShowcaseV2,
   parseServerPackage,
-  projectRegistryV1,
   issueSelectionToken,
   verifySelectionToken,
   resolveSourceRegistration,
   resolveInstallConflict,
   sha256Hex,
-  type ShowcaseV1,
   versionKeyForMcpServer,
+  type MarketplaceProductPolicy,
 } from "./index"
 import { OFFICIAL_SERVER_SCHEMA_SHA256, OFFICIAL_SERVER_SCHEMA_BYTES } from "./server-schema"
 
@@ -95,6 +90,15 @@ describe("@convax/marketplace strict contracts", () => {
     expect(() =>
       parseMarketplaceDescriptor({
         ...valid,
+        registry: {
+          v1: { url: "https://acme.github.io/market/registry-v1.json" },
+          v2: { url: "https://acme.github.io/market/registry-v2.json" },
+        },
+      }),
+    ).toThrow("unknown")
+    expect(() =>
+      parseMarketplaceDescriptor({
+        ...valid,
         registry: { v2: { url: "https://acme.github.io:8443/market/registry-v2.json" } },
       }),
     ).toThrow("GitHub Pages")
@@ -112,7 +116,7 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("GitHub Pages")
   })
 
-  test("rejects duplicate registry identities and excludes MCP from strict v1 projection", () => {
+  test("rejects duplicate registry identities and admits only plugin/8 projections", () => {
     const mcpServer = {
       name: "io.example/m",
       description: "Example MCP",
@@ -123,7 +127,12 @@ describe("@convax/marketplace strict contracts", () => {
       ...item("official", "plugin", "p"),
       compatibility: { convax: ">=0.1.0" },
       presentation: { name: "P", description: "Plugin P" },
-      manifest: { schema: "convax.plugin/4", id: "p", version: "1.0.0" },
+      manifest: {
+        schema: "convax.plugin/8",
+        id: "p",
+        version: "1.0.0",
+        hostApi: { major: 1, required: [], optional: [] },
+      },
       delivery: {
         ...artifact,
         url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
@@ -160,10 +169,28 @@ describe("@convax/marketplace strict contracts", () => {
       packages,
     }
     const parsed = parseRegistryV2(registry)
-    const v1 = projectRegistryV1(parsed, "c".repeat(40))
-    expect(v1.packages.map((entry) => entry.kind)).toEqual(["plugin"])
-    expect(v1).not.toHaveProperty("marketplaceId")
-    expect(v1.packages[0]).toMatchObject({ name: "P", description: "Plugin P", yanked: false })
+    expect(parsed.packages[0]?.manifest).toMatchObject({
+      schema: "convax.plugin/8",
+      hostApi: { major: 1, required: [], optional: [] },
+    })
+    const futureMinorPackages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              hostApi: { major: 1, required: ["future.capability.invoke"], optional: [] },
+            },
+          }
+        : entry,
+    )
+    expect(
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(futureMinorPackages)),
+        packages: futureMinorPackages,
+      }).packages[0]?.manifest?.hostApi,
+    ).toEqual({ major: 1, required: ["future.capability.invoke"], optional: [] })
     expect(() => parseRegistryV2({ ...registry, packages: [registry.packages[0], registry.packages[0]] })).toThrow(
       "duplicate",
     )
@@ -194,6 +221,34 @@ describe("@convax/marketplace strict contracts", () => {
           {
             ...registry.packages[0],
             manifest: { schema: "convax.plugin/999", id: "p", version: "1.0.0" },
+          },
+        ],
+      }),
+    ).toThrow("manifest schema")
+    expect(() =>
+      parseRegistryV2({
+        ...registry,
+        packages: registry.packages.map((entry) =>
+          "manifest" in entry
+            ? {
+                ...entry,
+                manifest: { ...entry.manifest, hostApi: { major: 2, required: [], optional: [] } },
+              }
+            : entry,
+        ),
+      }),
+    ).toThrow("hostApi")
+    expect(() =>
+      parseRegistryV2({
+        ...registry,
+        packages: [
+          {
+            ...registry.packages[0],
+            manifest: {
+              schema: "convax.plugin/7",
+              id: "p",
+              version: "1.0.0",
+            },
           },
         ],
       }),
@@ -554,7 +609,7 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("canonical extension")
   })
 
-  test("enforces declared GitHub Pages descriptor shape and exact v1 wire", () => {
+  test("enforces the declared GitHub Pages descriptor shape", () => {
     const descriptor = {
       schema: "convax.marketplace/1",
       id: "acme",
@@ -567,195 +622,6 @@ describe("@convax/marketplace strict contracts", () => {
       delivery: { kind: "github-pages-releases" },
     }
     expect(() => parseMarketplaceDescriptor(descriptor)).toThrow("GitHub Pages")
-    const v1 = {
-      schema: "convax.registry/1" as const,
-      sequence: 1,
-      revision: "a".repeat(40),
-      packages: [
-        {
-          kind: "skill",
-          id: "storyboard",
-          name: "Storyboard",
-          description: "Storyboard workflow",
-          version: "1.0.0",
-          compatibility: { skillSchema: "opencode.skill/1" },
-          artifact: {
-            url: "https://github.com/microvoid/convax-plugins/releases/download/v1/storyboard.zip",
-            size: 10,
-            sha256: "b".repeat(64),
-          },
-          yanked: false,
-        },
-      ],
-    }
-    expect(canonicalJson(parseRegistryV1(v1))).toBe(canonicalJson(v1))
-    expect(() => parseRegistryV1({ ...v1, marketplaceId: "forbidden" })).toThrow("unknown")
-    expect(() => parseRegistryV1({ ...v1, packages: [{ ...v1.packages[0], kind: "mcp-server" }] })).toThrow("only")
-    expect(() =>
-      parseRegistryV1({
-        ...v1,
-        packages: [
-          {
-            ...v1.packages[0],
-            artifact: {
-              ...v1.packages[0].artifact,
-              url: "https://github.com/microvoid/convax-plugins/releases/download/latest/storyboard.zip",
-            },
-          },
-        ],
-      }),
-    ).toThrow("immutable")
-    const companionTarget = {
-      platform: "darwin" as const,
-      arch: "arm64" as const,
-      artifact: {
-        url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-tools-v1.0.0/tool",
-        size: 10,
-        sha256: "c".repeat(64),
-      },
-    }
-    const pluginWithCompanions = {
-      kind: "plugin" as const,
-      id: "tools",
-      name: "Tools",
-      description: "Tools plugin",
-      version: "1.0.0",
-      compatibility: { pluginSchema: "convax.plugin/4", pluginHost: "convax.plugin-host/4" },
-      artifact: {
-        url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-tools-v1.0.0/tools.zip",
-        size: 10,
-        sha256: "d".repeat(64),
-      },
-      yanked: false,
-      manifest: { schema: "convax.plugin/4", id: "tools", version: "1.0.0" },
-      companions: [
-        {
-          command: "convax-tools",
-          version: "1.0.0",
-          targets: [companionTarget, companionTarget],
-        },
-      ],
-    }
-    expect(() => parseRegistryV1({ ...v1, packages: [pluginWithCompanions] })).toThrow("duplicate")
-    expect(() =>
-      parseRegistryV1({
-        ...v1,
-        packages: [
-          {
-            ...pluginWithCompanions,
-            companions: [
-              { ...pluginWithCompanions.companions[0], targets: [companionTarget] },
-              { ...pluginWithCompanions.companions[0], targets: [companionTarget] },
-            ],
-          },
-        ],
-      }),
-    ).toThrow("duplicate")
-  })
-
-  test("losslessly projects current v6/v7 Plugin compatibility without dropping identities", () => {
-    const packages = (["6", "7"] as const).map((version) => ({
-      kind: "plugin" as const,
-      id: `plugin-v${version}`,
-      version: "1.0.0",
-      compatibility: { convax: ">=0.1.0" },
-      presentation: { name: `Plugin V${version}`, description: `Plugin schema V${version}` },
-      delivery: {
-        kind: "artifact" as const,
-        url: `https://github.com/microvoid/convax-plugins/releases/download/plugin-plugin-v${version}-v1.0.0/plugin-plugin-v${version}-1.0.0.zip`,
-        size: 10,
-        sha256: version.repeat(64),
-      },
-      yanked: false,
-      manifest: { schema: `convax.plugin/${version}`, id: `plugin-v${version}`, version: "1.0.0" },
-    }))
-    const v1 = projectRegistryV1(
-      {
-        schema: "convax.registry/2",
-        marketplaceId: "convax-official",
-        sequence: 45,
-        revision: "a".repeat(64),
-        packages,
-      },
-      "b".repeat(40),
-    )
-    expect(v1.packages.map(({ id }) => id)).toEqual(["plugin-v6", "plugin-v7"])
-    expect(v1.packages.map((entry) => entry.kind === "plugin" && entry.compatibility.pluginHost)).toEqual([
-      "convax.plugin-capability/1",
-      "convax.plugin-capability/2",
-    ])
-  })
-
-  test("v1 projection is identity-lossless for Plugin and Skill and fails closed for unrepresentable entries", () => {
-    const plugin = {
-      kind: "plugin" as const,
-      id: "plugin",
-      version: "1.0.0",
-      compatibility: { convax: ">=0.1.0" },
-      presentation: { name: "Plugin", description: "Plugin description" },
-      delivery: {
-        ...artifact,
-        url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-plugin-v1.0.0/plugin-plugin-1.0.0.zip",
-      },
-      manifest: { schema: "convax.plugin/7", id: "plugin", version: "1.0.0" },
-    }
-    const skill = {
-      kind: "skill" as const,
-      id: "skill",
-      version: "1.0.0",
-      compatibility: { convax: ">=0.1.0" },
-      presentation: { name: "Skill", description: "Skill description" },
-      delivery: {
-        ...artifact,
-        url: "https://github.com/microvoid/convax-plugins/releases/download/skill-skill-v1.0.0/skill-skill-1.0.0.zip",
-      },
-    }
-    const mcpServer = {
-      name: "io.example/server",
-      description: "MCP description",
-      version: "1.0.0",
-      remotes: [{ type: "streamable-http", url: "https://example.com/mcp" }],
-    }
-    const mcp = {
-      kind: "mcp-server" as const,
-      id: "io.example/server",
-      version: "1.0.0",
-      compatibility: { convax: ">=0.1.0" },
-      presentation: { name: "MCP", description: "MCP description" },
-      delivery: {
-        kind: "mcp-http" as const,
-        serverJson: mcpServer,
-        serverJsonSha256: sha256Hex(`${canonicalJson(mcpServer)}\n`),
-        runtime: { endpoint: "https://example.com/mcp", transport: "streamable-http" as const },
-      },
-    }
-    const identityPackages = [plugin, skill, mcp]
-    const registry = parseRegistryV2({
-      schema: "convax.registry/2",
-      marketplaceId: "official",
-      sequence: 1,
-      revision: sha256Hex(canonicalJson(identityPackages)),
-      packages: identityPackages,
-    })
-    const v1 = projectRegistryV1(registry, "f".repeat(40))
-    const expected = registry.packages
-      .filter(({ kind }) => kind !== "mcp-server")
-      .map(({ kind, id }) => `${kind}\0${id}`)
-      .sort()
-    expect(v1.packages.map(({ kind, id }) => `${kind}\0${id}`).sort()).toEqual(expected)
-    expect(() =>
-      projectRegistryV1({ ...registry, packages: [{ ...plugin, manifest: undefined }] }, "f".repeat(40)),
-    ).toThrow("requires manifest")
-    expect(() =>
-      projectRegistryV1(
-        {
-          ...registry,
-          packages: [{ ...plugin, manifest: { schema: "convax.plugin/999", id: "plugin", version: "1.0.0" } }],
-        },
-        "f".repeat(40),
-      ),
-    ).toThrow("does not support schema")
-    expect(() => projectRegistryV1(registry, "e".repeat(64))).toThrow("source Git revision")
   })
 
   test("strictly binds Showcase presentation assets to one Registry identity and revision", () => {
@@ -882,93 +748,6 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("declared repository")
   })
 
-  test("strictly binds legacy Showcase v1 to its Registry and package Releases", () => {
-    expect(legacyPackageReleaseTag({ kind: "skill", id: "storyboard", version: "1.0.0+build.1" })).toBe(
-      "skill-storyboard-v1.0.0_build.1",
-    )
-    expect(
-      legacyShowcaseAssetName({ kind: "skill", id: "storyboard", version: "1.0.0+build.1" }, "poster", "image/png"),
-    ).toBe("convax-showcase-skill-storyboard-1.0.0_build.1-poster.png")
-    const descriptor = parseMarketplaceDescriptor({
-      schema: "convax.marketplace/1",
-      id: "convax-official",
-      name: "Convax Official",
-      publisher: { name: "Microvoid" },
-      repository: { owner: "microvoid", name: "convax-plugins" },
-      registry: {
-        v1: { url: "https://microvoid.github.io/convax-plugins/registry/v1/index.json" },
-        v2: { url: "https://microvoid.github.io/convax-plugins/registry/v2/index.json" },
-      },
-      showcase: { v2: { url: "https://microvoid.github.io/convax-plugins/showcase/v2/index.json" } },
-      compatibility: { convax: ">=0.1.0" },
-      delivery: { kind: "github-pages-releases" },
-    })
-    const registry = parseRegistryV1({
-      schema: "convax.registry/1",
-      sequence: 49,
-      revision: "a".repeat(40),
-      packages: [
-        {
-          kind: "skill",
-          id: "storyboard",
-          name: "Storyboard",
-          description: "Storyboard workflow",
-          version: "1.0.0",
-          compatibility: { skillSchema: "opencode.skill/1" },
-          artifact: {
-            url: "https://github.com/microvoid/convax-plugins/releases/download/skill-storyboard-v1.0.0/convax-skill-storyboard-1.0.0.zip",
-            size: 10,
-            sha256: "a".repeat(64),
-          },
-          yanked: false,
-        },
-      ],
-    })
-    const showcase: ShowcaseV1 = {
-      schema: "convax.showcase/1",
-      sequence: registry.sequence,
-      revision: registry.revision,
-      packages: [
-        {
-          kind: "skill",
-          id: "storyboard",
-          version: "1.0.0",
-          poster: {
-            url: "https://github.com/microvoid/convax-plugins/releases/download/skill-storyboard-v1.0.0/convax-showcase-skill-storyboard-1.0.0-poster.png",
-            mime: "image/png",
-            size: 10,
-            sha256: "b".repeat(64),
-            width: 1280,
-            height: 720,
-            alt: "Storyboard preview",
-          },
-        },
-      ],
-    }
-    expect(parseShowcaseV1(showcase, registry, descriptor)).toEqual(showcase)
-    expect(() => parseShowcaseV1({ ...showcase, sequence: 48 }, registry, descriptor)).toThrow(
-      "does not match Registry",
-    )
-    expect(() =>
-      parseShowcaseV1(
-        {
-          ...showcase,
-          packages: [
-            {
-              ...showcase.packages[0],
-              poster: {
-                ...showcase.packages[0].poster,
-                url: showcase.packages[0].poster.url.replace("microvoid/convax-plugins", "evil/fork"),
-              },
-            },
-          ],
-        },
-        registry,
-        descriptor,
-      ),
-    ).toThrow("declared repository")
-  })
-
   test("binds the Builtin release id to the exact canonical member closure", () => {
     const members = [
       {
@@ -1003,25 +782,7 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("canonical member content digest")
   })
 
-  test("rejects product-lock Release path and encoded-basename injection", () => {
-    const policy = {
-      builtin: { marketplaceId: "convax-builtin" as const, repository: "microvoid/convax-plugins" as const },
-      official: {
-        descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
-        marketplaceId: "convax-official" as const,
-        repository: "microvoid/convax-plugins" as const,
-      },
-      preinstalledPackages: [
-        {
-          marketplaceId: "convax-official" as const,
-          kind: "plugin" as const,
-          id: "ffmpeg-tools" as const,
-          targets: ["darwin-arm64"] as ["darwin-arm64"],
-          setup: "automatic" as const,
-        },
-      ],
-      revision: 1,
-    }
+  test("parses generic preinstall identities symmetrically and rejects Release path injection", () => {
     const lockedArtifact = (name: string, tag: string) => ({
       name,
       url: `https://github.com/microvoid/convax-plugins/releases/download/${tag}/${name}`,
@@ -1029,40 +790,128 @@ describe("@convax/marketplace strict contracts", () => {
       sha256: "a".repeat(64),
     })
     const officialRevision = "b".repeat(64)
-    const lock = {
-      schema: "convax.marketplace-product-lock/1",
-      policy,
-      resolved: {
-        policyDigest: canonicalProductPolicyDigest(policy),
-        builtinBundle: lockedArtifact("convax-builtin-bundle.zip", `builtin-${"c".repeat(64)}`),
-        builtinReservations: [{ kind: "skill", id: "canvas-storyboard" }],
+    const lockFor = (id: string) => {
+      const policy = {
+        builtin: { marketplaceId: "convax-builtin" as const, repository: "microvoid/convax-plugins" as const },
         official: {
-          revision: officialRevision,
-          descriptor: lockedArtifact("marketplace.json", `registry-v2-${officialRevision}`),
-          registry: lockedArtifact("registry-v2.json", `registry-v2-${officialRevision}`),
-          showcase: lockedArtifact("showcase-v2.json", `registry-v2-${officialRevision}`),
+          descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+          marketplaceId: "convax-official" as const,
+          repository: "microvoid/convax-plugins" as const,
         },
-        packages: [
+        preinstalledPackages: [
           {
             marketplaceId: "convax-official",
             kind: "plugin",
-            id: "ffmpeg-tools",
-            version: "0.3.1",
-            setup: "explicit",
-            artifact: lockedArtifact("plugin-ffmpeg-tools-0.3.1.zip", "plugin-ffmpeg-tools-v0.3.1"),
-            ownedSkills: [lockedArtifact("skill-ffmpeg-canvas-0.3.1.zip", "skill-ffmpeg-canvas-v0.3.1")],
-            companions: [
-              {
-                ...lockedArtifact("ffmpeg-tools", "plugin-ffmpeg-tools-v0.3.1"),
-                platform: "darwin",
-                arch: "arm64",
-              },
-            ],
+            id,
+            targets: ["darwin-arm64"],
+            setup: "automatic",
           },
         ],
-      },
+        revision: 1,
+      } satisfies MarketplaceProductPolicy
+      return {
+        schema: "convax.marketplace-product-lock/1",
+        policy,
+        resolved: {
+          policyDigest: canonicalProductPolicyDigest(policy),
+          builtinBundle: lockedArtifact("convax-builtin-bundle.zip", `builtin-${"c".repeat(64)}`),
+          builtinReservations: [
+            { kind: "skill", id: "workflow-foundation" },
+            { kind: "plugin", id: "headless-foundation" },
+          ],
+          official: {
+            revision: officialRevision,
+            descriptor: lockedArtifact("marketplace.json", `registry-v2-${officialRevision}`),
+            registry: lockedArtifact("registry-v2.json", `registry-v2-${officialRevision}`),
+            showcase: lockedArtifact("showcase-v2.json", `registry-v2-${officialRevision}`),
+          },
+          packages: [
+            {
+              marketplaceId: "convax-official",
+              kind: "plugin",
+              id,
+              version: "0.3.1",
+              setup: "explicit",
+              artifact: lockedArtifact(`plugin-${id}-0.3.1.zip`, `plugin-${id}-v0.3.1`),
+              ownedSkills: [lockedArtifact(`skill-${id}-workflow.zip`, `skill-${id}-workflow-v0.3.1`)],
+              companions: [
+                {
+                  ...lockedArtifact(`${id}-companion`, `plugin-${id}-v0.3.1`),
+                  platform: "darwin",
+                  arch: "arm64",
+                },
+              ],
+            },
+          ],
+        },
+      }
     }
-    expect(parseMarketplaceProductLock(lock).resolved.packages[0]?.id).toBe("ffmpeg-tools")
+    const first = parseMarketplaceProductLock(lockFor("alpha-tools"))
+    const unknown = parseMarketplaceProductLock(lockFor("unknown-extension"))
+    const normalize = (value: ReturnType<typeof parseMarketplaceProductLock>) => ({
+      policy: {
+        ...value.policy,
+        preinstalledPackages: value.policy.preinstalledPackages.map((entry) => ({ ...entry, id: "<plugin>" })),
+      },
+      resolved: {
+        ...value.resolved,
+        policyDigest: "<digest>",
+        packages: value.resolved.packages.map((entry) => ({
+          ...entry,
+          id: "<plugin>",
+          artifact: { ...entry.artifact, name: "<artifact>", url: "<artifact-url>" },
+          ownedSkills: entry.ownedSkills.map((skill) => ({ ...skill, name: "<skill>", url: "<skill-url>" })),
+          companions: entry.companions.map((companion) => ({
+            ...companion,
+            name: "<companion>",
+            url: "<companion-url>",
+          })),
+        })),
+      },
+    })
+    expect(first.resolved.packages[0]?.id).toBe("alpha-tools")
+    expect(unknown.resolved.packages[0]?.id).toBe("unknown-extension")
+    expect(normalize(first)).toEqual(normalize(unknown))
+
+    const lock = lockFor("alpha-tools")
+    expect(() =>
+      parseMarketplaceProductLock({
+        ...lock,
+        policy: {
+          ...lock.policy,
+          preinstalledPackages: [
+            ...lock.policy.preinstalledPackages,
+            {
+              marketplaceId: "convax-official",
+              kind: "plugin",
+              id: "alpha-tools",
+              targets: ["linux-x64"],
+              setup: "automatic",
+            },
+          ],
+        },
+      }),
+    ).toThrow("identities")
+    expect(() =>
+      parseMarketplaceProductLock({
+        ...lock,
+        resolved: {
+          ...lock.resolved,
+          packages: [
+            {
+              ...lock.resolved.packages[0],
+              companions: [
+                {
+                  ...lockedArtifact("linux-companion", "plugin-alpha-tools-v0.3.1"),
+                  platform: "linux",
+                  arch: "x64",
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toThrow("policy targets")
     expect(() =>
       parseMarketplaceProductLock({
         ...lock,

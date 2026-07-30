@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react"
+import { parseWebPluginAssetUrl } from "../plugin-asset-contract"
 
 const petHostProtocol = "convax.pet-host/1" as const
 
@@ -113,16 +114,7 @@ export function isPetSettingsProvider(value: unknown): value is PetSettingsProvi
     return false
   }
   try {
-    const url = new URL(value.settingsUrl)
-    return (
-      url.protocol === "convax-plugin:" &&
-      url.hostname === value.pluginId &&
-      url.username === "" &&
-      url.password === "" &&
-      url.port === "" &&
-      url.search === "" &&
-      url.hash === ""
-    )
+    return parseWebPluginAssetUrl(value.settingsUrl).identity.pluginId === value.pluginId
   } catch {
     return false
   }

@@ -94,8 +94,8 @@ export function validateLockedPluginManifest(
   if (parsed.id !== identity.id || parsed.version !== identity.version) {
     throw new Error("Locked Plugin identity changed")
   }
-  if (registryManifest === undefined || canonicalJson(rawManifest) !== canonicalJson(registryManifest)) {
-    throw new Error("Locked Plugin manifest does not canonically match the Official Registry")
+  if (registryManifest === undefined || canonicalJson(parsed) !== canonicalJson(registryManifest)) {
+    throw new Error("Locked Plugin manifest projection does not canonically match the Official Registry")
   }
   return parsed
 }
@@ -132,7 +132,7 @@ export async function stageMarketplaceProductLock(options: {
   if (
     descriptor.id !== lock.policy.official.marketplaceId ||
     descriptor.registry.v2.url !== "https://microvoid.github.io/convax-plugins/registry/v2/index.json" ||
-    descriptor.registry.v1?.url !== "https://microvoid.github.io/convax-plugins/registry/v1/index.json" ||
+    descriptor.registry.v1 !== undefined ||
     descriptor.showcase.v2.url !== "https://microvoid.github.io/convax-plugins/showcase/v2/index.json" ||
     registry.revision !== lock.resolved.official.revision
   ) {

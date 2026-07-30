@@ -12,8 +12,11 @@ import {
   type SourceKey,
   type SourceQualifiedItem,
 } from "@convax/marketplace"
-import { parseWebPluginManifest } from "../plugin-contracts"
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import {
+  parsePluginRuntimeSurface,
+  projectMcpRuntimeSurface,
+} from "./marketplace-runtime-surface"
 import type { MarketplaceItemKind } from "./marketplace-state"
 
 export interface LocalMarketplaceIdentity {
@@ -140,7 +143,9 @@ function skillName(bytes: Uint8Array) {
 function packageIdentity(kind: MarketplaceItemKind, files: readonly InventoryFile[]) {
   const byPath = new Map(files.map((file) => [file.path, file]))
   if (kind === "plugin") {
-    const manifest = parseWebPluginManifest(decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"))
+    const { manifest } = parsePluginRuntimeSurface(
+      decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"),
+    )
     return {
       id: requireIdentityText(manifest.id, "Plugin id"),
       version: requireIdentityText(manifest.version, "Plugin version"),
@@ -727,7 +732,7 @@ export class LocalMarketplaceStore {
           serverJson,
           serverJsonSha256,
         }
-        runtimeSurface = "agent"
+        runtimeSurface = projectMcpRuntimeSurface(delivery)
       } else {
         const extension = parseMcpServerExtension(extensionValue)
         delivery = {
@@ -738,7 +743,7 @@ export class LocalMarketplaceStore {
           serverJson,
           serverJsonSha256,
         }
-        runtimeSurface = (extension.productActions?.length ?? 0) > 0 ? "agent-and-convax" : "agent"
+        runtimeSurface = projectMcpRuntimeSurface(delivery)
       }
     } else {
       delivery = {
@@ -751,24 +756,13 @@ export class LocalMarketplaceStore {
         url: "https://local.invalid",
       }
       if (candidate.kind === "plugin") {
-        const manifest = parseWebPluginManifest(decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"))
-        const contributes = (manifest as { contributes?: Record<string, unknown> }).contributes
-        if (contributes) {
-          if (
-            ["tools", "generation", "services"].some((key) => {
-              const value = contributes[key]
-              return Array.isArray(value) ? value.length > 0 : Boolean(value && typeof value === "object")
-            })
-          )
-            runtimeSurface = "agent-and-convax"
-          else if (Object.keys(contributes).some((key) => ["hooks", "llms", "mcpServers", "skills"].includes(key))) {
-            runtimeSurface = "agent"
-          }
-        }
-        description =
-          typeof (manifest as { description?: unknown }).description === "string"
-            ? String((manifest as { description?: unknown }).description)
-            : ""
+        const parsed = parsePluginRuntimeSurface(
+          decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"),
+          candidate,
+        )
+        const manifest = parsed.manifest
+        runtimeSurface = parsed.runtimeSurface
+        description = manifest.description
       } else {
         const skill = parseAgentSkillMarkdown(
           new TextDecoder("utf-8", { fatal: true }).decode(byPath.get("SKILL.md")!.bytes),

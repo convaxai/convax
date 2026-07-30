@@ -3,7 +3,6 @@ import { createCanvasDocument } from "@convax/canvas/core"
 
 import { parseWebPluginManifest } from "../plugin-contracts"
 import { PluginMaterializationService } from "./plugin-materialization-service"
-import type { WebPluginManager } from "./plugin-manager"
 
 function materializationPlugin(version = "1.0.0") {
   return parseWebPluginManifest({
@@ -24,15 +23,20 @@ function materializationPlugin(version = "1.0.0") {
     },
     description: "Timeline surface",
     entry: "index.html",
+    hostApi: {
+      major: 1,
+      optional: ["canvas.inputs.list", "canvas.inputs.open", "canvas.inputs.close"],
+      required: ["host.context.get"],
+    },
     id: "timeline-surface",
     name: "Timeline Surface",
-    schema: "convax.plugin/7",
+    schema: "convax.plugin/8",
     version,
   })
 }
 
 describe("PluginMaterializationService", () => {
-  test("derives its own renderer under the publication lock and sends one revision-bound business command", async () => {
+  test("derives its own renderer under one snapshot lease and sends one revision-bound business command", async () => {
     const plugin = materializationPlugin()
     const execute = mock(async (request: Parameters<PluginMaterializationService["materialize"]>[0] | any) => {
       const node = request.envelope.command.node
@@ -41,13 +45,22 @@ describe("PluginMaterializationService", () => {
         document: { ...createCanvasDocument({ id: "canvas-1" }), revision: 8 },
       }
     })
-    const withPluginMutation = mock(async (_pluginId: string, operation: (mutation: unknown) => Promise<unknown>) =>
-      operation({ pluginId: "timeline-surface" }),
-    )
+    const release = mock(() => undefined)
+    const assertCurrentActivePlugin = mock(async () => undefined)
     const plugins = {
-      resolveCapabilityIdentity: mock(async () => ({ digest: "a".repeat(64), plugin })),
-      withPluginMutation,
-    } as unknown as Pick<WebPluginManager, "resolveCapabilityIdentity" | "withPluginMutation">
+      acquireActivePlugin: mock(async () => ({
+        identity: {
+          activeRevision: 1,
+          activeSetDigest: "b".repeat(64),
+          pluginId: plugin.id,
+          snapshotDigest: "c".repeat(64),
+          version: plugin.version,
+        },
+        plugin,
+        release,
+      })),
+      assertCurrentActivePlugin,
+    }
     const service = new PluginMaterializationService({ application: { execute } as any, plugins })
 
     const result = await service.materialize({
@@ -61,7 +74,15 @@ describe("PluginMaterializationService", () => {
     })
 
     expect(result.revision).toBe(8)
-    expect(withPluginMutation).toHaveBeenCalledTimes(1)
+    expect(plugins.acquireActivePlugin).toHaveBeenCalledTimes(1)
+    expect(assertCurrentActivePlugin).toHaveBeenCalledWith({
+      activeRevision: 1,
+      activeSetDigest: "b".repeat(64),
+      pluginId: plugin.id,
+      snapshotDigest: "c".repeat(64),
+      version: plugin.version,
+    })
+    expect(release).toHaveBeenCalledTimes(1)
     expect(execute).toHaveBeenCalledTimes(1)
     const request = execute.mock.calls[0]![0] as any
     expect(request).toMatchObject({
@@ -96,9 +117,19 @@ describe("PluginMaterializationService", () => {
     })
     let plugin = materializationPlugin("2.0.0")
     const plugins = {
-      resolveCapabilityIdentity: async () => ({ digest: "b".repeat(64), plugin }),
-      withPluginMutation: async (_id: string, operation: (mutation: unknown) => Promise<unknown>) => operation({}),
-    } as unknown as Pick<WebPluginManager, "resolveCapabilityIdentity" | "withPluginMutation">
+      acquireActivePlugin: async () => ({
+        identity: {
+          activeRevision: 1,
+          activeSetDigest: "c".repeat(64),
+          pluginId: plugin.id,
+          snapshotDigest: "d".repeat(64),
+          version: plugin.version,
+        },
+        plugin,
+        release() {},
+      }),
+      assertCurrentActivePlugin: async () => undefined,
+    }
     const service = new PluginMaterializationService({ application: { execute } as any, plugins })
     const request = {
       actionId: "create-timeline",
@@ -117,5 +148,88 @@ describe("PluginMaterializationService", () => {
     })
     await expect(service.materialize(request)).rejects.toThrow("action is unavailable")
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  test("retains the exact ActiveSet lease through the Canvas mutation boundary", async () => {
+    const plugin = materializationPlugin()
+    let released = false
+    const execute = mock(async (request: any) => {
+      expect(released).toBeFalse()
+      return {
+        createdNodeIds: [request.envelope.command.node.id],
+        document: { ...createCanvasDocument({ id: "canvas-1" }), revision: 2 },
+      }
+    })
+    const plugins = {
+      acquireActivePlugin: async () => ({
+        identity: {
+          activeRevision: 4,
+          activeSetDigest: "a".repeat(64),
+          pluginId: plugin.id,
+          snapshotDigest: "c".repeat(64),
+          version: plugin.version,
+        },
+        plugin,
+        release() {
+          released = true
+        },
+      }),
+      assertCurrentActivePlugin: async () => {
+        expect(released).toBeFalse()
+      },
+    }
+    const service = new PluginMaterializationService({ application: { execute } as any, plugins })
+
+    await service.materialize({
+      actionId: "create-timeline",
+      canvasId: "canvas-1",
+      expectedRevision: 1,
+      pluginId: "timeline-surface",
+      pluginVersion: "1.0.0",
+      projectId: "project-1",
+      sourceNodeId: "video-1",
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(released).toBeTrue()
+  })
+
+  test("fails stale when update or uninstall wins immediately before Canvas persistence", async () => {
+    const plugin = materializationPlugin()
+    const execute = mock(async () => {
+      throw new Error("must not execute")
+    })
+    const release = mock(() => undefined)
+    const identity = {
+      activeRevision: 4,
+      activeSetDigest: "a".repeat(64),
+      pluginId: plugin.id,
+      snapshotDigest: "c".repeat(64),
+      version: plugin.version,
+    }
+    const assertCurrentActivePlugin = mock(async () => {
+      throw new Error("Active Plugin set changed before final mutation")
+    })
+    const service = new PluginMaterializationService({
+      application: { execute } as any,
+      plugins: {
+        acquireActivePlugin: async () => ({ identity, plugin, release }),
+        assertCurrentActivePlugin,
+      },
+    })
+
+    await expect(
+      service.materialize({
+        actionId: "create-timeline",
+        canvasId: "canvas-1",
+        expectedRevision: 1,
+        pluginId: plugin.id,
+        pluginVersion: plugin.version,
+        projectId: "project-1",
+        sourceNodeId: "video-1",
+      }),
+    ).rejects.toThrow("Active Plugin set changed")
+    expect(assertCurrentActivePlugin).toHaveBeenCalledWith(identity)
+    expect(execute).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

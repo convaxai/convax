@@ -1,14 +1,23 @@
 import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
-import { dirname } from "node:path"
 import type {
   DesktopSkillClient,
+  DesktopSkillCatalogItem,
+  DesktopSkillDetails,
+  DesktopSkillShowcase,
   DesktopSkillShowcaseMedia,
   DesktopSkillSource,
+  DesktopSkillSummary,
   DesktopSkillTarget,
 } from "../skill-management-contracts"
-import type { WebPluginManager } from "./plugin-manager"
-import type { RemoteSkillCatalogPort } from "./remote-capability-installer"
 import type { DesktopSkillManager } from "./skill-manager"
+
+export interface SkillManagementCatalogPort {
+  getSkillDetails(id: string): Promise<DesktopSkillDetails>
+  getSkillShowcase(id: string, media: DesktopSkillShowcaseMedia): Promise<DesktopSkillShowcase | null>
+  installSkill(id: string): Promise<DesktopSkillSummary>
+  listSkillCatalog(installedNames: ReadonlySet<string>): Promise<DesktopSkillCatalogItem[]>
+  subscribe?(listener: () => void): () => void
+}
 
 type SkillClientInput<Method extends Exclude<keyof DesktopSkillClient, "onDidChange">> = Parameters<
   DesktopSkillClient[Method]
@@ -20,7 +29,6 @@ export const skillManagementIpcChannels = {
   getSkillShowcase: "agent:skill-showcase",
   importSkill: "agent:skill-import",
   installCatalogSkill: "agent:skill-catalog-install",
-  installPluginSkill: "agent:skill-plugin-install",
   listSkills: "agent:skills-list",
   openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
@@ -92,8 +100,7 @@ export function registerSkillManagementIpc(
   manager: DesktopSkillManager,
   projects: DesktopSkillProjectResolver,
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
-  remoteCatalog?: RemoteSkillCatalogPort,
-  plugins?: Pick<WebPluginManager, "list" | "resolveAsset">,
+  remoteCatalog?: SkillManagementCatalogPort,
 ) {
   const register = <Input, Result>(
     channel: string,
@@ -164,17 +171,6 @@ export function registerSkillManagementIpc(
         if (manager.hasCatalogSkill(input.id)) return manager.installCatalogSkill(input.id)
         if (remoteCatalog) return remoteCatalog.installSkill(input.id)
         throw new Error(`Skill catalog item was not found: ${input.id}`)
-      },
-    ),
-    register<SkillClientInput<"installPluginSkill">, Awaited<ReturnType<DesktopSkillClient["installPluginSkill"]>>>(
-      skillManagementIpcChannels.installPluginSkill,
-      async (_event, input) => {
-        if (!plugins) throw new Error("Legacy Plugin companion Skill installation is unavailable")
-        const plugin = (await plugins.list()).find((candidate) => candidate.id === input.pluginId)
-        if (!plugin) throw new Error(`Installed Plugin was not found: ${input.pluginId}`)
-        if (!plugin.skill) throw new Error(`Plugin does not include a legacy companion Skill: ${input.pluginId}`)
-        const skillFile = await plugins.resolveAsset(plugin.id, plugin.skill)
-        return manager.importFromDirectory(dirname(skillFile))
       },
     ),
     register<SkillClientInput<"openSkill">, Awaited<ReturnType<DesktopSkillClient["openSkill"]>>>(

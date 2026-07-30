@@ -83,44 +83,6 @@ export interface RegistryV2 {
     revision: string;
     packages: RegistryPackage[];
 }
-export interface RegistryV1Artifact {
-    url: string;
-    size: number;
-    sha256: string;
-}
-export type RegistryV1Package = {
-    kind: "plugin";
-    id: string;
-    name: string;
-    description: string;
-    version: string;
-    compatibility: {
-        pluginSchema: string;
-        pluginHost: string;
-    };
-    artifact: RegistryV1Artifact;
-    yanked: boolean;
-    manifest: Record<string, unknown>;
-    companions?: PluginCompanion[];
-} | {
-    kind: "skill";
-    id: string;
-    name: string;
-    description: string;
-    version: string;
-    compatibility: {
-        skillSchema: "opencode.skill/1";
-    };
-    artifact: RegistryV1Artifact;
-    yanked: boolean;
-    ownerPluginId?: string;
-};
-export interface RegistryV1 {
-    schema: "convax.registry/1";
-    sequence: number;
-    revision: string;
-    packages: RegistryV1Package[];
-}
 export interface MarketplaceDescriptor {
     schema: "convax.marketplace/1";
     id: string;
@@ -134,9 +96,6 @@ export interface MarketplaceDescriptor {
     };
     registry: {
         v2: {
-            url: string;
-        };
-        v1?: {
             url: string;
         };
     };
@@ -251,8 +210,6 @@ export declare function parseMarketplaceDescriptor(value: unknown): MarketplaceD
 export declare function parseMcpServerExtension(value: unknown): McpServerExtension;
 export declare function parseRegistryV2(value: unknown): RegistryV2;
 export declare function parseShowcaseV2(value: unknown, registry: RegistryV2, descriptor: MarketplaceDescriptor): ShowcaseV2;
-export declare function projectRegistryV1(registry: RegistryV2, sourceRevision: string): RegistryV1;
-export declare function parseRegistryV1(value: unknown): RegistryV1;
 export declare function parseBuiltinBundle(value: unknown): BuiltinBundle;
 export declare function classifyServerPackageForCatalog(definitionValue: unknown, extensionValue?: unknown): ServerPackageCatalogAdmission;
 export declare function parseServerPackage(definitionValue: unknown, extensionValue?: unknown): ParsedServerPackage;

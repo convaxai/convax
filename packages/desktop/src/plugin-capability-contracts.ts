@@ -1,19 +1,22 @@
 import type { CanvasApplicationCommand, CanvasNodeQuery, CanvasNodeSummary } from "@convax/canvas/application"
 import type { CanvasEdge, CanvasPoint, CanvasSize } from "@convax/canvas/core"
+import type { PluginApiDeclaration } from "@convax/plugin-api"
 
 import type { PluginCapability } from "./plugin-api"
-import type { PluginCapabilityProtocol } from "./plugin-host-protocol"
 
-export const pluginCapabilityRuntimeKinds = ["web", "tool", "builtin"] as const
+export const pluginCapabilityRuntimeKinds = ["web", "tool"] as const
 export type PluginCapabilityRuntimeKind = (typeof pluginCapabilityRuntimeKinds)[number]
 
 /** Immutable identity captured when a host connection is established. */
 export interface PluginPrincipal {
-  capabilityProtocol?: PluginCapabilityProtocol
+  /** Exact v8 global activation generation; none of these fields may be omitted or mixed. */
+  activeRevision: number
+  activeSetDigest: string
   manifestDigest: string
   pluginId: string
   pluginVersion: string
   runtime: PluginCapabilityRuntimeKind
+  snapshotDigest: string
 }
 
 /** Public Project/Canvas identity. Native paths never cross this contract. */
@@ -174,9 +177,12 @@ export interface PluginCanvasCapabilityClient {
 }
 
 export interface ResolvedPluginPrincipal {
+  activeRevision: number
+  activeSetDigest: string
   capabilities: readonly PluginCapability[]
-  capabilityProtocol?: PluginCapabilityProtocol
+  hostApi: PluginApiDeclaration<string>
   manifestDigest: string
   pluginId: string
   pluginVersion: string
+  snapshotDigest: string
 }

@@ -16,6 +16,7 @@ export interface McpToolDefinition {
   name: string
   description?: string
   inputSchema: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
 }
 
 export type McpToolContent =
@@ -41,6 +42,13 @@ export interface GenerationToolOperationMetadata {
   operationId: string
   recovery: "required"
   requestDigest: string
+}
+
+export interface PluginCapabilityToolOperationMetadata {
+  /** Random, invocation-scoped bearer capability for reverse Main requests. */
+  authorityToken: string
+  /** Host-generated id for one exact broker call chain. */
+  operationId: string
 }
 
 interface JsonRpcMessage {
@@ -94,6 +102,42 @@ export interface StdioMcpServerRequestHandler {
   methods: readonly string[]
 }
 
+/**
+ * One explicitly admitted server-to-client JSON-RPC failure. Callers must pass
+ * only bounded portable data; ordinary exceptions never acquire a data field.
+ */
+export class StdioMcpServerRequestError extends Error {
+  readonly data: Readonly<Record<string, unknown>>
+
+  constructor(
+    readonly code: number,
+    message: string,
+    data: Readonly<Record<string, unknown>>,
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = "StdioMcpServerRequestError"
+    if (!Number.isSafeInteger(code) || code > -32_000 || code < -32_099) {
+      throw new TypeError("MCP server request application error code is invalid")
+    }
+    let serialized: string | undefined
+    try {
+      serialized = JSON.stringify(data)
+    } catch {
+      throw new TypeError("MCP server request error data is not portable")
+    }
+    if (serialized === undefined) {
+      throw new TypeError("MCP server request error data is not portable")
+    }
+    if (Buffer.byteLength(serialized, "utf8") > 4_096) {
+      throw new TypeError("MCP server request error data is too large")
+    }
+    const cloned = JSON.parse(serialized) as unknown
+    if (!isRecord(cloned)) throw new TypeError("MCP server request error data must be an object")
+    this.data = Object.freeze(cloned)
+  }
+}
+
 export interface StdioMcpClientOptions {
   args?: readonly string[]
   command: string
@@ -115,6 +159,8 @@ const maximumToolResultContentItems = 1_024
 const supportedMcpProtocolVersion = "2025-03-26"
 const maximumServerRequestMethods = 64
 const maximumServerErrorBytes = 512
+const maximumOutboundQueueBytes = 4 * 1024 * 1024
+const maximumOutboundQueueEntries = 256
 const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true })
 const generationLifecycleNotification = "notifications/convax/generation-lifecycle"
 const generationLifecycleSchema = "convax.generation-lifecycle/1"
@@ -173,10 +219,13 @@ function requireString(value: unknown, label: string) {
 function normalizeTool(value: unknown): McpToolDefinition {
   const input = requireRecord(value, "MCP tool")
   const inputSchema = requireRecord(input.inputSchema, "MCP tool input schema")
+  const outputSchema =
+    input.outputSchema === undefined ? undefined : requireRecord(input.outputSchema, "MCP tool output schema")
   return {
     description: typeof input.description === "string" ? input.description : undefined,
     inputSchema,
     name: requireString(input.name, "MCP tool name"),
+    ...(outputSchema === undefined ? {} : { outputSchema }),
   }
 }
 
@@ -294,6 +343,9 @@ export class StdioMcpClient {
   #connecting?: Promise<void>
   #generationRecoveryCapability?: GenerationRecoveryCapability
   #nextId = 1
+  #outboundQueue: { bytes: number; line: string }[] = []
+  #outboundQueueBytes = 0
+  #outboundWaitingForDrain = false
   #shutdownChild?: ChildProcessWithoutNullStreams
   #resolveChildExit?: () => void
   #serverRequestHandlerClosed = false
@@ -435,6 +487,48 @@ export class StdioMcpClient {
     )
     await lifecycle?.tail
     return normalizeMcpToolCallResult(result)
+  }
+
+  /**
+   * Calls one manifest-exported Plugin capability operation. The metadata is
+   * Main-owned and lets the same sidecar issue a bounded reverse nested invoke
+   * without adding reserved fields to the Plugin's closed input schema.
+   */
+  async callPluginCapabilityTool(
+    name: string,
+    input: Record<string, unknown>,
+    operation: PluginCapabilityToolOperationMetadata,
+    signal?: AbortSignal,
+  ) {
+    if (
+      !operation ||
+      typeof operation.operationId !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(operation.operationId) ||
+      typeof operation.authorityToken !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/u.test(operation.authorityToken)
+    ) {
+      throw new Error("Plugin capability operation metadata is invalid")
+    }
+    await this.connect(signal)
+    if (signal?.aborted) throw abortError(signal.reason)
+    return normalizeMcpToolCallResult(
+      await this.#request(
+        "tools/call",
+        {
+          _meta: {
+            convaxPluginCapability: {
+              authorityToken: operation.authorityToken,
+              operationId: operation.operationId,
+              schema: "convax.plugin-capability-call/1",
+            },
+          },
+          arguments: input,
+          name: requireString(name, "MCP tool name"),
+        },
+        signal,
+        this.#options.requestTimeoutMs,
+      ),
+    )
   }
 
   async generationRecoveryCapability(signal?: AbortSignal) {
@@ -664,7 +758,13 @@ export class StdioMcpClient {
           this.#completeServerRequest(key, active, {
             error: controller.signal.aborted
               ? { code: -32800, message: "Request canceled" }
-              : { code: -32603, message: boundedServerError(error) },
+              : error instanceof StdioMcpServerRequestError
+                ? {
+                    code: error.code,
+                    data: error.data,
+                    message: boundedServerError(error),
+                  }
+                : { code: -32603, message: boundedServerError(error) },
           }),
       )
   }
@@ -672,7 +772,9 @@ export class StdioMcpClient {
   #completeServerRequest(
     key: string,
     active: { controller: AbortController; id: number | string },
-    outcome: { error: { code: number; message: string } } | { result: unknown },
+    outcome:
+      | { error: { code: number; data?: Readonly<Record<string, unknown>>; message: string } }
+      | { result: unknown },
   ) {
     if (this.#closed || this.#serverRequests.get(key) !== active) return
     this.#serverRequests.delete(key)
@@ -740,7 +842,39 @@ export class StdioMcpClient {
   #write(value: unknown) {
     const child = this.#child
     if (!child || !child.stdin.writable) throw new Error("MCP command stdin is not writable")
-    child.stdin.write(`${JSON.stringify(value)}\n`)
+    const line = `${JSON.stringify(value)}\n`
+    const bytes = Buffer.byteLength(line)
+    if (bytes > this.#options.maxMessageBytes) throw new Error("MCP request exceeded the message size limit")
+    const queueByteLimit = Math.max(maximumOutboundQueueBytes, bytes)
+    if (
+      this.#outboundQueue.length >= maximumOutboundQueueEntries ||
+      this.#outboundQueueBytes + bytes > queueByteLimit
+    ) {
+      throw new Error("MCP command stdin is backpressured")
+    }
+    this.#outboundQueue.push({ bytes, line })
+    this.#outboundQueueBytes += bytes
+    this.#flushOutbound()
+  }
+
+  #flushOutbound() {
+    const child = this.#child
+    if (this.#closed || !child || this.#outboundWaitingForDrain) return
+    while (this.#outboundQueue.length > 0) {
+      const next = this.#outboundQueue.shift()!
+      this.#outboundQueueBytes -= next.bytes
+      if (child.stdin.write(next.line)) continue
+      this.#outboundWaitingForDrain = true
+      child.stdin.once("drain", () => {
+        this.#outboundWaitingForDrain = false
+        try {
+          this.#flushOutbound()
+        } catch (error) {
+          this.#fail(error)
+        }
+      })
+      return
+    }
   }
 
   #fail(error: unknown, forceTree = false) {
@@ -778,6 +912,9 @@ export class StdioMcpClient {
     }
     this.#pending.clear()
     this.#generationLifecycles.clear()
+    this.#outboundQueue = []
+    this.#outboundQueueBytes = 0
+    this.#outboundWaitingForDrain = false
     child?.stdin.destroy()
     child?.stdout.destroy()
     child?.stderr.destroy()

@@ -78,7 +78,6 @@ import { CapabilityMutationCoordinator, FileMarketplaceStateStore } from "./mark
 import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-installer"
 import { MarketplaceApplicationService } from "./marketplace-application-service"
 import { MarketplaceLegacyMigration } from "./marketplace-legacy-migration"
-import { authorizeMarketplacePluginSetup } from "./marketplace-plugin-setup-authorization"
 import { registerMarketplaceIpc } from "./marketplace-ipc"
 import { provisionMarketplaceForStartup } from "./marketplace-startup-provisioning"
 import { builtinMarketplaceReservation } from "./builtin-marketplace-bundle"
@@ -92,11 +91,10 @@ import { GenerationCanvasService } from "./generation-canvas-service"
 import { GenerationInputSnapshotStore } from "./generation-input-snapshot-store"
 import { GenerationOperationStore } from "./generation-operation-store"
 import { registerGenerationIpc } from "./generation-ipc"
-import {
-  generationPluginEnvironment,
-  GenerationPluginRuntime,
-  resolveGenerationPluginExecutable,
-} from "./generation-plugin-runtime"
+import { generationPluginEnvironment, GenerationPluginRuntime } from "./generation-plugin-runtime"
+import { PluginInstallationRuntime } from "./plugin-installation-runtime"
+import { pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
+import { PluginSnapshotInstaller } from "./plugin-snapshot-installer"
 import {
   registerCanvasDocumentIpc,
   registerCanvasResourceIpc,
@@ -111,7 +109,6 @@ import { createCanvasExternalMediaDragIconFactory } from "./canvas-external-medi
 import { CanvasExternalMediaDragService } from "./canvas-external-media-drag-service"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
-import { desktopBuiltinPluginCatalog } from "./builtin-plugin-catalog"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
 import { registerWorkspaceSystemStatusIpc } from "./workspace-system-status-ipc"
 import {
@@ -125,25 +122,20 @@ import {
   webPluginAssetPrivileges,
   webPluginAssetScheme,
   webPluginFrameBindingForNavigation,
-  webPluginIdForAssetUrl,
 } from "./plugin-asset-protocol"
 import { registerPluginManagementIpc } from "./plugin-management-ipc"
 import { registerPluginCapabilityIpc } from "./plugin-capability-ipc"
+import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
+import { PluginHostApiService } from "./plugin-host-api-service"
+import { PluginCapabilityBrokerMainService } from "./plugin-capability-broker-service"
 import { registerPluginMaterializationIpc } from "./plugin-materialization-ipc"
 import { PluginMaterializationService } from "./plugin-materialization-service"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
-import { registerPluginCanvasImageIpc } from "./plugin-canvas-image-ipc"
 import { PluginCanvasImageService } from "./plugin-canvas-image-service"
-import { installedPluginAgentMcpServers } from "./plugin-agent-mcp"
+import { PluginAgentConfigurationResolver } from "./plugin-agent-configuration"
 import { PluginAgentMcpConnectionService } from "./plugin-agent-mcp-connection"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import { pluginConnectedMediaPrivileges, pluginConnectedMediaScheme } from "../plugin-connected-media-contracts"
-import {
-  WebPluginManager,
-  WebPluginPublicationDeferredError,
-  type WebPluginPublicationCandidate,
-} from "./plugin-manager"
 import { PluginServiceHost } from "./plugin-service-host"
 import { registerPluginServiceIpc } from "./plugin-service-ipc"
 import { ServiceAwareGenerationTools } from "./service-aware-generation-tools"
@@ -165,24 +157,11 @@ import { PetStateStore } from "./pet-state-store"
 import { registerPetPluginSessionProtocol } from "./pet-session"
 import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
-import { FileRemoteRegistryCache } from "./file-remote-registry-cache"
-import { FileRemoteArtifactCache, FileRemoteShowcaseMediaCache } from "./file-remote-showcase-media-cache"
-import { createElectronRemoteCapabilityFetch } from "./electron-remote-capability-fetch"
-import { RemoteCapabilityInstaller, type RemoteCapabilityRegistryPort } from "./remote-capability-installer"
-import { RemoteCapabilityRegistryClient } from "./remote-capability-registry"
-import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
-import { PluginHookAuthorizationStore } from "./plugin-hook-authorizations"
-import { ToolPluginAuthorizationStore } from "./tool-plugin-authorizations"
+import { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
-import { registerPluginConnectedMediaIpc } from "./plugin-connected-media-ipc"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
-import {
-  composePluginPublicationTransactions,
-  DesktopSkillMutationCoordinator,
-  PluginSkillLifecycle,
-  PluginSkillOwnershipStore,
-} from "./plugin-skill-lifecycle"
+import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 import {
   createProjectResourceProtocolResponse,
   createProjectResourceUrl,
@@ -193,6 +172,13 @@ import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
+const officialMarketplaceSourceKey = computeSourceKey({
+  deliveryPolicy: "github-pages-releases",
+  descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+  kind: "network",
+  marketplaceId: "convax-official",
+  repository: { name: "convax-plugins", owner: "microvoid" },
+})
 type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
@@ -283,8 +269,7 @@ function createWindow(
     projectAssetGcScheduler.closeAll()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
-  const restoreNativeMainWindowControls = () =>
-    setNativeMainWindowControlsVisible(process.platform, window, true)
+  const restoreNativeMainWindowControls = () => setNativeMainWindowControlsVisible(process.platform, window, true)
   window.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame) restoreNativeMainWindowControls()
   })
@@ -303,9 +288,9 @@ function createWindow(
       return
     }
     const frameId = frame.frameTreeNodeId
-    const boundPluginId = webPluginFrameBindingForNavigation(frame.url, event.url, pluginFrameBindings.get(frameId))
-    if (boundPluginId && !pluginFrameBindings.has(frameId)) pluginFrameBindings.set(frameId, boundPluginId)
-    if (!isAllowedWebPluginFrameNavigation(frame.url, event.url, boundPluginId)) {
+    const boundIdentity = webPluginFrameBindingForNavigation(frame.url, event.url, pluginFrameBindings.get(frameId))
+    if (boundIdentity && !pluginFrameBindings.has(frameId)) pluginFrameBindings.set(frameId, boundIdentity)
+    if (!isAllowedWebPluginFrameNavigation(frame.url, event.url, boundIdentity)) {
       event.preventDefault()
     }
   })
@@ -313,11 +298,11 @@ function createWindow(
     "did-frame-navigate",
     (_event, url, _httpResponseCode, _httpStatusText, isMainFrame, frameProcessId, frameRoutingId) => {
       if (isMainFrame) return
-      const pluginId = webPluginIdForAssetUrl(url)
+      const binding = webPluginFrameBindingForNavigation("", url)
       const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
-      if (!pluginId || !frame) return
+      if (!binding || !frame) return
       const bound = pluginFrameBindings.get(frame.frameTreeNodeId)
-      if (!bound) pluginFrameBindings.set(frame.frameTreeNodeId, pluginId)
+      if (!bound) pluginFrameBindings.set(frame.frameTreeNodeId, binding)
     },
   )
   let closeGate: CloseGate = "idle"
@@ -387,110 +372,19 @@ function startApplication() {
       inspector: petAssetInspector,
       petsRoot: join(userDataDirectory, "pets"),
     })
-    const pluginManager = new WebPluginManager(
-      join(userDataDirectory, "plugins"),
-      {},
-      desktopBuiltinPluginCatalog.map((item) => item.manifest.id),
-      { petAssetInspector },
-    )
-    // Package recovery selects the authoritative Plugin version used by every
-    // dependent authorization and owned-Skill journal. An ambiguous package
-    // state must stop startup instead of letting later recovery guess.
-    await pluginManager.reconcilePublicationState()
-    const companionStore = new ManagedPluginCompanionStore(join(userDataDirectory, "plugin-companions"))
+    const pluginInstallations = new PluginInstallationRuntime(join(userDataDirectory, "plugin-installations"))
+    const pluginSnapshotInstaller = new PluginSnapshotInstaller(pluginInstallations)
     const generationEnvironment = generationPluginEnvironment(process.env)
-    const toolPluginAuthorizations = new ToolPluginAuthorizationStore(
-      join(userDataDirectory, "plugin-authorizations"),
-      {
-        environment: generationEnvironment,
-        resolveExecutable: resolveGenerationPluginExecutable,
-        resolveManagedExecutable: (pluginId, pluginVersion, command) =>
-          companionStore.resolve(pluginId, pluginVersion, command),
-      },
-    )
-    const pluginHookAuthorizations = new PluginHookAuthorizationStore(
-      join(userDataDirectory, "plugin-hook-authorizations"),
-      {
-        resolveInstalledHook: (plugin) => pluginManager.resolveAsset(plugin.id, plugin.hooks!),
-      },
-    )
     const pluginServiceAuthorizationCheckpoints = new PluginServiceAuthorizationCheckpointStore(
       join(userDataDirectory, "plugin-service-authorization-checkpoints"),
     )
-    const reconcileToolPluginExecutionState = async (
-      installedPlugins: Awaited<ReturnType<typeof pluginManager.list>>,
-    ) => {
-      try {
-        await companionStore.reconcile(installedPlugins)
-      } catch (error) {
-        console.warn("Could not reconcile installed Tool Plugin companions", error)
-      }
-      try {
-        await toolPluginAuthorizations.reconcile(installedPlugins)
-      } catch (error) {
-        console.warn("Could not reconcile installed Tool Plugin authorizations", error)
-      }
-      try {
-        await pluginHookAuthorizations.reconcile(installedPlugins)
-      } catch (error) {
-        console.warn("Could not reconcile installed Plugin Hook authorizations", error)
-      }
-
-      const identities: Array<{ pluginId: string; serviceIdentity: string }> = []
-      const retainUnknownPluginIds: string[] = []
-      for (const plugin of installedPlugins) {
-        if (plugin.contributes.service === undefined) continue
-        try {
-          const serviceIdentity = await toolPluginAuthorizations.authorizedServiceIdentity(plugin)
-          if (serviceIdentity) identities.push({ pluginId: plugin.id, serviceIdentity })
-        } catch (error) {
-          // Keep a bounded recovery checkpoint when only identity inspection is
-          // unavailable. Runtime verification and checkpoint read still require
-          // an exact match before any Cookie can leave main.
-          retainUnknownPluginIds.push(plugin.id)
-          console.warn(`Could not inspect installed Tool Plugin service identity: ${plugin.id}`, error)
-        }
-      }
-      try {
-        await pluginServiceAuthorizationCheckpoints.reconcile(identities, retainUnknownPluginIds)
-      } catch (error) {
-        console.warn("Could not reconcile Plugin service authorization recovery state", error)
-      }
-    }
     const reconcileToolPluginExecutionStateForPlugin = async (pluginId: string) => {
-      const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
-      try {
-        await companionStore.reconcilePlugin(pluginId, current)
-      } catch (error) {
-        console.warn(`Could not reconcile changed Tool Plugin companion: ${pluginId}`, error)
-      }
-      try {
-        await toolPluginAuthorizations.reconcilePlugin(pluginId, current)
-      } catch (error) {
-        console.warn(`Could not reconcile changed Tool Plugin authorization: ${pluginId}`, error)
-      }
       try {
         await pluginServiceAuthorizationCheckpoints.remove(pluginId)
       } catch (error) {
         console.warn(`Could not discard changed Plugin service authorization checkpoint: ${pluginId}`, error)
       }
     }
-    for (const item of desktopBuiltinPluginCatalog) {
-      await pluginManager
-        .claimInstalledBuiltinBundle(
-          item.bundle,
-          "legacyBundleDigests" in item ? { legacyBundleDigests: item.legacyBundleDigests } : {},
-        )
-        .catch((error) => {
-          console.warn(`Could not claim installed built-in Plugin ${item.manifest.id}`, error)
-        })
-    }
-    await pluginManager
-      .list()
-      .then(reconcileToolPluginExecutionState)
-      .catch((error) => {
-        console.warn("Could not list installed Tool Plugins for execution-state reconciliation", error)
-      })
     const projectCanvases = new NodeProjectCanvasManager(projectManager, projectManager)
     const projectAssets = new ProjectManagedAssetStore(projectManager)
     const projectFilePublisher = new ProjectFilePublisher(projectManager, projectAssets)
@@ -563,16 +457,16 @@ function startApplication() {
         .reloadDocument({ canvasId: event.ref.canvasId, scopeId: event.ref.projectId })
         .catch((error) => console.warn("Could not refresh the Canvas renderer projection", error))
     })
-    const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginManager)
+    const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginInstallations)
     const pluginConnectedMedia = new PluginConnectedMediaService({
       changes: canvasDocumentChanges,
       documents: canvasDocuments,
       media: managedCanvasMedia,
-      plugins: pluginManager,
+      plugins: pluginInstallations,
     })
     const pluginMaterialization = new PluginMaterializationService({
       application: canvasApplication,
-      plugins: pluginManager,
+      plugins: pluginInstallations,
     })
     const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
       application: canvasApplication,
@@ -584,27 +478,35 @@ function startApplication() {
     })
     const pluginCanvasImages = new PluginCanvasImageService({
       documents: canvasDocuments,
-      plugins: pluginManager,
+      plugins: pluginInstallations,
       projects: projectFilePublisher,
       resources: canvasResources,
     })
     let marketplaceRuntimeState: FileMarketplaceStateStore | undefined
-    const isMarketplacePluginEnabled = async (pluginId: string) => {
-      const plugin = (await pluginManager.list()).find((entry) => entry.id === pluginId)
-      if (!plugin) return false
-      const [tool, hook] = await Promise.all([
-        toolPluginAuthorizations.verifyInstalledIdentity(plugin).catch(() => null),
-        pluginHookAuthorizations.verifyInstalledIdentity(plugin).catch(() => null),
-      ])
-      const authorizationContractDigest = tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
+    const marketplacePluginRuntimeState = async (pluginId: string) => {
+      const plugin = (await pluginInstallations.list()).find((entry) => entry.id === pluginId)
+      if (!plugin) return "disabled" as const
+      const authorizationContractDigest = await pluginInstallations.executionAuthorizationIdentity(pluginId)
       const state = await marketplaceRuntimeState?.read()
+      if (
+        state?.transitions.some(
+          (transition) => transition.identity.kind === "plugin" && transition.identity.id === pluginId,
+        )
+      ) {
+        return "recovering" as const
+      }
       return isMarketplacePluginRuntimeAdmitted({
         authorizationContractDigest,
         pluginId,
         pluginVersion: plugin.version,
         state,
       })
+        ? ("enabled" as const)
+        : ("disabled" as const)
     }
+    const isMarketplacePluginEnabled = async (pluginId: string) =>
+      (await marketplacePluginRuntimeState(pluginId)) === "enabled"
+    let pluginHostApi: PluginHostApiService | undefined
     const generationRuntime = new GenerationPluginRuntime({
       bunRuntime: desktopBunRuntime({
         applicationDirectory: app.getAppPath(),
@@ -612,18 +514,29 @@ function startApplication() {
         resourcesDirectory: process.resourcesPath,
       }),
       canvasCapabilities: {
-        broker: pluginCanvasCapabilities,
+        async connect(input) {
+          const host = pluginHostApi
+          if (!host) throw new Error("Plugin Host API router is not initialized")
+          const canvas = await pluginCanvasCapabilities.connect(
+            { principal: input.principal, scope: input.scope },
+            input.invocationLease,
+          )
+          return host.connect({ ...input, canvas })
+        },
         principals: pluginPrincipals,
       },
       environment: generationEnvironment,
       isPluginEnabled: isMarketplacePluginEnabled,
-      plugins: pluginManager,
-      recoveryRuntimeDirectory: join(userDataDirectory, "generation-sidecars", "runtime-v1"),
+      pluginRuntimeState: marketplacePluginRuntimeState,
+      plugins: pluginInstallations,
+      recoveryRuntimeDirectory: join(userDataDirectory, "generation-sidecars", "runtime-v3"),
       recoveryStateDirectory: join(userDataDirectory, "generation-sidecars", "operation-v1"),
-      resolveManagedExecutable: (pluginId, pluginVersion, command) =>
-        companionStore.resolve(pluginId, pluginVersion, command),
-      verifyAuthorization: ({ binding, bindingKind, plugin }) =>
-        toolPluginAuthorizations.verify(plugin, bindingKind, binding),
+    })
+    await generationRuntime.initialize()
+    const pluginCapabilityBroker = new PluginCapabilityBrokerMainService({
+      installations: pluginInstallations,
+      principals: pluginPrincipals,
+      sidecars: generationRuntime,
     })
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
@@ -713,41 +626,17 @@ function startApplication() {
       }),
       root: join(userDataDirectory, "mcp-server-runtime"),
     })
+    const agentPluginConfigurations = new PluginAgentConfigurationResolver({
+      plugins: pluginInstallations,
+      readMarketplaceState: () => Promise.resolve(marketplaceRuntimeState?.read()),
+    })
     const agentRuntime = new OpenCodeAgentRuntime({
       binaryDirectory: desktopOpenCodeBinaryDirectory({
         isPackaged: app.isPackaged,
         resourcesDirectory: process.resourcesPath,
       }),
       configDirectory: openCodeConfigDirectory,
-      async resolveMcpServers() {
-        const configured = installedPluginAgentMcpServers(await pluginManager.list())
-        if (Object.keys(configured).length > 0) {
-          console.warn(
-            "Internet MCP servers remain disabled because OpenCode does not expose a socket-level outbound-policy boundary",
-          )
-        }
-        return {}
-      },
-      async resolveHookModules() {
-        const modules: Array<{ fileUrl: string }> = []
-        const ids = (await pluginManager.list())
-          .filter((plugin) => plugin.hooks !== undefined)
-          .map((plugin) => plugin.id)
-          .sort()
-        for (const pluginId of ids) {
-          if (!(await isMarketplacePluginEnabled(pluginId))) continue
-          try {
-            const fileUrl = await pluginManager.withPluginMutation(pluginId, async () => {
-              const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
-              return current ? pluginHookAuthorizations.resolve(current) : null
-            })
-            if (fileUrl) modules.push({ fileUrl })
-          } catch (error) {
-            console.warn(`Disabled changed or unauthorized Plugin Hook module: ${pluginId}`, error)
-          }
-        }
-        return modules
-      },
+      resolvePluginConfiguration: () => agentPluginConfigurations.resolve(),
       async resolveProviders() {
         try {
           const providers = await generationRuntime.connectLlmProviders()
@@ -867,7 +756,7 @@ function startApplication() {
     })
     pets = new PetProviderController({
       activity: petActivity,
-      pluginManager,
+      pluginManager: pluginInstallations,
       stateStore: petStateStore,
       window: petWindow,
     })
@@ -895,88 +784,52 @@ function startApplication() {
         const result = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
         return result.canceled ? undefined : result.filePaths[0]
       },
-      restoreProvider: (pluginId) => pets.restoreProviderRuntime(pluginId),
     })
     connectPetOverlay = petIpc.connectOverlay
     const pluginAgentMcpConnection = new PluginAgentMcpConnectionService(agentRuntime, userDataDirectory)
     const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
-    const pluginSkillOwnership = new PluginSkillOwnershipStore(
-      join(userDataDirectory, "plugin-skill-bindings", "index-v1.json"),
-    )
     const skillMutations = new DesktopSkillMutationCoordinator()
-    const pluginSkillLifecycle = new PluginSkillLifecycle(
-      managedSkillStore,
-      pluginSkillOwnership,
-      () => agentRuntime.listSkills({ directory: userDataDirectory }),
-      skillMutations,
-    )
-    const installedPluginsForSkillReconciliation = await pluginManager.list()
-    await pluginSkillLifecycle.reconcileAll(installedPluginsForSkillReconciliation, (pluginId, relativePath) =>
-      pluginManager.resolveAsset(pluginId, relativePath),
-    )
+    const pluginSkillReservations = {
+      async assertSettled() {
+        await pluginInstallations.readActive()
+      },
+      async reservations() {
+        const activeSet = await pluginInstallations.acquireActivePluginSet()
+        try {
+          return activeSet.plugins.flatMap((handle) =>
+            handle.descriptor.ownedSkills.map((skill) => ({
+              pluginId: handle.plugin.id,
+              pluginName: handle.plugin.name,
+              pluginVersion: handle.plugin.version,
+              skillName: skill.name,
+              sourcePath:
+                handle.plugin.contributes.skills?.find((contribution) => contribution.name === skill.name)?.path ??
+                skill.name,
+              sourceSha256: pluginSnapshotCanonicalDigest(skill),
+            })),
+          )
+        } finally {
+          activeSet.release()
+        }
+      },
+    }
     const skillManager = new DesktopSkillManager(
       managedSkillStore,
       agentRuntime,
       userDataDirectory,
       [],
       [],
-      pluginSkillOwnership,
+      pluginSkillReservations,
       skillMutations,
     )
-    const createRemoteCapabilityInstaller = (
-      registry: RemoteCapabilityRegistryPort,
-      deferExecutionAuthorization = false,
-    ) =>
-      new RemoteCapabilityInstaller({
-        authorizationStore: toolPluginAuthorizations,
+    const marketplaceArtifactInstaller = new MarketplaceArtifactInstaller({
         beforePluginPublish: async (pluginId) => {
           await pluginServices.discardPlugin(pluginId)
         },
-        builtinPlugins: desktopBuiltinPluginCatalog,
-        builtinSkills: [],
-        companionStore,
-        deferExecutionAuthorization,
-        hookAuthorizationStore: pluginHookAuthorizations,
-        pluginManager,
-        pluginSkillLifecycle,
-        preparePluginPublication: async (pluginId) => petIpc.prepareProviderChange(pluginId),
-        registry,
+        deferExecutionAuthorization: true,
         skillManager,
+        snapshotInstaller: pluginSnapshotInstaller,
       })
-    const remoteCapabilityRegistry = new RemoteCapabilityRegistryClient({
-      artifactCache: new FileRemoteArtifactCache(join(userDataDirectory, "capability-registry", "artifact-v1")),
-      cache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "index-v1.json")),
-      fetch: createElectronRemoteCapabilityFetch(net),
-      showcaseCache: new FileRemoteRegistryCache(join(userDataDirectory, "capability-registry", "showcase-v1.json")),
-      showcaseMediaCache: new FileRemoteShowcaseMediaCache(
-        join(userDataDirectory, "capability-registry", "showcase-media-v1"),
-      ),
-    })
-    const remoteCapabilities = createRemoteCapabilityInstaller(remoteCapabilityRegistry)
-    const marketplaceRemoteCapabilities = createRemoteCapabilityInstaller(remoteCapabilityRegistry, true)
-    const prepareLocalPluginPublication = async (
-      plugin: InstalledWebPluginSummary,
-      candidate: WebPluginPublicationCandidate,
-    ) => {
-      const authorization = await toolPluginAuthorizations.prepareInstall(plugin)
-      let hookAuthorization
-      try {
-        hookAuthorization = await pluginHookAuthorizations.prepareInstall(plugin, candidate)
-        const ownedSkills = await pluginSkillLifecycle.prepareInstall(plugin, candidate)
-        // Pet state, owned Skills, and exact execution authorization all share
-        // the package publication decision.
-        return composePluginPublicationTransactions([
-          petIpc.prepareProviderChange(plugin.id),
-          ownedSkills,
-          hookAuthorization,
-          authorization,
-        ])
-      } catch (error) {
-        await hookAuthorization?.rollback().catch(() => undefined)
-        await authorization.rollback().catch(() => undefined)
-        throw error
-      }
-    }
     const marketplaceProductRoot = app.isPackaged
       ? join(process.resourcesPath, "marketplace-product")
       : join(app.getAppPath(), ".packaging", "marketplace-product")
@@ -990,8 +843,9 @@ function startApplication() {
     const developmentOfficialArtifactRoot = process.env.CONVAX_OFFICIAL_MARKETPLACE_ARTIFACT_ROOT
     if (!app.isPackaged && developmentOfficialArtifactRoot) {
       try {
-        developmentOfficialArtifacts =
-          await DevelopmentOfficialMarketplaceArtifacts.load(developmentOfficialArtifactRoot)
+        developmentOfficialArtifacts = await DevelopmentOfficialMarketplaceArtifacts.load(
+          developmentOfficialArtifactRoot,
+        )
       } catch (error) {
         console.warn("Development Official Marketplace artifacts are unavailable", {
           errorType: error instanceof Error ? error.name : "UnknownError",
@@ -1006,13 +860,7 @@ function startApplication() {
       reservedMarketplaceIds: new Set(["convax-builtin", "convax-local", "convax-official"]),
       root: join(userDataDirectory, "marketplaces", "network"),
     })
-    const officialSourceKey = computeSourceKey({
-      deliveryPolicy: "github-pages-releases",
-      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
-      kind: "network",
-      marketplaceId: "convax-official",
-      repository: { name: "convax-plugins", owner: "microvoid" },
-    })
+    const officialSourceKey = officialMarketplaceSourceKey
     let localMarketplaceSourceKey: SourceKey | undefined
     let localMarketplace: LocalMarketplaceStore | undefined
     const localCandidate = new LocalMarketplaceStore({
@@ -1126,21 +974,32 @@ function startApplication() {
     }
     const marketplaceInstaller = new DesktopMarketplaceCapabilityInstaller({
       authorizePlugin: async (id, mode) => {
-        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
+        const current = await pluginInstallations.readActive()
+        const plugin = current.plugins.find((entry) => entry.plugin.id === id)?.plugin
         if (!plugin) throw new Error("Installed Plugin is unavailable")
-        return authorizeMarketplacePluginSetup(plugin, mode, {
-          authorizeHook: (candidate) => pluginHookAuthorizations.authorizeInstalled(candidate),
-          authorizeTool: (candidate, options) => toolPluginAuthorizations.authorizeInstalled(candidate, options),
+        if (mode === "automatic-product-lock" && plugin.hooks) {
+          throw new Error("Automatic Plugin setup cannot authorize executable Hook modules")
+        }
+        if (
+          mode === "automatic-product-lock" &&
+          (plugin.contributes.service !== undefined ||
+            (plugin.contributes.capabilities?.exports.length ?? 0) > 0 ||
+            (plugin.contributes.capabilities?.imports.optional.length ?? 0) > 0 ||
+            (plugin.contributes.capabilities?.imports.required.length ?? 0) > 0)
+        ) {
+          throw new Error("Automatic Plugin setup cannot authorize extra runtime authority")
+        }
+        if (mode === "automatic-product-lock" && !plugin.runtime) {
+          throw new Error("Automatic Plugin setup requires an immutable managed companion")
+        }
+        await pluginInstallations.authorizeExecution(current.revision, id, {
+          companion: plugin.runtime !== undefined,
+          hook: mode !== "automatic-product-lock" && plugin.hooks !== undefined,
         })
+        return pluginInstallations.executionAuthorizationIdentity(id)
       },
       currentPluginAuthorization: async (id) => {
-        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
-        if (!plugin) throw new Error("Installed Plugin is unavailable")
-        const [tool, hook] = await Promise.all([
-          toolPluginAuthorizations.verifyInstalledIdentity(plugin),
-          pluginHookAuthorizations.verifyInstalledIdentity(plugin),
-        ])
-        return tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : null
+        return pluginInstallations.executionAuthorizationIdentity(id)
       },
       disablePlugin: async (id) => {
         availableGenerationTools.invalidate()
@@ -1159,12 +1018,6 @@ function startApplication() {
         await agentRuntime.refreshConfiguration()
         scheduleGenerationCatalogRefresh("a Marketplace Plugin change")
         await reconcileToolPluginExecutionStateForPlugin(pluginId)
-        const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
-        try {
-          await pluginHookAuthorizations.reconcilePlugin(pluginId, current)
-        } catch (error) {
-          console.warn(`Could not reconcile changed Marketplace Plugin Hook authorization: ${pluginId}`, error)
-        }
       },
       refreshPetProvider: () => pets.refresh(),
       fetchArtifact: async (item, artifact) => {
@@ -1175,25 +1028,24 @@ function startApplication() {
         })
       },
       installLocalPlugin: async (directory, options) => {
-        await pluginManager.install(directory, {
-          beforePublish: options.authorizeExecution
-            ? prepareLocalPluginPublication
-            : async (plugin, candidate) =>
-                composePluginPublicationTransactions([
-                  petIpc.prepareProviderChange(plugin.id),
-                  await pluginSkillLifecycle.prepareInstall(plugin, candidate),
-                ]),
-          updateExisting: true,
-        })
+        if (!localMarketplaceSourceKey) throw new Error("Local Marketplace SourceKey is unavailable")
+        await pluginSnapshotInstaller.installLocalDirectory(
+          directory,
+          {
+            authorizeExecution: options.authorizeExecution,
+            sourceIdentity: localMarketplaceSourceKey,
+          },
+          { allowCurrent: true },
+        )
       },
       installLocalSkill: async (directory) => {
         await skillManager.importFromDirectory(directory)
       },
       mcp: marketplaceMcp,
-      remote: marketplaceRemoteCapabilities,
+      remote: marketplaceArtifactInstaller,
       resolveInstalledTransition: async (transition) => {
         if (transition.identity.kind === "plugin") {
-          const current = (await pluginManager.list()).find((entry) => entry.id === transition.identity.id)
+          const current = (await pluginInstallations.list()).find((entry) => entry.id === transition.identity.id)
           if (!current) return transition.next === null ? "next" : "previous"
           if (transition.next?.version === current.version) return "next"
           if (transition.previous?.version === current.version) return "previous"
@@ -1204,25 +1056,13 @@ function startApplication() {
       },
       resolvePackage: resolveMarketplacePackage,
       uninstallPlugin: async (id) => {
-        await pluginManager.uninstall(id, {
-          beforeRemove: async (plugin) =>
-            composePluginPublicationTransactions([
-              petIpc.prepareProviderChange(plugin.id),
-              await pluginSkillLifecycle.prepareUninstall(plugin),
-            ]),
-        })
+        await pluginSnapshotInstaller.uninstall(id)
       },
       uninstallSkill: async (id) => {
         await skillManager.uninstall(id)
       },
       verifyPluginAuthorization: async (id, expected) => {
-        const plugin = (await pluginManager.list()).find((entry) => entry.id === id)
-        if (!plugin) return false
-        const [tool, hook] = await Promise.all([
-          toolPluginAuthorizations.verifyInstalledIdentity(plugin),
-          pluginHookAuthorizations.verifyInstalledIdentity(plugin),
-        ])
-        return sha256Hex(canonicalJson({ hook, tool })) === expected
+        return (await pluginInstallations.executionAuthorizationIdentity(id).catch(() => null)) === expected
       },
     })
     const marketplace = new MarketplaceApplicationService({
@@ -1287,8 +1127,9 @@ function startApplication() {
         }
         let refreshedDevelopmentArtifacts = developmentOfficialArtifacts
         if (!app.isPackaged && developmentOfficialArtifactRoot) {
-          refreshedDevelopmentArtifacts =
-            await DevelopmentOfficialMarketplaceArtifacts.load(developmentOfficialArtifactRoot)
+          refreshedDevelopmentArtifacts = await DevelopmentOfficialMarketplaceArtifacts.load(
+            developmentOfficialArtifactRoot,
+          )
         }
         marketplaceProduct = refreshedProduct
         developmentOfficialArtifacts = refreshedDevelopmentArtifacts
@@ -1387,29 +1228,34 @@ function startApplication() {
               item.sourceKey === officialSourceKey &&
               item.version === ffmpegRegistry?.version,
           )
-        const installedFfmpeg = (await pluginManager.list()).find(
+        const installedFfmpeg = (await pluginInstallations.list()).find(
           (plugin) => plugin.id === "ffmpeg-tools" && plugin.version === ffmpegRegistry?.version,
         )
         if (ffmpegRegistry && ffmpegCatalog && installedFfmpeg) {
           const verified = await marketplaceProduct.verifiedCandidate(ffmpegRegistry)
-          if (await pluginManager.isBundleInstalled({ files: unpackSafeZip(verified.artifactBytes) })) {
-            const [tool, hook] = await Promise.all([
-              toolPluginAuthorizations.verifyInstalledIdentity(installedFfmpeg).catch(() => null),
-              pluginHookAuthorizations.verifyInstalledIdentity(installedFfmpeg).catch(() => null),
-            ])
-            const authorizationContractDigest = tool || hook ? sha256Hex(canonicalJson({ hook, tool })) : undefined
-            proofs.push({
-              ...(authorizationContractDigest ? { authorizationContractDigest } : {}),
-              record: {
-                artifactDigest: sha256Hex(canonicalJson(ffmpegCatalog.delivery)),
-                id: ffmpegCatalog.id,
-                kind: ffmpegCatalog.kind,
-                revision: 1,
-                runtimeSurface: ffmpegCatalog.runtimeSurface,
-                sourceKey: ffmpegCatalog.sourceKey,
-                version: ffmpegCatalog.version,
-              },
-            })
+          const handle = await pluginInstallations.acquireActivePlugin(installedFfmpeg.id)
+          try {
+            if (
+              handle.descriptor.package.artifact.sha256 === sha256Hex(verified.artifactBytes) &&
+              handle.descriptor.package.artifact.size === verified.artifactBytes.byteLength
+            ) {
+              const authorizationContractDigest =
+                (await pluginInstallations.executionAuthorizationIdentity(installedFfmpeg.id)) ?? undefined
+              proofs.push({
+                ...(authorizationContractDigest ? { authorizationContractDigest } : {}),
+                record: {
+                  artifactDigest: sha256Hex(canonicalJson(ffmpegCatalog.delivery)),
+                  id: ffmpegCatalog.id,
+                  kind: ffmpegCatalog.kind,
+                  revision: 1,
+                  runtimeSurface: ffmpegCatalog.runtimeSurface,
+                  sourceKey: ffmpegCatalog.sourceKey,
+                  version: ffmpegCatalog.version,
+                },
+              })
+            }
+          } finally {
+            handle.release()
           }
         }
         return proofs
@@ -1424,7 +1270,12 @@ function startApplication() {
     })
     scheduleGenerationCatalogRefresh("startup provisioning")
     const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
-    const disposePetPluginProtocol = registerPetPluginSessionProtocol(session, pluginManager, customPets, fetchPetAsset)
+    const disposePetPluginProtocol = registerPetPluginSessionProtocol(
+      session,
+      pluginInstallations,
+      customPets,
+      fetchPetAsset,
+    )
     await pets.initialize()
     const petActivityNotifier = new PetActivityNotifier({
       createNotification(options) {
@@ -1498,7 +1349,6 @@ function startApplication() {
         resolveActiveCanvas,
       },
     )
-    const disposePluginCanvasImageIpc = registerPluginCanvasImageIpc(pluginCanvasImages, ipcSecurity)
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
       onError: (error) => console.warn("Canvas native media drag failed", error),
@@ -1560,37 +1410,88 @@ function startApplication() {
         isTrustedSender: ipcSecurity.isTrustedSender,
       },
     )
+    const pluginHostApiAdapter = new PluginHostApiMainAdapter({
+      agent: agentRuntime,
+      application: canvasApplication,
+      canvases: projectCanvases,
+      documents: canvasDocuments,
+      generation,
+      images: pluginCanvasImages,
+      media: pluginConnectedMedia,
+      projects: projectManager,
+    })
+    pluginHostApi = new PluginHostApiService({
+      nodes: pluginHostApiAdapter,
+      operations: pluginHostApiAdapter,
+      principals: {
+        async liveState(principal) {
+          const state = await marketplaceRuntimeState?.read()
+          const recovering = Boolean(
+            state?.transitions.some(
+              (transition) => transition.identity.kind === "plugin" && transition.identity.id === principal.pluginId,
+            ),
+          )
+          return {
+            disabled: recovering || !(await isMarketplacePluginEnabled(principal.pluginId)),
+            recovering,
+            setupComplete: true,
+          }
+        },
+        async resolve(principal) {
+          const [resolved, identity] = await Promise.all([
+            pluginPrincipals.resolve(principal),
+            pluginInstallations.resolveCapabilityIdentity(principal.pluginId),
+          ])
+          if (
+            !resolved ||
+            !identity ||
+            identity.plugin.id !== principal.pluginId ||
+            identity.plugin.version !== principal.pluginVersion ||
+            identity.activeRevision !== principal.activeRevision ||
+            identity.activeSetDigest !== principal.activeSetDigest ||
+            identity.snapshotDigest !== principal.snapshotDigest
+          ) {
+            return null
+          }
+          return { ...resolved, pluginName: identity.plugin.name }
+        },
+      },
+    })
     const disposePluginCapabilityIpc = registerPluginCapabilityIpc({
       broker: pluginCanvasCapabilities,
+      host: pluginHostApi,
       isTrustedSender: ipcSecurity.isTrustedSender,
+      pluginBroker: pluginCapabilityBroker,
       principals: pluginPrincipals,
-    })
-    const disposePluginConnectedMediaIpc = registerPluginConnectedMediaIpc({
-      isTrustedSender: ipcSecurity.isTrustedSender,
-      service: pluginConnectedMedia,
     })
     const disposePluginMaterializationIpc = registerPluginMaterializationIpc({
       isTrustedSender: ipcSecurity.isTrustedSender,
       service: pluginMaterialization,
     })
     const disposePluginManagementIpc = registerPluginManagementIpc(
-      pluginManager,
-      desktopBuiltinPluginCatalog,
+      pluginInstallations,
+      [],
       ipcSecurity.isTrustedSender,
-      remoteCapabilities,
+      undefined,
       {
         beforeChange: async (pluginId) => {
           pluginConnectedMedia.revokePlugin(pluginId)
           await pluginServices.discardPlugin(pluginId)
         },
         connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
+        installLocal: async (directory) => {
+          if (!localMarketplace || !localMarketplaceSourceKey) {
+            throw new Error("Local Marketplace is unavailable")
+          }
+          const candidate = await localMarketplace.importDirectory(directory)
+          if (candidate.kind !== "plugin") throw new Error("Selected directory is not a Plugin package")
+          return pluginSnapshotInstaller.installLocalDirectory(
+            localMarketplace.resolveSnapshotDirectory(candidate),
+            { authorizeExecution: true, sourceIdentity: localMarketplaceSourceKey },
+            { allowCurrent: true },
+          )
+        },
         listAgentMcpStatuses: (plugins) => pluginAgentMcpConnection.listStatuses(plugins),
-        prepareInstall: prepareLocalPluginPublication,
-        prepareRemove: async (plugin) =>
-          composePluginPublicationTransactions([
-            petIpc.prepareProviderChange(plugin.id),
-            await pluginSkillLifecycle.prepareUninstall(plugin),
-          ]),
         async onDidChange(pluginId) {
           availableGenerationTools.invalidate()
           generationRuntime.disposePlugin(pluginId)
@@ -1598,15 +1499,13 @@ function startApplication() {
           await agentRuntime.refreshConfiguration()
           scheduleGenerationCatalogRefresh("an installed Plugin change")
         },
-        async reconcileAfterChange(pluginId, mutation) {
+        async uninstall(pluginId) {
+          const current = (await pluginInstallations.list()).some((plugin) => plugin.id === pluginId)
+          if (!current) return false
+          await pluginSnapshotInstaller.uninstall(pluginId)
           await reconcileToolPluginExecutionStateForPlugin(pluginId)
-          await pets.refresh(mutation)
-          const current = (await pluginManager.list()).find((plugin) => plugin.id === pluginId)
-          try {
-            await pluginHookAuthorizations.reconcilePlugin(pluginId, current)
-          } catch (error) {
-            console.warn(`Could not reconcile changed Plugin Hook authorization: ${pluginId}`, error)
-          }
+          await pets.refresh()
+          return true
         },
       },
     )
@@ -1614,8 +1513,6 @@ function startApplication() {
       skillManager,
       projectManager,
       ipcSecurity.isTrustedSender,
-      remoteCapabilities,
-      pluginManager,
     )
     const disposeAgentIpc = registerAgentIpc(agentRuntime, projectManager, {
       ...ipcSecurity,
@@ -1644,7 +1541,7 @@ function startApplication() {
     ])
     protocol.handle(
       webPluginAssetScheme,
-      createWebPluginAssetHandler(pluginManager, {
+      createWebPluginAssetHandler(pluginInstallations, {
         rendererUrl: trustedRendererUrl,
       }),
     )
@@ -1691,14 +1588,12 @@ function startApplication() {
         disposeProjectIpc,
         disposeProjectCanvasIpc,
         disposeCanvasDocumentIpc,
-        disposePluginCanvasImageIpc,
         disposeCanvasExternalMediaDragIpc,
         disposeCanvasResourceIpc,
         disposeCanvasTextResourceIpc,
         disposeGenerationIpc,
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
-        disposePluginConnectedMediaIpc,
         disposePluginMaterializationIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
@@ -1712,6 +1607,7 @@ function startApplication() {
         () => pluginServiceBrowserAuthorization.dispose(),
         () => projectAssetGcScheduler.dispose(),
         () => generationRuntime.dispose(),
+        () => agentPluginConfigurations.dispose(),
         () => managedMcpRuntimes.close(),
         () => pluginConnectedMedia.dispose(),
         () => canvasProjectionSubscription.close(),
@@ -1729,6 +1625,7 @@ function startApplication() {
         .then(async () => {
           await disposePetApplication()
           await agentRuntime.dispose()
+          agentPluginConfigurations.dispose()
           await managedMcpRuntimes.close()
           await canvasExternalMediaDrag.dispose().catch((error) => {
             console.warn("Could not dispose Canvas native drag media during shutdown", error)
@@ -1739,7 +1636,7 @@ function startApplication() {
           // shared sidecar runtime or allowing the process to exit.
           await pluginServices.dispose()
           await pluginServiceBrowserAuthorization.dispose()
-          generationRuntime.dispose()
+          await generationRuntime.disposeAndWait()
           quitGate = "approved"
           app.quit()
         })

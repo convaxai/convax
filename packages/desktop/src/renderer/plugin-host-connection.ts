@@ -1,13 +1,31 @@
-import type { PluginCapabilityConnectInput, PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import { getPluginApiWireContract, isPluginApiId } from "@convax/plugin-api"
 import {
-  pluginCapabilityProtocolV1,
+  assertPluginHostMessageByteLength,
+  isPluginHostCancel,
+  isPluginHostRequestId,
+  maximumPluginCapabilityRequestBytes,
+  maximumPluginHostInFlightRequests,
+  maximumPluginHostRequestBytes,
+} from "@convax/plugin-sdk/client"
+import type { PluginCapabilityConnectInput, PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import { PluginHostProtocolError } from "../plugin-host-errors"
+import {
+  desktopPluginHostProtocolV8,
+  isDesktopPluginCapabilityAvailabilityRequest,
+  isDesktopPluginCapabilityInvokeRequest,
+  isDesktopPluginHostRequest,
+  pluginCapabilityProtocolV3,
   pluginHostFailure,
+  pluginHostSuccess,
   type DesktopPluginHostCommand,
   type DesktopPluginHostResponse,
-  type PluginCapabilityProtocol,
+  type PluginCapabilityResponse,
 } from "../plugin-host-protocol"
 
-const maximumCapabilityRequestBytes = 1024 * 1024
+interface ActivePluginHostRequest {
+  controller: AbortController
+  operationId: string
+}
 
 /**
  * Renderer adapter for one principal-bound main connection. It contains no
@@ -15,25 +33,35 @@ const maximumCapabilityRequestBytes = 1024 * 1024
  */
 export class RendererPluginHostConnection {
   private closed = false
+  private readonly activeRequests = new Map<string, ActivePluginHostRequest>()
   private connectionId: string | undefined
   private readonly connectPromise: Promise<string>
+  private readonly requestOperationIds = new Map<string, string>()
   private readonly unsubscribe: () => void
 
   constructor(
     private readonly client: PluginCapabilityRendererClient,
     input: PluginCapabilityConnectInput,
     private readonly onCommand: (command: DesktopPluginHostCommand) => void,
-    private readonly expectedProtocol: PluginCapabilityProtocol = pluginCapabilityProtocolV1,
   ) {
     this.unsubscribe = client.onEvent((event) => {
       if (this.closed || event.connectionId !== this.connectionId) return
-      this.onCommand(event.command)
+      if (event.command.protocol !== pluginCapabilityProtocolV3) {
+        this.close()
+        return
+      }
+      this.onCommand({
+        ...event.command,
+        protocol: desktopPluginHostProtocolV8,
+      })
     })
     this.connectPromise = client.connect(input).then(({ connectionId, protocol }) => {
-      if (protocol !== this.expectedProtocol) throw new Error("Plugin capability protocol mismatch")
+      if (protocol !== pluginCapabilityProtocolV3) {
+        throw new PluginHostProtocolError("transport-closed", "Plugin capability protocol mismatch")
+      }
       if (this.closed) {
         void client.disconnect({ connectionId }).catch(() => undefined)
-        throw new Error("Plugin capability connection was closed")
+        throw new PluginHostProtocolError("transport-closed", "Plugin capability connection was closed")
       }
       this.connectionId = connectionId
       return connectionId
@@ -41,16 +69,100 @@ export class RendererPluginHostConnection {
     void this.connectPromise.catch(() => undefined)
   }
 
-  async dispatch(request: unknown): Promise<DesktopPluginHostResponse | null> {
+  async dispatch(request: unknown, signal?: AbortSignal): Promise<DesktopPluginHostResponse | null> {
     const id = requestId(request)
     try {
-      if (this.closed) throw new Error("Plugin capability connection was closed")
-      assertSerializedSize(request, maximumCapabilityRequestBytes)
-      const connectionId = await this.connectPromise
-      return await this.client.call({ connectionId, request })
+      const requestBytes = preflightWebRequest(request)
+      assertMaximumBytes(requestBytes, maximumRequestBytesForEnvelope(request))
+      if (isPluginHostCancel(request)) {
+        if (this.closed) return null
+        const active = this.activeRequests.get(request.id)
+        if (active && !active.controller.signal.aborted) {
+          active.controller.abort(new DOMException("Plugin request was canceled", "AbortError"))
+        }
+        return null
+      }
+      if (this.closed) {
+        throw new PluginHostProtocolError("transport-closed", "Plugin capability connection was closed")
+      }
+      throwIfAborted(signal)
+      const hostRequest = isDesktopPluginHostRequest(request) ? request : null
+      const invokeRequest = isDesktopPluginCapabilityInvokeRequest(request) ? request : null
+      const availabilityRequest = isDesktopPluginCapabilityAvailabilityRequest(request) ? request : null
+      if (!hostRequest && !invokeRequest && !availabilityRequest) {
+        throw new PluginHostProtocolError("invalid-request", "Invalid Plugin host request")
+      }
+      const requestId = hostRequest?.id ?? invokeRequest?.id ?? availabilityRequest!.id
+      if (this.activeRequests.has(requestId)) {
+        throw new PluginHostProtocolError("invalid-request", "Plugin host request id is already in flight")
+      }
+      if (this.activeRequests.size >= maximumPluginHostInFlightRequests) {
+        throw new PluginHostProtocolError(
+          "overloaded",
+          `Plugin host connection permits at most ${maximumPluginHostInFlightRequests} in-flight requests`,
+        )
+      }
+      const operationId = this.operationId(requestId)
+      const requestController = new AbortController()
+      const active = { controller: requestController, operationId }
+      this.activeRequests.set(requestId, active)
+      try {
+        const requestSignal = signal ? AbortSignal.any([signal, requestController.signal]) : requestController.signal
+        const connectionId = await this.connectPromise
+        throwIfAborted(requestSignal)
+        const cancel = () => {
+          void this.client.cancel({ connectionId, operationId }).catch(() => undefined)
+        }
+        requestSignal.addEventListener("abort", cancel, { once: true })
+        try {
+          const response = availabilityRequest
+            ? pluginHostSuccess(
+                availabilityRequest.id,
+                await this.client.getPluginAvailability({
+                  capabilityId: availabilityRequest.capabilityId,
+                  connectionId,
+                  operationId,
+                }),
+              )
+            : await (invokeRequest
+                ? this.client
+                    .invokePlugin({
+                      connectionId,
+                      operationId,
+                      request: {
+                        capabilityId: invokeRequest.capabilityId,
+                        input: invokeRequest.input,
+                        requestId: invokeRequest.id,
+                      },
+                    })
+                    .then(translateCapabilityResponse)
+                : this.client
+                    .call({
+                      connectionId,
+                      operationId,
+                      request: {
+                        ...hostRequest!,
+                        protocol: pluginCapabilityProtocolV3,
+                      },
+                    })
+                    .then(translateCapabilityResponse))
+          if (requestController.signal.aborted) return null
+          throwIfAborted(signal)
+          return response
+        } catch (error) {
+          if (requestController.signal.aborted) return null
+          throw error
+        } finally {
+          requestSignal.removeEventListener("abort", cancel)
+        }
+      } finally {
+        if (this.activeRequests.get(requestId) === active) {
+          this.activeRequests.delete(requestId)
+        }
+      }
     } catch (error) {
       if (!id) return null
-      return pluginHostFailure(id, error, this.expectedProtocol)
+      return pluginHostFailure(id, error)
     }
   }
 
@@ -58,39 +170,76 @@ export class RendererPluginHostConnection {
     if (this.closed) return
     this.closed = true
     this.unsubscribe()
+    for (const request of this.activeRequests.values()) {
+      if (!request.controller.signal.aborted) {
+        request.controller.abort(new Error("Plugin capability connection was closed"))
+      }
+    }
+    this.activeRequests.clear()
     const connectionId = this.connectionId
-    if (connectionId) void this.client.disconnect({ connectionId }).catch(() => undefined)
+    if (connectionId) {
+      void this.client.disconnect({ connectionId }).catch(() => undefined)
+    }
+  }
+
+  private operationId(requestId: string) {
+    const existing = this.requestOperationIds.get(requestId)
+    if (existing) return existing
+    const operationId = globalThis.crypto.randomUUID()
+    if (this.requestOperationIds.size >= 1_024) {
+      this.requestOperationIds.delete(this.requestOperationIds.keys().next().value!)
+    }
+    this.requestOperationIds.set(requestId, operationId)
+    return operationId
   }
 }
 
-function assertSerializedSize(value: unknown, maximumBytes: number) {
-  let serialized: string | undefined
+function translateCapabilityResponse(response: PluginCapabilityResponse | null): DesktopPluginHostResponse | null {
+  if (!response) return null
+  if (response.protocol !== pluginCapabilityProtocolV3) {
+    throw new PluginHostProtocolError("internal-error", "Plugin capability response protocol mismatch")
+  }
+  return {
+    ...response,
+    protocol: desktopPluginHostProtocolV8,
+  }
+}
+
+function assertMaximumBytes(actualBytes: number, maximumBytes: number) {
+  if (actualBytes > maximumBytes) {
+    throw new PluginHostProtocolError("invalid-request", `Plugin capability request exceeds ${maximumBytes} bytes`)
+  }
+}
+
+function preflightWebRequest(value: unknown) {
   try {
-    serialized = JSON.stringify(value)
-  } catch {
-    throw new Error("Plugin capability request must be JSON-serializable")
-  }
-  if (serialized === undefined || new TextEncoder().encode(serialized).byteLength > maximumBytes) {
-    throw new Error(`Plugin capability request exceeds ${maximumBytes} bytes`)
+    return assertPluginHostMessageByteLength(value, maximumPluginHostRequestBytes, "Plugin Host Web request")
+  } catch (cause) {
+    throw new PluginHostProtocolError(
+      "invalid-request",
+      cause instanceof Error ? cause.message : "Plugin Host Web request is invalid",
+    )
   }
 }
 
-export function isProjectCanvasCapabilityRequest(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false
-  const method = (value as Record<string, unknown>).method
-  return (
-    method === "projects.list" ||
-    method === "canvas.catalog.list" ||
-    method === "canvas.document.get" ||
-    method === "canvas.nodes.query" ||
-    method === "canvas.transaction.execute" ||
-    method === "canvas.events.subscribe" ||
-    method === "canvas.events.unsubscribe"
-  )
+function maximumRequestBytesForEnvelope(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return maximumPluginCapabilityRequestBytes
+  }
+  const type = Reflect.get(value, "type")
+  const method = Reflect.get(value, "method")
+  return type === "request" && isPluginApiId(method)
+    ? getPluginApiWireContract(method).request.maxBytes
+    : maximumPluginCapabilityRequestBytes
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw new DOMException("Plugin Host API request was canceled", "AbortError")
 }
 
 function requestId(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
-  const id = (value as Record<string, unknown>).id
-  return typeof id === "string" && id && id.length <= 128 ? id : null
+  const id = Reflect.get(value, "id")
+  return isPluginHostRequestId(id) ? id : null
 }

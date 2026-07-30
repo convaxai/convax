@@ -21,12 +21,36 @@ type WorkspacePackage = {
 }
 
 const repositoryRoot = join(import.meta.dir, "..")
+const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
+const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
+const retiredRegistryPaths = [
+  "packages/desktop/src/main/remote-capability-registry.ts",
+  "packages/desktop/src/main/remote-capability-installer.ts",
+  "packages/desktop/src/main/default-remote-capability-catalog.ts",
+  "packages/desktop/src/main/electron-remote-capability-fetch.ts",
+  "packages/desktop/src/main/file-remote-registry-cache.ts",
+  "packages/desktop/src/main/file-remote-showcase-media-cache.ts",
+  "packages/desktop/src/main/packaged-default-capabilities.ts",
+  "packages/desktop/scripts/stage-default-capabilities.ts",
+]
+const retiredRegistryTokens = [
+  "convax.registry/1",
+  "convax.showcase/1",
+  "RemoteCapabilityInstaller",
+  "RemoteCapabilityRegistry",
+  "default-remote-capability",
+  "remote-capability-installer",
+  "remote-capability-registry",
+  "registry/v1/index.json",
+]
 const applicationPackageNames = new Set(["@convax/desktop"])
 const publishablePackageNames = new Set([
   "@convax/agent-runtime",
   "@convax/canvas",
   "@convax/marketplace",
   "@convax/marketplace-kit",
+  "@convax/plugin-api",
+  "@convax/plugin-sdk",
   "@convax/project",
   "@convax/project-files",
   "@convax/ui",
@@ -38,7 +62,9 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
   ["@convax/agent-runtime", new Set()],
   ["@convax/canvas", new Set(["@convax/ui"])],
   ["@convax/marketplace", new Set()],
-  ["@convax/marketplace-kit", new Set(["@convax/marketplace"])],
+  ["@convax/plugin-api", new Set()],
+  ["@convax/plugin-sdk", new Set(["@convax/plugin-api"])],
+  ["@convax/marketplace-kit", new Set(["@convax/marketplace", "@convax/plugin-api", "@convax/plugin-sdk"])],
   ["create-convax-marketplace", new Set(["@convax/marketplace-kit"])],
   [
     "@convax/desktop",
@@ -46,6 +72,8 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
       "@convax/agent-runtime",
       "@convax/canvas",
       "@convax/marketplace",
+      "@convax/plugin-api",
+      "@convax/plugin-sdk",
       "@convax/project",
       "@convax/project-files",
       "@convax/ui",
@@ -83,6 +111,8 @@ function canImportNodeBuiltins(packageName: string, sourcePath: string): boolean
   if (
     packageName === "@convax/marketplace"
     || packageName === "@convax/marketplace-kit"
+    || packageName === "@convax/plugin-api"
+    || packageName === "@convax/plugin-sdk"
     || packageName === "create-convax-marketplace"
   ) return true
   return false
@@ -144,6 +174,41 @@ function findCycle(graph: Map<string, Set<string>>): string[] | undefined {
 }
 
 const packages: WorkspacePackage[] = []
+const rootContract = await Bun.file(join(repositoryRoot, "AGENTS.md")).text()
+const hostChangeGovernance = await Bun.file(hostChangeGovernancePath).text()
+const desktopComposition = await Bun.file(desktopCompositionPath).text()
+if (
+  !rootContract.includes("## Plugin-to-Host change gate") ||
+  !rootContract.includes("Agent-authored approval text") ||
+  !rootContract.includes("protected external decision receipt") ||
+  !hostChangeGovernance.includes("Status: mandatory review gate.") ||
+  !hostChangeGovernance.includes("must not decide to modify the Convax repository") ||
+  !hostChangeGovernance.includes("Status: pending human review") ||
+  !hostChangeGovernance.includes("Decision: pending") ||
+  !hostChangeGovernance.includes("Approval prose committed by an Agent or Plugin author is not an approval")
+) {
+  throw new Error("Plugin-to-Host human review gate is missing from the architecture contract")
+}
+if (
+  desktopComposition.includes("RemoteCapabilityRegistryClient") ||
+  desktopComposition.includes("registry/v1/index.json") ||
+  desktopComposition.includes("convax.registry/1")
+) {
+  throw new Error("Desktop production composition must use Marketplace v2 and must not revive the legacy Registry v1")
+}
+for (const retiredPath of retiredRegistryPaths) {
+  if (await Bun.file(join(repositoryRoot, retiredPath)).exists()) {
+    throw new Error(`${retiredPath}: legacy Registry v1 ownership must not be restored`)
+  }
+}
+for await (const sourcePath of new Bun.Glob("packages/desktop/src/main/**/*.ts").scan(repositoryRoot)) {
+  if (sourcePath.endsWith(".test.ts") || sourcePath.endsWith(".fixture.ts")) continue
+  const source = await Bun.file(join(repositoryRoot, sourcePath)).text()
+  const retiredToken = retiredRegistryTokens.find((token) => source.includes(token))
+  if (retiredToken) {
+    throw new Error(`${sourcePath}: production source revives retired Registry v1 ownership (${retiredToken})`)
+  }
+}
 for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(repositoryRoot)) {
   const directory = dirname(join(repositoryRoot, manifestPath))
   const manifest = (await Bun.file(join(repositoryRoot, manifestPath)).json()) as PackageManifest

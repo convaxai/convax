@@ -15,7 +15,6 @@ import {
   type PetPreferencesUpdate,
 } from "../pet-contracts"
 import { PetHostConnection, type PetHostServices } from "./pet-host-connection"
-import type { WebPluginPublicationTransaction } from "./plugin-manager"
 import type { InstalledPetProvider } from "./pet-provider-controller"
 
 type Unsubscribe = () => void
@@ -107,14 +106,12 @@ export interface RegisterPetIpcOptions {
   isTrustedMainSender(event: IpcMainInvokeEvent): boolean
   openMainWindow(): Promise<PetMainWindow>
   pickCustomPetSource(): Promise<string | undefined>
-  restoreProvider(pluginId: string): Promise<void>
 }
 
 export interface PetIpcRegistration {
   connectOverlay(sender: PetHostWebContents, binding: PetHostProviderBinding): void
   dispose(): void
   openActivity(input: PetNavigationRequest): Promise<void>
-  prepareProviderChange(pluginId: string): WebPluginPublicationTransaction
 }
 
 interface PetSettingsIdentity {
@@ -227,7 +224,6 @@ export function registerPetIpc(
   const observedSenders = new Map<number, { listener: () => void; sender: PetHostWebContents }>()
   const { createMessageChannel, ipcMain } = options
   let disposed = false
-  let invalidatedBinding: PetHostProviderBinding | undefined
   let navigationReadySenderId: number | undefined
   let pendingNavigation: { senderId: number; target: PetNavigationTarget } | undefined
 
@@ -277,17 +273,12 @@ export function registerPetIpc(
   }
   const availableBinding = () => {
     const binding = provider.getBinding()
-    return binding && !sameBinding(binding, invalidatedBinding) ? binding : undefined
+    return binding
   }
   const notifyProviderChanged = () => {
     try {
       options.getMainWindow()?.webContents.send(petIpcChannels.providerChanged)
     } catch {}
-  }
-  const revokeBinding = (binding: PetHostProviderBinding) => {
-    invalidatedBinding = binding
-    for (const live of [...connections]) closeConnection(live, "Pet provider changed")
-    notifyProviderChanged()
   }
   const forgetMainRenderer = (senderId: number) => {
     mainRendererObservers.delete(senderId)
@@ -523,32 +514,5 @@ export function registerPetIpc(
     },
     dispose,
     openActivity,
-    prepareProviderChange(pluginId) {
-      let revoked: PetHostProviderBinding | undefined
-      return {
-        async publish() {
-          if (revoked) return
-          const binding = provider.getBinding()
-          if (!binding || binding.pluginId !== pluginId) return
-          revoked = binding
-          revokeBinding(binding)
-        },
-        async commit() {},
-        async rollback() {
-          if (!revoked || !sameBinding(revoked, invalidatedBinding)) return
-          invalidatedBinding = undefined
-          try {
-            await options.restoreProvider(pluginId)
-            notifyProviderChanged()
-            revoked = undefined
-          } catch (error) {
-            const current = provider.getBinding()
-            if (current?.pluginId === pluginId) revokeBinding(current)
-            throw error
-          }
-        },
-        async deferToRecovery() {},
-      }
-    },
   }
 }

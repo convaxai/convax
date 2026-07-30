@@ -8,6 +8,7 @@ function plugin(overrides: Partial<InstalledWebPluginSummary> = {}): InstalledWe
     capabilities: [],
     contributes: {
       generation: {
+        models: [],
         tools: [
           {
             acceptedInputs: ["reference_video"],
@@ -20,10 +21,11 @@ function plugin(overrides: Partial<InstalledWebPluginSummary> = {}): InstalledWe
       },
     },
     description: "Local transforms",
+    hostApi: { major: 1, optional: [], required: [] },
     id: "media-tools",
     name: "Media Tools",
     runtime: { command: "media-tools", type: "mcp-stdio" },
-    schema: "convax.plugin/4",
+    schema: "convax.plugin/8",
     version: "1.0.0",
     ...overrides,
   }

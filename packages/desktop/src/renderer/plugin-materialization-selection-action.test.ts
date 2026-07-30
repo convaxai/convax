@@ -8,34 +8,44 @@ import {
   listInstalledPluginMaterializationActions,
 } from "./plugin-materialization-selection-action"
 
-function plugin(schema: "convax.plugin/6" | "convax.plugin/7" = "convax.plugin/7") {
-  return parseWebPluginManifest({
-    capabilities: schema === "convax.plugin/7" ? ["canvas.connectedMedia.stream"] : [],
-    contributes: {
-      canvas: {
-        renderer: { create: true },
-        selectionActions: [
-          {
-            action: { connect: "selection-to-created", type: "materialize-own-plugin-node" },
-            description: { default: "Create a timeline" },
-            id: "create-timeline",
-            target: "video",
-            title: { default: "Create Timeline" },
-          },
-        ],
+function plugin() {
+  return {
+    ...parseWebPluginManifest({
+      capabilities: ["canvas.connectedMedia.stream"],
+      contributes: {
+        canvas: {
+          renderer: { create: true },
+          selectionActions: [
+            {
+              action: { connect: "selection-to-created", type: "materialize-own-plugin-node" },
+              description: { default: "Create a timeline" },
+              id: "create-timeline",
+              target: "video",
+              title: { default: "Create Timeline" },
+            },
+          ],
+        },
       },
-    },
-    description: "Timeline",
-    entry: "index.html",
-    id: "timeline",
-    name: "Timeline",
-    schema,
-    version: "1.0.0",
-  })
+      description: "Timeline",
+      entry: "index.html",
+      hostApi: {
+        major: 1,
+        optional: ["canvas.inputs.open", "canvas.inputs.close"],
+        required: ["host.context.get"],
+      },
+      id: "timeline",
+      name: "Timeline",
+      schema: "convax.plugin/8",
+      version: "1.0.0",
+    }),
+    activeRevision: 1,
+    activeSetDigest: "a".repeat(64),
+    snapshotDigest: "b".repeat(64),
+  }
 }
 
 describe("Plugin materialization selection action", () => {
-  test("projects only installed v7 own-renderer actions and requires one managed Project video", () => {
+  test("projects only installed v8 own-renderer actions and requires one managed Project video", () => {
     const actions = listInstalledPluginMaterializationActions([plugin()])
     expect(actions).toEqual([
       expect.objectContaining({
@@ -73,7 +83,8 @@ describe("Plugin materialization selection action", () => {
     ).toBeFalse()
   })
 
-  test("published v6 does not gain the materialization variant", () => {
-    expect(() => plugin("convax.plugin/6")).toThrow()
+  test("legacy manifests do not gain the materialization variant", () => {
+    const legacy = { ...plugin(), schema: "convax.plugin/7" } as unknown as ReturnType<typeof plugin>
+    expect(listInstalledPluginMaterializationActions([legacy])).toEqual([])
   })
 })

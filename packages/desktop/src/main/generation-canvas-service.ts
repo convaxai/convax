@@ -354,6 +354,13 @@ export class GenerationToolReportedError extends Error {
   }
 }
 
+export class GenerationResourceUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "GenerationResourceUnavailableError"
+  }
+}
+
 function requireGeneratedPublicationPath(value: string) {
   const reference = requireProjectResourceReference({ kind: "project-file", path: value })
   if (reference.kind !== "project-file" || !reference.path.startsWith("Generated/")) {
@@ -846,7 +853,7 @@ function selectTool(tools: readonly GenerationToolSummary[], request: Generation
     [...roles].every((role) => tool.acceptedInputs.includes(role))
   if (request.toolId) {
     const tool = tools.find((candidate) => candidate.id === request.toolId)
-    if (!tool) throw new Error(`Generation tool is not installed: ${request.toolId}`)
+    if (!tool) throw new GenerationResourceUnavailableError(`Generation tool is not installed: ${request.toolId}`)
     if (!satisfies(tool))
       throw new Error(`Generation tool does not accept the requested output or reference roles: ${tool.id}`)
     return tool
@@ -855,7 +862,9 @@ function selectTool(tools: readonly GenerationToolSummary[], request: Generation
   // their explicit host id so an installed action can never become a model by
   // coincidence.
   const candidates = tools.filter((tool) => tool.kind === "model" && satisfies(tool))
-  if (candidates.length === 0) throw new Error("No installed generation tool accepts this request")
+  if (candidates.length === 0) {
+    throw new GenerationResourceUnavailableError("No installed generation tool accepts this request")
+  }
   if (candidates.length > 1) {
     throw new Error(
       `More than one generation tool accepts this request; choose one of: ${candidates.map((tool) => tool.id).join(", ")}`,
@@ -2132,6 +2141,7 @@ export class GenerationCanvasService {
     request: GenerationCanvasRequest,
     actor: CanvasCommandActor,
     signal?: AbortSignal,
+    hooks?: { beforeExternalCall?: () => Promise<void> },
   ): Promise<GenerationCanvasResult> {
     validateRequest(request)
     requireIdentifier(actor.id, "Generation actor id")
@@ -2177,6 +2187,7 @@ export class GenerationCanvasService {
       (target) => {
         state.target = target
       },
+      hooks,
     )
     const execution = {
       actor: structuredClone(actor),
@@ -2224,6 +2235,7 @@ export class GenerationCanvasService {
     signal: AbortSignal | undefined,
     retainOperation: () => void,
     onRunStarted: (target: NonNullable<GenerationExecution["state"]["target"]>) => void,
+    hooks?: { beforeExternalCall?: () => Promise<void> },
   ): Promise<GenerationCanvasResult> {
     assertNotAborted(signal)
     const tool = selectTool(await this.#tools.listTools(request.output ? { output: request.output } : {}), request)
@@ -2488,8 +2500,13 @@ export class GenerationCanvasService {
         }
         assertNotAborted(signal)
       }
-      const dispatchHooks: GenerationToolDispatchHooks | undefined =
-        runStarted && resultMode.type === "replace-node" ? { validate: validateDispatchCanvas } : undefined
+      const dispatchHooks: GenerationToolDispatchHooks = {
+        validate: async () => {
+          await validateDispatchCanvas()
+          await hooks?.beforeExternalCall?.()
+          assertNotAborted(signal)
+        },
+      }
       const lifecycleObserver: GenerationToolLifecycleObserver = async (event) => {
         if (!runStarted || resultMode.type !== "replace-node") {
           if (event.type === "external-started") retainOperation()

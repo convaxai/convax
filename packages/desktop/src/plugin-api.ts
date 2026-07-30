@@ -19,11 +19,5 @@ export {
   parseWebPluginManifest as parsePluginManifest,
   webPluginCapabilities as pluginCapabilities,
   webPluginManifestFileName as pluginManifestFileName,
-  webPluginManifestSchema as pluginManifestSchemaV1,
-  webPluginManifestSchemaV2 as pluginManifestSchemaV2,
-  webPluginManifestSchemaV3 as pluginManifestSchemaV3,
-  webPluginManifestSchemaV4 as pluginManifestSchemaV4,
-  webPluginManifestSchemaV5 as pluginManifestSchemaV5,
-  webPluginManifestSchemaV6 as pluginManifestSchemaV6,
-  webPluginManifestSchemaV7 as pluginManifestSchemaV7,
+  webPluginManifestSchemaV8 as pluginManifestSchemaV8,
 } from "./plugin-contracts"

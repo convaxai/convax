@@ -85,20 +85,24 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   }
 
   async publishGenerated(input: {
+    beforePublish?: () => Promise<void>
     bytes?: Uint8Array
     extension: string
     name?: string
     projectId: string
+    signal?: AbortSignal
     sourcePath?: string
   }): Promise<{ path: string }> {
     return this.assets.runExclusive(input.projectId, () => this.#publishGenerated(input))
   }
 
   async #publishGenerated(input: {
+    beforePublish?: () => Promise<void>
     bytes?: Uint8Array
     extension: string
     name?: string
     projectId: string
+    signal?: AbortSignal
     sourcePath?: string
   }): Promise<{ path: string }> {
     const hasBytes = input.bytes !== undefined
@@ -107,11 +111,13 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
       throw new Error("Generated Project publication requires exactly one byte or file source")
     }
     return this.#publish({
+      beforePublish: input.beforePublish,
       directory: "Generated",
       extension: input.extension,
       maximumBytes: this.#maximumGeneratedBytes,
       name: input.name ?? "generated",
       projectId: input.projectId,
+      signal: input.signal,
       source: hasBytes
         ? { bytes: requirePublicationBytes(input.bytes), kind: "bytes" }
         : { kind: "file", sourcePath: requireSourcePath(input.sourcePath) },
@@ -119,11 +125,13 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
   }
 
   async #publish(input: {
+    beforePublish?: () => Promise<void>
     directory: "Generated" | "Notes"
     extension: string
     maximumBytes: number
     name?: string
     projectId: string
+    signal?: AbortSignal
     source: PublicationSource
   }): Promise<{ path: string }> {
     if (typeof input.projectId !== "string" || !input.projectId) throw new Error("Project id is required")
@@ -147,6 +155,9 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
       const fileName = `${stem}-${shortId}${extension}`
       const targetPath = path.join(layout.target.path, fileName)
       await assertPublicationDirectories(layout)
+      throwIfAborted(input.signal)
+      await input.beforePublish?.()
+      throwIfAborted(input.signal)
       // Repeated identity checks fail closed on ordinary symlinks and replacements
       // completed before a check. Portable Node cannot make parent-directory
       // validation and link(2) one atomic operation, so this does not defend against
@@ -207,6 +218,12 @@ export class ProjectFilePublisher implements ProjectCanvasFilePublisher {
     await assertPublicationDirectories(layout)
     return layout
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new DOMException("Project file publication was canceled", "AbortError")
 }
 
 interface PublicationLayout {

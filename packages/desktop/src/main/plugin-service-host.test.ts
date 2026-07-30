@@ -195,6 +195,7 @@ describe("PluginServiceHost", () => {
       async callService(_pluginId, call) {
         expect(call).toBe("authorize")
         return {
+          snapshotDigest: "b".repeat(64),
           completeAuthorization: async (input) => {
             if (!("cookies" in input)) throw new Error("unexpected external authorization completion")
             completions.push(input)
@@ -210,7 +211,13 @@ describe("PluginServiceHost", () => {
     const checkpointCommits: string[] = []
     const host = new PluginServiceHost(runtime, {
       async authorize(pluginId, parsed, options) {
-        browserCalls.push({ action: options.action, pluginId, parsed, serviceIdentity: options.serviceIdentity })
+        browserCalls.push({
+          action: options.action,
+          pluginId,
+          parsed,
+          serviceIdentity: options.serviceIdentity,
+          snapshotDigest: options.snapshotDigest,
+        })
         expect(await options.isCurrent()).toBeTrue()
         return {
           authorization_id: parsed.authorizationId,
@@ -232,6 +239,7 @@ describe("PluginServiceHost", () => {
         action: "authorize",
         pluginId: "account-tools",
         serviceIdentity: expect.stringMatching(/^[a-f0-9]{64}$/),
+        snapshotDigest: "b".repeat(64),
       }),
     ])
     expect(checkpointCommits).toEqual(["account-tools"])
@@ -406,6 +414,7 @@ describe("PluginServiceHost", () => {
         if (pending) return { isError: true }
         pending = true
         return {
+          snapshotDigest: "b".repeat(64),
           completeAuthorization: async () => {
             pending = false
             return { structuredContent: status }
@@ -449,6 +458,7 @@ describe("PluginServiceHost", () => {
           calls.push(call)
           if (call === "authorization.cancel") throw new Error("cleanup failed")
           return {
+            snapshotDigest: "b".repeat(64),
             completeAuthorization: async () => ({ isError: true }),
             structuredContent: {
               authorization_id: "request_0123456789abcdef",
@@ -598,6 +608,7 @@ describe("PluginServiceHost", () => {
           if (call === "authorization.cancel") return { structuredContent: status }
           return {
             authorizationIdentity: "a".repeat(64),
+            snapshotDigest: "b".repeat(64),
             completeAuthorization: async () => {
               throw new Error("sidecar restarted before commit")
             },

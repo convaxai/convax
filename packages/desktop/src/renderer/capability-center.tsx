@@ -71,7 +71,6 @@ type CapabilityAction =
   | `plugin.connect:${string}`
   | `plugin.install:${string}`
   | `plugin.release:${string}`
-  | `plugin.skill:${string}`
   | `plugin.uninstall:${string}`
   | `skill.install:${string}`
   | `skill.uninstall:${string}`
@@ -90,7 +89,6 @@ export interface CapabilityCenterDialogProps {
   onImportPlugin(): void
   onImportSkill(): void
   onInstallPlugin(id: string): void
-  onInstallPluginSkill(id: string): void
   onInstallSkill(id: string): void
   onLoadSkillDetails(target: DesktopSkillTarget): Promise<DesktopSkillDetails>
   onLoadSkillShowcase(
@@ -161,12 +159,10 @@ function PluginActions({
   busy,
   canUseCanvas,
   canUseAgent,
-  companionSkillInstalled,
   installed,
   locale,
   onConnect,
   onInstall,
-  onInstallSkill,
   onUninstall,
   onUseOnCanvas,
   onUseInAgent,
@@ -177,12 +173,10 @@ function PluginActions({
   busy: CapabilityAction | null
   canUseCanvas: boolean
   canUseAgent: boolean
-  companionSkillInstalled: boolean
   installed: boolean
   locale: AppLocale
   onConnect(): void
   onInstall(): void
-  onInstallSkill(): void
   onUninstall(): void
   onUseOnCanvas(): void
   onUseInAgent(): void
@@ -206,16 +200,6 @@ function PluginActions({
           <BusyIcon active={busy === `plugin.install:${plugin.id}`} />
           <RefreshCw />
           {appMessage(locale, "capabilities.updatePlugin")}
-        </Button>
-      ) : null}
-      {plugin.skill ? (
-        <Button disabled={disabled || companionSkillInstalled} onClick={onInstallSkill} size="sm" variant="outline">
-          <BusyIcon active={busy === `plugin.skill:${plugin.id}`} />
-          <Sparkles />
-          {appMessage(
-            locale,
-            companionSkillInstalled ? "capabilities.installed" : "capabilities.installCompanionSkill",
-          )}
         </Button>
       ) : null}
       {plugin.entry && plugin.contributes.canvas?.renderer?.create === true ? (
@@ -274,14 +258,12 @@ function PluginCard({
   busy,
   canUseCanvas,
   canUseAgent,
-  companionSkillInstalled,
   installed,
   installedPlugin,
   installedVersion,
   locale,
   onConnect,
   onInstall,
-  onInstallSkill,
   onOpenRelease,
   onUninstall,
   onUseOnCanvas,
@@ -293,14 +275,12 @@ function PluginCard({
   busy: CapabilityAction | null
   canUseCanvas: boolean
   canUseAgent: boolean
-  companionSkillInstalled: boolean
   installed: boolean
   installedPlugin?: WebPluginManifest
   installedVersion?: string
   locale: AppLocale
   onConnect(): void
   onInstall(): void
-  onInstallSkill(): void
   onOpenRelease(): void
   onUninstall(): void
   onUseOnCanvas(): void
@@ -423,12 +403,10 @@ function PluginCard({
           busy={busy}
           canUseCanvas={canUseCanvas}
           canUseAgent={canUseAgent}
-          companionSkillInstalled={companionSkillInstalled}
           installed={installed}
           locale={locale}
           onConnect={onConnect}
           onInstall={onInstall}
-          onInstallSkill={onInstallSkill}
           onUninstall={onUninstall}
           onUseOnCanvas={onUseOnCanvas}
           onUseInAgent={onUseInAgent}
@@ -812,12 +790,10 @@ function PluginsPanel({
   onConnect,
   onImport,
   onInstall,
-  onInstallSkill,
   onOpenRelease,
   onUninstall,
   onUseOnCanvas,
   onUseInAgent,
-  skills,
 }: {
   agentMcpStatuses: WebPluginAgentMcpConnectionStatuses
   busy: CapabilityAction | null
@@ -828,25 +804,14 @@ function PluginsPanel({
   onConnect(id: string): void
   onImport(): void
   onInstall(id: string): void
-  onInstallSkill(id: string): void
   onOpenRelease(id: string): void
   onUninstall(id: string): void
   onUseOnCanvas(plugin: WebPluginManifest): void
   onUseInAgent(plugin: WebPluginManifest): void
-  skills: DesktopSkillInventory | null
 }) {
   const catalogIds = new Set(inventory.catalog.map((plugin) => plugin.id))
   const installedById = new Map(inventory.installed.map((plugin) => [plugin.id, plugin]))
   const imported = inventory.installed.filter((plugin) => !catalogIds.has(plugin.id))
-  const installedSkillNames = new Set(skills?.skills.filter((skill) => skill.managed).map((skill) => skill.name))
-  const hasCompanionSkill = (plugin: WebPluginManifest | WebPluginCatalogItem) => {
-    if (!plugin.skill) return false
-    if ("companionSkillName" in plugin && plugin.companionSkillName) {
-      return installedSkillNames.has(plugin.companionSkillName)
-    }
-    const segments = plugin.skill.split("/")
-    return installedSkillNames.has(segments.at(-2) ?? "")
-  }
   return (
     <div className="space-y-6" role="tabpanel">
       <div className="flex items-start justify-between gap-4">
@@ -870,7 +835,6 @@ function PluginsPanel({
                 busy={busy}
                 canUseCanvas={canUseCanvas}
                 canUseAgent={canUseAgent}
-                companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed={plugin.installed}
                 installedPlugin={installedById.get(plugin.id)}
                 installedVersion={plugin.installedVersion}
@@ -878,7 +842,6 @@ function PluginsPanel({
                 locale={locale}
                 onConnect={() => onConnect(plugin.id)}
                 onInstall={() => onInstall(plugin.id)}
-                onInstallSkill={() => onInstallSkill(plugin.id)}
                 onOpenRelease={() => onOpenRelease(plugin.id)}
                 onUninstall={() => onUninstall(plugin.id)}
                 onUseOnCanvas={() => onUseOnCanvas(installedById.get(plugin.id) ?? plugin)}
@@ -903,14 +866,12 @@ function PluginsPanel({
                 busy={busy}
                 canUseCanvas={canUseCanvas}
                 canUseAgent={canUseAgent}
-                companionSkillInstalled={hasCompanionSkill(plugin)}
                 installed
                 installedPlugin={plugin}
                 key={plugin.id}
                 locale={locale}
                 onConnect={() => onConnect(plugin.id)}
                 onInstall={() => undefined}
-                onInstallSkill={() => onInstallSkill(plugin.id)}
                 onOpenRelease={() => undefined}
                 onUninstall={() => onUninstall(plugin.id)}
                 onUseOnCanvas={() => onUseOnCanvas(plugin)}
@@ -988,12 +949,10 @@ function CapabilityManagementView(props: CapabilityManagementViewProps) {
             onConnect={props.onConnectPlugin}
             onImport={props.onImportPlugin}
             onInstall={props.onInstallPlugin}
-            onInstallSkill={props.onInstallPluginSkill}
             onOpenRelease={props.onOpenPluginRelease}
             onUninstall={props.onUninstallPlugin}
             onUseOnCanvas={props.onUsePluginOnCanvas}
             onUseInAgent={props.onUsePluginInAgent}
-            skills={props.skills}
           />
         ) : (
           <EmptySection>{appMessage(locale, "capabilities.unavailable")}</EmptySection>
@@ -1143,8 +1102,6 @@ function useCapabilityManagement({
     onConnectPlugin: (id) => void mutate(`plugin.connect:${id}`, () => pluginClient.connectAgentMcp({ id })),
     onImportSkill: () => void mutate("skill.import", () => skillClient.importSkill()),
     onInstallPlugin: (id) => void mutate(`plugin.install:${id}`, () => pluginClient.installCatalogPlugin({ id })),
-    onInstallPluginSkill: (pluginId) =>
-      void mutate(`plugin.skill:${pluginId}`, () => skillClient.installPluginSkill({ pluginId })),
     onInstallSkill: (id) => void mutate(`skill.install:${id}`, () => skillClient.installCatalogSkill({ id })),
     onLoadSkillDetails: loadSkillDetails,
     onLoadSkillShowcase: loadSkillShowcase,

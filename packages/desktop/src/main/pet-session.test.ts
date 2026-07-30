@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { fileURLToPath } from "node:url"
 
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import { webPluginAssetScheme } from "./plugin-asset-protocol"
 import { petAssetScheme } from "./pet-asset-protocol"
 import { petWindowPartition, registerPetPluginSessionProtocol } from "./pet-session"
@@ -10,8 +11,25 @@ describe("pet Plugin Session", () => {
     const handle = mock((_scheme: string, _handler: (request: Request) => Promise<Response>) => undefined)
     const unhandle = mock((_scheme: string) => undefined)
     const fromPartition = mock(() => ({ protocol: { handle, unhandle } }))
+    const resolveAsset = mock(async () => fileURLToPath(import.meta.url))
     const manager = {
-      resolveAsset: mock(async () => fileURLToPath(import.meta.url)),
+      async acquirePluginSnapshot(identity: {
+        activeRevision: number
+        activeSetDigest: string
+        pluginId: string
+        pluginVersion: string
+        snapshotDigest: string
+      }) {
+        return {
+          identity: {
+            ...identity,
+            version: identity.pluginVersion,
+          },
+          plugin: { capabilities: [], id: "soft-companion", schema: "convax.plugin/8" },
+          release() {},
+          resolveAsset,
+        }
+      },
     }
     const customPets = {
       resolveAsset: mock(async () => fileURLToPath(import.meta.url)),
@@ -25,9 +43,22 @@ describe("pet Plugin Session", () => {
     expect(handle.mock.calls[1]?.[0]).toBe(petAssetScheme)
 
     const handler = handle.mock.calls[0]?.[1] as (request: Request) => Promise<Response>
-    const response = await handler(new Request("convax-plugin://soft-companion/pet/index.html"))
+    const response = await handler(
+      new Request(
+        webPluginAssetUrl(
+          {
+            activeRevision: 1,
+            activeSetDigest: "a".repeat(64),
+            id: "soft-companion",
+            snapshotDigest: "b".repeat(64),
+            version: "1.0.0",
+          },
+          "pet/index.html",
+        ),
+      ),
+    )
     expect(response.status).toBe(200)
-    expect(manager.resolveAsset).toHaveBeenCalledWith("soft-companion", "pet/index.html")
+    expect(resolveAsset).toHaveBeenCalledWith("pet/index.html")
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
 
     const assetHandler = handle.mock.calls[1]?.[1] as (request: Request) => Promise<Response>

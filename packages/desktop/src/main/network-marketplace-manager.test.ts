@@ -20,7 +20,11 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((entry) => fs.rm(entry, { force: true, recursive: true })))
 })
 
-function fixture(id = "acme", sequence = 1) {
+function fixture(
+  id = "acme",
+  sequence = 1,
+  packageOverrides?: Record<string, unknown>[],
+) {
   const descriptorUrl = `https://${id}.github.io/market/marketplace.json`
   const registryUrl = `https://${id}.github.io/market/registry-v2.json`
   const descriptor = {
@@ -34,7 +38,7 @@ function fixture(id = "acme", sequence = 1) {
     schema: "convax.marketplace/1",
     showcase: { v2: { url: `https://${id}.github.io/market/showcase-v2.json` } },
   }
-  const packages = [
+  const packages = packageOverrides ?? [
     {
       compatibility: { convax: ">=0.1.0" },
       delivery: {
@@ -60,6 +64,33 @@ function fixture(id = "acme", sequence = 1) {
     new TextEncoder().encode(JSON.stringify(url === descriptorUrl ? descriptor : registry)),
   )
   return { descriptorUrl, fetch, registry }
+}
+
+function pluginPackage(id: string, contributes: Record<string, unknown>) {
+  return {
+    compatibility: { convax: ">=0.1.0" },
+    delivery: {
+      kind: "artifact" as const,
+      sha256: "b".repeat(64),
+      size: 100,
+      url: `https://github.com/acme/market/releases/download/${id}-v1.0.0/${id}.zip`,
+    },
+    id,
+    kind: "plugin" as const,
+    manifest: {
+      capabilities: [],
+      contributes,
+      description: id,
+      entry: "index.html",
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+      id,
+      name: id,
+      schema: "convax.plugin/8",
+      version: "1.0.0",
+    },
+    presentation: { description: id, name: id },
+    version: "1.0.0",
+  }
 }
 
 test("binds previews to their renderer and keeps source order monotonic across removal", async () => {
@@ -112,4 +143,48 @@ test("rejects a persisted graph whose nested descriptor or computed SourceKey wa
     root: directory,
   })
   await expect(manager.listSources()).rejects.toThrow("unknown property")
+})
+
+test("projects Network Plugin surfaces only after canonical v8 parsing", async () => {
+  const directory = await root()
+  const remote = fixture(
+    "acme",
+    1,
+    [pluginPackage("canvas-plugin", { canvas: { renderer: { create: true } } })],
+  )
+  const manager = new NetworkMarketplaceManager({
+    fetcher: { fetch: remote.fetch } as unknown as PinnedHttpsFetcher,
+    root: directory,
+  })
+  const preview = await manager.preview(remote.descriptorUrl, "renderer-1")
+  await manager.add(preview.previewToken, "renderer-1")
+  expect((await manager.listCatalog())[0]?.runtimeSurface).toBe("agent-and-convax")
+})
+
+test("keeps accepted Network metadata for diagnosis but refuses guessed legacy fields", async () => {
+  const directory = await root()
+  const legacy = pluginPackage("legacy-fields", { tools: [{ id: "guess-me" }] })
+  delete (legacy.manifest as Record<string, unknown>).entry
+  ;(legacy.manifest as Record<string, unknown>).hostApi = {
+    major: 1,
+    optional: [],
+    required: [],
+  }
+  const remote = fixture("acme", 1, [legacy])
+  const manager = new NetworkMarketplaceManager({
+    fetcher: { fetch: remote.fetch } as unknown as PinnedHttpsFetcher,
+    root: directory,
+  })
+  const preview = await manager.preview(remote.descriptorUrl, "renderer-1")
+  await manager.add(preview.previewToken, "renderer-1")
+
+  await expect(manager.listCatalog()).rejects.toThrow("unsupported field: tools")
+  const source = await manager.listSources()
+  const retained = await manager.resolvePackage({
+    id: "legacy-fields",
+    kind: "plugin",
+    sourceKey: source[0]!.sourceKey,
+    version: "1.0.0",
+  })
+  expect(retained.manifest?.contributes).toEqual({ tools: [{ id: "guess-me" }] })
 })

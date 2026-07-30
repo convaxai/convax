@@ -51,14 +51,7 @@ describe("PinnedHttpsFetcher", () => {
       expect(isPublicMarketplaceAddress(address, 4)).toBe(false)
     }
     expect(isPublicMarketplaceAddress("192.88.99.1", 4)).toBe(false)
-    for (const address of [
-      "::1",
-      "::ffff:127.0.0.1",
-      "64:ff9b:1::1",
-      "2002::1",
-      "fe80::1",
-      "ff02::1",
-    ]) {
+    for (const address of ["::1", "::ffff:127.0.0.1", "64:ff9b:1::1", "2002::1", "fe80::1", "ff02::1"]) {
       expect(isPublicMarketplaceAddress(address, 6)).toBe(false)
     }
     expect(isPublicMarketplaceAddress("fec0::1", 6)).toBe(false)
@@ -92,9 +85,9 @@ describe("PinnedHttpsFetcher", () => {
         tlsServername: "owner.github.io",
       },
     })
-    expect(
-      await fetcher.fetch("https://owner.github.io/repo/marketplace.json", "descriptor", { ca: cert }),
-    ).toEqual(Buffer.from('{"schema":"test"}'))
+    expect(await fetcher.fetch("https://owner.github.io/repo/marketplace.json", "descriptor", { ca: cert })).toEqual(
+      Buffer.from('{"schema":"test"}'),
+    )
     await expect(
       fetcher.fetch("https://owner.github.io/repo/marketplace.json", "descriptor", { ca: cert, maxBytes: 4 }),
     ).rejects.toThrow("byte limit")

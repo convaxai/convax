@@ -83,6 +83,8 @@ export interface CanvasResourcePreparationPort {
 export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   anchor: CanvasPoint
+  /** Host-neutral final guard invoked immediately before Canvas persistence. */
+  beforeCommit?: () => Promise<void>
   commandId: string
   /**
    * Controls whether a concurrent Canvas change may replay this business
@@ -558,6 +560,7 @@ export class CanvasResourceBusinessService {
         throwIfAborted(request.signal)
         const result = await this.application.execute({
           ...applicationRequest,
+          ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
         })
         const replayWarning =

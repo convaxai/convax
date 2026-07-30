@@ -1,8 +1,22 @@
 import { describe, expect, mock, test } from "bun:test"
 import { EventEmitter } from "node:events"
 
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import type { InstalledPetProvider } from "./pet-provider-controller"
 import { clampPetBounds, PetWindow } from "./pet-window"
+
+function pluginUrl(pluginId: string, relativePath: string) {
+  return webPluginAssetUrl(
+    {
+      activeRevision: 7,
+      activeSetDigest: "a".repeat(64),
+      id: pluginId,
+      snapshotDigest: "b".repeat(64),
+      version: "1.0.0",
+    },
+    relativePath,
+  )
+}
 
 function provider(overrides: Partial<InstalledPetProvider> = {}): InstalledPetProvider {
   return {
@@ -15,10 +29,10 @@ function provider(overrides: Partial<InstalledPetProvider> = {}): InstalledPetPr
     },
     digest: "digest:soft-companion:1",
     generation: 1,
-    libraryUrl: "convax-plugin://soft-companion/pet-library.json",
-    overlayUrl: "convax-plugin://soft-companion/pet/index.html",
+    libraryUrl: pluginUrl("soft-companion", "pet-library.json"),
+    overlayUrl: pluginUrl("soft-companion", "pet/index.html"),
     pluginId: "soft-companion",
-    settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+    settingsUrl: pluginUrl("soft-companion", "settings/index.html"),
     version: "1.0.0",
     ...overrides,
   }
@@ -195,11 +209,11 @@ describe("PetWindow", () => {
     created.window.webContents.emit(
       "will-navigate",
       sameProviderNavigation,
-      "convax-plugin://soft-companion/pet/next.html",
+      pluginUrl("soft-companion", "pet/next.html"),
     )
     expect(sameProviderNavigation.preventDefault).not.toHaveBeenCalled()
     for (const url of [
-      "convax-plugin://other-provider/pet/index.html",
+      pluginUrl("other-provider", "pet/index.html"),
       "https://example.invalid/",
       "data:text/html,escaped",
       "file:///tmp/escaped.html",
@@ -211,7 +225,7 @@ describe("PetWindow", () => {
     const subframe = {
       isMainFrame: false,
       preventDefault: mock(() => undefined),
-      url: "convax-plugin://soft-companion/pet/frame.html",
+      url: pluginUrl("soft-companion", "pet/frame.html"),
     }
     created.window.webContents.emit("will-frame-navigate", subframe)
     expect(subframe.preventDefault).toHaveBeenCalled()
@@ -354,7 +368,7 @@ describe("PetWindow", () => {
     value.created[0]!.window.webContents.emit("render-process-gone")
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(value.created).toHaveLength(2)
-    expect(value.created[1]!.window.loadedUrl).toBe("convax-plugin://soft-companion/pet/index.html")
+    expect(value.created[1]!.window.loadedUrl).toBe(pluginUrl("soft-companion", "pet/index.html"))
     expect(value.onLoaded).toHaveBeenCalledTimes(2)
 
     value.created[1]!.window.webContents.emit("render-process-gone")
@@ -499,7 +513,7 @@ describe("PetWindow", () => {
     const nextProvider = provider({
       digest: "digest:beta-pet:1",
       generation: 2,
-      overlayUrl: "convax-plugin://beta-pet/pet/index.html",
+      overlayUrl: pluginUrl("beta-pet", "pet/index.html"),
       pluginId: "beta-pet",
     })
     await value.pet.open(nextProvider)

@@ -1,32 +1,39 @@
 import { createHash, randomUUID } from "node:crypto"
-import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
 import type { GenerationToolSummary } from "../generation-contracts"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
-import {
-  toolPluginAuthorizationIdentity,
-  toolPluginManifestSha256,
-  type ToolPluginExecutableBinding,
-  type ToolPluginExecutableBindingKind,
-} from "./tool-plugin-authorizations"
+import { parseWebPluginManifest, webPluginManifestSchemaV8, type InstalledWebPluginSummary } from "../plugin-contracts"
+import type { ActivePluginRuntimeIdentity } from "./plugin-installation-runtime"
+import { pluginSnapshotCanonicalDigest, type PluginSnapshotByteIdentity } from "./plugin-installation-snapshots"
 
-export const generationRecoveryRuntimeSchema = "convax.generation-lro-runtime/1" as const
+export const generationRecoveryRuntimeSchema = "convax.generation-lro-runtime/3" as const
+export const generationRecoveryOwnerPrefix = "generation-binding:" as const
 
 export interface GenerationRecoveryRuntimeRecord {
-  bindingKind: ToolPluginExecutableBindingKind
-  executablePath: string
-  executableRuntime?: "bun"
   executionBindingDigest: string
-  modelBindingDigest?: string
   plugin: InstalledWebPluginSummary
+  pluginIdentity: ActivePluginRuntimeIdentity
   pluginPackageDigest: string
   recoveryBindingDigest: string
   runtimeAuthorizationDigest: string
   schema: typeof generationRecoveryRuntimeSchema
-  sourceBinding: ToolPluginExecutableBinding
+  sourceBinding: GenerationRecoveryExecutableBinding
   tool: GenerationToolSummary
+  toolBindingDigest: string
+}
+
+export interface GenerationRecoveryExecutableBinding extends PluginSnapshotByteIdentity {
+  runtime?: "bun"
+}
+
+export interface GenerationRecoveryExecutionBindingInput {
+  pluginIdentity: ActivePluginRuntimeIdentity
+  pluginPackageDigest: string
+  recoveryBindingDigest: string
+  runtimeAuthorizationDigest: string
+  sourceBinding: GenerationRecoveryExecutableBinding
+  toolBindingDigest: string
 }
 
 const digestPattern = /^[a-f0-9]{64}$/
@@ -37,15 +44,178 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
-function stableExecutionBindingDigest(
-  pluginPackageDigest: string,
-  runtimeAuthorizationDigest: string,
-  recoveryBindingDigest: string,
-  modelBindingDigest?: string,
-) {
-  const parts = [pluginPackageDigest, runtimeAuthorizationDigest, recoveryBindingDigest]
-  if (modelBindingDigest !== undefined) parts.push(modelBindingDigest)
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]) {
+  const keys = Object.keys(value).sort()
+  const sortedExpected = [...expected].sort()
+  return keys.length === sortedExpected.length && keys.every((key, index) => key === sortedExpected[index])
+}
+
+function requireDigest(value: unknown, label: string) {
+  if (typeof value !== "string" || !digestPattern.test(value)) {
+    throw new Error(`${label} is invalid`)
+  }
+  return value
+}
+
+function parseExecutableBinding(value: unknown): GenerationRecoveryExecutableBinding {
+  if (!isRecord(value)) throw new Error("Pinned generation recovery executable binding is invalid")
+  const expected = value.runtime === undefined ? ["sha256", "size"] : ["runtime", "sha256", "size"]
+  if (
+    !exactKeys(value, expected) ||
+    typeof value.sha256 !== "string" ||
+    !digestPattern.test(value.sha256) ||
+    typeof value.size !== "number" ||
+    !Number.isSafeInteger(value.size) ||
+    value.size < 1 ||
+    value.size > defaultMaximumExecutableBytes ||
+    (value.runtime !== undefined && value.runtime !== "bun")
+  ) {
+    throw new Error("Pinned generation recovery executable binding is invalid")
+  }
+  return {
+    ...(value.runtime === undefined ? {} : { runtime: value.runtime }),
+    sha256: value.sha256,
+    size: value.size,
+  }
+}
+
+function parsePluginIdentity(value: unknown): ActivePluginRuntimeIdentity {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["activeRevision", "activeSetDigest", "pluginId", "snapshotDigest", "version"]) ||
+    typeof value.activeRevision !== "number" ||
+    !Number.isSafeInteger(value.activeRevision) ||
+    value.activeRevision < 1 ||
+    typeof value.pluginId !== "string" ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.pluginId) ||
+    typeof value.version !== "string" ||
+    !value.version ||
+    value.version.length > 128
+  ) {
+    throw new Error("Pinned generation recovery Plugin identity is invalid")
+  }
+  return {
+    activeRevision: value.activeRevision,
+    activeSetDigest: requireDigest(value.activeSetDigest, "Pinned generation recovery ActiveSet digest"),
+    pluginId: value.pluginId,
+    snapshotDigest: requireDigest(value.snapshotDigest, "Pinned generation recovery snapshot digest"),
+    version: value.version,
+  }
+}
+
+export function generationRecoveryOwnerKey(executionBindingDigest: string) {
+  return `${generationRecoveryOwnerPrefix}${requireDigest(
+    executionBindingDigest,
+    "Pinned generation recovery execution binding",
+  )}`
+}
+
+export function generationRecoveryExecutionBindingDigest(input: GenerationRecoveryExecutionBindingInput) {
+  const pluginIdentity = parsePluginIdentity(input.pluginIdentity)
+  const sourceBinding = parseExecutableBinding(input.sourceBinding)
+  const parts = [
+    requireDigest(input.pluginPackageDigest, "Pinned generation recovery Plugin package digest"),
+    pluginIdentity.activeRevision,
+    pluginIdentity.activeSetDigest,
+    pluginIdentity.snapshotDigest,
+    createHash("sha256").update(JSON.stringify(sourceBinding)).digest("hex"),
+    requireDigest(input.runtimeAuthorizationDigest, "Pinned generation recovery authorization digest"),
+    requireDigest(input.recoveryBindingDigest, "Pinned generation recovery protocol binding digest"),
+    requireDigest(input.toolBindingDigest, "Pinned generation recovery tool binding digest"),
+  ]
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex")
+}
+
+function parseRecord(value: unknown): GenerationRecoveryRuntimeRecord {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      "executionBindingDigest",
+      "plugin",
+      "pluginIdentity",
+      "pluginPackageDigest",
+      "recoveryBindingDigest",
+      "runtimeAuthorizationDigest",
+      "schema",
+      "sourceBinding",
+      "tool",
+      "toolBindingDigest",
+    ]) ||
+    value.schema !== generationRecoveryRuntimeSchema ||
+    !isRecord(value.plugin) ||
+    !isRecord(value.pluginIdentity) ||
+    !isRecord(value.sourceBinding) ||
+    !isRecord(value.tool)
+  ) {
+    throw new Error("Pinned generation recovery runtime record is invalid")
+  }
+  const plugin = parseWebPluginManifest(value.plugin)
+  const pluginIdentity = parsePluginIdentity(value.pluginIdentity)
+  const pluginPackageDigest = requireDigest(
+    value.pluginPackageDigest,
+    "Pinned generation recovery Plugin package digest",
+  )
+  const recoveryBindingDigest = requireDigest(
+    value.recoveryBindingDigest,
+    "Pinned generation recovery protocol binding digest",
+  )
+  const runtimeAuthorizationDigest = requireDigest(
+    value.runtimeAuthorizationDigest,
+    "Pinned generation recovery authorization digest",
+  )
+  const sourceBinding = parseExecutableBinding(value.sourceBinding)
+  const toolBindingDigest = requireDigest(value.toolBindingDigest, "Pinned generation recovery tool binding digest")
+  const executionBindingDigest = requireDigest(
+    value.executionBindingDigest,
+    "Pinned generation recovery execution binding",
+  )
+  const tool = structuredClone(value.tool) as unknown as GenerationToolSummary
+  if (
+    tool.recovery !== "long-running-operation" ||
+    tool.pluginId !== plugin.id ||
+    plugin.schema !== webPluginManifestSchemaV8 ||
+    !plugin.hostApi ||
+    plugin.runtime?.type !== "mcp-stdio" ||
+    plugin.id !== pluginIdentity.pluginId ||
+    plugin.version !== pluginIdentity.version
+  ) {
+    throw new Error("Pinned generation recovery runtime tool binding is invalid")
+  }
+  if (pluginSnapshotCanonicalDigest(plugin) !== pluginPackageDigest) {
+    throw new Error("Pinned generation recovery Plugin package changed")
+  }
+  if (
+    generationRecoveryExecutionBindingDigest({
+      pluginIdentity,
+      pluginPackageDigest,
+      recoveryBindingDigest,
+      runtimeAuthorizationDigest,
+      sourceBinding,
+      toolBindingDigest,
+    }) !== executionBindingDigest
+  ) {
+    throw new Error("Pinned generation recovery execution binding changed")
+  }
+  return {
+    executionBindingDigest,
+    plugin,
+    pluginIdentity,
+    pluginPackageDigest,
+    recoveryBindingDigest,
+    runtimeAuthorizationDigest,
+    schema: generationRecoveryRuntimeSchema,
+    sourceBinding,
+    tool,
+    toolBindingDigest,
+  }
+}
+
+function serializedRecord(record: GenerationRecoveryRuntimeRecord) {
+  const json = `${JSON.stringify(record)}\n`
+  if (Buffer.byteLength(json, "utf8") > maximumRecordBytes) {
+    throw new Error("Pinned generation recovery runtime record is too large")
+  }
+  return json
 }
 
 async function ensurePrivateDirectory(directory: string, label: string) {
@@ -60,272 +230,156 @@ async function ensurePrivateDirectory(directory: string, label: string) {
   return fs.realpath(directory)
 }
 
-async function hashFile(filePath: string, maximumBytes = defaultMaximumExecutableBytes) {
-  const handle = await fs.open(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
-  try {
-    const before = await handle.stat()
-    if (!before.isFile() || before.size < 1 || before.size > maximumBytes) {
-      throw new Error("Pinned generation recovery executable is invalid")
-    }
-    const bytes = await handle.readFile()
-    const after = await handle.stat()
-    if (
-      bytes.byteLength !== before.size ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      throw new Error("Pinned generation recovery executable changed while it was read")
-    }
-    return { bytes, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength }
-  } finally {
-    await handle.close()
-  }
-}
-
-function parseRecord(value: unknown, executablePath: string): GenerationRecoveryRuntimeRecord {
-  if (!isRecord(value)) throw new Error("Pinned generation recovery runtime record is invalid")
-  const modelBindingDigest = value.modelBindingDigest
-  const allowed = new Set([
-    "bindingKind",
-    "executableRuntime",
-    "executionBindingDigest",
-    "modelBindingDigest",
-    "plugin",
-    "pluginPackageDigest",
-    "recoveryBindingDigest",
-    "runtimeAuthorizationDigest",
-    "schema",
-    "sourceBinding",
-    "tool",
-  ])
-  if (
-    Object.keys(value).some((key) => !allowed.has(key)) ||
-    value.schema !== generationRecoveryRuntimeSchema ||
-    (value.bindingKind !== "managed" && value.bindingKind !== "path") ||
-    (value.executableRuntime !== undefined && value.executableRuntime !== "bun") ||
-    !digestPattern.test(String(value.executionBindingDigest)) ||
-    (modelBindingDigest !== undefined &&
-      (typeof modelBindingDigest !== "string" || !digestPattern.test(modelBindingDigest))) ||
-    !digestPattern.test(String(value.pluginPackageDigest)) ||
-    !digestPattern.test(String(value.recoveryBindingDigest)) ||
-    !digestPattern.test(String(value.runtimeAuthorizationDigest)) ||
-    !isRecord(value.plugin) ||
-    !isRecord(value.sourceBinding) ||
-    !isRecord(value.tool)
-  ) {
-    throw new Error("Pinned generation recovery runtime record is invalid")
-  }
-  const plugin = structuredClone(value.plugin) as unknown as InstalledWebPluginSummary
-  const sourceBinding = structuredClone(value.sourceBinding) as unknown as ToolPluginExecutableBinding
-  const tool = structuredClone(value.tool) as unknown as GenerationToolSummary
-  if (
-    tool.recovery !== "long-running-operation" ||
-    tool.pluginId !== plugin.id ||
-    plugin.runtime?.type !== "mcp-stdio"
-  ) {
-    throw new Error("Pinned generation recovery runtime tool binding is invalid")
-  }
-  if (toolPluginManifestSha256(plugin) !== value.pluginPackageDigest) {
-    throw new Error("Pinned generation recovery Plugin package changed")
-  }
-  if (
-    createHash("sha256")
-      .update(toolPluginAuthorizationIdentity(plugin, value.bindingKind, sourceBinding))
-      .digest("hex") !== value.runtimeAuthorizationDigest
-  ) {
-    throw new Error("Pinned generation recovery authorization changed")
-  }
-  if (
-    stableExecutionBindingDigest(
-      value.pluginPackageDigest as string,
-      value.runtimeAuthorizationDigest as string,
-      value.recoveryBindingDigest as string,
-      modelBindingDigest,
-    ) !== value.executionBindingDigest
-  ) {
-    throw new Error("Pinned generation recovery execution binding changed")
-  }
-  return {
-    bindingKind: value.bindingKind,
-    executablePath,
-    ...(value.executableRuntime === undefined ? {} : { executableRuntime: value.executableRuntime }),
-    executionBindingDigest: value.executionBindingDigest as string,
-    ...(modelBindingDigest === undefined ? {} : { modelBindingDigest }),
-    plugin,
-    pluginPackageDigest: value.pluginPackageDigest as string,
-    recoveryBindingDigest: value.recoveryBindingDigest as string,
-    runtimeAuthorizationDigest: value.runtimeAuthorizationDigest as string,
-    schema: generationRecoveryRuntimeSchema,
-    sourceBinding,
-    tool,
-  }
-}
-
-function serializedRecord(record: Omit<GenerationRecoveryRuntimeRecord, "executablePath">) {
-  const json = `${JSON.stringify(record)}\n`
-  if (Buffer.byteLength(json, "utf8") > maximumRecordBytes) {
-    throw new Error("Pinned generation recovery runtime record is too large")
-  }
-  return json
-}
-
 export class GenerationRecoveryRuntimeStore {
-  readonly #maxExecutableBytes: number
   readonly #maxRecords: number
+  #mutationTail = Promise.resolve()
 
   constructor(
     private readonly rootPath: string,
-    options: { maxExecutableBytes?: number; maxRecords?: number } = {},
+    options: { maxRecords?: number } = {},
   ) {
     if (!path.isAbsolute(rootPath)) throw new Error("Generation recovery runtime root must be absolute")
-    this.#maxExecutableBytes = options.maxExecutableBytes ?? defaultMaximumExecutableBytes
     this.#maxRecords = options.maxRecords ?? 256
-    if (!Number.isSafeInteger(this.#maxExecutableBytes) || this.#maxExecutableBytes < 1) {
-      throw new Error("Generation recovery runtime executable size limit is invalid")
-    }
     if (!Number.isSafeInteger(this.#maxRecords) || this.#maxRecords < 1 || this.#maxRecords > 4_096) {
       throw new Error("Generation recovery runtime record limit is invalid")
     }
   }
 
-  async pin(input: {
-    bindingKind: ToolPluginExecutableBindingKind
-    executablePath: string
-    executableRuntime?: "bun"
-    executionBindingDigest: string
-    modelBindingDigest?: string
-    plugin: InstalledWebPluginSummary
-    pluginPackageDigest: string
-    recoveryBindingDigest: string
-    runtimeAuthorizationDigest: string
-    sourceBinding: ToolPluginExecutableBinding
-    tool: GenerationToolSummary
-  }) {
-    if (
-      !digestPattern.test(input.executionBindingDigest) ||
-      (input.modelBindingDigest !== undefined && !digestPattern.test(input.modelBindingDigest))
-    ) {
-      throw new Error("Pinned generation recovery execution binding is invalid")
-    }
-    const parent = await ensurePrivateDirectory(path.dirname(this.rootPath), "Generation recovery runtime parent")
-    const root = await ensurePrivateDirectory(
-      path.join(parent, path.basename(this.rootPath)),
-      "Generation recovery runtime root",
-    )
-    const target = path.join(root, input.executionBindingDigest)
-    let targetExists = false
-    try {
-      const stat = await fs.lstat(target)
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        throw new Error("Pinned generation recovery runtime directory is invalid")
-      }
-      targetExists = true
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-    }
-    if (!targetExists) {
-      let count = 0
-      for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-        if (entry.name.startsWith(".runtime-") && entry.name.endsWith(".tmp")) {
-          await fs.rm(path.join(root, entry.name), { force: true, recursive: true })
-          continue
+  async pin(input: Omit<GenerationRecoveryRuntimeRecord, "schema">) {
+    const validated = parseRecord({ ...input, schema: generationRecoveryRuntimeSchema })
+    return this.#withMutation(async () => {
+      const parent = await ensurePrivateDirectory(path.dirname(this.rootPath), "Generation recovery runtime parent")
+      const root = await ensurePrivateDirectory(
+        path.join(parent, path.basename(this.rootPath)),
+        "Generation recovery runtime root",
+      )
+      const target = path.join(root, validated.executionBindingDigest)
+      try {
+        const existing = await this.open(validated.executionBindingDigest)
+        if (JSON.stringify(existing) !== JSON.stringify(validated)) {
+          throw new Error("Pinned generation recovery execution binding already has another record")
         }
-        if (!entry.isDirectory() || !digestPattern.test(entry.name)) {
-          throw new Error("Pinned generation recovery runtime store contains invalid state")
-        }
-        count += 1
+        return existing
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       }
-      if (count >= this.#maxRecords) {
+      const records = await this.#recordNames(root, true)
+      if (records.length >= this.#maxRecords) {
         throw new Error("Pinned generation recovery runtime store reached its record limit")
       }
-    }
-    const temporary = path.join(root, `.runtime-${randomUUID()}.tmp`)
-    await fs.mkdir(temporary, { mode: 0o700 })
-    try {
-      const source = await hashFile(input.executablePath, this.#maxExecutableBytes)
-      if (source.sha256 !== input.sourceBinding.sha256 || source.size !== input.sourceBinding.size) {
-        throw new Error("Pinned generation recovery executable does not match its authorization")
-      }
-      const executablePath = path.join(temporary, "entrypoint")
-      await fs.writeFile(executablePath, source.bytes, { flag: "wx", mode: 0o500 })
-      const record = {
-        bindingKind: input.bindingKind,
-        ...(input.executableRuntime === undefined ? {} : { executableRuntime: input.executableRuntime }),
-        executionBindingDigest: input.executionBindingDigest,
-        ...(input.modelBindingDigest === undefined ? {} : { modelBindingDigest: input.modelBindingDigest }),
-        plugin: structuredClone(input.plugin),
-        pluginPackageDigest: input.pluginPackageDigest,
-        recoveryBindingDigest: input.recoveryBindingDigest,
-        runtimeAuthorizationDigest: input.runtimeAuthorizationDigest,
-        schema: generationRecoveryRuntimeSchema,
-        sourceBinding: structuredClone(input.sourceBinding),
-        tool: structuredClone(input.tool),
-      } satisfies Omit<GenerationRecoveryRuntimeRecord, "executablePath">
-      await fs.writeFile(path.join(temporary, "record.json"), serializedRecord(record), {
-        flag: "wx",
-        mode: 0o400,
-      })
+      const temporary = path.join(root, `.runtime-${randomUUID()}.tmp`)
+      await fs.mkdir(temporary, { mode: 0o700 })
       try {
-        await fs.rename(temporary, target)
+        await fs.writeFile(path.join(temporary, "record.json"), serializedRecord(validated), {
+          flag: "wx",
+          mode: 0o400,
+        })
+        try {
+          await fs.rename(temporary, target)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+          await fs.rm(temporary, { force: true, recursive: true })
+        }
+        const published = await this.open(validated.executionBindingDigest)
+        if (JSON.stringify(published) !== JSON.stringify(validated)) {
+          throw new Error("Pinned generation recovery execution binding already has another record")
+        }
+        return published
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-        await fs.rm(temporary, { force: true, recursive: true })
+        await fs.rm(temporary, { force: true, recursive: true }).catch(() => undefined)
+        throw error
       }
-      return this.open(input.executionBindingDigest)
-    } catch (error) {
-      await fs.rm(temporary, { force: true, recursive: true }).catch(() => undefined)
-      throw error
-    }
+    })
   }
 
   async open(executionBindingDigest: string) {
-    if (!digestPattern.test(executionBindingDigest)) {
-      throw new Error("Pinned generation recovery execution binding is invalid")
-    }
+    requireDigest(executionBindingDigest, "Pinned generation recovery execution binding")
     const root = await fs.realpath(this.rootPath)
     const directory = path.join(root, executionBindingDigest)
     const directoryStat = await fs.lstat(directory)
     if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
       throw new Error("Pinned generation recovery runtime directory is invalid")
     }
+    const entries = await fs.readdir(directory, { withFileTypes: true })
+    if (
+      entries.length !== 1 ||
+      entries[0]?.name !== "record.json" ||
+      !entries[0].isFile() ||
+      entries[0].isSymbolicLink()
+    ) {
+      throw new Error("Pinned generation recovery runtime files are invalid")
+    }
     const recordPath = path.join(directory, "record.json")
-    const executablePath = path.join(directory, "entrypoint")
-    const [recordStat, executableStat, bytes] = await Promise.all([
-      fs.lstat(recordPath),
-      fs.lstat(executablePath),
-      fs.readFile(recordPath),
-    ])
+    const [recordStat, bytes] = await Promise.all([fs.lstat(recordPath), fs.readFile(recordPath)])
     if (
       recordStat.isSymbolicLink() ||
       !recordStat.isFile() ||
-      executableStat.isSymbolicLink() ||
-      !executableStat.isFile() ||
       bytes.byteLength < 1 ||
       bytes.byteLength > maximumRecordBytes
     ) {
       throw new Error("Pinned generation recovery runtime files are invalid")
     }
-    const record = parseRecord(JSON.parse(bytes.toString("utf8")) as unknown, executablePath)
+    const record = parseRecord(JSON.parse(bytes.toString("utf8")) as unknown)
     if (record.executionBindingDigest !== executionBindingDigest) {
       throw new Error("Pinned generation recovery runtime identity changed")
-    }
-    const executable = await hashFile(executablePath, this.#maxExecutableBytes)
-    if (
-      executable.sha256 !== record.sourceBinding.sha256 ||
-      executable.size !== record.sourceBinding.size ||
-      record.executableRuntime !== record.sourceBinding.runtime
-    ) {
-      throw new Error("Pinned generation recovery executable changed")
     }
     return record
   }
 
+  async list() {
+    return this.#withMutation(async () => {
+      let root: string
+      try {
+        root = await fs.realpath(this.rootPath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as GenerationRecoveryRuntimeRecord[]
+        throw error
+      }
+      const names = await this.#recordNames(root, true)
+      return Promise.all(names.map((name) => this.open(name)))
+    })
+  }
+
   async remove(executionBindingDigest: string) {
-    if (!digestPattern.test(executionBindingDigest)) {
-      throw new Error("Pinned generation recovery execution binding is invalid")
+    requireDigest(executionBindingDigest, "Pinned generation recovery execution binding")
+    await this.#withMutation(async () => {
+      let root: string
+      try {
+        root = await fs.realpath(this.rootPath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+        throw error
+      }
+      await fs.rm(path.join(root, executionBindingDigest), { force: true, recursive: true })
+    })
+  }
+
+  async #withMutation<T>(operation: () => Promise<T>) {
+    const previous = this.#mutationTail
+    let release: () => void = () => {}
+    this.#mutationTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
     }
-    const root = await ensurePrivateDirectory(this.rootPath, "Generation recovery runtime root")
-    await fs.rm(path.join(root, executionBindingDigest), { force: true, recursive: true })
+  }
+
+  async #recordNames(root: string, cleanTemporary: boolean) {
+    const names: string[] = []
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+      if (entry.name.startsWith(".runtime-") && entry.name.endsWith(".tmp")) {
+        if (cleanTemporary) await fs.rm(path.join(root, entry.name), { force: true, recursive: true })
+        continue
+      }
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !digestPattern.test(entry.name)) {
+        throw new Error("Pinned generation recovery runtime store contains invalid state")
+      }
+      names.push(entry.name)
+    }
+    return names.sort()
   }
 }

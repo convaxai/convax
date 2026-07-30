@@ -54,6 +54,15 @@ import protectedPathPlugin from "./protected-path-plugin"
 type OpenCodeClient = ReturnType<typeof createOpencodeClient>
 type OpenCodeServer = Awaited<ReturnType<typeof createOpencodeServer>>
 
+export interface AgentPluginConfiguration {
+  /** Host-verified immutable OpenCode Plugin modules from one publication generation. */
+  readonly hookModules?: readonly AgentHookModule[]
+  /** Host-validated remote MCP servers from that same publication generation. */
+  readonly mcpServers?: Readonly<Record<string, AgentRemoteMcpServerConfig>>
+  /** Host-owned immutable Skill directories from that same publication generation. */
+  readonly skillPaths?: readonly string[]
+}
+
 export interface OpenCodeAgentRuntimeOptions {
   binaryDirectory?: string
   /** Host-managed OpenCode config root used for installed Skills. */
@@ -65,14 +74,13 @@ export interface OpenCodeAgentRuntimeOptions {
   config?: ServerOptions["config"]
   /** Host-owned dynamic OpenCode providers, resolved only when a server connection is created. */
   resolveProviders?: () => Promise<NonNullable<ServerOptions["config"]>["provider"]>
-  /** Host-owned remote MCP servers, resolved only when a server connection is created. */
-  resolveMcpServers?: () => Promise<Readonly<Record<string, AgentRemoteMcpServerConfig>>>
   /**
-   * Host-verified immutable OpenCode Plugin modules. The runtime owns only
-   * generic loading; package identity, authorization, and snapshots stay with
-   * the host.
+   * Host-verified immutable Agent contributions from one publication generation.
+   * Hook modules, Skill paths, and MCP servers must be resolved atomically by the
+   * host. The runtime owns only generic loading; package identity, authorization,
+   * snapshots, and generation leases stay with the host.
    */
-  resolveHookModules?: () => Promise<readonly AgentHookModule[]>
+  resolvePluginConfiguration?: () => Promise<AgentPluginConfiguration>
   /** Lexical OpenCode permission patterns. These are not a filesystem sandbox. */
   protectedPathPatterns?: readonly string[]
   /**
@@ -95,25 +103,18 @@ export interface AgentHookModule {
   readonly fileUrl: string
 }
 
-export interface AgentRemoteMcpOAuthConfig {
-  callbackPort?: number
-  clientId?: string
-  clientSecret?: string
-  redirectUri?: string
-  scope?: string
-}
-
 /** A host-provided remote MCP server. OpenCode owns its transport and OAuth lifecycle. */
 export interface AgentRemoteMcpServerConfig {
   enabled?: boolean
   headers?: Readonly<Record<string, string>>
   /**
-   * Internet MCP is intentionally fail-closed until OpenCode exposes a socket-level
-   * outbound-policy hook. Desktop-managed stdio is bridged through an authenticated
-   * exact loopback address and is the only admitted host-provided transport.
+   * The host must select and validate one explicit transport boundary before the
+   * configuration reaches Agent Runtime. The runtime revalidates the corresponding
+   * URL and authentication envelope without learning the contribution owner.
    */
-  networkBoundary?: "host-authenticated-loopback" | "internet"
-  oauth?: AgentRemoteMcpOAuthConfig | false
+  networkBoundary: "host-authenticated-loopback" | "host-validated-https"
+  /** `undefined` lets OpenCode own OAuth discovery; `false` explicitly disables it. */
+  oauth?: false
   timeout?: number
   type: "remote"
   url: string
@@ -217,6 +218,42 @@ function withSkillDiscoveryBoundary(config: ServerOptions["config"] | undefined)
   }
 }
 
+function normalizedAgentSkillPath(path: string) {
+  if (typeof path !== "string" || path.includes("\0") || !path.trim()) {
+    throw new Error("Agent Skill path must be a non-empty absolute directory path")
+  }
+  const normalized = resolve(path.trim())
+  if (!isAbsolute(path.trim())) {
+    throw new Error("Agent Skill path must be a non-empty absolute directory path")
+  }
+  return normalized
+}
+
+/** Merge immutable host-owned Skill roots without mutating either input. */
+export function withAgentSkillPaths(
+  config: ServerOptions["config"] | undefined,
+  resolvedPaths: readonly string[],
+): OpenCodeConfig {
+  const configuredPaths = [...(config?.skills?.paths ?? [])]
+  const seen = new Set(
+    configuredPaths.map((path) => (typeof path === "string" && isAbsolute(path.trim()) ? resolve(path.trim()) : path)),
+  )
+  const paths = [...configuredPaths]
+  for (const path of resolvedPaths) {
+    const normalized = normalizedAgentSkillPath(path)
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    paths.push(normalized)
+  }
+  return {
+    ...config,
+    skills: {
+      ...config?.skills,
+      ...(paths.length === 0 ? {} : { paths }),
+    },
+  }
+}
+
 function protectPathPatterns(
   rule: OpenCodePermissionRule | undefined,
   patterns: readonly string[],
@@ -253,7 +290,7 @@ export function withProtectedPathPermissions(
 function normalizeProtectedPaths(paths: readonly string[]) {
   return [...new Set(paths.map((path) => path.trim()).filter(Boolean))].map((path) => {
     if (path.includes("\0")) throw new Error("Protected paths cannot contain null bytes")
-    if (/[*?\[\]{}]/.test(path)) {
+    if (["*", "?", "[", "]", "{", "}"].some((character) => path.includes(character))) {
       throw new Error("Protected paths must be concrete paths; use protectedPathPatterns for glob rules")
     }
     return path
@@ -409,12 +446,59 @@ function mcpServerName(name: string): string {
   return value
 }
 
-function copyRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
-  if (config.networkBoundary !== "host-authenticated-loopback") {
-    throw new Error(
-      "Internet MCP execution is disabled because the runtime cannot enforce outbound policy at OpenCode's socket boundary",
-    )
+function copyHttpsRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
+  let url: URL
+  try {
+    url = new URL(config.url)
+  } catch {
+    throw new Error("Remote MCP server must use an absolute HTTPS URL")
   }
+  if (
+    url.protocol !== "https:" ||
+    config.url !== config.url.trim() ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("Remote MCP server must use an absolute HTTPS URL without credentials or a fragment")
+  }
+  if (config.oauth !== undefined && config.oauth !== false) {
+    throw new Error("Remote MCP OAuth client credentials must remain OpenCode-owned")
+  }
+  const headers = Object.entries(config.headers ?? {})
+  if (headers.length > 16) throw new Error("Remote MCP headers must contain at most 16 entries")
+  const names = new Set<string>()
+  for (const [name, value] of headers) {
+    const normalizedName = name.toLowerCase()
+    if (
+      !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u.test(name) ||
+      names.has(normalizedName) ||
+      normalizedName === "authorization" ||
+      normalizedName === "cookie" ||
+      normalizedName === "proxy-authorization"
+    ) {
+      throw new Error(`Remote MCP header is not admitted: ${name}`)
+    }
+    if (
+      typeof value !== "string" ||
+      value.length === 0 ||
+      value.length > 2_048 ||
+      /[\r\n\0]/u.test(value) ||
+      /\{(?:env|file):/iu.test(value) ||
+      /\$\{[^}]*\}/u.test(value)
+    ) {
+      throw new Error(`Remote MCP header must be a bounded literal value: ${name}`)
+    }
+    names.add(normalizedName)
+  }
+  const { networkBoundary: _networkBoundary, ...openCodeConfig } = config
+  return {
+    ...openCodeConfig,
+    ...(openCodeConfig.headers === undefined ? {} : { headers: { ...openCodeConfig.headers } }),
+  }
+}
+
+function copyLoopbackRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
   let url: URL
   try {
     url = new URL(config.url)
@@ -452,8 +536,27 @@ function copyRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
   return {
     ...openCodeConfig,
     ...(openCodeConfig.headers === undefined ? {} : { headers: { ...openCodeConfig.headers } }),
-    ...(typeof openCodeConfig.oauth === "object" ? { oauth: { ...openCodeConfig.oauth } } : {}),
   }
+}
+
+function copyRemoteMcpServerConfig(config: AgentRemoteMcpServerConfig) {
+  if (config.type !== "remote") throw new Error("Remote MCP server type must be remote")
+  if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
+    throw new Error("Remote MCP enabled state must be boolean")
+  }
+  if (
+    config.timeout !== undefined &&
+    (!Number.isSafeInteger(config.timeout) || config.timeout <= 0 || config.timeout > 2_147_483_647)
+  ) {
+    throw new Error("Remote MCP timeout must be a positive bounded integer")
+  }
+  if (config.networkBoundary === "host-authenticated-loopback") {
+    return copyLoopbackRemoteMcpServerConfig(config)
+  }
+  if (config.networkBoundary === "host-validated-https") {
+    return copyHttpsRemoteMcpServerConfig(config)
+  }
+  throw new Error("Remote MCP server is missing a supported Host network boundary")
 }
 
 function copyConfiguredMcpServers(
@@ -710,7 +813,8 @@ function structuredResourcePart(resource: Extract<AgentRuntimeResource, { kind: 
   if (!uri) throw new Error("Structured resource URI is required")
   if (!mime || /[\r\n,]/.test(mime)) throw new Error("Structured resource MIME type is invalid")
   try {
-    new URL(uri)
+    const parsed = new URL(uri)
+    void parsed
   } catch {
     throw new Error("Structured resource URI is invalid")
   }
@@ -999,11 +1103,11 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
   }
 
   private async serverConfig() {
-    const [providers, resolvedMcpServers, hookModules] = await Promise.all([
+    const [providers, pluginConfiguration] = await Promise.all([
       this.options.resolveProviders?.(),
-      this.options.resolveMcpServers?.(),
-      this.options.resolveHookModules?.(),
+      this.options.resolvePluginConfiguration?.(),
     ])
+    const resolvedMcpServers = pluginConfiguration?.mcpServers
     const configuredMcpServers = this.options.config?.mcp ?? {}
     const resolvedEntries = Object.entries(resolvedMcpServers ?? {})
     const conflicts = resolvedEntries
@@ -1033,7 +1137,8 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
             ...(providers === undefined ? {} : { provider: { ...this.options.config?.provider, ...providers } }),
             ...(mcp === undefined ? {} : { mcp }),
           }
-    const baseConfig = withAgentHookModules(resolvedConfig, hookModules ?? [])
+    const skillConfig = withAgentSkillPaths(resolvedConfig, pluginConfiguration?.skillPaths ?? [])
+    const baseConfig = withAgentHookModules(skillConfig, pluginConfiguration?.hookModules ?? [])
     const paths = this.options.protectedPaths ?? []
     if (paths.length === 0) return baseConfig
     const plugin = await this.materializeProtectedPathPlugin()

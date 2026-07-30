@@ -77,9 +77,9 @@ describe("ProjectFilePublisher", () => {
   test.each(invalidPublisherLimitCases)(
     "rejects invalid or hard-limit-raising %s override %p above maximum %p",
     (option, value, maximum) => {
-      expect(() => new ProjectFilePublisher(roots(), managedAssets(), { [option]: value } as ProjectFilePublisherOptions)).toThrow(
-        `Project publication ${option} must be a positive safe integer no greater than ${maximum}`,
-      )
+      expect(
+        () => new ProjectFilePublisher(roots(), managedAssets(), { [option]: value } as ProjectFilePublisherOptions),
+      ).toThrow(`Project publication ${option} must be a positive safe integer no greater than ${maximum}`)
     },
   )
 
@@ -99,6 +99,38 @@ describe("ProjectFilePublisher", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "staging", "generated-a1"), "utf8")).toBe(
       "A generated paragraph",
     )
+  })
+
+  test("runs the caller guard at the final no-clobber publication boundary", async () => {
+    const ids = ["guarded-a1", "guarded-a2"]
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { randomId: () => ids.shift()! })
+    let current = true
+
+    await expect(
+      publisher.publishGenerated({
+        beforePublish: async () => {
+          if (!current) throw new Error("Plugin snapshot is stale")
+        },
+        bytes: Buffer.from("prepared bytes", "utf8"),
+        extension: ".md",
+        projectId: "project_one",
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toEqual({ path: "Generated/generated-guarded-a1.md" })
+
+    current = false
+    await expect(
+      publisher.publishGenerated({
+        beforePublish: async () => {
+          if (!current) throw new Error("Plugin snapshot is stale")
+        },
+        bytes: Buffer.from("stale bytes", "utf8"),
+        extension: ".md",
+        name: "stale",
+        projectId: "project_one",
+      }),
+    ).rejects.toThrow("Plugin snapshot is stale")
+    expect(await fs.readdir(path.join(projectRoot, "Generated"))).toEqual(["generated-guarded-a1.md"])
   })
 
   test("streams a generated media source without reading the whole file into memory", async () => {
@@ -347,7 +379,10 @@ describe("ProjectFilePublisher", () => {
       }
       return Reflect.apply(originalFrom, Buffer, [value, ...args])
     }) as typeof Buffer.from
-    const publisher = new ProjectFilePublisher(roots(), managedAssets(), { maximumBytes: 4, randomId: () => "oversize" })
+    const publisher = new ProjectFilePublisher(roots(), managedAssets(), {
+      maximumBytes: 4,
+      randomId: () => "oversize",
+    })
 
     try {
       await expect(

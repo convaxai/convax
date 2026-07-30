@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test"
-import type { InstalledWebPluginSummary, WebPluginInventory } from "../plugin-contracts"
+import type { ActiveInstalledWebPluginSummary, WebPluginInventory } from "../plugin-contracts"
 import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
 
 function deferred<T>() {
@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function inventory(installed: InstalledWebPluginSummary[]): WebPluginInventory {
+function inventory(installed: ActiveInstalledWebPluginSummary[]): WebPluginInventory {
   return { catalog: [], installed }
 }
 
@@ -22,7 +22,7 @@ describe("subscribeInstalledPluginInventory", () => {
     const listPlugins = mock()
       .mockImplementationOnce(() => initial.promise)
       .mockImplementationOnce(() => changed.promise)
-    const updates: InstalledWebPluginSummary[][] = []
+    const updates: Array<readonly ActiveInstalledWebPluginSummary[]> = []
     const dispose = subscribeInstalledPluginInventory(
       {
         listPlugins,
@@ -38,7 +38,7 @@ describe("subscribeInstalledPluginInventory", () => {
     )
 
     listener?.()
-    changed.resolve(inventory([{ id: "plugin-new" } as InstalledWebPluginSummary]))
+    changed.resolve(inventory([{ id: "plugin-new" } as ActiveInstalledWebPluginSummary]))
     await changed.promise
     await Promise.resolve()
     initial.resolve(inventory([]))

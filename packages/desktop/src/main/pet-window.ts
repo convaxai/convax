@@ -317,14 +317,14 @@ export class PetWindow {
     window.setBounds({ ...position, ...size })
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     window.webContents.on("will-navigate", (event: { preventDefault(): void }, url: string) => {
-      if (!isAllowedWebPluginFrameNavigation(provider.overlayUrl, url, provider.pluginId)) event.preventDefault()
+      if (!isAllowedWebPluginFrameNavigation(provider.overlayUrl, url)) event.preventDefault()
     })
     window.webContents.on(
       "will-frame-navigate",
       (event: { isMainFrame: boolean; preventDefault(): void; url: string }) => {
         if (
           !event.isMainFrame ||
-          !isAllowedWebPluginFrameNavigation(provider.overlayUrl, event.url, provider.pluginId)
+          !isAllowedWebPluginFrameNavigation(provider.overlayUrl, event.url)
         ) {
           event.preventDefault()
         }

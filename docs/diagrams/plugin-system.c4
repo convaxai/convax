@@ -1,12 +1,7 @@
-// Convax 插件平台——逻辑、运行时、信任边界与流程视图。
+// Convax 当前 v8 插件平台。
 //
-// 预览：
-//   npx likec4 serve docs/diagrams
 // 校验：
 //   npx likec4 validate docs/diagrams
-//
-// 模型遵循 https://likec4.dev/tutorial/：
-// specification -> model/hierarchy -> relationships -> projected views。
 
 specification {
   element actor {
@@ -90,7 +85,7 @@ specification {
   }
 
   deploymentNode data {
-    notation '数据存储'
+    notation '数据'
     style {
       color gray
       shape storage
@@ -107,463 +102,402 @@ specification {
 
 model {
   user = actor 'Convax 用户' {
-    description '安装能力，并显式触发 Canvas、Agent、服务与桌宠操作。'
+    description '安装能力并显式触发 Canvas、Agent、Tool 与服务操作。'
   }
 
   pluginAuthor = actor '插件作者' {
-    description '在 microvoid/convax-plugins 中编写具体插件、Skill 与 companion 工具。'
+    description '在独立插件仓库中实现具体 Plugin、Skill、MCP server 与 companion。'
   }
 
-  registry = external '官方能力目录' {
-    description '固定来源、序列单调递增的 convax.registry/1 目录及展示元数据。'
+  hostMaintainer = actor 'Host 维护者' {
+    description '在人类批准后维护通用 Catalog、SDK、Main handler 与 conformance tests。'
   }
 
-  releases = external 'GitHub Release 制品' {
-    description 'Registry 声明的不可变插件或 Skill ZIP，以及特定目标平台的 companion 字节。'
+  registry = external '能力 Registry' {
+    description '发布 package/2 元数据、版本、target 与不可变 artifact identity。'
   }
 
-  vendor = external '供应商或外部服务' {
-    description '由已验证 Tool sidecar 负责的供应商 API 或账户系统，Convax 核心不直接拥有。'
+  releases = external '不可变 Release 制品' {
+    description 'Plugin ZIP、standalone Skill ZIP 与 target-specific managed companion。'
   }
 
-  remoteMcp = external '远程智能体 MCP 服务' {
-    description '可选的 convax.plugin/6 HTTPS MCP 服务，由 OpenCode 连接并持有 OAuth 状态。'
+  externalService = external '插件负责的外部服务' {
+    description '凭据、网络调用和供应商语义停留在已验证 sidecar 或 native remote MCP 边界。'
   }
 
-  pathExecutable = external '用户安装的 PATH 可执行文件' {
-    description '当 Tool 插件没有 Registry 托管 companion 时使用的显式回退入口。'
-  }
+  pluginSource = system '独立插件源码仓库' {
+    description '具体集成唯一源码所有者；发现缺失 Host API 时只能提交结构化请求。'
 
-  pluginRuntime = system '插件运行时贡献' {
-    description '由同一份已验证 Manifest 派生的可选贡献平面，各平面之间不继承权限。'
-
-    manifest = artifact '已验证的插件清单' {
-      description 'convax.plugin/1 至 /6：身份、能力、运行时与声明式贡献。'
+    package = artifact 'v8 Plugin package' {
+      description '唯一 convax.plugin/8 Manifest、静态资源和声明式 contributions。'
     }
 
-    webFrame = component '沙箱网页界面' {
-      description '静态 HTML/JS 运行在 sandbox="allow-scripts" iframe 中；没有同源、Node、Electron 或原生路径权限。'
+    hostRequest = artifact 'Plugin-to-Host change request' {
+      description 'Use case、通用 contract、替代方案、authority、side effect 与可证伪测试。'
     }
 
-    sidecar = component '已验证的工具伴随进程' {
-      description '从宿主持有的精确快照启动的原生或 convax-bun mcp-stdio 进程。'
-    }
-
-    ownedSkill = artifact '插件持有的技能（Skill）' {
-      description 'v4+ 指令目录，与插件原子发布，但不继承插件权限。'
-    }
-
-    hook = component '已授权的 OpenCode 钩子（Hook）' {
-      description '由 OpenCode 作为原生 Agent 可执行代码加载的精确字节私有 ESM 快照。'
-    }
-
-    pet = component '沙箱桌宠提供方' {
-      description '静态浮层、设置页和资源库，只连接固定的 convax.pet-host/1 接口。'
+    generatedSkill = artifact 'Plugin authoring Skill reference' {
+      description '从 Host API Catalog 与 SDK contract 确定性生成，不手写 API 列表。'
     }
   }
 
-  convax = system 'Convax 桌面端宿主' {
-    description '负责插件 ABI、校验、安装、生命周期、运行时桥接、IPC/UI 与 Registry 客户端。'
+  pluginRuntime = system '已安装 Plugin 完整闭包' {
+    description '一个 content-addressed immutable snapshot；各贡献不相互继承权限。'
 
-    renderer = boundary 'Electron 渲染进程' {
-      capabilityCenter = component '能力中心' {
-        description '只展示 Renderer 安全信息的目录、安装、更新、移除、服务状态与 Agent 连接界面。'
-      }
-
-      canvasShell = component 'Canvas 插件宿主' {
-        description '把已验证的 Canvas 贡献映射到现有 Renderer、工具栏和选择操作注册表。'
-      }
-
-      webAdapter = component '网页 MessagePort 适配器' {
-        description '为每个挂载节点创建独立通道，并把旧版调用绑定到精确 Frame 与节点作用域。'
-      }
-
-      servicesUi = component '服务与桌宠界面' {
-        description '仅展示服务投影与窄桌宠界面；不接收凭据或原始 MCP 方法。'
-      }
+    manifest = artifact 'convax.plugin/8 Manifest' {
+      description '身份、Host API declaration、P2P import/export 和 contributions 的唯一 portable contract。'
     }
 
-    preload = boundary '预加载（Preload）桥接层' {
-      description '窄而有类型的 window.convax 命名空间，只校验可克隆的传输结构。'
+    webFrame = component 'Canvas Web node renderer' {
+      description 'sandbox="allow-scripts" iframe；只使用 convax.plugin-host/8 transport。'
     }
 
-    main = boundary 'Electron 主进程——插件平台所有者' {
-      managementIpc = component '插件管理 IPC' {
-        description '仅接受可信发送方和 id 的管理入口，负责本地与 Registry 操作。'
-      }
-
-      registryClient = component '能力目录客户端与制品缓存' {
-        description '校验固定来源、序列单调性、兼容性、大小边界、SHA-256、MIME 与安全 ZIP。'
-      }
-
-      remoteInstaller = component '远程能力安装器' {
-        description '协调 Registry 字节与本地插件、Skill、companion 和授权生命周期。'
-      }
-
-      packageManager = component '插件包管理器' {
-        description '按 id 串行执行校验、暂存、原子重命名、回滚、墓碑处理与启动恢复。'
-      }
-
-      publication = component '依赖发布协调器' {
-        description '把 owned Skill、companion 收据、Tool/Hook 授权和桌宠状态与插件包切换组合为同一决策。'
-      }
-
-      assetProtocol = component '受限插件资源协议' {
-        description '只提供已验证包内文件，并执行固定 MIME/CSP 与路径包含校验。'
-      }
-
-      webGateway = component '旧版网页宿主网关' {
-        description '提供经过能力检查的节点方法，并把调用适配到绑定 Principal 的 Broker。'
-      }
-
-      capabilityBroker = component '绑定权限主体的能力代理' {
-        description '每次调用都绑定 Manifest 摘要、插件/版本/运行时、Project 作用域、授权项与实时 Canvas 归属。'
-      }
-
-      generationRuntime = component '生成与工具运行时' {
-        description '重新验证可执行收据、暂存有界输入输出、负责取消，并通过 MCP stdio 通信。'
-      }
-
-      serviceHost = component '插件服务宿主' {
-        description '复用已验证的 Tool 运行时，只暴露固定 service.* 操作和有界投影。'
-      }
-
-      skillLifecycle = component '插件持有技能的生命周期' {
-        description '记录 prepare/publish/activate/commit 日志，并协调共享的 OpenCode Skill 目录。'
-      }
-
-      executionAuth = component '可执行代码授权存储' {
-        description '保存安装期 Tool 绑定收据、Hook 字节快照和短期服务授权检查点。'
-      }
-
-      agentConfig = component '智能体配置组合器' {
-        description '向 OpenCode 注入通用 Hook URL、插件 LLM 网关和 v6 远程 MCP 声明。'
-      }
-
-      petHost = component '桌宠提供方宿主' {
-        description '验证已安装桌宠的 Principal，并暴露固定、窄化的活动与偏好桥接。'
-      }
+    sidecar = component 'verified Tool sidecar' {
+      description '从 Host 私有精确快照启动；Tool、generation、service 与 P2P export 共用同一 owner。'
     }
 
-    canvas = service 'Canvas 应用与业务服务' {
-      description '负责权威命令、资源准入、修订检查、CAS 持久化与变更失效通知。'
+    ownedSkills = artifact 'Plugin-owned Skills' {
+      description '与闭包原子发布，通过 leased closure 解析；自身没有隐式 capability。'
     }
 
-    project = service '项目能力适配器' {
-      description '在有类型端口后管理 Project 绑定、Canvas 目录、托管资源与原生持久化。'
+    hooks = artifact 'authorized Hook snapshots' {
+      description '精确、私有、不可变 ESM 字节，只由 OpenCode 原生 Hook runtime 加载。'
     }
 
-    agent = service 'OpenCode 智能体运行时' {
-      description '提供通用会话、Skill、Hook 加载、MCP/OAuth、模型提供方、受保护路径与 Tool Provider 桥接。'
+    agentMcp = artifact 'Agent remote MCP declarations' {
+      description '已验证 HTTPS 配置，由 OpenCode native MCP client 和 OAuth 执行。'
     }
 
-    hostState = boundary 'Electron userData 数据' {
-      pluginPackages = storage '已安装插件包'
-      companionStore = storage '托管伴随程序'
-      authorizationStore = storage '工具与 Hook 收据'
-      skillStore = storage '已物化 Skill 与所有者绑定'
-      registryCache = storage '能力目录与制品缓存'
-    }
-
-    projectState = storage '项目 .convax 数据与托管资源' {
-      description '可移植的 Canvas 目录、文档与已准入资源；Main 是唯一权威写入方。'
+    uiContributions = artifact 'Host-rendered UI contributions' {
+      description 'Canvas node、command、menu、toolbar 和 action 的声明，不含任意 host function。'
     }
   }
 
-  pluginAuthor -> registry '从 convax-plugins 发布目录元数据'
-  pluginAuthor -> releases '发布带版本的插件包与 companion'
-  registry -> releases '声明不可变 URL、大小与 SHA-256'
+  convax = system 'Convax Host' {
+    description '拥有 ABI、Catalog、校验、安装、ActiveSet、Main routing、IPC/UI 与通用 authoring tooling。'
 
-  user -> convax.renderer.capabilityCenter '管理能力'
-  user -> convax.renderer.canvasShell '使用 Canvas 贡献'
-  user -> convax.renderer.servicesUi '配置服务与桌宠'
-  user -> convax.agent '使用 Agent 工作流'
+    contracts = boundary '代码生成契约' {
+      apiCatalog = artifact '@convax/plugin-api Catalog' {
+        description 'API id、typed schema、since、audience、grant、availability 与 TSDoc 的唯一来源。'
+      }
 
-  convax.renderer.capabilityCenter -> convax.preload '发起有类型的管理调用'
-  convax.renderer.canvasShell -> convax.renderer.webAdapter '挂载已声明的 Web 界面'
-  convax.renderer.servicesUi -> convax.preload '发起有类型的服务与桌宠调用'
-  convax.preload -> convax.main.managementIpc '可信 Renderer IPC'
+      sdk = artifact '@convax/plugin-sdk' {
+        description '唯一 v8 Manifest、contribution、P2P schema/version 和 bounded value contract。'
+      }
 
-  convax.main.managementIpc -> convax.main.remoteInstaller '按目录 id 安装或更新'
-  convax.main.managementIpc -> convax.main.packageManager '本地导入或卸载'
-  convax.main.remoteInstaller -> convax.main.registryClient '解析当前目录与制品'
-  convax.main.registryClient -> registry 'HTTPS + ETag'
-  convax.main.registryClient -> releases '下载有界、不可变的字节'
-  convax.main.registryClient -> convax.hostState.registryCache '读写非权威缓存'
+      generatedRefs = artifact '生成的 types、validators、clients、Docs 与 Skills' {
+        description 'CI 校验确定性和 external-consumer 可用性。'
+      }
+    }
 
-  convax.main.remoteInstaller -> convax.main.packageManager '发布已验证的插件包'
-  convax.main.packageManager -> pluginRuntime.manifest '解析并校验'
-  convax.main.packageManager -> convax.hostState.pluginPackages '原子发布插件包'
-  convax.main.remoteInstaller -> convax.main.publication '组合依赖状态'
-  convax.main.publication -> convax.main.skillLifecycle '执行 owned Skill 事务'
-  convax.main.publication -> convax.main.executionAuth '执行 Tool 与 Hook 授权事务'
-  convax.main.publication -> convax.hostState.companionStore '执行托管 companion 事务'
-  convax.main.publication -> convax.main.petHost '切换桌宠提供方'
-  convax.main.skillLifecycle -> convax.hostState.skillStore '发布并协调'
-  convax.main.executionAuth -> convax.hostState.authorizationStore '持久化精确身份'
+    renderer = boundary 'Electron Renderer' {
+      marketplaceUi = component 'Marketplace 与 Capability UI' {
+        description '显示 Host 投影并提交 id/用户意图，不提交 URL、digest、principal 或可执行路径。'
+      }
 
-  convax.main.assetProtocol -> convax.hostState.pluginPackages '提供受限静态资源'
-  convax.renderer.webAdapter -> pluginRuntime.webFrame '执行 MessageChannel 握手'
-  pluginRuntime.webFrame -> convax.main.webGateway '发起节点作用域请求'
-  convax.main.webGateway -> convax.main.capabilityBroker '适配 v5 Project/Canvas 调用'
-  convax.main.capabilityBroker -> convax.canvas '查询或执行原子事务'
-  convax.main.capabilityBroker -> convax.project '重新验证 Project 与 Canvas 目录作用域'
+      canvasShell = component 'Canvas contribution shell' {
+        description '从 validated contributions 投影 node、menu、toolbar、command 和 action。'
+      }
 
-  convax.main.generationRuntime -> convax.main.executionAuth '重新检查精确可执行身份'
-  convax.main.generationRuntime -> convax.hostState.companionStore '优先使用已验证托管 companion'
-  convax.main.generationRuntime -> pathExecutable '仅在不要求托管 companion 时回退'
-  convax.main.generationRuntime -> pluginRuntime.sidecar '启动快照并通过 MCP stdio 通信'
-  convax.main.generationRuntime -> convax.main.capabilityBroker '适配已授权的 Tool reverse-MCP 调用'
-  pluginRuntime.sidecar -> vendor '负责供应商凭据、轮询与网络调用'
-  convax.main.generationRuntime -> convax.canvas '通过 Canvas 服务提交已准入输出'
-  convax.main.generationRuntime -> convax.project '暂存输入并准入托管资源'
-  convax.main.serviceHost -> convax.main.generationRuntime '复用同一已验证运行时'
+      webTransport = component 'Web MessagePort transport' {
+        description '只翻译 convax.plugin-host/8 envelope；不实现权限、领域逻辑或 provider 选择。'
+      }
+    }
 
-  convax.main.agentConfig -> convax.agent '注入通用内存配置'
-  pluginRuntime.ownedSkill -> convax.agent '作为指令被发现'
-  pluginRuntime.hook -> convax.agent '从私有不可变文件 URL 加载'
-  convax.agent -> remoteMcp '使用原生远程 MCP 客户端与 OAuth'
-  convax.agent -> convax.canvas '使用有类型的宿主工具'
-  convax.agent -> convax.main.generationRuntime '复用同一生成执行器'
+    preload = boundary 'Preload transport' {
+      description '只暴露固定 convax.plugin-capability/3 client 与可克隆结构。'
+    }
 
-  pluginRuntime.pet -> convax.main.petHost '使用固定桌宠协议'
-  convax.main.petHost -> convax.renderer.servicesUi '提供窄化浮层与设置投影'
+    main = boundary 'Electron Main' {
+      marketplace = component 'Marketplace validator 与 installer' {
+        description '验证 package/2、plugin/8、大小、摘要、safe ZIP、target 和 source identity。'
+      }
 
-  convax.canvas -> convax.project '通过有类型的 Project 适配器持久化'
-  convax.project -> convax.projectState '读写受保护的可移植状态'
+      closurePublisher = component 'immutable closure publisher' {
+        description '原子发布 package、owned Skills、Hook、companion 与授权绑定。'
+      }
+
+      activeSet = component 'ActivePluginSet runtime' {
+        description '一次全局 CAS 切换 exact snapshots；提供 invocation lease、owner pin 和保守 GC。'
+      }
+
+      hostRouter = component 'Main Host API router' {
+        description '重检 exact principal、Catalog declaration、grant、availability、scope、revision 与取消。'
+      }
+
+      p2pBroker = component 'Host-mediated P2P broker' {
+        description '绑定 import/export、SemVer、schema、exact caller/provider pair lease、深度与并发。'
+      }
+
+      sidecarOwner = component 'verified sidecar owner' {
+        description '唯一 Tool/generation/service/P2P executor；无 shell、无外部可执行回退、无具体 id 分支。'
+      }
+
+      agentConfig = component 'Agent configuration bridge' {
+        description '注入 leased Skills、authorized Hooks、native remote MCP 和 Host Tool providers。'
+      }
+
+      governance = component 'Plugin-to-Host change gate' {
+        description '缺失 API 只能形成结构化请求；只有人类批准后才创建独立 Host 任务。'
+      }
+    }
+
+    canvas = service 'Canvas application services' {
+      description '权威命令、业务操作、expectedRevision、单次 CAS 与最终 beforeCommit guard。'
+    }
+
+    project = service 'Project services' {
+      description 'Project binding、Canvas catalog、资源准入、no-clobber publish 与受保护持久化。'
+    }
+
+    agent = service 'Agent runtime' {
+      description '通用会话、Skill、Hook、native MCP/OAuth 与 typed Host Tool bridge。'
+    }
+
+    hostState = boundary 'Electron userData authority' {
+      closures = storage 'immutable Plugin closures'
+      descriptors = storage 'validated snapshot descriptors'
+      activeSets = storage 'ActiveSets、active pointer 与 owner pins'
+      artifactCache = storage '非权威 artifact cache'
+    }
+
+    projectState = storage 'Project portable state' {
+      description 'Canvas catalog/document 与 admitted resources；只由 Project/Canvas owner 写入。'
+    }
+  }
+
+  pluginAuthor -> pluginSource.package '实现 contributions 与公开 API 调用'
+  convax.contracts.generatedRefs -> pluginSource.generatedSkill '生成 authoring reference'
+  pluginAuthor -> registry '发布 Registry metadata'
+  pluginAuthor -> releases '发布不可变 package 与 companion'
+  registry -> releases '绑定 URL、大小与摘要'
+  pluginAuthor -> pluginSource.hostRequest '发现缺失 Host capability'
+  pluginSource.hostRequest -> convax.main.governance '提交等待人类判断'
+  hostMaintainer -> convax.main.governance '批准、拒绝或指向已有 API'
+  hostMaintainer -> convax.contracts.apiCatalog '批准后维护通用 API contract'
+  convax.contracts.apiCatalog -> convax.contracts.sdk '提供生成 metadata'
+  convax.contracts.apiCatalog -> convax.contracts.generatedRefs '生成 types、validators、Docs 与 Skill'
+  convax.contracts.sdk -> convax.contracts.generatedRefs '生成 Manifest/P2P reference'
+
+  user -> convax.renderer.marketplaceUi '安装、更新、启停或移除'
+  user -> convax.renderer.canvasShell '使用 Plugin contributions'
+  user -> convax.agent '运行 Skill 与 Agent Tool'
+  convax.renderer.marketplaceUi -> convax.preload '传输用户意图'
+  convax.preload -> convax.main.marketplace '可信 IPC'
+  convax.main.marketplace -> registry '读取并验证 Registry'
+  convax.main.marketplace -> releases '下载并校验 artifact bytes'
+  convax.main.marketplace -> convax.hostState.artifactCache '写入可丢弃缓存'
+  convax.main.marketplace -> convax.main.closurePublisher '提交验证后的完整候选'
+  convax.main.closurePublisher -> convax.hostState.closures '发布 content-addressed closure'
+  convax.main.closurePublisher -> convax.hostState.descriptors '发布 validated descriptor'
+  convax.main.closurePublisher -> convax.main.activeSet '请求全局 CAS'
+  convax.main.activeSet -> convax.hostState.activeSets '持久化 pointer、set 与 pins'
+  convax.main.activeSet -> pluginRuntime.manifest '租赁 exact snapshot'
+  convax.main.activeSet -> pluginRuntime.ownedSkills '从 closure 直接解析'
+  convax.main.activeSet -> pluginRuntime.hooks '解析 authorized exact bytes'
+  convax.main.activeSet -> pluginRuntime.sidecar '绑定 managed companion bytes'
+
+  convax.renderer.canvasShell -> convax.renderer.webTransport '挂载 validated Web contribution'
+  convax.renderer.webTransport -> pluginRuntime.webFrame '建立每 frame 独立 MessagePort'
+  pluginRuntime.webFrame -> convax.renderer.webTransport '发送 host/8 request'
+  convax.renderer.webTransport -> convax.preload '纯 transport translation'
+  convax.preload -> convax.main.hostRouter 'capability/3 exact sender connection'
+  convax.main.hostRouter -> convax.main.activeSet '签发并重检 exact principal/lease'
+  convax.main.hostRouter -> convax.canvas '执行 Canvas command/query'
+  convax.main.hostRouter -> convax.project '执行 Project capability'
+  convax.main.hostRouter -> convax.agent '执行 Agent capability'
+  convax.main.hostRouter -> convax.main.sidecarOwner '执行 Tool capability'
+
+  pluginRuntime.manifest -> convax.main.p2pBroker '提供 versioned import/export declarations'
+  convax.main.p2pBroker -> convax.main.activeSet '联合租赁 exact caller/provider'
+  convax.main.p2pBroker -> convax.main.sidecarOwner '以 provider principal 执行 export'
+  convax.main.sidecarOwner -> pluginRuntime.sidecar '调用同一 verified process generation'
+  pluginRuntime.sidecar -> convax.main.p2pBroker '发起受限 nested import'
+  pluginRuntime.sidecar -> convax.main.hostRouter '使用 invocation-scoped reverse Host authority'
+  pluginRuntime.sidecar -> externalService '持有集成语义、凭据与网络调用'
+
+  pluginRuntime.uiContributions -> convax.renderer.canvasShell '投影 Host-rendered surfaces'
+  pluginRuntime.ownedSkills -> convax.main.agentConfig '提供 leased Skill paths'
+  pluginRuntime.hooks -> convax.main.agentConfig '提供 immutable file URLs'
+  pluginRuntime.agentMcp -> convax.main.agentConfig '提供 validated native MCP config'
+  convax.main.agentConfig -> convax.agent '注入通用配置'
+  convax.agent -> convax.canvas '调用 typed Host tools'
+  convax.agent -> convax.main.sidecarOwner '复用同一 Tool executor'
+
+  convax.main.sidecarOwner -> convax.project '暂存输入并发布验证后的输出'
+  convax.main.sidecarOwner -> convax.canvas '提交领域 mutation'
+  convax.canvas -> convax.project '通过 typed port 持久化'
+  convax.project -> convax.projectState '读写受保护 portable state'
 }
 
 deployment {
   workstation = device '用户工作站' {
-    mainProcess = process 'Electron 主进程' {
-      instanceOf convax.main.managementIpc
-      instanceOf convax.main.registryClient
-      instanceOf convax.main.remoteInstaller
-      instanceOf convax.main.packageManager
-      instanceOf convax.main.publication
-      instanceOf convax.main.assetProtocol
-      instanceOf convax.main.webGateway
-      instanceOf convax.main.capabilityBroker
-      instanceOf convax.main.generationRuntime
-      instanceOf convax.main.serviceHost
-      instanceOf convax.main.skillLifecycle
-      instanceOf convax.main.executionAuth
+    mainProcess = process 'Electron Main' {
+      instanceOf convax.main.marketplace
+      instanceOf convax.main.closurePublisher
+      instanceOf convax.main.activeSet
+      instanceOf convax.main.hostRouter
+      instanceOf convax.main.p2pBroker
+      instanceOf convax.main.sidecarOwner
       instanceOf convax.main.agentConfig
-      instanceOf convax.main.petHost
+      instanceOf convax.main.governance
       instanceOf convax.canvas
       instanceOf convax.project
     }
 
-    rendererProcess = process 'Electron 渲染进程' {
-      instanceOf convax.renderer.capabilityCenter
+    rendererProcess = process 'Electron Renderer' {
+      instanceOf convax.renderer.marketplaceUi
       instanceOf convax.renderer.canvasShell
-      instanceOf convax.renderer.webAdapter
-      instanceOf convax.renderer.servicesUi
+      instanceOf convax.renderer.webTransport
       instanceOf convax.preload
     }
 
-    pluginIframe = sandbox 'sandbox="allow-scripts" 插件 iframe' {
+    webSandbox = sandbox 'sandboxed Plugin iframe' {
       instanceOf pluginRuntime.webFrame
     }
 
-    toolProcess = process '已验证的伴随进程' {
+    sidecarProcess = process 'verified sidecar process generation' {
       instanceOf pluginRuntime.sidecar
     }
 
-    openCodeProcess = process 'OpenCode 进程与工作区运行时' {
+    agentProcess = process 'OpenCode runtime' {
       instanceOf convax.agent
-      instanceOf pluginRuntime.hook
-      instanceOf pluginRuntime.ownedSkill
+      instanceOf pluginRuntime.ownedSkills
+      instanceOf pluginRuntime.hooks
+      instanceOf pluginRuntime.agentMcp
     }
 
-    petSandbox = sandbox '沙箱桌宠窗口' {
-      instanceOf pluginRuntime.pet
+    userData = data 'Electron userData' {
+      instanceOf convax.hostState.closures
+      instanceOf convax.hostState.descriptors
+      instanceOf convax.hostState.activeSets
+      instanceOf convax.hostState.artifactCache
     }
 
-    userData = data 'Electron userData 数据' {
-      instanceOf convax.hostState.pluginPackages
-      instanceOf convax.hostState.companionStore
-      instanceOf convax.hostState.authorizationStore
-      instanceOf convax.hostState.skillStore
-      instanceOf convax.hostState.registryCache
-    }
-
-    projectRoot = data '已绑定的项目根目录' {
+    projectRoot = data '绑定的 Project root' {
       instanceOf convax.projectState
     }
-
-    instanceOf pathExecutable
   }
 
-  internet = network '互联网与外部信任域' {
+  internet = network '外部网络域' {
     instanceOf registry
     instanceOf releases
-    instanceOf vendor
-    instanceOf remoteMcp
+    instanceOf externalService
   }
 }
 
 views {
   view index {
-    title 'Convax 插件体系总览'
-    description '从用户、插件作者、宿主、运行时贡献、官方能力目录和外部服务观察整体边界。'
-
+    title 'Convax v8 插件平台总览'
+    description '唯一 v8 Manifest、Main authority、immutable ActiveSet、Plugin contributions 与外部边界。'
     include *
   }
 
-  view plugin_context {
-    title 'Convax 插件体系上下文'
-    description '宿主负责权限与生命周期；具体集成和远程服务位于核心之外。'
-
+  view runtime_contracts {
+    title '运行契约与生成 reference'
+    description 'plugin/8、host/8、capability/3 与独立 SemVer Host API Catalog。'
     include
-      user,
       pluginAuthor,
-      registry,
-      releases,
-      vendor,
-      remoteMcp,
-      pathExecutable,
-      convax,
-      pluginRuntime
-  }
-
-  view plugin_platform {
-    title '插件平台组件'
-    description 'Desktop Main 是组合与策略所有者；Canvas、Project 和 Agent 仍保持有类型的领域或运行时边界。'
-
-    include
-      user,
-      registry,
-      releases,
-      convax.renderer.*,
+      hostMaintainer,
+      pluginSource.*,
+      pluginRuntime.manifest,
+      convax.contracts.*,
+      convax.renderer.webTransport,
       convax.preload,
-      convax.main.*,
-      convax.canvas,
-      convax.project,
-      convax.agent,
-      pluginRuntime.*,
-      remoteMcp,
-      vendor
+      convax.main.hostRouter,
+      convax.main.governance
   }
 
   view contribution_planes {
-    title '插件清单驱动的贡献平面'
-    description '每个平面都有独立的信任和运行时适配器；安装一个平面不会授予另一个平面的权限。'
-
+    title '声明式贡献平面'
+    description 'Skill、MCP、Agent、Tool、node、menu、toolbar 与 action 不相互继承权限。'
     include
+      user,
       pluginRuntime.*,
       convax.renderer.canvasShell,
-      convax.renderer.webAdapter,
-      convax.main.assetProtocol,
-      convax.main.webGateway,
-      convax.main.capabilityBroker,
-      convax.main.generationRuntime,
-      convax.main.serviceHost,
-      convax.main.skillLifecycle,
-      convax.main.executionAuth,
+      convax.renderer.webTransport,
+      convax.main.hostRouter,
+      convax.main.sidecarOwner,
       convax.main.agentConfig,
-      convax.main.petHost,
       convax.canvas,
       convax.project,
       convax.agent,
-      remoteMcp,
-      vendor
+      externalService
   }
 
-  view capability_authority {
-    title '项目与 Canvas 能力权限'
-    description '网页与工具传输汇聚到同一个绑定权限主体的主进程能力代理；文档写入复用 Canvas 应用服务。'
-
+  view authority_and_execution {
+    title 'Main authority 与执行所有权'
+    description 'Renderer transport 汇聚到 Main router；领域服务和 verified sidecar 保持单一 owner。'
     include
+      user,
       pluginRuntime.webFrame,
       pluginRuntime.sidecar,
-      convax.renderer.webAdapter,
-      convax.main.webGateway,
-      convax.main.generationRuntime,
-      convax.main.capabilityBroker,
+      convax.renderer.*,
+      convax.preload,
+      convax.main.activeSet,
+      convax.main.hostRouter,
+      convax.main.sidecarOwner,
       convax.canvas,
       convax.project,
+      convax.agent,
       convax.projectState
   }
 
-  deployment view process_trust_boundaries {
-    title '运行进程、沙箱与数据信任边界'
-    description '工具伴随进程和 Hook 以用户进程权限运行；网页与桌宠界面位于沙箱内；凭据不会进入渲染进程 IPC。'
-    includeAncestors: true
+  view p2p_broker {
+    title 'Plugin-to-Plugin typed broker'
+    description 'Host 绑定 exact caller/provider lease、version/schema、取消、深度、并发和嵌套调用。'
+    include
+      pluginRuntime.manifest,
+      pluginRuntime.sidecar,
+      convax.main.activeSet,
+      convax.main.p2pBroker,
+      convax.main.sidecarOwner,
+      convax.main.hostRouter
+  }
 
+  deployment view process_trust_boundaries {
+    title '进程、沙箱与数据边界'
+    description 'Web 无 authority；Main 持有策略；sidecar 执行精确字节；OpenCode 原生管理 Agent 扩展。'
+    includeAncestors: true
     include workstation.**, internet.**
   }
 
-  dynamic view install_update_flow {
-    title '安装与更新发布流程'
-    description '同 id 变更把插件包发布与依赖 Skill、companion、授权收据和恢复日志串行化。'
-
-    user -> convax.renderer.capabilityCenter '选择安装或更新'
-    convax.renderer.capabilityCenter -> convax.preload '只传目录 id'
-    convax.preload -> convax.main.managementIpc '可信 IPC'
-    convax.main.managementIpc -> convax.main.remoteInstaller '网络优先安装'
-    convax.main.remoteInstaller -> convax.main.registryClient '解析目录并下载'
-    convax.main.registryClient -> registry '验证单调递增的 Registry'
-    convax.main.registryClient -> releases '验证大小、SHA-256 与安全 ZIP'
-    convax.main.registryClient -> convax.main.remoteInstaller '返回已验证的插件包与 companion 字节'
-    convax.main.remoteInstaller -> convax.main.publication '准备依赖事务'
-    convax.main.publication -> convax.main.skillLifecycle '暂存 owned Skill 并写日志'
-    convax.main.publication -> convax.main.executionAuth '准备 Tool 与 Hook 收据'
-    convax.main.remoteInstaller -> convax.main.packageManager '暂存并校验插件包'
-    convax.main.packageManager -> convax.hostState.pluginPackages '原子重命名并决定插件包状态'
-    convax.main.packageManager -> convax.main.publication '激活并提交，或回滚、交由恢复'
-    convax.main.publication -> convax.main.agentConfig '发布后刷新'
-    convax.main.agentConfig -> convax.agent '使惰性配置失效'
+  dynamic view installation_flow {
+    title '完整闭包发布与 ActiveSet CAS'
+    description '验证 package/8 contributions 后发布 closure，再以一次 CAS 改变全局可见集合。'
+    user -> convax.renderer.marketplaceUi '选择安装或更新'
+    convax.renderer.marketplaceUi -> convax.preload '提交 id 与用户意图'
+    convax.preload -> convax.main.marketplace '可信 IPC'
+    convax.main.marketplace -> registry '验证 source identity 与 version'
+    convax.main.marketplace -> releases '验证大小、摘要、target 与 ZIP'
+    convax.main.marketplace -> convax.main.closurePublisher '提交 complete candidate'
+    convax.main.closurePublisher -> convax.hostState.closures '发布 immutable bytes'
+    convax.main.closurePublisher -> convax.hostState.descriptors '发布 validated descriptor'
+    convax.main.closurePublisher -> convax.main.activeSet 'compare-and-swap complete set'
+    convax.main.activeSet -> convax.hostState.activeSets '持久化 exact set/pointer'
   }
 
-  dynamic view web_canvas_call {
-    title '沙箱 Web 插件访问 Canvas 的流程'
-    description '网页 Frame 永远不是权限根；每个请求都会重新绑定到已安装权限主体与实时宿主作用域。'
-
-    user -> pluginRuntime.webFrame '显式触发插件界面操作'
-    pluginRuntime.webFrame -> convax.renderer.webAdapter '发送 MessagePort 请求'
-    convax.renderer.webAdapter -> convax.main.webGateway '需要 Main 权限时发送方作用域 IPC'
-    convax.main.webGateway -> convax.main.capabilityBroker 'Principal 与宿主签发的 Project 作用域'
-    convax.main.capabilityBroker -> convax.main.packageManager '重新验证 Manifest 摘要与授权项'
-    convax.main.capabilityBroker -> convax.project '重新验证 Project 绑定与 Canvas 目录'
-    convax.main.capabilityBroker -> convax.canvas '执行有界投影或修订绑定事务'
-    convax.canvas -> convax.project '走唯一权威持久化路径'
-    convax.canvas -> convax.main.capabilityBroker '返回紧凑结果或修订失效通知'
-    pluginRuntime.webFrame <- convax.main.capabilityBroker '通过已绑定适配器返回结果'
+  dynamic view web_host_call {
+    title 'Web Plugin Host API 调用'
+    description 'host/8 和 capability/3 都是 transport；Main 是唯一 authority 和业务路由。'
+    user -> pluginRuntime.webFrame '显式触发操作'
+    pluginRuntime.webFrame -> convax.renderer.webTransport 'host/8 request'
+    convax.renderer.webTransport -> convax.preload 'transport-only translation'
+    convax.preload -> convax.main.hostRouter 'capability/3 sender-bound call'
+    convax.main.hostRouter -> convax.main.activeSet '验证 exact principal 与 lease'
+    convax.main.hostRouter -> convax.canvas '执行 typed command/query'
+    convax.canvas -> convax.project 'CAS / no-clobber persistence'
+    convax.main.hostRouter -> pluginRuntime.webFrame '返回有界 pathless result'
   }
 
-  dynamic view generation_execution_flow {
-    title '已验证工具插件的生成流程'
-    description '界面、智能体与网页调用方汇聚到同一执行器；伴随进程负责供应商工作，Canvas 负责已准入的持久结果。'
-
-    user -> convax.renderer.canvasShell '显式触发生成'
-    convax.renderer.canvasShell -> convax.preload '发送有类型请求与取消 id'
-    convax.preload -> convax.main.generationRuntime '发送作用域内生成请求'
-    convax.main.generationRuntime -> convax.main.packageManager '解析当前 Manifest 贡献'
-    convax.main.generationRuntime -> convax.main.executionAuth '验证 Manifest 与可执行收据'
-    convax.main.generationRuntime -> convax.project '暂存有界、实时的 Canvas 输入'
-    convax.main.generationRuntime -> pluginRuntime.sidecar '启动精确快照并调用 MCP tools/list 与 tools/call'
-    pluginRuntime.sidecar -> vendor '发送供应商请求并轮询'
-    pluginRuntime.sidecar <- vendor '接收终态结果或错误'
-    convax.main.generationRuntime <- pluginRuntime.sidecar '接收有界 MCP 结果'
-    convax.main.generationRuntime -> convax.project '检查并准入托管输出'
-    convax.main.generationRuntime -> convax.canvas '执行资源业务操作与修订保护'
-    convax.canvas -> convax.projectState '以 CAS 提交文档'
-  }
-
-  dynamic view agent_extension_flow {
-    title '智能体扩展平面'
-    description 'Skill、Hook、LLM 网关与远程 MCP 是相互独立的配置和信任路径。'
-
-    convax.main.skillLifecycle -> pluginRuntime.ownedSkill '发布通用 Skill 目录'
-    pluginRuntime.ownedSkill -> convax.agent '由工作流指令选择有类型工具'
-    convax.main.executionAuth -> pluginRuntime.hook '解析精确私有快照'
-    pluginRuntime.hook -> convax.agent '运行原生 OpenCode Hook 代码'
-    convax.main.generationRuntime -> convax.main.agentConfig '提供临时回环 LLM Provider'
-    convax.main.packageManager -> convax.main.agentConfig '提供已验证的 v6 远程 MCP 声明'
-    convax.main.agentConfig -> convax.agent '注入通用内存配置'
-    convax.agent -> remoteMcp '使用 OpenCode MCP 传输与 OAuth'
-    convax.agent -> convax.canvas '调用有类型的宿主工具'
-    convax.agent -> convax.main.generationRuntime '共享 Tool 执行'
+  dynamic view plugin_host_request {
+    title 'Plugin 缺失 Host API 的治理流程'
+    description 'Plugin task 不修改 Host；结构化诉求必须等待人类决定。'
+    pluginAuthor -> pluginSource.hostRequest '记录 use case、contract、替代方案与 tests'
+    pluginSource.hostRequest -> convax.main.governance '提交请求并停止 Host 修改'
+    hostMaintainer -> convax.main.governance '人类批准、拒绝或指向已有 API'
+    convax.main.governance -> convax.contracts.apiCatalog '批准后创建独立 Host task'
+    convax.contracts.apiCatalog -> convax.contracts.generatedRefs '生成 types、Docs 与 Skill reference'
+    convax.contracts.generatedRefs -> pluginSource.generatedSkill '发布 authoring contract'
   }
 }

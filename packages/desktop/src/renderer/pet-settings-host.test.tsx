@@ -1,5 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import {
   PetSettingsFrameLifecycle,
   PetSettingsFrameRelay,
@@ -41,10 +42,23 @@ mock.module("electron", () => ({
   },
 }))
 
+function settingsUrl(pluginId = "soft-companion") {
+  return webPluginAssetUrl(
+    {
+      activeRevision: 7,
+      activeSetDigest: "a".repeat(64),
+      id: pluginId,
+      snapshotDigest: "b".repeat(64),
+      version: "1.0.0",
+    },
+    "settings/index.html",
+  )
+}
+
 const provider: PetSettingsProvider = {
   generation: 7,
   pluginId: "soft-companion",
-  settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+  settingsUrl: settingsUrl(),
 }
 
 function createClient(): PetSettingsHostClient {
@@ -117,7 +131,7 @@ describe("PetSettingsHost", () => {
   test("renders only the installed provider settings iframe with the exact sandbox", () => {
     const markup = renderToStaticMarkup(<PetSettingsHost client={createClient()} provider={provider} />)
 
-    expect(markup).toContain('src="convax-plugin://soft-companion/settings/index.html"')
+    expect(markup).toContain(`src="${settingsUrl()}"`)
     expect(markup).toContain('sandbox="allow-scripts"')
     expect(markup).not.toContain("allow-same-origin")
     expect(markup).not.toContain('type="file"')
@@ -451,7 +465,7 @@ describe("PetSettingsHost", () => {
         provider={{
           generation: provider.generation + 1,
           pluginId: "other-companion",
-          settingsUrl: "convax-plugin://other-companion/settings/index.html",
+          settingsUrl: settingsUrl("other-companion"),
         }}
       />,
     )
@@ -469,7 +483,7 @@ describe("PetSettingsHost", () => {
           provider={{
             generation: provider.generation + 1,
             pluginId: "other-companion",
-            settingsUrl: "convax-plugin://other-companion/settings/index.html",
+            settingsUrl: settingsUrl("other-companion"),
           }}
         />,
       )

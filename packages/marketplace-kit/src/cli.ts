@@ -82,11 +82,7 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
       previousDescriptorPath: option(rest, "--previous-descriptor"),
       previousRegistryPath: option(rest, "--previous"),
       previousShowcasePath: option(rest, "--previous-showcase"),
-      previousRegistryV1Path: option(rest, "--previous-v1"),
-      previousShowcaseV1Path: option(rest, "--previous-showcase-v1"),
-      bootstrapPreviousV1Path: option(rest, "--bootstrap-previous-v1"),
       initialOfficial: rest.includes("--initial"),
-      v1Revision: option(rest, "--v1-revision"),
       publishSelections: changed,
       fetchArtifact: changed ? fetchReleaseArtifact : undefined,
     })

@@ -6,10 +6,14 @@ import type { LocalMarketplacePackage } from "./local-marketplace-store"
 import type { MarketplaceMcpMetadataStore } from "./marketplace-mcp-metadata"
 import type { CapabilityTransition, InstallRecord } from "./marketplace-state"
 import type { MarketplacePluginSetupMode } from "./marketplace-plugin-setup-authorization"
-import type { RemoteCapabilityInstaller } from "./remote-capability-installer"
+import type { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 
 export interface DesktopMarketplaceCapabilityInstallerOptions {
-  installLocalPlugin(directory: string, options: { authorizeExecution: boolean }): Promise<void>
+  installLocalPlugin(
+    directory: string,
+    options: { authorizeExecution: boolean },
+    item: LocalMarketplacePackage,
+  ): Promise<void>
   installLocalSkill(directory: string): Promise<void>
   resolveInstalledTransition(transition: CapabilityTransition): Promise<"next" | "previous" | "unknown">
   mcp: MarketplaceMcpMetadataStore
@@ -20,7 +24,7 @@ export interface DesktopMarketplaceCapabilityInstallerOptions {
   enablePlugin(id: string): Promise<void>
   hardRefreshPlugin(id: string): Promise<void>
   refreshPetProvider(id: string): Promise<void>
-  remote: Pick<RemoteCapabilityInstaller, "installVerifiedMarketplaceCandidate">
+  remote: Pick<MarketplaceArtifactInstaller, "installVerifiedMarketplaceCandidate">
   resolvePackage(item: SourceQualifiedItem): Promise<RegistryPackage>
   uninstallPlugin(id: string): Promise<void>
   uninstallSkill(id: string): Promise<void>
@@ -58,6 +62,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
         artifactBytes: prepared.artifactBytes,
         ...(Object.keys(prepared.companionBytes).length ? { companionBytes: prepared.companionBytes } : {}),
         item: registryItem,
+        sourceIdentity: item.sourceKey,
       },
       {
         deferExecutionAuthorization: !options.authorizeExecution,
@@ -75,6 +80,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     }
     await this.#options.remote.installVerifiedMarketplaceCandidate({
       artifactBytes: bytes,
+      sourceIdentity: item.sourceKey,
       item: {
         compatibility: item.compatibility,
         delivery: {
@@ -98,7 +104,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
   ) {
     const realSnapshot = await fs.realpath(snapshotDirectory)
     if (item.kind === "plugin") {
-      await this.#options.installLocalPlugin(realSnapshot, options)
+      await this.#options.installLocalPlugin(realSnapshot, options, item)
       const authorizationContractDigest = options.authorizeExecution
         ? await this.#options.currentPluginAuthorization(item.id)
         : null

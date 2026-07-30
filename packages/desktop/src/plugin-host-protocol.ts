@@ -1,218 +1,154 @@
-export const desktopPluginHostProtocolV1 = "convax.plugin-host/1" as const
-export const desktopPluginHostProtocolV2 = "convax.plugin-host/2" as const
-export const desktopPluginHostProtocolV3 = "convax.plugin-host/3" as const
-export const desktopPluginHostProtocolV4 = "convax.plugin-host/4" as const
+import { pluginApiCatalog, type PluginApiId } from "@convax/plugin-api"
+import {
+  isPluginHostCapabilityAvailabilityRequest,
+  isPluginHostCapabilityInvokeRequest,
+  isPluginHostCommand,
+  isPluginHostConnect,
+  isPluginHostRequest,
+  isPluginHostResponse,
+  pluginHostFailure as sdkPluginHostFailure,
+  pluginHostProtocolV8,
+  pluginHostSuccess as sdkPluginHostSuccess,
+  type PluginHostCapabilityAvailabilityRequest,
+  type PluginHostCapabilityInvokeRequest,
+  type PluginHostCommand,
+  type PluginHostConnect,
+  type PluginHostRequest,
+  type PluginHostResponse,
+  type PluginHostRemoteFailure,
+} from "@convax/plugin-sdk/client"
+import {
+  pluginHostApiRemoteFailure,
+  pluginHostProtocolRemoteFailure,
+} from "./plugin-host-errors"
+
 /**
- * Transport-neutral capability protocol introduced with manifest v5. Unlike
- * legacy plugin-host/1-4, future manifest schemas may negotiate this protocol
- * independently instead of creating another Web-host protocol version.
+ * Sandboxed iframe/Web MessagePort ABI.
+ *
+ * This protocol is intentionally independent from the renderer-to-main
+ * principal transport below. Host API additions are versioned by the
+ * @convax/plugin-api Catalog rather than by another transport token.
  */
-export const pluginCapabilityProtocolV1 = "convax.plugin-capability/1" as const
-/** v2 adds self-node materialization admission and node-scoped connected-media streams. */
-export const pluginCapabilityProtocolV2 = "convax.plugin-capability/2" as const
-export type PluginCapabilityProtocol = typeof pluginCapabilityProtocolV1 | typeof pluginCapabilityProtocolV2
-/** Compatibility name for callers that still index protocols by manifest generation. */
-export const desktopPluginHostProtocolV5 = pluginCapabilityProtocolV1
-export const desktopPluginHostProtocolV7 = pluginCapabilityProtocolV2
-/** Backwards-compatible name for the original static Plugin protocol. */
-export const desktopPluginHostProtocol = desktopPluginHostProtocolV1
+export const desktopPluginHostProtocolV8 = pluginHostProtocolV8
+export type DesktopPluginHostProtocol = typeof desktopPluginHostProtocolV8
+
+/**
+ * Principal-bound renderer/main and verified-sidecar transport.
+ *
+ * This is not an alias for the iframe ABI. The renderer adapter translates
+ * between the two envelopes at the process boundary.
+ */
+export const pluginCapabilityProtocolV3 = "convax.plugin-capability/3" as const
+export type PluginCapabilityProtocol = typeof pluginCapabilityProtocolV3
+
 export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImages.changed"
 export const desktopPluginConnectedInputsChangedCommand = "canvas.connectedInputs.changed"
+export const pluginCanvasInputsChangedCommand = "canvas.inputs.changed"
 export const pluginCanvasDocumentChangedCommand = "canvas.document.changed"
 
-export type DesktopPluginHostProtocol =
-  | typeof desktopPluginHostProtocolV1
-  | typeof desktopPluginHostProtocolV2
-  | typeof desktopPluginHostProtocolV3
-  | typeof desktopPluginHostProtocolV4
-  | typeof desktopPluginHostProtocolV5
-  | typeof desktopPluginHostProtocolV7
+export type DesktopPluginHostMethod = PluginApiId
 
-export type DesktopPluginHostMethodV1 =
-  | "host.context.get"
-  | "canvas.connectedImages.list"
-  | "canvas.connectedImage.read"
-  | "canvas.connectedInputs.list"
-  | "canvas.node.get"
-  | "canvas.node.updateState"
-  | "canvas.image.create"
-  | "project.file.readText"
-  | "agent.prompt"
-
-export type DesktopPluginHostMethodV2 =
-  | DesktopPluginHostMethodV1
-  | "generation.tools.list"
-  | "generation.canvas.execute"
-
-export type DesktopPluginHostMethodV3 = DesktopPluginHostMethodV2
-export type DesktopPluginHostMethodV4 = DesktopPluginHostMethodV3
-export type DesktopPluginHostMethodV5 =
-  | DesktopPluginHostMethodV4
-  | "projects.list"
-  | "canvas.catalog.list"
-  | "canvas.document.get"
-  | "canvas.nodes.query"
-  | "canvas.transaction.execute"
-  | "canvas.events.subscribe"
-  | "canvas.events.unsubscribe"
-
-export type DesktopPluginHostMethodV7 =
-  | DesktopPluginHostMethodV5
-  | "canvas.connectedMedia.open"
-  | "canvas.connectedMedia.close"
-
-export type DesktopPluginHostMethod = DesktopPluginHostMethodV7
-
-export interface DesktopPluginHostRequest {
+interface PluginCapabilityProtocolRequest {
   id: string
   method: DesktopPluginHostMethod
   params?: unknown
-  protocol: DesktopPluginHostProtocol
+  protocol: PluginCapabilityProtocol
   type: "request"
 }
 
-export type DesktopPluginHostResponse =
+type PluginCapabilityProtocolResponse =
   | {
       id: string
       ok: true
-      protocol: DesktopPluginHostProtocol
+      protocol: PluginCapabilityProtocol
       result: unknown
       type: "response"
     }
   | {
-      error: string
+      error: PluginHostRemoteFailure
       id: string
       ok: false
-      protocol: DesktopPluginHostProtocol
+      protocol: PluginCapabilityProtocol
       type: "response"
     }
 
-export interface DesktopPluginHostCommand {
+interface PluginCapabilityProtocolCommand {
   command: string
   params?: unknown
-  protocol: DesktopPluginHostProtocol
+  protocol: PluginCapabilityProtocol
   type: "command"
 }
 
-export interface DesktopPluginHostConnect {
-  pluginId: string
-  protocol: DesktopPluginHostProtocol
-  type: "connect"
+export type DesktopPluginHostRequest = PluginHostRequest
+export type DesktopPluginHostResponse = PluginHostResponse
+export type DesktopPluginHostCommand = PluginHostCommand
+export type DesktopPluginHostConnect = PluginHostConnect
+export type DesktopPluginCapabilityInvokeRequest = PluginHostCapabilityInvokeRequest
+export type DesktopPluginCapabilityAvailabilityRequest = PluginHostCapabilityAvailabilityRequest
+
+export type PluginCapabilityRequest = PluginCapabilityProtocolRequest
+export type PluginCapabilityResponse = PluginCapabilityProtocolResponse
+export type PluginCapabilityCommand = PluginCapabilityProtocolCommand
+
+export const isDesktopPluginHostConnect = isPluginHostConnect
+export const isDesktopPluginHostRequest = isPluginHostRequest
+export const isDesktopPluginHostResponse = isPluginHostResponse
+export const isDesktopPluginHostCommand = isPluginHostCommand
+export const isDesktopPluginCapabilityInvokeRequest = isPluginHostCapabilityInvokeRequest
+export const isDesktopPluginCapabilityAvailabilityRequest = isPluginHostCapabilityAvailabilityRequest
+export const pluginHostSuccess = sdkPluginHostSuccess
+export function pluginHostFailure(id: string, error: unknown): DesktopPluginHostResponse {
+  return sdkPluginHostFailure(id, pluginHostProtocolRemoteFailure(error))
 }
 
-const methodsV1 = new Set<DesktopPluginHostMethodV1>([
-  "host.context.get",
-  "canvas.connectedImages.list",
-  "canvas.connectedImage.read",
-  "canvas.connectedInputs.list",
-  "canvas.node.get",
-  "canvas.node.updateState",
-  "canvas.image.create",
-  "project.file.readText",
-  "agent.prompt",
-])
+const hostApiMethods = new Set<DesktopPluginHostMethod>(pluginApiCatalog.apis.map((definition) => definition.id))
 
-const methodsV2 = new Set<DesktopPluginHostMethodV2>([
-  ...methodsV1,
-  "generation.tools.list",
-  "generation.canvas.execute",
-])
-
-const methodsV3 = new Set<DesktopPluginHostMethodV3>(methodsV2)
-const methodsV4 = new Set<DesktopPluginHostMethodV4>(methodsV3)
-const methodsV5 = new Set<DesktopPluginHostMethodV5>([
-  ...methodsV4,
-  "projects.list",
-  "canvas.catalog.list",
-  "canvas.document.get",
-  "canvas.nodes.query",
-  "canvas.transaction.execute",
-  "canvas.events.subscribe",
-  "canvas.events.unsubscribe",
-])
-const methodsV7 = new Set<DesktopPluginHostMethodV7>([
-  ...methodsV5,
-  "canvas.connectedMedia.open",
-  "canvas.connectedMedia.close",
-])
-
-export function desktopPluginHostProtocolForManifestSchema(
-  schema:
-    | "convax.plugin/1"
-    | "convax.plugin/2"
-    | "convax.plugin/3"
-    | "convax.plugin/4"
-    | "convax.plugin/5"
-    | "convax.plugin/6"
-    | "convax.plugin/7",
-): DesktopPluginHostProtocol {
-  return schema === "convax.plugin/7"
-    ? desktopPluginHostProtocolV7
-    : schema === "convax.plugin/5" || schema === "convax.plugin/6"
-      ? desktopPluginHostProtocolV5
-      : schema === "convax.plugin/4"
-        ? desktopPluginHostProtocolV4
-        : schema === "convax.plugin/3"
-          ? desktopPluginHostProtocolV3
-          : schema === "convax.plugin/2"
-            ? desktopPluginHostProtocolV2
-            : desktopPluginHostProtocolV1
-}
-
-export function isDesktopPluginHostProtocol(value: unknown): value is DesktopPluginHostProtocol {
-  return (
-    value === desktopPluginHostProtocolV1 ||
-    value === desktopPluginHostProtocolV2 ||
-    value === desktopPluginHostProtocolV3 ||
-    value === desktopPluginHostProtocolV4 ||
-    value === desktopPluginHostProtocolV5 ||
-    value === desktopPluginHostProtocolV7
-  )
-}
-
-export function isDesktopPluginHostRequest(value: unknown): value is DesktopPluginHostRequest {
+function isPrincipalProtocolRequest(value: unknown): value is PluginCapabilityProtocolRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const request = value as Record<string, unknown>
-  if (
-    request.type !== "request" ||
-    typeof request.id !== "string" ||
-    request.id.length === 0 ||
-    request.id.length > 128 ||
-    typeof request.method !== "string" ||
-    !isDesktopPluginHostProtocol(request.protocol)
+  return (
+    request.type === "request" &&
+    typeof request.id === "string" &&
+    request.id.length > 0 &&
+    request.id.length <= 128 &&
+    request.protocol === pluginCapabilityProtocolV3 &&
+    typeof request.method === "string" &&
+    hostApiMethods.has(request.method as DesktopPluginHostMethod)
   )
-    return false
-  return request.protocol === desktopPluginHostProtocolV1
-    ? methodsV1.has(request.method as DesktopPluginHostMethodV1)
-    : request.protocol === desktopPluginHostProtocolV2
-      ? methodsV2.has(request.method as DesktopPluginHostMethodV2)
-      : request.protocol === desktopPluginHostProtocolV3
-        ? methodsV3.has(request.method as DesktopPluginHostMethodV3)
-        : request.protocol === desktopPluginHostProtocolV4
-          ? methodsV4.has(request.method as DesktopPluginHostMethodV4)
-          : request.protocol === desktopPluginHostProtocolV5
-            ? methodsV5.has(request.method as DesktopPluginHostMethodV5)
-            : methodsV7.has(request.method as DesktopPluginHostMethodV7)
 }
 
-export function pluginHostSuccess(
-  id: string,
-  result: unknown,
-  protocol: DesktopPluginHostProtocol = desktopPluginHostProtocolV1,
-): DesktopPluginHostResponse {
-  return { id, ok: true, protocol, result, type: "response" }
+export function isPluginCapabilityRequest(value: unknown): value is PluginCapabilityRequest {
+  return isPrincipalProtocolRequest(value)
 }
 
-export function pluginHostFailure(
+export function pluginCapabilitySuccess(id: string, result: unknown): PluginCapabilityResponse {
+  return { id, ok: true, protocol: pluginCapabilityProtocolV3, result, type: "response" }
+}
+
+export function pluginCapabilityFailure(
   id: string,
-  error: unknown,
-  protocol: DesktopPluginHostProtocol = desktopPluginHostProtocolV1,
-): DesktopPluginHostResponse {
+  error: PluginHostRemoteFailure,
+): PluginCapabilityResponse {
   return {
-    error: error instanceof Error ? error.message : String(error),
+    error,
     id,
     ok: false,
-    protocol,
+    protocol: pluginCapabilityProtocolV3,
     type: "response",
   }
+}
+
+export function pluginCapabilityApiFailure(
+  id: string,
+  method: PluginApiId,
+  error: unknown,
+): PluginCapabilityResponse {
+  return pluginCapabilityFailure(id, pluginHostApiRemoteFailure(method, error))
+}
+
+export function pluginCapabilityProtocolFailure(
+  id: string,
+  error: unknown,
+): PluginCapabilityResponse {
+  return pluginCapabilityFailure(id, pluginHostProtocolRemoteFailure(error))
 }

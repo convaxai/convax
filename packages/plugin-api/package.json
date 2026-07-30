@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@convax/plugin-api",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microvoid/convax.git",
+    "directory": "packages/plugin-api"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.3.0"
+  },
+  "packageManager": "bun@1.3.14",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "convax-plugin-api": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./generator": {
+      "types": "./dist/generator.d.ts",
+      "import": "./dist/generator.js",
+      "default": "./dist/generator.js"
+    },
+    "./catalog.json": "./dist/generated/plugin-api.json",
+    "./catalog.md": "./dist/generated/plugin-api.md"
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "generate": "bun src/cli.ts generate",
+    "generate:check": "bun src/cli.ts generate --check",
+    "compat": "bun src/cli.ts compat",
+    "history:append": "bun src/cli.ts history:append",
+    "build:js": "bun scripts/build-js.ts",
+    "build:types": "tsc -p tsconfig.build.json",
+    "build:generated": "bun scripts/copy-generated.ts",
+    "build": "bun run typecheck && bun run compat && bun run generate:check && bun run clean && bun run build:js && bun run build:types && bun run build:generated",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "pack:check": "bun run build && bun scripts/pack-check.ts",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run compat && bun run generate:check"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

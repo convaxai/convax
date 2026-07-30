@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto"
-import { constants as fsConstants, createReadStream, mkdtempSync, rmSync } from "node:fs"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { mkdtempSync, rmSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -12,13 +12,8 @@ import type {
 } from "../generation-contracts"
 import { pluginServiceMcpTools, type PluginServiceSummary } from "../plugin-service-contracts"
 import {
-  webPluginManifestFileName,
-  webPluginManifestSchemaV2,
-  webPluginManifestSchemaV3,
-  webPluginManifestSchemaV4,
-  webPluginManifestSchemaV5,
-  webPluginManifestSchemaV6,
-  webPluginManifestSchemaV7,
+  webPluginManifestSchemaV8,
+  type ActiveInstalledWebPluginSummary,
   type InstalledWebPluginSummary,
   type WebPluginGenerationToolContribution,
   type WebPluginServiceAction,
@@ -29,9 +24,20 @@ import {
   type GenerationToolLifecycleObserver,
   type McpToolCallResult,
   type McpToolDefinition,
+  type PluginCapabilityToolOperationMetadata,
   type StdioMcpClientOptions,
   normalizeMcpToolCallResult,
 } from "./stdio-mcp-client"
+import type { PluginCapabilityExecutorPort, PluginCapabilityPluginIdentity } from "./plugin-capability-broker"
+import type {
+  PluginCapabilityRuntimeInspection,
+  PluginCapabilityRuntimeInspectionPort,
+} from "./plugin-capability-runtime-readiness"
+import {
+  createPluginCapabilityNestedMcpHandler,
+  type PluginCapabilityNestedOperation,
+} from "./plugin-capability-sidecar-bridge"
+import type { PluginHostInvocationLease, PluginHostInvocationLeaseClaims } from "../plugin-host-api-main-contracts"
 import {
   type GenerationRecoveryCapability,
   type GenerationRecoveryMethod,
@@ -42,19 +48,19 @@ import {
 } from "./generation-recovery-protocol"
 import {
   GenerationRecoveryRuntimeStore,
+  generationRecoveryExecutionBindingDigest,
+  generationRecoveryOwnerKey,
+  generationRecoveryOwnerPrefix,
+  type GenerationRecoveryExecutableBinding,
   type GenerationRecoveryRuntimeRecord,
 } from "./generation-recovery-runtime-store"
-import {
-  toolPluginAuthorizationIdentity,
-  toolPluginManifestSha256,
-  type ToolPluginExecutableBinding,
-  type ToolPluginExecutableBindingKind,
-} from "./tool-plugin-authorizations"
+import { pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
 import type { PluginServiceBrowserAuthorizationCompletion } from "./plugin-service-browser-authorization"
 import type { PluginServiceExternalAuthorizationCompletion } from "./plugin-service-external-authorization"
 import {
   createToolPluginCanvasMcpBridge,
-  type ToolPluginCanvasCapabilityHost,
+  toolPluginCanvasMcpMethodNames,
+  type ToolPluginHostApiCapabilityHost,
   type ToolPluginCanvasMcpBridge,
 } from "./tool-plugin-canvas-capabilities"
 import {
@@ -82,11 +88,72 @@ async function runGenerationHostPreDispatch(callback: (() => void | Promise<void
 }
 
 export interface GenerationPluginSource {
-  list(): Promise<readonly InstalledWebPluginSummary[]>
-  resolveAsset(pluginId: string, relativePath: string): Promise<string>
+  acquireActivePlugin(pluginId: string): Promise<GenerationPluginActiveHandle>
+  acquirePluginSnapshot(identity: {
+    activeRevision: number
+    activeSetDigest: string
+    pluginId: string
+    pluginVersion: string
+    snapshotDigest: string
+  }): Promise<GenerationPluginActiveHandle>
+  acquirePinnedPlugin(
+    ownerKey: string,
+    identity: GenerationPluginActiveHandle["identity"],
+  ): Promise<GenerationPluginActiveHandle>
+  assertCurrentActivePlugin(identity: GenerationPluginActiveHandle["identity"]): Promise<void>
+  list(): Promise<readonly (ActiveInstalledWebPluginSummary | InstalledWebPluginSummary)[]>
+  listOwnerPins(): Promise<
+    readonly {
+      identity: GenerationPluginActiveHandle["identity"]
+      ownerKey: string
+    }[]
+  >
+  pinActivePluginForOwner(ownerKey: string, identity: GenerationPluginActiveHandle["identity"]): Promise<unknown>
+  resolveCapabilityIdentity(pluginId: string): Promise<GenerationPluginActiveIdentity | null>
+  unpinPluginOwner(ownerKey: string, identity: GenerationPluginActiveHandle["identity"]): Promise<boolean>
+}
+
+export interface GenerationPluginActiveIdentity {
+  activeRevision: number
+  activeSetDigest: string
+  digest: string
+  plugin: InstalledWebPluginSummary
+  snapshotDigest: string
+}
+
+export interface GenerationPluginActiveHandle {
+  descriptor: {
+    authorizations: {
+      capabilityContractDigest: string
+      companionExecutionDigest?: string
+    }
+    companion?: {
+      entryPath: string
+      mode: "convax-bun" | "native"
+      sha256: string
+      size: number
+      target: string
+    }
+  }
+  identity: {
+    activeRevision: number
+    activeSetDigest: string
+    pluginId: string
+    snapshotDigest: string
+    version: string
+  }
+  plugin: InstalledWebPluginSummary
+  release(): void
+  resolveCompanion(): Promise<string | null>
 }
 
 export interface GenerationPluginMcpClient {
+  callPluginCapabilityTool?(
+    name: string,
+    input: Record<string, unknown>,
+    operation: PluginCapabilityToolOperationMetadata,
+    signal?: AbortSignal,
+  ): Promise<McpToolCallResult>
   callTool(
     name: string,
     input: Record<string, unknown>,
@@ -101,6 +168,8 @@ export interface GenerationPluginMcpClient {
     signal?: AbortSignal,
   ): Promise<unknown>
   close(force?: boolean): void
+  /** Resolves only after the owned process exits or its force-stop barrier completes. */
+  closeAndWait?(force?: boolean): Promise<void>
   generationRecoveryCapability?(signal?: AbortSignal): Promise<GenerationRecoveryCapability | undefined>
   listTools(signal?: AbortSignal): Promise<readonly McpToolDefinition[]>
 }
@@ -112,6 +181,8 @@ export interface PluginServiceMcpCallResult extends McpToolCallResult {
    * never serialized to preload or a renderer.
    */
   authorizationIdentity?: string
+  /** Main-only InstalledSnapshot identity for service authorization checkpoints. */
+  snapshotDigest?: string
   /**
    * Main-only, one-shot continuation bound to the exact sidecar bytes and
    * manifest that returned the browser request. It is never serialized.
@@ -133,7 +204,9 @@ export interface PluginLlmProviderConnection {
 
 export type GenerationPluginMcpClientFactory = (options: StdioMcpClientOptions) => GenerationPluginMcpClient
 
-export type GenerationPluginExecutableBinding = ToolPluginExecutableBinding
+export interface GenerationPluginExecutableBinding extends GenerationRecoveryExecutableBinding {
+  path: string
+}
 
 export interface GenerationPluginExecutableSnapshot {
   dispose(): void
@@ -146,71 +219,53 @@ export interface GenerationPluginBunRuntime {
   env?: Readonly<Record<string, string>>
 }
 
-export type GenerationPluginExecutableResolver = (
-  command: string,
-  environment: Readonly<Record<string, string>>,
-) => Promise<GenerationPluginExecutableBinding>
-
-export type GenerationPluginManagedExecutableResolver = (
-  pluginId: string,
-  pluginVersion: string,
-  command: string,
-) => Promise<GenerationPluginExecutableBinding | null>
-
-export type GenerationPluginExecutableMaterializer = (
-  binding: GenerationPluginExecutableBinding,
-) => Promise<GenerationPluginExecutableSnapshot>
-
 export interface GenerationPluginRuntimeOptions {
   /** Trusted app-owned Bun CLI used only for companions carrying the exact convax-bun header. */
   bunRuntime?: GenerationPluginBunRuntime
-  /** Optional principal-bound reverse Canvas API for an already-running v5 Tool sidecar. */
-  canvasCapabilities?: ToolPluginCanvasCapabilityHost
+  /** Optional principal-bound reverse Host API for an already-running v8 Tool sidecar. */
+  canvasCapabilities?: ToolPluginHostApiCapabilityHost
   createClient?: GenerationPluginMcpClientFactory
   /** Source environment. Only the explicit host allowlist is inherited. */
   environment?: Readonly<Record<string, string | undefined>>
   plugins: GenerationPluginSource
   /** Main-owned activation gate for source-bound Marketplace runtime capabilities. */
-  isPluginEnabled?(pluginId: string): Promise<boolean>
-  /** Resolves and fingerprints the host-owned executable before receipt verification. */
-  resolveExecutable?: GenerationPluginExecutableResolver
-  /** Copies the install-authorized entrypoint to a unique host-owned launch snapshot. */
-  materializeExecutable?: GenerationPluginExecutableMaterializer
-  /** Resolves a Registry-managed, host-owned companion before the explicit PATH fallback. */
-  resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
+  isPluginEnabled?: (this: void, pluginId: string) => Promise<boolean>
+  /** Exact Main-owned runtime gate; `recovering` is distinct from user disable. */
+  pluginRuntimeState?: (this: void, pluginId: string) => Promise<"enabled" | "disabled" | "recovering">
   /**
    * Main-private root used by recovery-capable sidecars for durable operation
    * journals. A binding-scoped child is injected only into the sidecar process.
    */
   recoveryStateDirectory?: string
-  /** Main-private immutable executable snapshots retained for active recovery ledgers. */
+  /** Main-private recovery records; executable bytes remain in owner-pinned Plugin snapshots. */
   recoveryRuntimeDirectory?: string
   /** Test seam; Windows execution fails closed until the host owns a Job Object. */
   platform?: NodeJS.Platform
-  /** Verifies installation-time consent for this exact declaration and executable. */
-  verifyAuthorization(input: {
-    binding: GenerationPluginExecutableBinding
-    bindingKind: ToolPluginExecutableBindingKind
-    plugin: InstalledWebPluginSummary
-  }): Promise<void>
 }
 
 interface DiscoveredPlugin {
+  /** Exact active-set/snapshot identity; unlike packageDigest, any activation change invalidates live calls. */
   fingerprint: string
+  identity: PluginCapabilityPluginIdentity
   manifest: InstalledWebPluginSummary
+  packageDigest: string
 }
 
 interface CachedPluginRuntime {
+  activeHandle?: GenerationPluginActiveHandle
   authorizationIdentity: string
   availableTools?: ReadonlyMap<string, McpToolDefinition>
-  bindingKind: ToolPluginExecutableBindingKind
   canvasCapabilities?: ToolPluginCanvasMcpBridge
   client: GenerationPluginMcpClient
+  capabilityGeneration: string
+  capabilityOperations: Map<string, PluginCapabilityNestedOperation>
+  capabilityReferences: number
+  capabilityRetired: boolean
   executableSnapshot: GenerationPluginExecutableSnapshot
   fingerprint: string
   plugin: InstalledWebPluginSummary
   pluginId: string
-  sourceBinding: GenerationPluginExecutableBinding
+  sourceBinding: GenerationRecoveryExecutableBinding
 }
 
 interface PreparedPluginTool {
@@ -287,6 +342,17 @@ interface StartingPluginRuntime {
   promise?: Promise<CachedPluginRuntime>
 }
 
+interface StartingExactPluginRuntime {
+  cancel(): void
+  fingerprint: string | null
+  key: string
+  persistent: boolean
+  pluginId: string
+  promise: Promise<CachedPluginRuntime>
+  settled: boolean
+  waiters: number
+}
+
 class PluginRuntimeReportedError extends Error {}
 
 const generationToolEnvironmentKeys = [
@@ -320,7 +386,6 @@ const generationModelSelectionMarker = ".model-selection-"
 const generationModelSelectionDigestPattern = /^[a-f0-9]{64}$/
 const llmModelIdPattern = /^~?[A-Za-z0-9]+(?:[._/:-][A-Za-z0-9]+)*$/
 const bareCommandPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
-const maximumExecutableBytes = 512 * 1024 * 1024
 const maximumRuntimeLlmModels = 2_048
 
 function abortError(reason?: unknown) {
@@ -335,11 +400,103 @@ function abortError(reason?: unknown) {
   return error
 }
 
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError(signal.reason)
+}
+
+function waitForSignal<Value>(promise: Promise<Value>, signal?: AbortSignal): Promise<Value> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError(signal.reason))
+  return new Promise<Value>((resolve, reject) => {
+    let settled = false
+    const cleanup = () => signal.removeEventListener("abort", onAbort)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(abortError(signal.reason))
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    void promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(value)
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(error)
+      },
+    )
+  })
+}
+
+function waitForActiveHandle(
+  pending: Promise<GenerationPluginActiveHandle>,
+  signal?: AbortSignal,
+): Promise<GenerationPluginActiveHandle> {
+  if (!signal) return pending
+  if (signal.aborted) {
+    void pending.then(
+      (handle) => handle.release(),
+      () => undefined,
+    )
+    return Promise.reject(abortError(signal.reason))
+  }
+  return new Promise<GenerationPluginActiveHandle>((resolve, reject) => {
+    let settled = false
+    const cleanup = () => signal.removeEventListener("abort", onAbort)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      cleanup()
+      void pending.then(
+        (handle) => handle.release(),
+        () => undefined,
+      )
+      reject(abortError(signal.reason))
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    void pending.then(
+      (handle) => {
+        if (settled) {
+          handle.release()
+          return
+        }
+        settled = true
+        cleanup()
+        resolve(handle)
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(error)
+      },
+    )
+  })
+}
+
 function closeQuietly(client: GenerationPluginMcpClient, force = false) {
   try {
     client.close(force)
   } catch {
     // Disposal is best effort; one broken child must not keep the others alive.
+  }
+}
+
+async function closeAndWaitQuietly(client: GenerationPluginMcpClient, force = false) {
+  if (!client.closeAndWait) {
+    closeQuietly(client, force)
+    return
+  }
+  try {
+    await client.closeAndWait(force)
+  } catch {
+    closeQuietly(client, true)
   }
 }
 
@@ -353,31 +510,6 @@ function requireBareCommand(value: string) {
     throw new Error("Generation Plugin runtime command must be a bare executable name")
   }
   return value
-}
-
-function executableBindingFingerprint(binding: GenerationPluginExecutableBinding) {
-  return JSON.stringify([binding.path, binding.size, binding.sha256, binding.runtime])
-}
-
-function sameFileIdentity(left: Awaited<ReturnType<typeof fs.stat>>, right: Awaited<ReturnType<typeof fs.stat>>) {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
-  )
-}
-
-async function sha256File(filePath: string) {
-  const hash = createHash("sha256")
-  await new Promise<void>((resolve, reject) => {
-    const stream = createReadStream(filePath)
-    stream.on("data", (chunk) => hash.update(chunk))
-    stream.once("error", reject)
-    stream.once("end", resolve)
-  })
-  return hash.digest("hex")
 }
 
 async function ensurePlainPrivateDirectory(directory: string, label: string) {
@@ -411,141 +543,107 @@ async function ensureGenerationRecoveryStateDirectory(
   return ensurePlainPrivateDirectory(path.join(root, bindingKey), "Generation recovery binding directory")
 }
 
-/**
- * Launch from a unique private temporary copy so a later atomic replacement of the
- * install-authorized entrypoint cannot change which bytes are executed. The snapshot
- * must stay outside the immutable managed-companion installation it was copied from.
- */
-export async function materializeGenerationPluginExecutable(
-  binding: GenerationPluginExecutableBinding,
-): Promise<GenerationPluginExecutableSnapshot> {
-  if (process.platform === "win32") {
-    throw new Error("Generation Tool Plugin execution on Windows requires a host Job Object and is not enabled")
-  }
-  const temporaryRoot = await fs.realpath(os.tmpdir())
-  const snapshotDirectory = await fs.mkdtemp(path.join(temporaryRoot, "convax-generation-snapshot-"))
-  const extension = path.extname(binding.path)
-  const snapshotPath = path.join(snapshotDirectory, `entrypoint${extension}`)
-  try {
-    await fs.chmod(snapshotDirectory, 0o700)
-    await fs.copyFile(binding.path, snapshotPath, fsConstants.COPYFILE_EXCL)
-    await fs.chmod(snapshotPath, 0o500)
-    const before = await fs.stat(snapshotPath)
-    if (!before.isFile() || before.size !== binding.size || (await fs.realpath(snapshotPath)) !== snapshotPath) {
-      throw new Error("Generation Plugin executable snapshot is invalid")
-    }
-    const sha256 = await sha256File(snapshotPath)
-    const after = await fs.stat(snapshotPath)
-    if (sha256 !== binding.sha256 || !sameFileIdentity(before, after)) {
-      throw new Error("Generation Plugin executable changed while its launch snapshot was created")
-    }
-    return {
-      dispose() {
-        try {
-          rmSync(snapshotDirectory, { force: true, recursive: true })
-        } catch {
-          // The exact host-created private snapshot directory is best-effort cleanup on shutdown.
-        }
-      },
-      path: snapshotPath,
-      ...(binding.runtime === undefined ? {} : { runtime: binding.runtime }),
-    }
-  } catch (error) {
-    rmSync(snapshotDirectory, { force: true, recursive: true })
-    throw error
-  }
-}
-
-function executableCandidates(command: string, environment: Readonly<Record<string, string>>) {
-  const pathValue = environment.PATH
-  if (!pathValue) return []
-  const extensions =
-    process.platform === "win32" && !path.extname(command)
-      ? (environment.PATHEXT ?? ".COM;.EXE").split(";").filter((extension) => /^\.(?:COM|EXE)$/i.test(extension))
-      : [""]
-  return pathValue.split(path.delimiter).flatMap((entry) => {
-    const unquoted = entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry
-    if (!path.isAbsolute(unquoted)) return []
-    return extensions.map((extension) => path.join(unquoted, `${command}${extension}`))
-  })
-}
-
-/** Resolve a bare command only through absolute PATH entries and bind consent to its exact bytes. */
-export async function resolveGenerationPluginExecutable(
-  command: string,
-  environment: Readonly<Record<string, string>>,
-): Promise<GenerationPluginExecutableBinding> {
-  requireBareCommand(command)
-  if (process.platform === "win32") {
-    const extension = path.extname(command).toLowerCase()
-    if (extension && extension !== ".exe" && extension !== ".com") {
-      throw new Error("Generation Plugin Windows commands must resolve to a native .exe or .com executable")
-    }
-  }
-  for (const candidate of executableCandidates(command, environment)) {
-    try {
-      const realPath = await fs.realpath(candidate)
-      const before = await fs.stat(realPath)
-      if (!before.isFile() || before.size < 1 || before.size > maximumExecutableBytes) continue
-      await fs.access(realPath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK)
-      const sha256 = await sha256File(realPath)
-      const after = await fs.stat(realPath)
-      if (!sameFileIdentity(before, after)) {
-        throw new Error(`Generation Plugin executable changed while it was being inspected: ${command}`)
-      }
-      return { path: realPath, sha256, size: after.size }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("changed while it was being inspected")) throw error
-      // Continue searching PATH. Permission errors and non-files are not valid bindings.
-    }
-  }
-  throw new Error(`Generation Plugin executable was not found in the host PATH: ${command}`)
-}
-
 function isExecutablePlugin(plugin: InstalledWebPluginSummary): plugin is InstalledWebPluginSummary & {
   runtime: NonNullable<InstalledWebPluginSummary["runtime"]>
-  schema:
-    | typeof webPluginManifestSchemaV2
-    | typeof webPluginManifestSchemaV3
-    | typeof webPluginManifestSchemaV4
-    | typeof webPluginManifestSchemaV5
-    | typeof webPluginManifestSchemaV6
-    | typeof webPluginManifestSchemaV7
+  schema: typeof webPluginManifestSchemaV8
 } {
   return (
-    (plugin.schema === webPluginManifestSchemaV2 ||
-      plugin.schema === webPluginManifestSchemaV3 ||
-      plugin.schema === webPluginManifestSchemaV4 ||
-      plugin.schema === webPluginManifestSchemaV5 ||
-      plugin.schema === webPluginManifestSchemaV6 ||
-      plugin.schema === webPluginManifestSchemaV7) &&
+    plugin.schema === webPluginManifestSchemaV8 &&
+    plugin.hostApi !== undefined &&
     plugin.runtime?.type === "mcp-stdio" &&
     (Boolean(plugin.contributes.generation?.tools.length) ||
       plugin.contributes.service !== undefined ||
-      plugin.contributes.llm !== undefined)
+      plugin.contributes.llm !== undefined ||
+      Boolean(plugin.contributes.capabilities?.exports.length))
   )
+}
+
+function inventoryPluginManifest(
+  plugin: ActiveInstalledWebPluginSummary | InstalledWebPluginSummary,
+): InstalledWebPluginSummary {
+  if (!("activeRevision" in plugin)) return plugin
+  const {
+    activeRevision: _activeRevision,
+    activeSetDigest: _activeSetDigest,
+    snapshotDigest: _snapshotDigest,
+    ...manifest
+  } = plugin
+  return manifest
+}
+
+function activePluginFingerprint(identity: GenerationPluginActiveIdentity) {
+  if (
+    !Number.isSafeInteger(identity.activeRevision) ||
+    identity.activeRevision < 0 ||
+    !/^[a-f0-9]{64}$/.test(identity.activeSetDigest) ||
+    !/^[a-f0-9]{64}$/.test(identity.snapshotDigest) ||
+    !/^[a-f0-9]{64}$/.test(identity.digest) ||
+    identity.plugin.schema !== webPluginManifestSchemaV8 ||
+    !identity.plugin.hostApi
+  ) {
+    throw new Error(`Generation Plugin is not bound to an active immutable v8 snapshot: ${identity.plugin.id}`)
+  }
+  return createHash("sha256")
+    .update(
+      JSON.stringify([identity.activeRevision, identity.activeSetDigest, identity.snapshotDigest, identity.digest]),
+    )
+    .digest("hex")
+}
+
+function activeHandleMatches(
+  handle: GenerationPluginActiveHandle,
+  identity: GenerationPluginActiveIdentity,
+  packageDigest: string,
+) {
+  return (
+    handle.identity.activeRevision === identity.activeRevision &&
+    handle.identity.activeSetDigest === identity.activeSetDigest &&
+    handle.identity.snapshotDigest === identity.snapshotDigest &&
+    handle.identity.pluginId === identity.plugin.id &&
+    handle.identity.version === identity.plugin.version &&
+    pluginSnapshotCanonicalDigest(handle.plugin) === packageDigest
+  )
+}
+
+function sameRuntimeIdentity(
+  left: GenerationPluginActiveHandle["identity"],
+  right: GenerationPluginActiveHandle["identity"],
+) {
+  return (
+    left.activeRevision === right.activeRevision &&
+    left.activeSetDigest === right.activeSetDigest &&
+    left.pluginId === right.pluginId &&
+    left.snapshotDigest === right.snapshotDigest &&
+    left.version === right.version
+  )
+}
+
+function pluginCapabilityRuntimeKey(identity: PluginCapabilityPluginIdentity) {
+  return JSON.stringify([
+    identity.activeRevision,
+    identity.activeSetDigest,
+    identity.pluginId,
+    identity.pluginVersion,
+    identity.snapshotDigest,
+  ])
+}
+
+function activeHandleRuntimeKey(identity: GenerationPluginActiveHandle["identity"]) {
+  return pluginCapabilityRuntimeKey({
+    activeRevision: identity.activeRevision,
+    activeSetDigest: identity.activeSetDigest,
+    pluginId: identity.pluginId,
+    pluginVersion: identity.version,
+    snapshotDigest: identity.snapshotDigest,
+  })
 }
 
 function toolSummary(
   plugin: DiscoveredPlugin["manifest"],
   tool: WebPluginGenerationToolContribution,
 ): GenerationToolSummary {
-  const model =
-    plugin.schema === webPluginManifestSchemaV3 ||
-    plugin.schema === webPluginManifestSchemaV4 ||
-    plugin.schema === webPluginManifestSchemaV5 ||
-    plugin.schema === webPluginManifestSchemaV6 ||
-    plugin.schema === webPluginManifestSchemaV7
-      ? plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
-      : { name: tool.title, tool: tool.id }
-  const agent =
-    plugin.schema === webPluginManifestSchemaV3 ||
-    plugin.schema === webPluginManifestSchemaV4 ||
-    plugin.schema === webPluginManifestSchemaV5 ||
-    plugin.schema === webPluginManifestSchemaV6 ||
-    plugin.schema === webPluginManifestSchemaV7
-      ? plugin.contributes.agent?.tools?.find((candidate) => candidate.tool === tool.id)
-      : undefined
+  const model = plugin.contributes.generation?.models?.find((candidate) => candidate.tool === tool.id)
+  const agent = plugin.contributes.agent?.tools?.find((candidate) => candidate.tool === tool.id)
   return {
     acceptedInputs: [...tool.acceptedInputs],
     ...(agent === undefined ? {} : { agentId: agent.id }),
@@ -773,25 +871,30 @@ function llmModelCatalog(value: unknown) {
  * one verified process lifecycle. It intentionally contains no provider, model,
  * credential, account, or routing registry.
  */
-export class GenerationPluginRuntime {
+export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectionPort, PluginCapabilityExecutorPort {
   readonly #bunRuntime?: GenerationPluginBunRuntime
   readonly #cache = new Map<string, CachedPluginRuntime>()
-  readonly #canvasCapabilities?: ToolPluginCanvasCapabilityHost
+  readonly #canvasCapabilities?: ToolPluginHostApiCapabilityHost
   readonly #createClient: GenerationPluginMcpClientFactory
   readonly #environment: Record<string, string>
-  readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
   readonly #isPluginEnabled: (pluginId: string) => Promise<boolean>
-  readonly #resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
-  readonly #resolveExecutable: GenerationPluginExecutableResolver
+  readonly #pluginRuntimeState: (pluginId: string) => Promise<"enabled" | "disabled" | "recovering">
   readonly #recoveryStateDirectory?: string
+  readonly #recoveryMutations = new Map<string, Promise<void>>()
   readonly #recoveryRuntimeStore?: GenerationRecoveryRuntimeStore
   readonly #recoveryRuntimes = new Map<string, CachedPluginRuntime>()
+  readonly #runtimesBySnapshot = new Map<string, CachedPluginRuntime>()
+  readonly #runtimesByCapabilityGeneration = new Map<string, CachedPluginRuntime>()
+  readonly #closingRuntimes = new Set<Promise<void>>()
   readonly #starting = new Map<string, StartingPluginRuntime>()
-  readonly #verifyAuthorization: GenerationPluginRuntimeOptions["verifyAuthorization"]
+  readonly #startingByIdentity = new Map<string, StartingExactPluginRuntime>()
   readonly #workingDirectory: string
+  #disposePromise?: Promise<void>
   #disposed = false
+  #initialized = false
+  #initializing?: Promise<void>
 
   constructor(options: GenerationPluginRuntimeOptions) {
     if (
@@ -805,11 +908,12 @@ export class GenerationPluginRuntime {
     this.#bunRuntime = options.bunRuntime
     this.#plugins = options.plugins
     this.#isPluginEnabled = options.isPluginEnabled ?? (async () => true)
+    this.#pluginRuntimeState =
+      options.pluginRuntimeState ??
+      (async (pluginId) => ((await this.#isPluginEnabled(pluginId)) ? "enabled" : "disabled"))
     this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
-    this.#resolveExecutable = options.resolveExecutable ?? resolveGenerationPluginExecutable
-    this.#resolveManagedExecutable = options.resolveManagedExecutable
     if (options.recoveryStateDirectory && !path.isAbsolute(options.recoveryStateDirectory)) {
       throw new Error("Generation recovery state directory must be absolute")
     }
@@ -820,13 +924,29 @@ export class GenerationPluginRuntime {
     this.#recoveryRuntimeStore = options.recoveryRuntimeDirectory
       ? new GenerationRecoveryRuntimeStore(options.recoveryRuntimeDirectory)
       : undefined
-    this.#materializeExecutable = options.materializeExecutable ?? materializeGenerationPluginExecutable
     this.#platform = options.platform ?? process.platform
-    this.#verifyAuthorization = (input) => options.verifyAuthorization(input)
     // Never resolve commands or relative interpreter arguments from a downloaded
     // Plugin package (or the shared temp root). Each app session gets an empty,
     // private cwd owned by this runtime.
     this.#workingDirectory = mkdtempSync(path.join(os.tmpdir(), "convax-generation-runtime-"))
+  }
+
+  /**
+   * Reconciles durable recovery records with owner-scoped snapshot pins before
+   * any GC or recovery resume can observe them. Missing or mismatched pins fail
+   * closed; a pin left behind after record-first deletion is safely removed.
+   */
+  async initialize() {
+    if (this.#initialized) return
+    if (this.#initializing) return this.#initializing
+    const operation = this.#reconcileRecoveryPins()
+    this.#initializing = operation
+    try {
+      await operation
+      this.#initialized = true
+    } finally {
+      if (this.#initializing === operation) this.#initializing = undefined
+    }
   }
 
   async listTools(options: { output?: GenerationOutputModality } = {}): Promise<readonly GenerationToolSummary[]> {
@@ -1090,6 +1210,7 @@ export class GenerationPluginRuntime {
         signal,
       )
       result.authorizationIdentity = runtime.authorizationIdentity
+      result.snapshotDigest = runtime.activeHandle?.identity.snapshotDigest
       if (
         (call === "authorize" || call === "reauthorize") &&
         availableTools?.has(pluginServiceMcpTools.completeAuthorization)
@@ -1186,6 +1307,7 @@ export class GenerationPluginRuntime {
     if (!this.#recoveryRuntimeStore) {
       throw new Error("Pinned generation recovery runtime storage is unavailable")
     }
+    await this.initialize()
     const record = await this.#recoveryRuntimeStore.open(binding.executionBindingDigest)
     if (
       record.executionBindingDigest !== binding.executionBindingDigest ||
@@ -1243,12 +1365,32 @@ export class GenerationPluginRuntime {
 
   async releaseRecoveryTool(executionBindingDigest: string) {
     if (!this.#recoveryRuntimeStore) return
-    const runtime = this.#recoveryRuntimes.get(executionBindingDigest)
-    if (runtime) {
-      this.#recoveryRuntimes.delete(executionBindingDigest)
-      this.#closeRuntime(runtime, true)
-    }
-    await this.#recoveryRuntimeStore.remove(executionBindingDigest)
+    await this.initialize()
+    await this.#withRecoveryMutation(executionBindingDigest, async () => {
+      const runtime = this.#recoveryRuntimes.get(executionBindingDigest)
+      if (runtime) {
+        this.#recoveryRuntimes.delete(executionBindingDigest)
+        this.#closeRuntime(runtime, true)
+      }
+      let record: GenerationRecoveryRuntimeRecord
+      try {
+        record = await this.#recoveryRuntimeStore!.open(executionBindingDigest)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+        throw error
+      }
+      // Record-first deletion is the crash-safe order: a crash after this point
+      // leaves an orphan owner pin that startup reconciliation can remove.
+      await this.#recoveryRuntimeStore!.remove(executionBindingDigest)
+      if (
+        !(await this.#plugins.unpinPluginOwner(
+          generationRecoveryOwnerKey(executionBindingDigest),
+          record.pluginIdentity,
+        ))
+      ) {
+        throw new Error("Generation recovery snapshot owner disappeared before release")
+      }
+    })
   }
 
   /**
@@ -1379,14 +1521,24 @@ export class GenerationPluginRuntime {
     if (!capability || capability.mode !== expected.recovery) {
       throw new Error(`Generation recovery manifest and runtime disagree: ${expected.id}`)
     }
-    const pluginPackageDigest = plugin.fingerprint
+    const pluginPackageDigest = plugin.packageDigest
     const bindingDigest = createHash("sha256").update(capability.binding).digest("hex")
     const runtimeAuthorizationDigest = createHash("sha256").update(runtime.authorizationIdentity).digest("hex")
     const toolBindingDigest = createHash("sha256")
       .update(stableJson({ binding: prepared.modelBinding ?? null, toolId: prepared.toolId }))
       .digest("hex")
-    const executionBindingParts = [pluginPackageDigest, runtimeAuthorizationDigest, bindingDigest, toolBindingDigest]
-    const executionBindingDigest = createHash("sha256").update(JSON.stringify(executionBindingParts)).digest("hex")
+    const activeHandle = runtime.activeHandle
+    if (!activeHandle) {
+      throw new Error(`Generation recovery requires an active snapshot lease: ${expected.id}`)
+    }
+    const executionBindingDigest = generationRecoveryExecutionBindingDigest({
+      pluginIdentity: activeHandle.identity,
+      pluginPackageDigest,
+      recoveryBindingDigest: bindingDigest,
+      runtimeAuthorizationDigest,
+      sourceBinding: runtime.sourceBinding,
+      toolBindingDigest,
+    })
     const assertCurrent = () => this.#assertPreparedRecoveryCurrent(prepared)
     const recovery = this.#createRecoveryControls({
       assertCurrent,
@@ -1397,22 +1549,45 @@ export class GenerationPluginRuntime {
       runtimeAuthorizationDigest,
     })
     if (this.#recoveryRuntimeStore) {
-      await this.#recoveryRuntimeStore.pin({
-        bindingKind: runtime.bindingKind,
-        executablePath: runtime.executableSnapshot.path,
-        ...(runtime.executableSnapshot.runtime === undefined
-          ? {}
-          : { executableRuntime: runtime.executableSnapshot.runtime }),
-        executionBindingDigest,
-        plugin: plugin.manifest,
-        pluginPackageDigest,
-        recoveryBindingDigest: bindingDigest,
-        runtimeAuthorizationDigest,
-        // Keep the persisted field name compatible with existing schema-1
-        // records; new records bind both the base tool and optional model.
-        modelBindingDigest: toolBindingDigest,
-        sourceBinding: runtime.sourceBinding,
-        tool: expected,
+      await this.initialize()
+      await this.#withRecoveryMutation(executionBindingDigest, async () => {
+        const ownerKey = generationRecoveryOwnerKey(executionBindingDigest)
+        const existingPin = (await this.#plugins.listOwnerPins()).find((pin) => pin.ownerKey === ownerKey)
+        let createdPin = false
+        if (existingPin) {
+          if (!sameRuntimeIdentity(existingPin.identity, activeHandle.identity)) {
+            throw new Error(`Generation recovery snapshot owner is bound to another identity: ${expected.id}`)
+          }
+        } else {
+          await this.#plugins.pinActivePluginForOwner(ownerKey, activeHandle.identity)
+          createdPin = true
+        }
+        try {
+          await this.#recoveryRuntimeStore!.pin({
+            executionBindingDigest,
+            plugin: plugin.manifest,
+            pluginIdentity: activeHandle.identity,
+            pluginPackageDigest,
+            recoveryBindingDigest: bindingDigest,
+            runtimeAuthorizationDigest,
+            sourceBinding: runtime.sourceBinding,
+            tool: expected,
+            toolBindingDigest,
+          })
+        } catch (error) {
+          if (createdPin) {
+            try {
+              await this.#plugins.unpinPluginOwner(ownerKey, activeHandle.identity)
+            } catch (rollbackError) {
+              throw new AggregateError(
+                [error, rollbackError],
+                "Generation recovery publication and snapshot-pin rollback failed",
+                { cause: error },
+              )
+            }
+          }
+          throw error
+        }
       })
     }
     return recovery
@@ -1542,58 +1717,88 @@ export class GenerationPluginRuntime {
     if (signal?.aborted) throw abortError(signal.reason)
     const cached = this.#recoveryRuntimes.get(record.executionBindingDigest)
     if (cached) return cached
-    if (record.executableRuntime === "bun" && !this.#bunRuntime) {
-      throw new Error("Bundled Bun runtime is unavailable")
-    }
-    const declaredRuntime = record.plugin.runtime!
-    const recoveryStateDirectory = this.#recoveryStateDirectory
-      ? await ensureGenerationRecoveryStateDirectory(
-          this.#recoveryStateDirectory,
-          record.plugin.id,
-          record.pluginPackageDigest,
-          record.runtimeAuthorizationDigest,
-        )
-      : undefined
-    const client = this.#createClient({
-      ...(record.executableRuntime === "bun"
-        ? { args: [record.executablePath, ...(declaredRuntime.args ?? [])] }
-        : declaredRuntime.args
-          ? { args: [...declaredRuntime.args] }
-          : {}),
-      command: record.executableRuntime === "bun" ? this.#bunRuntime!.command : record.executablePath,
-      cwd: this.#workingDirectory,
-      env: {
-        ...this.#environment,
-        ...(record.executableRuntime === "bun" ? this.#bunRuntime?.env : {}),
-        ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
-      },
-    })
-    const runtime: CachedPluginRuntime = {
-      authorizationIdentity: record.runtimeAuthorizationDigest,
-      bindingKind: record.bindingKind,
-      client,
-      executableSnapshot: {
-        dispose() {},
-        path: record.executablePath,
-        ...(record.executableRuntime === undefined ? {} : { runtime: record.executableRuntime }),
-      },
-      fingerprint: record.pluginPackageDigest,
-      plugin: structuredClone(record.plugin),
-      pluginId: record.plugin.id,
-      sourceBinding: structuredClone(record.sourceBinding),
-    }
-    this.#recoveryRuntimes.set(record.executionBindingDigest, runtime)
+    const ownerKey = generationRecoveryOwnerKey(record.executionBindingDigest)
+    const activeHandle = await this.#plugins.acquirePinnedPlugin(ownerKey, record.pluginIdentity)
     try {
+      if (
+        pluginSnapshotCanonicalDigest(activeHandle.plugin) !== record.pluginPackageDigest ||
+        activeHandle.plugin.id !== record.plugin.id ||
+        activeHandle.plugin.version !== record.plugin.version ||
+        activeHandle.descriptor.companion?.sha256 !== record.sourceBinding.sha256 ||
+        activeHandle.descriptor.companion?.size !== record.sourceBinding.size ||
+        (activeHandle.descriptor.companion?.mode === "convax-bun" ? "bun" : undefined) !== record.sourceBinding.runtime
+      ) {
+        throw new Error("Pinned generation recovery snapshot binding changed")
+      }
+      const authorizationIdentity = activeHandle.descriptor.authorizations.companionExecutionDigest
+      if (
+        !authorizationIdentity ||
+        createHash("sha256").update(authorizationIdentity).digest("hex") !== record.runtimeAuthorizationDigest
+      ) {
+        throw new Error("Pinned generation recovery authorization changed")
+      }
+      const executablePath = await activeHandle.resolveCompanion()
+      if (!executablePath || !path.isAbsolute(executablePath)) {
+        throw new Error("Pinned generation recovery companion is unavailable")
+      }
+      if (record.sourceBinding.runtime === "bun" && !this.#bunRuntime) {
+        throw new Error("Bundled Bun runtime is unavailable")
+      }
+      const declaredRuntime = record.plugin.runtime!
+      const recoveryStateDirectory = this.#recoveryStateDirectory
+        ? await ensureGenerationRecoveryStateDirectory(
+            this.#recoveryStateDirectory,
+            record.plugin.id,
+            record.pluginPackageDigest,
+            record.runtimeAuthorizationDigest,
+          )
+        : undefined
+      const client = this.#createClient({
+        ...(record.sourceBinding.runtime === "bun"
+          ? { args: [executablePath, ...(declaredRuntime.args ?? [])] }
+          : declaredRuntime.args
+            ? { args: [...declaredRuntime.args] }
+            : {}),
+        command: record.sourceBinding.runtime === "bun" ? this.#bunRuntime!.command : executablePath,
+        cwd: this.#workingDirectory,
+        env: {
+          ...this.#environment,
+          ...(record.sourceBinding.runtime === "bun" ? this.#bunRuntime?.env : {}),
+          ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
+        },
+      })
+      const runtime: CachedPluginRuntime = {
+        activeHandle,
+        authorizationIdentity,
+        capabilityGeneration: randomUUID(),
+        capabilityOperations: new Map(),
+        capabilityReferences: 0,
+        capabilityRetired: false,
+        client,
+        executableSnapshot: {
+          dispose() {},
+          path: executablePath,
+          ...(record.sourceBinding.runtime === undefined ? {} : { runtime: record.sourceBinding.runtime }),
+        },
+        fingerprint: record.pluginPackageDigest,
+        plugin: structuredClone(record.plugin),
+        pluginId: record.plugin.id,
+        sourceBinding: structuredClone(record.sourceBinding),
+      }
+      this.#recoveryRuntimes.set(record.executionBindingDigest, runtime)
       const availableTools = await this.#availableTools(runtime, signal, true)
       if (!availableTools.has(record.tool.toolId)) {
         throw new Error("Pinned generation recovery runtime no longer exposes its exact tool")
       }
       return runtime
     } catch (error) {
-      if (this.#recoveryRuntimes.get(record.executionBindingDigest) === runtime) {
+      const runtime = this.#recoveryRuntimes.get(record.executionBindingDigest)
+      if (runtime?.activeHandle === activeHandle) {
         this.#recoveryRuntimes.delete(record.executionBindingDigest)
+        this.#closeRuntime(runtime)
+      } else {
+        activeHandle.release()
       }
-      this.#closeRuntime(runtime)
       throw error
     }
   }
@@ -1660,10 +1865,15 @@ export class GenerationPluginRuntime {
       this.#starting.delete(pluginId)
       disposed = true
     }
+    for (const starting of this.#startingByIdentity.values()) {
+      if (starting.pluginId !== pluginId) continue
+      starting.cancel()
+      disposed = true
+    }
     const runtime = this.#cache.get(pluginId)
     if (runtime) {
       this.#cache.delete(pluginId)
-      this.#closeRuntime(runtime)
+      this.#retireRuntime(runtime)
       disposed = true
     }
     return disposed
@@ -1674,11 +1884,421 @@ export class GenerationPluginRuntime {
     this.#disposed = true
     for (const starting of this.#starting.values()) starting.canceled = true
     this.#starting.clear()
-    for (const runtime of this.#cache.values()) this.#closeRuntime(runtime, true)
+    const startingPromises = [...new Set([...this.#startingByIdentity.values()].map(({ promise }) => promise))]
+    for (const starting of this.#startingByIdentity.values()) starting.cancel()
+    this.#startingByIdentity.clear()
+    for (const runtime of new Set([...this.#cache.values(), ...this.#runtimesBySnapshot.values()])) {
+      this.#closeRuntime(runtime, true)
+    }
     this.#cache.clear()
+    this.#runtimesBySnapshot.clear()
+    this.#runtimesByCapabilityGeneration.clear()
     for (const runtime of this.#recoveryRuntimes.values()) this.#closeRuntime(runtime, true)
     this.#recoveryRuntimes.clear()
-    rmSync(this.#workingDirectory, { force: true, recursive: true })
+    const closing = [...this.#closingRuntimes]
+    if (closing.length === 0 && startingPromises.length === 0) {
+      rmSync(this.#workingDirectory, { force: true, recursive: true })
+      this.#disposePromise = Promise.resolve()
+    } else {
+      this.#disposePromise = Promise.allSettled([...startingPromises, ...closing]).then(async () => {
+        await Promise.allSettled(this.#closingRuntimes)
+        rmSync(this.#workingDirectory, { force: true, recursive: true })
+      })
+    }
+  }
+
+  async disposeAndWait() {
+    this.dispose()
+    await this.#disposePromise
+  }
+
+  async inspect(
+    provider: PluginCapabilityPluginIdentity,
+    signal?: AbortSignal,
+  ): Promise<PluginCapabilityRuntimeInspection> {
+    if (this.#disposed) return { state: "recovering" }
+    throwIfAborted(signal)
+    try {
+      const handle = await waitForActiveHandle(
+        this.#plugins.acquirePluginSnapshot({
+          activeRevision: provider.activeRevision,
+          activeSetDigest: provider.activeSetDigest,
+          pluginId: provider.pluginId,
+          pluginVersion: provider.pluginVersion,
+          snapshotDigest: provider.snapshotDigest,
+        }),
+        signal,
+      )
+      let handleOwned = true
+      const current = await waitForSignal(this.#plugins.resolveCapabilityIdentity(provider.pluginId), signal)
+      const isCurrent =
+        current !== null &&
+        current.activeRevision === provider.activeRevision &&
+        current.activeSetDigest === provider.activeSetDigest &&
+        current.snapshotDigest === provider.snapshotDigest &&
+        current.plugin.version === provider.pluginVersion
+      if (isCurrent) {
+        const state = await waitForSignal(this.#pluginRuntimeState(provider.pluginId), signal)
+        if (state !== "enabled") {
+          handle.release()
+          return { state }
+        }
+      }
+      let runtime: CachedPluginRuntime
+      try {
+        handleOwned = false
+        runtime = await this.#capabilityRuntimeFor(
+          provider,
+          handle,
+          isCurrent && current ? activePluginFingerprint(current) : null,
+          signal,
+        )
+      } finally {
+        if (handleOwned) handle.release()
+      }
+      runtime.capabilityReferences += 1
+      let released = false
+      try {
+        if (isCurrent) {
+          const confirmed = await waitForSignal(this.#plugins.resolveCapabilityIdentity(provider.pluginId), signal)
+          if (
+            !confirmed ||
+            confirmed.activeRevision !== provider.activeRevision ||
+            confirmed.activeSetDigest !== provider.activeSetDigest ||
+            confirmed.snapshotDigest !== provider.snapshotDigest ||
+            confirmed.plugin.version !== provider.pluginVersion
+          ) {
+            this.#evict(runtime)
+          }
+        }
+        const tools = [...(await this.#availableTools(runtime, signal, true)).values()]
+        return {
+          generation: runtime.capabilityGeneration,
+          provider,
+          get released() {
+            return released
+          },
+          release: () => {
+            if (released) return
+            released = true
+            this.#releaseCapabilityRuntime(runtime)
+          },
+          state: "ready",
+          tools,
+        }
+      } catch (error) {
+        released = true
+        this.#releaseCapabilityRuntime(runtime, true)
+        throw error
+      }
+    } catch (error) {
+      if (signal?.aborted) throw abortError(signal.reason)
+      return error instanceof Error && error.message.includes("setup is required")
+        ? { state: "setup-required" }
+        : { state: "recovering" }
+    }
+  }
+
+  async execute(input: Parameters<PluginCapabilityExecutorPort["execute"]>[0]): Promise<unknown> {
+    if (input.signal?.aborted) throw abortError(input.signal.reason)
+    const runtime = this.#runtimesByCapabilityGeneration.get(input.runtime.generation)
+    if (
+      !runtime ||
+      input.runtime.released ||
+      !runtime.activeHandle ||
+      !sameRuntimeIdentity(runtime.activeHandle.identity, {
+        activeRevision: input.provider.activeRevision,
+        activeSetDigest: input.provider.activeSetDigest,
+        pluginId: input.provider.pluginId,
+        snapshotDigest: input.provider.snapshotDigest,
+        version: input.provider.pluginVersion,
+      })
+    ) {
+      throw new Error("Plugin capability process generation is unavailable")
+    }
+    if (!runtime.client.callPluginCapabilityTool) {
+      throw new Error("Plugin capability process does not implement the exact MCP operation executor")
+    }
+    if (
+      input.authority.operationId !== input.operationId ||
+      input.authority.providerPluginId !== input.provider.pluginId
+    ) {
+      throw new Error("Plugin capability invocation authority does not match its provider operation")
+    }
+    if ([...runtime.capabilityOperations.values()].some(({ operationId }) => operationId === input.operationId)) {
+      throw new Error("Plugin capability operation is already active in this sidecar")
+    }
+    if (!isUnknownRecord(input.input)) {
+      throw new Error("Plugin capability input must be a closed object")
+    }
+    await input.authority.assertActive()
+    const authorityToken = randomBytes(32).toString("base64url")
+    const invocationAbort = new AbortController()
+    const invocationSignal = input.authority.signal
+      ? AbortSignal.any([input.authority.signal, invocationAbort.signal])
+      : invocationAbort.signal
+    const activeHandle = runtime.activeHandle
+    const principal = Object.freeze({
+      activeRevision: input.provider.activeRevision,
+      activeSetDigest: input.provider.activeSetDigest,
+      manifestDigest: activeHandle.descriptor.authorizations.capabilityContractDigest,
+      pluginId: input.provider.pluginId,
+      pluginVersion: input.provider.pluginVersion,
+      runtime: "tool" as const,
+      snapshotDigest: input.provider.snapshotDigest,
+    })
+    const claims: PluginHostInvocationLeaseClaims = Object.freeze({
+      consumerPluginId: input.authority.consumerPluginId,
+      operationId: input.authority.operationId,
+      providerPluginId: input.authority.providerPluginId,
+    })
+    const invocationLease: PluginHostInvocationLease = Object.freeze({
+      assertActive: async (candidate: PluginHostInvocationLeaseClaims) => {
+        if (
+          candidate.operationId !== claims.operationId ||
+          candidate.consumerPluginId !== claims.consumerPluginId ||
+          candidate.providerPluginId !== claims.providerPluginId ||
+          invocationSignal.aborted ||
+          input.runtime.released ||
+          !runtime.activeHandle ||
+          !sameRuntimeIdentity(runtime.activeHandle.identity, {
+            activeRevision: input.provider.activeRevision,
+            activeSetDigest: input.provider.activeSetDigest,
+            pluginId: input.provider.pluginId,
+            snapshotDigest: input.provider.snapshotDigest,
+            version: input.provider.pluginVersion,
+          })
+        ) {
+          throw new Error("Plugin capability invocation authority is no longer active")
+        }
+        await input.authority.assertActive()
+      },
+      claims,
+      principal,
+      resolved: Object.freeze({
+        activeRevision: principal.activeRevision,
+        activeSetDigest: principal.activeSetDigest,
+        capabilities: Object.freeze([...runtime.plugin.capabilities]),
+        hostApi: runtime.plugin.hostApi,
+        manifestDigest: principal.manifestDigest,
+        pluginId: principal.pluginId,
+        pluginName: runtime.plugin.name,
+        pluginVersion: principal.pluginVersion,
+        snapshotDigest: principal.snapshotDigest,
+      }),
+      signal: invocationSignal,
+    })
+    let host: ToolPluginCanvasMcpBridge | undefined
+    try {
+      host = await createToolPluginCanvasMcpBridge(runtime.plugin, this.#canvasCapabilities, invocationLease)
+      runtime.capabilityOperations.set(authorityToken, {
+        ...(host ? { host: host.handler } : {}),
+        invoke: input.invoke,
+        operationId: input.operationId,
+      })
+      const result = await runtime.client.callPluginCapabilityTool(
+        input.capability.operation,
+        input.input,
+        { authorityToken, operationId: input.operationId },
+        input.signal,
+      )
+      if (result.isError) throw new Error("Plugin capability provider returned an MCP error")
+      if (!result.structuredContent) throw new Error("Plugin capability provider omitted structuredContent")
+      return result.structuredContent
+    } finally {
+      invocationAbort.abort(new Error("Plugin capability invocation ended"))
+      runtime.capabilityOperations.delete(authorityToken)
+      host?.close()
+    }
+  }
+
+  async #capabilityRuntimeFor(
+    provider: PluginCapabilityPluginIdentity,
+    handle: GenerationPluginActiveHandle,
+    currentFingerprint: string | null,
+    signal?: AbortSignal,
+  ) {
+    const key = pluginCapabilityRuntimeKey(provider)
+    const shared = this.#runtimesBySnapshot.get(key)
+    if (shared?.activeHandle && this.#runtimeMatchesProvider(shared, provider)) {
+      handle.release()
+      return shared
+    }
+    const pending = this.#startingByIdentity.get(key)
+    if (pending) {
+      handle.release()
+      return this.#waitForExactRuntime(pending, signal)
+    }
+    const controller = new AbortController()
+    const promise = this.#startHistoricalCapabilityRuntime(
+      provider,
+      handle,
+      currentFingerprint,
+      controller.signal,
+    )
+    const starting: StartingExactPluginRuntime = {
+      cancel: () => controller.abort(new Error("Plugin capability runtime start was canceled")),
+      fingerprint: currentFingerprint,
+      key,
+      persistent: false,
+      pluginId: provider.pluginId,
+      promise,
+      settled: false,
+      waiters: 0,
+    }
+    this.#startingByIdentity.set(key, starting)
+    void promise.then(
+      () => this.#finishExactRuntimeStart(starting),
+      () => this.#finishExactRuntimeStart(starting),
+    )
+    return this.#waitForExactRuntime(starting, signal)
+  }
+
+  async #waitForExactRuntime(starting: StartingExactPluginRuntime, signal?: AbortSignal) {
+    starting.waiters += 1
+    try {
+      return await waitForSignal(starting.promise, signal)
+    } finally {
+      starting.waiters = Math.max(0, starting.waiters - 1)
+      if (starting.waiters === 0 && !starting.persistent && !starting.settled) starting.cancel()
+    }
+  }
+
+  #finishExactRuntimeStart(starting: StartingExactPluginRuntime) {
+    starting.settled = true
+    if (this.#startingByIdentity.get(starting.key) === starting) {
+      this.#startingByIdentity.delete(starting.key)
+    }
+  }
+
+  #runtimeMatchesProvider(runtime: CachedPluginRuntime, provider: PluginCapabilityPluginIdentity) {
+    const identity = runtime.activeHandle?.identity
+    return Boolean(
+      identity &&
+        identity.activeRevision === provider.activeRevision &&
+        identity.activeSetDigest === provider.activeSetDigest &&
+        identity.pluginId === provider.pluginId &&
+        identity.version === provider.pluginVersion &&
+        identity.snapshotDigest === provider.snapshotDigest,
+    )
+  }
+
+  async #startHistoricalCapabilityRuntime(
+    provider: PluginCapabilityPluginIdentity,
+    activeHandle: GenerationPluginActiveHandle,
+    currentFingerprint: string | null,
+    signal?: AbortSignal,
+  ) {
+    const runtimeKey = pluginCapabilityRuntimeKey(provider)
+    const existing = this.#runtimesBySnapshot.get(runtimeKey)
+    if (existing && this.#runtimeMatchesProvider(existing, provider)) {
+      activeHandle.release()
+      return existing
+    }
+    let client: GenerationPluginMcpClient | undefined
+    try {
+      throwIfAborted(signal)
+      if (
+        activeHandle.identity.activeRevision !== provider.activeRevision ||
+        activeHandle.identity.activeSetDigest !== provider.activeSetDigest ||
+        activeHandle.identity.pluginId !== provider.pluginId ||
+        activeHandle.identity.version !== provider.pluginVersion ||
+        activeHandle.identity.snapshotDigest !== provider.snapshotDigest
+      ) {
+        throw new Error("Historical Plugin capability handle identity changed")
+      }
+      const plugin = activeHandle.plugin
+      const declaredRuntime = plugin.runtime
+      const companion = activeHandle.descriptor.companion
+      const authorizationIdentity = activeHandle.descriptor.authorizations.companionExecutionDigest
+      if (!declaredRuntime || declaredRuntime.type !== "mcp-stdio" || !companion) {
+        throw new Error("Plugin capability provider has no verified runtime")
+      }
+      if (!authorizationIdentity || !/^[a-f0-9]{64}$/.test(authorizationIdentity)) {
+        throw new Error(`Generation Plugin companion setup is required: ${plugin.id}`)
+      }
+      const companionPath = await activeHandle.resolveCompanion()
+      throwIfAborted(signal)
+      if (!companionPath || !path.isAbsolute(companionPath)) {
+        throw new Error("Plugin capability provider companion is unavailable")
+      }
+      if (companion.mode === "convax-bun" && !this.#bunRuntime) {
+        throw new Error("Bundled Bun runtime is unavailable")
+      }
+      const capabilityOperations = new Map<string, PluginCapabilityNestedOperation>()
+      client = this.#createClient({
+        ...(companion.mode === "convax-bun"
+          ? { args: [companionPath, ...(declaredRuntime.args ?? [])] }
+          : declaredRuntime.args
+            ? { args: [...declaredRuntime.args] }
+            : {}),
+        command: companion.mode === "convax-bun" ? this.#bunRuntime!.command : companionPath,
+        cwd: this.#workingDirectory,
+        env: {
+          ...this.#environment,
+          ...(companion.mode === "convax-bun" ? this.#bunRuntime?.env : {}),
+        },
+        serverRequestHandler: createPluginCapabilityNestedMcpHandler(
+          capabilityOperations,
+          toolPluginCanvasMcpMethodNames(plugin),
+        ),
+      })
+      throwIfAborted(signal)
+      if (this.#disposed) throw new Error("Generation Plugin runtime is disposed")
+      const runtime: CachedPluginRuntime = {
+        activeHandle,
+        authorizationIdentity,
+        capabilityGeneration: randomUUID(),
+        capabilityOperations,
+        capabilityReferences: 0,
+        capabilityRetired: currentFingerprint === null,
+        client,
+        executableSnapshot: {
+          dispose() {},
+          path: companionPath,
+          ...(companion.mode === "convax-bun" ? { runtime: "bun" as const } : {}),
+        },
+        fingerprint:
+          currentFingerprint ??
+          createHash("sha256")
+            .update(
+              JSON.stringify([
+                provider.activeRevision,
+                provider.activeSetDigest,
+                provider.snapshotDigest,
+                activeHandle.descriptor.authorizations.capabilityContractDigest,
+              ]),
+            )
+            .digest("hex"),
+        plugin: structuredClone(plugin),
+        pluginId: plugin.id,
+        sourceBinding: {
+          ...(companion.mode === "convax-bun" ? { runtime: "bun" as const } : {}),
+          sha256: companion.sha256,
+          size: companion.size,
+        },
+      }
+      if (currentFingerprint !== null) {
+        const prior = this.#cache.get(provider.pluginId)
+        if (prior && prior !== runtime) this.#closeRuntime(prior)
+        this.#cache.set(provider.pluginId, runtime)
+      }
+      this.#runtimesBySnapshot.set(runtimeKey, runtime)
+      this.#runtimesByCapabilityGeneration.set(runtime.capabilityGeneration, runtime)
+      return runtime
+    } catch (error) {
+      if (client) await closeAndWaitQuietly(client, true)
+      activeHandle.release()
+      throw error
+    }
+  }
+
+  #releaseCapabilityRuntime(runtime: CachedPluginRuntime, failed = false) {
+    runtime.capabilityReferences = Math.max(0, runtime.capabilityReferences - 1)
+    if (failed) runtime.capabilityRetired = true
+    if (runtime.capabilityRetired && runtime.capabilityReferences === 0) {
+      this.#closeRuntime(runtime, failed)
+    }
   }
 
   async #discover() {
@@ -1686,13 +2306,34 @@ export class GenerationPluginRuntime {
     const discovered = new Map<string, DiscoveredPlugin>()
     const installed = await this.#plugins.list()
     if (this.#disposed) throw new Error("Generation Plugin runtime is disposed")
-    for (const plugin of installed) {
+    for (const inventoryPlugin of installed) {
+      const plugin = inventoryPluginManifest(inventoryPlugin)
       if (!isExecutablePlugin(plugin)) continue
-      if (!(await this.#isPluginEnabled(plugin.id))) continue
+      if ((await this.#pluginRuntimeState(plugin.id)) !== "enabled") continue
+      const identity = await this.#plugins.resolveCapabilityIdentity(plugin.id)
+      if (
+        !identity ||
+        identity.plugin.id !== plugin.id ||
+        identity.plugin.version !== plugin.version ||
+        pluginSnapshotCanonicalDigest(identity.plugin) !== pluginSnapshotCanonicalDigest(plugin)
+      ) {
+        throw new Error(`Generation Plugin active identity changed during discovery: ${plugin.id}`)
+      }
       requireBareCommand(plugin.runtime.command)
       if (discovered.has(plugin.id)) throw new Error(`Duplicate installed Plugin id: ${plugin.id}`)
       for (const tool of plugin.contributes.generation?.tools ?? []) requireGenerationToolId(tool.id)
-      discovered.set(plugin.id, { fingerprint: toolPluginManifestSha256(plugin), manifest: plugin })
+      discovered.set(plugin.id, {
+        fingerprint: activePluginFingerprint(identity),
+        identity: {
+          activeRevision: identity.activeRevision,
+          activeSetDigest: identity.activeSetDigest,
+          pluginId: identity.plugin.id,
+          pluginVersion: identity.plugin.version,
+          snapshotDigest: identity.snapshotDigest,
+        },
+        manifest: plugin,
+        packageDigest: pluginSnapshotCanonicalDigest(plugin),
+      })
     }
     for (const [pluginId, runtime] of this.#cache) {
       if (discovered.get(pluginId)?.fingerprint !== runtime.fingerprint) this.#evict(runtime)
@@ -1701,6 +2342,14 @@ export class GenerationPluginRuntime {
       if (discovered.get(pluginId)?.fingerprint !== starting.fingerprint) {
         starting.canceled = true
         this.#starting.delete(pluginId)
+      }
+    }
+    for (const starting of this.#startingByIdentity.values()) {
+      if (
+        starting.fingerprint !== null &&
+        discovered.get(starting.pluginId)?.fingerprint !== starting.fingerprint
+      ) {
+        starting.cancel()
       }
     }
     return discovered
@@ -1726,9 +2375,14 @@ export class GenerationPluginRuntime {
   async #runtimeFor(plugin: DiscoveredPlugin): Promise<CachedPluginRuntime> {
     const cached = this.#cache.get(plugin.manifest.id)
     if (cached?.fingerprint === plugin.fingerprint) return cached
+    const runtimeKey = pluginCapabilityRuntimeKey(plugin.identity)
+    const exactPending = this.#startingByIdentity.get(runtimeKey)
+    if (exactPending) {
+      exactPending.persistent = true
+      return exactPending.promise
+    }
 
     const pending = this.#starting.get(plugin.manifest.id)
-    if (pending?.fingerprint === plugin.fingerprint && pending.promise) return pending.promise
     if (pending) {
       pending.canceled = true
       this.#starting.delete(plugin.manifest.id)
@@ -1738,6 +2392,23 @@ export class GenerationPluginRuntime {
     const promise = this.#startRuntime(plugin, starting)
     starting.promise = promise
     this.#starting.set(plugin.manifest.id, starting)
+    const exactStarting: StartingExactPluginRuntime = {
+      cancel: () => {
+        starting.canceled = true
+      },
+      fingerprint: plugin.fingerprint,
+      key: runtimeKey,
+      persistent: true,
+      pluginId: plugin.manifest.id,
+      promise,
+      settled: false,
+      waiters: 0,
+    }
+    this.#startingByIdentity.set(runtimeKey, exactStarting)
+    void promise.then(
+      () => this.#finishExactRuntimeStart(exactStarting),
+      () => this.#finishExactRuntimeStart(exactStarting),
+    )
     try {
       return await promise
     } finally {
@@ -1749,101 +2420,138 @@ export class GenerationPluginRuntime {
     if (this.#platform === "win32") {
       throw new Error("Generation Tool Plugin execution on Windows requires a host Job Object and is not enabled")
     }
-    const declaredRuntime = plugin.manifest.runtime!
-    const resolveExecutable = async () => {
-      const managed = await this.#resolveManagedExecutable?.(
-        plugin.manifest.id,
-        plugin.manifest.version,
-        declaredRuntime.command,
-      )
-      return managed
-        ? { binding: managed, kind: "managed" as const }
-        : {
-            binding: await this.#resolveExecutable(declaredRuntime.command, this.#environment),
-            kind: "path" as const,
-          }
-    }
-    const resolved = await resolveExecutable()
-    const binding = resolved.binding
-    if (this.#disposed || starting.canceled) {
-      throw new Error(`Generation Plugin changed while resolving its executable: ${plugin.manifest.id}`)
-    }
-    const bindingFingerprint = executableBindingFingerprint(binding)
-    await this.#verifyAuthorization({ binding, bindingKind: resolved.kind, plugin: plugin.manifest })
-    if (this.#disposed || starting.canceled) {
-      throw new Error(`Generation Plugin changed while verifying its installation: ${plugin.manifest.id}`)
-    }
-    const manifestPath = await this.#plugins.resolveAsset(plugin.manifest.id, webPluginManifestFileName)
-    if (!path.isAbsolute(manifestPath)) throw new Error("Installed Plugin manifest path must be absolute")
-    if (this.#disposed || starting.canceled)
-      throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
-    const confirmed = await resolveExecutable()
-    if (confirmed.kind !== resolved.kind || executableBindingFingerprint(confirmed.binding) !== bindingFingerprint) {
-      throw new Error(
-        `Generation Plugin executable changed after installation; reinstall Plugin: ${plugin.manifest.id}`,
-      )
-    }
-    const executableSnapshot = await this.#materializeExecutable(confirmed.binding)
-    const authorizationIdentity = toolPluginAuthorizationIdentity(plugin.manifest, confirmed.kind, confirmed.binding)
-    const runtimeAuthorizationDigest = createHash("sha256").update(authorizationIdentity).digest("hex")
-    const recoveryStateDirectory = this.#recoveryStateDirectory
-      ? await ensureGenerationRecoveryStateDirectory(
-          this.#recoveryStateDirectory,
-          plugin.manifest.id,
-          plugin.fingerprint,
-          runtimeAuthorizationDigest,
-        )
-      : undefined
-    let canvasCapabilities: ToolPluginCanvasMcpBridge | undefined
+    const activeHandle = await this.#plugins.acquireActivePlugin(plugin.manifest.id)
     try {
-      canvasCapabilities = await createToolPluginCanvasMcpBridge(plugin.manifest, this.#canvasCapabilities)
-      if (this.#disposed || starting.canceled) {
-        canvasCapabilities?.close()
+      if (!activeHandleMatches(activeHandle, await this.#requireActiveIdentity(plugin), plugin.packageDigest)) {
+        throw new Error(`Generation Plugin changed before its runtime lease was acquired: ${plugin.manifest.id}`)
+      }
+      const declaredRuntime = plugin.manifest.runtime!
+      const companion = activeHandle.descriptor.companion
+      const authorizationIdentity = activeHandle.descriptor.authorizations.companionExecutionDigest
+      if (!companion) {
+        throw new Error(`Generation Plugin has no immutable active companion: ${plugin.manifest.id}`)
+      }
+      if (!authorizationIdentity || !/^[a-f0-9]{64}$/.test(authorizationIdentity)) {
+        throw new Error(`Generation Plugin companion setup is required: ${plugin.manifest.id}`)
+      }
+      const companionPath = await activeHandle.resolveCompanion()
+      if (!companionPath || !path.isAbsolute(companionPath)) {
+        throw new Error(`Generation Plugin active companion is unavailable: ${plugin.manifest.id}`)
+      }
+      const sourceBinding: GenerationRecoveryExecutableBinding = {
+        ...(companion.mode === "convax-bun" ? { runtime: "bun" as const } : {}),
+        sha256: companion.sha256,
+        size: companion.size,
+      }
+      const executableSnapshot: GenerationPluginExecutableSnapshot = {
+        dispose() {},
+        path: companionPath,
+        ...(companion.mode === "convax-bun" ? { runtime: "bun" as const } : {}),
+      }
+      await this.#assertActiveIdentity(plugin)
+      if (this.#disposed || starting.canceled)
         throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
-      }
-      if (executableSnapshot.runtime === "bun" && !this.#bunRuntime) {
-        throw new Error("Bundled Bun runtime is unavailable")
-      }
-      const client = this.#createClient({
-        ...(executableSnapshot.runtime === "bun"
-          ? { args: [executableSnapshot.path, ...(declaredRuntime.args ?? [])] }
-          : declaredRuntime.args
-            ? { args: [...declaredRuntime.args] }
-            : {}),
-        command: executableSnapshot.runtime === "bun" ? this.#bunRuntime!.command : executableSnapshot.path,
-        cwd: this.#workingDirectory,
-        env: {
-          ...this.#environment,
-          ...(executableSnapshot.runtime === "bun" ? this.#bunRuntime?.env : {}),
-          ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
-        },
-        ...(canvasCapabilities ? { serverRequestHandler: canvasCapabilities.handler } : {}),
-      })
-      if (this.#disposed || starting.canceled) {
-        closeQuietly(client)
+      const runtimeAuthorizationDigest = createHash("sha256").update(authorizationIdentity).digest("hex")
+      const recoveryStateDirectory = this.#recoveryStateDirectory
+        ? await ensureGenerationRecoveryStateDirectory(
+            this.#recoveryStateDirectory,
+            plugin.manifest.id,
+            plugin.packageDigest,
+            runtimeAuthorizationDigest,
+          )
+        : undefined
+      let canvasCapabilities: ToolPluginCanvasMcpBridge | undefined
+      try {
+        canvasCapabilities = await createToolPluginCanvasMcpBridge(plugin.manifest, this.#canvasCapabilities)
+        const capabilityOperations = new Map<string, PluginCapabilityNestedOperation>()
+        const serverRequestHandler = createPluginCapabilityNestedMcpHandler(
+          capabilityOperations,
+          toolPluginCanvasMcpMethodNames(plugin.manifest),
+          canvasCapabilities?.handler,
+        )
+        if (this.#disposed || starting.canceled) {
+          canvasCapabilities?.close()
+          throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
+        }
+        if (executableSnapshot.runtime === "bun" && !this.#bunRuntime) {
+          throw new Error("Bundled Bun runtime is unavailable")
+        }
+        await this.#assertActiveIdentity(plugin)
+        const confirmedCompanionPath = await activeHandle.resolveCompanion()
+        if (confirmedCompanionPath !== companionPath) {
+          throw new Error(`Generation Plugin companion changed immediately before process start: ${plugin.manifest.id}`)
+        }
+        if (this.#disposed || starting.canceled) {
+          throw new Error(`Generation Plugin changed immediately before process start: ${plugin.manifest.id}`)
+        }
+        const client = this.#createClient({
+          ...(executableSnapshot.runtime === "bun"
+            ? { args: [executableSnapshot.path, ...(declaredRuntime.args ?? [])] }
+            : declaredRuntime.args
+              ? { args: [...declaredRuntime.args] }
+              : {}),
+          command: executableSnapshot.runtime === "bun" ? this.#bunRuntime!.command : executableSnapshot.path,
+          cwd: this.#workingDirectory,
+          env: {
+            ...this.#environment,
+            ...(executableSnapshot.runtime === "bun" ? this.#bunRuntime?.env : {}),
+            ...(recoveryStateDirectory ? { CONVAX_GENERATION_LRO_DIRECTORY: recoveryStateDirectory } : {}),
+          },
+          ...(serverRequestHandler ? { serverRequestHandler } : {}),
+        })
+        if (this.#disposed || starting.canceled) {
+          await closeAndWaitQuietly(client, true)
+          canvasCapabilities?.close()
+          throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
+        }
+        const cached: CachedPluginRuntime = {
+          activeHandle,
+          authorizationIdentity,
+          capabilityGeneration: randomUUID(),
+          capabilityOperations,
+          capabilityReferences: 0,
+          capabilityRetired: false,
+          ...(canvasCapabilities ? { canvasCapabilities } : {}),
+          client,
+          executableSnapshot,
+          fingerprint: plugin.fingerprint,
+          plugin: structuredClone(plugin.manifest),
+          pluginId: plugin.manifest.id,
+          sourceBinding,
+        }
+        const prior = this.#cache.get(plugin.manifest.id)
+        if (prior) this.#closeRuntime(prior)
+        this.#cache.set(plugin.manifest.id, cached)
+        this.#runtimesBySnapshot.set(activeHandleRuntimeKey(activeHandle.identity), cached)
+        this.#runtimesByCapabilityGeneration.set(cached.capabilityGeneration, cached)
+        return cached
+      } catch (error) {
         canvasCapabilities?.close()
-        throw new Error(`Generation Plugin changed while starting: ${plugin.manifest.id}`)
+        executableSnapshot.dispose()
+        throw error
       }
-      const cached: CachedPluginRuntime = {
-        authorizationIdentity,
-        bindingKind: confirmed.kind,
-        ...(canvasCapabilities ? { canvasCapabilities } : {}),
-        client,
-        executableSnapshot,
-        fingerprint: plugin.fingerprint,
-        plugin: structuredClone(plugin.manifest),
-        pluginId: plugin.manifest.id,
-        sourceBinding: structuredClone(confirmed.binding),
-      }
-      const prior = this.#cache.get(plugin.manifest.id)
-      if (prior) this.#closeRuntime(prior)
-      this.#cache.set(plugin.manifest.id, cached)
-      return cached
     } catch (error) {
-      canvasCapabilities?.close()
-      executableSnapshot.dispose()
+      activeHandle.release()
       throw error
     }
+  }
+
+  async #requireActiveIdentity(plugin: DiscoveredPlugin) {
+    const identity = await this.#plugins.resolveCapabilityIdentity(plugin.manifest.id)
+    if (
+      !identity ||
+      identity.plugin.id !== plugin.manifest.id ||
+      identity.plugin.version !== plugin.manifest.version ||
+      pluginSnapshotCanonicalDigest(identity.plugin) !== plugin.packageDigest ||
+      activePluginFingerprint(identity) !== plugin.fingerprint
+    ) {
+      throw new Error(`Generation Plugin active identity changed: ${plugin.manifest.id}`)
+    }
+    return identity
+  }
+
+  async #assertActiveIdentity(plugin: DiscoveredPlugin) {
+    await this.#requireActiveIdentity(plugin)
   }
 
   async #availableTools(runtime: CachedPluginRuntime, signal?: AbortSignal, refresh = false) {
@@ -1856,14 +2564,94 @@ export class GenerationPluginRuntime {
     return runtime.availableTools
   }
 
+  async #reconcileRecoveryPins() {
+    if (!this.#recoveryRuntimeStore) return
+    const [records, pins] = await Promise.all([this.#recoveryRuntimeStore.list(), this.#plugins.listOwnerPins()])
+    const expected = new Map(
+      records.map((record) => [generationRecoveryOwnerKey(record.executionBindingDigest), record.pluginIdentity]),
+    )
+    const generationPins = pins.filter(({ ownerKey }) => ownerKey.startsWith(generationRecoveryOwnerPrefix))
+    for (const [ownerKey, identity] of expected) {
+      const pin = generationPins.find((candidate) => candidate.ownerKey === ownerKey)
+      if (!pin || !sameRuntimeIdentity(pin.identity, identity)) {
+        throw new Error(`Generation recovery record has a missing or stale snapshot owner: ${ownerKey}`)
+      }
+    }
+    for (const pin of generationPins) {
+      if (expected.has(pin.ownerKey)) continue
+      await this.#plugins.unpinPluginOwner(pin.ownerKey, pin.identity)
+    }
+  }
+
+  async #withRecoveryMutation<Result>(executionBindingDigest: string, operation: () => Promise<Result>) {
+    const previous = this.#recoveryMutations.get(executionBindingDigest) ?? Promise.resolve()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const current = previous.then(() => gate)
+    this.#recoveryMutations.set(executionBindingDigest, current)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (this.#recoveryMutations.get(executionBindingDigest) === current) {
+        this.#recoveryMutations.delete(executionBindingDigest)
+      }
+    }
+  }
+
   #evict(runtime: CachedPluginRuntime) {
     if (this.#cache.get(runtime.pluginId) === runtime) this.#cache.delete(runtime.pluginId)
-    this.#closeRuntime(runtime)
+    this.#retireRuntime(runtime)
+  }
+
+  #retireRuntime(runtime: CachedPluginRuntime) {
+    runtime.capabilityRetired = true
+    if (runtime.capabilityReferences === 0) this.#closeRuntime(runtime)
   }
 
   #closeRuntime(runtime: CachedPluginRuntime, force = false) {
+    if (!force && runtime.capabilityReferences > 0) {
+      runtime.capabilityRetired = true
+      return
+    }
+    if (this.#cache.get(runtime.pluginId) === runtime) this.#cache.delete(runtime.pluginId)
+    if (
+      runtime.activeHandle &&
+      this.#runtimesBySnapshot.get(activeHandleRuntimeKey(runtime.activeHandle.identity)) === runtime
+    ) {
+      this.#runtimesBySnapshot.delete(activeHandleRuntimeKey(runtime.activeHandle.identity))
+    }
+    this.#runtimesByCapabilityGeneration.delete(runtime.capabilityGeneration)
+    runtime.capabilityOperations.clear()
     runtime.canvasCapabilities?.close()
-    closeQuietly(runtime.client, force)
-    runtime.executableSnapshot.dispose()
+    let finalized = false
+    const finalize = () => {
+      if (finalized) return
+      finalized = true
+      runtime.executableSnapshot.dispose()
+      runtime.activeHandle?.release()
+    }
+    if (!runtime.client.closeAndWait) {
+      closeQuietly(runtime.client, force)
+      finalize()
+      return
+    }
+    const closing = (async () => {
+      try {
+        await runtime.client.closeAndWait!(force)
+      } catch {
+        closeQuietly(runtime.client, true)
+      } finally {
+        finalize()
+      }
+    })()
+    this.#closingRuntimes.add(closing)
+    void closing.then(
+      () => this.#closingRuntimes.delete(closing),
+      () => this.#closingRuntimes.delete(closing),
+    )
   }
 }

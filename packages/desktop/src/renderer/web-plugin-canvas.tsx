@@ -1,7 +1,2 @@
-/**
- * Compatibility entrypoint. Web is one node-renderer transport; capability
- * validation and Canvas host ports live in transport-neutral modules.
- */
-export * from "../plugin-canvas-host"
-export * from "../plugin-host-types"
+/** Web Plugin Canvas renderer and fixed host/8 to capability/3 transport. */
 export * from "./web-plugin-node-renderer"

@@ -1,5 +1,13 @@
-import type { WebPluginBundle, WebPluginLegacyBundleDigest } from "./plugin-manager"
 import type { WebPluginManifest } from "../plugin-contracts"
+
+export interface WebPluginBundle {
+  files: Readonly<Record<string, string | Uint8Array>>
+}
+
+export interface WebPluginLegacyBundleDigest {
+  bundleDigest: string
+  version: string
+}
 
 export interface DesktopBuiltinPluginBundle {
   bundle: WebPluginBundle
