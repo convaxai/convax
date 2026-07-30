@@ -127,6 +127,10 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
       expect(privilegedShell).toContain('test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"')
       expect(source).toContain('--repository-id "$GITHUB_REPOSITORY_ID"')
       expect(source).toContain('--repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"')
+      expect(source).not.toContain("--run-id")
+      expect(source).not.toContain("--run-attempt")
+      expect(source).not.toContain("GITHUB_RUN_ID")
+      expect(source).not.toContain("GITHUB_RUN_ATTEMPT")
       expect(source).not.toContain("attestations: write")
       expect(source).not.toContain("CONVAX_PRIVATE_ATTESTATIONS_ENABLED")
       for (const step of steps) {

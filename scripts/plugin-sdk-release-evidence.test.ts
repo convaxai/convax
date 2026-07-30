@@ -32,8 +32,6 @@ function input(overrides: Record<string, unknown> = {}) {
     repository: "microvoid/convax",
     repositoryId: "1293264965",
     repositoryOwnerId: "125447777",
-    runAttempt: "1",
-    runId: "123",
     sdkPackageJson: {
       name: "@convax/plugin-sdk",
       version: "0.1.0",
@@ -61,8 +59,6 @@ describe("Plugin SDK Host package release evidence", () => {
       },
       workflow: {
         ref: "microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
-        runId: "123",
-        runAttempt: "1",
       },
       sigstore: {
         bundle: {
@@ -171,5 +167,13 @@ describe("Plugin SDK Host package release evidence", () => {
         }),
       ),
     ).toThrow("release conformance profile")
+  })
+
+  test("emits retry-stable evidence for one version and commit", () => {
+    const first = JSON.stringify(buildPluginSdkReleaseEvidence(input()))
+    const retry = JSON.stringify(buildPluginSdkReleaseEvidence(input()))
+    expect(retry).toBe(first)
+    expect(first).not.toContain("runId")
+    expect(first).not.toContain("runAttempt")
   })
 })

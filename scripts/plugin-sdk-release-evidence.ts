@@ -19,7 +19,6 @@ const MAX_PACKAGE_JSON_BYTES = 128 * 1024
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
 const STABLE_VERSION = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u
 const COMMIT = /^[a-f0-9]{40}$/u
-const POSITIVE_INTEGER = /^[1-9][0-9]*$/u
 const NPM_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/u
 
 export const pluginSdkReleaseCheckDefinitions = [
@@ -71,8 +70,6 @@ type EvidenceInput = {
   readonly repository: string
   readonly repositoryId: string
   readonly repositoryOwnerId: string
-  readonly runAttempt: string
-  readonly runId: string
   readonly sdkPackageJson: unknown
   readonly sdkSourceTarballBytes: Uint8Array
   readonly sdkTarballBytes: Uint8Array
@@ -161,9 +158,6 @@ export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<stri
   if (!STABLE_VERSION.test(input.sdkVersion) || !STABLE_VERSION.test(input.apiVersion)) {
     fail("package versions must be stable SemVer")
   }
-  if (!POSITIVE_INTEGER.test(input.runId) || !POSITIVE_INTEGER.test(input.runAttempt)) {
-    fail("workflow run id and attempt must be positive integers")
-  }
   const allowedWorkflows = new Map([
     [
       `${input.repository}/.github/workflows/plugin-sdk-bootstrap.yml@${PROTECTED_WORKFLOW_REF}`,
@@ -232,8 +226,6 @@ export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<stri
     },
     workflow: {
       ref: input.workflowRef,
-      runId: input.runId,
-      runAttempt: input.runAttempt,
     },
     sigstore: {
       bundle: {
@@ -291,8 +283,6 @@ type Arguments = {
   readonly repository: string
   readonly repositoryId: string
   readonly repositoryOwnerId: string
-  readonly runAttempt: string
-  readonly runId: string
   readonly sdkPackageJson: string
   readonly sdkSourceTarball: string
   readonly sdkTarball: string
@@ -315,8 +305,6 @@ function parseArguments(argv: readonly string[]): Arguments {
     "--repository",
     "--repository-id",
     "--repository-owner-id",
-    "--run-attempt",
-    "--run-id",
     "--sdk-package-json",
     "--sdk-source-tarball",
     "--sdk-tarball",
@@ -347,8 +335,6 @@ function parseArguments(argv: readonly string[]): Arguments {
     repository: values.get("--repository")!,
     repositoryId: values.get("--repository-id")!,
     repositoryOwnerId: values.get("--repository-owner-id")!,
-    runAttempt: values.get("--run-attempt")!,
-    runId: values.get("--run-id")!,
     sdkPackageJson: values.get("--sdk-package-json")!,
     sdkSourceTarball: values.get("--sdk-source-tarball")!,
     sdkTarball: values.get("--sdk-tarball")!,
@@ -391,8 +377,6 @@ async function main(): Promise<void> {
     repository: args.repository,
     repositoryId: args.repositoryId,
     repositoryOwnerId: args.repositoryOwnerId,
-    runAttempt: args.runAttempt,
-    runId: args.runId,
     sdkPackageJson: parseJson(sdkPackageJsonBytes, "Plugin SDK package.json"),
     sdkSourceTarballBytes,
     sdkTarballBytes,

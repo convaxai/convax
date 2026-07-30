@@ -149,8 +149,6 @@ jobs:
             --repository "$REPOSITORY" \
             --repository-id "$GITHUB_REPOSITORY_ID" \
             --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --run-id "$GITHUB_RUN_ID" \
             --sdk-package-json "$inspection/sdk-package.json" \
             --sdk-source-tarball "$sdk_tarball" \
             --sdk-tarball "$sdk_tarball" \
@@ -272,7 +270,7 @@ jobs:
               .profile == "convax.plugin-sdk-authoring-package/1" and
               keys == ["checks", "dependencies", "host", "package", "profile", "schema", "sigstore", "workflow"] and
               (.host | keys) == ["commit", "repository", "repositoryId", "repositoryOwnerId"] and
-              (.workflow | keys) == ["ref", "runAttempt", "runId"] and
+              (.workflow | keys) == ["ref"] and
               (.package | keys) == ["name", "tarballIntegrity", "tarballSha256", "version"] and
               .host == {
                 repository: "microvoid/convax",
