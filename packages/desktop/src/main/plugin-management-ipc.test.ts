@@ -311,21 +311,37 @@ describe("registerPluginManagementIpc", () => {
     dispose()
   })
 
-  test("serializes changed lifecycles before acquiring each Plugin mutation", async () => {
+  test("resolves independent package mutations while serializing their post-change lifecycle", async () => {
     const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
     const manager = createManager()
     dialogResult = { canceled: false, filePaths: ["/portable/plugin-source"] }
     let releaseFirst!: () => void
     let markFirstEntered!: () => void
+    let markSecondEntered!: () => void
     const firstBlocked = new Promise<void>((resolve) => {
       releaseFirst = resolve
     })
     const firstEntered = new Promise<void>((resolve) => {
       markFirstEntered = resolve
     })
-    const lifecycleOrder: string[] = []
+    const secondEntered = new Promise<void>((resolve) => {
+      markSecondEntered = resolve
+    })
+    const order: string[] = []
+    manager.install = mock(async () => {
+      order.push("package:imported-plugin")
+      return manifest("imported-plugin")
+    }) as WebPluginManager["install"]
+    manager.uninstall = mock(async () => {
+      order.push("package:other-plugin")
+      return true
+    }) as WebPluginManager["uninstall"]
     const onDidChange = mock(async (pluginId: string) => {
-      lifecycleOrder.push(pluginId)
+      order.push(`lifecycle:${pluginId}`)
+      if (pluginId === "other-plugin") {
+        markSecondEntered()
+        return
+      }
       if (pluginId !== "imported-plugin") return
       markFirstEntered()
       await firstBlocked
@@ -334,16 +350,29 @@ describe("registerPluginManagementIpc", () => {
 
     const first = Promise.resolve(invoke(pluginManagementIpcChannels.importPlugin))
     await firstEntered
+    const firstState = await Promise.race([
+      first.then(() => "completed" as const),
+      Bun.sleep(25).then(() => "blocked" as const),
+    ])
     const second = Promise.resolve(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "other-plugin" }))
     const secondState = await Promise.race([
       second.then(() => "completed" as const),
       Bun.sleep(25).then(() => "blocked" as const),
     ])
-    releaseFirst()
-    await Promise.all([first, second])
+    expect(firstState).toBe("completed")
+    expect(secondState).toBe("completed")
+    expect(manager.uninstall).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(["package:imported-plugin", "lifecycle:imported-plugin", "package:other-plugin"])
 
-    expect(secondState).toBe("blocked")
-    expect(lifecycleOrder).toEqual(["imported-plugin", "other-plugin"])
+    releaseFirst()
+    await Promise.all([first, second, secondEntered])
+
+    expect(order).toEqual([
+      "package:imported-plugin",
+      "lifecycle:imported-plugin",
+      "package:other-plugin",
+      "lifecycle:other-plugin",
+    ])
     dispose()
   })
 
@@ -546,6 +575,37 @@ describe("registerPluginManagementIpc", () => {
       await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
       expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
       expect(reconcileAfterChange).not.toHaveBeenCalled()
+      expect(warning).toHaveBeenCalledTimes(1)
+    } finally {
+      dispose()
+      warning.mockRestore()
+    }
+  })
+
+  test("keeps a committed mutation successful when one renderer notification fails", async () => {
+    const { pluginManagementIpcChannels, registerPluginManagementIpc } = await import("./plugin-management-ipc")
+    const manager = createManager()
+    const stale = testWindow()
+    const live = testWindow()
+    stale.webContents.send.mockImplementation(() => {
+      throw new Error("renderer disappeared")
+    })
+    windows.push(stale, live)
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined)
+    let markLifecycleEntered!: () => void
+    const lifecycleEntered = new Promise<void>((resolve) => {
+      markLifecycleEntered = resolve
+    })
+    const onDidChange = mock(async () => {
+      markLifecycleEntered()
+    })
+    const dispose = registerPluginManagementIpc(manager, [], () => true, undefined, { onDidChange })
+    try {
+      await expect(invoke(pluginManagementIpcChannels.uninstallPlugin, { id: "installed-plugin" })).resolves.toBe(true)
+      await lifecycleEntered
+      expect(stale.webContents.send).toHaveBeenCalledTimes(1)
+      expect(live.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)
+      expect(onDidChange).toHaveBeenCalledWith("installed-plugin")
       expect(warning).toHaveBeenCalledTimes(1)
     } finally {
       dispose()

@@ -134,6 +134,12 @@ export interface PreparedGenerationToolExecution {
   validateInput(input?: GenerationToolInput): Record<string, GenerationToolInputValue>
 }
 
+/** Display-only projection admitted from one exact generation tools/list snapshot. */
+export interface InspectedGenerationModel {
+  description: GenerationToolDescription
+  summary: GenerationToolSummary
+}
+
 export interface GenerationToolExecutionPort {
   describeTool(toolId: string, signal?: AbortSignal): Promise<GenerationToolDescription>
   listTools(options?: { output?: GenerationOutputModality }): Promise<readonly GenerationToolSummary[]>

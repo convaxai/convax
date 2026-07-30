@@ -666,11 +666,18 @@ Desktop fails closed and never recreates or writes through it.
 
 Tool-custom generation controls come only from the selected sidecar's current MCP
 `tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
-registry. Main lazily describes one explicitly selected tool, projects only bounded
-top-level scalar fields across preload, and revalidates caller values against the
-same live tool definition before execution. Those validated fields extend the
+registry. Main owns one bounded, display-only session snapshot of concrete model
+summaries and projected top-level scalar fields. After startup provisioning and
+after Plugin or service lifecycle changes, it invalidates the snapshot and warms a
+new epoch asynchronously. Concurrent refreshes for one epoch are single-flight and
+commit atomically; an age-triggered refresh serves the prior same-epoch snapshot
+until the replacement succeeds. This cache is not durable and is never renderer
+state. Main still reloads the selected tool's live definition and revalidates caller
+values immediately before execution. Those validated fields extend the
 `convax.generation-call/1` object without being allowed to replace its fixed
-host-reserved envelope; tools without extensions keep the original payload.
+host-reserved envelope; tools without extensions keep the original payload. Agent
+LLM provider admission is outside this display cache and continues to check live
+service status.
 
 Dynamic model identity is the one semantic projection on that schema. A declared
 model tool may mark exactly one required bounded string select with
@@ -691,10 +698,12 @@ current media references.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
 catalog only when the owning Plugin contributes the same model through a service and
-Main's bounded live status reports that service connected. Missing, disconnected,
-attention, unknown, timed-out, or invalid service status hides that service's models;
-service-independent operations remain manifest-driven. When no model is available,
-Agent and card composers offer the Services route instead of synthesizing an `auto`
+Main's bounded status checks admit that service into the current display snapshot.
+Missing, disconnected, attention, unknown, timed-out, or invalid service status
+hides that service's models; service-independent operations remain manifest-driven.
+Preparation and dispatch recheck live service status and the exact tool schema, so a
+stale display snapshot cannot authorize a call. When no model is available, Agent
+and card composers offer the Services route instead of synthesizing an `auto`
 choice. The available catalog is never pruned by current `@` inputs: when no model
 accepts all inputs, the card still shows a concrete matching Agent default or first
 available model and blocks execution until the user removes incompatible inputs or
@@ -741,6 +750,17 @@ For host-owned pending-result mode, Canvas creates the pending file node and the
 running, task-receipt, guarded replacement, terminal and restart-reconciliation
 state machine as an existing card; a restart cannot leave a placeholder permanently
 pending.
+
+A terminal run whose external result is `unknown` remains attached to and locks its
+original card. The UI may restore that run's normalized prompt only through an
+explicit “new task” action. Submitting that composer uses a fresh `operationId` and
+`create-pending-node`, so Main creates a separate host-owned target while retaining
+the original card and unresolved operation unchanged. Its prompt context and media
+references remain constrained to the original card's live direct incoming edges.
+Main may connect the new target from that owner to preserve visible lineage, but it
+must never replace or clear the old unknown owner.
+This is not an in-place retry and must never bypass Canvas's unknown-retry guard.
+Only a run explicitly marked retry-safe may reuse its card through `replace-node`.
 
 The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
 Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is

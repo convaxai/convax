@@ -522,6 +522,42 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain('aria-label="刷新图片"')
   })
 
+  test("presents idle image and video targets as generation cards instead of missing resources", () => {
+    for (const kind of ["image", "video"] as const) {
+      const node: CanvasNode = {
+        id: `empty-${kind}`,
+        type: "file",
+        position: { x: 0, y: 0 },
+        data: {
+          kind,
+          label: kind[0]!.toUpperCase() + kind.slice(1),
+          metadata: {},
+          resourceState: { status: "ready" },
+          status: "idle",
+        },
+      }
+      const markup = renderWithEditor(
+        selection([node.id]),
+        false,
+        (props) => <BuiltinMediaFileNode {...props} />,
+        false,
+        { node },
+      )
+
+      expect(markup).toContain('class="convax-media-empty__content"')
+      expect(markup).not.toContain(`${kind} unavailable`)
+      expect(markup).not.toContain("Relink a selected Project resource")
+      if (kind === "image") {
+        expect(markup).toContain('data-canvas-empty-image="true"')
+        expect(markup).toContain("Add an image")
+        expect(markup).toContain("Upload your own or create one with Generate.")
+      } else {
+        expect(markup).toContain("Empty video")
+        expect(markup).toContain("Describe what you want to generate below")
+      }
+    }
+  })
+
   test("exposes explicit relink actions for missing resources and editable-copy for managed text", () => {
     const missingImage: CanvasNode = {
       id: "missing-image",
@@ -590,6 +626,9 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).toContain('aria-label="Relink local file"')
     expect(imageMarkup).not.toContain("Relink is not available yet")
     expect(imageMarkup).toContain('class="convax-media-empty__content"')
+    expect(imageMarkup).toContain("image unavailable")
+    expect(imageMarkup).toContain("Relink a selected Project resource or choose a local file")
+    expect(imageMarkup).not.toContain("Empty image")
     expect(folderMarkup).toContain('aria-label="Relink selected Project directory"')
     expect(folderMarkup).not.toContain('aria-label="Relink local file"')
     expect(textMarkup).toContain('aria-label="Save editable copy"')
@@ -1351,19 +1390,19 @@ describe("built-in node toolbar visibility", () => {
       },
     )
     expect(indeterminateMarkup).toContain('data-canvas-file-generation-activity="interrupted"')
-    expect(indeterminateMarkup).toContain("本卡片不可重试")
+    expect(indeterminateMarkup).toContain("使用原提示词新建任务")
     expect(indeterminateMarkup).toContain("避免重复计费")
     expect(indeterminateMarkup).toContain("切换 Agent 默认模型不会改变该任务")
-    expect(indeterminateMarkup).toContain("新任务可能另行计费")
+    expect(indeterminateMarkup).toContain("可能另行计费")
     expect(indeterminateMarkup).not.toContain("修改并重试")
     expect(indeterminateMarkup).not.toContain("data-assistant-toolbar")
     expect(
       openingTagContaining(indeterminateMarkup, 'data-canvas-file-generation-activity="interrupted"'),
     ).not.toContain("nodrag")
-    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-generation-retry-blocked="true"')).toContain(
+    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-generation-new-task="true"')).toContain(
       'class="nodrag nowheel"',
     )
-    expect(openingTagContaining(indeterminateMarkup, "本卡片不可重试")).toContain('disabled=""')
+    expect(openingTagContaining(indeterminateMarkup, "使用原提示词新建任务")).not.toContain('disabled=""')
 
     const succeeded = succeedCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     let request: CanvasAssistantRequest | undefined

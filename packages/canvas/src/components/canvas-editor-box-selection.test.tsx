@@ -2,6 +2,7 @@ import { afterAll, expect, mock, test } from "bun:test"
 import { Window as HappyDOMWindow } from "happy-dom"
 import { StrictMode, type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { CanvasAssistantRequest } from "../services"
 import type { CanvasDocument, CanvasNode } from "../types"
 
 const testWindow = new HappyDOMWindow({ url: "https://convax.test/" })
@@ -105,8 +106,12 @@ mock.module("@convax/ui", () => ({
 
 const { createCanvasDocument, createTextNode } = await import("../document")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
-const { finishCanvasNodeGenerationRun, markCanvasNodeGenerationRunRunning, startCanvasNodeGenerationRun } =
-  await import("../generation-run")
+const {
+  finishCanvasNodeGenerationRun,
+  getCanvasNodeGenerationRun,
+  markCanvasNodeGenerationRunRunning,
+  startCanvasNodeGenerationRun,
+} = await import("../generation-run")
 const { useCanvasEditor } = await import("../editor-context")
 const { createCanvasNodeRegistry } = await import("../node-registry")
 const { createCanvasServices } = await import("../services")
@@ -583,6 +588,7 @@ test("drags a generating card from its overlay while generation controls keep th
   const container = document.createElement("div")
   document.body.append(container)
   let latestDocument: CanvasDocument = initialDocument
+  let assistantRequest: CanvasAssistantRequest | undefined
   let root: Root | undefined
 
   const dragWithMouse = async (target: Element, start: { x: number; y: number }, end: { x: number; y: number }) => {
@@ -649,7 +655,16 @@ test("drags a generating card from its overlay while generation controls keep th
           onDocumentChange={(document) => {
             latestDocument = document
           }}
-          services={createCanvasServices()}
+          services={createCanvasServices({
+            assistant: {
+              render: (request) => {
+                assistantRequest = request
+                return (
+                  <textarea aria-label="Recovered generation prompt" defaultValue={request.generation?.initialPrompt} />
+                )
+              },
+            },
+          })}
         />,
       )
     })
@@ -659,12 +674,14 @@ test("drags a generating card from its overlay while generation controls keep th
     const cancelButton = [...(activeOverlay?.querySelectorAll("button") ?? [])].find(
       (button) => button.textContent === "取消",
     )
-    const blockedWrapper = container.querySelector<HTMLElement>('[data-canvas-generation-retry-blocked="true"]')
+    const blockedWrapper = container.querySelector<HTMLElement>('[data-canvas-generation-new-task="true"]')
+    const continueButton = blockedWrapper?.querySelector<HTMLButtonElement>("button")
     expect(activeOverlay).not.toBeNull()
     expect(cancelButton).toBeDefined()
     expect(blockedWrapper).not.toBeNull()
     expect(blockedWrapper?.classList.contains("nodrag")).toBe(true)
-    expect(blockedWrapper?.querySelector("button")?.disabled).toBe(true)
+    expect(continueButton?.disabled).toBe(false)
+    expect(continueButton?.textContent).toBe("使用原提示词新建任务")
     const generatingNodeElement = activeOverlay?.closest<HTMLElement>(".react-flow__node")
     expect(generatingNodeElement?.classList.contains("draggable")).toBe(true)
 
@@ -681,6 +698,25 @@ test("drags a generating card from its overlay while generation controls keep th
     const blockedPosition = latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position
     await dragWithMouse(blockedWrapper!, { x: 440, y: 120 }, { x: 504, y: 168 })
     expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).toEqual(blockedPosition)
+
+    await act(async () => {
+      continueButton?.click()
+      await Promise.resolve()
+    })
+    expect(assistantRequest?.ownerNodeId).toBe(blockedNode.id)
+    expect(assistantRequest?.generation).toMatchObject({
+      initialPrompt: "Generate",
+      output: "image",
+      submissionMode: "create-pending-node",
+    })
+    expect(
+      container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Recovered generation prompt"]')?.value,
+    ).toBe("Generate")
+    expect(getCanvasNodeGenerationRun(latestDocument.nodes.find((node) => node.id === blockedNode.id)!)).toMatchObject({
+      operationId: "blocked-operation",
+      retrySafety: "unknown",
+      status: "interrupted",
+    })
     expect(errors).toEqual([])
   } finally {
     HTMLElement.prototype.getBoundingClientRect = originalRect

@@ -205,10 +205,10 @@ describe("Canvas card generation output", () => {
   test("binds replace-card references to the owner's direct incoming edges", () => {
     expect(
       canvasCardGenerationReferenceConstraint({
-        resultMode: { nodeId: "image-card", type: "replace-node" },
+        referenceConstraint: { ownerNodeId: "image-card", type: "direct-incoming" },
       }),
     ).toEqual({ ownerNodeId: "image-card", type: "direct-incoming" })
-    expect(canvasCardGenerationReferenceConstraint({ resultMode: { type: "add" } })).toBeUndefined()
+    expect(canvasCardGenerationReferenceConstraint({})).toBeUndefined()
   })
 
   test("inherits the Agent model until this node stores its own override", () => {
@@ -314,6 +314,7 @@ describe("Canvas card generation request", () => {
       operationId: "operation-one",
       output: "image",
       prompt: "Turn this into a poster",
+      referenceConstraint: { ownerNodeId: "image-card", type: "direct-incoming" },
       references: [{ nodeId: "image-card", role: "reference_image" }],
       resultMode: { nodeId: "image-card", type: "replace-node" },
       signal: controller.signal,
@@ -339,6 +340,46 @@ describe("Canvas card generation request", () => {
     const second = create()
     expect(first.operationId).toMatch(/^[0-9a-f-]{36}$/)
     expect(second.operationId).not.toBe(first.operationId)
+  })
+
+  test("continues an unknown result as a fresh pending task without replacing the unresolved owner", () => {
+    const owner = imageNode()
+    const incoming = imageNode({ id: "incoming-reference" })
+    const request = assistantRequest(owner, [owner, incoming], [incoming.id])
+    const continuation = {
+      ...request,
+      generation: {
+        ...request.generation!,
+        initialPrompt: "A small rabbit",
+        submissionMode: "create-pending-node" as const,
+      },
+    }
+    const create = () =>
+      createCanvasCardGenerationRequest({
+        description,
+        prompt: continuation.generation.initialPrompt,
+        request: continuation,
+        signal: new AbortController().signal,
+        tool: tool(),
+        toolInput: { aspect_ratio: "16:9", steps: 24 },
+      })
+
+    const first = create()
+    const second = create()
+    expect(first).toMatchObject({
+      context: { selectedNodeIds: [owner.id], source: "canvas-card" },
+      prompt: "A small rabbit",
+      referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+      references: [{ nodeId: incoming.id, role: "reference_image" }],
+      resultMode: { type: "create-pending-node" },
+    })
+    expect(first.resultMode).not.toEqual({ nodeId: owner.id, type: "replace-node" })
+    expect(first.operationId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(second.operationId).not.toBe(first.operationId)
+    expect(canvasCardGenerationReferenceConstraint(first)).toEqual({
+      ownerNodeId: owner.id,
+      type: "direct-incoming",
+    })
   })
 
   test("carries mentioned text as prompt context and allows it to be the entire prompt", () => {

@@ -122,7 +122,13 @@ export function registerPluginManagementIpc(
   const publishChange = () => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-      window.webContents.send(pluginManagementIpcChannels.changed)
+      try {
+        window.webContents.send(pluginManagementIpcChannels.changed)
+      } catch (error) {
+        // Renderer projection is best-effort after a durable package or service
+        // mutation. A window may disappear between the liveness check and send.
+        console.warn("Could not notify a renderer about changed Plugins", error)
+      }
     }
   }
   const unsubscribeRemote = remoteCatalog?.subscribe?.(publishChange)
@@ -167,43 +173,35 @@ export function registerPluginManagementIpc(
     }
   }
   let changedLifecycleTail = Promise.resolve()
-  const runChangedLifecycle = async <Result>(operation: () => Promise<Result>): Promise<Result> => {
-    const previous = changedLifecycleTail
-    let release!: () => void
-    changedLifecycleTail = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    await previous
+  const runChangedLifecycle = async (changedPluginId: string) => {
     try {
-      return await operation()
-    } finally {
-      release()
+      await lifecycle?.onDidChange?.(changedPluginId)
+      if (lifecycle?.reconcileAfterChange) {
+        await manager.withPluginMutation(changedPluginId, (mutation) =>
+          Promise.resolve(lifecycle.reconcileAfterChange?.(changedPluginId, mutation)),
+        )
+      }
+    } catch (error) {
+      // The package mutation is already committed. Startup reconciliation
+      // retries cleanup. Invalidation failure must also retain superseded
+      // Hook snapshots because the old Agent generation may still need them.
+      console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
     }
   }
   const changed = async <Result>(
     operation: () => Promise<Result>,
     pluginId: (result: Result) => string | undefined,
-  ) => {
+  ): Promise<Result> => {
     const result = await operation()
     const changedPluginId = pluginId(result)
-    if (changedPluginId) {
-      try {
-        await runChangedLifecycle(async () => {
-          await lifecycle?.onDidChange?.(changedPluginId)
-          if (lifecycle?.reconcileAfterChange) {
-            await manager.withPluginMutation(changedPluginId, (mutation) =>
-              Promise.resolve(lifecycle.reconcileAfterChange?.(changedPluginId, mutation)),
-            )
-          }
-        })
-      } catch (error) {
-        // The package mutation is already committed. Startup reconciliation
-        // retries cleanup. Invalidation failure must also retain superseded
-        // Hook snapshots because the old Agent generation may still need them.
-        console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
-      }
-    }
     publishChange()
+    if (changedPluginId) {
+      // Agent refresh is global and remains ordered, but it is post-publication
+      // convergence: it must not hold this result or an unrelated Plugin package
+      // mutation hostage. Per-Plugin reconciliation reacquires the manager lock
+      // and reads the latest installed identity after invalidation completes.
+      changedLifecycleTail = changedLifecycleTail.then(() => runChangedLifecycle(changedPluginId))
+    }
     return result
   }
   const disposers = [
