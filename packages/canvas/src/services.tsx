@@ -222,6 +222,10 @@ export interface CanvasGenerateService {
   /** Host-owned token that changes when installed generation declarations change. */
   readonly catalogVersion?: string | number
   cancel?: (operationId: string) => void | Promise<void>
+  /** Synchronous stale-while-revalidate read used to avoid flashing an empty catalog on remount. */
+  getCachedDescription?: (toolId: string) => CanvasGenerationToolDescription | undefined
+  /** Synchronous stale-while-revalidate read used to share one host catalog across Canvas surfaces. */
+  getCachedTools?: (query: CanvasGenerationToolQuery) => readonly CanvasGenerationToolSummary[] | undefined
   describeTool: (toolId: string, signal?: AbortSignal) => Promise<CanvasGenerationToolDescription>
   generate: (request: CanvasGenerateRequest) => Promise<CanvasGenerateResult>
   listTools: (query: CanvasGenerationToolQuery, signal?: AbortSignal) => Promise<readonly CanvasGenerationToolSummary[]>

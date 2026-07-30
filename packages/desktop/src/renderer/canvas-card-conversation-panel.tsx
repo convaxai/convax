@@ -255,10 +255,21 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const agentDefault = useAgentGenerationDefault()
   const [prompt, setPrompt] = useState(props.generation.initialPrompt ?? "")
   const [dismissedMentionedNodeIds, setDismissedMentionedNodeIds] = useState<ReadonlySet<string>>(() => new Set())
-  const [catalog, setCatalog] = useState<ScopedLoad<readonly CanvasGenerationToolSummary[]>>({
-    scope: "",
-    status: "loading",
-  })
+  const ownerOutput = props.generation.output
+  const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
+  const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
+  const catalogScope = JSON.stringify([
+    props.request.document.id,
+    props.request.ownerNodeId,
+    ownerOutput ?? null,
+    catalogVersion,
+  ])
+  const initialCachedTools = props.service.getCachedTools?.(ownerOutput ? { output: ownerOutput } : {})
+  const [catalog, setCatalog] = useState<ScopedLoad<readonly CanvasGenerationToolSummary[]>>(
+    initialCachedTools
+      ? { scope: catalogScope, status: "ready", value: initialCachedTools }
+      : { scope: catalogScope, status: "loading" },
+  )
   const [description, setDescription] = useState<ScopedLoad<CanvasGenerationToolDescription>>({
     scope: "",
     status: "loading",
@@ -290,20 +301,11 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const references = generationInputs.references
   const promptContextNodeIds = generationInputs.promptContextNodeIds
   const generationInputError = getCanvasGenerationInputError(generationInputs)
-  const ownerOutput = props.generation.output
-  const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
-  const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
   const [optimisticOwnerTool, setOptimisticOwnerTool] = useState<{
     pendingOwnerToolIds: readonly (string | undefined)[]
     scope: string
     toolId: string
   }>()
-  const catalogScope = JSON.stringify([
-    props.request.document.id,
-    props.request.ownerNodeId,
-    ownerOutput ?? null,
-    catalogVersion,
-  ])
   const currentCatalog = catalog.scope === catalogScope ? catalog : undefined
   // The owner output chooses the model directory. @ references may gate one
   // submission, but must never make an installed Image/Video directory disappear.
@@ -386,7 +388,9 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   useEffect(() => {
     const isLatest = catalogRequestRef.current.begin(catalogScope)
     const controller = new AbortController()
-    setCatalog({ scope: catalogScope, status: "loading" })
+    const cachedTools = props.service.getCachedTools?.(ownerOutput ? { output: ownerOutput } : {})
+    if (cachedTools) setCatalog({ scope: catalogScope, status: "ready", value: cachedTools })
+    else setCatalog({ scope: catalogScope, status: "loading" })
     void props.service.listTools(ownerOutput ? { output: ownerOutput } : {}, controller.signal).then(
       (listed) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
@@ -395,6 +399,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       },
       (error) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
+        if (cachedTools) return
         setCatalog({ error: generationErrorMessage(error), scope: catalogScope, status: "error" })
       },
     )
@@ -416,7 +421,13 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     const describedTool = resolvedTool
     const isLatest = descriptionRequestRef.current.begin(descriptionScope)
     const controller = new AbortController()
-    setDescription({ scope: descriptionScope, status: "loading" })
+    const cachedDescription = props.service.getCachedDescription?.(describedTool.id)
+    if (cachedDescription?.toolId === describedTool.id) {
+      setToolInput(createToolInputDefaultValues(cachedDescription.fields))
+      setDescription({ scope: descriptionScope, status: "ready", value: cachedDescription })
+    } else {
+      setDescription({ scope: descriptionScope, status: "loading" })
+    }
     void props.service.describeTool(describedTool.id, controller.signal).then(
       (result) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
@@ -433,6 +444,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
       },
       (error) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
+        if (cachedDescription?.toolId === describedTool.id) return
         setDescription({ error: generationErrorMessage(error), scope: descriptionScope, status: "error" })
       },
     )

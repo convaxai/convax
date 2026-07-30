@@ -1,5 +1,11 @@
 import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
-import type { CanvasAssistantRequest, CanvasGenerateRequest, CanvasGenerateService } from "@convax/canvas"
+import type {
+  CanvasAssistantRequest,
+  CanvasGenerateRequest,
+  CanvasGenerateService,
+  CanvasGenerationToolDescription,
+  CanvasGenerationToolSummary,
+} from "@convax/canvas"
 import { expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
 import { act } from "react"
@@ -251,6 +257,107 @@ test("shows the first real compatible model without writing a node override", as
     expect(document.body.textContent).not.toContain("跟随 Agent")
     expect(described).toEqual(["tools/first-image"])
     expect(onOwnerToolIdChange).not.toHaveBeenCalled()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("renders the shared cached model without loading and preserves it when background refresh fails", async () => {
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
+  let root: Root | undefined
+  const owner = createMediaNode({
+    id: "owner",
+    position: { x: 0, y: 0 },
+    resource: {
+      id: "owner-resource",
+      kind: "image",
+      metadata: {},
+      name: "Output",
+      state: { status: "ready", url: "asset://output" },
+    },
+  })
+  const request: CanvasAssistantRequest = {
+    document: createCanvasDocument({ id: "canvas", nodes: [owner] }),
+    generation: { initialPrompt: "Create a new scene", output: "image" },
+    mentionedNodeIds: [],
+    mode: "file",
+    ownerNodeId: owner.id,
+  }
+  const cachedTools: readonly CanvasGenerationToolSummary[] = [
+    {
+      acceptedInputs: [],
+      description: "Cached image model",
+      id: "tools/cached-image",
+      modelName: "Cached Image",
+      output: "image",
+      serviceId: "cached-service",
+      serviceName: "Cached Service",
+      title: "Image model",
+    },
+  ]
+  const cachedDescription: CanvasGenerationToolDescription = {
+    fields: [],
+    toolId: "tools/cached-image",
+  }
+  let rejectCatalog!: (reason?: unknown) => void
+  let rejectDescription!: (reason?: unknown) => void
+  const listTools = mock(
+    () =>
+      new Promise<readonly CanvasGenerationToolSummary[]>((_resolve, reject) => {
+        rejectCatalog = reject
+      }),
+  )
+  const describeTool = mock(
+    () =>
+      new Promise<CanvasGenerationToolDescription>((_resolve, reject) => {
+        rejectDescription = reject
+      }),
+  )
+  const service: CanvasGenerateService = {
+    describeTool,
+    generate: mock(async (generationRequest) => ({
+      createdNodeIds: [],
+      revision: 1,
+      toolId: generationRequest.toolId!,
+      warnings: [],
+    })),
+    getCachedDescription: mock(() => cachedDescription),
+    getCachedTools: mock(() => cachedTools),
+    listTools,
+  }
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    act(() => {
+      root?.render(<CanvasCardGenerationPanel generation={request.generation!} request={request} service={service} />)
+    })
+
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.textContent).toContain(
+      "Cached Service · Cached Image",
+    )
+    expect(document.body.textContent).not.toContain("正在加载模型")
+    expect(document.body.textContent).not.toContain("正在加载可用模型")
+    expect(document.body.textContent).not.toContain("正在加载模型选项")
+    expect(listTools).toHaveBeenCalledWith({ output: "image" }, expect.any(AbortSignal))
+    expect(describeTool).toHaveBeenCalledWith("tools/cached-image", expect.any(AbortSignal))
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')?.disabled).toBe(false)
+
+    await act(async () => {
+      rejectCatalog(new Error("Background catalog refresh failed"))
+      rejectDescription(new Error("Background description refresh failed"))
+      await settle()
+    })
+
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.textContent).toContain(
+      "Cached Service · Cached Image",
+    )
+    expect(document.body.textContent).not.toContain("Background catalog refresh failed")
+    expect(document.body.textContent).not.toContain("Background description refresh failed")
+    expect(document.body.textContent).not.toContain("正在加载模型")
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')?.disabled).toBe(false)
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()

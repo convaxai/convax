@@ -68,9 +68,12 @@ function canvasGenerationToolSelectionTitle(tool: CanvasGenerationToolSummary) {
  */
 export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const scopeId = props.scopeId ?? ""
+  const initialCachedTools = props.generateService.getCachedTools?.({})
   const [prompt, setPrompt] = useState(props.initialPrompt ?? "")
-  const [tools, setTools] = useState<readonly CanvasGenerationToolSummary[]>([])
-  const [catalogStatus, setCatalogStatus] = useState<CanvasGenerationCatalogStatus>("idle")
+  const [tools, setTools] = useState(initialCachedTools ?? [])
+  const [catalogStatus, setCatalogStatus] = useState<CanvasGenerationCatalogStatus>(
+    initialCachedTools ? "ready" : "idle",
+  )
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [catalogAttempt, setCatalogAttempt] = useState(0)
   const [selectedToolId, setSelectedToolId] = useState("")
@@ -117,7 +120,13 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       documentId: props.document.id,
       scopeId,
     })
-    setCatalogStatus("loading")
+    const cachedTools = props.generateService.getCachedTools?.({})
+    if (cachedTools) {
+      setTools(cachedTools)
+      setCatalogStatus("ready")
+    } else {
+      setCatalogStatus("loading")
+    }
     setCatalogError(null)
     void props.generateService.listTools({}, request.signal).then(
       (nextTools) => {
@@ -127,8 +136,10 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       },
       (error) => {
         if (!catalogTrackerRef.current.isCurrent(request)) return
-        setTools([])
-        setCatalogStatus("error")
+        if (!cachedTools) {
+          setTools([])
+          setCatalogStatus("error")
+        }
         setCatalogError(error instanceof Error ? error.message : String(error))
       },
     )
@@ -153,7 +164,13 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       return undefined
     }
     const controller = new AbortController()
-    setDescription({ scope: descriptionScope, status: "loading" })
+    const cachedDescription = props.generateService.getCachedDescription?.(describedToolId)
+    if (cachedDescription?.toolId === describedToolId) {
+      setToolInput(createToolInputDefaultValues(cachedDescription.fields))
+      setDescription({ scope: descriptionScope, status: "ready", value: cachedDescription })
+    } else {
+      setDescription({ scope: descriptionScope, status: "loading" })
+    }
     void props.generateService.describeTool(describedToolId, controller.signal).then(
       (result) => {
         if (controller.signal.aborted) return
@@ -170,6 +187,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
       },
       (error) => {
         if (controller.signal.aborted) return
+        if (cachedDescription?.toolId === describedToolId) return
         setDescription({
           error: error instanceof Error ? error.message : String(error),
           scope: descriptionScope,

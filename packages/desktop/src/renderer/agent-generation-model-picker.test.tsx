@@ -197,6 +197,34 @@ describe("Agent generation model picker", () => {
     expect(markup).toContain("Cinematic")
   })
 
+  test("does not create a second model-selection row while description metadata loads or is empty", () => {
+    const installed = tool()
+    const render = (description?: {
+      fields: []
+      toolId: string
+    }) =>
+      renderToStaticMarkup(
+        <AgentGenerationModelPicker
+          activeTab="image"
+          description={description}
+          descriptionLoading={!description}
+          loading={false}
+          onClose={mock(() => undefined)}
+          onLlmSelect={mock(() => undefined)}
+          onOpenServices={mock(() => undefined)}
+          onSelect={mock(() => undefined)}
+          onTabChange={mock(() => undefined)}
+          onToolInputChange={mock(() => undefined)}
+          selected={{ id: installed.id, output: "image" }}
+          toolInput={{}}
+          tools={[installed]}
+        />,
+      )
+
+    expect(render()).not.toContain("Loading model options")
+    expect(render({ fields: [], toolId: installed.id })).not.toContain("no additional options")
+  })
+
   test("renders connected OpenCode providers and selects a concrete LLM model", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker

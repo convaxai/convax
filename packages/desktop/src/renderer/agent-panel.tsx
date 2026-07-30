@@ -137,6 +137,7 @@ import {
 } from "./agent-composer-picker"
 import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
+import { useAgentModelCatalog } from "./agent-model-catalog"
 import { findAgentLlmModel, reconcileAgentLlmModelSelection, type AgentLlmModelSelection } from "./agent-llm-models"
 import {
   agentConversationAnnouncementState,
@@ -277,6 +278,11 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const hosted = !embedded && props.hosted === true
   const compactEmbeddedChrome = embedded && props.embeddedHeader === false
   const sharedGenerationPreference = useAgentGenerationPreference()
+  const sharedModelCatalog = useAgentModelCatalog()
+  const sharedGenerationController = sharedModelCatalog?.generationController
+  const sharedGenerationSnapshot = sharedModelCatalog?.generation
+  const sharedLlmCatalog = sharedModelCatalog?.llm.catalog
+  const usesSharedModelCatalog = sharedModelCatalog !== null
   const sharedGenerationSelection = sharedGenerationPreference?.selection
   const setSharedGenerationSelection = sharedGenerationPreference?.setSelection
   const sharedLlmSelection = sharedGenerationPreference?.llmSelection
@@ -300,9 +306,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [suggestionAnchor, setSuggestionAnchor] = useState<AgentComposerPickerAnchor>()
   const [generationModelPickerOpen, setGenerationModelPickerOpen] = useState(false)
   const [modelPickerTab, setModelPickerTab] = useState<AgentModelPickerTab>("llm")
-  const [generationTools, setGenerationTools] = useState<readonly GenerationToolSummary[]>([])
-  const [generationToolsLoading, setGenerationToolsLoading] = useState(false)
-  const [generationToolsError, setGenerationToolsError] = useState<string>()
+  const [localGenerationTools, setGenerationTools] = useState<readonly GenerationToolSummary[]>([])
+  const [localGenerationToolsLoading, setGenerationToolsLoading] = useState(false)
+  const [localGenerationToolsError, setGenerationToolsError] = useState<string>()
   const [localGenerationToolSelection, setLocalGenerationToolSelection] = useState<AgentGenerationToolSelection>()
   const generationToolSelection = sharedGenerationPreference ? sharedGenerationSelection : localGenerationToolSelection
   const setGenerationToolSelection = useCallback(
@@ -312,9 +318,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     },
     [setSharedGenerationSelection],
   )
-  const [llmCatalog, setLlmCatalog] = useState<AgentModelCatalog>()
-  const [llmCatalogLoading, setLlmCatalogLoading] = useState(false)
-  const [llmCatalogError, setLlmCatalogError] = useState<string>()
+  const [localLlmCatalog, setLlmCatalog] = useState<AgentModelCatalog>()
+  const [localLlmCatalogLoading, setLlmCatalogLoading] = useState(false)
+  const [localLlmCatalogError, setLlmCatalogError] = useState<string>()
   const [localLlmSelection, setLocalLlmSelection] = useState<AgentLlmModelSelection>()
   const llmSelection = sharedGenerationPreference ? sharedLlmSelection : localLlmSelection
   const setLlmSelection = useCallback(
@@ -402,6 +408,31 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   generationToolSelectionRef.current = generationToolSelection
   llmSelectionRef.current = llmSelection
 
+  const generationTools = useMemo(
+    () =>
+      sharedGenerationSnapshot
+        ? sharedGenerationSnapshot.tools.filter((tool) => isAgentGenerationOutput(tool.output))
+        : localGenerationTools,
+    [localGenerationTools, sharedGenerationSnapshot],
+  )
+  const generationToolsLoading = sharedGenerationSnapshot
+    ? sharedGenerationSnapshot.loading
+    : localGenerationToolsLoading
+  const generationToolsError = sharedGenerationSnapshot
+    ? sharedGenerationSnapshot.ready
+      ? undefined
+      : sharedGenerationSnapshot.error
+    : localGenerationToolsError
+  const llmCatalog = usesSharedModelCatalog ? sharedLlmCatalog : localLlmCatalog
+  const llmCatalogLoading = usesSharedModelCatalog
+    ? sharedModelCatalog.llm.loading && !sharedLlmCatalog
+    : localLlmCatalogLoading
+  const llmCatalogError = usesSharedModelCatalog
+    ? sharedLlmCatalog
+      ? undefined
+      : sharedModelCatalog.llm.error
+    : localLlmCatalogError
+
   const selectedGenerationTool = findAgentGenerationTool(generationToolSelection, generationTools)
   const validatedGenerationToolSelection =
     selectedGenerationTool && isAgentGenerationOutput(selectedGenerationTool.output)
@@ -482,6 +513,24 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
 
   const loadGenerationTools = useCallback(() => {
     const scopeId = props.projectId
+    if (sharedGenerationController) {
+      if (!scopeId) return Promise.resolve<readonly GenerationToolSummary[]>([])
+      return sharedGenerationController
+        .listTools()
+        .then((listed) => {
+          const tools = listed.filter((tool) => isAgentGenerationOutput(tool.output))
+          if (!mountedRef.current || activeProjectRef.current !== scopeId) return tools
+          const current = generationToolSelectionRef.current
+          const reconciled = reconcileAgentGenerationToolSelection(current, tools)
+          if (current?.id !== reconciled?.id || current?.output !== reconciled?.output) {
+            setGenerationToolSelection(reconciled)
+          }
+          return tools
+        })
+        // The shared snapshot owns user-visible failure state and keeps stale data.
+        // Event/effect callers intentionally fire-and-forget this reconciliation.
+        .catch(() => [])
+    }
     const isLatest = generationCatalogRequestRef.current.begin(generationCatalogScope)
     setGenerationTools([])
     setGenerationToolsError(undefined)
@@ -514,10 +563,21 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setGenerationToolsLoading(false)
         }
       })
-  }, [generationCatalogScope, props.projectId, setGenerationToolSelection])
+  }, [generationCatalogScope, props.projectId, setGenerationToolSelection, sharedGenerationController])
 
   const loadLlmModels = useCallback(() => {
     const scopeId = props.projectId
+    if (usesSharedModelCatalog) {
+      const catalog = sharedLlmCatalog ?? { providers: [] }
+      if (scopeId && mountedRef.current) {
+        const current = llmSelectionRef.current
+        const reconciled = reconcileAgentLlmModelSelection(current, catalog)
+        if (current?.providerId !== reconciled?.providerId || current?.modelId !== reconciled?.modelId) {
+          setLlmSelection(reconciled)
+        }
+      }
+      return Promise.resolve(catalog)
+    }
     const isLatest = llmCatalogRequestRef.current.begin(llmCatalogScope)
     if (llmCatalogValueScopeRef.current !== llmCatalogScope) {
       llmCatalogValueScopeRef.current = ""
@@ -554,7 +614,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           setLlmCatalogLoading(false)
         }
       })
-  }, [llmCatalogScope, props.projectId, setLlmSelection])
+  }, [llmCatalogScope, props.projectId, setLlmSelection, sharedLlmCatalog, usesSharedModelCatalog])
 
   useEffect(() => {
     void loadGenerationTools()
@@ -571,8 +631,17 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const scopeId = props.projectId
     const selected = selectedGenerationTool
     const isLatest = generationDescriptionRequestRef.current.begin(generationDescriptionScope)
-    setGenerationDescription({ scope: generationDescriptionScope, status: "loading" })
-    void window.convax.generation.describeTool({ scopeId, toolId: selected.id }).then(
+    const cachedDescription = sharedGenerationController?.peekDescription(selected.id)
+    if (cachedDescription?.toolId === selected.id) {
+      setGenerationToolInput(createToolInputDefaultValues(cachedDescription.fields))
+      setGenerationDescription({ scope: generationDescriptionScope, status: "ready", value: cachedDescription })
+    } else {
+      setGenerationDescription({ scope: generationDescriptionScope, status: "loading" })
+    }
+    const descriptionRequest = sharedGenerationController
+      ? sharedGenerationController.describeTool(selected.id)
+      : window.convax.generation.describeTool({ scopeId, toolId: selected.id })
+    void descriptionRequest.then(
       (result) => {
         if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
         if (result.toolId !== selected.id) {
@@ -588,6 +657,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       },
       (cause) => {
         if (mountedRef.current && activeProjectRef.current === scopeId && isLatest()) {
+          if (cachedDescription?.toolId === selected.id) return
           setGenerationDescription({
             error: errorMessage(cause),
             scope: generationDescriptionScope,
@@ -599,7 +669,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     return () => {
       if (isLatest()) generationDescriptionRequestRef.current.invalidate()
     }
-  }, [generationDescriptionScope, props.projectId, selectedGenerationTool])
+  }, [generationDescriptionScope, props.projectId, selectedGenerationTool, sharedGenerationController])
 
   const refreshSessions = useCallback(
     async (preferredSessionId?: string) => {
