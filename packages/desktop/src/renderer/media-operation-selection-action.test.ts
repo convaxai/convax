@@ -416,6 +416,7 @@ describe("manifest-driven media operation requests", () => {
       },
       output: "image",
       references: [{ nodeId: managedImage.id, role: "reference_image" }],
+      resultMode: { type: "create-pending-node" },
       toolId: "cutout-studio/background.remove",
     })
     expect(request.anchor.x).toBeGreaterThan(managedImage.position.x)

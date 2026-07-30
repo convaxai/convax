@@ -280,6 +280,10 @@ export function createMediaOperationGenerateRequests(
   const node = requireRequestMediaNode(request)
   const anchor = mediaOperationResultAnchor(node, request.context.document.nodes)
   const toolInput = editorToolInput(request.action.editor, input)
+  const createsPendingImage =
+    request.action.target === "image" &&
+    request.action.editor === "immediate" &&
+    request.action.presentation === "cutout-scan"
   return request.action.steps.map((step, index) => ({
     anchor: { x: anchor.x, y: anchor.y + index * 224 },
     context: {
@@ -297,6 +301,7 @@ export function createMediaOperationGenerateRequests(
         role: request.action.target === "image" ? "reference_image" : "reference_video",
       },
     ],
+    ...(createsPendingImage ? { resultMode: { type: "create-pending-node" as const } } : {}),
     signal,
     toolId: step.toolId,
     ...(toolInput ? { toolInput } : {}),

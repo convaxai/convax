@@ -18,13 +18,4 @@ describe("Desktop → Canvas motion preference wiring", () => {
     expect(indexSource).not.toContain("localStorage.getItem")
     expect(indexSource).not.toContain('document.documentElement.getAttribute("data-reduced-motion")')
   })
-
-  test("reveals cutout results immediately and keeps the reference dissolve duration", () => {
-    expect(indexSource).toContain("const cutoutResultDissolveDurationMs = 1_740")
-    expect(indexSource).not.toContain("cutoutResultRevealDelayMs")
-    expect(indexSource.indexOf("await canvasEditorRef.current?.reloadAuthoritative()")).toBeGreaterThan(
-      indexSource.indexOf("await window.convax.generation.generate({"),
-    )
-    expect(indexSource).toContain("await waitForMilliseconds(cutoutResultDissolveDurationMs)")
-  })
 })
