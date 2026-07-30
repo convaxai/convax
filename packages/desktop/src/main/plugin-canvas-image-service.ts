@@ -4,12 +4,15 @@ import type { CanvasAddResourceSourcesRequest, CanvasApplicationCommandResult } 
 import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
 import type { PluginCanvasImageCreateRequest, PluginCanvasImageCreateResult } from "../plugin-canvas-image-contracts"
 import { requireProjectResourceReference } from "@convax/project/canvas"
+import type { PluginPrincipal } from "../plugin-capability-contracts"
+import type { PluginHostMutationCheckpoint, PluginHostNodeBinding } from "../plugin-host-api-main-contracts"
 import { matchesWebPluginCanvasNode } from "../plugin-canvas-node"
 import {
   hasWebPluginCanvasSurface,
   type InstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
+import { PluginHostApiError } from "../plugin-host-errors"
 
 interface PluginCanvasImageDocumentPort {
   load(ref: { canvasId: string; scopeId: string }): Promise<{ document: CanvasDocument | null }>
@@ -17,10 +20,12 @@ interface PluginCanvasImageDocumentPort {
 
 interface PluginCanvasImageProjectPort {
   publishGenerated(input: {
+    beforePublish?: () => Promise<void>
     bytes?: Uint8Array
     extension: string
     name?: string
     projectId: string
+    signal?: AbortSignal
     sourcePath?: string
   }): Promise<{ path: string }>
 }
@@ -30,8 +35,12 @@ interface PluginCanvasImageResourcePort {
 }
 
 interface PluginCanvasImageIdentity {
+  activeRevision?: number
+  activeSetDigest?: string
   digest: string
+  manifestDigest?: string
   plugin: InstalledWebPluginSummary
+  snapshotDigest?: string
 }
 
 interface PluginCanvasImageSurfaceIdentity extends PluginCanvasImageIdentity {
@@ -125,15 +134,24 @@ function requireIdentity(
   identity: PluginCanvasImageIdentity | null,
   request: PluginCanvasImageCreateRequest,
   expectedDigest?: string,
+  principal?: PluginPrincipal,
 ): PluginCanvasImageSurfaceIdentity {
   if (
     !identity ||
     identity.plugin.id !== request.pluginId ||
     identity.plugin.version !== request.pluginVersion ||
     (expectedDigest !== undefined && identity.digest !== expectedDigest) ||
+    (principal !== undefined &&
+      (identity.activeRevision !== principal.activeRevision ||
+        identity.activeSetDigest !== principal.activeSetDigest ||
+        (identity.manifestDigest ?? identity.digest) !== principal.manifestDigest ||
+        identity.snapshotDigest !== principal.snapshotDigest)) ||
     !hasWebPluginCanvasSurface(identity.plugin) ||
     !identity.plugin.capabilities.includes("canvas.image.write")
   ) {
+    if (principal !== undefined) {
+      throw new PluginHostApiError("stale-context", "Plugin identity or Canvas image permission changed")
+    }
     throw new Error("Plugin identity or Canvas image permission changed")
   }
   return { digest: identity.digest, plugin: identity.plugin }
@@ -200,9 +218,54 @@ export class PluginCanvasImageService {
   }
 
   async create(request: PluginCanvasImageCreateRequest, signal?: AbortSignal): Promise<PluginCanvasImageCreateResult> {
+    return this.#create(request, signal)
+  }
+
+  async createForHostApi(
+    input: {
+      binding: PluginHostNodeBinding
+      checkpoint: PluginHostMutationCheckpoint
+      dataUrl: string
+      name: string
+      operationId: string
+      principal: PluginPrincipal
+    },
+    signal?: AbortSignal,
+  ): Promise<PluginCanvasImageCreateResult> {
+    if (input.principal.runtime !== "web") {
+      throw new Error("Plugin Canvas image Host API requires a Web principal")
+    }
+    return this.#create(
+      {
+        dataUrl: input.dataUrl,
+        expectedRevision: (await input.checkpoint.checkpoint()).documentRevision,
+        name: input.name,
+        operationId: input.operationId,
+        ownerNodeId: input.binding.nodeId,
+        pluginId: input.principal.pluginId,
+        pluginVersion: input.principal.pluginVersion,
+        ref: { canvasId: input.binding.canvasId, scopeId: input.binding.projectId },
+      },
+      signal,
+      input.principal,
+      input.checkpoint,
+    )
+  }
+
+  async #create(
+    request: PluginCanvasImageCreateRequest,
+    signal?: AbortSignal,
+    principal?: PluginPrincipal,
+    checkpoint?: PluginHostMutationCheckpoint,
+  ): Promise<PluginCanvasImageCreateResult> {
     const { bytes, name } = validateRequest(request)
     throwIfAborted(signal)
-    const identity = requireIdentity(await this.#plugins.resolveCapabilityIdentity(request.pluginId), request)
+    const identity = requireIdentity(
+      await this.#plugins.resolveCapabilityIdentity(request.pluginId),
+      request,
+      undefined,
+      principal,
+    )
     const snapshot = await this.#documents.load(request.ref)
     if (!snapshot.document) throw new Error(`Canvas document was not found: ${request.ref.canvasId}`)
     if (snapshot.document.revision !== request.expectedRevision) {
@@ -215,18 +278,32 @@ export class PluginCanvasImageService {
 
     throwIfAborted(signal)
     const published = await this.#projects.publishGenerated({
+      beforePublish: async () => {
+        throwIfAborted(signal)
+        await checkpoint?.checkpoint()
+        requireIdentity(
+          await this.#plugins.resolveCapabilityIdentity(request.pluginId),
+          request,
+          identity.digest,
+          principal,
+        )
+        throwIfAborted(signal)
+      },
       bytes,
       extension: ".png",
       name,
       projectId: request.ref.scopeId,
+      signal,
     })
     const publishedPath = requireGeneratedPublicationPath(published.path)
     try {
       throwIfAborted(signal)
+      await checkpoint?.checkpoint()
       const currentIdentity = requireIdentity(
         await this.#plugins.resolveCapabilityIdentity(request.pluginId),
         request,
         identity.digest,
+        principal,
       )
       const current = await this.#documents.load(request.ref)
       if (!current.document || current.document.revision !== request.expectedRevision) {
@@ -240,6 +317,7 @@ export class PluginCanvasImageService {
       const result: CanvasApplicationCommandResult = await this.#resources.addResources({
         actor: { id: request.pluginId, kind: "plugin" },
         anchor: imageAnchor(currentOwner),
+        ...(checkpoint ? { beforeCommit: () => checkpoint.checkpoint().then(() => undefined) } : {}),
         canvasId: request.ref.canvasId,
         commandId: `plugin-image:${request.operationId}`,
         conflictPolicy: "reject",

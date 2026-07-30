@@ -384,7 +384,6 @@ export async function resolveMarketplaceProductLock(
     descriptor.id !== policy.official.marketplaceId ||
     descriptor.repository.owner !== "microvoid" ||
     descriptor.repository.name !== "convax-plugins" ||
-    descriptor.registry.v1?.url !== `${officialPagesRoot}/registry/v1/index.json` ||
     descriptor.registry.v2.url !== `${officialPagesRoot}/registry/v2/index.json` ||
     descriptor.showcase.v2.url !== `${officialPagesRoot}/showcase/v2/index.json` ||
     registry.marketplaceId !== descriptor.id ||

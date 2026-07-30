@@ -9,11 +9,15 @@ import type { CanvasDocumentRef, CanvasDocumentRepository } from "./persistence"
 import { queryCanvasNodes, type CanvasNodeQuery, type CanvasNodeSummary } from "./queries"
 
 export interface CanvasApplicationCommandRequest extends CanvasDocumentRef {
+  /** Host-neutral final guard invoked immediately before repository persistence. */
+  beforeCommit?: () => Promise<void>
   envelope: CanvasCommandEnvelope
   signal?: AbortSignal
 }
 
 export interface CanvasApplicationTransactionRequest extends CanvasDocumentRef {
+  /** Host-neutral final guard invoked immediately before repository persistence. */
+  beforeCommit?: () => Promise<void>
   envelope: CanvasTransactionEnvelope
   signal?: AbortSignal
 }
@@ -197,6 +201,8 @@ export class CanvasApplicationService {
       return { ...result, storageVersion: snapshot.storageVersion }
     }
     throwIfAborted(request.signal)
+    await request.beforeCommit?.()
+    throwIfAborted(request.signal)
     const saved = await this.repository.save({
       document: result.document,
       expectedStorageVersion: snapshot.storageVersion,
@@ -219,6 +225,8 @@ export class CanvasApplicationService {
       if (!snapshot.storageVersion) throw new Error(`Canvas document has no storage version: ${request.canvasId}`)
       return { ...result, storageVersion: snapshot.storageVersion }
     }
+    throwIfAborted(request.signal)
+    await request.beforeCommit?.()
     throwIfAborted(request.signal)
     const saved = await this.repository.save({
       document: result.document,

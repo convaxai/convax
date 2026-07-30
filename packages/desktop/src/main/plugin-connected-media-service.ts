@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import { Readable } from "node:stream"
 import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
+import { getPluginApiDefinition, isPluginApiDeclared } from "@convax/plugin-api"
 
 import {
   pluginConnectedMediaScheme,
@@ -14,12 +15,18 @@ import {
   type PluginConnectedMediaProbe,
 } from "../plugin-connected-media-contracts"
 import { matchesWebPluginCanvasNodeIdentity } from "../plugin-canvas-node"
-import { webPluginManifestSchemaV7 } from "../plugin-contracts"
+import { webPluginManifestSchemaV8, type InstalledWebPluginSummary } from "../plugin-contracts"
+import {
+  PluginHostApiError,
+  PluginHostApiResourceUnavailableError,
+} from "../plugin-host-errors"
 import type { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
-import type {
-  ManagedCanvasMediaFileIdentity,
-  ManagedCanvasMediaResolutionPort,
-  ResolvedManagedCanvasMedia,
+import {
+  ManagedCanvasMediaResourceUnavailableError,
+  ManagedCanvasMediaStaleError,
+  type ManagedCanvasMediaFileIdentity,
+  type ManagedCanvasMediaResolutionPort,
+  type ResolvedManagedCanvasMedia,
 } from "./managed-canvas-media-resolver"
 import { parseSingleHttpByteRange } from "./http-byte-range"
 import type { InstalledPluginCapabilityIdentitySource } from "./plugin-principal-resolver"
@@ -32,6 +39,8 @@ const absoluteLifetimeMs = 4 * 60 * 60_000
 
 interface ConnectedMediaSession {
   absoluteExpiresAt: number
+  activeRevision: number
+  activeSetDigest: string
   canvasId: string
   expectedRevision: number
   frameId: string
@@ -49,6 +58,7 @@ interface ConnectedMediaSession {
   senderId: number
   sessionId: string
   size: number
+  snapshotDigest: string
   sourceNodeId: string
   token: string
 }
@@ -90,24 +100,38 @@ export class PluginConnectedMediaService {
 
     const principal = await this.requirePrincipal(request)
     const { document, source } = await this.requireLiveBinding(request)
-    const [resolved] = await this.input.media.resolve(
-      {
-        canvasId: request.canvasId,
-        expectedRevision: request.expectedRevision,
-        nodeIds: [request.sourceNodeId],
-        scopeId: request.projectId,
-      },
-      {
-        allowedKinds: new Set(["audio", "video"]),
-        allowedKindsDescription: "audio or video",
-        operationLabel: "Plugin connected-media preview",
-      },
-    )
+    const [resolved] = await this.input.media
+      .resolve(
+        {
+          canvasId: request.canvasId,
+          expectedRevision: request.expectedRevision,
+          nodeIds: [request.sourceNodeId],
+          scopeId: request.projectId,
+        },
+        {
+          allowedKinds: new Set(["audio", "video"]),
+          allowedKindsDescription: "audio or video",
+          operationLabel: "Plugin connected-media preview",
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof ManagedCanvasMediaResourceUnavailableError) {
+          throw new PluginHostApiResourceUnavailableError("Connected-media resource could not be resolved", {
+            cause: error,
+          })
+        }
+        if (error instanceof ManagedCanvasMediaStaleError) {
+          throw new PluginHostApiError("stale-context", "Connected-media Canvas binding changed", {
+            cause: error,
+          })
+        }
+        throw error
+      })
     if (!resolved || resolved.size > maximumMediaBytes) {
-      throw new Error("Connected media exceeds the streaming size limit")
+      throw new PluginHostApiResourceUnavailableError("Connected media is unavailable or exceeds the size limit")
     }
     const currentPrincipal = await this.requirePrincipal(request)
-    if (currentPrincipal.digest !== principal.digest) {
+    if (!sameActivePluginIdentity(currentPrincipal, principal)) {
       throw new Error("Plugin changed while its connected-media session was opening")
     }
     await this.requireLiveBinding(request)
@@ -117,6 +141,8 @@ export class PluginConnectedMediaService {
     const token = randomUUID().replaceAll("-", "")
     const session: ConnectedMediaSession = {
       absoluteExpiresAt: now + absoluteLifetimeMs,
+      activeRevision: principal.activeRevision,
+      activeSetDigest: principal.activeSetDigest,
       canvasId: request.canvasId,
       expectedRevision: document.revision,
       frameId: request.frameId,
@@ -134,6 +160,7 @@ export class PluginConnectedMediaService {
       senderId,
       sessionId,
       size: resolved.size,
+      snapshotDigest: principal.snapshotDigest,
       sourceNodeId: request.sourceNodeId,
       token,
     }
@@ -247,10 +274,11 @@ export class PluginConnectedMediaService {
     const identity = await this.input.plugins.resolveCapabilityIdentity(request.pluginId)
     if (
       !identity ||
-      identity.plugin.schema !== webPluginManifestSchemaV7 ||
+      identity.plugin.schema !== webPluginManifestSchemaV8 ||
       identity.plugin.version !== request.pluginVersion ||
       !identity.plugin.entry ||
-      !identity.plugin.capabilities.includes("canvas.connectedMedia.stream")
+      !declaresAuthorizedInputStream(identity.plugin) ||
+      !hasActivePluginIdentity(identity)
     ) {
       throw new Error("Plugin is not authorized for connected-media streaming")
     }
@@ -275,7 +303,14 @@ export class PluginConnectedMediaService {
   private async revalidate(session: ConnectedMediaSession) {
     const frame = sessionFrame(session)
     const principal = await this.requirePrincipal(frame)
-    if (principal.digest !== session.manifestDigest) throw new Error("Plugin changed after the session opened")
+    if (
+      principal.digest !== session.manifestDigest ||
+      principal.activeRevision !== session.activeRevision ||
+      principal.activeSetDigest !== session.activeSetDigest ||
+      principal.snapshotDigest !== session.snapshotDigest
+    ) {
+      throw new Error("Plugin changed after the session opened")
+    }
     const { source } = await this.requireLiveBinding({
       ...frame,
       expectedRevision: session.expectedRevision,
@@ -307,6 +342,52 @@ export class PluginConnectedMediaService {
     session.idleExpiresAt = Math.min(Date.now() + idleLifetimeMs, session.absoluteExpiresAt)
     return resolved
   }
+}
+
+function declaresAuthorizedInputStream(plugin: InstalledWebPluginSummary) {
+  const apiId = "canvas.inputs.open"
+  if (!plugin.hostApi || !isPluginApiDeclared(plugin.hostApi, apiId)) return false
+  const grant = getPluginApiDefinition(apiId).grant
+  return grant === null || plugin.capabilities.includes(grant as InstalledWebPluginSummary["capabilities"][number])
+}
+
+function hasActivePluginIdentity(
+  identity: NonNullable<Awaited<ReturnType<InstalledPluginCapabilityIdentitySource["resolveCapabilityIdentity"]>>>,
+): identity is typeof identity & {
+  activeRevision: number
+  activeSetDigest: string
+  snapshotDigest: string
+} {
+  return (
+    Number.isSafeInteger(identity.activeRevision) &&
+    (identity.activeRevision ?? -1) >= 0 &&
+    typeof identity.activeSetDigest === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.activeSetDigest) &&
+    typeof identity.snapshotDigest === "string" &&
+    /^[a-f0-9]{64}$/.test(identity.snapshotDigest)
+  )
+}
+
+function sameActivePluginIdentity(
+  left: {
+    activeRevision: number
+    activeSetDigest: string
+    digest: string
+    snapshotDigest: string
+  },
+  right: {
+    activeRevision: number
+    activeSetDigest: string
+    digest: string
+    snapshotDigest: string
+  },
+) {
+  return (
+    left.digest === right.digest &&
+    left.activeRevision === right.activeRevision &&
+    left.activeSetDigest === right.activeSetDigest &&
+    left.snapshotDigest === right.snapshotDigest
+  )
 }
 
 function requireDirectMediaSource(document: CanvasDocument, ownerNodeId: string, sourceNodeId: string) {

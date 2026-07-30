@@ -1,26 +1,32 @@
 import {
   canonicalJson,
   classifyServerPackageForCatalog,
-  legacyShowcaseAssetName,
   parseBuiltinBundleArchive,
   parseMarketplaceDescriptor,
   parseMcpServerExtension,
-  parseRegistryV1,
   parseRegistryV2,
-  parseShowcaseV1,
   parseShowcaseV2,
-  projectRegistryV1,
   sha256Hex,
   identityKeyForMcpServer,
   versionKeyForMcpServer,
   type McpManagedStdioDelivery,
   type ParsedServerPackage,
   type RegistryPackage,
-  type RegistryV1,
   type RegistryV2,
-  type ShowcaseV1,
   type ShowcaseV2,
 } from "@convax/marketplace"
+import {
+  renderPluginApiReference,
+  type PluginApiId,
+  type PluginToolReference,
+} from "@convax/plugin-api"
+import {
+  parsePluginManifestV8,
+  renderPluginCapabilityReference,
+  type PluginCapabilityDeclaration,
+  type PortablePluginManifestV8,
+  type PortablePluginSkillContribution,
+} from "@convax/plugin-sdk"
 import { chmod, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises"
 import { constants } from "node:fs"
 import { basename, dirname, join, relative, resolve, sep } from "node:path"
@@ -64,11 +70,7 @@ export interface BuildMarketplaceOptions {
   previousDescriptorPath?: string
   previousRegistryPath?: string
   previousShowcasePath?: string
-  previousRegistryV1Path?: string
-  previousShowcaseV1Path?: string
-  bootstrapPreviousV1Path?: string
   initialOfficial?: boolean
-  v1Revision?: string
   publishIdentities?: readonly string[]
   publishSelections?: readonly MarketplacePublishSelection[]
   fetchArtifact?: (artifact: { url: string; size: number; sha256: string }) => Promise<Uint8Array>
@@ -77,8 +79,6 @@ export interface BuildMarketplaceOptions {
 export interface MarketplaceBuildResult {
   registry: RegistryV2
   registrySha256: string
-  registryV1?: RegistryV1
-  showcaseV1?: ShowcaseV1
   showcase: ShowcaseV2
   artifacts: Array<{
     path: string
@@ -109,7 +109,7 @@ interface DiscoveredPackage {
   contentRoot: string
   presentation: { name: string; description?: string }
   authoring?: Record<string, unknown>
-  manifest?: Record<string, unknown>
+  manifest?: PortablePluginManifestV8
   server?: Record<string, unknown>
   extension?: ReturnType<typeof parseMcpServerExtension>
   catalogSupported?: boolean
@@ -209,6 +209,38 @@ async function readJson(path: string, label: string): Promise<unknown> {
   }
 }
 
+function parsePackageMetadata(value: unknown, label = "convax-package.json"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`)
+  }
+  const metadata = value as Record<string, unknown>
+  const allowed = ["schema", "kind", "id", "name", "description", "version", "showcase", "yanked"]
+  if (metadata.kind === "plugin") allowed.push("companions")
+  if (metadata.kind === "skill") allowed.push("ownerPluginId")
+  const required = ["schema", "kind", "id", "name", "description", "version"]
+  for (const key of Object.keys(metadata)) {
+    if (!allowed.includes(key)) throw new TypeError(`${label} has unknown property ${key}`)
+  }
+  for (const key of required) {
+    if (!(key in metadata)) throw new TypeError(`${label} is missing ${key}`)
+  }
+  if (metadata.schema !== "convax.package/2") {
+    throw new TypeError(`${label} must use convax.package/2`)
+  }
+  if (metadata.kind !== "plugin" && metadata.kind !== "skill" && metadata.kind !== "mcp-server") {
+    throw new TypeError(`${label} has an unsupported kind`)
+  }
+  for (const key of ["id", "name", "description", "version"] as const) {
+    if (typeof metadata[key] !== "string" || metadata[key].length === 0) {
+      throw new TypeError(`${label}.${key} must be a non-empty string`)
+    }
+  }
+  if (metadata.yanked !== undefined && typeof metadata.yanked !== "boolean") {
+    throw new TypeError(`${label}.yanked must be a boolean`)
+  }
+  return metadata
+}
+
 function parseSkill(
   markdown: string,
   directoryName: string,
@@ -248,14 +280,22 @@ async function classifyPackageRoot(packageRoot: string): Promise<StarterKind> {
   return matches[0]
 }
 
-async function inspectPackage(packageRoot: string, expected?: StarterKind): Promise<DiscoveredPackage> {
+async function inspectPackage(
+  packageRoot: string,
+  expected?: StarterKind,
+  options: { allowUnwrapped?: boolean } = {},
+): Promise<DiscoveredPackage> {
   const info = await lstat(packageRoot)
   if (!info.isDirectory() || info.isSymbolicLink()) throw new TypeError("package root must be a no-follow directory")
   const authoringPath = join(packageRoot, "convax-package.json")
-  const authoring = await readJson(authoringPath, "convax-package.json").catch((error: unknown) => {
+  const authoringValue = await readJson(authoringPath, "convax-package.json").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
     throw error
   })
+  if (authoringValue === undefined && !options.allowUnwrapped) {
+    throw new TypeError("package root must contain convax.package/2 metadata")
+  }
+  const authoring = authoringValue === undefined ? undefined : parsePackageMetadata(authoringValue)
   const contentRoot = authoring === undefined ? packageRoot : join(packageRoot, "package")
   const authoringKind =
     authoring && typeof authoring === "object" && !Array.isArray(authoring)
@@ -288,6 +328,7 @@ async function inspectPackage(packageRoot: string, expected?: StarterKind): Prom
     if (metadata && (metadata.kind !== "plugin" || manifest.id !== id || manifest.version !== version)) {
       throw new TypeError("Plugin authoring metadata does not match package manifest")
     }
+    const portableManifest = parsePluginManifestV8(manifest)
     assertSegment(id, "Plugin id")
     return {
       kind,
@@ -304,7 +345,7 @@ async function inspectPackage(packageRoot: string, expected?: StarterKind): Prom
             ? { description: manifest.description }
             : {}),
       },
-      manifest,
+      manifest: portableManifest,
       ...(metadata ? { authoring: metadata } : {}),
     }
   }
@@ -315,6 +356,10 @@ async function inspectPackage(packageRoot: string, expected?: StarterKind): Prom
     const id = typeof metadata?.id === "string" ? metadata.id : skill.id
     const version = typeof metadata?.version === "string" ? metadata.version : skill.version
     if (metadata && metadata.kind !== "skill") throw new TypeError("Skill authoring metadata kind mismatch")
+    if (metadata && (skill.id !== id || skill.version !== version)) {
+      throw new TypeError("Skill authoring metadata does not match SKILL.md")
+    }
+    assertSegment(id, "Skill id")
     return {
       kind,
       id,
@@ -341,6 +386,12 @@ async function inspectPackage(packageRoot: string, expected?: StarterKind): Prom
   const extension = extensionJson === undefined ? undefined : parseMcpServerExtension(extensionJson)
   const admission = classifyServerPackageForCatalog(server, extension)
   const parsed = admission.supported ? admission.package : admission
+  if (
+    authoring &&
+    (authoring.kind !== "mcp-server" || authoring.id !== parsed.id || authoring.version !== parsed.version)
+  ) {
+    throw new TypeError("MCP authoring metadata does not match server.json")
+  }
   return {
     kind,
     id: parsed.id,
@@ -454,51 +505,14 @@ export async function changedMarketplaceVersions(
   const basePackages = new Map<string, { version: string; yanked: boolean }>()
   for (const packageRoot of [...baseRoots].sort()) {
     const authoringText = await show(`${packageRoot}/convax-package.json`)
-    let kind: StarterKind
-    let id: string
-    let version: string
-    let yanked = false
-    if (authoringText !== undefined) {
-      const authoring = JSON.parse(authoringText) as Record<string, unknown>
-      if (authoring.kind !== "plugin" && authoring.kind !== "skill" && authoring.kind !== "mcp-server") {
-        throw new TypeError(`base package ${packageRoot} has invalid authoring kind`)
-      }
-      kind = authoring.kind
-      if (typeof authoring.id !== "string" || typeof authoring.version !== "string") {
-        throw new TypeError(`base package ${packageRoot} has incomplete authoring identity`)
-      }
-      id = authoring.id
-      version = authoring.version
-      yanked = authoring.yanked === true
-    } else if (packageRoot.startsWith("packages/plugins/")) {
-      kind = "plugin"
-      const manifestText = await show(`${packageRoot}/manifest.json`)
-      if (!manifestText) continue
-      const manifest = JSON.parse(manifestText) as Record<string, unknown>
-      if (typeof manifest.id !== "string" || typeof manifest.version !== "string") {
-        throw new TypeError(`base Plugin ${packageRoot} has incomplete identity`)
-      }
-      id = manifest.id
-      version = manifest.version
-    } else if (packageRoot.startsWith("packages/skills/")) {
-      kind = "skill"
-      const markdown = await show(`${packageRoot}/SKILL.md`)
-      if (!markdown) continue
-      const skill = parseSkill(markdown, basename(packageRoot))
-      id = skill.id
-      version = skill.version
-    } else {
-      kind = "mcp-server"
-      const serverText = await show(`${packageRoot}/server.json`)
-      if (!serverText) continue
-      const extensionText = await show(`${packageRoot}/convax-mcp.json`)
-      const admission = classifyServerPackageForCatalog(
-        JSON.parse(serverText),
-        extensionText === undefined ? undefined : JSON.parse(extensionText),
-      )
-      id = admission.supported ? admission.package.id : admission.id
-      version = admission.supported ? admission.package.version : admission.version
+    if (authoringText === undefined) {
+      throw new TypeError(`base package ${packageRoot} does not use convax.package/2`)
     }
+    const authoring = parsePackageMetadata(JSON.parse(authoringText), `base package ${packageRoot}`)
+    const kind = authoring.kind as StarterKind
+    const id = authoring.id as string
+    const version = authoring.version as string
+    const yanked = authoring.yanked === true
     const identity = `${kind}\0${id}`
     if (basePackages.has(identity)) throw new TypeError(`base tree has duplicate package identity ${kind}/${id}`)
     basePackages.set(identity, { version, yanked })
@@ -538,9 +552,7 @@ export async function changedMarketplaceVersions(
     const addMaterializedPackagePaths = (item: DiscoveredPackage, label: string): void => {
       materializedClosurePaths.add(closurePath(item.contentRoot, `${label} content`))
       if (!item.authoring) return
-      materializedClosurePaths.add(
-        closurePath(join(item.root, "convax-package.json"), `${label} authoring metadata`),
-      )
+      materializedClosurePaths.add(closurePath(join(item.root, "convax-package.json"), `${label} authoring metadata`))
       const showcaseValue = item.authoring.showcase
       if (!showcaseValue || typeof showcaseValue !== "object" || Array.isArray(showcaseValue)) return
       const showcase = showcaseValue as Record<string, unknown>
@@ -549,9 +561,7 @@ export async function changedMarketplaceVersions(
         if (!value || typeof value !== "object" || Array.isArray(value)) continue
         const metadata = value as Record<string, unknown>
         if (typeof metadata.path !== "string") continue
-        materializedClosurePaths.add(
-          closurePath(resolve(item.root, metadata.path), `${label} Showcase ${slot}`),
-        )
+        materializedClosurePaths.add(closurePath(resolve(item.root, metadata.path), `${label} Showcase ${slot}`))
       }
     }
     addMaterializedPackagePaths(entry, `${entry.kind}/${entry.id}`)
@@ -568,9 +578,7 @@ export async function changedMarketplaceVersions(
           if (!companionValue || typeof companionValue !== "object" || Array.isArray(companionValue)) continue
           const companion = companionValue as Record<string, unknown>
           if (typeof companion.source !== "string") continue
-          trackedClosurePaths.add(
-            closurePath(resolve(root, companion.source), `Plugin ${entry.id} companion source`),
-          )
+          trackedClosurePaths.add(closurePath(resolve(root, companion.source), `Plugin ${entry.id} companion source`))
         }
       }
     } else if (entry.kind === "mcp-server" && entry.extension) {
@@ -590,14 +598,7 @@ export async function changedMarketplaceVersions(
       else throw error
     }
     const untracked = await git(["ls-files", "--others", "--exclude-standard", "--", ...untrackedPaths])
-    const ignored = await git([
-      "ls-files",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-      "--",
-      ...materializedPaths,
-    ])
+    const ignored = await git(["ls-files", "--others", "--ignored", "--exclude-standard", "--", ...materializedPaths])
     if (trackedChanged || untracked.trim() || ignored.trim()) {
       throw new TypeError(
         `immutable ${entry.kind}/${entry.id}@${entry.version} closure changed without a version change`,
@@ -833,18 +834,9 @@ async function packageInventory(
 ): Promise<InventoryEntry[]> {
   const entries = await inventory(entry.contentRoot)
   if (entry.kind !== "plugin" || !entry.manifest) return entries
-  const contributes = entry.manifest.contributes
-  if (!contributes || typeof contributes !== "object" || Array.isArray(contributes)) return entries
-  const skills = (contributes as Record<string, unknown>).skills
-  if (!Array.isArray(skills)) return entries
-  for (const skillValue of skills) {
-    if (!skillValue || typeof skillValue !== "object" || Array.isArray(skillValue)) {
-      throw new TypeError(`Plugin ${entry.id} has invalid owned Skill declaration`)
-    }
-    const declaration = skillValue as Record<string, unknown>
-    if (typeof declaration.name !== "string" || typeof declaration.path !== "string") {
-      throw new TypeError(`Plugin ${entry.id} has incomplete owned Skill declaration`)
-    }
+  const skills = entry.manifest.contributes.skills
+  if (!skills) return entries
+  for (const declaration of skills) {
     if (
       declaration.path.startsWith("/") ||
       declaration.path.includes("\\") ||
@@ -870,9 +862,82 @@ async function packageInventory(
       }
       entries.push(ownedEntry)
     }
+    addGeneratedSkillReferences(entries, entry.manifest, declaration)
   }
   entries.sort((left, right) => compareAscii(left.path, right.path))
+  if (entries.length > 4_096) throw new TypeError("package contains too many files")
+  if (entries.reduce((sum, item) => sum + item.bytes.byteLength, 0) > 128 * 1024 * 1024) {
+    throw new TypeError("package exceeds total byte limit")
+  }
   return entries
+}
+
+function addGeneratedSkillReferences(
+  entries: InventoryEntry[],
+  manifest: PortablePluginManifestV8,
+  skill: PortablePluginSkillContribution,
+) {
+  const generationTools = new Map(
+    manifest.contributes.generation?.tools.map((tool) => [tool.id, tool]) ?? [],
+  )
+  const agentTools = new Map(
+    manifest.contributes.agent?.tools?.map((tool) => [tool.id, tool.tool]) ?? [],
+  )
+  const pluginTools: PluginToolReference[] = (skill.uses?.pluginTools ?? []).map(
+    (agentToolId) => {
+      const generationToolId = agentTools.get(agentToolId)
+      const generationTool =
+        generationToolId === undefined ? undefined : generationTools.get(generationToolId)
+      if (!generationTool) {
+        throw new TypeError(
+          `Plugin Skill ${skill.name} references an undocumented Plugin tool: ${agentToolId}`,
+        )
+      }
+      return {
+        id: agentToolId,
+        summary: generationTool.description,
+        request: `Validated input for manifest operation \`${generationTool.id}\`.`,
+        response: `Bounded ${generationTool.output} result from the verified Plugin runtime.`,
+      }
+    },
+  )
+  const capabilityDeclaration: PluginCapabilityDeclaration =
+    manifest.contributes.capabilities ?? {
+      exports: [],
+      imports: { optional: [], required: [] },
+    }
+  const generated = [
+    {
+      bytes: new TextEncoder().encode(
+        renderPluginApiReference({
+          optionalIds: (skill.uses?.optionalHostApis ?? []) as readonly PluginApiId[],
+          pluginTools,
+          requiredIds: (skill.uses?.requiredHostApis ?? []) as readonly PluginApiId[],
+        }),
+      ),
+      path: `${skill.path}/references/convax-capabilities.md`,
+    },
+    {
+      bytes: new TextEncoder().encode(
+        renderPluginCapabilityReference(capabilityDeclaration),
+      ),
+      path: `${skill.path}/references/plugin-capabilities.md`,
+    },
+  ]
+  for (const reference of generated) {
+    if (
+      entries.some(
+        (entry) =>
+          entry.path.toLocaleLowerCase("en-US") ===
+          reference.path.toLocaleLowerCase("en-US"),
+      )
+    ) {
+      throw new TypeError(
+        `Plugin-owned Skill generated reference is reserved and must not be authored: ${reference.path}`,
+      )
+    }
+    entries.push({ ...reference, mode: 0o644 })
+  }
 }
 
 async function companionInputs(
@@ -1077,26 +1142,11 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   if (options.previousShowcasePath && !options.previousRegistryPath) {
     throw new TypeError("previous Showcase v2 requires a previous Registry v2")
   }
-  if (options.previousShowcaseV1Path && !options.previousRegistryV1Path && !options.bootstrapPreviousV1Path) {
-    throw new TypeError("previous Showcase v1 requires a matching Registry v1")
-  }
-  if (options.previousRegistryV1Path && !options.previousShowcaseV1Path) {
-    throw new TypeError("previous Registry v1 requires a previous Showcase v1")
-  }
-  if (options.previousRegistryV1Path && !options.previousRegistryPath) {
-    throw new TypeError("legacy Registry v1 preservation requires a previous Registry v2")
-  }
   const previousRegistryV2 = options.previousRegistryPath
     ? parseRegistryV2(await readJson(options.previousRegistryPath, "previous Registry"))
     : undefined
   if (previousRegistryV2 && previousRegistryV2.marketplaceId !== descriptor.id) {
     throw new TypeError("previous Registry belongs to another Marketplace")
-  }
-  const bootstrapRegistryV1 = options.bootstrapPreviousV1Path
-    ? parseRegistryV1(await readJson(options.bootstrapPreviousV1Path, "bootstrap Official Registry v1"))
-    : undefined
-  if (previousRegistryV2 && bootstrapRegistryV1) {
-    throw new TypeError("Official build cannot combine v2 previous and v1 bootstrap")
   }
   const previousShowcaseV2 = options.previousShowcasePath
     ? parseShowcaseV2(
@@ -1105,26 +1155,9 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
         descriptor,
       )
     : undefined
-  const previousRegistryV1 = options.previousRegistryV1Path
-    ? parseRegistryV1(await readJson(options.previousRegistryV1Path, "previous Registry v1"))
-    : undefined
-  if (
-    options.initialOfficial &&
-    (previousDescriptor || previousRegistryV2 || bootstrapRegistryV1 || previousRegistryV1 || previousShowcaseV2)
-  ) {
+  if (options.initialOfficial && (previousDescriptor || previousRegistryV2 || previousShowcaseV2)) {
     throw new TypeError("initial Official build cannot consume a previous publication")
   }
-  const previousShowcaseV1Value = options.previousShowcaseV1Path
-    ? await readJson(options.previousShowcaseV1Path, "previous Showcase v1")
-    : undefined
-  const bootstrapShowcaseV1 =
-    bootstrapRegistryV1 && previousShowcaseV1Value
-      ? parseShowcaseV1(previousShowcaseV1Value, bootstrapRegistryV1, descriptor)
-      : undefined
-  const legacyShowcaseV1 =
-    previousRegistryV1 && previousShowcaseV1Value
-      ? parseShowcaseV1(previousShowcaseV1Value, previousRegistryV1, descriptor)
-      : undefined
   if (selectedIdentities) {
     if (!previousDescriptor) {
       throw new TypeError("selective build requires a trusted previous Marketplace descriptor")
@@ -1132,16 +1165,8 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     if (previousRegistryV2 && !previousShowcaseV2) {
       throw new TypeError("selective build from Registry v2 requires its previous Showcase v2")
     }
-    if (bootstrapRegistryV1 && !bootstrapShowcaseV1) {
-      throw new TypeError("selective v1 bootstrap requires its previous Showcase v1")
-    }
-    if (!previousRegistryV2 && !bootstrapRegistryV1) {
+    if (!previousRegistryV2) {
       throw new TypeError("selective build requires an explicit production Registry baseline")
-    }
-    if (options.official && descriptor.registry.v1 && previousRegistryV2) {
-      if (!previousRegistryV1 || !legacyShowcaseV1) {
-        throw new TypeError("selective Official build requires the legacy Registry and Showcase v1 baseline")
-      }
     }
     if (!options.fetchArtifact) {
       throw new TypeError("selective build requires a bounded artifact fetch port")
@@ -1156,9 +1181,6 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     sequence = nextSequence
   }
   if (options.official) {
-    if (!options.v1Revision || !/^[a-f0-9]{40}$/.test(options.v1Revision)) {
-      throw new TypeError("Official build requires --v1-revision as an exact 40-character lowercase Git SHA")
-    }
     const config = (await readJson(
       join(options.root, "registry", "config.json"),
       "Official Registry config",
@@ -1174,8 +1196,6 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     let previousSequence: number | undefined
     if (previousRegistryV2) {
       previousSequence = previousRegistryV2.sequence
-    } else if (bootstrapRegistryV1) {
-      previousSequence = bootstrapRegistryV1.sequence
     } else if (!options.initialOfficial) {
       throw new TypeError("Official build requires an explicit previous Registry or initial-candidate flag")
     }
@@ -1220,7 +1240,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
         compatibility: { convax: ">=0.1.0" },
         presentation: entry.presentation,
         yanked: entry.authoring?.yanked === true,
-        ...(entry.kind === "plugin" && entry.manifest ? { manifest: entry.manifest } : {}),
+        ...(entry.kind === "plugin" && entry.manifest ? { manifest: { ...entry.manifest } } : {}),
         ...(companions ? { companions } : {}),
         ...(entry.kind === "skill" && typeof entry.authoring?.ownerPluginId === "string"
           ? { ownerPluginId: entry.authoring.ownerPluginId }
@@ -1312,9 +1332,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   })
   const selectionContext: MarketplaceSelectionContext | undefined = selectedIdentities
     ? (() => {
-        const baseline = previousRegistryV2
-          ? { mode: "v2" as const, registry: previousRegistryV2, showcase: previousShowcaseV2! }
-          : { mode: "v1" as const, registry: bootstrapRegistryV1!, showcase: bootstrapShowcaseV1! }
+        const baseline = { mode: "v2" as const, registry: previousRegistryV2!, showcase: previousShowcaseV2! }
         const baselineRegistry = selectionBaselineRegistry(
           {
             schema: MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
@@ -1357,9 +1375,6 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
             }
           }),
           baseline,
-          ...(previousRegistryV1 && legacyShowcaseV1
-            ? { legacy: { registry: previousRegistryV1, showcase: legacyShowcaseV1 } }
-            : {}),
         }
       })()
     : undefined
@@ -1547,141 +1562,18 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     }
     return join(outDir, "site", ...segments)
   }
-  const registryV1 = options.official ? projectRegistryV1(registry, options.v1Revision!) : undefined
-  const legacyShowcaseReleaseAssets = new Map<
-    string,
-    MarketplaceBuildResult["releasePlan"]["releases"][number]["assets"]
-  >()
-  const showcaseV1 = registryV1
-    ? await (async (): Promise<ShowcaseV1> => {
-        const selected = new Set(selectedIdentities ?? registry.packages.map(packageIdentity))
-        const projectedByIdentity = new Map(
-          registryV1.packages.map((entry) => [packageIdentity(entry), entry] as const),
-        )
-        const packagesV1: ShowcaseV1["packages"] = []
-        const legacyBaseline = selectionContext
-          ? (selectionContext.legacy ??
-            (selectionContext.baseline.mode === "v1"
-              ? {
-                  registry: selectionContext.baseline.registry,
-                  showcase: selectionContext.baseline.showcase,
-                }
-              : undefined))
-          : undefined
-        if (legacyBaseline) {
-          for (const entry of legacyBaseline.showcase.packages) {
-            const identity = packageIdentity(entry)
-            const projected = projectedByIdentity.get(identity)
-            if (!selected.has(identity) && projected?.version === entry.version && !projected.yanked) {
-              packagesV1.push(entry)
-            }
-          }
-        }
-        const legacyMimes = new Set(["image/png", "image/jpeg", "image/webp", "video/mp4"])
-        const projectAsset = async (
-          entry: ShowcaseV2["packages"][number],
-          role: "poster" | "animation",
-          source: ShowcaseV2["packages"][number]["presentation"]["poster"],
-        ) => {
-          if (
-            !legacyMimes.has(source.mime) ||
-            source.alt === undefined ||
-            source.width === undefined ||
-            source.height === undefined
-          ) {
-            throw new TypeError(
-              `Official Showcase v1 ${entry.kind}/${entry.id} ${role} requires compatible mime, alt, and dimensions`,
-            )
-          }
-          const bytes = showcaseBytesByUrl.get(source.url)
-          if (!bytes) throw new TypeError(`Official Showcase v1 ${entry.kind}/${entry.id} ${role} has no local bytes`)
-          const tag = releaseTagForPackage(entry)
-          const name = legacyShowcaseAssetName(
-            { kind: entry.kind as "plugin" | "skill", id: entry.id, version: entry.version },
-            role,
-            source.mime as "image/png" | "image/jpeg" | "image/webp" | "video/mp4",
-          )
-          const url = releaseUrl(descriptor, tag, name)
-          const path = join(outDir, "releases", tag, name)
-          await atomicWrite(path, bytes)
-          const assets = legacyShowcaseReleaseAssets.get(tag) ?? []
-          if (assets.some((asset) => asset.name === name)) {
-            throw new TypeError(`duplicate legacy Showcase Release asset ${name}`)
-          }
-          assets.push({
-            path: relative(outDir, path).split(sep).join("/"),
-            name,
-            size: source.size,
-            sha256: source.sha256,
-            url,
-          })
-          legacyShowcaseReleaseAssets.set(tag, assets)
-          return {
-            url,
-            mime: source.mime,
-            size: source.size,
-            sha256: source.sha256,
-            width: source.width,
-            height: source.height,
-            alt: source.alt,
-          }
-        }
-        for (const entry of showcase.packages) {
-          const identity = packageIdentity(entry)
-          if (!selected.has(identity) || (entry.kind !== "plugin" && entry.kind !== "skill")) continue
-          const projected = projectedByIdentity.get(identity)
-          if (!projected || projected.version !== entry.version || projected.yanked) continue
-          const poster = (await projectAsset(
-            entry,
-            "poster",
-            entry.presentation.poster,
-          )) as ShowcaseV1["packages"][number]["poster"]
-          const animation = entry.presentation.animation
-            ? ((await projectAsset(entry, "animation", entry.presentation.animation)) as NonNullable<
-                ShowcaseV1["packages"][number]["animation"]
-              >)
-            : undefined
-          packagesV1.push({
-            kind: entry.kind,
-            id: entry.id,
-            version: entry.version,
-            poster,
-            ...(animation ? { animation } : {}),
-          })
-        }
-        packagesV1.sort((left, right) => compareAscii(packageIdentity(left), packageIdentity(right)))
-        return parseShowcaseV1(
-          {
-            schema: "convax.showcase/1",
-            sequence: registryV1.sequence,
-            revision: registryV1.revision,
-            packages: packagesV1,
-          },
-          registryV1,
-          descriptor,
-        )
-      })()
-    : undefined
   if (selectionContext) {
     assertSelectiveMarketplaceClosure({
       context: selectionContext,
       descriptor,
       registry,
       showcase,
-      ...(registryV1 ? { registryV1 } : {}),
-      ...(showcaseV1 ? { showcaseV1 } : {}),
     })
   }
-  if (registryV1) await atomicWrite(join(outDir, "registry-v1.json"), jsonBytes(registryV1))
-  if (showcaseV1) await atomicWrite(join(outDir, "showcase-v1.json"), jsonBytes(showcaseV1))
   await atomicWrite(join(outDir, "marketplace.json"), descriptorBytes)
   await atomicWrite(join(outDir, "site", "marketplace.json"), descriptorBytes)
   await atomicWrite(sitePathForPagesUrl(descriptor.registry.v2.url), registryBytes)
   await atomicWrite(sitePathForPagesUrl(descriptor.showcase.v2.url), showcaseBytes)
-  if (registryV1 && descriptor.registry.v1) {
-    await atomicWrite(sitePathForPagesUrl(descriptor.registry.v1.url), jsonBytes(registryV1))
-    await atomicWrite(join(outDir, "site", "showcase", "v1", "index.json"), jsonBytes(showcaseV1))
-  }
   const releases = new Map<string, MarketplaceBuildResult["releasePlan"]["releases"][number]>()
   for (const artifact of artifacts) {
     if (selectedIdentities && !selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`)) {
@@ -1697,16 +1589,6 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
       url: artifact.url,
     })
     releases.set(artifact.releaseTag, release)
-  }
-  for (const [tag, assets] of legacyShowcaseReleaseAssets) {
-    const release = releases.get(tag) ?? { tag, assets: [] }
-    for (const asset of assets) {
-      if (release.assets.some((existing) => existing.name === asset.name)) {
-        throw new TypeError(`duplicate Release asset ${tag}/${asset.name}`)
-      }
-      release.assets.push(asset)
-    }
-    releases.set(tag, release)
   }
   const metadataAssets = [
     { name: "marketplace.json", bytes: descriptorBytes },
@@ -1783,36 +1665,50 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   if (
     Object.keys(preinstalledConfig).sort().join(",") !== "packages,schema" ||
     preinstalledConfig.schema !== "convax.preinstalled-config/1" ||
-    !Array.isArray(preinstalledConfig.packages)
+    !Array.isArray(preinstalledConfig.packages) ||
+    preinstalledConfig.packages.length > 64
   ) {
     throw new TypeError("preinstalled config must strictly declare schema and packages")
   }
-  if (options.official) {
-    const expected = [
-      {
-        marketplaceId: "convax-official",
-        kind: "plugin",
-        id: "ffmpeg-tools",
-        targets: ["darwin-arm64"],
-        setup: "explicit",
-      },
-    ]
-    if (canonicalJson(preinstalledConfig.packages) !== canonicalJson(expected)) {
-      throw new TypeError("Official preinstalled policy must contain only ffmpeg-tools for darwin-arm64")
-    }
-  } else if (preinstalledConfig.packages.length !== 0) {
+  if (!options.official && preinstalledConfig.packages.length !== 0) {
     throw new TypeError("third-party Marketplace cannot emit a Convax product preinstalled policy")
   }
+  const selectedPreinstalled = preinstalledConfig.packages.map((rawPreinstalled, index) => {
+    if (!rawPreinstalled || typeof rawPreinstalled !== "object" || Array.isArray(rawPreinstalled)) {
+      throw new TypeError(`preinstalled package ${index} must be an object`)
+    }
+    const selected = rawPreinstalled as Record<string, unknown>
+    if (
+      Object.keys(selected).sort().join(",") !== "id,kind,marketplaceId,setup,targets" ||
+      selected.marketplaceId !== descriptor.id ||
+      selected.kind !== "plugin" ||
+      selected.setup !== "explicit" ||
+      typeof selected.id !== "string" ||
+      !SAFE_SEGMENT.test(selected.id) ||
+      !Array.isArray(selected.targets) ||
+      selected.targets.length > 6 ||
+      selected.targets.some((target) => typeof target !== "string" || !TARGET.test(target)) ||
+      new Set(selected.targets).size !== selected.targets.length
+    ) {
+      throw new TypeError(`preinstalled package ${index} is not a valid generic explicit Plugin declaration`)
+    }
+    return {
+      marketplaceId: selected.marketplaceId,
+      kind: "plugin" as const,
+      id: selected.id,
+      targets: selected.targets as string[],
+      setup: "explicit" as const,
+    }
+  })
+  if (new Set(selectedPreinstalled.map(({ id }) => id)).size !== selectedPreinstalled.length) {
+    throw new TypeError("preinstalled package identities must be unique")
+  }
   const lockedPreinstalledPackages = await Promise.all(
-    preinstalledConfig.packages.map(async (rawPreinstalled) => {
-      if (!rawPreinstalled || typeof rawPreinstalled !== "object" || Array.isArray(rawPreinstalled)) {
-        throw new TypeError("invalid preinstalled package")
-      }
-      const selected = rawPreinstalled as Record<string, unknown>
-      const identity = `${String(selected.kind)}\0${String(selected.id)}`
+    selectedPreinstalled.map(async (selected) => {
+      const identity = `${selected.kind}\0${selected.id}`
       const entry = registryByIdentity.get(identity)
       if (!entry || entry.kind !== "plugin" || entry.delivery.kind !== "artifact") {
-        throw new TypeError(`preinstalled package ${String(selected.kind)}/${String(selected.id)} is unavailable`)
+        throw new TypeError(`preinstalled package ${selected.kind}/${selected.id} is unavailable`)
       }
       const packageArtifact = await lockRegistryArtifact(
         entry.delivery,
@@ -1832,11 +1728,10 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
                 : [],
             )
           : []
-      const selectedTargets = selected.targets as string[]
       const companions = await Promise.all(
         (entry.companions ?? []).flatMap((companion) =>
           companion.targets
-            .filter((target) => selectedTargets.includes(`${target.platform}-${target.arch}`))
+            .filter((target) => selected.targets.includes(`${target.platform}-${target.arch}`))
             .map(async (target) => ({
               ...(await lockRegistryArtifact(
                 target.artifact,
@@ -1847,7 +1742,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
             })),
         ),
       )
-      if (companions.length !== selectedTargets.length) {
+      if (companions.length !== selected.targets.length) {
         throw new TypeError(`preinstalled package ${entry.id} does not close its selected companion targets`)
       }
       const ownedSkills = await Promise.all(
@@ -1885,8 +1780,6 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   return {
     registry,
     registrySha256: sha256Hex(registryBytes),
-    ...(registryV1 ? { registryV1 } : {}),
-    ...(showcaseV1 ? { showcaseV1 } : {}),
     showcase,
     artifacts: selectedIdentities
       ? artifacts.filter((artifact) => selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`))
@@ -1901,7 +1794,7 @@ export async function buildRegistryV2(options: BuildMarketplaceOptions): Promise
   return (await buildMarketplace(options)).registry
 }
 
-export { parseRegistryV1, parseRegistryV2, projectRegistryV1, releaseTagForPackage }
+export { parseRegistryV2, releaseTagForPackage }
 export {
   MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
   assertSelectiveMarketplaceClosure,
@@ -2141,27 +2034,62 @@ export async function createMarketplaceTemplate(root: string, kind: StarterKind,
   const packageRoot = join(root, "packages", KIND_DIRECTORY[kind], id)
   const existing = await lstat(packageRoot).catch(() => undefined)
   if (existing) throw new TypeError(`template already exists: ${id}`)
-  await mkdir(packageRoot, { recursive: true })
+  const contentRoot = join(packageRoot, "package")
+  await mkdir(contentRoot, { recursive: true })
+  const version = "0.1.0"
+  const packageId = kind === "mcp-server" ? (id.includes("/") ? id : `io.example/${id}`) : id
+  await atomicWrite(
+    join(packageRoot, "convax-package.json"),
+    `${JSON.stringify(
+      {
+        schema: "convax.package/2",
+        kind,
+        id: packageId,
+        name: id,
+        description: kind === "skill" ? `${id} workflow` : `${id} ${kind}`,
+        version,
+      },
+      null,
+      2,
+    )}\n`,
+  )
   if (kind === "plugin") {
     await atomicWrite(
-      join(packageRoot, "manifest.json"),
-      `${JSON.stringify({ schema: "convax.plugin/1", id, version: "0.1.0", name: id }, null, 2)}\n`,
+      join(contentRoot, "manifest.json"),
+      `${JSON.stringify(
+        {
+          schema: "convax.plugin/8",
+          id,
+          version,
+          name: id,
+          description: `${id} plugin`,
+          hostApi: { major: 1, required: ["host.context.get"], optional: [] },
+          capabilities: [],
+          contributes: { canvas: { renderer: { create: true } } },
+          entry: "index.html",
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    await atomicWrite(
+      join(contentRoot, "index.html"),
+      "<!doctype html><html><body><main>Convax Plugin</main></body></html>\n",
     )
   } else if (kind === "skill") {
     await atomicWrite(
-      join(packageRoot, "SKILL.md"),
-      `---\nname: ${id}\nversion: 0.1.0\ndescription: ${id} workflow\n---\n\n# ${id}\n`,
+      join(contentRoot, "SKILL.md"),
+      `---\nname: ${id}\nversion: ${version}\ndescription: ${id} workflow\n---\n\n# ${id}\n`,
     )
   } else {
-    const serverName = id.includes("/") ? id : `io.example/${id}`
     await atomicWrite(
-      join(packageRoot, "server.json"),
+      join(contentRoot, "server.json"),
       `${JSON.stringify(
         {
           $schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-          name: serverName,
+          name: packageId,
           description: `${id} MCP Server`,
-          version: "0.1.0",
+          version,
           remotes: [{ type: "streamable-http", url: "https://example.com/mcp" }],
         },
         null,
@@ -2209,7 +2137,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.1.1",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.0",
         },
       },
       null,
@@ -2367,10 +2295,6 @@ jobs:
           registry_page="$(page_path "$(jq -er '.registry.v2.url' dist/site/marketplace.json)")"
           showcase_page="$(page_path "$(jq -er '.showcase.v2.url' dist/site/marketplace.json)")"
           mappings=("marketplace.json:marketplace.json" "registry-v2.json:$registry_page" "showcase-v2.json:$showcase_page")
-          if registry_v1_url="$(jq -er '.registry.v1.url // empty' dist/site/marketplace.json)"; then
-            registry_v1_page="$(page_path "$registry_v1_url")"
-            mappings+=("registry-v1.json:$registry_v1_page")
-          fi
           for mapping in "\${mappings[@]}"; do
             name="\${mapping%%:*}"
             page="\${mapping#*:}"
@@ -2403,15 +2327,32 @@ export async function addMarketplaceDirectory(root: string, sourceDirectory: str
   const sourceInfo = await lstat(source)
   if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink())
     throw new TypeError("source must be a no-follow directory")
-  const packageInfo = await inspectPackage(source)
+  const packageInfo = await inspectPackage(source, undefined, { allowUnwrapped: true })
   const destination = join(root, "packages", KIND_DIRECTORY[packageInfo.kind], basename(source))
   if (await lstat(destination).catch(() => undefined)) throw new TypeError("destination package already exists")
   const files = await inventory(source)
   await mkdir(destination, { recursive: true })
   for (const entry of files) {
-    const path = join(destination, ...entry.path.split("/"))
+    const path = join(destination, ...(packageInfo.authoring ? [] : ["package"]), ...entry.path.split("/"))
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, entry.bytes, { mode: entry.mode })
+  }
+  if (!packageInfo.authoring) {
+    await atomicWrite(
+      join(destination, "convax-package.json"),
+      `${JSON.stringify(
+        {
+          schema: "convax.package/2",
+          kind: packageInfo.kind,
+          id: packageInfo.id,
+          name: packageInfo.presentation.name,
+          description: packageInfo.presentation.description ?? `${packageInfo.id} ${packageInfo.kind}`,
+          version: packageInfo.version,
+        },
+        null,
+        2,
+      )}\n`,
+    )
   }
   return destination
 }

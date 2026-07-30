@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
+import { webPluginAssetUrl } from "../plugin-asset-contract"
+import type { ActiveInstalledWebPluginSummary } from "../plugin-contracts"
 import type { PetActivitySnapshot } from "../pet-contracts"
 import {
   PetProviderConflictError,
@@ -9,8 +10,10 @@ import {
 } from "./pet-provider-controller"
 import { boundPetState, defaultPetState, type PetPersistedState, type PetStateWrite } from "./pet-state-store"
 
-function provider(id = "convax-pet", version = "0.2.0"): InstalledWebPluginSummary {
+function provider(id = "convax-pet", version = "0.2.0"): ActiveInstalledWebPluginSummary {
   return {
+    activeRevision: 7,
+    activeSetDigest: "a".repeat(64),
     capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
     contributes: {
       pet: {
@@ -21,9 +24,11 @@ function provider(id = "convax-pet", version = "0.2.0"): InstalledWebPluginSumma
       },
     },
     description: `${id} provider`,
+    hostApi: { major: 1, optional: [], required: ["host.context.get"] },
     id,
     name: id,
-    schema: "convax.plugin/5",
+    schema: "convax.plugin/8",
+    snapshotDigest: "b".repeat(64),
     version,
   }
 }
@@ -68,7 +73,7 @@ class MemoryStateStore {
 
 function fixture(
   input: {
-    installed?: InstalledWebPluginSummary[]
+    installed?: ActiveInstalledWebPluginSummary[]
     state?: PetStateWrite | PetPersistedState
   } = {},
 ) {
@@ -78,7 +83,15 @@ function fixture(
     list: mock(async () => installed),
     resolveCapabilityIdentity: mock(async (pluginId: string) => {
       const plugin = installed.find((candidate) => candidate.id === pluginId)
-      return plugin ? { digest: digests.get(plugin.id) ?? `digest:${plugin.id}:${plugin.version}`, plugin } : null
+      return plugin
+        ? {
+            activeRevision: plugin.activeRevision,
+            activeSetDigest: plugin.activeSetDigest,
+            digest: digests.get(plugin.id) ?? `digest:${plugin.id}:${plugin.version}`,
+            plugin,
+            snapshotDigest: plugin.snapshotDigest,
+          }
+        : null
     }),
   } satisfies PetProviderPluginManager
   let activityListener: ((snapshot: PetActivitySnapshot) => void) | undefined
@@ -108,7 +121,7 @@ function fixture(
     emitActivity(snapshot: PetActivitySnapshot) {
       activityListener?.(snapshot)
     },
-    install(...plugins: InstalledWebPluginSummary[]) {
+    install(...plugins: ActiveInstalledWebPluginSummary[]) {
       installed = plugins
       for (const plugin of plugins) {
         if (!digests.has(plugin.id)) digests.set(plugin.id, `digest:${plugin.id}:${plugin.version}`)
@@ -172,10 +185,10 @@ describe("PetProviderController", () => {
     expect(value.controller.getProvider()).toMatchObject({
       digest: "digest:soft-companion:0.2.0",
       generation: 1,
-      libraryUrl: "convax-plugin://soft-companion/pet-library.json",
-      overlayUrl: "convax-plugin://soft-companion/pet/index.html",
+      libraryUrl: webPluginAssetUrl(provider("soft-companion"), "pet-library.json"),
+      overlayUrl: webPluginAssetUrl(provider("soft-companion"), "pet/index.html"),
       pluginId: "soft-companion",
-      settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+      settingsUrl: webPluginAssetUrl(provider("soft-companion"), "settings/index.html"),
       version: "0.2.0",
     })
     expect(value.controller.getProvider()?.contribution).toEqual(plugin.contributes.pet)
@@ -190,27 +203,6 @@ describe("PetProviderController", () => {
     expect(value.window.open).not.toHaveBeenCalled()
     expect(value.activity.subscribe).not.toHaveBeenCalled()
     expect(changes).toHaveLength(1)
-  })
-
-  test("reuses an owned Plugin mutation context while refreshing provider identity", async () => {
-    const value = fixture({ installed: [provider()] })
-    await value.controller.initialize()
-    value.pluginManager.resolveCapabilityIdentity.mockClear()
-    const mutation = { pluginId: "convax-pet" } as const
-
-    await value.controller.refresh(mutation)
-
-    expect(value.pluginManager.resolveCapabilityIdentity).toHaveBeenCalledWith("convax-pet", mutation)
-  })
-
-  test("does not reuse another Plugin mutation while refreshing provider identity", async () => {
-    const value = fixture({ installed: [provider()] })
-    await value.controller.initialize()
-    value.pluginManager.resolveCapabilityIdentity.mockClear()
-
-    await value.controller.refresh({ pluginId: "hello-convax" })
-
-    expect(value.pluginManager.resolveCapabilityIdentity).toHaveBeenCalledWith("convax-pet", undefined)
   })
 
   test("keeps selection separate from explicit wake and subscribes to activity only while awake", async () => {

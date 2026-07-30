@@ -1,180 +1,215 @@
 import { describe, expect, test } from "bun:test"
+import { pluginApiCatalog, pluginApiMethodContracts } from "@convax/plugin-api"
 import {
-  desktopPluginHostProtocol,
-  desktopPluginHostProtocolForManifestSchema,
-  desktopPluginHostProtocolV2,
-  desktopPluginHostProtocolV3,
-  desktopPluginHostProtocolV4,
+  isPluginHostCancel,
+  isPluginHostCapabilityInvokeRequest,
+  pluginHostProtocolV8,
+} from "@convax/plugin-sdk/client"
+import {
+  PluginHostApiError,
+  PluginHostApiResourceUnavailableError,
+} from "./plugin-host-errors"
+import {
+  desktopPluginHostProtocolV8,
+  isDesktopPluginCapabilityAvailabilityRequest,
+  isDesktopPluginCapabilityInvokeRequest,
   isDesktopPluginHostRequest,
-  pluginCapabilityProtocolV1,
-  pluginCapabilityProtocolV2,
+  isPluginCapabilityRequest,
+  pluginCapabilityApiFailure,
+  pluginCapabilityProtocolFailure,
+  pluginCapabilityProtocolV3,
+  pluginCapabilitySuccess,
   pluginHostFailure,
   pluginHostSuccess,
 } from "./plugin-host-protocol"
 
-describe("desktop plugin host protocol", () => {
-  test("accepts only versioned, known host methods", () => {
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-media",
-        method: "canvas.connectedMedia.open",
-        protocol: pluginCapabilityProtocolV2,
+describe("desktop Plugin protocols", () => {
+  test("keeps the iframe ABI and principal transport distinct", () => {
+    expect(desktopPluginHostProtocolV8).toBe("convax.plugin-host/8")
+    expect(desktopPluginHostProtocolV8).toBe(pluginHostProtocolV8)
+    expect(pluginCapabilityProtocolV3).toBe("convax.plugin-capability/3")
+    expect(desktopPluginHostProtocolV8).not.toBe(pluginCapabilityProtocolV3)
+  })
+
+  test("derives both method allowlists from the Catalog and validates Web params from its contract map", () => {
+    for (const definition of pluginApiCatalog.apis) {
+      const envelope = {
+        id: `request-${definition.id}`,
+        method: definition.id,
         type: "request",
-      }),
-    ).toBeTrue()
+      }
+      const validWithoutParams = isDesktopPluginHostRequest({
+        ...envelope,
+        protocol: desktopPluginHostProtocolV8,
+      })
+      const paramsContract = pluginApiMethodContracts[definition.id].params
+      expect(validWithoutParams).toBe(
+        paramsContract.type === "none" || (paramsContract.type === "object" && paramsContract.required.length === 0),
+      )
+      expect(
+        isPluginCapabilityRequest({
+          ...envelope,
+          protocol: pluginCapabilityProtocolV3,
+        }),
+      ).toBeTrue()
+    }
+  })
+
+  test("fails closed for unknown methods and every retired protocol", () => {
+    const retiredProtocols = [
+      ...Array.from({ length: 7 }, (_, index) => `convax.plugin-host/${index + 1}`),
+      "convax.plugin-capability/1",
+      "convax.plugin-capability/2",
+    ]
+    for (const protocol of retiredProtocols) {
+      const request = {
+        id: "request-retired",
+        method: "host.context.get",
+        protocol,
+        type: "request",
+      }
+      expect(isDesktopPluginHostRequest(request)).toBeFalse()
+      expect(isPluginCapabilityRequest(request)).toBeFalse()
+    }
     expect(
       isDesktopPluginHostRequest({
-        id: "request-media",
-        method: "canvas.connectedMedia.open",
-        protocol: pluginCapabilityProtocolV1,
+        id: "request-unknown",
+        method: "canvas.document.writeJson",
+        protocol: desktopPluginHostProtocolV8,
         type: "request",
       }),
     ).toBeFalse()
     expect(
       isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.node.get",
-        protocol: desktopPluginHostProtocol,
+        id: "forbidden-internal-transport",
+        method: "host.context.get",
+        protocol: pluginCapabilityProtocolV3,
         type: "request",
       }),
-    ).toBe(true)
+    ).toBeFalse()
     expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.connectedImages.list",
-        protocol: desktopPluginHostProtocol,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.connectedImage.read",
-        params: { nodeId: "image-1" },
-        protocol: desktopPluginHostProtocol,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.connectedInputs.list",
-        protocol: desktopPluginHostProtocol,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
+      isPluginCapabilityRequest({
+        id: "request-unknown",
         method: "canvas.document.writeJson",
-        protocol: desktopPluginHostProtocol,
+        protocol: pluginCapabilityProtocolV3,
         type: "request",
       }),
-    ).toBe(false)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "generation.canvas.execute",
-        protocol: desktopPluginHostProtocol,
-        type: "request",
-      }),
-    ).toBe(false)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "generation.canvas.execute",
-        protocol: desktopPluginHostProtocolV2,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "generation.tools.list",
-        protocol: desktopPluginHostProtocolV2,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.node.get",
-        protocol: desktopPluginHostProtocolV2,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "generation.canvas.execute",
-        protocol: desktopPluginHostProtocolV3,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "generation.canvas.execute",
-        protocol: desktopPluginHostProtocolV4,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.transaction.execute",
-        protocol: desktopPluginHostProtocolV4,
-        type: "request",
-      }),
-    ).toBe(false)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.transaction.execute",
-        protocol: pluginCapabilityProtocolV1,
-        type: "request",
-      }),
-    ).toBe(true)
-    expect(
-      isDesktopPluginHostRequest({
-        id: "request-1",
-        method: "canvas.node.get",
-        protocol: "convax.plugin-host/0",
-        type: "request",
-      }),
-    ).toBe(false)
+    ).toBeFalse()
   })
 
-  test("creates serializable success and failure envelopes", () => {
-    expect(pluginHostSuccess("request-1", { ok: true })).toEqual({
-      id: "request-1",
+  test("creates fixed, non-negotiable response envelopes", () => {
+    expect(pluginHostSuccess("host-success", { ok: true })).toEqual({
+      id: "host-success",
       ok: true,
-      protocol: desktopPluginHostProtocol,
+      protocol: desktopPluginHostProtocolV8,
       result: { ok: true },
       type: "response",
     })
-    expect(pluginHostFailure("request-2", new Error("denied"))).toEqual({
-      error: "denied",
-      id: "request-2",
+    expect(pluginHostFailure("host-failure", new Error("denied"))).toEqual({
+      error: {
+        code: "internal-error",
+        kind: "protocol",
+        message: "Plugin Host request failed",
+        recoverable: false,
+      },
+      id: "host-failure",
       ok: false,
-      protocol: desktopPluginHostProtocol,
+      protocol: desktopPluginHostProtocolV8,
       type: "response",
+    })
+    expect(pluginCapabilitySuccess("capability-success", {})).toMatchObject({
+      protocol: pluginCapabilityProtocolV3,
+    })
+    expect(pluginCapabilityProtocolFailure("capability-failure", new Error("denied"))).toMatchObject({
+      protocol: pluginCapabilityProtocolV3,
     })
   })
 
-  test("selects a protocol from the installed manifest schema", () => {
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/1")).toBe(desktopPluginHostProtocol)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/2")).toBe(desktopPluginHostProtocolV2)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/3")).toBe(desktopPluginHostProtocolV3)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/4")).toBe(desktopPluginHostProtocolV4)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/5")).toBe(pluginCapabilityProtocolV1)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/6")).toBe(pluginCapabilityProtocolV1)
-    expect(desktopPluginHostProtocolForManifestSchema("convax.plugin/7")).toBe(pluginCapabilityProtocolV2)
-    expect(pluginHostSuccess("request-v2", {}, desktopPluginHostProtocolV2)).toMatchObject({
-      protocol: desktopPluginHostProtocolV2,
+  test("projects admitted Host API failures without leaking diagnostics", () => {
+    expect(
+      pluginCapabilityApiFailure(
+        "permission",
+        "projects.list",
+        new PluginHostApiError("permission-denied", "secret grant and Plugin identity"),
+      ),
+    ).toMatchObject({
+      error: {
+        code: "permission-denied",
+        kind: "api",
+        message: "Plugin Host API permission was denied",
+        recoverable: false,
+      },
     })
-    expect(pluginHostFailure("request-v2", "denied", desktopPluginHostProtocolV2)).toMatchObject({
-      protocol: desktopPluginHostProtocolV2,
+    expect(
+      pluginCapabilityApiFailure(
+        "stale",
+        "canvas.catalog.list",
+        new PluginHostApiError("stale-context", "secret ActiveSet digest"),
+      ),
+    ).toMatchObject({
+      error: {
+        code: "stale-context",
+        kind: "api",
+        message: "Plugin Host API context is stale",
+        recoverable: true,
+      },
     })
+    expect(
+      pluginCapabilityApiFailure(
+        "resource",
+        "canvas.inputs.open",
+        new PluginHostApiResourceUnavailableError("secret Project path"),
+      ),
+    ).toMatchObject({
+      error: {
+        code: "resource-unavailable",
+        kind: "api",
+        message: "Plugin Host API resource is unavailable",
+        recoverable: true,
+      },
+    })
+    expect(pluginHostFailure("unknown", new Error("private stack and token"))).toMatchObject({
+      error: {
+        code: "internal-error",
+        kind: "protocol",
+        message: "Plugin Host request failed",
+        recoverable: false,
+      },
+    })
+  })
+
+  test("keeps Plugin-to-Plugin broker envelopes outside the Host API method union", () => {
+    const invocation = {
+      capabilityId: "video.render",
+      id: "invoke-1",
+      input: { prompt: "hello" },
+      protocol: desktopPluginHostProtocolV8,
+      type: "capability-invoke",
+    }
+    expect(isDesktopPluginCapabilityInvokeRequest(invocation)).toBeTrue()
+    expect(isPluginHostCapabilityInvokeRequest(invocation)).toBeTrue()
+    expect(
+      isDesktopPluginCapabilityAvailabilityRequest({
+        capabilityId: "video.render",
+        id: "availability-1",
+        protocol: desktopPluginHostProtocolV8,
+        type: "capability-availability",
+      }),
+    ).toBeTrue()
+    expect(
+      isDesktopPluginHostRequest({
+        id: "forbidden-method",
+        method: "plugin.capability.invoke",
+        protocol: desktopPluginHostProtocolV8,
+        type: "request",
+      }),
+    ).toBeFalse()
+    const cancel = {
+      id: "invoke-1",
+      protocol: desktopPluginHostProtocolV8,
+      type: "cancel",
+    }
+    expect(isPluginHostCancel(cancel)).toBeTrue()
+    expect(isDesktopPluginCapabilityInvokeRequest({ ...invocation, providerPluginId: "forbidden" })).toBeFalse()
   })
 })

@@ -1,7 +1,9 @@
 # Canvas Node Generation: Scheduler–Agent–Supervisor and Long-Running Operations
 
-Status: normative ideal design implemented against `origin/convax-next` at
-`06f993e6dea3c3cff59ec7d335cf7ebc7b4a2e38`.
+Status: historical implementation record for `origin/convax-next` at
+`06f993e6dea3c3cff59ec7d335cf7ebc7b4a2e38`. The Scheduler–Agent–Supervisor and LRO
+invariants remain current, but Plugin authoring now uses only `convax.plugin/8`,
+immutable ActiveSet snapshots, and code-generated API/Skill references.
 
 This document is the normative design implemented by this change. It applies the
 industry-standard **Scheduler–Agent–Supervisor** pattern to a durable
@@ -395,9 +397,9 @@ inputs belonging to a non-terminal ledger.
 
 ## 9. Long-Running Operation capability admission
 
-Durable LRO support is an atomic capability, not a loose collection of optional booleans.
-It is introduced only in a new exact Plugin manifest schema, conceptually
-`convax.plugin/7`, on each generation tool:
+Durable LRO support is an atomic capability, not a loose collection of optional
+booleans. In the current breaking Plugin ABI it is declared by
+`convax.plugin/8` on each generation tool:
 
 ```json
 {
@@ -424,8 +426,8 @@ initialization and return its stable opaque recovery-binding value.
 Manifest/runtime disagreement or recovery-binding drift fails before submission or
 recovery.
 
-Older manifests and tools remain valid but are recovery-unsupported. They continue
-to persist Canvas run state and task receipts when available, but restart marks an
+Within v8, tools that omit `recovery` are recovery-unsupported. They continue to
+persist Canvas run state and task receipts when available, but restart marks an
 orphaned active run `interrupted(unknown)` and never invokes the tool.
 
 Convax contains no Plugin-id, provider, model, or vendor branches. A tool either
@@ -772,10 +774,11 @@ Every row asserts:
 
 ## 20. Compatibility and rollout
 
-- Existing `convax.plugin/1` through `/6` behavior is unchanged.
-- Full recovery is admitted only by the new exact manifest/runtime contract.
-- Old Tool Plugins keep structured task receipt compatibility where implemented but
-  remain restart-interrupted.
+- Pre-v8 Plugin manifests are rejected at admission and are not normalized into
+  the current runtime.
+- Full recovery is admitted only by the exact v8 manifest/runtime contract.
+- V8 tools without the complete LRO declaration may still return structured task
+  receipts, but remain restart-interrupted.
 - `convax.node-generation-run/1` and `/2` are read and explicitly migrated; unknown schemas
   remain untouched.
 - Desktop protocol and `@convax/canvas` public version must be bumped when the
@@ -850,7 +853,7 @@ UI scenario:
 | Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                         |
 | Desktop generation-service tests | durable ledger/input ordering, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication                         |
 | Renderer lifecycle tests         | an accepted Main-owned generation remains alive when switching Canvas unmounts the owning card; remount hydrates active and terminal state from Canvas metadata                                   |
-| LRO protocol/runtime tests       | v7 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and legacy rejection                                              |
+| LRO protocol/runtime tests       | v8 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and pre-v8 rejection                                              |
 | stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                          |
 | built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, terminal-state renderer remount, deleted-target late callback rejection and legacy restart interruption |
 

@@ -1,4 +1,4 @@
-import type { InstalledWebPluginSummary, WebPluginClient } from "../plugin-contracts"
+import type { ActiveInstalledWebPluginSummary, WebPluginClient } from "../plugin-contracts"
 
 type InstalledPluginInventoryClient = Pick<WebPluginClient, "listPlugins" | "onDidChange">
 type ChangeClient = Pick<WebPluginClient, "onDidChange">
@@ -26,7 +26,7 @@ export function combineInstalledPluginInventoryChanges(
 
 export function subscribeInstalledPluginInventory(
   client: InstalledPluginInventoryClient,
-  onInstalled: (plugins: InstalledWebPluginSummary[]) => void,
+  onInstalled: (plugins: readonly ActiveInstalledWebPluginSummary[]) => void,
   onError: (error: unknown) => void,
 ) {
   let active = true

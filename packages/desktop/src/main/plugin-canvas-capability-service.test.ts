@@ -6,7 +6,6 @@ import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type {
   PluginCanvasChangeEvent,
   PluginCanvasEventSubscription,
-  PluginCanvasRef,
   PluginPrincipal,
   ResolvedPluginPrincipal,
 } from "../plugin-capability-contracts"
@@ -19,13 +18,18 @@ import {
 } from "./plugin-canvas-capability-service"
 
 const principal: PluginPrincipal = {
+  activeRevision: 7,
+  activeSetDigest: "b".repeat(64),
   manifestDigest: "a".repeat(64),
   pluginId: "layout-tools",
   pluginVersion: "1.0.0",
   runtime: "tool",
+  snapshotDigest: "c".repeat(64),
 }
 
 const installed: ResolvedPluginPrincipal = {
+  activeRevision: principal.activeRevision,
+  activeSetDigest: principal.activeSetDigest,
   capabilities: [
     "projects.read",
     "canvas.catalog.read",
@@ -33,9 +37,23 @@ const installed: ResolvedPluginPrincipal = {
     "canvas.document.write",
     "canvas.events.subscribe",
   ],
+  hostApi: {
+    major: 1,
+    optional: [],
+    required: [
+      "projects.list",
+      "canvas.catalog.list",
+      "canvas.document.get",
+      "canvas.nodes.query",
+      "canvas.transaction.execute",
+      "canvas.events.subscribe",
+      "canvas.events.unsubscribe",
+    ],
+  },
   manifestDigest: principal.manifestDigest,
   pluginId: principal.pluginId,
   pluginVersion: principal.pluginVersion,
+  snapshotDigest: principal.snapshotDigest,
 }
 
 function fixture(

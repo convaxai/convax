@@ -107,7 +107,6 @@ describe("Marketplace product lock resolution", () => {
       name: "Convax Official",
       publisher: { name: "Convax" },
       registry: {
-        v1: { url: "https://microvoid.github.io/convax-plugins/registry/v1/index.json" },
         v2: { url: "https://microvoid.github.io/convax-plugins/registry/v2/index.json" },
       },
       repository: { name: "convax-plugins", owner: "microvoid" },
@@ -144,8 +143,9 @@ describe("Marketplace product lock resolution", () => {
         kind: "plugin",
         manifest: {
           contributes: { skills: [{ name: "ffmpeg-canvas", path: "skills/ffmpeg-canvas" }] },
+          hostApi: { major: 1, optional: [], required: [] },
           id: "ffmpeg-tools",
-          schema: "convax.plugin/4",
+          schema: "convax.plugin/8",
           version: "1.0.0",
         },
         presentation: { description: "FFmpeg tools", name: "FFmpeg Tools" },

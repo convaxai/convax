@@ -29,6 +29,8 @@
     "@convax/agent-runtime": "workspace:*",
     "@convax/canvas": "workspace:*",
     "@convax/marketplace": "workspace:*",
+    "@convax/plugin-api": "workspace:*",
+    "@convax/plugin-sdk": "workspace:*",
     "@convax/project": "workspace:*",
     "@convax/project-files": "workspace:*",
     "@convax/ui": "workspace:*",

@@ -3,6 +3,7 @@ import { Window } from "happy-dom"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { MarketplaceClient } from "../marketplace-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
@@ -15,6 +16,17 @@ import { SettingsView } from "./settings-view"
 const noop = () => undefined
 const marketplaceClient = {} as MarketplaceClient
 
+const petSettingsUrl = webPluginAssetUrl(
+  {
+    activeRevision: 7,
+    activeSetDigest: "a".repeat(64),
+    id: "soft-companion",
+    snapshotDigest: "b".repeat(64),
+    version: "1.0.0",
+  },
+  "settings/index.html",
+)
+
 const skillClient: DesktopSkillClient = {
   getSkillDetails: mock(async () => {
     throw new Error("not used")
@@ -22,13 +34,6 @@ const skillClient: DesktopSkillClient = {
   getSkillShowcase: mock(async () => null),
   importSkill: mock(async () => null),
   installCatalogSkill: mock(async () => ({
-    location: "/managed/storyboard/SKILL.md",
-    management: { kind: "standalone" as const },
-    managed: true,
-    name: "storyboard",
-    source: "managed" as const,
-  })),
-  installPluginSkill: mock(async () => ({
     location: "/managed/storyboard/SKILL.md",
     management: { kind: "standalone" as const },
     managed: true,
@@ -57,7 +62,7 @@ const pluginClient: WebPluginClient = {
 const petProvider: PetSettingsProvider = {
   generation: 7,
   pluginId: "soft-companion",
-  settingsUrl: "convax-plugin://soft-companion/settings/index.html",
+  settingsUrl: petSettingsUrl,
 }
 
 const petClient: PetSettingsHostClient = {
@@ -430,7 +435,7 @@ describe("SettingsView", () => {
     const markup = renderPetSettings({ provider: petProvider, status: "ready" })
 
     expect(markup).toContain("Pets")
-    expect(markup).toContain('src="convax-plugin://soft-companion/settings/index.html"')
+    expect(markup).toContain(`src="${petSettingsUrl}"`)
     expect(markup).toContain('sandbox="allow-scripts"')
     expect(markup).not.toContain("allow-same-origin")
     expect(markup).not.toContain('type="file"')

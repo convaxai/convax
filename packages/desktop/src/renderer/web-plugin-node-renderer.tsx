@@ -2,50 +2,34 @@ import {
   CanvasNodeChrome,
   CanvasNodeToolbarButton,
   CanvasNodeToolbarDivider,
-  updateCanvasNodeData,
   useCanvasEditor,
-  type CanvasDocument,
   type CanvasFileRendererDefinition,
   type CanvasFileRendererPlugin,
 } from "@convax/canvas"
-import { Copy, Play, Puzzle, Trash2 } from "lucide-react"
-import { type ComponentProps, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import type { PortablePluginUiToolbarItem } from "@convax/plugin-sdk"
+import { Copy, Puzzle, Trash2 } from "lucide-react"
+import { type ComponentProps, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import {
   requireWebPluginId,
   requireWebPluginRelativePath,
-  webPluginManifestSchemaV5,
-  webPluginManifestSchemaV6,
-  webPluginManifestSchemaV7,
-  type InstalledWebPluginCanvasSurface,
+  type ActiveInstalledWebPluginCanvasSurface,
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
-import {
-  connectedInputFingerprint,
-  connectedImageFingerprint,
-  dispatchPluginHostRequest,
-  getIncomingConnectedImageNodes,
-  getIncomingConnectedInputNodes,
-} from "../plugin-canvas-host"
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import {
   matchesWebPluginCanvasNode,
   createWebPluginCanvasNode,
   webPluginCanvasRendererId,
   webPluginIdentityMetadataKey,
-  webPluginNodeMetadata,
   webPluginStateMetadataKey,
 } from "../plugin-canvas-node"
-import type { PluginCanvasHost, PluginHostLimits, PluginNodeInvocationRef } from "../plugin-host-types"
-import {
-  desktopPluginConnectedImagesChangedCommand,
-  desktopPluginConnectedInputsChangedCommand,
-  desktopPluginHostProtocolForManifestSchema,
-  pluginCapabilityProtocolV1,
-  pluginCapabilityProtocolV2,
-  type DesktopPluginHostConnect,
-} from "../plugin-host-protocol"
+import { desktopPluginHostProtocolV8, type DesktopPluginHostConnect } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry, type DesktopPluginFrameRef } from "./plugin-frame-registry"
-import { isProjectCanvasCapabilityRequest, RendererPluginHostConnection } from "./plugin-host-connection"
+import { RendererPluginHostConnection } from "./plugin-host-connection"
 import { HostPointerReleaseGate } from "./host-pointer-gesture"
+import type { AppLocale } from "./app-language"
+import { DesktopPluginNodeCommandRegistry } from "./plugin-node-command-registry"
+import { PluginNodeCommandSurfaces } from "./plugin-node-command-surfaces"
 
 export const webPluginIframeSandbox = "allow-scripts" as const
 export const webPluginIframePermissions = [
@@ -157,142 +141,51 @@ export function scheduleWebPluginFrameConnect(callback: () => void, clock = brow
   }
 }
 
-interface WebPluginCanvasStateWriteEditor {
-  document: CanvasDocument
-  hydrating: boolean
-  readOnly: boolean
-}
-
-function waitForRendererTask(signal: AbortSignal) {
-  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("Plugin frame was closed"))
-  return new Promise<void>((resolve, reject) => {
-    const delayId = globalThis.setTimeout(() => {
-      signal.removeEventListener("abort", onAbort)
-      resolve()
-    }, 0)
-    const onAbort = () => {
-      globalThis.clearTimeout(delayId)
-      reject(signal.reason ?? new Error("Plugin frame was closed"))
-    }
-    signal.addEventListener("abort", onAbort, { once: true })
-  })
-}
-
-export async function waitForWebPluginCanvasStateWrite<Editor extends WebPluginCanvasStateWriteEditor>(
-  input: {
-    frame: PluginNodeInvocationRef
-    getActiveContext: PluginCanvasHost["getActiveContext"]
-    getEditor: () => Editor
-    signal: AbortSignal
-    waitForGenerationProjection: PluginCanvasHost["waitForGenerationProjection"]
-  },
-  waitForRender: (signal: AbortSignal) => Promise<void> = waitForRendererTask,
-): Promise<Editor> {
-  await input.waitForGenerationProjection({ ...input.frame, signal: input.signal })
-  while (true) {
-    if (input.signal.aborted) throw input.signal.reason ?? new Error("Plugin frame was closed")
-    const active = input.getActiveContext()
-    if (active?.projectId !== input.frame.projectId || active.canvasId !== input.frame.canvasId) {
-      throw new Error("Plugin call is no longer in the active Project and Canvas")
-    }
-    const editor = input.getEditor()
-    if (editor.document.id !== input.frame.canvasId) {
-      throw new Error("Canvas is not writable in the current scope")
-    }
-    if (!editor.hydrating) {
-      if (editor.readOnly) throw new Error("Canvas is not writable in the current scope")
-      return editor
-    }
-    await waitForRender(input.signal)
-  }
-}
-
 type WebPluginNodeProps = ComponentProps<CanvasFileRendererDefinition["component"]>
 
 export interface WebPluginCanvasContributionOptions {
   frameRegistry: DesktopPluginFrameRegistry
-  host: PluginCanvasHost
-  limits?: PluginHostLimits
+  getActiveProjectId(): string | null
+  locale: AppLocale
 }
-
-export function updateWebPluginNodeState(
-  document: CanvasDocument,
-  input: { canvasId: string; nodeId: string; plugin: InstalledWebPluginCanvasSurface },
-  state: Record<string, unknown>,
+export function webPluginEntryUrl(
+  plugin: Pick<
+    ActiveInstalledWebPluginCanvasSurface,
+    "activeRevision" | "activeSetDigest" | "entry" | "id" | "snapshotDigest" | "version"
+  >,
 ) {
-  if (document.id !== input.canvasId) return document
-  const node = document.nodes.find((candidate) => candidate.id === input.nodeId)
-  if (!node || !matchesWebPluginCanvasNode(input.plugin, node.data)) return document
-  return updateCanvasNodeData(document, input.nodeId, (data) => ({
-    ...data,
-    metadata: {
-      ...webPluginNodeMetadata(data),
-      [webPluginIdentityMetadataKey]: {
-        entry: input.plugin.entry,
-        id: input.plugin.id,
-        version: input.plugin.version,
-      },
-      [webPluginStateMetadataKey]: state,
-    },
-  }))
-}
-export function webPluginEntryUrl(plugin: Pick<InstalledWebPluginCanvasSurface, "entry" | "id">) {
-  const id = requireWebPluginId(plugin.id)
+  requireWebPluginId(plugin.id)
   const entry = requireWebPluginRelativePath(plugin.entry, "Plugin entry")
-  const url = new URL(`convax-plugin://${id}/`)
-  url.pathname = `/${entry.split("/").map(encodeURIComponent).join("/")}`
-  return url.href
+  return webPluginAssetUrl(plugin, entry)
 }
 
-/** Force an installed Plugin upgrade to replace the live opaque-origin frame. */
-export function webPluginFrameKey(plugin: Pick<InstalledWebPluginCanvasSurface, "entry" | "id" | "version">) {
-  return `${requireWebPluginId(plugin.id)}:${plugin.version}:${requireWebPluginRelativePath(plugin.entry, "Plugin entry")}`
-}
-
-const webPluginNodeDataIdentity = new WeakMap<object, number>()
-const webPluginNodeDataVectorScope = new WeakMap<CanvasDocument["nodes"], string>()
-let nextWebPluginNodeDataIdentity = 1
-
-function nodeDataIdentity(data: CanvasDocument["nodes"][number]["data"]) {
-  const cached = webPluginNodeDataIdentity.get(data)
-  if (cached !== undefined) return cached
-  const identity = nextWebPluginNodeDataIdentity++
-  webPluginNodeDataIdentity.set(data, identity)
-  return identity
-}
-
-/**
- * Geometry-only gesture previews retain node data references, while resource
- * hydration and semantic node updates replace them. Cache the vector once per
- * nodes array so every Plugin on the Canvas shares the same O(n) scan.
- */
-export function webPluginDocumentFingerprintScope(document: Pick<CanvasDocument, "id" | "nodes" | "revision">) {
-  let dataVector = webPluginNodeDataVectorScope.get(document.nodes)
-  if (dataVector === undefined) {
-    dataVector = JSON.stringify(document.nodes.map((node) => [node.id, nodeDataIdentity(node.data)]))
-    webPluginNodeDataVectorScope.set(document.nodes, dataVector)
-  }
-  return JSON.stringify([document.id, document.revision, dataVector])
+/** Force every exact ActiveSet/snapshot transition to replace the live frame. */
+export function webPluginFrameKey(
+  plugin: Pick<
+    ActiveInstalledWebPluginCanvasSurface,
+    "activeRevision" | "activeSetDigest" | "entry" | "id" | "snapshotDigest" | "version"
+  >,
+) {
+  return JSON.stringify([
+    requireWebPluginId(plugin.id),
+    plugin.version,
+    plugin.activeRevision,
+    plugin.activeSetDigest,
+    plugin.snapshotDigest,
+    requireWebPluginRelativePath(plugin.entry, "Plugin entry"),
+  ])
 }
 
 function WebPluginCanvasNode(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
-    plugin: InstalledWebPluginCanvasSurface
+    plugin: ActiveInstalledWebPluginCanvasSurface
   },
 ) {
   const editor = useCanvasEditor()
-  const editorRef = useRef(editor)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
-  const canvasImageWriteGateRef = useRef({ active: false })
-  const connectedImageReadGateRef = useRef({ active: false })
-  const connectedMediaOpenGateRef = useRef({ active: false })
-  const generationGateRef = useRef({ active: false })
-  const nodeStateWriteGateRef = useRef({ active: false })
-  const connectedImageFingerprintRef = useRef<string | null>(null)
-  const connectedInputFingerprintRef = useRef<string | null>(null)
   const pointerGateRef = useRef(new HostPointerReleaseGate())
   const pointerReleaseFrameRef = useRef<number | null>(null)
   const pointerReleaseListenersRef = useRef<(() => void) | null>(null)
@@ -304,13 +197,6 @@ function WebPluginCanvasNode(
     pointerReleasePending: interactionPending,
     selected: props.selected,
   })
-  editorRef.current = editor
-
-  const canReadConnectedImages = props.plugin.capabilities.includes("canvas.connectedImages.read")
-  const canReadConnectedInputs = props.plugin.capabilities.includes("canvas.connectedInputs.read")
-  const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
-  const documentFingerprintScope = webPluginDocumentFingerprintScope(editor.document)
-
   useEffect(
     () => () => {
       pendingConnectCleanupRef.current?.()
@@ -379,135 +265,31 @@ function WebPluginCanvasNode(
     pointerReleaseListenersRef.current = removeListeners
   }
 
-  useEffect(() => {
-    if (!canReadConnectedImages) return () => undefined
-    let canceled = false
-    const document = editor.document
-    void connectedImageFingerprint(document, props.id)
-      .then((fingerprint) => {
-        if (canceled || connectedImageFingerprintRef.current === fingerprint) return
-        connectedImageFingerprintRef.current = fingerprint
-        const active = props.options.host.getActiveContext()
-        if (!active || active.canvasId !== document.id) return
-        const frame = {
-          canvasId: active.canvasId,
-          nodeId: props.id,
-          pluginId: props.plugin.id,
-          projectId: active.projectId,
-        }
-        if (!props.options.frameRegistry.has(frame)) return
-        try {
-          props.options.frameRegistry.send(frame, {
-            command: desktopPluginConnectedImagesChangedCommand,
-            protocol: hostProtocol,
-            type: "command",
-          })
-        } catch {
-          // The frame may unmount between the digest and this command.
-        }
-      })
-      .catch(() => {
-        // Web Crypto is a renderer primitive; initial Plugin listing still fails safe if unavailable.
-      })
-    return () => {
-      canceled = true
-    }
-  }, [
-    canReadConnectedImages,
-    documentFingerprintScope,
-    props.id,
-    props.options.frameRegistry,
-    props.options.host,
-    props.plugin.id,
-    hostProtocol,
-  ])
-
-  useEffect(() => {
-    if (!canReadConnectedInputs) return () => undefined
-    let canceled = false
-    const document = editor.document
-    void connectedInputFingerprint(document, props.id)
-      .then((fingerprint) => {
-        if (canceled || connectedInputFingerprintRef.current === fingerprint) return
-        connectedInputFingerprintRef.current = fingerprint
-        const active = props.options.host.getActiveContext()
-        if (!active || active.canvasId !== document.id) return
-        const frame = {
-          canvasId: active.canvasId,
-          nodeId: props.id,
-          pluginId: props.plugin.id,
-          projectId: active.projectId,
-        }
-        if (!props.options.frameRegistry.has(frame)) return
-        try {
-          props.options.frameRegistry.send(frame, {
-            command: desktopPluginConnectedInputsChangedCommand,
-            protocol: hostProtocol,
-            type: "command",
-          })
-        } catch {
-          // The frame may unmount between the digest and this command.
-        }
-      })
-      .catch(() => {
-        // Metadata listing remains available even when Web Crypto is unavailable.
-      })
-    return () => {
-      canceled = true
-    }
-  }, [
-    canReadConnectedInputs,
-    documentFingerprintScope,
-    props.id,
-    props.options.frameRegistry,
-    props.options.host,
-    props.plugin.id,
-    hostProtocol,
-  ])
-
   const connectFrame = () => {
     cleanupRef.current?.()
     cleanupRef.current = null
     const iframeWindow = iframeRef.current?.contentWindow
-    const active = props.options.host.getActiveContext()
-    const currentEditor = editorRef.current
-    const node = currentEditor.document.nodes.find((candidate) => candidate.id === props.id)
-    if (
-      !iframeWindow ||
-      !active ||
-      active.canvasId !== currentEditor.document.id ||
-      !node ||
-      !matchesWebPluginCanvasNode(props.plugin, node.data)
-    )
-      return
+    const projectId = props.options.getActiveProjectId()
+    if (!iframeWindow || !projectId) return
 
     const controller = new AbortController()
     const channel = new MessageChannel()
-    const connectedImageReadGate = connectedImageReadGateRef.current
-    const connectedMediaOpenGate = connectedMediaOpenGateRef.current
-    const canvasImageWriteGate = canvasImageWriteGateRef.current
-    const generationGate = generationGateRef.current
-    const nodeStateWriteGate = nodeStateWriteGateRef.current
     const frame: DesktopPluginFrameRef = {
-      canvasId: active.canvasId,
+      activeRevision: props.plugin.activeRevision,
+      activeSetDigest: props.plugin.activeSetDigest,
+      canvasId: editor.document.id,
       nodeId: props.id,
       pluginId: props.plugin.id,
-      projectId: active.projectId,
-    }
-    const connectedMediaFrame = {
-      ...frame,
-      frameId: globalThis.crypto.randomUUID(),
       pluginVersion: props.plugin.version,
+      projectId,
+      snapshotDigest: props.plugin.snapshotDigest,
     }
-    const connectedMediaSessions = new Set<string>()
     let unregister: () => void = () => undefined
     let capabilityConnection: RendererPluginHostConnection | null = null
     const cleanup = () => {
       if (controller.signal.aborted) return
       controller.abort(new Error("Plugin frame was closed"))
       capabilityConnection?.close()
-      connectedMediaSessions.clear()
-      void window.convax.canvas.pluginConnectedMedia.revokeFrame(connectedMediaFrame).catch(() => undefined)
       channel.port1.onmessage = null
       channel.port1.close()
       unregister()
@@ -530,125 +312,31 @@ function WebPluginCanvasNode(
       channel.port2.close()
       return
     }
-    if (
-      props.plugin.schema === webPluginManifestSchemaV5 ||
-      props.plugin.schema === webPluginManifestSchemaV6 ||
-      props.plugin.schema === webPluginManifestSchemaV7
-    ) {
-      capabilityConnection = new RendererPluginHostConnection(
-        window.convax.pluginCapabilities,
-        {
-          pluginId: props.plugin.id,
-          pluginVersion: props.plugin.version,
-          projectId: active.projectId,
-          runtime: "web",
-        },
-        (command) => {
-          if (controller.signal.aborted) return
-          try {
-            channel.port1.postMessage(command)
-          } catch {
-            cleanup()
-          }
-        },
-        props.plugin.schema === webPluginManifestSchemaV7
-          ? pluginCapabilityProtocolV2
-          : pluginCapabilityProtocolV1,
-      )
-    }
+    capabilityConnection = new RendererPluginHostConnection(
+      window.convax.pluginCapabilities,
+      {
+        activeRevision: props.plugin.activeRevision,
+        activeSetDigest: props.plugin.activeSetDigest,
+        canvasId: frame.canvasId,
+        nodeId: frame.nodeId,
+        pluginId: props.plugin.id,
+        pluginVersion: props.plugin.version,
+        projectId,
+        runtime: "web",
+        snapshotDigest: props.plugin.snapshotDigest,
+      },
+      (command) => {
+        if (controller.signal.aborted) return
+        try {
+          channel.port1.postMessage(command)
+        } catch {
+          cleanup()
+        }
+      },
+    )
     cleanupRef.current = cleanup
     channel.port1.onmessage = (event) => {
-      const response =
-        capabilityConnection && isProjectCanvasCapabilityRequest(event.data)
-          ? capabilityConnection.dispatch(event.data)
-          : dispatchPluginHostRequest(event.data, {
-              canvasImageWriteGate,
-              connectedImageReadGate,
-              connectedMediaOpenGate,
-              createCanvasImage: (input) => props.options.host.createCanvasImage(input),
-              executeCanvasGeneration: (input) => props.options.host.executeCanvasGeneration(input),
-              frame,
-              generationGate,
-              nodeStateWriteGate,
-              getActiveContext: () => props.options.host.getActiveContext(),
-              getConnectedImageNodes: () => {
-                const latest = editorRef.current
-                if (latest.document.id !== frame.canvasId) return []
-                return getIncomingConnectedImageNodes(latest.document, frame.nodeId)
-              },
-              getConnectedInputNodes: () => {
-                const latest = editorRef.current
-                if (latest.document.id !== frame.canvasId) return []
-                return getIncomingConnectedInputNodes(latest.document, frame.nodeId)
-              },
-              getNode: () => {
-                const latest = editorRef.current
-                if (latest.document.id !== frame.canvasId) return undefined
-                return latest.document.nodes.find((candidate) => candidate.id === frame.nodeId)
-              },
-              getDocument: () => {
-                const latest = editorRef.current
-                return latest.document.id === frame.canvasId ? latest.document : undefined
-              },
-              isCanvasWritable: () => {
-                const latest = editorRef.current
-                return !latest.readOnly && latest.document.id === frame.canvasId
-              },
-              limits: props.options.limits,
-              listGenerationTools: (input) => props.options.host.listGenerationTools(input),
-              openConnectedMedia: async (input) => {
-                const result = await window.convax.canvas.pluginConnectedMedia.open({
-                  ...connectedMediaFrame,
-                  expectedRevision: input.expectedRevision,
-                  sourceNodeId: input.sourceNodeId,
-                })
-                if (controller.signal.aborted) {
-                  await window.convax.canvas.pluginConnectedMedia
-                    .close({ ...connectedMediaFrame, sessionId: result.sessionId })
-                    .catch(() => undefined)
-                  throw controller.signal.reason ?? new Error("Plugin frame was closed")
-                }
-                connectedMediaSessions.add(result.sessionId)
-                return result
-              },
-              closeConnectedMedia: async ({ sessionId }) => {
-                if (!connectedMediaSessions.delete(sessionId)) return false
-                return window.convax.canvas.pluginConnectedMedia.close({
-                  ...connectedMediaFrame,
-                  sessionId,
-                })
-              },
-              ownsNode: (candidate) => matchesWebPluginCanvasNode(props.plugin, candidate.data),
-              plugin: props.plugin,
-              promptAgent: (input) => props.options.host.promptAgent(input),
-              readConnectedImage: (input) => props.options.host.readConnectedImage(input),
-              readProjectText: (input) => props.options.host.readProjectText(input),
-              signal: controller.signal,
-              updateNodeState: async (state) => {
-                const latest = await waitForWebPluginCanvasStateWrite({
-                  frame,
-                  getActiveContext: () => props.options.host.getActiveContext(),
-                  getEditor: () => editorRef.current,
-                  signal: controller.signal,
-                  waitForGenerationProjection: (input) => props.options.host.waitForGenerationProjection(input),
-                })
-                const latestNode = latest.document.nodes.find((candidate) => candidate.id === frame.nodeId)
-                if (!latestNode || !matchesWebPluginCanvasNode(props.plugin, latestNode.data)) {
-                  throw new Error("Plugin frame no longer owns this Canvas node")
-                }
-                latest.commit((document) =>
-                  updateWebPluginNodeState(
-                    document,
-                    {
-                      canvasId: frame.canvasId,
-                      nodeId: frame.nodeId,
-                      plugin: props.plugin,
-                    },
-                    state,
-                  ),
-                )
-              },
-            })
+      const response = capabilityConnection?.dispatch(event.data, controller.signal) ?? Promise.resolve(null)
       void response.then((response) => {
         if (!response || controller.signal.aborted) return
         try {
@@ -661,7 +349,7 @@ function WebPluginCanvasNode(
     channel.port1.start()
     const connect = {
       pluginId: props.plugin.id,
-      protocol: hostProtocol,
+      protocol: desktopPluginHostProtocolV8,
       type: "connect",
     } satisfies DesktopPluginHostConnect
     // Sandboxed frames have an opaque origin; the transferred port is the scoped capability token.
@@ -683,9 +371,12 @@ function WebPluginCanvasNode(
     })
   }
 
-  const contributedToolbar = props.plugin.contributes.canvas.toolbar?.length ? (
+  const hasCommandPlacements = Boolean(
+    props.plugin.contributes.canvas.menus?.length || props.plugin.contributes.canvas.toolbar?.length,
+  )
+  const contributedToolbar = hasCommandPlacements ? (
     <>
-      <WebPluginCanvasToolbarButtons {...props} />
+      <WebPluginCanvasCommandSurfaces {...props} />
       <CanvasNodeToolbarDivider />
     </>
   ) : null
@@ -723,66 +414,62 @@ function WebPluginCanvasNode(
   )
 }
 
-function WebPluginCanvasToolbarButtons(
+function WebPluginCanvasCommandSurfaces(
   props: WebPluginNodeProps & {
     options: WebPluginCanvasContributionOptions
-    plugin: InstalledWebPluginCanvasSurface
+    plugin: ActiveInstalledWebPluginCanvasSurface
   },
 ) {
   const editor = useCanvasEditor()
-  const hostProtocol = desktopPluginHostProtocolForManifestSchema(props.plugin.schema)
   useSyncExternalStore(
     props.options.frameRegistry.subscribe,
     props.options.frameRegistry.getVersion,
     props.options.frameRegistry.getVersion,
   )
-  const active = props.options.host.getActiveContext()
-  const frame =
-    active && active.canvasId === editor.document.id
-      ? {
-          canvasId: active.canvasId,
-          nodeId: props.id,
-          pluginId: props.plugin.id,
-          projectId: active.projectId,
-        }
-      : null
-  const mounted = Boolean(frame && props.options.frameRegistry.has(frame))
+  const commandContribution = useMemo(() => {
+    const toolbar = props.plugin.contributes.canvas.toolbar ?? []
+    if (toolbar.some((item) => "title" in item)) {
+      throw new Error("convax.plugin/8 Canvas toolbar must reference canonical UI commands")
+    }
+    return {
+      commands: props.plugin.contributes.canvas.commands ?? [],
+      menus: props.plugin.contributes.canvas.menus ?? [],
+      toolbar: toolbar as readonly PortablePluginUiToolbarItem[],
+    }
+  }, [props.plugin])
+  const commandRegistry = useMemo(
+    () => new DesktopPluginNodeCommandRegistry(props.plugin.id, commandContribution, props.options.frameRegistry),
+    [commandContribution, props.options.frameRegistry, props.plugin.id],
+  )
+  const activeProjectId = props.options.getActiveProjectId()
+  const frame = activeProjectId
+    ? {
+        activeRevision: props.plugin.activeRevision,
+        activeSetDigest: props.plugin.activeSetDigest,
+        canvasId: editor.document.id,
+        nodeId: props.id,
+        pluginId: props.plugin.id,
+        pluginVersion: props.plugin.version,
+        projectId: activeProjectId,
+        snapshotDigest: props.plugin.snapshotDigest,
+      }
+    : null
+  const projection = commandRegistry.project(frame, props.options.locale)
   return (
-    <>
-      {props.plugin.contributes.canvas.toolbar?.map((item) => (
-        <CanvasNodeToolbarButton
-          disabled={!mounted}
-          icon={item.icon === "play" ? <Play /> : undefined}
-          key={item.id}
-          label={item.title}
-          onClick={() => {
-            const current = props.options.host.getActiveContext()
-            if (!current || current.canvasId !== editor.document.id) return
-            const currentFrame = {
-              canvasId: current.canvasId,
-              nodeId: props.id,
-              pluginId: props.plugin.id,
-              projectId: current.projectId,
-            }
-            try {
-              props.options.frameRegistry.send(currentFrame, {
-                command: item.command,
-                protocol: hostProtocol,
-                type: "command",
-              })
-            } catch {
-              // A failed sandbox command must not break the Canvas toolbar.
-            }
-          }}
-          visibleLabel={item.icon === undefined}
-        />
-      ))}
-    </>
+    <PluginNodeCommandSurfaces
+      canExecute={() => {
+        if (!frame) return false
+        return props.options.getActiveProjectId() === frame.projectId && editor.document.id === frame.canvasId
+      }}
+      moreLabel={props.options.locale === "zh-CN" ? "更多插件操作" : "More Plugin actions"}
+      projection={projection}
+      registry={commandRegistry}
+    />
   )
 }
 
 export function createWebPluginCanvasContribution(
-  plugin: InstalledWebPluginCanvasSurface,
+  plugin: ActiveInstalledWebPluginCanvasSurface,
   options: WebPluginCanvasContributionOptions,
 ): CanvasFileRendererPlugin {
   const renderer = plugin.contributes.canvas.renderer

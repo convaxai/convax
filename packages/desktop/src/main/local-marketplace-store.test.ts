@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 import { afterEach, describe, expect, test } from "bun:test"
+import { computeSourceKey } from "@convax/marketplace"
 
 import { LocalMarketplaceStore } from "./local-marketplace-store"
 
@@ -67,7 +68,7 @@ describe("LocalMarketplaceStore", () => {
     [
       "plugin",
       "manifest.json",
-      '{"schema":"convax.plugin/5","id":"local-plugin","name":"Local Plugin","description":"Local plugin","version":"1.0.0","capabilities":["projects.read"],"contributes":{}}',
+      '{"schema":"convax.plugin/8","id":"local-plugin","name":"Local Plugin","description":"Local plugin","version":"1.0.0","hostApi":{"major":1,"required":[],"optional":[]},"capabilities":["projects.read"],"contributes":{}}',
     ],
     ["skill", "SKILL.md", "---\nname: local-skill\ndescription: Local skill\n---\n"],
     [
@@ -90,6 +91,68 @@ describe("LocalMarketplaceStore", () => {
     await fs.writeFile(path.join(source, marker), `${contents}\nchanged`)
     expect(await fs.readFile(path.join(snapshotDirectory, marker), "utf8")).toBe(contents)
     expect(await fs.readFile(path.join(root, "index-v1.json"), "utf8")).not.toContain(root)
+  })
+
+  test("projects only canonical v8 contribution fields into Local runtime surfaces", async () => {
+    const root = await directory("runtime-surface-store")
+    const store = localStore({ marketplaceId: "convax-local", root })
+    const identity = await store.initialize()
+    const sourceKey = computeSourceKey({ kind: "local", ...identity })
+    const cases = [
+      {
+        expected: "none",
+        id: "authority-only",
+        manifest: {
+          capabilities: ["projects.read"],
+          contributes: {},
+          description: "Authority only",
+          hostApi: { major: 1, optional: [], required: [] },
+          name: "Authority only",
+          schema: "convax.plugin/8",
+          version: "1.0.0",
+        },
+      },
+      {
+        expected: "agent",
+        id: "agent-hook",
+        manifest: {
+          capabilities: [],
+          contributes: {},
+          description: "Agent hook",
+          hooks: "hook.mjs",
+          hostApi: { major: 1, optional: [], required: [] },
+          name: "Agent hook",
+          schema: "convax.plugin/8",
+          version: "1.0.0",
+        },
+      },
+      {
+        expected: "agent-and-convax",
+        id: "canvas-surface",
+        manifest: {
+          capabilities: [],
+          contributes: { canvas: { renderer: { create: true } } },
+          description: "Canvas surface",
+          entry: "index.html",
+          hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+          name: "Canvas surface",
+          schema: "convax.plugin/8",
+          version: "1.0.0",
+        },
+      },
+    ] as const
+
+    for (const item of cases) {
+      const source = await directory(item.id)
+      await fs.writeFile(
+        path.join(source, "manifest.json"),
+        JSON.stringify({ ...item.manifest, id: item.id }),
+      )
+      const imported = await store.importDirectory(source)
+      const projected = await store.projectCatalogItem(imported, sourceKey)
+      expect(projected.runtimeSurface).toBe(item.expected)
+      expect(projected.presentation.description).toBe(item.manifest.description)
+    }
   })
 
   test("treats an exact duplicate as a no-op without advancing revision", async () => {

@@ -207,6 +207,7 @@ export class PluginServiceBrowserAuthorizationBroker {
       action: PluginServiceAuthorizationAction
       isCurrent(): Promise<boolean>
       serviceIdentity: string
+      snapshotDigest: string
       signal?: AbortSignal
     },
   ): Promise<PluginServiceBrowserAuthorizationCompletion> {
@@ -236,6 +237,7 @@ export class PluginServiceBrowserAuthorizationBroker {
         cookieOrigin: request.cookieOrigin,
         pluginId,
         serviceIdentity: options.serviceIdentity,
+        snapshotDigest: options.snapshotDigest,
       }
       let checkpoint: PluginServiceAuthorizationCheckpoint | null = null
       if (this.checkpoints) {

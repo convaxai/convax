@@ -4,7 +4,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { StdioMcpClient, type StdioMcpClientOptions } from "./stdio-mcp-client"
+import {
+  StdioMcpClient,
+  StdioMcpServerRequestError,
+  type StdioMcpClientOptions,
+} from "./stdio-mcp-client"
 import { generationLroMethods } from "./generation-recovery-protocol"
 
 const clients = new Set<StdioMcpClient>()
@@ -33,6 +37,29 @@ afterEach(() => {
 })
 
 describe("StdioMcpClient", () => {
+  test("sends bounded Plugin capability metadata outside the closed tool arguments", async () => {
+    const client = createClient()
+    clients.add(client)
+    const operationId = "a".repeat(64)
+    const authorityToken = "A".repeat(43)
+    await expect(
+      client.callPluginCapabilityTool("echo", { text: "hello" }, { authorityToken, operationId }),
+    ).resolves.toMatchObject({
+      structuredContent: {
+        requestMeta: {
+          convaxPluginCapability: {
+            authorityToken,
+            operationId,
+            schema: "convax.plugin-capability-call/1",
+          },
+        },
+      },
+    })
+    await expect(
+      client.callPluginCapabilityTool("echo", {}, { authorityToken, operationId: "caller-supplied" }),
+    ).rejects.toThrow("metadata is invalid")
+  })
+
   test("delivers structured generation lifecycle receipts for the exact live call", async () => {
     const client = createClient({ fixtureArgs: ["--generation-task-id=task_safe_123"] })
     const events: Array<{ type: string; taskId?: string }> = []
@@ -196,6 +223,42 @@ describe("StdioMcpClient", () => {
     })
   })
 
+  test("bounds the outbound queue when the child stdin applies backpressure", async () => {
+    let child: ChildProcessWithoutNullStreams | undefined
+    const client = new StdioMcpClient({
+      args: [path.join(import.meta.dir, "stdio-mcp-client.fixture.ts"), "--pause-stdin-after-tools-list"],
+      command: process.execPath,
+      cwd: import.meta.dir,
+      env: { PATH: process.env.PATH },
+      spawn: ((command, args, options) => {
+        child = spawn(command, args ?? [], options ?? {}) as ChildProcessWithoutNullStreams
+        return child
+      }) as typeof spawn,
+    })
+    clients.add(client)
+    await client.listTools()
+
+    const payload = "x".repeat(128 * 1024)
+    const calls = Array.from({ length: 96 }, (_, index) => client.callTool("echo", { index, payload }))
+    const settled = Promise.allSettled(calls)
+    await Bun.sleep(40)
+    expect(child!.stdin.writableLength).toBeLessThan(512 * 1024)
+
+    client.close(true)
+    const results = await Promise.race([settled, Bun.sleep(2_000).then(() => "timeout" as const)])
+    expect(results).not.toBe("timeout")
+    if (results === "timeout") throw new Error("Backpressured requests did not settle")
+    expect(results).toHaveLength(96)
+    expect(
+      results.some(
+        (result) =>
+          result.status === "rejected" &&
+          result.reason instanceof Error &&
+          result.reason.message.includes("backpressured"),
+      ),
+    ).toBeTrue()
+  })
+
   test("rejects server-to-client requests by default and invokes only explicitly allowlisted methods", async () => {
     const rejected = createClient({ fixtureArgs: ["--host-request-method=convax/test"] })
     expect((await rejected.callTool("echo", {})).structuredContent).toMatchObject({
@@ -245,6 +308,54 @@ describe("StdioMcpClient", () => {
     expect(Buffer.byteLength(responses.find(({ error }) => error.code === -32603)!.error.message)).toBeLessThanOrEqual(
       512,
     )
+  })
+
+  test("preserves only explicitly admitted structured server-request error data", async () => {
+    const client = createClient({
+      fixtureArgs: ["--host-request-method=convax/allowed"],
+      serverRequestHandler: {
+        async handle() {
+          throw new StdioMcpServerRequestError(
+            -32_010,
+            "Plugin capability call failed",
+            {
+              failure: {
+                code: "execution-failed",
+                kind: "capability",
+                message: "Plugin capability provider execution failed",
+                recoverable: false,
+              },
+              schema: "convax.plugin-capability-failure/1",
+            },
+            { cause: new Error("cookie=secret-value /private/provider/path") },
+          )
+        },
+        methods: ["convax/allowed"],
+      },
+    })
+    const response = (await client.callTool("echo", {})).structuredContent?.hostResponses as Array<{
+      error: { code: number; data: unknown; message: string }
+    }>
+
+    expect(response).toEqual([
+      {
+        error: {
+          code: -32_010,
+          data: {
+            failure: {
+              code: "execution-failed",
+              kind: "capability",
+              message: "Plugin capability provider execution failed",
+              recoverable: false,
+            },
+            schema: "convax.plugin-capability-failure/1",
+          },
+          message: "Plugin capability call failed",
+        },
+      },
+    ])
+    expect(JSON.stringify(response)).not.toContain("secret-value")
+    expect(JSON.stringify(response)).not.toContain("/private/provider/path")
   })
 
   test("aborts and closes the optional server request handler with the process lifecycle", async () => {

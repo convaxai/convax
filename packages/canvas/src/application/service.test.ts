@@ -96,6 +96,40 @@ describe("canvas application service", () => {
     ).toEqual(["first"])
   })
 
+  test("runs a host-neutral final guard immediately before persistence", async () => {
+    const order: string[] = []
+    const document = createCanvasDocument({
+      id: "canvas-guarded",
+      nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 } })],
+    })
+    const service = new CanvasApplicationService({
+      async load() {
+        order.push("load")
+        return { document, storageVersion: "v1" }
+      },
+      async save() {
+        order.push("save")
+        return { storageVersion: "v2" }
+      },
+    })
+
+    await service.execute({
+      beforeCommit: async () => {
+        order.push("guard")
+      },
+      canvasId: document.id,
+      envelope: {
+        actor: { id: "plugin-one", kind: "plugin" },
+        command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["first"] },
+        commandId: "guarded-move",
+        expectedRevision: document.revision,
+      },
+      scopeId: "project-one",
+    })
+
+    expect(order).toEqual(["load", "guard", "save"])
+  })
+
   test("applies a transaction in order with one revision, one CAS save, and transaction idempotency", async () => {
     let loads = 0
     let snapshot: CanvasDocumentSnapshot = {

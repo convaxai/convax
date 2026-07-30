@@ -23,6 +23,7 @@ import {
 
 interface PluginServiceToolCallResult {
   authorizationIdentity?: string
+  snapshotDigest?: string
   completeAuthorization?: (
     input: PluginServiceBrowserAuthorizationCompletion | PluginServiceExternalAuthorizationCompletion,
     signal?: AbortSignal,
@@ -61,6 +62,7 @@ export interface PluginServiceBrowserAuthorizationHost {
       action: "authorize" | "reauthorize"
       isCurrent(): Promise<boolean>
       serviceIdentity: string
+      snapshotDigest: string
       signal?: AbortSignal
     },
   ): Promise<PluginServiceBrowserAuthorizationCompletion>
@@ -92,6 +94,13 @@ function authorizationIdentity(result: PluginServiceToolCallResult, summary: Plu
   // GenerationPluginRuntime always supplies the stronger manifest + verified
   // executable identity above.
   return createHash("sha256").update(summaryFingerprint(summary)).digest("hex")
+}
+
+function requireSnapshotDigest(value: unknown, pluginId: string) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error(`Plugin service is not bound to an immutable snapshot: ${pluginId}`)
+  }
+  return value
 }
 
 function abortError(message: string) {
@@ -338,6 +347,7 @@ export class PluginServiceHost {
           action: call,
           isCurrent: async () => this.#isCurrent(before),
           serviceIdentity: authorizationIdentity(result, before),
+          snapshotDigest: requireSnapshotDigest(result.snapshotDigest, pluginId),
           signal,
         })
         commitBrowserCheckpoint = true

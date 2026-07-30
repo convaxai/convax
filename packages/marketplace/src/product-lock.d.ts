@@ -4,6 +4,13 @@ export type MarketplaceArtifactLock = {
     size: number;
     url: string;
 };
+export type MarketplacePreinstalledPackagePolicy = {
+    id: string;
+    kind: "plugin";
+    marketplaceId: "convax-official";
+    setup: "automatic";
+    targets: Array<`${"darwin" | "linux" | "win32"}-${"arm64" | "x64"}`>;
+};
 export type MarketplaceProductPolicy = {
     builtin: {
         marketplaceId: "convax-builtin";
@@ -14,13 +21,7 @@ export type MarketplaceProductPolicy = {
         marketplaceId: "convax-official";
         repository: "microvoid/convax-plugins";
     };
-    preinstalledPackages: Array<{
-        id: "ffmpeg-tools";
-        kind: "plugin";
-        marketplaceId: "convax-official";
-        setup: "automatic";
-        targets: ["darwin-arm64"];
-    }>;
+    preinstalledPackages: MarketplacePreinstalledPackagePolicy[];
     revision: number;
 };
 export type MarketplaceProductLock = {
@@ -40,14 +41,14 @@ export type MarketplaceProductLock = {
         packages: Array<{
             artifact: MarketplaceArtifactLock;
             companions: Array<MarketplaceArtifactLock & {
-                arch: string;
-                platform: string;
+                arch: "arm64" | "x64";
+                platform: "darwin" | "linux" | "win32";
             }>;
             id: string;
-            kind: "plugin" | "skill" | "mcp-server";
-            marketplaceId: string;
+            kind: "plugin";
+            marketplaceId: "convax-official";
             ownedSkills: MarketplaceArtifactLock[];
-            setup: "explicit" | "none";
+            setup: "explicit";
             version: string;
         }>;
         policyDigest: string;

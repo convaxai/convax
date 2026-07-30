@@ -1,327 +1,238 @@
-# Convax 插件体系分析（LikeC4）
+# Convax v8 插件体系分析
 
-分析快照：2026-07-25
+本文只描述当前破坏性切换后的 v8 架构，不是历史兼容说明。规范性边界以
+[`architecture.md`](architecture.md)、根目录 `AGENTS.md`、`@convax/plugin-api`
+和 `@convax/plugin-sdk` 的源码与生成产物为准。配套模型见
+[`diagrams/plugin-system.c4`](diagrams/plugin-system.c4)。
 
-代码基线：`ee06fc27f0`
+## 1. 架构结论
 
-官方 Registry：`convax.registry/1`，sequence `32`，revision
-`c6c1ec55e7ff7f1ff8ef7976f116b7470c765fe3`
+Convax 是一个由声明式贡献驱动、由 Desktop Main 统一授权和编排的插件平台。
+宿主提供 Skill、MCP、Agent、Tool 和 Canvas 能力；插件可以注册 Skill、MCP、
+Agent Tool、已验证 Tool、Hook、Canvas node renderer、command、menu、toolbar
+和 host-rendered action，也可以调用 Catalog 中明确声明的 Host API。
 
-配套 LikeC4 模型见 [`diagrams/plugin-system.c4`](diagrams/plugin-system.c4)。模型按
-[LikeC4 Tutorial](https://likec4.dev/tutorial/) 的方式组织：先定义元素类型，再建立层级与关系，最后从同一模型投影静态视图、部署视图和动态流程视图。
+当前只有三份运行契约：
 
-## 1. 结论
+| 契约                         | 唯一所有者           | 责任                                                                |
+| ---------------------------- | -------------------- | ------------------------------------------------------------------- |
+| `convax.plugin/8`            | `@convax/plugin-sdk` | Manifest、贡献、Plugin-to-Plugin export/import、版本范围和值 schema |
+| `convax.plugin-host/8`       | Desktop Host         | 沙箱 iframe 的固定 MessagePort ABI                                  |
+| `convax.plugin-capability/3` | Desktop Host         | transport 到 Main 的 exact-principal 调用协议                       |
 
-Convax 当前的“插件”并不是一个 Web 扩展机制，而是一个**由声明式 Manifest 驱动、由
-Desktop Main 统一授权和编排的多运行平面能力平台**：
+Host API 不随 Manifest 或 transport 升级。`@convax/plugin-api` 的独立 SemVer
+Catalog 是 API id、参数、返回值、权限、受众、引入版本和废弃信息的唯一来源。
+类型、validator、客户端 metadata、人类参考和 Skill 参考都从 Catalog 与 TSDoc
+确定性生成；手写文档不能成为另一份规范。
 
-- `manifest.json` 是路由、贡献和权限的声明源；
-- Desktop Main 是安装、更新、恢复、权限与运行时组合的唯一策略所有者；
-- Web、Tool、Skill、Hook、LLM、remote MCP、Service、Pet 是不同信任等级的贡献平面；
-- Canvas、Project 和 Agent 的领域语义仍由各自既有服务拥有，插件只通过窄适配器调用；
-- 具体插件源码属于 `microvoid/convax-plugins`，本仓库只拥有宿主平台。
+## 2. 不变量
 
-整体方向是健康的：它成功避免了“每种集成都在 Desktop 里加一个 provider 分支”，也没有让
-iframe、Skill 或 Agent 绕过 Canvas 的单写者和 Project 的路径边界。当前主要问题不在抽象方向，
-而在于：
+### 2.1 声明不等于授权
 
-1. Tool sidecar 和 Hook 具有用户进程级执行权，但供应链目前依赖固定 HTTPS 源、Registry
-   序列和 Registry 内 SHA-256，尚没有独立的签名信任根；
-2. Desktop Main 内的生命周期与兼容逻辑高度集中，理解和修改半径较大；
-3. 宿主已经实现 v6、Hook、Project/Canvas broker 等高级能力，但当前官方目录尚未实际采用其中
-   多数能力；
-4. 当前带 companion 的官方插件都只有 `darwin/arm64` 构建，宿主的跨平台设计尚未转化为目录的
-   跨平台可用性；
-5. v1 内置包和 JianYing 的 id-gated 原生路径仍是明确的历史债务。
+`contributes`、`hostApi` 和 Plugin-to-Plugin `exports`/`imports` 相互正交：
 
-## 2. LikeC4 视图
+- contribution 只声明宿主应注册什么；
+- `hostApi.required`/`optional` 只声明插件可能调用哪些基座 API；
+- export/import 只声明插件间的 typed capability binding；
+- Skill 只编排能力，不获得隐式 Plugin、Canvas、文件或网络权限；
+- iframe、Renderer、sidecar、Hook 和 remote MCP 不共享 authority。
 
-| View                        | 回答的问题                                                           |
-| --------------------------- | -------------------------------------------------------------------- |
-| `index`                     | 用中文概览用户、宿主、运行时贡献、能力目录和外部服务。               |
-| `plugin_context`            | Convax、插件作者、Registry、Release、外部服务之间的系统边界是什么？  |
-| `plugin_platform`           | Renderer、Preload、Main、Canvas、Project、Agent 如何组合？           |
-| `contribution_planes`       | Web、Tool、Skill、Hook、Pet 等贡献各自接到哪个宿主适配器？           |
-| `capability_authority`      | Web 与 Tool 如何汇合到同一个 principal-bound Canvas broker？         |
-| `process_trust_boundaries`  | 哪些代码在 iframe、Renderer、Main、sidecar、OpenCode、互联网中运行？ |
-| `install_update_flow`       | 安装/更新如何协调包、Skill、companion、授权收据和恢复日志？          |
-| `web_canvas_call`           | 沙箱 Web 插件如何完成一次 Canvas 读写？                              |
-| `generation_execution_flow` | UI/Agent/Web 如何复用同一 Tool 执行与资源入库链路？                  |
-| `agent_extension_flow`      | Skill、Hook、LLM gateway、remote MCP 为什么是四条不同的信任路径？    |
+运行行为必须由已验证的贡献、grant、schema 和 exact principal 推导，绝不能根据
+具体 Plugin id、厂商、模型名或字段猜测进入特殊分支。
 
-本地预览：
+### 2.2 Main 是唯一策略与执行路由
 
-```bash
-npx likec4 serve docs/diagrams
+Renderer 和 Preload 只运输可克隆数据。Web Plugin 的每次 Host API 调用都在 Main：
+
+```text
+iframe
+  -> convax.plugin-host/8
+  -> renderer transport adapter
+  -> convax.plugin-capability/3
+  -> Main Host API router
+  -> exact principal / API declaration / grant / scope / availability
+  -> owning domain service
 ```
 
-校验：
+Main 签发并重检
+`{activeRevision, activeSetDigest, snapshotDigest, manifestDigest, pluginId,
+pluginVersion, runtime}`。Renderer 不能提供 principal、provider、原生路径、凭据、
+授权 URL 或可执行入口。Canvas 写入走 `CanvasApplicationService` 的 revision/CAS；
+Project 文件发布走 Project owner；Agent 与 Tool 复用各自已有的 typed port。
+
+有副作用的操作使用 Host 签发的 operation identity，传播取消，并在最后不可逆边界
+重新检查 exact principal、作用域与修订。文件发布成功但 Canvas commit 失败属于明确的
+partial success，不能伪装成完整回滚。
+
+### 2.3 发布的是完整不可变闭包
+
+安装先验证并发布一个 content-addressed complete closure。闭包包含：
+
+- v8 Plugin package；
+- Plugin-owned Skills；
+- 已授权 Hook 的精确私有快照；
+- managed companion 的精确字节和授权绑定；
+- 规范化贡献与权限声明。
+
+运行时只读取 immutable closure 和 validated descriptor。全局可见集合由一次
+ActivePluginSet compare-and-swap 切换；不得扫描多个可变目录重建“当前状态”。
+正在执行的调用持有 exact ActiveSet/snapshot lease，长期 owner 使用 bounded durable
+pin。更新可以使新调用转向新集合，但不能替换已经租赁的旧字节。
+
+缓存、staging 和孤儿 closure 都不是 authority。摘要漂移、身份歧义、缺失字节或
+unsupported schema 一律 fail closed。
+
+### 2.4 Plugin-to-Plugin 是独立 Broker
+
+插件互调不是 Host API 的别名，也不是 renderer-selected provider：
+
+```text
+caller declared import
+  -> published ActiveSet binding plan
+  -> Host-mediated typed broker
+  -> exact caller/provider pair lease
+  -> provider export schema + version range
+  -> same verified sidecar execution owner
+  -> output schema validation
+```
+
+Broker 固定一个 exact provider snapshot，联合租赁 caller/provider，限制并发、深度、
+重入和 request size，并传播取消。callee 不继承 caller 的 Host grants。required
+dependency cycle 在发布前拒绝。禁止直接对象、MessageChannel、raw MCP、service
+locator 或“第一个 provider 胜出”。
+
+sidecar 发起嵌套 Plugin 调用或反向 Host API 时，authority 绑定当前 invocation 的
+operation、immediate consumer、provider 和 historical ActiveSet lease。租约结束或
+取消后重放必须失败；它不能放宽普通 current-principal resolver。
+
+### 2.5 可执行集成只有一个边界
+
+Tool、generation、service 和 generic operation 复用同一 verified sidecar owner。
+只有安装时验证并授权的 managed companion 可以启动：
+
+- 命令必须与 v8 Manifest runtime 完全一致；
+- Host 从私有 immutable snapshot 启动并重新 fingerprint；
+- 参数不是 shell command；
+- 输入输出在 Host 分配的有界 staging 中；
+- dispose/cancel 终止完整进程树；
+- 凭据、供应商轮询和网络调用留在 sidecar；
+- Host 不发现或回退到 closure 外部的可执行文件，也不存在 vendor registry 或
+  Plugin-id 分支。
+
+Agent 使用 OpenCode native remote MCP；Convax 只注入已验证的 HTTPS 配置和薄
+status/auth 调用，不实现第二套 MCP transport、OAuth 或 tool proxy。
+
+## 3. 贡献平面
+
+| 贡献                        | 运行位置                         | 宿主责任                                              | 不授予                        |
+| --------------------------- | -------------------------------- | ----------------------------------------------------- | ----------------------------- |
+| Canvas node renderer        | `sandbox="allow-scripts"` iframe | 静态资源、frame/node binding、Main Host API transport | Node/Electron、同源、原生路径 |
+| command/menu/toolbar/action | Host UI                          | 从 Manifest 投影、当前 selection/revision gate        | 任意 host function 注册       |
+| Tool/generation/service     | verified sidecar                 | receipt、snapshot、staging、取消、结果校验            | shell、PATH、Host 凭据        |
+| Plugin-owned Skill          | OpenCode Skill discovery         | 与 closure 原子发布、直接从 leased closure 解析       | Plugin/Host capability        |
+| Hook                        | OpenCode Hook runtime            | 精确 ESM 字节授权和私有 snapshot                      | 未声明依赖、动态 loader       |
+| Agent MCP                   | OpenCode native MCP client       | 已验证 HTTPS config、稳定 server key、刷新            | Renderer token、local command |
+| Agent Tool                  | Agent runtime bridge             | typed adapter 到同一领域/Tool executor                | 独立业务实现                  |
+
+Canvas、Project、Workbench 和 Agent 的所有权不因 Plugin 而改变。插件代码不能直接
+读写 `.convax` JSON，不能以 renderer state 作为正确性来源，也不能复制领域规则到
+Skill、IPC adapter 或 sidecar。
+
+## 4. API 可用性与生成文档
+
+插件在调用前使用 Catalog 生成的 `supports`/availability 能力判断，而不是：
+
+- 比较 Convax 应用版本；
+- 检测某个对象字段是否存在；
+- 捕获“方法未定义”后猜测；
+- 根据 Plugin id 或 runtime surface 选择私有入口。
+
+availability 由 Main 结合 Catalog 版本、API 的 `since`、受众、声明、grant、setup、
+disabled/recovering 状态和实时上下文计算。required API 不可用时安装或激活失败；
+optional API 不可用时插件必须走声明过的降级路径。
+
+新增或变更 Host API 的唯一流程：
+
+1. 在 `@convax/plugin-api` Catalog 定义 typed contract、TSDoc、`since`、audience、
+   grant、限制和失败语义；
+2. 生成 validator、types、client metadata、人类参考和 Skill reference；
+3. `@convax/plugin-sdk` 消费生成的 Catalog，不手写第二份 API 列表；
+4. Main 实现通用 handler，并增加 conformance、取消、stale scope、版本和不可逆边界测试；
+5. CI 校验生成产物无 diff、公共 API 可打包并从 clean external consumer 使用。
+
+文档或 Skill 与 Catalog 不一致是构建错误，不是允许手动补丁的理由。
+
+## 5. Plugin-to-Host 变更治理
+
+具体 Plugin、Plugin-owned Skill、standalone Skill、MCP server 和 companion 源码属于
+`microvoid/convax-plugins`。Plugin 实现任务可以只读检查 Host 的公共 Catalog/SDK，
+但不得修改、建分支、提交或发起本 Host 仓库的 PR。
+
+缺失能力时只能在 Plugin 仓库提交
+[`plugin-host-change-governance.md`](plugin-host-change-governance.md) 定义的结构化请求，
+说明 use case、通用 contract、替代方案、authority、side effect、兼容性和可证伪
+acceptance tests，然后停止。只有人类明确批准后，才创建独立 Host 任务。Host
+maintainer 可以拒绝请求、指出已有 API，或实现通用 Catalog/SDK 能力。
+
+以下绕过全部禁止：
+
+- private import、直接 IPC 或 raw MCP；
+- renderer 选择 provider；
+- Plugin-to-Plugin 直连或 service locator；
+- 修改生成文件规避 Catalog；
+- 在 Host 中添加具体 Plugin id、厂商或模型分支。
+
+这条治理约束必须同时存在于根/包级 `AGENTS.md`、Plugin authoring Skill 和 CI
+boundary/conformance 检查中，防止“文档建议”退化为自觉约定。
+
+## 6. 主要风险与可证伪检查
+
+| 风险              | 失败证据                                                | 必须通过的检查                                                            |
+| ----------------- | ------------------------------------------------------- | ------------------------------------------------------------------------- |
+| authority TOCTOU  | 更新/卸载或 scope 切换后仍发生文件、Canvas 或外部调用   | 在准备与最终不可逆边界之间切换 ActiveSet/Project/revision，副作用必须为零 |
+| closure 漂移      | leased invocation 读取到新包、旧 Hook 或不同 companion  | 更新并发测试证明旧 lease 只执行旧 digest，新调用只执行新 digest           |
+| P2P 权限继承      | callee 能使用 caller grant 或选择未绑定 provider        | 双 principal/schema 测试、cycle/reentry/depth/concurrency 测试            |
+| Renderer 越权     | IPC 能提交 principal/provider/path/token                | schema fuzz 与 cross-sender/frame theft 测试全部拒绝                      |
+| 文档漂移          | reference/Skill 中 API、since 或 schema 与 Catalog 不同 | 重新生成后 `git diff --exit-code`，external-consumer typecheck            |
+| 具体集成污染 Host | runtime 根据 id/vendor 分支                             | AST/`rg` policy 与 package-boundary tests 无例外通过                      |
+
+若任一测试只能依赖 sleep、当前目录扫描、PATH、mutable global 或具体 Plugin fixture
+才能通过，说明架构边界仍未真正成立。
+
+## 7. LikeC4 视图与验证
+
+模型提供以下视图：
+
+| View                      | 说明                                                |
+| ------------------------- | --------------------------------------------------- |
+| `index`                   | 当前 v8 平台总览                                    |
+| `runtime_contracts`       | 三份 ABI、Catalog 和生成 reference                  |
+| `contribution_planes`     | Skill/MCP/Agent/Tool/UI 贡献如何接入                |
+| `authority_and_execution` | Main Host router、领域服务和 verified sidecar       |
+| `p2p_broker`              | exact pair lease、schema/version binding 和嵌套调用 |
+| `installation_flow`       | closure publication、ActiveSet CAS、lease/pin       |
+| `web_host_call`           | Web transport-only Host API 调用                    |
+| `plugin_host_request`     | 缺失 API 的人审治理                                 |
+
+本地校验：
 
 ```bash
 npx likec4 validate docs/diagrams
 ```
 
-## 3. 体系分层
+## 8. 代码依据
 
-### 3.1 发布与安装平面
-
-```text
-convax-plugins
-  -> Official Registry（元数据、兼容性、sequence、artifact identity）
-  -> GitHub Releases（Plugin/Skill ZIP、target companion）
-  -> Registry client（固定源、缓存、大小、SHA-256、safe ZIP）
-  -> RemoteCapabilityInstaller（跨生命周期协调）
-  -> WebPluginManager（按 Plugin id 串行、原子 rename、回滚/恢复）
-  -> Electron userData（包、companion、授权、Skill 绑定）
-```
-
-关键点：
-
-- Renderer 只提交 catalog id，不提交 URL、路径或 digest。
-- Registry 缓存是非权威缓存；安装使用 network-first 视图。
-- 包切换与 owned Skill、Tool/Hook authorization、managed companion、Pet provider transition
-  组成同一个 publication decision。
-- 如果包 rename 无法完整回滚，依赖状态不会被“猜测性回滚”，而是保留 journal 并要求启动恢复。
-- 同一 Plugin id 的安装、更新、built-in claim 和卸载被完整串行化。
-
-这是一套偏“数据库事务/日志恢复”风格的插件发布模型，而不是常见的“解压后立即可用”模型。
-它的复杂度较高，但和 companion、Hook、owned Skill 的原子一致性要求是匹配的。
-
-### 3.2 运行贡献平面
-
-| 贡献                              | 声明                                            | 实际执行位置                         | 权限来源                                          | 主要隔离                                        |
-| --------------------------------- | ----------------------------------------------- | ------------------------------------ | ------------------------------------------------- | ----------------------------------------------- |
-| Canvas Web surface                | `entry` + `contributes.canvas.renderer`         | `sandbox="allow-scripts"` iframe     | Manifest capability + 绑定的 frame/node/principal | 无 same-origin、Node、Electron、native path     |
-| Canvas toolbar / selection action | `contributes.canvas.*`                          | Host UI + Main executor              | 已验证贡献和当前选择/修订                         | Plugin 不能注册任意 host function               |
-| Tool / generation                 | `runtime: mcp-stdio` + `contributes.generation` | 独立 companion 进程                  | 安装时 executable receipt                         | 无 shell、精确 snapshot、有限环境、暂存输入输出 |
-| Service                           | `contributes.service`                           | 复用同一 Tool sidecar                | 固定 `service.*` 动作白名单                       | Renderer 只拿有界展示投影                       |
-| LLM provider                      | `contributes.llm`                               | sidecar + Main-only loopback gateway | 已授权 companion                                  | URL/key 只进 OpenCode 内存配置                  |
-| Plugin-owned Skill                | `contributes.skills`（v4+）                     | OpenCode Skill discovery             | Skill 自身无权限                                  | 与 Plugin 原子发布，但运行时保持普通 Skill      |
-| OpenCode Hook                     | 顶层 `hooks`                                    | OpenCode 原生 Plugin 运行时          | 显式安装/更新 + 精确字节授权                      | 私有不可变 snapshot；限制 ESM/import            |
-| Agent remote MCP                  | `contributes.agent.mcp`（v6）                   | OpenCode 原生 MCP client             | 已安装 manifest + OpenCode OAuth                  | HTTPS only；Renderer 不见 URL/header/token      |
-| Pet provider                      | `contributes.pet`（v5）                         | 沙箱 overlay/settings                | 独立 Pet capabilities                             | 固定 `convax.pet-host/1`，窄原生能力            |
-
-这里最重要的设计判断是：**一个 Plugin 可以声明多种贡献，但贡献之间不继承权限。** 例如：
-
-- owned Skill 不会因为归属于某个 Plugin 就获得 Plugin capability；
-- Web surface 的存在不会自动产生 Project-wide Canvas authority；
-- Hook 不会因为静态 Web 包可展示就自动被执行；
-- remote MCP 的 OAuth 状态归 OpenCode，不归 Manifest 或 Renderer；
-- Service 不会让 Renderer 选择任意 MCP tool。
-
-### 3.3 领域能力平面
-
-插件写 Canvas 的路径最终都收敛到：
-
-```text
-Plugin transport
-  -> principal/scope/capability validation
-  -> CanvasApplicationService / CanvasResourceBusinessService
-  -> CanvasDocumentRepository
-  -> @convax/project/node persistence
-  -> revision invalidation
-```
-
-这保证了 UI、Agent 和 Plugin 使用相同的业务规则：
-
-- 文档事务要求 `expectedRevision`，非空、命令数受限，并以一次 CAS 持久化；
-- Plugin document transaction 明确排除资源 admission/replacement；
-- 资源必须走 Project 管理的 `.convax/assets` 入库、检查和失败回滚；
-- Renderer 只是 optimistic projection，不是 Main commit 的前置条件；
-- 可选 reveal/refresh 失败不能把已经成功的领域写入报告成失败。
-
-### 3.4 Agent 扩展平面
-
-Agent 侧存在四种容易混淆但本质不同的机制：
-
-1. **Skill**：可信工作流说明，选择和编排 typed tools，不是代码权限。
-2. **Hook**：OpenCode 原生可执行模块，必须进行精确字节授权。
-3. **LLM gateway**：已验证 sidecar 提供的 Main-only 临时 loopback provider。
-4. **remote MCP**：OpenCode 自己实现协议与 OAuth，Convax 只注入已验证配置。
-
-`@convax/agent-runtime` 对 Plugin id、owned Skill 绑定和 Desktop 策略保持无感，只消费通用 Skill
-目录、Hook file URL、provider config 和 MCP config。这一点很好地维护了 package dependency
-方向。
-
-## 4. ABI 演进
-
-| Manifest          | 主要增量                                                                             | 兼容协议                     |
-| ----------------- | ------------------------------------------------------------------------------------ | ---------------------------- |
-| `convax.plugin/1` | 静态 Web Canvas surface、legacy 独立 Skill                                           | `convax.plugin-host/1`       |
-| `convax.plugin/2` | `mcp-stdio` executable / generation runtime                                          | `convax.plugin-host/2`       |
-| `convax.plugin/3` | declarative models、Agent operation、host-rendered Canvas actions                    | `convax.plugin-host/3`       |
-| `convax.plugin/4` | Plugin-owned Skills 原子生命周期                                                     | `convax.plugin-host/4`       |
-| `convax.plugin/5` | transport-neutral `convax.plugin-capability/1`、Project/Canvas grants、LLM、Pet      | `convax.plugin-capability/1` |
-| `convax.plugin/6` | remote Agent MCP、connected-input metadata、return delivery、direct-incoming binding | `convax.plugin-capability/1` |
-
-v5 是正确的架构转折点：Manifest 版本不再强制产生新的 Web host protocol，而是让不同 transport
-适配到同一个 capability protocol。后续版本应继续保持这个方向，把新能力表现为可组合 contribution
-和 grant，而不是增加 `plugin-host/N`。
-
-当前代码仍大量使用 `WebPlugin*` 类型名，这是从 Web-only 阶段留下的命名债务。`plugin-api.ts`
-已经提供了 `PluginManifest`、`InstalledPlugin` 等传输中立别名，新代码应只依赖这些别名；旧名可在
-一次独立的兼容清理中逐步退场。
-
-## 5. 当前官方目录的实际采用情况
-
-从当前固定 Registry 读取到：
-
-- 8 个 active Plugin，12 个 active standalone Skill；
-- Plugin schema 分布：
-  - v1：2
-  - v3：3
-  - v4：1
-  - v5：2
-  - v2 / v6：0
-- contribution 使用：
-  - Canvas：5
-  - generation：3
-  - service：2
-  - Agent tools：1
-  - owned Skills：1
-  - LLM：1
-  - Pet：1
-- 当前没有官方 Plugin 使用：
-  - v5 Project/Canvas capability grants；
-  - v6 remote Agent MCP；
-  - Hook；
-  - v6 `return` delivery / `direct-incoming` binding / connected-input metadata。
-- `codex-service`、`ffmpeg-tools`、`xiaoyunque-generation` 三个 companion Plugin 的当前 target
-  都只有 `darwin/arm64`。
-
-这说明宿主平台的能力面已经明显领先于官方目录的采用面。高级路径虽然有单元测试，但还缺少
-Registry 级真实包、发布流水线和多版本升级的端到端证明。
-
-仓库内还有两个 legacy/bootstrap v1 包：
-
-- `jianying-editor`
-- `storyai-3d-director-desk`
-
-其中 JianYing 通过 host-authored provenance 和精确 bundle 身份启用 id-gated 原生适配器。
-架构文档已明确把它标记为历史债务，而不是新插件的实现范式。
-
-## 6. 设计优势
-
-### 6.1 Manifest 驱动而非 Plugin-id 驱动
-
-运行行为来自经过验证的 contribution、capability 和 executable binding。除明确隔离的 legacy
-JianYing 路径外，核心执行不需要知道具体厂商或 Plugin id，因此没有形成第二套 provider registry。
-
-### 6.2 安装授权绑定精确执行身份
-
-Tool Plugin 的授权不是“这个 id 永久可信”，而是绑定：
-
-- normalized manifest fingerprint；
-- binding kind；
-- real path；
-- size；
-- SHA-256；
-- managed Bun/native 模式。
-
-每次执行还会重新 fingerprint，并从精确 snapshot 启动，显著降低 PATH executable 被普通替换后
-继续执行的风险。
-
-### 6.3 Web transport 不是授权根
-
-MessagePort 只证明请求来自某个已绑定 frame。真正的 authority 是 Main 创建的
-`PluginPrincipal + PluginProjectScope`，每次调用都重新检查 manifest digest、grant、Project binding
-和 Canvas catalog membership。
-
-### 6.4 领域单写者没有被插件体系破坏
-
-Canvas Main application service 仍是唯一 authoritative document state 和持久化写者。Plugin 不能通过
-IPC、iframe state、Skill 或 sidecar 直接编辑 `.convax` JSON。
-
-### 6.5 Crash recovery 被当作正常状态机
-
-package staging、replacement backup、uninstall tombstone、owned-Skill journal、authorization receipt 和
-companion orphan 都有显式恢复顺序。系统在不确定时 fail closed，而不是选择一个“看起来最新”的目录。
-
-## 7. 风险与架构债务
-
-| 优先级 | 风险 / 债务                                 | 影响                                                                                                                        | 建议                                                                                                                     |
-| ------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 高     | Registry 和 artifact 没有独立数字签名信任根 | Registry/Release 发布面一旦同时被控制，Registry 内 SHA-256 只能保证一致性，不能证明发布者身份；sidecar 仍以用户 OS 权限运行 | 为 Registry 元数据和 companion 增加离线根或受保护发布密钥签名；考虑 TUF/Sigstore 风格的过期、轮换和回滚策略              |
-| 高     | Tool sidecar / Hook 不是 OS sandbox         | 恶意或被接管的已授权执行代码拥有用户进程权限                                                                                | 优先对 sidecar 做平台 sandbox/profile、最小目录/网络权限和进程级隔离；Hook 继续保持最小 ABI，并考虑独立 worker/process   |
-| 高     | 官方 companion 只有 `darwin/arm64`          | Linux、Windows、macOS x64 用户会在安装时 fail closed，跨平台承诺没有产品化                                                  | 在 `convax-plugins` 建立 target matrix、每 target 摘要验证和安装 smoke；目录 UI 提前显示不可用原因                       |
-| 中高   | “Plugin”一词覆盖多种风险等级                | 用户可能无法区分静态 iframe、OS-authority sidecar、native Hook 和 remote OAuth MCP                                          | Capability Center 应由 Manifest 自动生成贡献/权限/执行位置/网络/凭据/更新再授权清单                                      |
-| 中     | Desktop Main 实现集中                       | 9 个核心文件约 6,775 行；Plugin 相关代码分布在约 144 个 TS/TSX 文件，变更影响面大                                           | 保持 package owner 不变，但在 Desktop 内形成显式 publication、runtime、capability 三个内部 facade 和 conformance harness |
-| 中     | v1-v4 兼容面长期存在                        | `WebPlugin*`、四代 host protocol 和 v5 capability protocol 并存，增加每次 ABI 变更的测试矩阵                                | 冻结 v1-v4；安装时规范化成内部 v5-style contribution/principal model；新 schema 不再增加 Web protocol                    |
-| 中     | 高级宿主能力缺少真实目录采用                | v6、Hook、Project/Canvas broker 的集成错误可能只在真实包升级/授权时出现                                                     | 发布无厂商语义的 conformance Plugin，覆盖 Web/Tool/builtin 三 transport、更新、取消、恢复、OAuth 状态和跨 Project scope  |
-| 中     | legacy built-in 与源码仓分离目标不完全一致  | 两个具体包仍在 Desktop resources；JianYing 仍由 id 控制原生路径                                                             | 将 bootstrap bytes 改为可机械验证产物；把 JianYing 迁移到 verified companion + generic operation contract                |
-
-“无独立数字签名”不是说当前 SHA-256 校验无效。它很好地防止传输损坏、缓存污染和 artifact 与
-Registry 声明不一致；剩余问题是**Registry 声明本身的发布者真实性**。
-
-“Desktop Main 集中”也不意味着应立刻增加一个新的公开 package。按当前 ownership contract，
-Plugin lifecycle 本来就属于 Desktop。更合适的第一步是 Desktop 内部模块化和接口化，并用 LikeC4
-模型测试约束依赖方向；只有出现可独立发布、可由其他 host 消费的稳定 invariant 时，再讨论新 package。
-
-## 8. 推荐演进顺序
-
-### 第一阶段：把信任模型变成产品和发布约束
-
-1. Capability Center 展示 contribution-level 风险，而不只展示 Plugin 名称和 capability 字符串。
-2. 给 Registry/companion 建立签名元数据和密钥轮换方案。
-3. 对 companion 建立 `darwin-arm64`、`darwin-x64`、`linux-x64/arm64`、`win32-x64/arm64`
-   的显式支持矩阵；不支持的 target 在下载前可见。
-
-### 第二阶段：让高级 ABI 经历真实发布
-
-1. 在 `convax-plugins` 发布一个无厂商逻辑的 v6 conformance Plugin。
-2. 覆盖 Web frame、Tool reverse-MCP、remote MCP、Hook、owned Skill 的安装、升级、卸载和 crash
-   recovery。
-3. 把 conformance 包接入 Registry CI，而不只依赖本仓库 synthetic fixture。
-
-### 第三阶段：收敛兼容和实现复杂度
-
-1. 安装后将 v1-v4 manifest 规范化为统一内部 contribution model。
-2. 新代码只使用 `Plugin*` 中立类型名。
-3. 把 package publication、execution authorization、runtime activation 的状态机边界固化为内部
-   facade，并给 LikeC4 模型增加自动规则：
-   - Renderer 不得直连 Project/Canvas persistence；
-   - Web/Tool transport 必须经 capability broker；
-   - executable runtime 必须依赖 authorization；
-   - Canvas mutation 必须经 Canvas application/business service。
-
-### 第四阶段：清理 legacy
-
-1. 将 Desktop resources 中的 concrete Plugin 改为来自 `convax-plugins` 的机械生成、摘要固定的
-   bootstrap artifact。
-2. 把 JianYing 原生行为迁移到通用 verified companion operation；移除运行时 Plugin-id 分支。
-3. 迁移 v1-v3 顶层 legacy `skill` 到 v4+ owned Skill，保留严格的 exact-tree ownership transfer。
-
-## 9. 代码依据
-
-- Manifest/贡献/版本：
-  [`packages/desktop/src/plugin-contracts.ts`](../packages/desktop/src/plugin-contracts.ts)
-- 传输中立别名：
-  [`packages/desktop/src/plugin-api.ts`](../packages/desktop/src/plugin-api.ts)
-- Web host 与 capability protocol：
-  [`packages/desktop/src/plugin-host-protocol.ts`](../packages/desktop/src/plugin-host-protocol.ts)
-- Principal-bound Project/Canvas contract：
-  [`packages/desktop/src/plugin-capability-contracts.ts`](../packages/desktop/src/plugin-capability-contracts.ts)
-- 包发布、序列化和启动恢复：
-  [`packages/desktop/src/main/plugin-manager.ts`](../packages/desktop/src/main/plugin-manager.ts)
-- Registry 与 artifact 验证：
-  [`packages/desktop/src/main/remote-capability-registry.ts`](../packages/desktop/src/main/remote-capability-registry.ts)
-- 远程安装事务协调：
-  [`packages/desktop/src/main/remote-capability-installer.ts`](../packages/desktop/src/main/remote-capability-installer.ts)
-- Tool runtime 与 MCP stdio：
+- API Catalog 与生成器：[`packages/plugin-api`](../packages/plugin-api)
+- Manifest、互调 schema 与 reference 生成输入：
+  [`packages/plugin-sdk`](../packages/plugin-sdk)
+- Host transport：[`packages/desktop/src/plugin-host-protocol.ts`](../packages/desktop/src/plugin-host-protocol.ts)
+- Main Host router：
+  [`packages/desktop/src/main/plugin-host-api-service.ts`](../packages/desktop/src/main/plugin-host-api-service.ts)
+- ActiveSet/closure runtime：
+  [`packages/desktop/src/main/plugin-installation-runtime.ts`](../packages/desktop/src/main/plugin-installation-runtime.ts)
+- P2P broker：
+  [`packages/desktop/src/main/plugin-capability-broker.ts`](../packages/desktop/src/main/plugin-capability-broker.ts)
+- verified sidecar owner：
   [`packages/desktop/src/main/generation-plugin-runtime.ts`](../packages/desktop/src/main/generation-plugin-runtime.ts)
-- owned Skill 生命周期：
-  [`packages/desktop/src/main/plugin-skill-lifecycle.ts`](../packages/desktop/src/main/plugin-skill-lifecycle.ts)
-- Canvas capability broker：
-  [`packages/desktop/src/main/plugin-canvas-capability-service.ts`](../packages/desktop/src/main/plugin-canvas-capability-service.ts)
-- iframe sandbox 与 MessageChannel：
-  [`packages/desktop/src/renderer/web-plugin-node-renderer.tsx`](../packages/desktop/src/renderer/web-plugin-node-renderer.tsx)
-- Electron Main 组合根：
-  [`packages/desktop/src/main/index.ts`](../packages/desktop/src/main/index.ts)
-
-外部数据源：
-
-- [LikeC4 Tutorial](https://likec4.dev/tutorial/)
-- [LikeC4 Dynamic views](https://likec4.dev/dsl/views/dynamic/)
-- [LikeC4 Deployment model](https://likec4.dev/dsl/deployment/model/)
-- [LikeC4 CLI / validate](https://likec4.dev/tooling/cli/)
-- [Convax official capability Registry](https://microvoid.github.io/convax-plugins/registry/v1/index.json)
+- Canvas authoritative application service：
+  [`packages/canvas/src/application/service.ts`](../packages/canvas/src/application/service.ts)

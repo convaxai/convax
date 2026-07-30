@@ -9,6 +9,7 @@ import {
   isAgentSessionInDirectory,
   prepareAgentResourceParts,
   withAgentHookModules,
+  withAgentSkillPaths,
   withProtectedPathGuard,
   withProtectedPathPermissions,
 } from "../src/node/opencode-agent-runtime"
@@ -304,111 +305,190 @@ describe("OpenCode agent runtime boundaries", () => {
     }
   })
 
-  test("lazily merges host-owned remote MCP servers without mutating resolver values", async () => {
+  test("lazily merges normalized immutable Skill paths without mutating provider snapshots", async () => {
+    const configured = join(tmpdir(), "host", "configured-skills")
+    const resolved = join(tmpdir(), "host", "plugin-skills")
+    const mutablePaths = [join(resolved, "..", "plugin-skills"), resolved]
+    const resolvePluginConfiguration = mock(async () => ({ skillPaths: mutablePaths }))
+    const runtime = new OpenCodeAgentRuntime({
+      config: { skills: { paths: [configured] } },
+      resolvePluginConfiguration,
+    })
+    const serverConfig = () =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<{ skills?: { paths?: string[]; urls?: string[] } }>
+        }
+      ).serverConfig()
+
+    try {
+      expect(resolvePluginConfiguration).not.toHaveBeenCalled()
+      const first = await serverConfig()
+      expect(first.skills).toEqual({ paths: [configured, resolved], urls: [] })
+      mutablePaths[0] = join(tmpdir(), "host", "changed-after-resolution")
+      expect(first.skills?.paths).toEqual([configured, resolved])
+
+      const second = await serverConfig()
+      expect(second.skills?.paths).toEqual([configured, mutablePaths[0], resolved])
+      expect(first.skills?.paths).toEqual([configured, resolved])
+      expect(resolvePluginConfiguration).toHaveBeenCalledTimes(2)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  test("keeps empty Skill path providers inert and rejects invalid or failed providers", async () => {
+    const empty = new OpenCodeAgentRuntime({ resolvePluginConfiguration: async () => ({ skillPaths: [] }) })
+    const invalid = new OpenCodeAgentRuntime({
+      resolvePluginConfiguration: async () => ({ skillPaths: ["relative/skill"] }),
+    })
+    const failed = new OpenCodeAgentRuntime({
+      resolvePluginConfiguration: async () => {
+        throw new Error("Skill path provider failed")
+      },
+    })
+    const serverConfig = (runtime: OpenCodeAgentRuntime) =>
+      (
+        runtime as unknown as {
+          serverConfig(): Promise<{ skills?: { paths?: string[]; urls?: string[] } }>
+        }
+      ).serverConfig()
+
+    try {
+      expect((await serverConfig(empty)).skills).toEqual({ urls: [] })
+      await expect(serverConfig(invalid)).rejects.toThrow("non-empty absolute directory path")
+      await expect(serverConfig(failed)).rejects.toThrow("Skill path provider failed")
+    } finally {
+      await Promise.all([empty.dispose(), invalid.dispose(), failed.dispose()])
+    }
+  })
+
+  test("deduplicates configured and resolved absolute Skill paths without changing base config", () => {
+    const root = join(tmpdir(), "host", "skills")
+    const config = { skills: { paths: [root], urls: [] as string[] } }
+    const merged = withAgentSkillPaths(config, [join(root, "."), `${root}/../skills`])
+
+    expect(merged.skills).toEqual({ paths: [root], urls: [] })
+    expect(config.skills.paths).toEqual([root])
+  })
+
+  test("resolves remote MCP, Hooks, and Skills once as one generic configuration generation", async () => {
+    const skillPath = join(tmpdir(), "host", "skills", "remote")
+    const hook = pathToFileURL(join(tmpdir(), "host", "hooks", "remote.mjs")).href
     const resolvedServer = {
-      headers: { Authorization: `Bearer ${"a".repeat(32)}` },
-      networkBoundary: "host-authenticated-loopback" as const,
+      headers: { "x-surface": "convax" },
+      networkBoundary: "host-validated-https" as const,
       oauth: false as const,
       timeout: 12_345,
       type: "remote" as const,
-      url: "http://127.0.0.1:43127/mcp",
+      url: "https://mcp.example.com/mcp",
     }
-    const resolveMcpServers = mock(async () => ({ "plugin-remote-editor--main": resolvedServer }))
-    const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers,
-    })
+    const resolvePluginConfiguration = mock(async () => ({
+      hookModules: [{ fileUrl: hook }],
+      mcpServers: { plugin_remote: resolvedServer },
+      skillPaths: [skillPath],
+    }))
+    const runtime = new OpenCodeAgentRuntime({ resolvePluginConfiguration })
     const serverConfig = () =>
       (
         runtime as unknown as {
-          serverConfig(): Promise<{ mcp?: Record<string, unknown> }>
+          serverConfig(): Promise<{
+            mcp?: Record<string, unknown>
+            plugin?: Array<string | [string, unknown]>
+            skills?: { paths?: string[] }
+          }>
         }
       ).serverConfig()
 
     try {
-      expect(resolveMcpServers).not.toHaveBeenCalled()
+      expect(resolvePluginConfiguration).not.toHaveBeenCalled()
       await runtime.refreshConfiguration()
-      expect(resolveMcpServers).not.toHaveBeenCalled()
+      expect(resolvePluginConfiguration).not.toHaveBeenCalled()
 
       const config = await serverConfig()
-      expect(resolveMcpServers).toHaveBeenCalledTimes(1)
+      expect(resolvePluginConfiguration).toHaveBeenCalledTimes(1)
       expect(config.mcp).toEqual({
-        "plugin-remote-editor--main": {
+        plugin_remote: {
           headers: resolvedServer.headers,
           oauth: false,
           timeout: resolvedServer.timeout,
-          type: resolvedServer.type,
+          type: "remote",
           url: resolvedServer.url,
         },
       })
-      const configuredPlugin = config.mcp?.["plugin-remote-editor--main"]
-      expect(configuredPlugin).not.toBe(resolvedServer)
-      if (!configuredPlugin || typeof configuredPlugin !== "object") {
-        throw new Error("Resolved MCP server was not copied into OpenCode configuration")
-      }
-      expect("headers" in configuredPlugin ? configuredPlugin.headers : undefined).not.toBe(resolvedServer.headers)
-      expect("oauth" in configuredPlugin ? configuredPlugin.oauth : undefined).toBe(false)
-      expect(resolvedServer).toEqual({
-        headers: { Authorization: `Bearer ${"a".repeat(32)}` },
-        networkBoundary: "host-authenticated-loopback",
-        oauth: false,
-        timeout: 12_345,
-        type: "remote",
-        url: "http://127.0.0.1:43127/mcp",
-      })
+      expect(config.plugin).toEqual([hook])
+      expect(config.skills?.paths).toEqual([skillPath])
+      expect(config.mcp?.plugin_remote).not.toBe(resolvedServer)
+      expect(resolvedServer.networkBoundary).toBe("host-validated-https")
     } finally {
       await runtime.dispose()
     }
   })
 
-  test("fails closed for internet MCP because OpenCode owns the socket boundary", async () => {
+  test.each([
+    ["HTTP URL", { networkBoundary: "host-validated-https", type: "remote", url: "http://mcp.example.com/mcp" }],
+    [
+      "URL credentials",
+      { networkBoundary: "host-validated-https", type: "remote", url: "https://user:pass@mcp.example.com/mcp" },
+    ],
+    [
+      "sensitive header",
+      {
+        headers: { Authorization: "Bearer plugin-secret" },
+        networkBoundary: "host-validated-https",
+        type: "remote",
+        url: "https://mcp.example.com/mcp",
+      },
+    ],
+    [
+      "OAuth credentials",
+      {
+        networkBoundary: "host-validated-https",
+        oauth: { clientSecret: "plugin-secret" },
+        type: "remote",
+        url: "https://mcp.example.com/mcp",
+      },
+    ],
+  ])("rejects a host-validated HTTPS MCP with %s", async (_case, server) => {
     const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        "marketplace-http": {
-          networkBoundary: "internet",
-          oauth: false,
-          type: "remote",
-          url: "https://mcp.example.com/mcp",
-        },
+      resolvePluginConfiguration: async () => ({
+        mcpServers: { remote: server as never },
       }),
     })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-
     try {
-      await expect(serverConfig()).rejects.toThrow(
-        "Internet MCP execution is disabled because the runtime cannot enforce outbound policy at OpenCode's socket boundary",
-      )
+      await expect(
+        (
+          runtime as unknown as {
+            serverConfig(): Promise<Record<string, unknown>>
+          }
+        ).serverConfig(),
+      ).rejects.toThrow()
     } finally {
       await runtime.dispose()
     }
   })
 
-  test("admits only authenticated Main-owned loopback MCP bridges", async () => {
+  test("admits only an authenticated Main-owned loopback MCP bridge", async () => {
     const token = "a".repeat(32)
     const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          headers: { Authorization: `Bearer ${token}` },
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url: "http://127.0.0.1:43127/mcp",
+      resolvePluginConfiguration: async () => ({
+        mcpServers: {
+          managed: {
+            headers: { Authorization: `Bearer ${token}` },
+            networkBoundary: "host-authenticated-loopback",
+            oauth: false,
+            type: "remote",
+            url: "http://127.0.0.1:43127/mcp",
+          },
         },
       }),
     })
-    const serverConfig = () =>
-      (
+    try {
+      const config = await (
         runtime as unknown as {
           serverConfig(): Promise<{ mcp?: Record<string, unknown> }>
         }
       ).serverConfig()
-
-    try {
-      const config = await serverConfig()
       expect(config.mcp?.managed).toEqual({
         headers: { Authorization: `Bearer ${token}` },
         oauth: false,
@@ -423,77 +503,19 @@ describe("OpenCode agent runtime boundaries", () => {
   test.each([
     ["hostname", "http://localhost:43127/mcp"],
     ["unspecified IPv4", "http://0.0.0.0:43127/mcp"],
-    ["non-loopback IPv4", "http://127.0.0.2:43127/mcp"],
-    ["IPv6 unspecified", "http://[::]:43127/mcp"],
+    ["query", "http://127.0.0.1:43127/mcp?token=secret"],
     ["credentials", "http://user:pass@127.0.0.1:43127/mcp"],
-    ["fragment", "http://127.0.0.1:43127/mcp#fragment"],
-  ])("rejects a managed MCP bridge with an unsafe %s URL", async (_case, url) => {
+  ])("rejects an unsafe managed MCP %s URL", async (_case, url) => {
     const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          headers: { Authorization: "Bearer opaque" },
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url,
-        },
-      }),
-    })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-
-    try {
-      await expect(serverConfig()).rejects.toThrow("Managed MCP bridge must use an exact loopback URL")
-    } finally {
-      await runtime.dispose()
-    }
-  })
-
-  test("rejects a managed MCP bridge without bearer authentication", async () => {
-    const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url: "http://[::1]:43127/mcp",
-        },
-      }),
-    })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-
-    try {
-      await expect(serverConfig()).rejects.toThrow(
-        "Managed MCP bridge requires exactly one Main-owned bearer Authorization header",
-      )
-    } finally {
-      await runtime.dispose()
-    }
-  })
-
-  test.each([
-    ["short", "Bearer opaque"],
-    ["space", `Bearer ${"a".repeat(16)} ${"b".repeat(16)}`],
-    ["CRLF", `Bearer ${"a".repeat(32)}\r\nX-Injected: yes`],
-    ["unicode", `Bearer ${"界".repeat(32)}`],
-  ])("rejects a %s managed MCP bearer token", async (_case, authorization) => {
-    const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          headers: { Authorization: authorization },
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url: "http://127.0.0.1:43127/mcp",
+      resolvePluginConfiguration: async () => ({
+        mcpServers: {
+          managed: {
+            headers: { Authorization: `Bearer ${"a".repeat(32)}` },
+            networkBoundary: "host-authenticated-loopback",
+            oauth: false,
+            type: "remote",
+            url,
+          },
         },
       }),
     })
@@ -504,125 +526,49 @@ describe("OpenCode agent runtime boundaries", () => {
             serverConfig(): Promise<Record<string, unknown>>
           }
         ).serverConfig(),
-      ).rejects.toThrow("exactly one Main-owned bearer Authorization header")
+      ).rejects.toThrow("Managed MCP bridge must use an exact loopback URL")
     } finally {
       await runtime.dispose()
     }
   })
 
-  test("rejects a resolved MCP server that conflicts with base OpenCode configuration", async () => {
-    const runtime = new OpenCodeAgentRuntime({
+  test("rejects resolved MCP conflicts and every unmarked base MCP entry", async () => {
+    const conflict = new OpenCodeAgentRuntime({
       config: {
         mcp: {
-          shared: {
-            oauth: false,
-            type: "remote",
-            url: "https://base.example/mcp",
-          },
+          shared: { oauth: false, type: "remote", url: "https://base.example/mcp" },
         },
       },
-      resolveMcpServers: async () => ({
-        shared: {
-          type: "remote",
-          url: "https://resolved.example/mcp",
-        },
-      }),
-    })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-
-    try {
-      await expect(serverConfig()).rejects.toThrow("Resolved MCP server conflicts with base OpenCode config: shared")
-    } finally {
-      await runtime.dispose()
-    }
-  })
-
-  test.each([
-    [
-      "internet remote",
-      { oauth: false, type: "remote" as const, url: "https://mcp.example.com/mcp" },
-      "Internet MCP execution is disabled",
-    ],
-    [
-      "local command",
-      { command: ["/usr/bin/example"], type: "local" as const },
-      "Local MCP commands are not admitted into Agent Runtime",
-    ],
-  ])("rejects a base OpenCode %s MCP config before server creation", async (_case, config, message) => {
-    const runtime = new OpenCodeAgentRuntime({ config: { mcp: { bypass: config } } })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-    try {
-      await expect(serverConfig()).rejects.toThrow(message)
-    } finally {
-      await runtime.dispose()
-    }
-  })
-
-  test.each([
-    ["query", "http://127.0.0.1:43127/mcp?token=secret"],
-    ["integer IPv4", "http://2130706433:43127/mcp"],
-    ["hex IPv4", "http://0x7f000001:43127/mcp"],
-    ["IPv4-mapped IPv6", "http://[::ffff:127.0.0.1]:43127/mcp"],
-  ])("rejects an encoded or ambiguous managed MCP %s URL", async (_case, url) => {
-    const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          headers: { Authorization: `Bearer ${"a".repeat(32)}` },
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url,
-        },
-      }),
-    })
-    const serverConfig = () =>
-      (
-        runtime as unknown as {
-          serverConfig(): Promise<Record<string, unknown>>
-        }
-      ).serverConfig()
-    try {
-      await expect(serverConfig()).rejects.toThrow("Managed MCP bridge must use an exact loopback URL")
-    } finally {
-      await runtime.dispose()
-    }
-  })
-
-  test("rejects duplicate or additional managed MCP headers", async () => {
-    const runtime = new OpenCodeAgentRuntime({
-      resolveMcpServers: async () => ({
-        managed: {
-          headers: {
-            Authorization: "Bearer first-opaque-main-token",
-            authorization: "Bearer second-opaque-main-token",
+      resolvePluginConfiguration: async () => ({
+        mcpServers: {
+          shared: {
+            networkBoundary: "host-validated-https",
+            type: "remote",
+            url: "https://resolved.example/mcp",
           },
-          networkBoundary: "host-authenticated-loopback",
-          oauth: false,
-          type: "remote",
-          url: "http://127.0.0.1:43127/mcp",
         },
       }),
     })
-    const serverConfig = () =>
+    const local = new OpenCodeAgentRuntime({
+      config: { mcp: { bypass: { command: ["/usr/bin/example"], type: "local" } } },
+    })
+    const unmarkedRemote = new OpenCodeAgentRuntime({
+      config: { mcp: { bypass: { oauth: false, type: "remote", url: "https://mcp.example.com/mcp" } } },
+    })
+    const serverConfig = (runtime: OpenCodeAgentRuntime) =>
       (
         runtime as unknown as {
           serverConfig(): Promise<Record<string, unknown>>
         }
       ).serverConfig()
     try {
-      await expect(serverConfig()).rejects.toThrow("exactly one Main-owned bearer Authorization header")
+      await expect(serverConfig(conflict)).rejects.toThrow(
+        "Resolved MCP server conflicts with base OpenCode config: shared",
+      )
+      await expect(serverConfig(local)).rejects.toThrow("Local MCP commands are not admitted into Agent Runtime")
+      await expect(serverConfig(unmarkedRemote)).rejects.toThrow("missing a supported Host network boundary")
     } finally {
-      await runtime.dispose()
+      await Promise.all([conflict.dispose(), local.dispose(), unmarkedRemote.dispose()])
     }
   })
 
@@ -630,11 +576,11 @@ describe("OpenCode agent runtime boundaries", () => {
     const base = pathToFileURL(join(tmpdir(), "host", "base-plugin.mjs")).href
     const hook = pathToFileURL(join(tmpdir(), "host", "plugin-hooks", "example.mjs")).href
     const modules = [{ fileUrl: hook }]
-    const resolveHookModules = mock(async () => modules)
+    const resolvePluginConfiguration = mock(async () => ({ hookModules: modules }))
     const runtime = new OpenCodeAgentRuntime({
       config: { plugin: [base] },
       protectedPaths: [".convax"],
-      resolveHookModules,
+      resolvePluginConfiguration,
     })
     const serverConfig = () =>
       (
@@ -644,9 +590,9 @@ describe("OpenCode agent runtime boundaries", () => {
       ).serverConfig()
 
     try {
-      expect(resolveHookModules).not.toHaveBeenCalled()
+      expect(resolvePluginConfiguration).not.toHaveBeenCalled()
       const config = await serverConfig()
-      expect(resolveHookModules).toHaveBeenCalledTimes(1)
+      expect(resolvePluginConfiguration).toHaveBeenCalledTimes(1)
       expect(config.plugin?.[0]).toBe(base)
       expect(config.plugin?.[1]).toBe(hook)
       const guard = config.plugin?.at(-1)

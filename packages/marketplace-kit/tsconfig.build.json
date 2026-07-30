@@ -8,7 +8,11 @@
     "baseUrl": ".",
     "paths": {
       "@convax/marketplace": ["../marketplace/dist/index.d.ts"],
-      "@convax/marketplace/*": ["../marketplace/dist/*"]
+      "@convax/marketplace/*": ["../marketplace/dist/*"],
+      "@convax/plugin-api": ["../plugin-api/dist/index.d.ts"],
+      "@convax/plugin-api/*": ["../plugin-api/dist/*"],
+      "@convax/plugin-sdk": ["../plugin-sdk/dist/index.d.ts"],
+      "@convax/plugin-sdk/*": ["../plugin-sdk/dist/*"]
     },
     "rootDir": "src",
     "outDir": "dist"

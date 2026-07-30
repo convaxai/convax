@@ -23,9 +23,15 @@ import {
 } from "@convax/marketplace"
 
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import {
+  parsePluginRuntimeSurface,
+  projectRegistryPackageRuntimeSurface,
+  type MarketplaceRuntimeSurface,
+} from "./marketplace-runtime-surface"
 import type {
   VerifiedMarketplaceCandidate,
-} from "./remote-capability-installer"
+} from "./marketplace-artifact-installer"
+import { unpackSafeZip } from "./safe-zip"
 
 const maxManifestBytes = 4 * 1024 * 1024
 const maxArtifactBytes = 128 * 1024 * 1024
@@ -157,6 +163,7 @@ export class PackagedMarketplaceProduct {
   readonly lock: MarketplaceProductLock
   readonly registry: RegistryV2
   readonly showcase: ShowcaseV2
+  readonly #builtinRuntimeSurfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>
   readonly #paths: ReadonlyMap<string, PackagedPath>
   readonly #root: string
   readonly #builtinArchive: Uint8Array
@@ -164,6 +171,7 @@ export class PackagedMarketplaceProduct {
   private constructor(input: {
     builtin: BuiltinBundle
     builtinArchive: Uint8Array
+    builtinRuntimeSurfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>
     descriptor: MarketplaceDescriptor
     lock: MarketplaceProductLock
     paths: ReadonlyMap<string, PackagedPath>
@@ -173,6 +181,7 @@ export class PackagedMarketplaceProduct {
   }) {
     this.builtin = input.builtin
     this.#builtinArchive = Uint8Array.from(input.builtinArchive)
+    this.#builtinRuntimeSurfaces = new Map(input.builtinRuntimeSurfaces)
     this.descriptor = input.descriptor
     this.lock = input.lock
     this.#paths = input.paths
@@ -210,6 +219,10 @@ export class PackagedMarketplaceProduct {
     }
     const builtinArchive = await read(manifest.lock.resolved.builtinBundle)
     const builtin = parseBuiltinBundleArchive(builtinArchive)
+    const builtinRuntimeSurfaces = projectPackagedBuiltinRuntimeSurfaces(
+      builtin,
+      builtinArchive,
+    )
     const descriptor = parseMarketplaceDescriptor(
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
         await read(manifest.lock.resolved.official.descriptor),
@@ -242,6 +255,7 @@ export class PackagedMarketplaceProduct {
     return new PackagedMarketplaceProduct({
       builtin,
       builtinArchive,
+      builtinRuntimeSurfaces,
       descriptor,
       lock: manifest.lock,
       paths,
@@ -319,7 +333,14 @@ export class PackagedMarketplaceProduct {
           marketplaceId: this.lock.policy.builtin.marketplaceId,
           official: false,
           presentation: { name: member.id },
-          runtimeSurface: "none",
+          runtimeSurface:
+            member.kind === "skill"
+              ? "none"
+              : requireBuiltinRuntimeSurface(
+                  this.#builtinRuntimeSurfaces,
+                  member.id,
+                  member.version,
+                ),
           sourceKey: builtinKey,
           sourceKind: "builtin",
           sourceOrder: 0,
@@ -337,7 +358,7 @@ export class PackagedMarketplaceProduct {
           marketplaceId: this.descriptor.id,
           official: true,
           presentation: item.presentation,
-          runtimeSurface: runtimeSurface(item),
+          runtimeSurface: projectRegistryPackageRuntimeSurface(item),
           sourceKey: officialSourceKey,
           sourceKind: "network",
           sourceOrder: 0,
@@ -362,24 +383,52 @@ export class PackagedMarketplaceProduct {
   }
 }
 
-function runtimeSurface(item: RegistryPackage): SourceQualifiedItem["runtimeSurface"] {
-  if (item.kind === "skill") return "none"
-  if (item.kind === "mcp-server") {
-    return item.delivery.kind === "mcp-managed-stdio" && (item.delivery.extension.productActions?.length ?? 0) > 0
-      ? "agent-and-convax"
-      : "agent"
+function builtinIdentity(id: string, version: string) {
+  return `${id}\0${version}`
+}
+
+function requireBuiltinRuntimeSurface(
+  surfaces: ReadonlyMap<string, MarketplaceRuntimeSurface>,
+  id: string,
+  version: string,
+) {
+  const surface = surfaces.get(builtinIdentity(id, version))
+  if (surface === undefined) {
+    throw new Error("Packaged Builtin Plugin runtime projection is unavailable")
   }
-  const contributions = (item.manifest as { contributes?: Record<string, unknown> } | undefined)?.contributes
-  if (!contributions) return "none"
-  if (
-    ["tools", "generation", "services"].some((key) => {
-      const value = contributions[key]
-      return Array.isArray(value) ? value.length > 0 : value && typeof value === "object"
-    })
-  ) {
-    return "agent-and-convax"
+  return surface
+}
+
+export function projectPackagedBuiltinRuntimeSurfaces(
+  bundle: BuiltinBundle,
+  archive: Uint8Array,
+): ReadonlyMap<string, MarketplaceRuntimeSurface> {
+  const surfaces = new Map<string, MarketplaceRuntimeSurface>()
+  for (const member of bundle.members) {
+    if (member.kind !== "plugin") continue
+    const artifact = readBuiltinBundleMember(
+      archive,
+      projectBuiltinMemberDelivery(bundle, member),
+    )
+    const manifestBytes = unpackSafeZip(artifact)["manifest.json"]
+    if (manifestBytes === undefined) {
+      throw new Error("Packaged Builtin Plugin is missing manifest.json")
+    }
+    let value: unknown
+    try {
+      value = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes),
+      )
+    } catch (error) {
+      throw new Error("Packaged Builtin Plugin manifest is invalid", {
+        cause: error,
+      })
+    }
+    const projected = parsePluginRuntimeSurface(value, member)
+    surfaces.set(
+      builtinIdentity(member.id, member.version),
+      projected.runtimeSurface,
+    )
   }
-  return Object.keys(contributions).some((key) => ["hooks", "llms", "mcpServers", "skills"].includes(key))
-    ? "agent"
-    : "none"
+  return surfaces
 }

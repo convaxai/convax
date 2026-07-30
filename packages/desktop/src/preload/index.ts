@@ -9,16 +9,9 @@ import {
   type CanvasExternalMediaDragRendererClient,
 } from "../canvas-external-drag-contracts"
 import { desktopProtocolChannel, desktopProtocolVersion, type DesktopProtocolClient } from "../desktop-protocol"
-import {
-  mainWindowControlsIpcChannel,
-  type MainWindowControlsClient,
-} from "../main-window-controls-contracts"
+import { mainWindowControlsIpcChannel, type MainWindowControlsClient } from "../main-window-controls-contracts"
 import { generationIpcChannels, type GenerationClient } from "../generation-contracts"
 import { pluginCapabilityIpcChannels, type PluginCapabilityRendererClient } from "../plugin-capability-ipc"
-import {
-  pluginConnectedMediaIpcChannels,
-  type PluginConnectedMediaRendererClient,
-} from "../plugin-connected-media-contracts"
 import {
   pluginMaterializationIpcChannels,
   type PluginMaterializationRendererClient,
@@ -27,7 +20,6 @@ import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-se
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
-import { pluginCanvasImageIpcChannels, type PluginCanvasImageClient } from "../plugin-canvas-image-contracts"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 import {
   canvasRendererChannels,
@@ -93,7 +85,6 @@ const agentSkillChannels = {
   getSkillShowcase: "agent:skill-showcase",
   importSkill: "agent:skill-import",
   installCatalogSkill: "agent:skill-catalog-install",
-  installPluginSkill: "agent:skill-plugin-install",
   listSkills: "agent:skills-list",
   openSkill: "agent:skill-open",
   uninstallSkill: "agent:skill-uninstall",
@@ -377,7 +368,6 @@ const agentSkillClient = {
   getSkillShowcase: (input) => ipcRenderer.invoke(agentSkillChannels.getSkillShowcase, input),
   importSkill: () => ipcRenderer.invoke(agentSkillChannels.importSkill),
   installCatalogSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installCatalogSkill, input),
-  installPluginSkill: (input) => ipcRenderer.invoke(agentSkillChannels.installPluginSkill, input),
   listSkills: (input) => ipcRenderer.invoke(agentSkillChannels.listSkills, input),
   onDidChange(listener) {
     const handleChange = () => listener()
@@ -474,15 +464,13 @@ const marketplaceClient = {
   update: (input) => ipcRenderer.invoke(marketplaceIpcChannels.update, input),
 } satisfies MarketplaceClient
 
-const pluginCanvasImageClient = {
-  cancel: (input) => ipcRenderer.send(pluginCanvasImageIpcChannels.cancel, input),
-  create: (input) => ipcRenderer.invoke(pluginCanvasImageIpcChannels.create, input),
-} satisfies PluginCanvasImageClient
-
 const pluginCapabilityClient = {
+  cancel: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.cancel, input),
   call: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.call, input),
   connect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.connect, input),
   disconnect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.disconnect, input),
+  getPluginAvailability: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.getPluginAvailability, input),
+  invokePlugin: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.invokePlugin, input),
   onEvent(listener) {
     const handleEvent = (_event: Electron.IpcRendererEvent, input: Parameters<typeof listener>[0]) => listener(input)
     ipcRenderer.on(pluginCapabilityIpcChannels.changed, handleEvent)
@@ -493,12 +481,6 @@ const pluginCapabilityClient = {
 const pluginMaterializationClient = {
   materialize: (input) => ipcRenderer.invoke(pluginMaterializationIpcChannels.materialize, input),
 } satisfies PluginMaterializationRendererClient
-
-const pluginConnectedMediaClient = {
-  close: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.close, input),
-  open: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.open, input),
-  revokeFrame: (input) => ipcRenderer.invoke(pluginConnectedMediaIpcChannels.revokeFrame, input),
-} satisfies PluginConnectedMediaRendererClient
 
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
@@ -598,9 +580,7 @@ contextBridge.exposeInMainWorld("convax", {
   canvas: {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
-    pluginConnectedMedia: pluginConnectedMediaClient,
     pluginMaterialization: pluginMaterializationClient,
-    pluginImages: pluginCanvasImageClient,
     renderer: canvasRendererClient,
     resources: canvasResourceClient,
     textResources: canvasTextResourceClient,

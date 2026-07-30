@@ -1,0 +1,633 @@
+import { describe, expect, test } from "bun:test"
+import { pluginApiCatalog, type PluginApiId } from "@convax/plugin-api"
+
+import type { PluginCanvasCapabilityClient, PluginPrincipal } from "../plugin-capability-contracts"
+import type {
+  PluginHostInvocationLease,
+  PluginHostNodeContext,
+  PluginHostNodeOperationsPort,
+  PluginHostPrincipalPort,
+  PluginHostResolvedPrincipal,
+} from "../plugin-host-api-main-contracts"
+import { PluginHostApiError } from "../plugin-host-errors"
+import { PluginHostApiService } from "./plugin-host-api-service"
+
+const digest = (character: string) => character.repeat(64)
+const allApiIds = pluginApiCatalog.apis.map(({ id }) => id)
+const capabilities = [
+  "agent.prompt",
+  "canvas.catalog.read",
+  "canvas.connectedInputs.read",
+  "canvas.connectedMedia.stream",
+  "canvas.document.read",
+  "canvas.document.write",
+  "canvas.events.subscribe",
+  "canvas.image.write",
+  "canvas.node.read",
+  "canvas.node.write",
+  "generation.execute",
+  "project.files.read",
+  "projects.read",
+] as const
+
+const principal: PluginPrincipal = {
+  activeRevision: 7,
+  activeSetDigest: digest("a"),
+  manifestDigest: digest("b"),
+  pluginId: "fixture",
+  pluginVersion: "1.2.3",
+  runtime: "web",
+  snapshotDigest: digest("c"),
+}
+
+const toolPrincipal: PluginPrincipal = { ...principal, runtime: "tool" }
+
+const nodeContext: PluginHostNodeContext = {
+  canvas: { id: "canvas-1", name: "Canvas" },
+  documentRevision: 4,
+  node: {
+    data: { kind: "file", label: "Plugin node" },
+    id: "node-1",
+    position: { x: 10, y: 20 },
+    type: "file",
+  },
+  project: { id: "project-1", name: "Project" },
+}
+
+function principalPort(isCurrent: () => boolean = () => true): PluginHostPrincipalPort {
+  return {
+    async liveState() {
+      return { disabled: false, recovering: false, setupComplete: true }
+    },
+    async resolve() {
+      if (!isCurrent()) return null
+      return resolvedPrincipal()
+    },
+  }
+}
+
+function resolvedPrincipal(input: PluginPrincipal = principal): PluginHostResolvedPrincipal {
+  return {
+    activeRevision: input.activeRevision,
+    activeSetDigest: input.activeSetDigest,
+    capabilities,
+    hostApi: { major: 1, optional: [], required: allApiIds },
+    manifestDigest: input.manifestDigest,
+    pluginId: input.pluginId,
+    pluginName: "Fixture Plugin",
+    pluginVersion: input.pluginVersion,
+    snapshotDigest: input.snapshotDigest,
+  }
+}
+
+function canvasClient(log: string[]): PluginCanvasCapabilityClient {
+  return {
+    async getDocument(ref, projection) {
+      log.push("canvas.document.get")
+      return {
+        document: { edges: [], id: ref.canvasId, nodes: [], revision: 4, title: "Canvas" },
+        projection: projection ?? "geometry",
+        ref,
+        storageVersion: "4",
+      } as never
+    },
+    async listCanvases(projectId) {
+      log.push("canvas.catalog.list")
+      return { canvases: [], projectId }
+    },
+    async listProjects() {
+      log.push("projects.list")
+      return [{ available: true, id: "project-1", name: "Project" }]
+    },
+    async queryNodes(ref) {
+      log.push("canvas.nodes.query")
+      return { nodes: [], ref, revision: 4, storageVersion: "4" }
+    },
+    async subscribe(_ref, listener) {
+      log.push("canvas.events.subscribe")
+      listener({
+        ref: { canvasId: "canvas-1", projectId: "project-1" },
+        revision: 5,
+        source: "host",
+      })
+      return { close: () => log.push("subscription.close") }
+    },
+    async transact(request) {
+      log.push("canvas.transaction.execute")
+      return {
+        affectedNodeIds: [],
+        changed: true,
+        createdNodeIds: [],
+        ref: request.ref,
+        revision: 5,
+        storageVersion: "5",
+        warnings: [],
+      }
+    },
+  }
+}
+
+function operations(log: string[]): PluginHostNodeOperationsPort {
+  return {
+    closeConnection() {
+      log.push("connection.close")
+    },
+    async closeInput() {
+      log.push("canvas.inputs.close")
+      return true
+    },
+    async createCanvasImage({ checkpoint }) {
+      await checkpoint.checkpoint()
+      log.push("canvas.resource.image.create")
+      return { createdNodeId: "image-1", revision: 5 }
+    },
+    async executeGeneration({ checkpoint }) {
+      await checkpoint.checkpoint()
+      log.push("generation.execute")
+      return { createdNodeIds: ["generated-1"], revision: 5, toolId: "tool-1", warnings: [] }
+    },
+    async listGenerationTools() {
+      log.push("generation.tools.list")
+      return [
+        {
+          acceptedInputs: ["text"],
+          description: "Fixture tool",
+          id: "tool-1",
+          kind: "operation",
+          output: "image",
+          title: "Fixture",
+        },
+      ]
+    },
+    async listInputs() {
+      log.push("canvas.inputs.list")
+      return [{ id: "source-1", kind: "image", label: "Input" }]
+    },
+    async openInput() {
+      log.push("canvas.inputs.open")
+      return {
+        probe: {
+          duration: { estimated: false, milliseconds: 100 },
+          height: 10,
+          kind: "video",
+          mediaRevision: "revision",
+          mimeType: "video/mp4",
+          size: 100,
+          width: 10,
+        },
+        sessionId: "session-1",
+        url: "convax-connected-media://session-1",
+      }
+    },
+    async promptAgent({ checkpoint }) {
+      await checkpoint.checkpoint()
+      log.push("agent.prompt")
+      return { text: "accepted" }
+    },
+    async readProjectText({ path }) {
+      log.push("project.file.text.read")
+      return { content: "text", exists: true, path }
+    },
+    async replaceNodeState({ checkpoint }) {
+      await checkpoint.checkpoint()
+      log.push("canvas.node.state.replace")
+    },
+  }
+}
+
+async function connection(input?: {
+  current?: () => boolean
+  invocationLease?: PluginHostInvocationLease
+  node?: () => PluginHostNodeContext | null
+  operations?: PluginHostNodeOperationsPort
+  principal?: PluginPrincipal
+  principals?: PluginHostPrincipalPort
+}) {
+  const log: string[] = []
+  const events: unknown[] = []
+  const service = new PluginHostApiService({
+    createId: () => "subscription-1",
+    nodes: {
+      async resolve() {
+        return (input?.node ?? (() => nodeContext))()
+      },
+    },
+    operations: input?.operations ?? operations(log),
+    principals: input?.principals ?? principalPort(input?.current),
+  })
+  const connected = await service.connect({
+    canvas: canvasClient(log),
+    ...(input?.invocationLease ? { invocationLease: input.invocationLease } : {}),
+    node: { canvasId: "canvas-1", nodeId: "node-1", projectId: "project-1" },
+    onCanvasEvent: (event) => events.push(event),
+    principal: input?.principal ?? principal,
+    scope: { kind: "all-bound-projects" },
+    transport: { frameId: "frame-1", senderId: 1 },
+  })
+  return { connected, events, log }
+}
+
+describe("PluginHostApiService", () => {
+  test("rejects projects.list with a typed non-recoverable permission error when its grant is absent", async () => {
+    const denied = {
+      ...resolvedPrincipal(),
+      capabilities: [] as const,
+    }
+    const { connected } = await connection({
+      principals: {
+        async liveState() {
+          return { disabled: false, recovering: false, setupComplete: true }
+        },
+        async resolve() {
+          return denied
+        },
+      },
+    })
+
+    try {
+      await connected.execute({ method: "projects.list" }, { operationId: "operation-projects-denied" })
+      throw new Error("Expected projects.list to be denied")
+    } catch (error) {
+      expect(error).toBeInstanceOf(PluginHostApiError)
+      expect(error).toMatchObject({ code: "permission-denied" })
+    }
+  })
+
+  test("routes every generated Catalog API through Main-owned ports", async () => {
+    const { connected, events, log } = await connection()
+    const calls = [
+      { method: "host.context.get" },
+      { method: "canvas.inputs.list" },
+      { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
+      { method: "canvas.inputs.close", params: { sessionId: "session-1" } },
+      { method: "canvas.node.get" },
+      { method: "canvas.node.state.replace", params: { state: { value: 1 } } },
+      {
+        method: "canvas.resource.image.create",
+        params: { dataUrl: "data:image/png;base64,AAAA", name: "capture.png" },
+      },
+      { method: "project.file.text.read", params: { path: "Notes/input.md" } },
+      { method: "agent.prompt", params: { text: "Help" } },
+      { method: "generation.tools.list", params: { output: "image" } },
+      {
+        method: "generation.execute",
+        params: { output: "image", prompt: "Create", toolId: "tool-1" },
+      },
+      { method: "projects.list" },
+      { method: "canvas.catalog.list", params: { projectId: "project-1" } },
+      {
+        method: "canvas.document.get",
+        params: { projection: "geometry", ref: { canvasId: "canvas-1", projectId: "project-1" } },
+      },
+      {
+        method: "canvas.nodes.query",
+        params: { query: {}, ref: { canvasId: "canvas-1", projectId: "project-1" } },
+      },
+      {
+        method: "canvas.transaction.execute",
+        params: {
+          commands: [{ delta: { x: 1, y: 1 }, nodeIds: ["node-1"], type: "nodes.move" }],
+          expectedRevision: 4,
+          ref: { canvasId: "canvas-1", projectId: "project-1" },
+          transactionId: "transaction-1",
+        },
+      },
+      {
+        method: "canvas.events.subscribe",
+        params: { ref: { canvasId: "canvas-1", projectId: "project-1" } },
+      },
+      { method: "canvas.events.unsubscribe", params: { subscriptionId: "subscription-1" } },
+    ] as const
+
+    expect(calls.map(({ method }) => method)).toEqual(allApiIds)
+    for (const call of calls) {
+      expect(connected.supports(call.method as PluginApiId)).toBe(true)
+      await connected.execute(call as never, { operationId: `operation-${call.method}` })
+    }
+    expect(log).toContain("canvas.node.state.replace")
+    expect(log).toContain("canvas.resource.image.create")
+    expect(log).toContain("generation.execute")
+    expect(log).toContain("canvas.transaction.execute")
+    // The fake source emits synchronously before subscription publication; the
+    // connection intentionally drops that unbound event.
+    expect(events).toEqual([])
+    expect(log).toContain("subscription.close")
+  })
+
+  test("rejects schema-owned semantic refinements before invoking Desktop ports", async () => {
+    const { connected, log } = await connection()
+    const invalidCalls = [
+      {
+        method: "canvas.node.state.replace",
+        params: { state: { payload: "x".repeat(300 * 1024) } },
+      },
+      {
+        method: "canvas.resource.image.create",
+        params: { dataUrl: "data:image/png;base64,AAAA", name: "CON.png" },
+      },
+      { method: "project.file.text.read", params: { path: "../secret.txt" } },
+      { method: "agent.prompt", params: { text: " padded " } },
+      { method: "generation.execute", params: { prompt: "\ncreate" } },
+    ] as const
+
+    for (const [index, call] of invalidCalls.entries()) {
+      await expect(connected.execute(call as never, { operationId: `invalid-schema-${index}` })).rejects.toBeInstanceOf(
+        TypeError,
+      )
+    }
+    expect(log).toEqual([])
+  })
+
+  test("an update or uninstall during preparation causes zero mutation", async () => {
+    let current = true
+    const prepared = deferred<void>()
+    const continueMutation = deferred<void>()
+    let persisted = 0
+    const base = operations([])
+    const { connected } = await connection({
+      current: () => current,
+      operations: {
+        ...base,
+        async replaceNodeState({ checkpoint }) {
+          prepared.resolve()
+          await continueMutation.promise
+          await checkpoint.checkpoint()
+          persisted += 1
+        },
+      },
+    })
+
+    const pending = connected.execute(
+      {
+        method: "canvas.node.state.replace",
+        params: { state: { value: 2 } },
+      },
+      { operationId: "operation-state" },
+    )
+    await prepared.promise
+    current = false
+    continueMutation.resolve()
+
+    await expect(pending).rejects.toThrow("no longer current")
+    expect(persisted).toBe(0)
+  })
+
+  test("sender destruction during image preparation aborts before publication", async () => {
+    const prepared = deferred<void>()
+    const continuePublication = deferred<void>()
+    let published = 0
+    const base = operations([])
+    const { connected } = await connection({
+      operations: {
+        ...base,
+        async createCanvasImage({ checkpoint }) {
+          prepared.resolve()
+          await continuePublication.promise
+          await checkpoint.checkpoint()
+          published += 1
+          return { createdNodeId: "image-1", revision: 5 }
+        },
+      },
+    })
+    const controller = new AbortController()
+    const pending = connected.execute(
+      {
+        method: "canvas.resource.image.create",
+        params: { dataUrl: "data:image/png;base64,AAAA", name: "capture.png" },
+      },
+      { operationId: "operation-image", signal: controller.signal },
+    )
+    await prepared.promise
+    controller.abort(new Error("renderer destroyed"))
+    continuePublication.resolve()
+
+    await expect(pending).rejects.toThrow("renderer destroyed")
+    expect(published).toBe(0)
+  })
+
+  test("rejects stale node scope before delegating", async () => {
+    let listed = 0
+    const base = operations([])
+    const { connected } = await connection({
+      node: (() => {
+        let first = true
+        return () => {
+          if (first) {
+            first = false
+            return nodeContext
+          }
+          return null
+        }
+      })(),
+      operations: {
+        ...base,
+        async listInputs() {
+          listed += 1
+          return []
+        },
+      },
+    })
+
+    await expect(
+      connected.execute({ method: "canvas.inputs.list" }, { operationId: "operation-inputs" }),
+    ).rejects.toThrow("changed")
+    expect(listed).toBe(0)
+  })
+
+  test("fails closed when an authoritative node projection contains a native path", async () => {
+    const unsafe = structuredClone(nodeContext)
+    unsafe.node.data.metadata = { nativePath: "/Users/example/private.bin" }
+    const { connected } = await connection({ node: () => unsafe })
+
+    await expect(connected.execute({ method: "canvas.node.get" }, { operationId: "operation-node" })).rejects.toThrow(
+      "native runtime data",
+    )
+  })
+
+  test("uses one active historical invocation lease without consulting the current resolver", async () => {
+    const invocation = invocationLease()
+    let currentResolutions = 0
+    const { connected } = await connection({
+      invocationLease: invocation.lease,
+      principal: toolPrincipal,
+      principals: {
+        async liveState() {
+          throw new Error("historical invocation must not consult current live state")
+        },
+        async resolve() {
+          currentResolutions += 1
+          return null
+        },
+      },
+    })
+
+    await expect(
+      connected.execute({ method: "projects.list" }, { operationId: invocation.lease.claims.operationId }),
+    ).resolves.toEqual({
+      projects: [{ available: true, id: "project-1", name: "Project" }],
+    })
+    expect(currentResolutions).toBe(0)
+    expect(invocation.assertions).toBeGreaterThanOrEqual(3)
+  })
+
+  test("rejects a completed or canceled historical invocation replay", async () => {
+    const completed = invocationLease()
+    const completedConnection = await connection({
+      invocationLease: completed.lease,
+      principal: toolPrincipal,
+      principals: rejectingCurrentPrincipalPort(),
+    })
+    await completedConnection.connected.execute(
+      { method: "projects.list" },
+      { operationId: completed.lease.claims.operationId },
+    )
+    completed.end()
+    await expect(
+      completedConnection.connected.execute(
+        { method: "projects.list" },
+        { operationId: completed.lease.claims.operationId },
+      ),
+    ).rejects.toThrow("invocation lease ended")
+
+    const canceled = invocationLease()
+    const canceledConnection = await connection({
+      invocationLease: canceled.lease,
+      principal: toolPrincipal,
+      principals: rejectingCurrentPrincipalPort(),
+    })
+    canceled.cancel()
+    await expect(
+      canceledConnection.connected.execute(
+        { method: "projects.list" },
+        { operationId: canceled.lease.claims.operationId },
+      ),
+    ).rejects.toThrow("invocation canceled")
+  })
+
+  test("rejects cross-operation, cross-provider, cross-Plugin, and forged consumer invocation claims", async () => {
+    const invocation = invocationLease()
+    const { connected } = await connection({
+      invocationLease: invocation.lease,
+      principal: toolPrincipal,
+      principals: rejectingCurrentPrincipalPort(),
+    })
+    await expect(connected.execute({ method: "projects.list" }, { operationId: "another-operation" })).rejects.toThrow(
+      "invocation lease",
+    )
+
+    const wrongProvider = invocationLease({
+      claims: { providerPluginId: "another-provider" },
+    })
+    await expect(
+      connection({
+        invocationLease: wrongProvider.lease,
+        principal: toolPrincipal,
+        principals: rejectingCurrentPrincipalPort(),
+      }),
+    ).rejects.toThrow("invocation lease")
+
+    const anotherPlugin = { ...toolPrincipal, pluginId: "another-plugin" }
+    const wrongPlugin = invocationLease({
+      principal: anotherPlugin,
+      resolved: resolvedPrincipal(anotherPlugin),
+    })
+    await expect(
+      connection({
+        invocationLease: wrongPlugin.lease,
+        principal: toolPrincipal,
+        principals: rejectingCurrentPrincipalPort(),
+      }),
+    ).rejects.toThrow("invocation lease")
+
+    const forgedConsumer = invocationLease({
+      claims: { consumerPluginId: "forged-consumer" },
+      expectedConsumerPluginId: "consumer",
+    })
+    await expect(
+      connection({
+        invocationLease: forgedConsumer.lease,
+        principal: toolPrincipal,
+        principals: rejectingCurrentPrincipalPort(),
+      }),
+    ).rejects.toThrow("invocation consumer changed")
+  })
+
+  test("never admits an invocation lease on a Web Plugin connection", async () => {
+    const invocation = invocationLease({ principal, resolved: resolvedPrincipal(principal) })
+    await expect(
+      connection({
+        invocationLease: invocation.lease,
+        principal,
+        principals: rejectingCurrentPrincipalPort(),
+      }),
+    ).rejects.toThrow("Web Plugin Host API connections cannot carry invocation leases")
+  })
+})
+
+function rejectingCurrentPrincipalPort(): PluginHostPrincipalPort {
+  return {
+    async liveState() {
+      throw new Error("historical invocation must not consult current live state")
+    },
+    async resolve() {
+      throw new Error("historical invocation must not consult the current resolver")
+    },
+  }
+}
+
+function invocationLease(input?: {
+  claims?: Partial<PluginHostInvocationLease["claims"]>
+  expectedConsumerPluginId?: string
+  principal?: PluginPrincipal
+  resolved?: PluginHostResolvedPrincipal
+}) {
+  const leasePrincipal = input?.principal ?? toolPrincipal
+  const claims = {
+    consumerPluginId: "consumer",
+    operationId: "capability-operation",
+    providerPluginId: leasePrincipal.pluginId,
+    ...input?.claims,
+  }
+  const expectedConsumerPluginId = input?.expectedConsumerPluginId ?? claims.consumerPluginId
+  const controller = new AbortController()
+  let active = true
+  let assertions = 0
+  const lease: PluginHostInvocationLease = {
+    async assertActive(candidate) {
+      assertions += 1
+      if (candidate.consumerPluginId !== expectedConsumerPluginId) {
+        throw new Error("invocation consumer changed")
+      }
+      if (candidate.operationId !== claims.operationId || candidate.providerPluginId !== claims.providerPluginId) {
+        throw new Error("invocation claims changed")
+      }
+      if (!active) throw new Error("invocation lease ended")
+    },
+    claims,
+    principal: leasePrincipal,
+    resolved: input?.resolved ?? resolvedPrincipal(leasePrincipal),
+    signal: controller.signal,
+  }
+  return {
+    get assertions() {
+      return assertions
+    },
+    cancel() {
+      controller.abort(new Error("invocation canceled"))
+    },
+    end() {
+      active = false
+    },
+    lease,
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}

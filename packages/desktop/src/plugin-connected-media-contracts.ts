@@ -2,12 +2,6 @@ import type { PluginNodeInvocationRef } from "./plugin-host-types"
 
 export const pluginConnectedMediaScheme = "convax-connected-media" as const
 
-export const pluginConnectedMediaIpcChannels = {
-  close: "plugin:connected-media-close",
-  open: "plugin:connected-media-open",
-  revokeFrame: "plugin:connected-media-revoke-frame",
-} as const
-
 export interface PluginConnectedMediaFrameRef extends PluginNodeInvocationRef {
   frameId: string
   pluginVersion: string
@@ -36,12 +30,6 @@ export interface PluginConnectedMediaOpenResult {
   probe: PluginConnectedMediaProbe
   sessionId: string
   url: string
-}
-
-export interface PluginConnectedMediaRendererClient {
-  close(input: PluginConnectedMediaCloseInput): Promise<boolean>
-  open(input: PluginConnectedMediaOpenInput): Promise<PluginConnectedMediaOpenResult>
-  revokeFrame(input: PluginConnectedMediaFrameRef): Promise<number>
 }
 
 export const pluginConnectedMediaPrivileges = {

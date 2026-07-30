@@ -26,6 +26,56 @@ import {
 import { runMarketplaceCli } from "./cli"
 
 describe("@convax/marketplace-kit", () => {
+  test("publishes only package/2 Plugins with valid plugin/8 Host API declarations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "convax-market-v8-contract-"))
+    await createMarketplaceStarter(root, {
+      id: "acme-market",
+      name: "Acme Market",
+      owner: "acme",
+      repository: "extensions",
+      starter: "plugin",
+    })
+    const pluginRoot = join(root, "packages/plugins/example-plugin")
+    const packageMetadataPath = join(pluginRoot, "convax-package.json")
+    const manifestPath = join(pluginRoot, "package/manifest.json")
+    const packageMetadata = JSON.parse(await readFile(packageMetadataPath, "utf8"))
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"))
+
+    expect(packageMetadata.schema).toBe("convax.package/2")
+    expect(manifest).toMatchObject({
+      schema: "convax.plugin/8",
+      hostApi: { major: 1, required: ["host.context.get"], optional: [] },
+    })
+    await checkMarketplace(root)
+
+    await Bun.write(
+      packageMetadataPath,
+      `${JSON.stringify({ ...packageMetadata, schema: "convax.package/1" }, null, 2)}\n`,
+    )
+    await expect(checkMarketplace(root)).rejects.toThrow("convax.package/2")
+    await Bun.write(packageMetadataPath, `${JSON.stringify(packageMetadata, null, 2)}\n`)
+
+    for (const [index, invalidManifest] of [
+      { ...manifest, schema: "convax.plugin/7" },
+      { ...manifest, hostApi: { major: 1, required: ["unknown.api"], optional: [] } },
+      {
+        ...manifest,
+        hostApi: { major: 1, required: ["host.context.get", "host.context.get"], optional: [] },
+      },
+      {
+        ...manifest,
+        hostApi: { major: 1, required: ["host.context.get"], optional: ["host.context.get"] },
+      },
+      { ...manifest, hostApi: { major: 2, required: [], optional: [] } },
+    ].entries()) {
+      await Bun.write(manifestPath, `${JSON.stringify(invalidManifest, null, 2)}\n`)
+      await expect(checkMarketplace(root)).rejects.toThrow()
+      await expect(
+        buildMarketplace({ root, outDir: join(root, `invalid-${index}`), official: false }),
+      ).rejects.toThrow()
+    }
+  })
+
   test("creates, checks and deterministically builds a v2-only third-party marketplace", async () => {
     const root = await mkdtemp(join(tmpdir(), "convax-market-kit-"))
     await createMarketplaceStarter(root, {
@@ -49,7 +99,7 @@ describe("@convax/marketplace-kit", () => {
     expect(refreshed.registry.revision).toBe(first.registry.revision)
     expect(first.registry.schema).toBe("convax.registry/2")
     expect(first.registry.revision).toMatch(/^[0-9a-f]{64}$/)
-    expect(first.registryV1).toBeUndefined()
+    expect(first).not.toHaveProperty("registryV1")
     const descriptor = parseMarketplaceDescriptor(JSON.parse(await readFile(join(root, "marketplace.json"), "utf8")))
     expect(parseShowcaseV2(first.showcase, first.registry, descriptor)).toEqual(first.showcase)
     const sourceDescriptorBytes = await readFile(join(root, "marketplace.json"))
@@ -76,7 +126,7 @@ describe("@convax/marketplace-kit", () => {
     const releaseWorkflow = await readFile(join(root, ".github/workflows/release.yml"), "utf8")
     expect(releaseWorkflow).toContain("Reverify immutable release and Pages bytes")
     expect(releaseWorkflow).toContain("page_path")
-    expect(releaseWorkflow).toContain(".registry.v1.url")
+    expect(releaseWorkflow).not.toContain(".registry.v1.url")
     expect(releaseWorkflow).toContain(".registry.v2.url")
     expect(releaseWorkflow).toContain(".showcase.v2.url")
     expect(releaseWorkflow).toContain("--previous-descriptor previous-marketplace.json")
@@ -109,7 +159,10 @@ describe("@convax/marketplace-kit", () => {
       join(source, "manifest.json"),
       `${JSON.stringify(
         {
-          schema: "convax.plugin/4",
+          schema: "convax.plugin/8",
+          capabilities: ["projects.read"],
+          contributes: {},
+          hostApi: { major: 1, required: [], optional: [] },
           id: "imported-plugin",
           name: "Imported Plugin",
           description: "Imported Plugin description",
@@ -148,14 +201,19 @@ describe("@convax/marketplace-kit", () => {
       { kind: "plugin", id: "imported-plugin", version: "1.0.0" },
       { kind: "skill", id: "example-skill", version: "0.1.0" },
     ])
-    const manifest = JSON.parse(await readFile(join(imported, "manifest.json"), "utf8"))
+    const importedManifestPath = join(imported, "package/manifest.json")
+    const importedMetadataPath = join(imported, "convax-package.json")
+    const manifest = JSON.parse(await readFile(importedManifestPath, "utf8"))
     manifest.description = "Changed bytes at the same immutable version"
-    await Bun.write(join(imported, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`)
+    await Bun.write(importedManifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
     await git("add", ".")
     await git("commit", "-m", "change immutable bytes without version")
     await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("without a version change")
     manifest.version = "1.1.0"
-    await Bun.write(join(imported, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`)
+    await Bun.write(importedManifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    const importedMetadata = JSON.parse(await readFile(importedMetadataPath, "utf8"))
+    importedMetadata.version = "1.1.0"
+    await Bun.write(importedMetadataPath, `${JSON.stringify(importedMetadata, null, 2)}\n`)
     await git("add", ".")
     await git("commit", "-m", "bump imported plugin version")
     const changed = await changedMarketplaceVersions(root, base)
@@ -213,37 +271,52 @@ describe("@convax/marketplace-kit", () => {
     await Bun.write(join(root, ".gitignore"), "node_modules/\ndist/\n")
     await Bun.write(
       join(pluginRoot, "convax-package.json"),
-      `${JSON.stringify({
-        schema: "convax.package/1",
-        kind: "plugin",
-        id: "example-plugin",
-        name: "Example Plugin",
-        description: "Example Plugin",
-        version: "1.0.0",
-        showcase: {
-          poster: { path: "assets/poster.bin", mime: "image/png" },
-        },
-        companions: [{
-          command: "example-companion",
+      `${JSON.stringify(
+        {
+          schema: "convax.package/2",
+          kind: "plugin",
+          id: "example-plugin",
+          name: "Example Plugin",
+          description: "Example Plugin",
           version: "1.0.0",
-          source: "packages/tools/example-companion",
-          targets: [{
-            platform: "darwin",
-            arch: "arm64",
-            path: "dist/darwin-arm64/example-companion",
-          }],
-        }],
-      }, null, 2)}\n`,
+          showcase: {
+            poster: { path: "assets/poster.bin", mime: "image/png" },
+          },
+          companions: [
+            {
+              command: "example-companion",
+              version: "1.0.0",
+              source: "packages/tools/example-companion",
+              targets: [
+                {
+                  platform: "darwin",
+                  arch: "arm64",
+                  path: "dist/darwin-arm64/example-companion",
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
     )
     await Bun.write(
       join(contentRoot, "manifest.json"),
-      `${JSON.stringify({
-        schema: "convax.plugin/2",
-        id: "example-plugin",
-        name: "Example Plugin",
-        description: "Example Plugin",
-        version: "1.0.0",
-      }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          schema: "convax.plugin/8",
+          capabilities: ["projects.read"],
+          contributes: {},
+          hostApi: { major: 1, required: [], optional: [] },
+          id: "example-plugin",
+          name: "Example Plugin",
+          description: "Example Plugin",
+          version: "1.0.0",
+        },
+        null,
+        2,
+      )}\n`,
     )
     await Bun.write(join(companionRoot, "src/index.ts"), "export const value = 1\n")
     const git = async (...args: string[]): Promise<string> => {
@@ -273,10 +346,7 @@ describe("@convax/marketplace-kit", () => {
     await Bun.write(join(pluginRoot, "showcase/dist/unreferenced.bin"), "ignored and unreferenced\n")
     expect(await changedMarketplaceVersions(root, base)).toEqual([])
 
-    await Bun.write(
-      join(root, ".git/info/exclude"),
-      "packages/plugins/example-plugin/assets/poster.bin\n",
-    )
+    await Bun.write(join(root, ".git/info/exclude"), "packages/plugins/example-plugin/assets/poster.bin\n")
     await mkdir(join(pluginRoot, "assets"), { recursive: true })
     await Bun.write(join(pluginRoot, "assets/poster.bin"), "ignored referenced Showcase bytes\n")
     await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("without a version change")
@@ -302,13 +372,15 @@ describe("@convax/marketplace-kit", () => {
     await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
     await git("add", "packages/plugins/example-plugin")
     await git("commit", "-m", "advance plugin version")
-    expect(await changedMarketplaceVersions(root, base)).toEqual([{
-      kind: "plugin",
-      id: "example-plugin",
-      version: "1.1.0",
-      previousVersion: "1.0.0",
-      releaseTag: "plugin-example-plugin-v1.1.0",
-    }])
+    expect(await changedMarketplaceVersions(root, base)).toEqual([
+      {
+        kind: "plugin",
+        id: "example-plugin",
+        version: "1.1.0",
+        previousVersion: "1.0.0",
+        releaseTag: "plugin-example-plugin-v1.1.0",
+      },
+    ])
   })
 
   test("selectively replaces one package while preserving the deployed Registry and Showcase", async () => {
@@ -330,7 +402,7 @@ describe("@convax/marketplace-kit", () => {
         join(packageRoot, "convax-package.json"),
         `${JSON.stringify(
           {
-            schema: "convax.package/1",
+            schema: "convax.package/2",
             kind: "skill",
             id,
             name: id,
@@ -355,7 +427,7 @@ describe("@convax/marketplace-kit", () => {
         join(packageRoot, "convax-package.json"),
         `${JSON.stringify(
           {
-            schema: "convax.package/1",
+            schema: "convax.package/2",
             kind: "plugin",
             id,
             name: id,
@@ -370,7 +442,10 @@ describe("@convax/marketplace-kit", () => {
         join(packageRoot, "package/manifest.json"),
         `${JSON.stringify(
           {
-            schema: "convax.plugin/6",
+            schema: "convax.plugin/8",
+            capabilities: ["projects.read"],
+            contributes: {},
+            hostApi: { major: 1, required: [], optional: [] },
             id,
             name: id,
             description,
@@ -473,7 +548,7 @@ describe("@convax/marketplace-kit", () => {
     ).rejects.toThrow("advance beyond 0.3.8")
   })
 
-  test("dogfoods Official parent metadata, source-controlled sequence, v1 projection, bundle and composed lock input", async () => {
+  test("dogfoods v2-only Official metadata, source-controlled sequence, bundle and composed lock input", async () => {
     const root = await mkdtemp(join(tmpdir(), "convax-market-official-"))
     await createMarketplaceStarter(root, {
       id: "convax-official",
@@ -486,9 +561,6 @@ describe("@convax/marketplace-kit", () => {
     await rm(starter, { recursive: true })
     const officialDescriptor = JSON.parse(await readFile(join(root, "marketplace.json"), "utf8"))
     officialDescriptor.registry.v2.url = "https://microvoid.github.io/convax-plugins/registry/v2/index.json"
-    officialDescriptor.registry.v1 = {
-      url: "https://microvoid.github.io/convax-plugins/registry/v1/index.json",
-    }
     officialDescriptor.showcase.v2.url = "https://microvoid.github.io/convax-plugins/showcase/v2/index.json"
     await Bun.write(join(root, "marketplace.json"), `${JSON.stringify(officialDescriptor, null, 2)}\n`)
     const skillRoot = join(root, "packages/skills/canvas-storyboard")
@@ -498,13 +570,12 @@ describe("@convax/marketplace-kit", () => {
       join(skillRoot, "convax-package.json"),
       `${JSON.stringify(
         {
-          schema: "convax.package/1",
+          schema: "convax.package/2",
           kind: "skill",
           id: "canvas-storyboard",
           name: "Storyboard",
           description: "Storyboard workflow",
           version: "0.1.0",
-          compatibility: { skillSchema: "opencode.skill/1" },
           showcase: {
             poster: {
               path: "showcase/poster.png",
@@ -522,7 +593,7 @@ describe("@convax/marketplace-kit", () => {
     )
     await Bun.write(
       join(skillRoot, "package/SKILL.md"),
-      "---\nname: canvas-storyboard\ndescription: Storyboard workflow\n---\n\n# Storyboard\n",
+      "---\nname: canvas-storyboard\nversion: 0.1.0\ndescription: Storyboard workflow\n---\n\n# Storyboard\n",
     )
     await Bun.write(join(skillRoot, "showcase/poster.png"), new Uint8Array([137, 80, 78, 71, 1]))
     await Bun.write(join(root, "registry/config.json"), '{\n  "sequence": 44,\n  "yanked": []\n}\n')
@@ -536,7 +607,7 @@ describe("@convax/marketplace-kit", () => {
       join(ffmpegPluginRoot, "convax-package.json"),
       `${JSON.stringify(
         {
-          schema: "convax.package/1",
+          schema: "convax.package/2",
           kind: "plugin",
           id: "ffmpeg-tools",
           name: "FFmpeg Tools",
@@ -559,7 +630,9 @@ describe("@convax/marketplace-kit", () => {
       join(ffmpegPluginRoot, "package/manifest.json"),
       `${JSON.stringify(
         {
-          schema: "convax.plugin/7",
+          schema: "convax.plugin/8",
+          capabilities: ["projects.read"],
+          hostApi: { major: 1, required: [], optional: [] },
           id: "ffmpeg-tools",
           name: "FFmpeg Tools",
           description: "FFmpeg tools",
@@ -576,7 +649,7 @@ describe("@convax/marketplace-kit", () => {
       join(ffmpegSkillRoot, "convax-package.json"),
       `${JSON.stringify(
         {
-          schema: "convax.package/1",
+          schema: "convax.package/2",
           kind: "skill",
           id: "ffmpeg-canvas",
           name: "FFmpeg Canvas",
@@ -592,28 +665,86 @@ describe("@convax/marketplace-kit", () => {
       join(ffmpegSkillRoot, "package/SKILL.md"),
       "---\nname: ffmpeg-canvas\nversion: 0.1.0\ndescription: FFmpeg Canvas workflow\n---\n",
     )
-    const companion = join(root, "companions/ffmpeg-tools/0.1.0/darwin-arm64/ffmpeg-tools")
-    await mkdir(join(root, "companions/ffmpeg-tools/0.1.0/darwin-arm64"), { recursive: true })
-    await Bun.write(companion, "#!/bin/sh\nexit 0\n")
+    const headlessPluginRoot = join(root, "packages/plugins/headless-workflows")
+    await mkdir(join(headlessPluginRoot, "package"), { recursive: true })
     await Bun.write(
-      join(root, "catalogs/preinstalled.json"),
+      join(headlessPluginRoot, "convax-package.json"),
       `${JSON.stringify(
         {
-          schema: "convax.preinstalled-config/1",
-          packages: [
-            {
-              marketplaceId: "convax-official",
-              kind: "plugin",
-              id: "ffmpeg-tools",
-              targets: ["darwin-arm64"],
-              setup: "explicit",
-            },
-          ],
+          schema: "convax.package/2",
+          kind: "plugin",
+          id: "headless-workflows",
+          name: "Headless Workflows",
+          description: "Skill-only headless Plugin",
+          version: "0.1.0",
         },
         null,
         2,
       )}\n`,
     )
+    await Bun.write(
+      join(headlessPluginRoot, "package/manifest.json"),
+      `${JSON.stringify(
+        {
+          schema: "convax.plugin/8",
+          capabilities: ["projects.read"],
+          hostApi: { major: 1, required: [], optional: [] },
+          id: "headless-workflows",
+          name: "Headless Workflows",
+          description: "Skill-only headless Plugin",
+          version: "0.1.0",
+          contributes: { skills: [{ name: "headless-workflow", path: "skills/headless-workflow" }] },
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    const headlessSkillRoot = join(root, "packages/skills/headless-workflow")
+    await mkdir(join(headlessSkillRoot, "package"), { recursive: true })
+    await Bun.write(
+      join(headlessSkillRoot, "convax-package.json"),
+      `${JSON.stringify(
+        {
+          schema: "convax.package/2",
+          kind: "skill",
+          id: "headless-workflow",
+          name: "Headless Workflow",
+          description: "Headless workflow",
+          version: "0.1.0",
+          ownerPluginId: "headless-workflows",
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    await Bun.write(
+      join(headlessSkillRoot, "package/SKILL.md"),
+      "---\nname: headless-workflow\nversion: 0.1.0\ndescription: Headless workflow\n---\n",
+    )
+    const companion = join(root, "companions/ffmpeg-tools/0.1.0/darwin-arm64/ffmpeg-tools")
+    await mkdir(join(root, "companions/ffmpeg-tools/0.1.0/darwin-arm64"), { recursive: true })
+    await Bun.write(companion, "#!/bin/sh\nexit 0\n")
+    const preinstalledPath = join(root, "catalogs/preinstalled.json")
+    const preinstalledConfig = {
+      schema: "convax.preinstalled-config/1",
+      packages: [
+        {
+          marketplaceId: "convax-official",
+          kind: "plugin",
+          id: "ffmpeg-tools",
+          targets: ["darwin-arm64"],
+          setup: "explicit",
+        },
+        {
+          marketplaceId: "convax-official",
+          kind: "plugin",
+          id: "headless-workflows",
+          targets: [],
+          setup: "explicit",
+        },
+      ],
+    }
+    await Bun.write(preinstalledPath, `${JSON.stringify(preinstalledConfig, null, 2)}\n`)
     const nexusRoot = join(root, "packages/plugins/nexus-service")
     await mkdir(join(nexusRoot, "package"), { recursive: true })
     const writeNexus = async (version: string, description: string) => {
@@ -621,7 +752,7 @@ describe("@convax/marketplace-kit", () => {
         join(nexusRoot, "convax-package.json"),
         `${JSON.stringify(
           {
-            schema: "convax.package/1",
+            schema: "convax.package/2",
             kind: "plugin",
             id: "nexus-service",
             name: "Nexus Service",
@@ -636,7 +767,10 @@ describe("@convax/marketplace-kit", () => {
         join(nexusRoot, "package/manifest.json"),
         `${JSON.stringify(
           {
-            schema: "convax.plugin/6",
+            schema: "convax.plugin/8",
+            capabilities: ["projects.read"],
+            contributes: {},
+            hostApi: { major: 1, required: [], optional: [] },
             id: "nexus-service",
             name: "Nexus Service",
             description,
@@ -654,20 +788,61 @@ describe("@convax/marketplace-kit", () => {
       outDir: catalogDir,
       official: true,
       initialOfficial: true,
-      v1Revision: "a".repeat(40),
     })
+    const ffmpegPluginArtifact = first.artifacts.find(
+      ({ id, kind, path }) => kind === "plugin" && id === "ffmpeg-tools" && path.endsWith(".zip"),
+    )
+    if (!ffmpegPluginArtifact) throw new Error("missing ffmpeg Plugin artifact")
+    const ffmpegPluginArchive = new TextDecoder().decode(await readFile(ffmpegPluginArtifact.path))
+    expect(ffmpegPluginArchive).toContain("skills/ffmpeg-canvas/references/convax-capabilities.md")
+    expect(ffmpegPluginArchive).toContain("skills/ffmpeg-canvas/references/plugin-capabilities.md")
+    expect(ffmpegPluginArchive).toContain("Generated by @convax/plugin-api. Do not edit.")
+    expect(ffmpegPluginArchive).toContain("Generated by @convax/plugin-sdk. Do not edit.")
+    expect(ffmpegPluginArchive).toContain("`createPluginHostClient` from `@convax/plugin-sdk/client`")
+    expect(ffmpegPluginArchive).toContain("`client.invokeCapability(...)`")
+    expect(ffmpegPluginArchive).toContain("`client.getHostApiAvailability(id)`")
+    expect(ffmpegPluginArchive).toContain("`convax.plugin-capability/3` is Host-internal")
+    const reservedReference = join(ffmpegSkillRoot, "package/references/plugin-capabilities.md")
+    await mkdir(join(ffmpegSkillRoot, "package/references"), { recursive: true })
+    await Bun.write(reservedReference, "hand-maintained drift\n")
+    const reservedReferenceError = await checkMarketplace(root).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(reservedReferenceError).toBeInstanceOf(TypeError)
+    if (!(reservedReferenceError instanceof Error)) {
+      throw new Error("generated reference collision did not return an Error")
+    }
+    expect(reservedReferenceError.message).toContain("generated reference is reserved")
+    await rm(reservedReference)
     expect(first.registry.sequence).toBe(45)
     expect(first.registry.revision).toMatch(/^[0-9a-f]{64}$/)
-    expect(first.registryV1?.revision).toBe("a".repeat(40))
-    expect((await stat(join(catalogDir, "site/registry/v2/index.json"))).isFile()).toBe(true)
-    expect((await stat(join(catalogDir, "site/registry/v1/index.json"))).isFile()).toBe(true)
-    expect((await stat(join(catalogDir, "site/showcase/v2/index.json"))).isFile()).toBe(true)
-    expect(first.registryV1?.packages.map(({ kind, id }) => `${kind}/${id}`).sort()).toEqual([
-      "plugin/ffmpeg-tools",
-      "plugin/nexus-service",
-      "skill/canvas-storyboard",
-      "skill/ffmpeg-canvas",
+    expect(first.productLockInput.packages).toMatchObject([
+      { id: "ffmpeg-tools", companions: [{ platform: "darwin", arch: "arm64" }] },
+      { id: "headless-workflows", companions: [], ownedSkills: [expect.any(Object)] },
     ])
+    expect((await stat(join(catalogDir, "site/registry/v2/index.json"))).isFile()).toBe(true)
+    expect((await stat(join(catalogDir, "site/showcase/v2/index.json"))).isFile()).toBe(true)
+    await Bun.write(
+      preinstalledPath,
+      `${JSON.stringify(
+        {
+          ...preinstalledConfig,
+          packages: [{ ...preinstalledConfig.packages[1], id: "unknown-extension" }],
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    await expect(
+      buildMarketplace({
+        root,
+        outDir: join(root, "dist/unknown-preinstall"),
+        official: true,
+        initialOfficial: true,
+      }),
+    ).rejects.toThrow("preinstalled package plugin/unknown-extension is unavailable")
+    await Bun.write(preinstalledPath, `${JSON.stringify(preinstalledConfig, null, 2)}\n`)
     await writeNexus("0.3.12", "selected Nexus")
     const storyboardMetadata = JSON.parse(await readFile(join(skillRoot, "convax-package.json"), "utf8"))
     storyboardMetadata.description = "unselected source mutation"
@@ -685,44 +860,6 @@ describe("@convax/marketplace-kit", () => {
       if (!bytes) throw new Error(`unexpected production artifact ${url}`)
       return bytes
     }
-    const bootstrapDir = join(root, "dist/selective-bootstrap-v1")
-    const bootstrapped = await buildMarketplace({
-      root,
-      outDir: bootstrapDir,
-      official: true,
-      previousDescriptorPath: join(catalogDir, "marketplace.json"),
-      bootstrapPreviousV1Path: join(catalogDir, "registry-v1.json"),
-      previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
-      publishSelections: [
-        {
-          kind: "plugin",
-          id: "nexus-service",
-          version: "0.3.12",
-          previousVersion: "0.3.11",
-          releaseTag: "plugin-nexus-service-v0.3.12",
-        },
-      ],
-      fetchArtifact,
-      v1Revision: "b".repeat(40),
-    })
-    expect(bootstrapped.registry.sequence).toBe(46)
-    expect(bootstrapped.registry.packages.find(({ id }) => id === "nexus-service")?.version).toBe("0.3.12")
-    expect(bootstrapped.registry.packages.find(({ id }) => id === "canvas-storyboard")?.presentation.description).toBe(
-      "Storyboard workflow",
-    )
-    expect(bootstrapped.showcase.packages[0]?.presentation.poster.sha256).toBe(
-      first.showcaseV1!.packages[0]!.poster.sha256,
-    )
-    expect(new URL(bootstrapped.showcase.packages[0]!.presentation.poster.url).pathname).toContain(
-      `/registry-v2-${bootstrapped.registry.revision}/`,
-    )
-    expect(bootstrapped.showcaseV1?.packages).toEqual(first.showcaseV1?.packages)
-    expect(bootstrapped.releasePlan.releases.map(({ tag }) => tag).sort()).toEqual(
-      ["plugin-nexus-service-v0.3.12", `registry-v2-${bootstrapped.registry.revision}`].sort(),
-    )
-    expect(bootstrapped.productLockInput).toMatchObject({
-      packages: [{ id: "ffmpeg-tools", artifact: { path: expect.stringContaining("inherited/") } }],
-    })
     const selectiveDir = join(root, "dist/selective")
     const selective = await buildMarketplace({
       root,
@@ -731,8 +868,6 @@ describe("@convax/marketplace-kit", () => {
       previousDescriptorPath: join(catalogDir, "marketplace.json"),
       previousRegistryPath: join(catalogDir, "registry-v2.json"),
       previousShowcasePath: join(catalogDir, "showcase-v2.json"),
-      previousRegistryV1Path: join(catalogDir, "registry-v1.json"),
-      previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
       publishSelections: [
         {
           kind: "plugin",
@@ -743,7 +878,6 @@ describe("@convax/marketplace-kit", () => {
         },
       ],
       fetchArtifact,
-      v1Revision: "b".repeat(40),
     })
     expect(selective.registry.sequence).toBe(46)
     expect(selective.registry.packages.find(({ id }) => id === "nexus-service")?.version).toBe("0.3.12")
@@ -753,15 +887,14 @@ describe("@convax/marketplace-kit", () => {
     expect(selective.showcase.packages[0]?.presentation.poster.sha256).toBe(
       first.showcase.packages[0]?.presentation.poster.sha256,
     )
-    expect(selective.showcaseV1?.sequence).toBe(selective.registryV1?.sequence)
-    expect(selective.showcaseV1?.revision).toBe("b".repeat(40))
-    expect(selective.showcaseV1?.packages).toEqual(first.showcaseV1?.packages)
-    expect((await stat(join(selectiveDir, "site/showcase/v1/index.json"))).isFile()).toBe(true)
     expect(selective.releasePlan.releases.map(({ tag }) => tag).sort()).toEqual(
       ["plugin-nexus-service-v0.3.12", `registry-v2-${selective.registry.revision}`].sort(),
     )
     expect(selective.productLockInput).toMatchObject({
-      packages: [{ id: "ffmpeg-tools", artifact: { path: expect.stringContaining("inherited/") } }],
+      packages: [
+        { id: "ffmpeg-tools", artifact: { path: expect.stringContaining("inherited/") } },
+        { id: "headless-workflows", artifact: { path: expect.stringContaining("inherited/") } },
+      ],
     })
     await expect(
       buildMarketplace({
@@ -771,8 +904,6 @@ describe("@convax/marketplace-kit", () => {
         previousDescriptorPath: join(catalogDir, "marketplace.json"),
         previousRegistryPath: join(catalogDir, "registry-v2.json"),
         previousShowcasePath: join(catalogDir, "showcase-v2.json"),
-        previousRegistryV1Path: join(catalogDir, "registry-v1.json"),
-        previousShowcaseV1Path: join(catalogDir, "showcase-v1.json"),
         publishSelections: [
           {
             kind: "plugin",
@@ -788,7 +919,6 @@ describe("@convax/marketplace-kit", () => {
           tampered[0] ^= 1
           return tampered
         },
-        v1Revision: "b".repeat(40),
       }),
     ).rejects.toThrow("do not match")
     const fromV2 = await buildMarketplace({
@@ -796,30 +926,8 @@ describe("@convax/marketplace-kit", () => {
       outDir: join(root, "dist/from-v2"),
       official: true,
       previousRegistryPath: join(catalogDir, "registry-v2.json"),
-      v1Revision: "b".repeat(40),
     })
     expect(fromV2.registry.sequence).toBe(46)
-    const fromV1 = await buildMarketplace({
-      root,
-      outDir: join(root, "dist/from-v1"),
-      official: true,
-      bootstrapPreviousV1Path: join(catalogDir, "registry-v1.json"),
-      v1Revision: "b".repeat(40),
-    })
-    expect(fromV1.registry.sequence).toBe(46)
-    await Bun.write(
-      join(root, "bad-v1.json"),
-      '{"schema":"convax.registry/1","sequence":44,"revision":"bad","packages":[]}',
-    )
-    await expect(
-      buildMarketplace({
-        root,
-        outDir: join(root, "dist/bad-v1"),
-        official: true,
-        bootstrapPreviousV1Path: join(root, "bad-v1.json"),
-        v1Revision: "b".repeat(40),
-      }),
-    ).rejects.toThrow("revision")
     await expect(
       buildMarketplace({
         root,
@@ -827,17 +935,8 @@ describe("@convax/marketplace-kit", () => {
         official: true,
         sequence: 1,
         initialOfficial: true,
-        v1Revision: "b".repeat(40),
       }),
     ).rejects.toThrow("floor/previous")
-    await expect(
-      buildMarketplace({
-        root,
-        outDir: join(root, "missing-v1-revision"),
-        official: true,
-        initialOfficial: true,
-      }),
-    ).rejects.toThrow("v1-revision")
     const builtinDir = join(root, "dist/builtin")
     const bundle = await buildBuiltinBundle({ root, outDir: builtinDir })
     expect(bundle.members[0]?.presentation.poster.sha256).toMatch(/^[0-9a-f]{64}$/)
@@ -952,6 +1051,14 @@ describe("@convax/marketplace-kit", () => {
           ownedSkills: [{ path: expect.any(String), url: expect.any(String) }],
           companions: [{ platform: "darwin", arch: "arm64" }],
         },
+        {
+          marketplaceId: "convax-official",
+          kind: "plugin",
+          id: "headless-workflows",
+          setup: "explicit",
+          ownedSkills: [{ path: expect.any(String), url: expect.any(String) }],
+          companions: [],
+        },
       ],
     })
     const cliLockPath = join(root, "dist/product-lock-input-cli.json")
@@ -995,11 +1102,11 @@ describe("@convax/marketplace-kit", () => {
     const mcp = join(root, "packages/mcp-servers/example-mcp")
     const marker = join(root, "must-not-exist")
     const binary = join(root, "companion")
-    const server = JSON.parse(await readFile(join(mcp, "server.json"), "utf8"))
+    const server = JSON.parse(await readFile(join(mcp, "package/server.json"), "utf8"))
     delete server.remotes
-    await Bun.write(join(mcp, "server.json"), `${JSON.stringify(server, null, 2)}\n`)
+    await Bun.write(join(mcp, "package/server.json"), `${JSON.stringify(server, null, 2)}\n`)
     await Bun.write(
-      join(mcp, "convax-mcp.json"),
+      join(mcp, "package/convax-mcp.json"),
       `${JSON.stringify(
         {
           schema: "convax.mcp-server-extension/1",
@@ -1027,11 +1134,11 @@ describe("@convax/marketplace-kit", () => {
     expect(await stat(marker).catch(() => undefined)).toBeUndefined()
     expect(addedTarget).not.toContain(server.name)
     expect(await readFile(addedTarget)).toEqual(await readFile(binary))
-    expect(await readFile(join(mcp, "server.json"), "utf8")).toContain("example-mcp")
+    expect(await readFile(join(mcp, "package/server.json"), "utf8")).toContain("example-mcp")
     await createMarketplaceTemplate(root, "plugin", "second-plugin")
     await createMarketplaceTemplate(root, "skill", "second-skill")
     const unsupportedMcp = await createMarketplaceTemplate(root, "mcp-server", "unsupported-mcp")
-    const unsupportedServer = JSON.parse(await readFile(join(unsupportedMcp, "server.json"), "utf8"))
+    const unsupportedServer = JSON.parse(await readFile(join(unsupportedMcp, "package/server.json"), "utf8"))
     unsupportedServer.remotes = [
       {
         type: "streamable-http",
@@ -1039,9 +1146,9 @@ describe("@convax/marketplace-kit", () => {
         variables: { tenant: { description: "Tenant" } },
       },
     ]
-    await Bun.write(join(unsupportedMcp, "server.json"), `${JSON.stringify(unsupportedServer, null, 2)}\n`)
-    expect(await stat(join(root, "packages/plugins/second-plugin/manifest.json"))).toBeTruthy()
-    expect(await stat(join(root, "packages/skills/second-skill/SKILL.md"))).toBeTruthy()
+    await Bun.write(join(unsupportedMcp, "package/server.json"), `${JSON.stringify(unsupportedServer, null, 2)}\n`)
+    expect(await stat(join(root, "packages/plugins/second-plugin/package/manifest.json"))).toBeTruthy()
+    expect(await stat(join(root, "packages/skills/second-skill/package/SKILL.md"))).toBeTruthy()
     const build = await buildMarketplace({ root, outDir: join(root, "dist") })
     expect(build.registry.packages.some(({ id }) => id === unsupportedServer.name)).toBe(false)
     expect(build.artifacts.some(({ id }) => id === unsupportedServer.name)).toBe(false)

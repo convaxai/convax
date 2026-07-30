@@ -25,6 +25,7 @@ const authorizationOptions = {
   action: "authorize" as const,
   isCurrent: async () => true,
   serviceIdentity: "a".repeat(64),
+  snapshotDigest: "b".repeat(64),
 }
 
 const temporaryRoots: string[] = []
@@ -148,6 +149,7 @@ describe("Plugin service browser authorization", () => {
       await checkpoints.inspect({
         pluginId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
+        snapshotDigest: authorizationOptions.snapshotDigest,
       }),
     ).toMatchObject({ action: "authorize" })
     expect(
@@ -157,6 +159,7 @@ describe("Plugin service browser authorization", () => {
           cookieOrigin: rawRequest.cookie_origin,
           pluginId: "account-tools",
           serviceIdentity: authorizationOptions.serviceIdentity,
+          snapshotDigest: authorizationOptions.snapshotDigest,
         })
       )?.cookies,
     ).toEqual([{ expiresAt: cookieExpiry, name: "session_id", value: "secret-session" }])
@@ -181,6 +184,7 @@ describe("Plugin service browser authorization", () => {
       await checkpoints.inspect({
         pluginId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
+        snapshotDigest: authorizationOptions.snapshotDigest,
       }),
     ).toBeNull()
   })
@@ -197,8 +201,9 @@ describe("Plugin service browser authorization", () => {
       cookieOrigin: rawRequest.cookie_origin,
       cookies: [{ name: "session_id", value: "recoverable-session" }],
       pluginId: "account-tools",
-      schema: "convax.plugin-service-authorization-checkpoint/1",
+      schema: "convax.plugin-service-authorization-checkpoint/2",
       serviceIdentity: authorizationOptions.serviceIdentity,
+      snapshotDigest: authorizationOptions.snapshotDigest,
     })
 
     const originalRealpath = fs.realpath.bind(fs)
@@ -232,6 +237,7 @@ describe("Plugin service browser authorization", () => {
         cookieOrigin: rawRequest.cookie_origin,
         pluginId: "account-tools",
         serviceIdentity: authorizationOptions.serviceIdentity,
+        snapshotDigest: authorizationOptions.snapshotDigest,
       }),
     ).not.toBeNull()
   })

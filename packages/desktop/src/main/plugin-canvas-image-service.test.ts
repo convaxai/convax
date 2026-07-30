@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, type CanvasDocument } from "@convax/canvas/core"
 
 import type { PluginCanvasImageCreateRequest } from "../plugin-canvas-image-contracts"
+import type { PluginPrincipal } from "../plugin-capability-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
   PluginCanvasImagePublicationPartialSuccessError,
@@ -69,9 +70,10 @@ function pluginIdentity(
       contributes: { canvas: { renderer: { create: true, height: 640, width: 980 } } },
       description: "Capture one viewport",
       entry: "index.html",
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
       id: "capture-surface",
       name: "Capture Surface",
-      schema: "convax.plugin/1",
+      schema: "convax.plugin/8",
       version: "1.0.0",
       ...overrides,
     },
@@ -119,6 +121,57 @@ describe("Plugin Canvas image service", () => {
     )
   })
 
+  test("an exact Host API snapshot change before publication creates no user file", async () => {
+    const canvas = document()
+    let current = true
+    let published = 0
+    const exactPrincipal: PluginPrincipal = {
+      activeRevision: 9,
+      activeSetDigest: "c".repeat(64),
+      manifestDigest: "a".repeat(64),
+      pluginId: "capture-surface",
+      pluginVersion: "1.0.0",
+      runtime: "web",
+      snapshotDigest: "d".repeat(64),
+    }
+    const exactIdentity = () => ({
+      activeRevision: current ? 9 : 10,
+      activeSetDigest: current ? "c".repeat(64) : "e".repeat(64),
+      ...pluginIdentity({}, current ? "a".repeat(64) : "b".repeat(64)),
+      manifestDigest: current ? "a".repeat(64) : "b".repeat(64),
+      snapshotDigest: current ? "d".repeat(64) : "f".repeat(64),
+    })
+    const service = new PluginCanvasImageService({
+      documents: { load: async () => ({ document: canvas }) },
+      plugins: { resolveCapabilityIdentity: async () => exactIdentity() },
+      projects: {
+        async publishGenerated(input) {
+          current = false
+          await input.beforePublish?.()
+          published += 1
+          return { path: "Generated/must-not-exist.png" }
+        },
+      },
+      resources: {
+        addResources: async () => {
+          throw new Error("must not commit")
+        },
+      },
+    })
+
+    await expect(
+      service.createForHostApi({
+        binding: { canvasId: "canvas-1", nodeId: "plugin-node-1", projectId: "project-1" },
+        checkpoint: { checkpoint: async () => nodeContextForImage(canvas) },
+        dataUrl: pngDataUrl(),
+        name: "capture.png",
+        operationId: "operation-1",
+        principal: exactPrincipal,
+      }),
+    ).rejects.toThrow("Plugin identity or Canvas image permission changed")
+    expect(published).toBe(0)
+  })
+
   test("retains the published image when the Canvas commit fails", async () => {
     const canvas = document()
     const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
@@ -141,6 +194,27 @@ describe("Plugin Canvas image service", () => {
       publishedPaths: ["Generated/capture.png"],
     } satisfies Partial<PluginCanvasImagePublicationPartialSuccessError>)
     expect(publishGenerated).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not classify a pre-publication implementation bug as a resource or partial-success error", async () => {
+    const canvas = document()
+    const bug = new TypeError("publisher invariant failed")
+    const service = new PluginCanvasImageService({
+      documents: { load: async () => ({ document: canvas }) },
+      plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
+      projects: {
+        async publishGenerated() {
+          throw bug
+        },
+      },
+      resources: {
+        addResources: async () => {
+          throw new Error("must not commit")
+        },
+      },
+    })
+
+    await expect(service.create(request())).rejects.toBe(bug)
   })
 
   test("rechecks the exact Plugin identity after publication before a stale commit", async () => {
@@ -251,3 +325,19 @@ describe("Plugin Canvas image service", () => {
     expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 })
+
+function nodeContextForImage(canvas: CanvasDocument) {
+  const node = canvas.nodes[0]!
+  return {
+    canvas: { id: canvas.id },
+    documentRevision: canvas.revision,
+    node: {
+      data: node.data,
+      id: node.id,
+      position: node.position,
+      style: node.style as Record<string, unknown>,
+      type: node.type ?? "file",
+    },
+    project: { id: "project-1" },
+  }
+}

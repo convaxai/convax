@@ -102,9 +102,7 @@ function selection(nodeIds: string[], edgeIds: string[] = []) {
   )
 }
 
-function operationPlugin(
-  schema: "convax.plugin/3" | "convax.plugin/4" | "convax.plugin/6" = "convax.plugin/3",
-): InstalledWebPluginSummary {
+function operationPlugin(withSkill = false): InstalledWebPluginSummary {
   const localized = (defaultText: string, chinese: string) => ({ default: defaultText, "zh-CN": chinese })
   return {
     capabilities: [],
@@ -157,15 +155,14 @@ function operationPlugin(
           tool("audio.extract", "audio"),
         ],
       },
-      ...(schema === "convax.plugin/4" || schema === "convax.plugin/6"
-        ? { skills: [{ name: "media-workflow", path: "skills/media-workflow" }] }
-        : {}),
+      ...(withSkill ? { skills: [{ name: "media-workflow", path: "skills/media-workflow" }] } : {}),
     },
     description: "A replaceable media operation Plugin.",
+    hostApi: { major: 1, optional: [], required: [] },
     id: "acme-media",
     name: "Acme Media",
     runtime: { command: "acme-media-mcp", type: "mcp-stdio" },
-    schema,
+    schema: "convax.plugin/8",
     version: "1.0.0",
   }
 }
@@ -181,7 +178,7 @@ function tool(id: string, output: "audio" | "image" | "video") {
 }
 
 function returnOperationPlugin(): InstalledWebPluginSummary {
-  const plugin = operationPlugin("convax.plugin/6")
+  const plugin = operationPlugin()
   return {
     ...plugin,
     contributes: {
@@ -254,10 +251,11 @@ function immediateImageOperationPlugin(): InstalledWebPluginSummary {
       },
     },
     description: "Local cutout",
+    hostApi: { major: 1, optional: [], required: [] },
     id: "cutout-studio",
     name: "Cutout Studio",
     runtime: { command: "convax-cutout-mcp", type: "mcp-stdio" },
-    schema: "convax.plugin/7",
+    schema: "convax.plugin/8",
     version: "0.2.0",
   }
 }
@@ -273,18 +271,20 @@ describe("manifest-driven media operation visibility", () => {
     expect(listInstalledMediaOperationActions([])).toEqual([])
   })
 
-  test("preserves manifest-driven actions for a v4 Plugin with owned Skills", () => {
-    const v3Actions = listInstalledMediaOperationActions([operationPlugin()])
-    const v4Plugin = operationPlugin("convax.plugin/4")
+  test("preserves manifest-driven actions for a v8 Plugin with owned Skills", () => {
+    const plainActions = listInstalledMediaOperationActions([operationPlugin()])
+    const pluginWithSkill = operationPlugin(true)
 
-    expect(v4Plugin.contributes.skills).toEqual([{ name: "media-workflow", path: "skills/media-workflow" }])
-    expect(listInstalledMediaOperationActions([v4Plugin])).toEqual(v3Actions)
+    expect(pluginWithSkill.contributes.skills).toEqual([{ name: "media-workflow", path: "skills/media-workflow" }])
+    expect(listInstalledMediaOperationActions([pluginWithSkill])).toEqual(plainActions)
   })
 
-  test("preserves manifest-driven actions for a v6 Plugin", () => {
-    expect(listInstalledMediaOperationActions([operationPlugin("convax.plugin/6")])).toEqual(
-      listInstalledMediaOperationActions([operationPlugin()]),
-    )
+  test("rejects legacy manifests instead of retaining schema aliases", () => {
+    const legacy = {
+      ...operationPlugin(),
+      schema: "convax.plugin/7",
+    } as unknown as InstalledWebPluginSummary
+    expect(listInstalledMediaOperationActions([legacy])).toEqual([])
   })
 
   test("accepts exactly one Project-backed video without a selected edge", () => {
@@ -367,10 +367,7 @@ describe("manifest-driven media operation requests", () => {
       (candidate) => candidate.id === "import-image",
     )!
     expect(
-      createMediaOperationReturnRequest(
-        { action, canvasId: "canvas", context, projectId: "project" },
-        "operation-1",
-      ),
+      createMediaOperationReturnRequest({ action, canvasId: "canvas", context, projectId: "project" }, "operation-1"),
     ).toMatchObject({
       expectedOutputCount: 1,
       expectedRevision: 7,

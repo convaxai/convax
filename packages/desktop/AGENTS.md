@@ -62,16 +62,14 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   sender validation.
 - Treat OpenCode Skills and Convax Plugins as distinct existing concepts. Skills use
   the Agent runtime's native discovery; Plugins compose existing Canvas file-renderer
-  and toolbar registries. Standalone Skills and the legacy top-level `skill` field in
-  `convax.plugin/1` through `/3` remain independently managed. A
-  `convax.plugin/4` and later `contributes.skills` entries are owned by their Plugin:
-  Desktop keeps
-  the ownership binding and atomically publishes, updates, rolls back, and removes
-  the materialized Skill with that Plugin. Owned Skills are visible as provided by
-  the Plugin but cannot be managed separately. No Skill grants Plugin or native
-  permission, and `@convax/agent-runtime` must not learn Plugin identity. Do not
-  create a generic extension framework.
-- A v6 remote Agent MCP is declared by the installed Plugin but connected by
+  and toolbar registries. Standalone Skills remain independently managed.
+  `convax.plugin/8` `contributes.skills` directories are owned immutable closure
+  content selected by one ActiveSet; they are never copied into the standalone
+  Skill root and need no second ownership journal. Desktop passes only their leased
+  absolute directories through the generic Agent Runtime Skill-path port. No Skill
+  grants Plugin or native permission, and `@convax/agent-runtime` must not learn
+  Plugin identity. Do not create a generic extension framework.
+- A v8 remote Agent MCP is declared by the installed Plugin but connected by
   OpenCode. Desktop validates and maps the declaration to a stable server key,
   refreshes the lazy Agent configuration after Plugin publication, and exposes only
   Plugin-id-based connect actions. Never send renderer-supplied URLs, headers,
@@ -85,17 +83,14 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - A top-level `hooks` field declares one self-contained OpenCode Plugin module.
   Treat it as executable Agent code, not a Web entry or Skill. During explicit
   install/update, bind consent to the normalized manifest and exact `.js`/`.mjs`
-  bytes, publish a private immutable snapshot in the same package transaction, and
-  load only that snapshot through the generic Agent runtime resolver. Resolve under
-  the per-Plugin mutation lock, sort by Plugin id, skip changed/unauthorized modules,
-  and append the host protected-path guard last. Retain superseded snapshots until
-  the old OpenCode generation has disposed, then reconcile them. Only static
+  bytes, publish them in the complete immutable closure, and load only the Hook from
+  the leased ActiveSet through the generic Agent runtime resolver. Sort by Plugin
+  id, skip unavailable or unauthorized modules, and append the host protected-path
+  guard last. The runtime lease retains superseded snapshots until the old OpenCode
+  generation has disposed. Only static
   `node:`/`bun:` imports may remain; require valid ESM with an exported Plugin entry
   and reject CommonJS globals, runtime module loaders, dynamic imports and every
   unbundled dependency.
-  Never wait for Agent hard refresh while holding the per-Plugin mutation lock:
-  Agent startup resolves Hooks under that lock. Invalidate first without the lock,
-  then reacquire it to converge current receipts and remove obsolete snapshots.
   Default/background provisioning must never authorize new Hook bytes and must
   recheck the parsed publication candidate rather than catalog metadata alone.
 - Startup installs every member of the product-lock-verified Builtin bundle before
@@ -108,63 +103,38 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   the fixed Official source revalidates the packaged product closure but cannot
   silently widen or replace that grant; never pass its reserved identity to the
   user Network Marketplace manager.
-- Plugin-owned Skill publication has three ordered phases. Prepare validates and
-  stages without exposing new bytes. `publish` rechecks external names and journals
-  exact rollback receipts before the Plugin directory switch. `activate` publishes
-  ownership before Skill bytes after the switch. `commit` records the forward
-  decision before cleanup. Startup converges exact remnants to the validated Plugin
-  package selected by Plugin-package recovery; changed bytes and unknown backups fail
-  closed. A v1-v3 companion transfers to v4-or-later ownership only after an exact old-package
-  byte match. Package recovery must succeed before any dependent Skill journal is
-  consumed. Serialize same-id Plugin install/update/uninstall publications, and
-  serialize owned-Skill transactions with every standalone managed Skill mutation;
-  they share one filesystem namespace. Agent discovery refresh uses that coordinator
-  too. A surviving ownership binding reserves its Skill name even when materialized
-  bytes are missing; a pending journal reserves both previous and next names and
-  blocks standalone mutation until recovery.
-- A dependent publication may roll back only after every Plugin-package rollback
-  rename succeeds. Any incomplete install, update, built-in update, or uninstall
-  rollback must call `deferToRecovery`: retain Skill journals, authorization receipts,
-  and managed companions, release process-local locks, and surface a typed
-  recovery-required error. Startup selects the canonical Plugin package first, then
-  converges all retained state. Default provisioning must not downgrade this error
-  to an offline failure or continue opening the application with a pending journal.
-- Treat owned-Skill commit as the fallible forward decision. Only after it succeeds
-  may executable-authorization and backup cleanup run; cleanup is best-effort and
-  must not roll a current Plugin back. Recover validated uninstall tombstones by
-  finishing removal, never by restoring them. Refresh Agent Skill discovery once
-  startup default provisioning has completed, including its failure path.
-- Install Plugins as validated packages under `userData`. Render third-party Web
-  entries only in `sandbox="allow-scripts"` iframes served by the contained Plugin
-  asset protocol. Never use `webview`, import Web Plugin JS, or expose Electron/Node.
-  The separately authorized Hook snapshot is main-owned Agent configuration and is
-  never imported by Desktop.
+- Validate Plugin-owned Skill paths and global names while building the immutable
+  ActiveSet. One ActiveSet compare-and-swap publishes the package, Skill, Hook,
+  companion and inter-Plugin dependency decision together. Do not materialize owned
+  Skills into the standalone Skill namespace, create a parallel ownership journal,
+  or emulate the atomic switch through ordered directory renames. On failure, leave
+  the prior ActiveSet current. Refresh Agent discovery only after a successful
+  pointer switch; existing Agent instances retain the old leased paths until dispose.
+- Publish each Plugin as one content-addressed immutable complete closure under
+  `userData/plugin-installations`, then select exact snapshot digests through the
+  single global ActiveSet CAS pointer. Render third-party Web entries only from a
+  current leased snapshot in `sandbox="allow-scripts"` iframes. Never use `webview`,
+  import Web Plugin JS, or expose Electron/Node. The separately authorized Hook is
+  exact closure content and is never imported by Desktop.
 - Fetch the official remote Plugin/Skill Registry only in main from its fixed
   origin. Renderer IPC carries a catalog id, never an arbitrary URL, path or digest.
   Verify monotonic catalog sequence, compatibility, size, SHA-256 and a bounded safe
-  ZIP inventory, then reuse the existing Plugin and managed-Skill installers. A
-  remote package never enters the trusted built-in update/provenance path.
+  ZIP inventory, then publish through the same immutable snapshot installer used by
+  every provisioning source. Source identity never becomes runtime privilege.
   Catalog UI may display validated package and current-host companion byte counts.
   Open an official GitHub Release only through id-only Plugin IPC that re-resolves
   the Registry package and constructs the canonical page in main.
-- A remote Tool Plugin executable is an optional Registry companion, never a file
-  inside the static Plugin ZIP. Select only an exact `process.platform`/`arch`
-  target, verify its deterministic Release URL plus declared size/SHA-256, and
-  publish immutable bytes below private versioned `userData/plugin-companions`.
+- A remote Tool Plugin executable is an optional Registry companion admitted into
+  the Plugin's complete immutable closure. Select only an exact
+  `process.platform`/`arch` target, verify its deterministic Release URL plus
+  declared size/SHA-256, and publish it before the ActiveSet switch.
   Treat only the exact `#!/usr/bin/env convax-bun` header as an interpreted
   companion and launch its verified snapshot through the app-owned shared Bun
   runtime. Do not infer this mode from Plugin identity, filename, or manifest text.
-  Preserve the previous Plugin/companion pair on failure, clean orphans on
-  update/uninstall/startup, and keep explicit `PATH` commands as the fallback.
-  Installation must resolve and fingerprint either the exact managed artifact or
-  the exact PATH executable and transactionally coordinate a host-owned receipt
-  with Plugin publication. A crash or cleanup failure may leave an inert orphan,
-  which runtime rejects and startup reconciliation removes. Runtime never prompts:
-  it silently verifies the same
-  manifest, binding kind, real path, size and SHA-256 or fails closed and requests
-  reinstall. A required managed artifact must never fall back to PATH.
-  Launch snapshots belong in a separate private runtime temporary directory and
-  must never add files to or otherwise mutate the immutable companion installation.
+  Preserve the previous ActiveSet on failure. Runtime resolves only the companion
+  recorded in the leased snapshot descriptor, revalidates exact path/size/SHA-256,
+  and never falls back to a mutable PATH executable or a legacy authorization
+  receipt. Missing or changed closure bytes fail closed and require reinstall.
 - Plugin service settings reuse that same Tool Plugin process/runtime. Keep actions
   as a manifest-declared subset of fixed `service.*` MCP tools, validate structured
   status in main, and expose one fixed preload method per action. Never return raw
@@ -250,16 +220,16 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   login. Never persist a browser profile or expose the request, URL or cookies
   through IPC. Drain the checkpoint/sidecar handoff before quit disposes the shared
   Tool Plugin runtime.
-- V5 Project/Canvas RPC is owned by one transport-neutral main broker. Bind every
+- V8 Project/Canvas RPC is owned by one transport-neutral main broker. Bind every
   connection to the exact installed manifest identity and a host-issued Project
   scope; revalidate identity, grants and the live Canvas catalog on every call.
-  Web MessagePorts, verified Tool sidecars and built-ins may only adapt to this
+  Web MessagePorts and verified Tool sidecars may only adapt to this
   broker, never recreate its authorization or Canvas semantics.
 - Bound each connection's concurrent requests and pending subscriptions before
   awaiting principal resolution. Serialize and deduplicate revision notifications,
   and recheck the exact Canvas remains in the live catalog before delivery.
 - Web node methods remain bound to the exact MessagePort and Project/Canvas/node.
-  V5 document methods are not authorized by node ownership: they carry an explicit
+  Project/document methods are not authorized by node ownership: they carry an explicit
   portable Canvas ref and use bounded geometry/structure projections or atomic
   resource-free transactions. Resource bytes/admission require a separate Project
   business capability and never ride the document transaction escape hatch.
@@ -272,14 +242,14 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   timed-out prepare explicitly, and propagate Agent/Tool cancellation to the final
   durable checkpoint. Renderer reconciliation failure after commit must not report
   the durable mutation as failed.
-- Bind legacy node-scoped Plugin RPC to its MessagePort and exact Project/Canvas/node
+- Bind node-scoped v8 Plugin RPC to its MessagePort and exact Project/Canvas/node
   scope. Enforce the
   manifest allowlist and delegate to existing typed clients; never add a generic
   IPC/function-call escape hatch.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned typed Project-resource read, and reject stale or
   caller-selected paths.
-- A v6 connected-input metadata capability is pathless and read-only. Return only
+- Connected-input metadata is pathless and read-only. Return only
   bounded direct-incoming media descriptors, send edge/source changes as
   invalidations, and never let an invalidation trigger upload or another external
   effect. Bytes still cross only the verified Main-owned tool staging boundary
@@ -289,7 +259,7 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   constrain every reference to live direct incoming edges before staging and again
   before execution. A return-delivery text operation reuses all normal execution
   guards but creates no Canvas resource or node.
-- A v6-or-later return-delivery selection action is confirmation-only, has exactly
+- A return-delivery selection action is confirmation-only, has exactly
   one step, has no input binding, and accepts the exact image or video role declared
   by its target. Project one such action only while Main admits the exact installed,
   version-bound, authorized and enabled operation. Flush the authoritative Canvas,
@@ -297,37 +267,12 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   staging; never turn this into a provider-specific renderer call.
 - Grant fullscreen or any future iframe feature-policy exception only when the
   installed manifest declares it; keep all unrelated denials unchanged.
-- Trusted built-in native integrations stay in main and are never loaded from the
-  static Plugin package. Reserve their catalog ids from ordinary imports and enable
-  them only after validating host-authored provenance plus the exact catalog bundle,
-  never manifest id/version alone. Renderer and Agent adapters share one narrow
-  service, pass only host-scoped ids/revisions, and never expose native paths to
-  preload or a sandboxed frame. One-time default Plugin and companion-Skill installs
-  need independent durable receipts so either uninstall is respected.
-- Startup may claim an existing marker-free built-in only when its complete
-  canonical digest matches the current catalog bundle or an explicit historical
-  `(version, digest)` allowlist. Never reinstall a missing non-default Plugin,
-  accept a case-variant provenance path, trust marker text without rehashing files,
-  or replace different bytes at the same version.
-- JianYing native actions and Agent tools currently run on macOS only. Keep an
-  explicit Windows WIP adapter that fails closed as unsupported; never substitute UI
-  automation. Export only image/video nodes backed by valid typed Project resource
-  references; main reloads the active Canvas, checks
-  revision/node/MIME/regular-file containment, and resolves or stages native paths
-  after that validation.
-- Dispatch JianYing imports through its macOS Deep Link, never Accessibility, Apple
-  Events, JXA or `AXPress`. Serve staged media only from a temporary
-  `127.0.0.1` server on a random port, with one unguessable opaque-token route per
-  item; the payload may contain only those URLs. Keep the server alive until every
-  requested item has fully transferred, then close it, or close it on bounded
-  failure. The verified Deep Link adds media to both the material panel and timeline
-  and has no panel-only parameter.
-- New-draft export from JianYing's home/not-running state must dispatch the native
-  force-create route and prove that a new draft directory became active before
-  dispatching the current-draft material import. Active-editor-to-new is an explicit
-  macOS WIP and must fail before native mutation, asking the user to return JianYing
-  home and retry. Never rely on editor-scene `new_draft`, silently reuse the old
-  draft, or send media before the destination identity is verified.
+- Builtin and preinstalled are provisioning-source policies, never runtime
+  privilege classes. They publish the same v8 snapshots, use the same grants and
+  broker, and may not enable native behavior through concrete ids or host-authored
+  provenance flags. Native external-editor behavior belongs to a verified generic
+  companion Tool contribution in `convax-plugins`; platform support and failure
+  derive from its target closure, not a Desktop product branch.
 - Native Canvas media drag-out is destination-neutral and uses Electron's native
   `webContents.startDrag`; do not special-case Finder or drive JianYing UI. Renderer
   may hold only a short-lived sender-scoped opaque ticket. Main reloads the exact

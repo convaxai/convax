@@ -51,6 +51,7 @@ function installedPlugin(id = "example-plugin", version = "1.0.0", command = "ex
     capabilities: [],
     contributes: {
       generation: {
+        models: [],
         tools: [
           {
             acceptedInputs: ["text"],
@@ -63,10 +64,11 @@ function installedPlugin(id = "example-plugin", version = "1.0.0", command = "ex
       },
     },
     description: "Example",
+    hostApi: { major: 1, optional: [], required: [] },
     id,
     name: id,
     runtime: { command, type: "mcp-stdio" },
-    schema: "convax.plugin/2",
+    schema: "convax.plugin/8",
     version,
   })
 }

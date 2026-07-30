@@ -96,51 +96,13 @@ export interface RegistryV2 {
   packages: RegistryPackage[]
 }
 
-export interface RegistryV1Artifact {
-  url: string
-  size: number
-  sha256: string
-}
-
-export type RegistryV1Package =
-  | {
-      kind: "plugin"
-      id: string
-      name: string
-      description: string
-      version: string
-      compatibility: { pluginSchema: string; pluginHost: string }
-      artifact: RegistryV1Artifact
-      yanked: boolean
-      manifest: Record<string, unknown>
-      companions?: PluginCompanion[]
-    }
-  | {
-      kind: "skill"
-      id: string
-      name: string
-      description: string
-      version: string
-      compatibility: { skillSchema: "opencode.skill/1" }
-      artifact: RegistryV1Artifact
-      yanked: boolean
-      ownerPluginId?: string
-    }
-
-export interface RegistryV1 {
-  schema: "convax.registry/1"
-  sequence: number
-  revision: string
-  packages: RegistryV1Package[]
-}
-
 export interface MarketplaceDescriptor {
   schema: "convax.marketplace/1"
   id: string
   name: string
   publisher: { name: string }
   repository: { owner: string; name: string }
-  registry: { v2: { url: string }; v1?: { url: string } }
+  registry: { v2: { url: string } }
   showcase: { v2: { url: string } }
   compatibility: Compatibility
   delivery: { kind: "github-pages-releases" }
@@ -209,32 +171,6 @@ export interface ShowcaseAsset {
   height?: number
 }
 
-export type ShowcaseV1PosterMime = "image/jpeg" | "image/png" | "image/webp"
-export type ShowcaseV1AnimationMime = "image/gif" | "video/mp4"
-
-export interface ShowcaseV1Asset<Mime extends ShowcaseV1PosterMime | ShowcaseV1AnimationMime> {
-  url: string
-  mime: Mime
-  size: number
-  sha256: Sha256
-  width: number
-  height: number
-  alt: string
-}
-
-export interface ShowcaseV1 {
-  schema: "convax.showcase/1"
-  sequence: number
-  revision: string
-  packages: Array<{
-    kind: "plugin" | "skill"
-    id: string
-    version: string
-    poster: ShowcaseV1Asset<ShowcaseV1PosterMime>
-    animation?: ShowcaseV1Asset<ShowcaseV1AnimationMime>
-  }>
-}
-
 export interface ShowcaseV2 {
   schema: "convax.showcase/2"
   marketplaceId: string
@@ -259,6 +195,7 @@ const MARKETPLACE_ID = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const SEMVER =
   /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 const SAFE_OPAQUE_VERSION = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,254}$/
+const PACKAGE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const COMMAND = /^[A-Za-z0-9._-]+$/
 const TARGET = /^(darwin|linux|win32)-(arm64|x64)$/
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
@@ -397,17 +334,9 @@ export function parseMarketplaceDescriptor(value: unknown): MarketplaceDescripto
   const repository = record(parsed.repository, "repository")
   strictKeys(repository, ["owner", "name"], ["owner", "name"], "repository")
   const registry = record(parsed.registry, "registry")
-  strictKeys(registry, ["v1", "v2"], ["v2"], "registry")
+  strictKeys(registry, ["v2"], ["v2"], "registry")
   const v2 = record(registry.v2, "registry.v2")
   strictKeys(v2, ["url"], ["url"], "registry.v2")
-  const v1 =
-    registry.v1 === undefined
-      ? undefined
-      : (() => {
-          const candidate = record(registry.v1, "registry.v1")
-          strictKeys(candidate, ["url"], ["url"], "registry.v1")
-          return { url: httpsUrl(candidate.url, "registry.v1.url") }
-        })()
   const showcase = record(parsed.showcase, "showcase")
   strictKeys(showcase, ["v2"], ["v2"], "showcase")
   const showcaseV2 = record(showcase.v2, "showcase.v2")
@@ -452,7 +381,6 @@ export function parseMarketplaceDescriptor(value: unknown): MarketplaceDescripto
     },
     registry: {
       v2: { url: assertPagesUrl(v2.url, "registry.v2.url") },
-      ...(v1 ? { v1: { url: assertPagesUrl(v1.url, "registry.v1.url") } } : {}),
     },
     showcase: { v2: { url: assertPagesUrl(showcaseV2.url, "showcase.v2.url") } },
     compatibility: parseCompatibility(parsed.compatibility),
@@ -655,18 +583,36 @@ function parseRegistryPackage(value: unknown): RegistryPackage {
   }
   const delivery = parseDelivery(parsed.delivery, kind)
   if (parsed.yanked !== undefined && typeof parsed.yanked !== "boolean") throw new TypeError("yanked must be boolean")
-  if (kind === "plugin" && parsed.manifest !== undefined) {
+  if (kind === "plugin" && parsed.manifest === undefined) {
+    throw new TypeError("Plugin Registry package must project its manifest")
+  }
+  if (kind === "plugin") {
     const manifest = record(parsed.manifest, "Plugin manifest projection")
-    if (
-      typeof manifest.schema !== "string" ||
-      !/^convax\.plugin\/[1-7]$/.test(manifest.schema) ||
-      manifest.id !== id ||
-      manifest.version !== version
-    ) {
+    if (manifest.schema !== "convax.plugin/8" || manifest.id !== id || manifest.version !== version) {
       if (manifest.id !== id || manifest.version !== version) {
         throw new TypeError("Plugin manifest identity must match its Registry entry")
       }
       throw new TypeError("Plugin manifest schema is unsupported")
+    }
+    const hostApi = record(manifest.hostApi, "Plugin manifest hostApi")
+    strictKeys(hostApi, ["major", "required", "optional"], ["major", "required", "optional"], "Plugin manifest hostApi")
+    const apiId = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/
+    if (
+      hostApi.major !== 1 ||
+      !Array.isArray(hostApi.required) ||
+      !Array.isArray(hostApi.optional) ||
+      [...hostApi.required, ...hostApi.optional].some((api) => typeof api !== "string" || !apiId.test(api))
+    ) {
+      throw new TypeError("Plugin manifest hostApi declaration is invalid")
+    }
+    const requiredApis = hostApi.required as string[]
+    const optionalApis = hostApi.optional as string[]
+    if (
+      new Set(requiredApis).size !== requiredApis.length ||
+      new Set(optionalApis).size !== optionalApis.length ||
+      optionalApis.some((api) => requiredApis.includes(api))
+    ) {
+      throw new TypeError("Plugin manifest hostApi declaration contains duplicate or overlapping APIs")
     }
   }
   if (kind !== "plugin" && parsed.manifest !== undefined) throw new TypeError("only Plugin may project a manifest")
@@ -948,456 +894,6 @@ export function parseShowcaseV2(value: unknown, registry: RegistryV2, descriptor
   }
 }
 
-const V1_SEMVER = SEMVER
-const V1_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const V1_HOST_BY_SCHEMA: Readonly<Record<string, string>> = {
-  "convax.plugin/1": "convax.plugin-host/1",
-  "convax.plugin/2": "convax.plugin-host/2",
-  "convax.plugin/3": "convax.plugin-host/3",
-  "convax.plugin/4": "convax.plugin-host/4",
-  "convax.plugin/5": "convax.plugin-capability/1",
-  "convax.plugin/6": "convax.plugin-capability/1",
-  "convax.plugin/7": "convax.plugin-capability/2",
-}
-
-function parseV1Artifact(value: unknown, label: string, maxSize: number): RegistryV1Artifact {
-  const artifact = record(value, label)
-  strictKeys(artifact, ["url", "size", "sha256"], ["url", "size", "sha256"], label)
-  const url = string(artifact.url, `${label}.url`, 2_048)
-  let parsedUrl: URL
-  try {
-    parsedUrl = new URL(url)
-  } catch {
-    throw new TypeError(`${label}.url must be an immutable Official Release URL`)
-  }
-  const segments = parsedUrl.pathname.split("/").filter(Boolean)
-  if (
-    parsedUrl.protocol !== "https:" ||
-    parsedUrl.hostname.toLowerCase() !== "github.com" ||
-    parsedUrl.port !== "" ||
-    parsedUrl.username ||
-    parsedUrl.password ||
-    parsedUrl.search ||
-    parsedUrl.hash ||
-    parsedUrl.pathname !== `/${segments.join("/")}` ||
-    segments.length !== 6 ||
-    segments[0] !== "microvoid" ||
-    segments[1] !== "convax-plugins" ||
-    segments[2] !== "releases" ||
-    segments[3] !== "download" ||
-    segments[4]?.toLowerCase() === "latest" ||
-    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(segments[4] ?? "") ||
-    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(segments[5] ?? "")
-  ) {
-    throw new TypeError(`${label}.url must be an immutable Official Release URL`)
-  }
-  const size = integer(artifact.size, `${label}.size`, maxSize)
-  if (size < 1) throw new TypeError(`${label}.size must be positive`)
-  return { url, size, sha256: sha256(artifact.sha256, `${label}.sha256`) }
-}
-
-function validateV1Package(value: unknown): RegistryV1Package {
-  const entry = record(value, "Registry v1 package")
-  const kind = entry.kind
-  if (kind !== "plugin" && kind !== "skill") throw new TypeError("Registry v1 supports only Plugin and Skill")
-  const allowed =
-    kind === "plugin"
-      ? [
-          "kind",
-          "id",
-          "name",
-          "description",
-          "version",
-          "compatibility",
-          "artifact",
-          "yanked",
-          "manifest",
-          "companions",
-        ]
-      : ["kind", "id", "name", "description", "version", "compatibility", "artifact", "yanked", "ownerPluginId"]
-  const required =
-    kind === "plugin"
-      ? ["kind", "id", "name", "description", "version", "compatibility", "artifact", "yanked", "manifest"]
-      : ["kind", "id", "name", "description", "version", "compatibility", "artifact", "yanked"]
-  strictKeys(entry, allowed, required, `Registry v1 ${kind}`)
-  const id = string(entry.id, "Registry v1 id", kind === "plugin" ? 80 : 64)
-  if (!V1_SLUG.test(id)) throw new TypeError("Registry v1 id must be a lowercase slug")
-  const name = string(entry.name, "Registry v1 name", 120)
-  const description = string(entry.description, "Registry v1 description", 2_000)
-  const version = string(entry.version, "Registry v1 version", 255)
-  if (!V1_SEMVER.test(version)) throw new TypeError("Registry v1 version must be SemVer")
-  if (typeof entry.yanked !== "boolean") throw new TypeError("Registry v1 yanked must be boolean")
-  const artifact = parseV1Artifact(entry.artifact, "Registry v1 artifact", 10 * 1024 * 1024)
-  const compatibility = record(entry.compatibility, "Registry v1 compatibility")
-  if (kind === "skill") {
-    strictKeys(compatibility, ["skillSchema"], ["skillSchema"], "Registry v1 Skill compatibility")
-    if (compatibility.skillSchema !== "opencode.skill/1") throw new TypeError("unsupported Registry v1 Skill schema")
-    const ownerPluginId =
-      entry.ownerPluginId === undefined ? undefined : string(entry.ownerPluginId, "ownerPluginId", 80)
-    if (ownerPluginId && !V1_SLUG.test(ownerPluginId)) throw new TypeError("ownerPluginId must be a lowercase slug")
-    return {
-      kind,
-      id,
-      name,
-      description,
-      version,
-      compatibility: { skillSchema: "opencode.skill/1" },
-      artifact,
-      yanked: entry.yanked,
-      ...(ownerPluginId ? { ownerPluginId } : {}),
-    }
-  }
-  strictKeys(
-    compatibility,
-    ["pluginSchema", "pluginHost"],
-    ["pluginSchema", "pluginHost"],
-    "Registry v1 Plugin compatibility",
-  )
-  const pluginSchema = string(compatibility.pluginSchema, "Registry v1 pluginSchema", 64)
-  const pluginHost = string(compatibility.pluginHost, "Registry v1 pluginHost", 64)
-  if (V1_HOST_BY_SCHEMA[pluginSchema] !== pluginHost)
-    throw new TypeError("Registry v1 Plugin compatibility is unsupported")
-  const manifest = record(entry.manifest, "Registry v1 manifest")
-  if (manifest.schema !== pluginSchema || manifest.id !== id || manifest.version !== version) {
-    throw new TypeError("Registry v1 manifest identity/compatibility mismatch")
-  }
-  const companions =
-    entry.companions === undefined
-      ? undefined
-      : (() => {
-          if (!Array.isArray(entry.companions) || entry.companions.length === 0 || entry.companions.length > 16) {
-            throw new TypeError("Registry v1 companions must be bounded")
-          }
-          const commands = new Set<string>()
-          return entry.companions.map((companionValue): PluginCompanion => {
-            const companion = record(companionValue, "Registry v1 companion")
-            strictKeys(
-              companion,
-              ["command", "version", "targets"],
-              ["command", "version", "targets"],
-              "Registry v1 companion",
-            )
-            const command = string(companion.command, "Registry v1 companion command", 128)
-            if (!COMMAND.test(command) || WINDOWS_RESERVED.test(command))
-              throw new TypeError("invalid Registry v1 companion command")
-            if (commands.has(command)) throw new TypeError(`duplicate Registry v1 companion command ${command}`)
-            commands.add(command)
-            const companionVersion = string(companion.version, "Registry v1 companion version", 255)
-            if (!V1_SEMVER.test(companionVersion)) throw new TypeError("Registry v1 companion version must be SemVer")
-            if (!Array.isArray(companion.targets) || companion.targets.length === 0 || companion.targets.length > 16) {
-              throw new TypeError("Registry v1 companion targets must be bounded")
-            }
-            const targetIdentities = new Set<string>()
-            const targets = companion.targets.map((targetValue): PluginCompanion["targets"][number] => {
-              const target = record(targetValue, "Registry v1 companion target")
-              strictKeys(
-                target,
-                ["platform", "arch", "artifact"],
-                ["platform", "arch", "artifact"],
-                "Registry v1 companion target",
-              )
-              if (target.platform !== "darwin" && target.platform !== "linux" && target.platform !== "win32")
-                throw new TypeError("invalid companion platform")
-              if (target.arch !== "arm64" && target.arch !== "x64")
-                throw new TypeError("invalid companion architecture")
-              const targetIdentity = `${target.platform}-${target.arch}`
-              if (targetIdentities.has(targetIdentity)) {
-                throw new TypeError(`duplicate Registry v1 companion target ${targetIdentity}`)
-              }
-              targetIdentities.add(targetIdentity)
-              return {
-                platform: target.platform,
-                arch: target.arch,
-                artifact: parseV1Artifact(target.artifact, "Registry v1 companion artifact", 128 * 1024 * 1024),
-              }
-            })
-            return { command, version: companionVersion, targets }
-          })
-        })()
-  return {
-    kind,
-    id,
-    name,
-    description,
-    version,
-    compatibility: { pluginSchema, pluginHost },
-    artifact,
-    yanked: entry.yanked,
-    manifest,
-    ...(companions ? { companions } : {}),
-  }
-}
-
-export function projectRegistryV1(registry: RegistryV2, sourceRevision: string): RegistryV1 {
-  const packages = registry.packages.flatMap((entry): RegistryV1Package[] => {
-    if (entry.kind === "mcp-server") return []
-    if (entry.delivery.kind !== "artifact") {
-      throw new TypeError(`v1 projection requires artifact delivery for ${entry.kind}/${entry.id}`)
-    }
-    const description = entry.presentation.description
-    if (!description) throw new TypeError(`v1 projection requires description for ${entry.kind}/${entry.id}`)
-    if (entry.kind === "plugin") {
-      const pluginSchema = entry.manifest?.schema
-      if (!entry.manifest) throw new TypeError(`v1 projection requires manifest for plugin/${entry.id}`)
-      if (typeof pluginSchema !== "string" || !V1_HOST_BY_SCHEMA[pluginSchema]) {
-        throw new TypeError(`v1 projection does not support schema for plugin/${entry.id}`)
-      }
-      return [
-        {
-          kind: "plugin",
-          id: entry.id,
-          name: entry.presentation.name,
-          description,
-          version: entry.version,
-          compatibility: {
-            pluginSchema,
-            pluginHost: V1_HOST_BY_SCHEMA[pluginSchema],
-          },
-          artifact: { url: entry.delivery.url, size: entry.delivery.size, sha256: entry.delivery.sha256 },
-          yanked: entry.yanked ?? false,
-          manifest: entry.manifest,
-          ...(entry.companions ? { companions: entry.companions } : {}),
-        },
-      ]
-    }
-    if (entry.kind === "skill") {
-      return [
-        {
-          kind: "skill",
-          id: entry.id,
-          name: entry.presentation.name,
-          description,
-          version: entry.version,
-          compatibility: { skillSchema: "opencode.skill/1" },
-          artifact: { url: entry.delivery.url, size: entry.delivery.size, sha256: entry.delivery.sha256 },
-          yanked: entry.yanked ?? false,
-          ...(entry.ownerPluginId ? { ownerPluginId: entry.ownerPluginId } : {}),
-        },
-      ]
-    }
-    throw new TypeError(`v1 projection cannot represent ${entry.kind}/${entry.id}`)
-  })
-  const projected: RegistryV1 = {
-    schema: "convax.registry/1",
-    sequence: registry.sequence,
-    revision: (() => {
-      if (!/^[a-f0-9]{40}$/.test(sourceRevision)) {
-        throw new TypeError("v1 projection requires an explicit 40-character lowercase source Git revision")
-      }
-      return sourceRevision
-    })(),
-    packages,
-  }
-  return {
-    ...projected,
-    packages: projected.packages.map(validateV1Package),
-  }
-}
-
-export function parseRegistryV1(value: unknown): RegistryV1 {
-  const parsed = record(value, "Registry v1")
-  strictKeys(
-    parsed,
-    ["schema", "sequence", "revision", "packages"],
-    ["schema", "sequence", "revision", "packages"],
-    "Registry v1",
-  )
-  if (parsed.schema !== "convax.registry/1") throw new TypeError("unsupported Registry v1 schema")
-  const sequence = integer(parsed.sequence, "Registry v1 sequence")
-  if (sequence < 1) throw new TypeError("Registry v1 sequence must be positive")
-  const revision = string(parsed.revision, "Registry v1 revision", 40)
-  if (!/^[a-f0-9]{40}$/.test(revision))
-    throw new TypeError("Registry v1 revision must be a 40-character lowercase hex digest")
-  if (!Array.isArray(parsed.packages) || parsed.packages.length > 16_384)
-    throw new TypeError("Registry v1 packages must be bounded")
-  const packages = parsed.packages.map(validateV1Package)
-  const identities = new Set<string>()
-  for (const entry of packages) {
-    const identity = `${entry.kind}\0${entry.id}`
-    if (identities.has(identity)) throw new TypeError(`duplicate Registry v1 identity ${entry.kind}/${entry.id}`)
-    identities.add(identity)
-  }
-  return { schema: "convax.registry/1", sequence, revision, packages }
-}
-
-const V1_SHOWCASE_POSTER_EXTENSIONS: Readonly<Record<ShowcaseV1PosterMime, string>> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-}
-const V1_SHOWCASE_ANIMATION_EXTENSIONS: Readonly<Record<ShowcaseV1AnimationMime, string>> = {
-  "image/gif": ".gif",
-  "video/mp4": ".mp4",
-}
-
-function legacyReleaseSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, "_")
-}
-
-export function legacyPackageReleaseTag(identity: { kind: "plugin" | "skill"; id: string; version: string }): string {
-  return `${identity.kind}-${legacyReleaseSegment(identity.id)}-v${legacyReleaseSegment(identity.version)}`
-}
-
-export function legacyShowcaseAssetName(
-  identity: { kind: "plugin" | "skill"; id: string; version: string },
-  role: "poster" | "animation",
-  mime: ShowcaseV1PosterMime | ShowcaseV1AnimationMime,
-): string {
-  const extensions: Readonly<Record<string, string>> = {
-    ...V1_SHOWCASE_POSTER_EXTENSIONS,
-    ...V1_SHOWCASE_ANIMATION_EXTENSIONS,
-  }
-  const extension = extensions[mime]
-  if (!extension) throw new TypeError("Showcase v1 asset mime is unsupported")
-  return `convax-showcase-${identity.kind}-${legacyReleaseSegment(identity.id)}-${legacyReleaseSegment(identity.version)}-${role}${extension}`
-}
-
-function hasOwnKey<Key extends PropertyKey>(value: Readonly<Record<Key, unknown>>, key: PropertyKey): key is Key {
-  return Object.hasOwn(value, key)
-}
-
-function parseShowcaseV1Asset<Mime extends ShowcaseV1PosterMime | ShowcaseV1AnimationMime>(
-  value: unknown,
-  identity: { kind: "plugin" | "skill"; id: string; version: string },
-  role: "poster" | "animation",
-  extensions: Readonly<Record<Mime, string>>,
-  maxSize: number,
-  descriptor: MarketplaceDescriptor,
-): ShowcaseV1Asset<Mime> {
-  const label = `Showcase v1 ${role}`
-  const asset = record(value, label)
-  strictKeys(
-    asset,
-    ["url", "mime", "size", "sha256", "width", "height", "alt"],
-    ["url", "mime", "size", "sha256", "width", "height", "alt"],
-    label,
-  )
-  const mime = string(asset.mime, `${label}.mime`, 80)
-  if (!hasOwnKey(extensions, mime)) throw new TypeError(`${label}.mime is unsupported`)
-  const size = integer(asset.size, `${label}.size`, maxSize)
-  if (size < 1) throw new TypeError(`${label}.size must be positive`)
-  const width = integer(asset.width, `${label}.width`, 8_192)
-  const height = integer(asset.height, `${label}.height`, 8_192)
-  if (width < 1 || height < 1) throw new TypeError(`${label} dimensions must be positive`)
-  const alt = string(asset.alt, `${label}.alt`, 500)
-  if (alt !== alt.trim() || /[\u0000-\u001f\u007f]/.test(alt)) {
-    throw new TypeError(`${label}.alt must be a non-empty trimmed string without control characters`)
-  }
-  const assetName = legacyShowcaseAssetName(identity, role, mime)
-  const expectedUrl =
-    `https://github.com/${descriptor.repository.owner}/${descriptor.repository.name}/releases/download/` +
-    `${legacyPackageReleaseTag(identity)}/${assetName}`
-  let url: string
-  try {
-    url = httpsUrl(asset.url, `${label}.url`)
-  } catch {
-    throw new TypeError(`${label}.url must be an immutable package Release asset in the declared repository`)
-  }
-  if (url !== expectedUrl) {
-    throw new TypeError(`${label}.url must be an immutable package Release asset in the declared repository`)
-  }
-  return {
-    url,
-    mime,
-    size,
-    sha256: sha256(asset.sha256, `${label}.sha256`),
-    width,
-    height,
-    alt,
-  }
-}
-
-export function parseShowcaseV1(value: unknown, registry: RegistryV1, descriptor: MarketplaceDescriptor): ShowcaseV1 {
-  const parsed = record(value, "Showcase v1")
-  strictKeys(
-    parsed,
-    ["schema", "sequence", "revision", "packages"],
-    ["schema", "sequence", "revision", "packages"],
-    "Showcase v1",
-  )
-  if (parsed.schema !== "convax.showcase/1") throw new TypeError("unsupported Showcase v1 schema")
-  const sequence = integer(parsed.sequence, "Showcase v1 sequence")
-  if (sequence < 1) throw new TypeError("Showcase v1 sequence must be positive")
-  const revision = string(parsed.revision, "Showcase v1 revision", 40)
-  if (!/^[a-f0-9]{40}$/.test(revision)) {
-    throw new TypeError("Showcase v1 revision must be a 40-character lowercase hex digest")
-  }
-  if (sequence !== registry.sequence || revision !== registry.revision) {
-    throw new TypeError("Showcase v1 sequence/revision does not match Registry")
-  }
-  if (
-    !Array.isArray(parsed.packages) ||
-    parsed.packages.length > 10_000 ||
-    parsed.packages.length > registry.packages.length
-  ) {
-    throw new TypeError("Showcase v1 packages must be bounded by the Registry")
-  }
-  const registryByIdentity = new Map(registry.packages.map((entry) => [`${entry.kind}\0${entry.id}`, entry]))
-  const identities = new Set<string>()
-  const urls = new Set<string>()
-  const packages = parsed.packages.map((packageValue): ShowcaseV1["packages"][number] => {
-    const entry = record(packageValue, "Showcase v1 package")
-    strictKeys(
-      entry,
-      ["kind", "id", "version", "poster", "animation"],
-      ["kind", "id", "version", "poster"],
-      "Showcase v1 package",
-    )
-    if (entry.kind !== "plugin" && entry.kind !== "skill") {
-      throw new TypeError("Showcase v1 package kind must be plugin or skill")
-    }
-    const kind: "plugin" | "skill" = entry.kind
-    const id = string(entry.id, "Showcase v1 package id", kind === "plugin" ? 80 : 64)
-    if (!V1_SLUG.test(id)) throw new TypeError("Showcase v1 package id must be a lowercase slug")
-    const version = string(entry.version, "Showcase v1 package version", 255)
-    if (!V1_SEMVER.test(version)) throw new TypeError("Showcase v1 package version must be SemVer")
-    const identity = `${kind}\0${id}`
-    if (identities.has(identity)) throw new TypeError(`duplicate Showcase v1 identity ${kind}/${id}`)
-    identities.add(identity)
-    const registryEntry = registryByIdentity.get(identity)
-    if (!registryEntry || registryEntry.yanked || registryEntry.version !== version) {
-      throw new TypeError(`Showcase v1 package ${kind}/${id}@${version} does not match Registry`)
-    }
-    const packageIdentity = { kind, id, version }
-    const poster = parseShowcaseV1Asset(
-      entry.poster,
-      packageIdentity,
-      "poster",
-      V1_SHOWCASE_POSTER_EXTENSIONS,
-      5 * 1024 * 1024,
-      descriptor,
-    )
-    const animation =
-      entry.animation === undefined
-        ? undefined
-        : parseShowcaseV1Asset(
-            entry.animation,
-            packageIdentity,
-            "animation",
-            V1_SHOWCASE_ANIMATION_EXTENSIONS,
-            20 * 1024 * 1024,
-            descriptor,
-          )
-    for (const url of [poster.url, ...(animation ? [animation.url] : [])]) {
-      if (urls.has(url)) throw new TypeError(`Showcase v1 reuses media URL ${url}`)
-      urls.add(url)
-    }
-    return {
-      kind,
-      id,
-      version,
-      poster,
-      ...(animation ? { animation } : {}),
-    }
-  })
-  return {
-    schema: "convax.showcase/1",
-    sequence: registry.sequence,
-    revision: registry.revision,
-    packages,
-  }
-}
-
 export function parseBuiltinBundle(value: unknown): BuiltinBundle {
   const parsed = record(value, "Builtin bundle")
   strictKeys(parsed, ["schema", "release", "members"], ["schema", "release", "members"], "Builtin bundle")
@@ -1436,7 +932,7 @@ export function parseBuiltinBundle(value: unknown): BuiltinBundle {
       }
     }
     const id = string(member.id, "Builtin member id", 200)
-    if (!V1_SLUG.test(id) || id.length > 80) throw new TypeError("Builtin member id must be a lowercase slug")
+    if (!PACKAGE_SLUG.test(id) || id.length > 80) throw new TypeError("Builtin member id must be a lowercase slug")
     const identity = `${member.kind}\0${id}`
     if (identities.has(identity)) throw new TypeError(`duplicate Builtin member ${member.kind}/${id}`)
     identities.add(identity)
@@ -1461,7 +957,7 @@ export function parseBuiltinBundle(value: unknown): BuiltinBundle {
       id,
       version: (() => {
         const version = string(member.version, "Builtin member version", 255)
-        if (!V1_SEMVER.test(version)) throw new TypeError("Builtin member version must be SemVer")
+        if (!SEMVER.test(version)) throw new TypeError("Builtin member version must be SemVer")
         return version
       })(),
       artifact: parseMemberArtifact(member.artifact, "Builtin member artifact"),

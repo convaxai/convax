@@ -1,29 +1,30 @@
 import { describe, expect, test } from "bun:test"
 
-import { parseWebPluginManifest } from "../plugin-contracts"
+import { parseWebPluginManifest, type InstalledWebPluginSummary } from "../plugin-contracts"
 import {
   installedPluginAgentMcpServer,
   installedPluginAgentMcpServers,
   pluginAgentMcpServerName,
 } from "./plugin-agent-mcp"
 
-function remotePlugin(id = "remote-editor") {
+function remotePlugin(id = "remote-editor", oauth: "auto" | "none" = "auto") {
   return parseWebPluginManifest({
     capabilities: [],
     contributes: {
       agent: {
         mcp: {
           headers: { "x-surface": "convax" },
-          oauth: "auto",
+          oauth,
           type: "remote",
           url: "https://example.com/mcp",
         },
       },
     },
     description: "Remote MCP Plugin",
+    hostApi: { major: 1, optional: [], required: [] },
     id,
     name: id,
-    schema: "convax.plugin/6",
+    schema: "convax.plugin/8",
     version: "1.0.0",
   })
 }
@@ -37,6 +38,7 @@ describe("installed Plugin Agent MCP mapping", () => {
       server: {
         enabled: true,
         headers: { "x-surface": "convax" },
+        networkBoundary: "host-validated-https",
         type: "remote",
         url: "https://example.com/mcp",
       },
@@ -45,43 +47,26 @@ describe("installed Plugin Agent MCP mapping", () => {
       plugin_remote_editor: {
         enabled: true,
         headers: { "x-surface": "convax" },
+        networkBoundary: "host-validated-https",
         type: "remote",
         url: "https://example.com/mcp",
       },
       plugin_video_editor: {
         enabled: true,
         headers: { "x-surface": "convax" },
+        networkBoundary: "host-validated-https",
         type: "remote",
         url: "https://example.com/mcp",
       },
     })
   })
 
-  test("maps explicit OAuth disablement and ignores pre-v6 executable MCP runtimes", () => {
-    const withoutOauth = remotePlugin()
-    withoutOauth.contributes.agent!.mcp!.oauth = "none"
-    const executable = parseWebPluginManifest({
-      capabilities: [],
-      contributes: {
-        generation: {
-          tools: [
-            {
-              acceptedInputs: ["text"],
-              description: "Generate",
-              id: "generate",
-              output: "image",
-              title: "Generate",
-            },
-          ],
-        },
-      },
-      description: "Executable Tool Plugin",
-      id: "local-tool",
-      name: "Local tool",
-      runtime: { command: "local-tool", type: "mcp-stdio" },
-      schema: "convax.plugin/2",
-      version: "1.0.0",
-    })
+  test("maps explicit OAuth disablement and rejects legacy executable runtimes", () => {
+    const withoutOauth = remotePlugin("remote-editor", "none")
+    const executable = {
+      ...remotePlugin("legacy-agent"),
+      schema: "convax.plugin/6",
+    } as unknown as InstalledWebPluginSummary
 
     expect(installedPluginAgentMcpServer(withoutOauth)?.server.oauth).toBe(false)
     expect(installedPluginAgentMcpServer(executable)).toBeNull()

@@ -23,7 +23,7 @@ function artifact(name: string, tag: string) {
 function validLock(): MarketplaceProductLock {
   const officialRevision = "b".repeat(64)
   const metadataTag = `registry-v2-${officialRevision}`
-  const pluginTag = "plugin-ffmpeg-tools-v1.0.0"
+  const pluginTag = "plugin-automation-tools-v1.0.0"
   const policy: MarketplaceProductPolicy = {
     builtin: {
       marketplaceId: "convax-builtin",
@@ -36,7 +36,7 @@ function validLock(): MarketplaceProductLock {
     },
     preinstalledPackages: [
       {
-        id: "ffmpeg-tools",
+        id: "automation-tools",
         kind: "plugin" as const,
         marketplaceId: "convax-official",
         setup: "automatic" as const,
@@ -58,18 +58,18 @@ function validLock(): MarketplaceProductLock {
       },
       packages: [
         {
-          artifact: artifact("plugin-ffmpeg-tools-v1.zip", pluginTag),
+          artifact: artifact("plugin-automation-tools-v1.zip", pluginTag),
           companions: [
             {
-              ...artifact("plugin-ffmpeg-tools-v1-darwin-arm64", pluginTag),
+              ...artifact("plugin-automation-tools-v1-darwin-arm64", pluginTag),
               arch: "arm64",
               platform: "darwin",
             },
           ],
-          id: "ffmpeg-tools",
+          id: "automation-tools",
           kind: "plugin",
           marketplaceId: "convax-official",
-          ownedSkills: [artifact("skill-ffmpeg-canvas-v1.zip", "skill-ffmpeg-canvas-v1.0.0")],
+          ownedSkills: [artifact("skill-automation-workflow-v1.zip", "skill-automation-workflow-v1.0.0")],
           setup: "explicit",
           version: "1.0.0",
         },
@@ -91,11 +91,11 @@ describe("Marketplace product lock", () => {
     expect(() => parseMarketplaceProductLock(lock)).toThrow("policyDigest")
   })
 
-  test("rejects preinstalled entries outside the approved darwin-arm64 ffmpeg policy", () => {
+  test("rejects a declared target without an exact resolved companion", () => {
     const lock = validLock()
     lock.policy.preinstalledPackages[0]!.targets.push("linux-x64" as never)
     lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
-    expect(() => parseMarketplaceProductLock(lock)).toThrow("preinstalledPackages")
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("policy targets")
   })
 
   test("rejects weakening the product-locked automatic setup policy back to an interactive grant", () => {
@@ -118,13 +118,13 @@ describe("Marketplace product lock", () => {
     expect(() => parseMarketplaceProductLock(nonDefaultPort)).toThrow("immutable")
   })
 
-  test("rejects a missing owned closure or target companion", () => {
+  test("rejects a missing target companion or duplicate owned closure", () => {
     const lock = validLock()
     lock.resolved.packages[0]!.companions = []
-    expect(() => parseMarketplaceProductLock(lock)).toThrow("darwin-arm64")
-    const missingSkill = validLock()
-    missingSkill.resolved.packages[0]!.ownedSkills = []
-    expect(() => parseMarketplaceProductLock(missingSkill)).toThrow("owned Skill")
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("policy targets")
+    const duplicateSkill = validLock()
+    duplicateSkill.resolved.packages[0]!.ownedSkills.push(duplicateSkill.resolved.packages[0]!.ownedSkills[0]!)
+    expect(() => parseMarketplaceProductLock(duplicateSkill)).toThrow("ownedSkills must be unique")
   })
 
   test("reads the tracked authority through a bounded single-link no-follow handle", async () => {

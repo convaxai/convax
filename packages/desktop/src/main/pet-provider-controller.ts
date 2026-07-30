@@ -1,10 +1,10 @@
 import {
+  type ActiveInstalledWebPluginSummary,
   type InstalledWebPluginSummary,
-  requireWebPluginId,
-  requireWebPluginRelativePath,
   type WebPluginCapability,
   type WebPluginPetContribution,
 } from "../plugin-contracts"
+import { webPluginAssetUrl } from "../plugin-asset-contract"
 import {
   type PetActivitySnapshot,
   type PetHostProviderBinding,
@@ -12,20 +12,19 @@ import {
   type PetPreferencesUpdate,
 } from "../pet-contracts"
 import type { PetPersistedState, PetStateWrite } from "./pet-state-store"
-import type { WebPluginMutationContext } from "./plugin-manager"
 
 type Awaitable<Value> = Promise<Value> | Value
 type Listener<Value> = (value: Value) => void
 type Unsubscribe = () => void
 
 export interface PetProviderPluginManager {
-  list(): Promise<readonly InstalledWebPluginSummary[]>
-  resolveCapabilityIdentity(
-    pluginId: string,
-    mutation?: WebPluginMutationContext,
-  ): Promise<{
+  list(): Promise<readonly ActiveInstalledWebPluginSummary[]>
+  resolveCapabilityIdentity(pluginId: string): Promise<{
+    activeRevision: number
+    activeSetDigest: string
     digest: string
     plugin: InstalledWebPluginSummary
+    snapshotDigest: string
   } | null>
 }
 
@@ -111,16 +110,6 @@ function freezeProvider(provider: InstalledPetProvider): InstalledPetProvider {
   })
 }
 
-function providerAssetUrl(pluginId: string, path: string, label: string) {
-  const id = requireWebPluginId(pluginId)
-  const relativePath = requireWebPluginRelativePath(path, label)
-  const encodedPath = relativePath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/")
-  return `convax-plugin://${id}/${encodedPath}`
-}
-
 function sameProviderIdentity(left: InstalledPetProvider | undefined, right: InstalledPetProvider | undefined) {
   return left?.pluginId === right?.pluginId && left?.digest === right?.digest
 }
@@ -172,8 +161,8 @@ export class PetProviderController {
     return this.#exclusive(() => this.#initialize())
   }
 
-  refresh(mutation?: WebPluginMutationContext) {
-    return this.#exclusive(() => (this.#initialized ? this.#refresh(mutation) : Promise.resolve()))
+  refresh() {
+    return this.#exclusive(() => (this.#initialized ? this.#refresh() : Promise.resolve()))
   }
 
   restoreProviderRuntime(pluginId: string) {
@@ -309,13 +298,13 @@ export class PetProviderController {
     }
   }
 
-  async #refresh(mutation?: WebPluginMutationContext) {
+  async #refresh() {
     this.#assertInitialized()
     const currentProvider = this.#provider
     const currentState = this.#requireState()
     let nextProvider: InstalledPetProvider | undefined
     try {
-      nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider, mutation)
+      nextProvider = await this.#resolveProvider(currentState.providerId, currentProvider)
     } catch (error) {
       if (
         error instanceof PetProviderConflictError &&
@@ -358,14 +347,13 @@ export class PetProviderController {
   async #resolveProvider(
     preferredProviderId: string | undefined,
     currentProvider: InstalledPetProvider | undefined,
-    mutation?: WebPluginMutationContext,
   ): Promise<InstalledPetProvider | undefined> {
     const candidates = (await this.#pluginManager.list())
       .filter((plugin) => plugin.contributes.pet !== undefined)
       .sort((left, right) => left.id.localeCompare(right.id))
     if (candidates.length === 0) return undefined
 
-    let candidate: InstalledWebPluginSummary | undefined
+    let candidate: ActiveInstalledWebPluginSummary | undefined
     if (candidates.length === 1) {
       candidate = candidates[0]
     } else {
@@ -373,8 +361,7 @@ export class PetProviderController {
       if (candidate === undefined) throw new PetProviderConflictError(candidates.map((plugin) => plugin.id))
     }
 
-    const ownedMutation = mutation?.pluginId === candidate.id ? mutation : undefined
-    const identity = await this.#pluginManager.resolveCapabilityIdentity(candidate.id, ownedMutation)
+    const identity = await this.#pluginManager.resolveCapabilityIdentity(candidate.id)
     if (identity === null || identity.plugin.id !== candidate.id) {
       throw new Error(`Pet feature provider is no longer installed: ${candidate.id}`)
     }
@@ -392,10 +379,37 @@ export class PetProviderController {
       contribution,
       digest: identity.digest,
       generation,
-      libraryUrl: providerAssetUrl(plugin.id, contribution.library, "Pet library path"),
-      overlayUrl: providerAssetUrl(plugin.id, contribution.overlay, "Pet overlay path"),
+      libraryUrl: webPluginAssetUrl(
+        {
+          activeRevision: identity.activeRevision,
+          activeSetDigest: identity.activeSetDigest,
+          id: plugin.id,
+          snapshotDigest: identity.snapshotDigest,
+          version: plugin.version,
+        },
+        contribution.library,
+      ),
+      overlayUrl: webPluginAssetUrl(
+        {
+          activeRevision: identity.activeRevision,
+          activeSetDigest: identity.activeSetDigest,
+          id: plugin.id,
+          snapshotDigest: identity.snapshotDigest,
+          version: plugin.version,
+        },
+        contribution.overlay,
+      ),
       pluginId: plugin.id,
-      settingsUrl: providerAssetUrl(plugin.id, contribution.settings, "Pet settings path"),
+      settingsUrl: webPluginAssetUrl(
+        {
+          activeRevision: identity.activeRevision,
+          activeSetDigest: identity.activeSetDigest,
+          id: plugin.id,
+          snapshotDigest: identity.snapshotDigest,
+          version: plugin.version,
+        },
+        contribution.settings,
+      ),
       version: plugin.version,
     })
   }

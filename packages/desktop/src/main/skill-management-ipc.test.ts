@@ -1,10 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
-import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import type { DesktopSkillInventory, DesktopSkillShowcase } from "../skill-management-contracts"
 import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
-import type { WebPluginManager } from "./plugin-manager"
 import type { DesktopSkillManager } from "./skill-manager"
-import type { RemoteSkillCatalogPort } from "./remote-capability-installer"
+import type { SkillManagementCatalogPort as RemoteSkillCatalogPort } from "./skill-management-ipc"
 
 type InvokeHandler = (event: TestIpcEvent, input?: unknown) => unknown
 type TestIpcEvent = { sender: { id: number } }
@@ -159,28 +157,6 @@ function createRemoteCatalog() {
   return { ...catalog, emitChange: () => changeListener?.(), unsubscribe }
 }
 
-function createPlugins() {
-  const list = mock(
-    async (): Promise<InstalledWebPluginSummary[]> => [
-      {
-        capabilities: [],
-        contributes: { canvas: { renderer: { create: true } } },
-        description: "Director",
-        entry: "index.html",
-        id: "director-stage",
-        name: "Director",
-        schema: "convax.plugin/1",
-        skill: "skills/director/SKILL.md",
-        version: "1.0.0",
-      },
-    ],
-  )
-  return {
-    list,
-    resolveAsset: mock(async () => "/plugins/director-stage/skills/director/SKILL.md"),
-  } satisfies Pick<WebPluginManager, "list" | "resolveAsset">
-}
-
 function invoke(channel: string, input?: unknown, event: TestIpcEvent = { sender: { id: 1 } }) {
   const handler = handlers.get(channel)
   if (!handler) throw new Error(`Missing IPC handler: ${channel}`)
@@ -206,7 +182,6 @@ describe("registerSkillManagementIpc", () => {
       getSkillShowcase: "agent:skill-showcase",
       importSkill: "agent:skill-import",
       installCatalogSkill: "agent:skill-catalog-install",
-      installPluginSkill: "agent:skill-plugin-install",
       listSkills: "agent:skills-list",
       openSkill: "agent:skill-open",
       uninstallSkill: "agent:skill-uninstall",
@@ -225,7 +200,6 @@ describe("registerSkillManagementIpc", () => {
       skillManagementIpcChannels.listSkills,
       skillManagementIpcChannels.importSkill,
       skillManagementIpcChannels.installCatalogSkill,
-      skillManagementIpcChannels.installPluginSkill,
       skillManagementIpcChannels.openSkill,
       skillManagementIpcChannels.uninstallSkill,
     ]) {
@@ -244,9 +218,8 @@ describe("registerSkillManagementIpc", () => {
     const projects = {
       resolveEntryPath: mock(async ({ projectId }: { projectId: string }) => `/projects/${projectId}`),
     }
-    const plugins = createPlugins()
     dialogResult = { canceled: false, filePaths: ["/skills/import-me"] }
-    const dispose = registerSkillManagementIpc(setup.manager, projects, () => true, undefined, plugins)
+    const dispose = registerSkillManagementIpc(setup.manager, projects, () => true)
 
     await invoke(skillManagementIpcChannels.listSkills)
     expect(setup.manager.list).toHaveBeenLastCalledWith(undefined)
@@ -258,9 +231,6 @@ describe("registerSkillManagementIpc", () => {
     expect(setup.manager.importFromDirectory).toHaveBeenCalledWith("/skills/import-me")
     await invoke(skillManagementIpcChannels.installCatalogSkill, { id: "storyboard" })
     expect(setup.manager.installCatalogSkill).toHaveBeenCalledWith("storyboard")
-    await invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "director-stage" })
-    expect(plugins.resolveAsset).toHaveBeenCalledWith("director-stage", "skills/director/SKILL.md")
-    expect(setup.manager.importFromDirectory).toHaveBeenLastCalledWith("/plugins/director-stage/skills/director")
     await invoke(skillManagementIpcChannels.openSkill, {
       name: "review",
       path: "/renderer/must-not-control-this.md",
@@ -302,41 +272,6 @@ describe("registerSkillManagementIpc", () => {
     dispose()
   })
 
-  test("rejects unavailable or v4 Plugin-owned Skills through the legacy companion endpoint", async () => {
-    const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
-    const setup = createManager()
-    const plugins = createPlugins()
-    plugins.list.mockResolvedValueOnce([])
-    const dispose = registerSkillManagementIpc(
-      setup.manager,
-      { resolveEntryPath: mock(async () => "/project") },
-      () => true,
-      undefined,
-      plugins,
-    )
-
-    await expect(invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "missing" })).rejects.toThrow(
-      "Installed Plugin was not found",
-    )
-    plugins.list.mockResolvedValueOnce([
-      {
-        capabilities: [],
-        contributes: { skills: [{ name: "owned-workflow", path: "skills/owned-workflow" }] },
-        description: "Owned workflow",
-        entry: "index.html",
-        id: "owned-tools",
-        name: "Owned Tools",
-        schema: "convax.plugin/4",
-        version: "1.0.0",
-      },
-    ])
-    await expect(invoke(skillManagementIpcChannels.installPluginSkill, { pluginId: "owned-tools" })).rejects.toThrow(
-      "does not include a legacy companion Skill",
-    )
-    expect(plugins.resolveAsset).not.toHaveBeenCalled()
-    dispose()
-  })
-
   test("broadcasts manager changes to live windows and fully disposes subscriptions and handlers", async () => {
     const { registerSkillManagementIpc, skillManagementIpcChannels } = await import("./skill-management-ipc")
     const setup = createManager()
@@ -359,7 +294,7 @@ describe("registerSkillManagementIpc", () => {
     dispose()
     expect(setup.unsubscribe).toHaveBeenCalledTimes(1)
     expect(remote.unsubscribe).toHaveBeenCalledTimes(1)
-    expect(registered).toHaveLength(8)
+    expect(registered).toHaveLength(Object.keys(skillManagementIpcChannels).length - 1)
     expect(removedHandlers.sort()).toEqual(registered.sort())
     expect(handlers).toHaveLength(0)
   })

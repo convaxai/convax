@@ -84,8 +84,6 @@ export interface DesktopSkillClient {
   }): Promise<DesktopSkillShowcase | null>
   importSkill(): Promise<DesktopSkillSummary | null>
   installCatalogSkill(input: { id: string }): Promise<DesktopSkillSummary>
-  /** Installs a legacy v1-v3 Plugin companion as an independent Skill. */
-  installPluginSkill(input: { pluginId: string }): Promise<DesktopSkillSummary>
   listSkills(input?: { scopeId?: string }): Promise<DesktopSkillInventory>
   onDidChange(listener: () => void): () => void
   openSkill(input: { name: string; scopeId?: string }): Promise<void>

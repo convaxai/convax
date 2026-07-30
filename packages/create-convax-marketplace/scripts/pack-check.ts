@@ -44,6 +44,8 @@ async function assertPackedDependency(tarball: string, name: string, expected: s
 const packageRoot = resolve(import.meta.dir, "..")
 const kitRoot = resolve(packageRoot, "../marketplace-kit")
 const marketplaceRoot = resolve(packageRoot, "../marketplace")
+const pluginApiRoot = resolve(packageRoot, "../plugin-api")
+const pluginSdkRoot = resolve(packageRoot, "../plugin-sdk")
 const temporaryRoot = await mkdtemp(join(tmpdir(), "create-convax-marketplace-pack-check-"))
 try {
   const tarballRoot = join(temporaryRoot, "tarballs")
@@ -51,10 +53,14 @@ try {
   await mkdir(tarballRoot)
   await mkdir(consumerRoot)
   const marketplaceTarball = await pack(marketplaceRoot, tarballRoot)
+  const pluginApiTarball = await pack(pluginApiRoot, tarballRoot)
+  const pluginSdkTarball = await pack(pluginSdkRoot, tarballRoot)
   const kitTarball = await pack(kitRoot, tarballRoot)
   const createTarball = await pack(packageRoot, tarballRoot)
-  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.1.0")
-  await assertPackedDependency(createTarball, "@convax/marketplace-kit", "^0.1.0")
+  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.0")
+  await assertPackedDependency(kitTarball, "@convax/plugin-api", "^1.0.0")
+  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.1.0")
+  await assertPackedDependency(createTarball, "@convax/marketplace-kit", "^0.2.0")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(
@@ -64,11 +70,15 @@ try {
         dependencies: {
           "@convax/marketplace": `file:${marketplaceTarball}`,
           "@convax/marketplace-kit": `file:${kitTarball}`,
+          "@convax/plugin-api": `file:${pluginApiTarball}`,
+          "@convax/plugin-sdk": `file:${pluginSdkTarball}`,
           "create-convax-marketplace": `file:${createTarball}`,
         },
         overrides: {
           "@convax/marketplace": `file:${marketplaceTarball}`,
           "@convax/marketplace-kit": `file:${kitTarball}`,
+          "@convax/plugin-api": `file:${pluginApiTarball}`,
+          "@convax/plugin-sdk": `file:${pluginSdkTarball}`,
         },
       },
       null,
@@ -118,8 +128,10 @@ void options
     ],
     consumerRoot,
   )
-  const generatedServer = await stat(join(generatedRoot, "packages/mcp-servers/example-mcp/server.json"))
+  const generatedServer = await stat(join(generatedRoot, "packages/mcp-servers/example-mcp/package/server.json"))
   if (!generatedServer.isFile()) throw new Error("packed create CLI did not emit its selected starter")
+  const generatedPackage = await stat(join(generatedRoot, "packages/mcp-servers/example-mcp/convax-package.json"))
+  if (!generatedPackage.isFile()) throw new Error("packed create CLI did not emit convax.package/2 metadata")
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })
 }

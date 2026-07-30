@@ -57,8 +57,11 @@ content-free MCP progress only for a request's validated progress token, keeps t
 configured OpenCode timeout as an inactivity window, and still propagates explicit
 cancellation, transport closure and runtime disposal through `AbortSignal`.
 
-Every base and lazily resolved MCP entry passes the same admission function. Until
-OpenCode exposes a real socket-level outbound-policy hook, reject Internet MCP
-execution entirely. The only admitted remote is a Main-owned literal loopback URL
-with no credentials/query/fragment, one fixed Authorization header, and a
-32-256-character base64url bearer token; local command MCP entries remain rejected.
+Every base and lazily resolved MCP entry passes the same admission function.
+Host-validated remote MCP entries use absolute HTTPS URLs without URL credentials or
+fragments, bounded non-sensitive literal headers, and OpenCode-owned OAuth. A
+Desktop-managed stdio bridge instead uses a Main-owned literal loopback URL with no
+credentials/query/fragment, one fixed Authorization header, and a 32-256-character
+base64url bearer token. Local command MCP entries remain rejected. Dynamic remote
+MCP, Hook, and Skill contributions must arrive in one atomic generic configuration
+generation; Agent Runtime never learns their Plugin owners.

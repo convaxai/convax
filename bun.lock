@@ -119,7 +119,7 @@
     },
     "packages/create-convax-marketplace": {
       "name": "create-convax-marketplace",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "create-convax-marketplace": "./dist/cli.js",
       },
@@ -140,6 +140,8 @@
         "@convax/agent-runtime": "workspace:*",
         "@convax/canvas": "workspace:*",
         "@convax/marketplace": "workspace:*",
+        "@convax/plugin-api": "workspace:*",
+        "@convax/plugin-sdk": "workspace:*",
         "@convax/project": "workspace:*",
         "@convax/project-files": "workspace:*",
         "@convax/ui": "workspace:*",
@@ -171,7 +173,7 @@
     },
     "packages/marketplace": {
       "name": "@convax/marketplace",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "dependencies": {
         "ajv": "8.20.0",
       },
@@ -184,12 +186,40 @@
     },
     "packages/marketplace-kit": {
       "name": "@convax/marketplace-kit",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "bin": {
         "convax-marketplace": "./dist/cli.js",
       },
       "dependencies": {
         "@convax/marketplace": "workspace:^",
+        "@convax/plugin-api": "workspace:^",
+        "@convax/plugin-sdk": "workspace:^",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/plugin-api": {
+      "name": "@convax/plugin-api",
+      "version": "1.0.0",
+      "bin": {
+        "convax-plugin-api": "./dist/cli.js",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/plugin-sdk": {
+      "name": "@convax/plugin-sdk",
+      "version": "0.1.0",
+      "dependencies": {
+        "@convax/plugin-api": "workspace:^",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -458,6 +488,10 @@
     "@convax/marketplace": ["@convax/marketplace@workspace:packages/marketplace"],
 
     "@convax/marketplace-kit": ["@convax/marketplace-kit@workspace:packages/marketplace-kit"],
+
+    "@convax/plugin-api": ["@convax/plugin-api@workspace:packages/plugin-api"],
+
+    "@convax/plugin-sdk": ["@convax/plugin-sdk@workspace:packages/plugin-sdk"],
 
     "@convax/project": ["@convax/project@workspace:packages/project"],
 

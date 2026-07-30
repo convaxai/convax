@@ -24,6 +24,8 @@ test("Desktop packaging verifies the one root Marketplace product lock before co
 
 test("stages every selected package as one deterministic artifact group", async () => {
   const source = await readFile(join(import.meta.dir, "stage-marketplace-product-lock.ts"), "utf8")
+  expect(source).toContain("descriptor.registry.v1 !== undefined")
+  expect(source).not.toContain("convax-plugins/registry/v1/index.json")
   expect(source).toContain("`packages/${entry.id}/${entry.artifact.name}`")
   expect(source).toContain("`packages/${entry.id}/skills/${skill.name}`")
   expect(source).toContain(
@@ -32,10 +34,11 @@ test("stages every selected package as one deterministic artifact group", async 
   expect(source).toContain("staged.map(({ lock, path }) =>")
 })
 
-test("compares the raw validated Plugin manifest without parser-added optional empty arrays", () => {
+test("compares the canonical validated Plugin projection with parser-added defaults", () => {
   const manifest = {
     contributes: {
       generation: {
+        models: [],
         tools: [
           {
             acceptedInputs: ["reference_video"],
@@ -48,28 +51,34 @@ test("compares the raw validated Plugin manifest without parser-added optional e
       },
     },
     description: "Runs reviewed local FFmpeg transforms.",
+    hostApi: { major: 1, optional: [], required: [] },
     id: "ffmpeg-tools",
     name: "FFmpeg Tools",
     runtime: { command: "convax-ffmpeg-mcp", type: "mcp-stdio" },
-    schema: "convax.plugin/2",
+    schema: "convax.plugin/8",
     version: "0.3.1",
   }
 
-  const parsed = validateLockedPluginManifest(manifest, structuredClone(manifest), {
+  const canonicalManifest = {
+    ...structuredClone(manifest),
+    capabilities: [],
+  }
+  const parsed = validateLockedPluginManifest(manifest, canonicalManifest, {
     id: "ffmpeg-tools",
     version: "0.3.1",
   })
 
   expect(parsed.capabilities).toEqual([])
   expect(canonicalJson(parsed)).not.toBe(canonicalJson(manifest))
+  expect(canonicalJson(parsed)).toBe(canonicalJson(canonicalManifest))
   expect(() =>
     validateLockedPluginManifest(
       manifest,
-      { ...manifest, description: "Changed Registry projection" },
+      { ...canonicalManifest, description: "Changed Registry projection" },
       {
         id: "ffmpeg-tools",
         version: "0.3.1",
       },
     ),
-  ).toThrow("does not canonically match")
+  ).toThrow("projection does not canonically match")
 })

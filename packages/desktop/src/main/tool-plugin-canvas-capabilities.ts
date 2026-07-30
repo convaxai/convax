@@ -1,58 +1,84 @@
-import type { InstalledPlugin, PluginCapability } from "../plugin-api"
-import type { PluginCanvasCapabilityClient } from "../plugin-capability-contracts"
-import { PluginCapabilityConnection } from "../plugin-capability-dispatch"
 import {
-  pluginCanvasDocumentChangedCommand,
-  pluginCapabilityProtocolV1,
-  type PluginCapabilityProtocol,
-  type DesktopPluginHostMethod,
-} from "../plugin-host-protocol"
-import type { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
+  getPluginApiDefinition,
+  isPluginApiId,
+  isPluginApiDeclared,
+  parsePluginApiCall,
+  pluginApiCatalog,
+  pluginApiContractIds,
+  type PluginApiDefinition,
+  type PluginApiId,
+} from "@convax/plugin-api"
+
+import type { InstalledPlugin } from "../plugin-api"
+import type {
+  PluginHostApiMainConnection,
+  PluginHostInvocationLease,
+  PluginHostInvocationLeaseClaims,
+} from "../plugin-host-api-main-contracts"
+import type {
+  PluginCanvasChangeEvent,
+  PluginPrincipal,
+  PluginProjectScope,
+} from "../plugin-capability-contracts"
 import type { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import type { StdioMcpServerRequestContext, StdioMcpServerRequestHandler } from "./stdio-mcp-client"
 
-export const toolPluginCanvasMcpMethods = {
-  executeTransaction: "convax/plugin-capability/canvas.transaction.execute",
-  getDocument: "convax/plugin-capability/canvas.document.get",
-  listCanvases: "convax/plugin-capability/canvas.catalog.list",
-  listProjects: "convax/plugin-capability/projects.list",
-  queryNodes: "convax/plugin-capability/canvas.nodes.query",
-  subscribeEvents: "convax/plugin-capability/canvas.events.subscribe",
-  unsubscribeEvents: "convax/plugin-capability/canvas.events.unsubscribe",
-} as const
+const companionMcpPrefix = "convax/plugin-capability/"
 
 export const toolPluginCanvasMcpNotifications = {
   documentChanged: "notifications/convax/plugin-capability/canvas.document.changed",
 } as const
 
-const methodDefinitions = [
-  { capability: "projects.read", host: "projects.list", mcp: toolPluginCanvasMcpMethods.listProjects },
-  { capability: "canvas.catalog.read", host: "canvas.catalog.list", mcp: toolPluginCanvasMcpMethods.listCanvases },
-  { capability: "canvas.document.read", host: "canvas.document.get", mcp: toolPluginCanvasMcpMethods.getDocument },
-  { capability: "canvas.document.read", host: "canvas.nodes.query", mcp: toolPluginCanvasMcpMethods.queryNodes },
-  {
-    capability: "canvas.document.write",
-    host: "canvas.transaction.execute",
-    mcp: toolPluginCanvasMcpMethods.executeTransaction,
-  },
-  {
-    capability: "canvas.events.subscribe",
-    host: "canvas.events.subscribe",
-    mcp: toolPluginCanvasMcpMethods.subscribeEvents,
-  },
-  {
-    capability: "canvas.events.subscribe",
-    host: "canvas.events.unsubscribe",
-    mcp: toolPluginCanvasMcpMethods.unsubscribeEvents,
-  },
-] as const satisfies readonly {
-  capability: PluginCapability
-  host: DesktopPluginHostMethod
-  mcp: string
-}[]
+export interface ToolPluginCompanionApiExclusion {
+  readonly reason: string
+}
 
-export interface ToolPluginCanvasCapabilityHost {
-  broker: Pick<PluginCanvasCapabilityService, "connect">
+/**
+ * A companion Catalog API that cannot use the generic Main route must be
+ * recorded here with a reviewable reason. The completeness check rejects a
+ * companion API that has neither a generated typed contract nor an exclusion.
+ */
+export const toolPluginCompanionApiExclusions = Object.freeze(
+  {} satisfies Partial<Record<PluginApiId, ToolPluginCompanionApiExclusion>>,
+)
+
+export interface ToolPluginCompanionApiRoute {
+  readonly host: PluginApiId
+  readonly mcp: string
+}
+
+export function deriveToolPluginCompanionApiRoutes(
+  definitions: readonly PluginApiDefinition[] = pluginApiCatalog.apis,
+): readonly ToolPluginCompanionApiRoute[] {
+  const contracts = new Set<string>(pluginApiContractIds)
+  return definitions
+    .filter((definition) => definition.audience.includes("companion"))
+    .flatMap((definition) => {
+      if (contracts.has(definition.id)) {
+        if (!isPluginApiId(definition.id)) {
+          throw new Error(`Companion Host API contract is absent from the Catalog: ${definition.id}`)
+        }
+        const host = definition.id
+        return [{ host, mcp: toolPluginCompanionMcpMethod(host) }]
+      }
+      if (definition.id in toolPluginCompanionApiExclusions) return []
+      throw new Error(`Companion Host API has no generic route or explicit exclusion: ${definition.id}`)
+    })
+}
+
+const companionApiRoutes = deriveToolPluginCompanionApiRoutes()
+
+export function toolPluginCompanionMcpMethod(apiId: PluginApiId) {
+  return `${companionMcpPrefix}${apiId}`
+}
+
+export interface ToolPluginHostApiCapabilityHost {
+  connect(input: {
+    invocationLease?: PluginHostInvocationLease
+    onCanvasEvent(input: { event: PluginCanvasChangeEvent; subscriptionId: string }): void
+    principal: PluginPrincipal
+    scope: PluginProjectScope
+  }): Promise<PluginHostApiMainConnection>
   principals: Pick<InstalledPluginPrincipalResolver, "issue">
 }
 
@@ -62,61 +88,96 @@ export interface ToolPluginCanvasMcpBridge {
 }
 
 /**
- * Creates the fixed reverse-MCP adapter for one exact, already verified Tool
- * Plugin runtime. A sidecar has no presentation Project, so no connection is
- * issued unless `projects.read` explicitly grants an all-bound-Projects scope.
+ * Thin reverse-MCP edge for one exact verified Tool runtime. Parameter/result
+ * validation, declaration/grant checks, cancellation, irreversible boundaries,
+ * subscriptions and domain routing all remain owned by PluginHostApiService.
  */
 export async function createToolPluginCanvasMcpBridge(
   plugin: InstalledPlugin,
-  host: ToolPluginCanvasCapabilityHost | undefined,
+  host: ToolPluginHostApiCapabilityHost | undefined,
+  invocationLease?: PluginHostInvocationLease,
 ): Promise<ToolPluginCanvasMcpBridge | undefined> {
-  if (
-    !host ||
-    (plugin.schema !== "convax.plugin/5" &&
-      plugin.schema !== "convax.plugin/6" &&
-      plugin.schema !== "convax.plugin/7") ||
-    plugin.runtime?.type !== "mcp-stdio" ||
-    (!plugin.contributes.generation?.tools.length && plugin.contributes.service === undefined) ||
-    !plugin.capabilities.includes("projects.read")
-  ) {
-    return undefined
-  }
-  const definitions = methodDefinitions.filter(({ capability }) => plugin.capabilities.includes(capability))
-  if (definitions.length === 0) return undefined
-  const principal = await host.principals.issue(plugin.id, "tool", plugin)
+  if (!host) return undefined
+  const routes = toolPluginCompanionApiDefinitions(plugin)
+  if (routes.length === 0) return undefined
+  const principal = invocationLease?.principal ?? (await host.principals.issue(plugin.id, "tool", plugin))
   if (principal.pluginVersion !== plugin.version) {
-    throw new Error(`Tool Plugin changed before its Canvas capability connection was established: ${plugin.id}`)
+    throw new Error(`Tool Plugin changed before its Host API connection was established: ${plugin.id}`)
   }
-  const client = await host.broker.connect({ principal, scope: { kind: "all-bound-projects" } })
-  return new ToolPluginCanvasConnection(client, definitions, principal.capabilityProtocol ?? pluginCapabilityProtocolV1)
+  const events: {
+    send?: (input: { event: PluginCanvasChangeEvent; subscriptionId: string }) => void
+  } = {}
+  const connection = await host.connect({
+    ...(invocationLease ? { invocationLease } : {}),
+    onCanvasEvent: (input) => events.send?.(input),
+    principal,
+    scope: { kind: "all-bound-projects" },
+  })
+  return new ToolPluginHostApiMcpConnection(connection, routes, events, invocationLease?.claims)
 }
 
-class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
+function toolPluginCompanionApiDefinitions(plugin: InstalledPlugin) {
+  if (
+    plugin.schema !== "convax.plugin/8" ||
+    !plugin.hostApi ||
+    plugin.runtime?.type !== "mcp-stdio" ||
+    (!plugin.contributes.generation?.tools.length &&
+      plugin.contributes.service === undefined &&
+      !plugin.contributes.capabilities?.exports.length) ||
+    !plugin.capabilities.includes("projects.read")
+  ) {
+    return []
+  }
+  return companionApiRoutes.filter(({ host: apiId }) => declaresAuthorizedApi(plugin, apiId))
+}
+
+export function toolPluginCanvasMcpMethodNames(plugin: InstalledPlugin): readonly string[] {
+  return toolPluginCompanionApiDefinitions(plugin).map(({ mcp }) => mcp)
+}
+
+function declaresAuthorizedApi(plugin: InstalledPlugin, apiId: PluginApiId) {
+  if (!plugin.hostApi || !isPluginApiDeclared(plugin.hostApi, apiId)) return false
+  const grant = getPluginApiDefinition(apiId).grant
+  return grant === null || plugin.capabilities.includes(grant as InstalledPlugin["capabilities"][number])
+}
+
+class ToolPluginHostApiMcpConnection implements ToolPluginCanvasMcpBridge {
   readonly handler: StdioMcpServerRequestHandler
-  readonly #connection: PluginCapabilityConnection
-  readonly #methods: ReadonlyMap<string, DesktopPluginHostMethod>
+  readonly #connection: PluginHostApiMainConnection
+  readonly #events: {
+    send?: (input: { event: PluginCanvasChangeEvent; subscriptionId: string }) => void
+  }
+  readonly #methods: ReadonlyMap<string, PluginApiId>
+  readonly #operationId?: string
   #closed = false
   #nextRequestId = 1
-  readonly #protocol: PluginCapabilityProtocol
   #sendNotification?: StdioMcpServerRequestContext["sendNotification"]
 
   constructor(
-    client: PluginCanvasCapabilityClient,
-    definitions: readonly { host: DesktopPluginHostMethod; mcp: string }[],
-    protocol: PluginCapabilityProtocol,
+    connection: PluginHostApiMainConnection,
+    routes: readonly ToolPluginCompanionApiRoute[],
+    events: {
+      send?: (input: { event: PluginCanvasChangeEvent; subscriptionId: string }) => void
+    },
+    invocationClaims?: PluginHostInvocationLeaseClaims,
   ) {
-    this.#protocol = protocol
-    this.#methods = new Map(definitions.map(({ host, mcp }) => [mcp, host]))
-    this.#connection = new PluginCapabilityConnection(client, {
-      send: (command) => {
-        if (this.#closed || command.command !== pluginCanvasDocumentChangedCommand) return
-        try {
-          this.#sendNotification?.(toolPluginCanvasMcpNotifications.documentChanged, command.params)
-        } catch {
-          this.close()
-        }
-      },
-    }, undefined, protocol)
+    this.#connection = connection
+    this.#events = events
+    this.#operationId = invocationClaims?.operationId
+    this.#methods = new Map(
+      routes.filter(({ host }) => connection.supports(host)).map(({ host, mcp }) => [mcp, host]),
+    )
+    events.send = ({ event, subscriptionId }) => {
+      if (this.#closed) return
+      try {
+        this.#sendNotification?.(toolPluginCanvasMcpNotifications.documentChanged, {
+          event,
+          subscriptionId,
+        })
+      } catch {
+        this.close()
+      }
+    }
     this.handler = {
       close: () => this.close(),
       handle: (request, context) => this.#handle(request.method, request.params, context),
@@ -128,52 +189,30 @@ class ToolPluginCanvasConnection implements ToolPluginCanvasMcpBridge {
     if (this.#closed) return
     this.#closed = true
     this.#sendNotification = undefined
+    this.#events.send = undefined
     this.#connection.close()
   }
 
   async #handle(method: string, params: unknown, context: StdioMcpServerRequestContext) {
-    if (this.#closed) throw new Error("Tool Plugin Canvas capability connection is closed")
-    if (context.signal.aborted) throw new Error("Tool Plugin Canvas capability request was canceled")
+    if (this.#closed) throw new Error("Tool Plugin Host API connection is closed")
+    throwIfAborted(context.signal)
     const hostMethod = this.#methods.get(method)
-    if (!hostMethod) throw new Error("Tool Plugin Canvas capability method is not available")
+    if (!hostMethod) throw new Error("Tool Plugin Host API method is not available")
     this.#sendNotification = (notificationMethod, notificationParams) =>
       context.sendNotification(notificationMethod, notificationParams)
-    const response = await this.#connection.dispatch(
-      {
-        id: `tool-request-${this.#nextRequestId++}`,
-        method: hostMethod,
-        ...(params === undefined ? {} : { params }),
-        protocol: this.#protocol,
-        type: "request",
-      },
-      context.signal,
-    )
-    if (context.signal.aborted && !(hostMethod === "canvas.transaction.execute" && response?.ok)) {
-      if (hostMethod === "canvas.events.subscribe" && response?.ok) {
-        const subscriptionId = subscriptionIdFrom(response.result)
-        if (subscriptionId) {
-          await this.#connection.dispatch({
-            id: `tool-request-${this.#nextRequestId++}`,
-            method: "canvas.events.unsubscribe",
-            params: { subscriptionId },
-            protocol: this.#protocol,
-            type: "request",
-          })
-        }
-      }
-      throw new Error("Tool Plugin Canvas capability request was canceled")
-    }
-    if (this.#closed && !(hostMethod === "canvas.transaction.execute" && response?.ok)) {
-      throw new Error("Tool Plugin Canvas capability connection is closed")
-    }
-    if (!response) throw new Error("Tool Plugin Canvas capability request was invalid")
-    if (!response.ok) throw new Error(response.error)
-    return response.result
+    const call = parsePluginApiCall({
+      method: hostMethod,
+      ...(params === undefined ? {} : { params }),
+    })
+    return this.#connection.execute(call, {
+      operationId: this.#operationId ?? `tool-request-${this.#nextRequestId++}`,
+      signal: context.signal,
+    })
   }
 }
 
-function subscriptionIdFrom(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
-  const subscriptionId = Reflect.get(value, "subscriptionId")
-  return typeof subscriptionId === "string" ? subscriptionId : undefined
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  throw new DOMException("Tool Plugin Host API request was canceled", "AbortError")
 }

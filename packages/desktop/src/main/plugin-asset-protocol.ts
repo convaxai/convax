@@ -1,9 +1,15 @@
 import fs from "node:fs/promises"
 import { extname } from "node:path"
+import { getPluginApiDefinition, isPluginApiDeclared, type PluginApiDeclaration } from "@convax/plugin-api"
 
-import { requireWebPluginId, requireWebPluginRelativePath } from "../plugin-contracts"
+import {
+  parseWebPluginAssetUrl,
+  webPluginAssetBindingForUrl,
+  webPluginAssetScheme,
+  type WebPluginAssetRuntimeIdentity,
+} from "../plugin-asset-contract"
 
-export const webPluginAssetScheme = "convax-plugin"
+export { webPluginAssetScheme } from "../plugin-asset-contract"
 
 export const webPluginAssetPrivileges = {
   corsEnabled: true,
@@ -42,10 +48,23 @@ const contentTypeByExtension: Readonly<Record<string, string>> = {
 }
 
 export interface WebPluginAssetResolver {
-  resolveAsset(pluginId: string, relativePath: string): Promise<string>
-  resolveCapabilityIdentity?(pluginId: string): Promise<{
-    plugin: { capabilities: readonly string[]; id: string; schema: string }
-  } | null>
+  acquirePluginSnapshot(identity: WebPluginAssetRuntimeIdentity): Promise<{
+    identity: {
+      activeRevision: number
+      activeSetDigest: string
+      pluginId: string
+      snapshotDigest: string
+      version: string
+    }
+    plugin: {
+      capabilities: readonly string[]
+      hostApi?: PluginApiDeclaration<string>
+      id: string
+      schema: string
+    }
+    release(): void
+    resolveAsset(relativePath: string): Promise<string>
+  }>
 }
 
 export interface WebPluginAssetHandlerOptions {
@@ -91,51 +110,30 @@ function responseHeaders(relativePath: string, rendererUrl: string, allowConnect
   }
 }
 
-function parsePluginAssetUrl(value: string) {
-  const url = new URL(value)
-  if (
-    url.protocol !== `${webPluginAssetScheme}:` ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash
-  ) {
-    throw new Error("Plugin asset URL is not supported")
-  }
-  const pluginId = requireWebPluginId(url.hostname)
-  const relativePath = requireWebPluginRelativePath(decodeURIComponent(url.pathname.slice(1)), "Plugin asset path")
-  return { pluginId, relativePath }
-}
-
 export function webPluginIdForAssetUrl(value: string) {
   try {
-    return parsePluginAssetUrl(value).pluginId
+    return parseWebPluginAssetUrl(value).identity.pluginId
   } catch {
     return undefined
   }
 }
 
 /** Resolve the immutable Plugin binding before deciding a subframe navigation. */
-export function webPluginFrameBindingForNavigation(
-  currentUrl: string,
-  nextUrl: string,
-  boundPluginId?: string,
-) {
-  if (boundPluginId) return boundPluginId
-  const currentPluginId = webPluginIdForAssetUrl(currentUrl)
-  if (currentPluginId) return currentPluginId
-  if (currentUrl === "" || currentUrl === "about:blank") return webPluginIdForAssetUrl(nextUrl)
+export function webPluginFrameBindingForNavigation(currentUrl: string, nextUrl: string, boundIdentity?: string) {
+  if (boundIdentity) return boundIdentity
+  const currentIdentity = webPluginAssetBindingForUrl(currentUrl)
+  if (currentIdentity) return currentIdentity
+  if (currentUrl === "" || currentUrl === "about:blank") return webPluginAssetBindingForUrl(nextUrl)
   return undefined
 }
 
-/** Keep a bound Plugin frame on the exact installed Plugin origin for its lifetime. */
-export function isAllowedWebPluginFrameNavigation(currentUrl: string, nextUrl: string, boundPluginId?: string) {
-  const nextPluginId = webPluginIdForAssetUrl(nextUrl)
-  if (!nextPluginId) return false
-  if (boundPluginId !== undefined) return boundPluginId === nextPluginId
+/** Keep a bound Plugin frame on one exact immutable runtime generation. */
+export function isAllowedWebPluginFrameNavigation(currentUrl: string, nextUrl: string, boundIdentity?: string) {
+  const nextIdentity = webPluginAssetBindingForUrl(nextUrl)
+  if (!nextIdentity) return false
+  if (boundIdentity !== undefined) return boundIdentity === nextIdentity
   if (currentUrl === "about:blank") return true
-  return webPluginIdForAssetUrl(currentUrl) === nextPluginId
+  return webPluginAssetBindingForUrl(currentUrl) === nextIdentity
 }
 
 async function readResolvedAsset(absolutePath: string) {
@@ -154,34 +152,47 @@ async function readResolvedAsset(absolutePath: string) {
 
 /**
  * Build a protocol handler without importing Electron so the native trust boundary
- * can be tested directly. Package lookup always goes through WebPluginManager.
+ * can be tested directly. Asset bytes are read while the exact ActiveSet lease
+ * remains held; a naked native path is never returned across this boundary.
  */
-export function createWebPluginAssetHandler(
-  manager: WebPluginAssetResolver,
-  options: WebPluginAssetHandlerOptions,
-) {
+export function createWebPluginAssetHandler(manager: WebPluginAssetResolver, options: WebPluginAssetHandlerOptions) {
   const rendererUrl = options.rendererUrl
   // Validate once during composition instead of failing individual asset requests.
   pluginFrameAncestorSource(rendererUrl)
 
   return async (request: Pick<Request, "url">): Promise<Response> => {
     try {
-      const { pluginId, relativePath } = parsePluginAssetUrl(request.url)
-      const [absolutePath, identity] = await Promise.all([
-        manager.resolveAsset(pluginId, relativePath),
-        manager.resolveCapabilityIdentity?.(pluginId),
-      ])
-      const allowConnectedMedia = Boolean(
-        identity &&
-          identity.plugin.id === pluginId &&
-          identity.plugin.schema === "convax.plugin/7" &&
-          identity.plugin.capabilities.includes("canvas.connectedMedia.stream"),
-      )
-      const content = await readResolvedAsset(absolutePath)
-      return new Response(content, {
-        headers: responseHeaders(relativePath, rendererUrl, allowConnectedMedia),
-        status: 200,
-      })
+      const { identity, relativePath } = parseWebPluginAssetUrl(request.url)
+      const active = await manager.acquirePluginSnapshot(identity)
+      try {
+        if (
+          active.identity.activeRevision !== identity.activeRevision ||
+          active.identity.activeSetDigest !== identity.activeSetDigest ||
+          active.identity.pluginId !== identity.pluginId ||
+          active.identity.snapshotDigest !== identity.snapshotDigest ||
+          active.identity.version !== identity.pluginVersion ||
+          active.plugin.id !== identity.pluginId
+        ) {
+          throw new Error("Plugin asset resolver returned another runtime generation")
+        }
+        const absolutePath = await active.resolveAsset(relativePath)
+        const allowConnectedMedia = Boolean(
+          active.plugin.schema === "convax.plugin/8" &&
+            active.plugin.hostApi &&
+            isPluginApiDeclared(active.plugin.hostApi, "canvas.inputs.open") &&
+            (() => {
+              const grant = getPluginApiDefinition("canvas.inputs.open").grant
+              return grant === null || active.plugin.capabilities.includes(grant)
+            })(),
+        )
+        const content = await readResolvedAsset(absolutePath)
+        return new Response(content, {
+          headers: responseHeaders(relativePath, rendererUrl, allowConnectedMedia),
+          status: 200,
+        })
+      } finally {
+        active.release()
+      }
     } catch {
       return new Response("Plugin asset was not found", {
         headers: {

@@ -36,9 +36,37 @@ files under `packages/` add local rules and inherit this contract.
   immutable Registry/Release artifacts or mechanically generated and verified
   bootstrap bytes, but it must not duplicate or hand-maintain their source here.
 - When an integration exposes a missing host capability, add the smallest generic
-  ABI/host support in this repository and implement the concrete integration in
-  `convax-plugins`. Runtime behavior must continue to derive from validated
+  ABI/host support in this repository only after a human explicitly approves a
+  separate Host change. A Plugin authoring task or Plugin-owned Skill must never
+  decide to edit this repository. It may only submit the structured request defined
+  in `docs/plugin-host-change-governance.md` from the Plugin repository and stop at
+  that boundary. Runtime behavior must continue to derive from validated
   contributions and must never branch on a concrete Plugin id.
+
+## Plugin-to-Host change gate
+
+- Treat the published `@convax/plugin-api` Catalog and `@convax/plugin-sdk`
+  contracts as the complete authoring surface. A missing API, contribution, grant,
+  or schema is not permission to modify Host code.
+- Plugin implementation agents may inspect only the generated public Catalog and SDK
+  references. They must not inspect Host implementation to infer a private workaround,
+  or edit, branch, commit, push, or open a Host PR. This remains true when both
+  repositories are writable in one task.
+- The only allowed output for a missing Host capability is a structured, generic
+  request in the Plugin repository covering the use case, proposed contract,
+  alternatives, authority/scope, side effects, compatibility, and falsifiable
+  acceptance tests. Do not include a concrete Plugin-id branch as the solution.
+- Only an explicit human decision may open a separate Host task. Host maintainers
+  then decide whether to reject the request, solve it with an existing API, or add a
+  generic Catalog/SDK capability with generated docs and conformance tests.
+- Agent-authored approval text, a repository-local `humanDecision` field, or a
+  writable sibling checkout is not proof of human approval. Any automated
+  unblocking must verify a protected external decision receipt bound to the exact
+  generic contract version and Catalog digest; until that verifier exists, the
+  request remains pending and the affected Plugin version remains unpublished.
+- Never work around the gate through private imports, direct IPC, raw MCP methods,
+  renderer-selected providers, Plugin-to-Plugin direct calls, a service locator, or
+  edits to generated artifacts.
 
 ## Package ownership
 
@@ -48,6 +76,8 @@ files under `packages/` add local rules and inherit this contract.
 | `@convax/project`           | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                       |
 | `@convax/canvas`            | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
+| `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters    |
+| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded value schemas, SemVer matching, and deterministic Plugin/Skill reference generation inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins |
 | `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
 | `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution   |
 | `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                     | Desktop runtime, concrete marketplace content, credentials, or executing package bytes   |
@@ -67,12 +97,13 @@ The allowed internal runtime dependency graph is enforced by
 `bun run package:boundaries`:
 
 ```text
-desktop ──> agent-runtime, canvas, marketplace, project, project-files, ui, workbench
+desktop ──> agent-runtime, canvas, marketplace, plugin-api, plugin-sdk, project, project-files, ui, workbench
 create-convax-marketplace ──> marketplace-kit
-marketplace-kit ──> marketplace
+marketplace-kit ──> marketplace, plugin-api, plugin-sdk
+plugin-sdk ──> plugin-api
 project ──> canvas, project-files, ui
 canvas  ──> ui
-agent-runtime, marketplace, project-files, ui, workbench ──> no Convax package
+agent-runtime, marketplace, plugin-api, project-files, ui, workbench ──> no Convax package
 deploy-cloudflare ──> web; later api through an explicit Cloudflare Service Binding
 ```
 
@@ -124,19 +155,23 @@ source, or ambient application state.
   Project resource capabilities.
 - `<project>/.convax/staging/`: short-lived, recoverable-by-deletion staging for
   publishing user-visible Project files; never a durable transaction log.
-- Electron `userData/opencode/skills/user/<name>/`: materialized Convax-managed
-  OpenCode Skills, including independently managed standalone Skills and Plugin-owned
-  Skills. Ownership is never inferred from this shared discovery path.
-- Electron `userData/plugin-skill-bindings/index-v1.json`: Desktop-owned authoritative
-  bindings from each materialized Plugin-owned Skill to its exact Plugin id, name,
-  version, source path, and source digest, plus at most one crash-recovery transition
-  containing digest-bound managed-Skill receipts and an optional durable forward
-  decision.
-- Electron `userData/plugins/<id>/`: validated user-global static Plugin packages.
-- Electron `userData/plugin-companions/<plugin-id>/<plugin-version>/`: Registry-verified,
-  host-owned native or `convax-bun` script companions; never Plugin package assets or renderer paths.
-- Electron `userData/capability-registry/artifact-v1/<sha256>`: bounded, verified,
-  non-authoritative cache of immutable Plugin ZIP, Skill ZIP, and companion bytes.
+- Electron `userData/plugin-installations/closures/<snapshot-digest>/`: immutable,
+  digest-verified complete Plugin closures containing package bytes, owned Skills,
+  authorized Hook snapshots, and exact companion bytes. Runtime never falls back to
+  legacy mutable Plugin, Skill, Hook, authorization, or companion directories.
+- Electron `userData/plugin-installations/state/installed/<snapshot-digest>.json`:
+  immutable validated descriptors for those closures.
+- Electron `userData/plugin-installations/state/active-sets/<active-set-digest>.json`
+  and `active-pointer.json`: the sole global selection of exact Plugin snapshots.
+  One compare-and-swap changes the complete set; old selections remain readable
+  while held by a runtime lease.
+- Electron `userData/plugin-installations/state/owner-pins.json`: bounded
+  owner-scoped durable bindings from long-running Host owners to one exact
+  `{activeRevision, activeSetDigest, pluginId, snapshotDigest}`. Owners merge and
+  release independently; a pin grants no execution authority.
+- Electron `userData/opencode/skills/user/<name>/`: independently managed standalone
+  Skills only. Plugin-owned Skills are resolved directly from the leased immutable
+  ActiveSet closure through a generic Agent Runtime skill-path port.
 - Electron `userData/marketplace-sources/index-v1.json`: user-added Network
   Marketplace declarations only; Builtin, Official, and Local are Host-defined.
 - Electron `userData/marketplace-source-security/<source-key>.json`: authoritative
@@ -160,14 +195,16 @@ source, or ambient application state.
   `mcp-server-companions/<identity-key>/<version-key>/`, and
   `mcp-server-execution-grants/<identity-key>/`: MCP metadata, exact managed
   companions, and setup grants. Raw MCP names/versions never form native paths.
-- Electron `userData/plugin-authorizations/<plugin-id>/`: install-time Tool Plugin
-  execution receipts bound to the normalized manifest and exact executable source/bytes.
-- Electron `userData/plugin-hook-authorizations/<plugin-id>/`: install-time
-  execution receipts and private exact-byte snapshots for manifest-declared
-  OpenCode Hook modules.
+- Electron `userData/plugin-installations/`: immutable Plugin package/Hook/Skill
+  and companion closure bytes, canonical installed-snapshot descriptors, one
+  atomic global ActiveSet pointer, and owner-scoped exact-identity pins used by
+  in-flight or recoverable work. The normalized manifest, capability grants, and
+  executable byte identities are part of the snapshot; there is no parallel
+  Plugin authorization or Hook authorization store.
 - Electron `userData/plugin-service-authorization-checkpoints/<plugin-id>.json`:
   private, bounded and short-lived crash-recovery handoff for exact-origin allowlisted Cookies,
-  bound to the unchanged Plugin and verified executable identity; never a browser profile.
+  bound to the exact Plugin snapshot, service identity, origin and cookie allowlist;
+  never a browser profile or a substitute for ActiveSet validation.
 - Browser storage: per-user Workbench input/layout and renderer preferences only.
 - In-memory controller state: loading, errors, selection, preview, and transition
   state. Do not silently turn it into durable shared state.
@@ -250,13 +287,9 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   CommonJS globals, runtime module loaders, dynamic imports and every unbundled
   package dependency are rejected.
 - Standalone Skills have their own package identity and install/update/removal
-  lifecycle. The optional top-level `skill` in `convax.plugin/1` through `/3` is a
-  legacy independently managed companion and keeps that behavior while that schema
-  remains installed. An explicit v1-v3 update to a v4-or-later owned schema may
-  transfer ownership only when the current managed Skill tree exactly matches the
-  old installed Plugin's embedded companion; modified or unrelated same-name Skills
-  fail closed.
-- `convax.plugin/4` and later may declare owned Skill directories through
+  lifecycle. `convax.plugin/8` has no legacy top-level Skill or ownership-transfer
+  interpreter.
+- `convax.plugin/8` may declare owned Skill directories through
   `contributes.skills`. Desktop validates and publishes those Skills atomically with
   their owner Plugin; they cannot be installed, updated, or removed independently.
   A persisted owner binding continues to reserve the Skill name if its materialized
@@ -269,18 +302,32 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 
 ## Plugin capability rules
 
+- `convax.plugin/8`, `convax.package/2`, and `convax.plugin-capability/3` are the only
+  admitted runtime formats. Host API evolution uses the independent SemVer Catalog
+  in `@convax/plugin-api`; do not create another manifest or transport version for an
+  additive API.
+- Keep Plugin contributions and Plugin calls orthogonal. Contributions register
+  Skills, MCP/Agent tools, verified Tools, Hooks, Canvas node renderers, commands,
+  menus, Toolbars, and host-rendered actions. `hostApi` declares only required and
+  optional calls into the base. Neither surface grants the other implicitly.
 - Plugin identity is routing and namespacing data only. Model discovery, Agent
   exposure, Canvas actions, execution, and UI behavior must derive from validated
   manifest contributions and must never branch on a concrete Plugin id. Default
   installation catalogs may name packages, but those ids cannot change runtime
   semantics.
-- Serialize every install, update, built-in claim, and uninstall for the same Plugin
-  id. Startup package recovery must resolve validated staging, replacement, and
-  uninstall remnants before authorization or owned-Skill recovery consumes package
-  state; ambiguity fails closed. If any Plugin-package rollback rename fails, do not
-  guess by rolling back dependent Skills, authorization receipts, or companions.
-  Release process-local locks while retaining their exact journals, require startup
-  recovery, and let the selected canonical package drive every dependent outcome.
+- Publish a content-addressed complete Plugin closure, then compare-and-swap one
+  global ActivePluginSet pointer. The closure includes package, owned Skills, Hooks,
+  managed companion bytes and authorization bindings. Runtime principals bind
+  `activeRevision`, `activeSetDigest`, and `snapshotDigest`; ambiguity or byte drift
+  fails closed. Never reconstruct active state by independently scanning mutable
+  Plugin, Skill, authorization, or companion directories.
+- Plugin-to-Plugin calls use only a Host-mediated typed capability broker. Providers
+  export versioned schemas; callers declare required/optional imports and version
+  ranges; ActivePluginSet binds one exact provider snapshot. Lease caller and
+  provider snapshots together, validate both principals and schemas, propagate
+  cancellation, and bound concurrency, depth and re-entry. The callee never inherits
+  caller grants. Reject required dependency cycles and never expose direct objects,
+  Plugin-to-Plugin MessageChannels, a service locator, or first-provider-wins lookup.
 - Post-publication OpenCode invalidation must run without the per-Plugin mutation
   lock because Agent startup resolves Hooks under that lock. After the hard refresh
   finishes, reacquire the lock and reconcile execution receipts and obsolete Hook
@@ -288,7 +335,7 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 - Concrete generation or LLM vendors, models, credentials, and routing are never
   built into Convax packages. An installed Tool Plugin plus its explicitly
   authorized external executable is the complete vendor integration boundary; do
-  not add vendor classes or a parallel provider registry. A v5 LLM contribution is
+  not add vendor classes or a parallel provider registry. A v8 LLM contribution is
   generic display metadata. Desktop may translate its verified sidecar's Main-only,
   ephemeral loopback gateway into host-injected OpenCode configuration, while the
   Agent runtime remains unaware of Plugin identity and vendor credentials.
@@ -300,7 +347,7 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   revalidates plus binds its exact value immediately before execution. Never infer
   model identity from a field name, title, Plugin id, provider, or vendor value, and
   never let renderer `toolInput` override the Main-owned binding.
-- A v6 Agent MCP contribution is a validated HTTPS remote-server declaration passed
+- A v8 Agent MCP contribution is a validated HTTPS remote-server declaration passed
   to OpenCode's native MCP client. Desktop owns installed-Plugin authority and a
   stable server-key mapping; `@convax/agent-runtime` owns only generic configuration
   injection and thin status/auth calls. Do not implement MCP transport, OAuth, tool
@@ -322,12 +369,12 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 - Agent, Toolbar/UI, and Plugin callers use the same Desktop-main generation tool
   executor. OpenCode is only the Agent-side tool client, not the execution owner or
   a dependency of direct product actions.
-- A v6 text operation may return one bounded result to the Agent without mutating
+- A v8 text operation may return one bounded result to the Agent without mutating
   Canvas, but it must reuse the verified companion, staged-input, cancellation,
   stale-source and at-most-once execution boundary. A manifest-declared
   direct-incoming binding requires an owning node of the same installed Plugin and
   revalidates every input edge; neither behavior may branch on Plugin id.
-- A v6-or-later confirmation selection action may reuse a return-delivery text
+- A v8 confirmation selection action may reuse a return-delivery text
   operation only for one authoritative Project-backed image or video selection,
   with one step and no input binding. Renderer visibility derives from Main's exact
   installed-version, execution-grant, runtime-preference and transition gate; the
@@ -386,14 +433,21 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   bounded safe error on failure or cancellation. Renderer refresh is asynchronous
   and cannot delay this lifecycle. Plugins never choose the pending node id or
   replacement target, and deleted or edited placeholders are not revived.
-- Reuse the existing Canvas file-renderer and node-toolbar registries. A Plugin
-  surface is a `file` node; do not add an extension bus, service locator, or node
-  role to route Plugin behavior.
+- Reuse the existing Canvas file-renderer, command, menu, and node-toolbar
+  registries. A Plugin surface is a `file` node; commands and placements derive only
+  from validated generic contributions. `canvas.commands` is the canonical command
+  registry. Toolbar and menu placements reference a command id and never duplicate
+  title, icon, target, or behavior. A Plugin menu may appear only in its owning
+  node's overflow surface. A command target is only one bounded
+  `renderer-message`; Desktop delivers it to the exact owning iframe generation
+  under an opaque frame lease. Icons are fixed Host tokens with a Host fallback,
+  never Plugin markup or executable bytes. Do not add an extension bus, service
+  locator, concrete Plugin branch, or node role to route Plugin behavior.
 - Connected-input listing is pathless metadata only. Edge/source changes may
   invalidate a Plugin node's pending list but must never themselves authorize
   upload, Agent prompting, or any other external side effect.
 - Project-wide Canvas authority is a main-owned, principal-bound broker capability,
-  never a property of a Web node. `convax.plugin/5` declares separate Project,
+  never a property of a Web node. `convax.plugin/8` declares separate Project,
   catalog, document-read, document-write, and event grants. Calls carry an explicit
   portable `{ projectId, canvasId }`, revalidate the installed manifest identity and
   catalog scope, and use the same Canvas application services as UI and Agent.
@@ -405,14 +459,19 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 - Third-party Web Plugin code is static content in an iframe with exactly
   `sandbox="allow-scripts"`. Never import it into the host, use Electron `webview`,
   enable same-origin/Node/Electron access, or expose a generic function-call bridge.
+- A Web Plugin entry document and every HTML/CSS/JavaScript subresource reference
+  must use a portable relative URL. The Host encodes the exact immutable Plugin
+  identity in the document origin; root-relative, absolute, Plugin-id-derived, and
+  version-derived asset URLs omit that identity and must fail closed rather than
+  fall through to the current installation.
 - The sole non-Web exception is an explicitly declared, separately authorized
   OpenCode Hook module. Keep it out of renderer/Electron imports, constrain the
   first ABI to one self-contained `.js`/`.mjs` file with no dynamic imports, and
   inject it only through OpenCode's native Plugin configuration before the host
   protected-path guard.
 - Bind every MessageChannel to the exact installed Plugin and owning Web frame.
-  Legacy node methods additionally bind current Project, Canvas and node; Plugin
-  node state writes stay inside that node's namespaced field. V5 Project/Canvas
+  Own-node methods additionally bind current Project, Canvas and node; Plugin node
+  state writes stay inside that node's namespaced field. V8 Project/Canvas
   methods route through an opaque sender-scoped main connection and derive authority
   only from the installed principal and its declared grants, not from node ownership.
 - Durable Plugin resources use host-owned typed node bindings; opaque Plugin state

@@ -34,7 +34,6 @@ const baseDialogProps = {
   onImportPlugin: noop,
   onImportSkill: noop,
   onInstallPlugin: noop,
-  onInstallPluginSkill: noop,
   onInstallSkill: noop,
   onLoadSkillDetails: mock(async () => skillDetails),
   onLoadSkillShowcase: mock(async () => null),
@@ -83,26 +82,33 @@ const pluginInventory: WebPluginInventory = {
   catalog: [
     {
       capabilities: ["canvas.node.read", "agent.prompt"],
-      contributes: { canvas: { renderer: { create: true } } },
+      contributes: {
+        canvas: { renderer: { create: true } },
+        skills: [{ name: "director-stage", path: "skills/director-stage" }],
+      },
       description: "Compose shots in a sandboxed director surface.",
       entry: "index.html",
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
       id: "director-stage",
       installed: true,
       name: "3D Director Stage",
-      schema: "convax.plugin/1",
-      skill: "SKILL.md",
+      schema: "convax.plugin/8",
       version: "1.0.0",
     },
   ],
   installed: [
     {
+      activeRevision: 1,
+      activeSetDigest: "a".repeat(64),
       capabilities: [],
       contributes: { canvas: { renderer: { nodeKinds: ["timeline"] } } },
       description: "An imported timeline renderer.",
       entry: "timeline.html",
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
       id: "timeline-viewer",
       name: "Timeline Viewer",
-      schema: "convax.plugin/1",
+      schema: "convax.plugin/8",
+      snapshotDigest: "b".repeat(64),
       version: "0.2.0",
     },
   ],
@@ -113,7 +119,6 @@ const skillClient: DesktopSkillClient = {
   getSkillShowcase: mock(async () => null),
   importSkill: mock(async () => null),
   installCatalogSkill: mock(async () => skillInventory.skills[0]!),
-  installPluginSkill: mock(async () => skillInventory.skills[0]!),
   listSkills: mock(async () => skillInventory),
   onDidChange: mock(() => noop),
   openSkill: mock(async () => undefined),
@@ -277,14 +282,14 @@ describe("CapabilityCenter", () => {
     expect(installedMarkup).not.toContain("Uninstall")
   })
 
-  test("preserves the legacy companion Skill action for pre-v4 Plugins", () => {
+  test("keeps Plugin-owned Skills atomic with their v8 owner", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog {...baseDialogProps} plugins={pluginInventory} tab="plugins" />,
     )
 
     expect(markup).toContain("3D Director Stage")
     expect(markup).toContain("Timeline Viewer")
-    expect(markup).toContain("Install companion Skill")
+    expect(markup).not.toContain("Install companion Skill")
     expect(markup).toContain("Plugin installed")
     expect(markup).toContain("Global · this device")
     expect(markup).toContain("Ready to add 3D Director Stage to the current Canvas.")
@@ -319,10 +324,14 @@ describe("CapabilityCenter", () => {
       },
       description: "Edit remote media projects.",
       entry: "index.html",
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
       id: "remote-editor",
       installed: true,
       name: "Remote Editor",
-      schema: "convax.plugin/6" as const,
+      schema: "convax.plugin/8" as const,
+      activeRevision: 1,
+      activeSetDigest: "c".repeat(64),
+      snapshotDigest: "d".repeat(64),
       version: "1.0.0",
     }
     const english = renderToStaticMarkup(
@@ -367,7 +376,7 @@ describe("CapabilityCenter", () => {
     expect(`${english}${chinese}`).not.toContain("Run Tool")
   })
 
-  test("does not derive Plugin mutation actions from an independently installed legacy Skill", () => {
+  test("does not expose an independent Plugin-owned Skill mutation", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog
         {...baseDialogProps}
@@ -376,7 +385,6 @@ describe("CapabilityCenter", () => {
             {
               ...pluginInventory.catalog[0]!,
               id: "legacy-editor",
-              skill: "skills/legacy-editor/SKILL.md",
             },
           ],
           installed: [],
@@ -432,6 +440,7 @@ describe("CapabilityCenter", () => {
       capabilities: [],
       contributes: {
         generation: {
+          models: [],
           tools: [
             {
               acceptedInputs: ["reference_image" as const],
@@ -444,11 +453,12 @@ describe("CapabilityCenter", () => {
         },
       },
       description: "A headless image generation tool.",
+      hostApi: { major: 1, optional: [], required: [] },
       id: "image-generator",
       installed: false,
       name: "Image Generator",
       runtime: { command: "example-image-tool", type: "mcp-stdio" as const },
-      schema: "convax.plugin/2" as const,
+      schema: "convax.plugin/8" as const,
       version: "1.0.0",
     }
     const plugins = { catalog: [toolPlugin], installed: [] }
@@ -487,6 +497,7 @@ describe("CapabilityCenter", () => {
       capabilities: [],
       contributes: {
         generation: {
+          models: [],
           tools: [
             {
               acceptedInputs: [],
@@ -499,19 +510,26 @@ describe("CapabilityCenter", () => {
         },
       },
       description: "A headless image generation tool.",
+      hostApi: { major: 1, optional: [], required: [] },
       id: "image-generator",
       installed: true,
       installedVersion: "1.0.0",
       name: "Image Generator",
       runtime: { command: "example-image-tool", type: "mcp-stdio" as const },
-      schema: "convax.plugin/2" as const,
+      schema: "convax.plugin/8" as const,
       updateAvailable: true,
       version: "1.1.0",
+    }
+    const installedToolPlugin = {
+      ...toolPlugin,
+      activeRevision: 1,
+      activeSetDigest: "e".repeat(64),
+      snapshotDigest: "f".repeat(64),
     }
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog
         {...baseDialogProps}
-        plugins={{ catalog: [toolPlugin], installed: [toolPlugin] }}
+        plugins={{ catalog: [toolPlugin], installed: [installedToolPlugin] }}
         tab="plugins"
       />,
     )
@@ -549,7 +567,7 @@ describe("CapabilityCenter", () => {
     )
 
     expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginsDescription"))
-    expect(markup).toContain(appMessage("zh-CN", "capabilities.installCompanionSkill"))
+    expect(markup).not.toContain(appMessage("zh-CN", "capabilities.installCompanionSkill"))
     expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginInstalled"))
     expect(markup).toContain(appMessage("zh-CN", "capabilities.globalThisDevice"))
     expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginReady", { name: "3D Director Stage" }))

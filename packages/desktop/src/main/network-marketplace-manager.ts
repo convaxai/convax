@@ -23,6 +23,7 @@ import {
   marketplaceRepositoryFromDescriptorUrl,
   PinnedHttpsFetcher,
 } from "./pinned-https-fetch"
+import { projectRegistryPackageRuntimeSurface } from "./marketplace-runtime-surface"
 
 interface PersistedNetworkSource {
   descriptor: MarketplaceDescriptor
@@ -160,33 +161,6 @@ function catalog(registry: RegistryV2): AcceptedMarketplaceCatalog {
     revision: registry.revision,
     sequence: registry.sequence,
   }
-}
-
-function packageRuntimeSurface(item: RegistryV2["packages"][number]): SourceQualifiedItem["runtimeSurface"] {
-  if (item.kind === "skill") return "none"
-  if (item.kind === "mcp-server") {
-    return item.delivery.kind === "mcp-managed-stdio" && (item.delivery.extension.productActions?.length ?? 0) > 0
-      ? "agent-and-convax"
-      : "agent"
-  }
-  const manifest = item.manifest as { contributes?: Record<string, unknown> } | undefined
-  const contributions = manifest?.contributes
-  if (!contributions) return "none"
-  if (
-    ["tools", "generationTools", "services"].some(
-      (key) => Array.isArray(contributions[key]) && (contributions[key] as unknown[]).length > 0,
-    )
-  ) {
-    return "agent-and-convax"
-  }
-  if (
-    ["hooks", "llms", "mcpServers", "skills"].some(
-      (key) => Array.isArray(contributions[key]) && (contributions[key] as unknown[]).length > 0,
-    )
-  ) {
-    return "agent"
-  }
-  return "none"
 }
 
 async function atomicGraph(file: string, value: SourceGraph) {
@@ -406,7 +380,7 @@ export class NetworkMarketplaceManager {
           marketplaceId: source.descriptor.id,
           official: false,
           presentation: item.presentation,
-          runtimeSurface: packageRuntimeSurface(item),
+          runtimeSurface: projectRegistryPackageRuntimeSurface(item),
           sourceKey: source.sourceKey,
           sourceKind: "network",
           sourceOrder: source.sourceOrder,

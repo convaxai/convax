@@ -25,7 +25,7 @@ interface ToolHookOutput {
  */
 export default async function protectedPathPlugin(input: PluginInput, options?: ProtectedPathPluginOptions) {
   const { lstat, readlink, readdir } = await import("node:fs/promises")
-  const { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } = await import("node:path")
+  const { dirname, isAbsolute, join, parse, relative, resolve, sep } = await import("node:path")
 
   function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === "object" && !Array.isArray(value))

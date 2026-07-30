@@ -2,17 +2,26 @@ import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type Op
 import {
   compareWebPluginVersions,
   requireWebPluginId,
+  type ActiveInstalledWebPluginSummary,
   type InstalledWebPluginSummary,
+  type WebPluginCatalogItem,
   type WebPluginClient,
 } from "../plugin-contracts"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
-import type {
-  WebPluginManager,
-  WebPluginMutationContext,
-  WebPluginPublicationCandidate,
-  WebPluginPublicationTransaction,
-} from "./plugin-manager"
-import type { RemotePluginCatalogPort } from "./remote-capability-installer"
+
+export interface PluginManagementCatalogPort {
+  getPluginReleaseUrl(id: string): Promise<string>
+  installPlugin(
+    id: string,
+    options?: { allowCurrent?: boolean; allowHooks?: boolean },
+  ): Promise<InstalledWebPluginSummary>
+  listPluginCatalog(installedIds: ReadonlySet<string>): Promise<WebPluginCatalogItem[]>
+  subscribe?(listener: () => void): () => void
+}
+
+export interface PluginManagementInventory {
+  list(): Promise<ActiveInstalledWebPluginSummary[]>
+}
 
 type PluginClientInput<Method extends Exclude<keyof WebPluginClient, "onDidChange">> = Parameters<
   WebPluginClient[Method]
@@ -35,80 +44,22 @@ function showDirectoryDialog(event: IpcMainInvokeEvent, options: OpenDialogOptio
 }
 
 export function registerPluginManagementIpc(
-  manager: WebPluginManager,
+  manager: PluginManagementInventory,
   catalog: readonly DesktopBuiltinPluginBundle[],
   isTrustedSender: (event: IpcMainInvokeEvent) => boolean,
-  remoteCatalog?: RemotePluginCatalogPort,
+  remoteCatalog?: PluginManagementCatalogPort,
   lifecycle?: {
     beforeChange?(pluginId: string): Promise<void> | void
     connectAgentMcp?(plugin: InstalledWebPluginSummary): Promise<void>
     listAgentMcpStatuses?(
       plugins: readonly InstalledWebPluginSummary[],
     ): ReturnType<WebPluginClient["listAgentMcpStatuses"]>
+    installLocal?(directory: string): Promise<InstalledWebPluginSummary>
+    uninstall?(pluginId: string): Promise<boolean>
     /** Lock-free invalidation. This may wait for Agent work that resolves Plugin state. */
     onDidChange?(pluginId: string): Promise<void> | void
-    prepareInstall?(
-      plugin: InstalledWebPluginSummary,
-      candidate: WebPluginPublicationCandidate,
-    ): Promise<WebPluginPublicationTransaction>
-    prepareRemove?(plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction>
-    /** Final convergence against the latest package while holding its mutation lock. */
-    reconcileAfterChange?(pluginId: string, mutation: WebPluginMutationContext): Promise<void> | void
   },
 ) {
-  const prepareInstall = lifecycle?.prepareInstall?.bind(lifecycle)
-  const preparePublication =
-    prepareInstall || lifecycle?.beforeChange
-      ? async (
-          plugin: InstalledWebPluginSummary,
-          candidate: WebPluginPublicationCandidate,
-        ): Promise<WebPluginPublicationTransaction> => {
-          const authorization = await prepareInstall?.(plugin, candidate)
-          return {
-            async activate() {
-              await authorization?.activate?.()
-            },
-            async publish() {
-              await lifecycle?.beforeChange?.(plugin.id)
-              await authorization?.publish()
-            },
-            async commit() {
-              await authorization?.commit()
-            },
-            async rollback() {
-              await authorization?.rollback()
-            },
-            async deferToRecovery() {
-              await authorization?.deferToRecovery?.()
-            },
-          }
-        }
-      : undefined
-  const prepareRemove = lifecycle?.prepareRemove?.bind(lifecycle)
-  const prepareRemoval =
-    prepareRemove || lifecycle?.beforeChange
-      ? async (plugin: InstalledWebPluginSummary): Promise<WebPluginPublicationTransaction> => {
-          const publication = await prepareRemove?.(plugin)
-          return {
-            async activate() {
-              await publication?.activate?.()
-            },
-            async publish() {
-              await lifecycle?.beforeChange?.(plugin.id)
-              await publication?.publish()
-            },
-            async commit() {
-              await publication?.commit()
-            },
-            async rollback() {
-              await publication?.rollback()
-            },
-            async deferToRecovery() {
-              await publication?.deferToRecovery?.()
-            },
-          }
-        }
-      : undefined
   const register = <Input, Result>(
     channel: string,
     handler: (event: IpcMainInvokeEvent, input: Input) => Promise<Result> | Result,
@@ -122,13 +73,7 @@ export function registerPluginManagementIpc(
   const publishChange = () => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || window.webContents.isDestroyed()) continue
-      try {
-        window.webContents.send(pluginManagementIpcChannels.changed)
-      } catch (error) {
-        // Renderer projection is best-effort after a durable package or service
-        // mutation. A window may disappear between the liveness check and send.
-        console.warn("Could not notify a renderer about changed Plugins", error)
-      }
+      window.webContents.send(pluginManagementIpcChannels.changed)
     }
   }
   const unsubscribeRemote = remoteCatalog?.subscribe?.(publishChange)
@@ -176,15 +121,10 @@ export function registerPluginManagementIpc(
   const runChangedLifecycle = async (changedPluginId: string) => {
     try {
       await lifecycle?.onDidChange?.(changedPluginId)
-      if (lifecycle?.reconcileAfterChange) {
-        await manager.withPluginMutation(changedPluginId, (mutation) =>
-          Promise.resolve(lifecycle.reconcileAfterChange?.(changedPluginId, mutation)),
-        )
-      }
     } catch (error) {
-      // The package mutation is already committed. Startup reconciliation
-      // retries cleanup. Invalidation failure must also retain superseded
-      // Hook snapshots because the old Agent generation may still need them.
+      // The ActiveSet mutation is already committed. Startup reconciliation
+      // retries cleanup, so post-publication invalidation cannot fail the
+      // successful install or uninstall result.
       console.warn(`Could not finish changed Plugin cleanup: ${changedPluginId}`, error)
     }
   }
@@ -197,9 +137,8 @@ export function registerPluginManagementIpc(
     publishChange()
     if (changedPluginId) {
       // Agent refresh is global and remains ordered, but it is post-publication
-      // convergence: it must not hold this result or an unrelated Plugin package
-      // mutation hostage. Per-Plugin reconciliation reacquires the manager lock
-      // and reads the latest installed identity after invalidation completes.
+      // convergence: it must not hold this result or an unrelated immutable
+      // ActiveSet mutation hostage.
       changedLifecycleTail = changedLifecycleTail.then(() => runChangedLifecycle(changedPluginId))
     }
     return result
@@ -215,13 +154,11 @@ export function registerPluginManagementIpc(
         const pluginId = requireWebPluginId(input?.id)
         let attempted = false
         try {
-          await manager.withPluginMutation(pluginId, async () => {
-            const plugin = (await manager.list()).find((candidate) => candidate.id === pluginId)
-            if (!plugin) throw new Error(`Installed Plugin was not found: ${pluginId}`)
-            if (!lifecycle?.connectAgentMcp) throw new Error("Plugin Agent MCP connection is unavailable")
-            attempted = true
-            await lifecycle.connectAgentMcp(plugin)
-          })
+          const plugin = (await manager.list()).find((candidate) => candidate.id === pluginId)
+          if (!plugin) throw new Error(`Installed Plugin was not found: ${pluginId}`)
+          if (!lifecycle?.connectAgentMcp) throw new Error("Plugin Agent MCP connection is unavailable")
+          attempted = true
+          await lifecycle.connectAgentMcp(plugin)
         } finally {
           if (attempted) publishChange()
         }
@@ -241,14 +178,9 @@ export function registerPluginManagementIpc(
         })
         if (selected.canceled || !selected.filePaths[0]) return null
         const sourceDirectory = selected.filePaths[0]
+        if (!lifecycle?.installLocal) throw new Error("Local Plugin import is unavailable")
         return changed(
-          () =>
-            preparePublication
-              ? manager.install(sourceDirectory, {
-                  beforePublish: preparePublication,
-                  updateExisting: true,
-                })
-              : manager.install(sourceDirectory, { updateExisting: true }),
+          () => lifecycle.installLocal!(sourceDirectory),
           (plugin) => plugin.id,
         )
       },
@@ -258,25 +190,7 @@ export function registerPluginManagementIpc(
       (_event, input) => {
         const item = catalog.find((candidate) => candidate.manifest.id === input.id)
         if (item) {
-          return changed(
-            async () => {
-              const current = (await manager.list()).find((plugin) => plugin.id === item.manifest.id)
-              if (current && compareWebPluginVersions(item.manifest.version, current.version) <= 0) {
-                throw new Error(`Plugin is already installed: ${item.manifest.id}`)
-              }
-              return "legacyBundleDigests" in item
-                ? manager.installOrUpdateBuiltinBundle(item.bundle, {
-                    ...(preparePublication ? { beforePublish: preparePublication } : {}),
-                    legacyBundleDigests: item.legacyBundleDigests,
-                  })
-                : preparePublication
-                  ? manager.installOrUpdateBuiltinBundle(item.bundle, {
-                      beforePublish: preparePublication,
-                    })
-                  : manager.installOrUpdateBuiltinBundle(item.bundle)
-            },
-            (plugin) => plugin.id,
-          )
+          throw new Error(`Legacy built-in Plugin packages are unsupported by the v8 installer: ${item.manifest.id}`)
         }
         if (remoteCatalog)
           return changed(
@@ -299,10 +213,11 @@ export function registerPluginManagementIpc(
       (_event, input) =>
         changed(
           async () => {
-            const removed = prepareRemoval
-              ? await manager.uninstall(input.id, { beforeRemove: prepareRemoval })
-              : await manager.uninstall(input.id)
-            return removed
+            const current = (await manager.list()).some((plugin) => plugin.id === input.id)
+            if (!current) return false
+            if (!lifecycle?.uninstall) throw new Error("Plugin uninstall is unavailable")
+            await lifecycle.beforeChange?.(input.id)
+            return lifecycle.uninstall(input.id)
           },
           (removed) => (removed ? input.id : undefined),
         ),

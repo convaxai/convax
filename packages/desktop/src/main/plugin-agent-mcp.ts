@@ -1,13 +1,9 @@
-import {
-  type InstalledWebPluginSummary,
-  requireWebPluginId,
-  webPluginManifestSchemaV6,
-  webPluginManifestSchemaV7,
-} from "../plugin-contracts"
+import { type InstalledWebPluginSummary, requireWebPluginId, webPluginManifestSchemaV8 } from "../plugin-contracts"
 
 export interface InstalledPluginAgentMcpServer {
   enabled: true
   headers?: Record<string, string>
+  networkBoundary: "host-validated-https"
   oauth?: false
   type: "remote"
   url: string
@@ -29,11 +25,7 @@ export function installedPluginAgentMcpServer(plugin: InstalledWebPluginSummary)
   pluginId: string
   server: InstalledPluginAgentMcpServer
 } | null {
-  if (
-    (plugin.schema !== webPluginManifestSchemaV6 && plugin.schema !== webPluginManifestSchemaV7) ||
-    !plugin.contributes.agent?.mcp
-  )
-    return null
+  if (plugin.schema !== webPluginManifestSchemaV8 || !plugin.hostApi || !plugin.contributes.agent?.mcp) return null
   const contribution = plugin.contributes.agent.mcp
   return {
     name: pluginAgentMcpServerName(plugin.id),
@@ -41,6 +33,7 @@ export function installedPluginAgentMcpServer(plugin: InstalledWebPluginSummary)
     server: {
       enabled: true,
       ...(contribution.headers === undefined ? {} : { headers: { ...contribution.headers } }),
+      networkBoundary: "host-validated-https",
       ...(contribution.oauth === "none" ? { oauth: false as const } : {}),
       type: "remote" as const,
       url: contribution.url,

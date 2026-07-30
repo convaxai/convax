@@ -81,15 +81,7 @@ export function listInstalledMediaOperationActions(
   admittedToolIds?: ReadonlySet<string>,
 ): readonly MediaOperationAction[] {
   return installedPlugins.flatMap((plugin) => {
-    if (
-      (plugin.schema !== "convax.plugin/3" &&
-        plugin.schema !== "convax.plugin/4" &&
-        plugin.schema !== "convax.plugin/5" &&
-        plugin.schema !== "convax.plugin/6" &&
-        plugin.schema !== "convax.plugin/7") ||
-      plugin.runtime?.type !== "mcp-stdio"
-    )
-      return []
+    if (plugin.schema !== "convax.plugin/8" || !plugin.hostApi || plugin.runtime?.type !== "mcp-stdio") return []
     const generationTools = plugin.contributes.generation?.tools ?? []
     const actions = plugin.contributes.canvas?.selectionActions ?? []
     return actions.flatMap((action) => {
@@ -101,9 +93,7 @@ export function listInstalledMediaOperationActions(
         const tool = generationTools.find((candidate) => candidate.id === step.tool)
         const toolId = `${plugin.id}/${step.tool}`
         if (admittedToolIds && !admittedToolIds.has(toolId)) return []
-        return tool?.acceptedInputs.includes(referenceRole)
-          ? [{ output: tool.output, toolId }]
-          : []
+        return tool?.acceptedInputs.includes(referenceRole) ? [{ output: tool.output, toolId }] : []
       })
       if (steps.length !== action.steps.length || steps.length === 0) return []
       const tools = action.steps.map((step) => generationTools.find((candidate) => candidate.id === step.tool))
@@ -153,10 +143,7 @@ export function isManagedProjectVideoSelection(context: CanvasSelectionActionCon
   return isManagedProjectMediaSelection(context, "video")
 }
 
-export function isManagedProjectMediaSelection(
-  context: CanvasSelectionActionContext,
-  target: "image" | "video",
-) {
+export function isManagedProjectMediaSelection(context: CanvasSelectionActionContext, target: "image" | "video") {
   if (
     context.selectedEdgeIds.length !== 0 ||
     context.selectedNodeIds.length !== 1 ||

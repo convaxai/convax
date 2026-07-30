@@ -45,6 +45,26 @@ export interface ManagedCanvasMediaResolutionPort {
   ): Promise<readonly ResolvedManagedCanvasMedia[]>
 }
 
+/**
+ * Expected resource-state failure from the authoritative media resolver.
+ * Callers may translate only this type into a recoverable public error;
+ * programming faults and unknown adapter failures must remain internal.
+ */
+export class ManagedCanvasMediaResourceUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "ManagedCanvasMediaResourceUnavailableError"
+  }
+}
+
+/** A previously checked Canvas/media binding changed while it was resolving. */
+export class ManagedCanvasMediaStaleError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = "ManagedCanvasMediaStaleError"
+  }
+}
+
 export interface ManagedCanvasMediaProjectPathResolver {
   readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo>
   resolveEntryPath(input: { path: string; projectId: string }): Promise<string>
@@ -75,12 +95,14 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
     const snapshot = await this.input.documents.load({ canvasId: request.canvasId, scopeId: request.scopeId })
     throwIfAborted(signal)
     const document = snapshot.document
-    if (!document) throw new Error(`Canvas was not found: ${request.canvasId}`)
+    if (!document) throw new ManagedCanvasMediaStaleError(`Canvas was not found: ${request.canvasId}`)
     if (document.id !== request.canvasId) {
-      throw new Error(`Canvas document scope did not match the ${options.operationLabel} request`)
+      throw new ManagedCanvasMediaStaleError(
+        `Canvas document scope did not match the ${options.operationLabel} request`,
+      )
     }
     if (document.revision !== request.expectedRevision) {
-      throw new Error(
+      throw new ManagedCanvasMediaStaleError(
         `Canvas changed before ${options.operationLabel} (expected revision ${request.expectedRevision}, found ${document.revision})`,
       )
     }
@@ -88,16 +110,16 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
     const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
     const references = request.nodeIds.map((nodeId) => {
       const node = nodeById.get(nodeId)
-      if (!node) throw new Error(`Selected Canvas node was not found: ${nodeId}`)
+      if (!node) throw new ManagedCanvasMediaStaleError(`Selected Canvas node was not found: ${nodeId}`)
       const kind = node.data.kind
       if (node.type !== "file" || !isManagedCanvasMediaKind(kind) || !options.allowedKinds.has(kind)) {
-        throw new Error(
+        throw new ManagedCanvasMediaResourceUnavailableError(
           `Only Canvas ${options.allowedKindsDescription} can be used for ${options.operationLabel}: ${nodeId}`,
         )
       }
       const reference = getProjectResourceReference(node.data.metadata)
       if (!reference || reference.kind === "project-directory") {
-        throw new Error(
+        throw new ManagedCanvasMediaResourceUnavailableError(
           `Canvas media must be stored in the active Project before ${options.operationLabel}: ${node.data.label}`,
         )
       }
@@ -128,7 +150,9 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
         )
       }
       if (!mimeType.startsWith(`${kind}/`)) {
-        throw new Error(`Canvas ${kind} does not reference a matching media file: ${resourcePath}`)
+        throw new ManagedCanvasMediaResourceUnavailableError(
+          `Canvas ${kind} does not reference a matching media file: ${resourcePath}`,
+        )
       }
       resolved.push(
         await inspectMatchingMediaFile(
@@ -226,8 +250,17 @@ async function inspectMatchingMediaFile(
       size,
     }
   } catch (error) {
-    if (error instanceof CanvasMediaValidationError || isAbortError(error)) throw error
-    throw new Error(`Could not validate Canvas media: ${input.resourcePath}${nodeErrorCode(error)}`, { cause: error })
+    if (error instanceof CanvasMediaValidationError) {
+      throw new ManagedCanvasMediaResourceUnavailableError(error.message, { cause: error })
+    }
+    if (isAbortError(error)) throw error
+    if (isNodeOperationalError(error)) {
+      throw new ManagedCanvasMediaResourceUnavailableError(
+        `Could not validate Canvas media: ${input.resourcePath}${nodeErrorCode(error)}`,
+        { cause: error },
+      )
+    }
+    throw error
   }
 }
 
@@ -237,14 +270,29 @@ async function safeProjectMediaCall<Result>(resourcePath: string, operation: () 
   try {
     return await operation()
   } catch (error) {
-    throw new Error(`Could not resolve Canvas media inside the Project: ${resourcePath}${nodeErrorCode(error)}`, {
-      cause: error,
-    })
+    if (
+      error instanceof ManagedCanvasMediaResourceUnavailableError ||
+      error instanceof ManagedCanvasMediaStaleError ||
+      isAbortError(error)
+    ) {
+      throw error
+    }
+    if (isNodeOperationalError(error)) {
+      throw new ManagedCanvasMediaResourceUnavailableError(
+        `Could not resolve Canvas media inside the Project: ${resourcePath}${nodeErrorCode(error)}`,
+        { cause: error },
+      )
+    }
+    throw error
   }
 }
 
+function isNodeOperationalError(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && "code" in error && typeof error.code === "string"
+}
+
 function nodeErrorCode(error: unknown) {
-  return error instanceof Error && "code" in error && typeof error.code === "string" ? ` (${error.code})` : ""
+  return isNodeOperationalError(error) ? ` (${error.code})` : ""
 }
 
 function normalizeMimeType(value: string) {

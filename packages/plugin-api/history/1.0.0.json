@@ -1,0 +1,3109 @@
+{
+  "apis": [
+    {
+      "audience": ["web-plugin"],
+      "completion": "commit-preserving",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:76e251f24d6ab5527e39517a049b5c1d80d928e6e0fddf42579da14f5d14718a",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "controlCharacters": false,
+                "maxLength": 20000,
+                "minLength": 1,
+                "refinement": "trimmed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "controlCharacters": false,
+                "maxLength": 65536,
+                "minLength": 0,
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Uses the current host-owned Agent context; it does not grant direct OpenCode, filesystem, model, or credential access.",
+        "request": "`{ text }`, containing the bounded prompt text.",
+        "response": "`{ text }`, containing the bounded host acknowledgement.",
+        "summary": "Submit a bounded prompt through the host Agent capability."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "agent.prompt",
+      "id": "agent.prompt",
+      "scope": "connection",
+      "sideEffect": "execute",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:69a21e94f5c83a36d086bde23f2960624ab4279c73e15b45f5f93e98ae18ec78",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "projectId": {
+                "controlCharacters": false,
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "projectId"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 8388608,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "canvases": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "createdAt": {
+                      "finite": true,
+                      "type": "number"
+                    },
+                    "id": {
+                      "controlCharacters": false,
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "finite": true,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "createdAt",
+                    "id",
+                    "name",
+                    "updatedAt"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 10000,
+                "minItems": 0,
+                "type": "array"
+              },
+              "projectId": {
+                "controlCharacters": false,
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "canvases",
+              "projectId"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Reads the Project-owned Canvas catalog without selecting a Project or Canvas in the Workbench.",
+        "request": "`{ projectId }`, naming one explicit portable Project.",
+        "response": "A bounded list of portable Canvas catalog entries.",
+        "summary": "List Canvas catalog entries for one authorized Project."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.catalog.read",
+      "id": "canvas.catalog.list",
+      "scope": "project",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:e057891e9bb29ec85d3175baf425ee849c12092157a9541b4b19edbe056f01d4",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "projection": {
+                "controlCharacters": false,
+                "enum": [
+                  "geometry",
+                  "structure"
+                ],
+                "maxLength": 9,
+                "minLength": 1,
+                "type": "string"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "canvasId",
+                  "projectId"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "ref"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 8388608,
+          "schema": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "document": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "edges": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "target": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "source",
+                            "target"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "id": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodes": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "controlCharacters": false,
+                              "maxLength": 80,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "label": {
+                              "controlCharacters": false,
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "parentId": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "position": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "x": {
+                                  "finite": true,
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "finite": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y"
+                              ],
+                              "type": "object"
+                            },
+                            "size": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "height": {
+                                  "finite": true,
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "finite": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "height",
+                                "width"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "label",
+                            "position",
+                            "size"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "revision": {
+                        "finite": true,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "title": {
+                        "controlCharacters": false,
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "edges",
+                      "id",
+                      "nodes",
+                      "revision",
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "projection": {
+                    "const": "geometry"
+                  },
+                  "ref": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "canvasId": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "canvasId",
+                      "projectId"
+                    ],
+                    "type": "object"
+                  },
+                  "storageVersion": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "document",
+                  "projection",
+                  "ref",
+                  "storageVersion"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "document": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "controlCharacters": false,
+                        "maxLength": 8000,
+                        "minLength": 0,
+                        "type": "string"
+                      },
+                      "edges": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "target": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "source",
+                            "target"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "id": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nodes": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "durationMs": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "controlCharacters": false,
+                              "maxLength": 80,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "label": {
+                              "controlCharacters": false,
+                              "maxLength": 512,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "mimeType": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "name": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "parentId": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "position": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "x": {
+                                  "finite": true,
+                                  "type": "number"
+                                },
+                                "y": {
+                                  "finite": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "x",
+                                "y"
+                              ],
+                              "type": "object"
+                            },
+                            "resource": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "kind": {
+                                  "const": "project-file"
+                                },
+                                "path": {
+                                  "controlCharacters": false,
+                                  "maxLength": 1024,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "path"
+                              ],
+                              "type": "object"
+                            },
+                            "size": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "height": {
+                                  "finite": true,
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "finite": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "height",
+                                "width"
+                              ],
+                              "type": "object"
+                            },
+                            "status": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "text": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            },
+                            "type": {
+                              "controlCharacters": false,
+                              "maxLength": 65536,
+                              "minLength": 0,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "kind",
+                            "label",
+                            "position",
+                            "size"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 10000,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "revision": {
+                        "finite": true,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "tags": {
+                        "items": {
+                          "controlCharacters": false,
+                          "maxLength": 2048,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 256,
+                        "minItems": 0,
+                        "type": "array"
+                      },
+                      "title": {
+                        "controlCharacters": false,
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "edges",
+                      "id",
+                      "nodes",
+                      "revision",
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "projection": {
+                    "const": "structure"
+                  },
+                  "ref": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "canvasId": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "canvasId",
+                      "projectId"
+                    ],
+                    "type": "object"
+                  },
+                  "storageVersion": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "controlCharacters": false,
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "document",
+                  "projection",
+                  "ref",
+                  "storageVersion"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        }
+      },
+      "docs": {
+        "description": "Returns a bounded portable structure or geometry projection from Main's authoritative Canvas application service.",
+        "request": "`{ ref, projection }`, using an explicit portable Project/Canvas reference and supported projection.",
+        "response": "The requested pathless document projection and authoritative revision.",
+        "summary": "Read one authorized Canvas document projection."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.document.read",
+      "id": "canvas.document.get",
+      "scope": "canvas",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:51f9f8c90f0ad68dcfe705ff7c066605a217290fafd9aba5f5858cb089587808",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "projectId"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "ref"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "subscriptionId": {
+                "controlCharacters": false,
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "subscriptionId"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Creates a connection-scoped subscription; events are revisioned invalidations or safe projections, never native data.",
+        "request": "`{ ref }`, using an explicit portable Project/Canvas reference.",
+        "response": "A connection-bound subscription identifier.",
+        "summary": "Subscribe to bounded events for one authorized Canvas."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.events.subscribe",
+      "id": "canvas.events.subscribe",
+      "scope": "canvas",
+      "sideEffect": "subscribe",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:6d319eacead57d5bf425b7ca3c287babdbd1d8af3cb4a8a1cd585948956f4eb4",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "subscriptionId": {
+                "controlCharacters": false,
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "subscriptionId"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "removed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "removed"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Releases a subscription created by canvas.events.subscribe without changing Canvas state.",
+        "request": "The subscription identifier returned by canvas.events.subscribe.",
+        "response": "An acknowledgement; closing an already closed subscription is idempotent.",
+        "summary": "Close one connection-bound Canvas event subscription."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.events.subscribe",
+      "id": "canvas.events.unsubscribe",
+      "scope": "canvas",
+      "sideEffect": "subscribe",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:ea4c8159fad501093af0a729c70d4e56aa423e43c9a8ca6db021f824effebb23",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "sessionId": {
+                "controlCharacters": false,
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "sessionId"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "closed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "closed"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Releases a stream created by canvas.inputs.open without changing Canvas or Project state.",
+        "request": "The stream handle returned by canvas.inputs.open.",
+        "response": "An acknowledgement; closing an already closed handle is idempotent.",
+        "summary": "Close one connection-bound input stream."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.connectedMedia.stream",
+      "id": "canvas.inputs.close",
+      "scope": "own-node",
+      "sideEffect": "write",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:d0ab072d6ec7ced354378e4ac0ece6bf3a6e4d10505d8e5f48f4fb01b753cf4c",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "type": "none"
+          }
+        },
+        "result": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "inputs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "durationMs": {
+                      "finite": true,
+                      "type": "number"
+                    },
+                    "height": {
+                      "finite": true,
+                      "type": "number"
+                    },
+                    "inputKey": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "controlCharacters": false,
+                      "maxLength": 80,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "label": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "mediaRevision": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "status": {
+                      "controlCharacters": false,
+                      "enum": [
+                        "error",
+                        "idle",
+                        "pending"
+                      ],
+                      "maxLength": 7,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "width": {
+                      "finite": true,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "inputKey",
+                    "kind",
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "minItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "inputs"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Derives pathless input metadata from authoritative direct incoming Canvas edges and never reads resource bytes.",
+        "request": "No parameters; the owning node comes from the bound connection.",
+        "response": "A bounded list of direct incoming input descriptors and opaque input keys.",
+        "summary": "List direct incoming inputs of the owning Plugin node."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.connectedInputs.read",
+      "id": "canvas.inputs.list",
+      "scope": "own-node",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:df5ba1c7a09f20d000ffd0a1be60ca02545ca39dd9abd4c64d7657ed177defe2",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "inputKey": {
+                "controlCharacters": false,
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "inputKey"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "probe": {
+                "additionalProperties": false,
+                "properties": {
+                  "duration": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "estimated": {
+                        "type": "boolean"
+                      },
+                      "milliseconds": {
+                        "finite": true,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "estimated",
+                      "milliseconds"
+                    ],
+                    "type": "object"
+                  },
+                  "height": {
+                    "finite": true,
+                    "type": "number"
+                  },
+                  "kind": {
+                    "controlCharacters": false,
+                    "enum": [
+                      "audio",
+                      "video"
+                    ],
+                    "maxLength": 5,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "mediaRevision": {
+                    "controlCharacters": false,
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "mimeType": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "size": {
+                    "finite": true,
+                    "type": "number"
+                  },
+                  "width": {
+                    "finite": true,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "duration",
+                  "kind",
+                  "mediaRevision",
+                  "mimeType",
+                  "size"
+                ],
+                "type": "object"
+              },
+              "sessionId": {
+                "controlCharacters": false,
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "url": {
+                "controlCharacters": false,
+                "maxLength": 2048,
+                "minLength": 1,
+                "prefix": "convax-connected-media://",
+                "type": "string"
+              }
+            },
+            "required": [
+              "probe",
+              "sessionId",
+              "url"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Opens host-owned access to the exact authoritative input after topology and resource identity are revalidated.",
+        "remarks": "Call canvas.inputs.close when the stream is no longer needed.",
+        "request": "`{ inputKey }`, using an opaque key returned by canvas.inputs.list.",
+        "response": "A connection-bound stream descriptor and safe media metadata.",
+        "summary": "Open a bounded stream for one previously listed direct input."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "resource-unavailable",
+          "description": "The authoritative Project resource is missing, changed, or cannot be read safely.",
+          "recoverable": true
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.connectedMedia.stream",
+      "id": "canvas.inputs.open",
+      "scope": "own-node",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:4b5c2ab530abecb3c681f521a6e2f5e01c289169f9f4655511d4244e91d36005",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "type": "none"
+          }
+        },
+        "result": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "keyMaxLength": 128,
+                "maxBytes": 1048576,
+                "maxDepth": 32,
+                "type": "json-object"
+              },
+              "id": {
+                "controlCharacters": false,
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "parentId": {
+                "controlCharacters": false,
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "position": {
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "finite": true,
+                    "type": "number"
+                  },
+                  "y": {
+                    "finite": true,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "type": "object"
+              },
+              "revision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "style": {
+                "keyMaxLength": 128,
+                "maxBytes": 1048576,
+                "maxDepth": 32,
+                "type": "json-object"
+              },
+              "type": {
+                "controlCharacters": false,
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "data",
+              "id",
+              "position",
+              "revision",
+              "type"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Returns a bounded renderer-safe projection of the exact node bound to the connection.",
+        "request": "No parameters; the owning node comes from the bound connection.",
+        "response": "The owning node identity, revision, geometry, and Plugin state projection.",
+        "summary": "Read the owning Plugin node projection."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.node.read",
+      "id": "canvas.node.get",
+      "scope": "own-node",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "commit-preserving",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:7912cf937a57b518350e12a6a59fe8903e1f8942e067ff04c2a233d69b3aa606",
+        "request": {
+          "maxBytes": 266240,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "keyMaxLength": 128,
+                "maxBytes": 262144,
+                "maxDepth": 32,
+                "type": "json-object"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "updated": {
+                "const": true
+              }
+            },
+            "required": [
+              "updated"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Commits only the namespaced Plugin state through the authoritative Canvas application service with revision checks.",
+        "request": "`{ state }`, where state is a bounded JSON value.",
+        "response": "`{ updated: true }` after the authoritative state replacement commits.",
+        "summary": "Replace the owning node's bounded Plugin state."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.node.write",
+      "id": "canvas.node.state.replace",
+      "scope": "own-node",
+      "sideEffect": "write",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:7ad688f9bae1bb8dc947c2eeae740726349ed79261b31a1bc0a2e4efce65a9c7",
+        "request": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "query": {
+                "additionalProperties": false,
+                "properties": {
+                  "ids": {
+                    "items": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "kinds": {
+                    "items": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "limit": {
+                    "finite": true,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "relatedToNodeIds": {
+                    "items": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 0,
+                    "type": "array"
+                  },
+                  "text": {
+                    "controlCharacters": false,
+                    "maxLength": 2000,
+                    "minLength": 0,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "canvasId",
+                  "projectId"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "ref"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 8388608,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "nodes": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "incomingNodeIds": {
+                      "items": {
+                        "controlCharacters": false,
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "minItems": 0,
+                      "type": "array"
+                    },
+                    "kind": {
+                      "controlCharacters": false,
+                      "maxLength": 80,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "label": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "outgoingNodeIds": {
+                      "items": {
+                        "controlCharacters": false,
+                        "maxLength": 2048,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 1000,
+                      "minItems": 0,
+                      "type": "array"
+                    },
+                    "parentId": {
+                      "controlCharacters": false,
+                      "maxLength": 65536,
+                      "minLength": 0,
+                      "type": "string"
+                    },
+                    "position": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "x": {
+                          "finite": true,
+                          "type": "number"
+                        },
+                        "y": {
+                          "finite": true,
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "x",
+                        "y"
+                      ],
+                      "type": "object"
+                    },
+                    "text": {
+                      "controlCharacters": false,
+                      "maxLength": 65536,
+                      "minLength": 0,
+                      "type": "string"
+                    },
+                    "type": {
+                      "controlCharacters": false,
+                      "maxLength": 65536,
+                      "minLength": 0,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "incomingNodeIds",
+                    "kind",
+                    "label",
+                    "outgoingNodeIds",
+                    "position"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1000,
+                "minItems": 0,
+                "type": "array"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "canvasId",
+                  "projectId"
+                ],
+                "type": "object"
+              },
+              "revision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "storageVersion": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "nodes",
+              "ref",
+              "revision",
+              "storageVersion"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Executes a host-defined bounded query without exposing native paths or resource bytes.",
+        "request": "`{ ref, query }`, using an explicit portable Project/Canvas reference and bounded query.",
+        "response": "Matching node projections and the authoritative Canvas revision.",
+        "summary": "Query bounded node projections in one authorized Canvas."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.document.read",
+      "id": "canvas.nodes.query",
+      "scope": "canvas",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "commit-preserving",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:8d0b617c067ef85a2ba6e7a7aee95cd8741616fe420b16cd91302e835aefba9f",
+        "request": {
+          "maxBytes": 25169920,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "dataUrl": {
+                "controlCharacters": false,
+                "maxLength": 25165824,
+                "minLength": 1,
+                "prefix": "data:image/png;base64,",
+                "type": "string"
+              },
+              "name": {
+                "controlCharacters": false,
+                "maxLength": 120,
+                "minLength": 1,
+                "refinement": "safe-png-file-name",
+                "type": "string"
+              }
+            },
+            "required": [
+              "dataUrl",
+              "name"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "createdNodeId": {
+                "controlCharacters": false,
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "revision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "createdNodeId",
+              "revision"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Admits bounded image content as a user-visible Project resource and commits its Canvas reference without exposing native paths.",
+        "request": "`{ dataUrl, name }`, containing a bounded validated image data URL and safe file name.",
+        "response": "The created renderer-safe image result after Project publication and Canvas commit.",
+        "summary": "Create a Project-backed Canvas image through the host lifecycle."
+      },
+      "errors": [
+        {
+          "code": "partial-success",
+          "description": "A user-visible Project file was published, but the requested Canvas commit did not complete; retry is unsafe.",
+          "recoverable": false
+        },
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.image.write",
+      "id": "canvas.resource.image.create",
+      "scope": "own-node",
+      "sideEffect": "write",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "commit-preserving",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:74564948d214651d6a292d73a0d67a8d4aab8b8be307ce958acb9cbe3d375813",
+        "request": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "commands": {
+                "items": {
+                  "oneOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "edgeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "elements.remove"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "direction": {
+                          "controlCharacters": false,
+                          "enum": [
+                            "left",
+                            "center",
+                            "right",
+                            "top",
+                            "middle",
+                            "bottom"
+                          ],
+                          "maxLength": 6,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "nodes.align"
+                        }
+                      },
+                      "required": [
+                        "direction",
+                        "nodeIds",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "connection": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "animated": {
+                              "type": "boolean"
+                            },
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "target": {
+                              "controlCharacters": false,
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "type": {
+                              "controlCharacters": false,
+                              "maxLength": 80,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "target"
+                          ],
+                          "type": "object"
+                        },
+                        "type": {
+                          "const": "nodes.connect"
+                        }
+                      },
+                      "required": [
+                        "connection",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "axis": {
+                          "controlCharacters": false,
+                          "enum": [
+                            "horizontal",
+                            "vertical"
+                          ],
+                          "maxLength": 10,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "nodes.distribute"
+                        }
+                      },
+                      "required": [
+                        "axis",
+                        "nodeIds",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "label": {
+                          "controlCharacters": false,
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "nodes.group"
+                        }
+                      },
+                      "required": [
+                        "nodeIds",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "gap": {
+                          "finite": true,
+                          "type": "number"
+                        },
+                        "layout": {
+                          "controlCharacters": false,
+                          "enum": [
+                            "grid",
+                            "horizontal",
+                            "vertical"
+                          ],
+                          "maxLength": 10,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "nodes.layout"
+                        }
+                      },
+                      "required": [
+                        "nodeIds",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "delta": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "x": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "y": {
+                              "finite": true,
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "x",
+                            "y"
+                          ],
+                          "type": "object"
+                        },
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "type": {
+                          "const": "nodes.move"
+                        }
+                      },
+                      "required": [
+                        "delta",
+                        "nodeIds",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "type": {
+                          "const": "nodes.setGeometry"
+                        },
+                        "updates": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "nodeId": {
+                                "controlCharacters": false,
+                                "maxLength": 2048,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "position": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "x": {
+                                    "finite": true,
+                                    "type": "number"
+                                  },
+                                  "y": {
+                                    "finite": true,
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "x",
+                                  "y"
+                                ],
+                                "type": "object"
+                              },
+                              "size": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "height": {
+                                    "finite": true,
+                                    "type": "number"
+                                  },
+                                  "width": {
+                                    "finite": true,
+                                    "type": "number"
+                                  }
+                                },
+                                "required": [
+                                  "height",
+                                  "width"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "nodeId",
+                              "position"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "updates"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "nodeId": {
+                          "controlCharacters": false,
+                          "maxLength": 2048,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "nodes.ungroup"
+                        }
+                      },
+                      "required": [
+                        "nodeId",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "nodeIds": {
+                          "items": {
+                            "controlCharacters": false,
+                            "maxLength": 2048,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxItems": 1000,
+                          "minItems": 0,
+                          "type": "array"
+                        },
+                        "options": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "componentGap": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "componentPackingScale": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "crossGap": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "isolatedPlacement": {
+                              "controlCharacters": false,
+                              "enum": [
+                                "left",
+                                "preserve"
+                              ],
+                              "maxLength": 8,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "mainGap": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "nodeGap": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "nodePackingScale": {
+                              "finite": true,
+                              "type": "number"
+                            },
+                            "strategy": {
+                              "controlCharacters": false,
+                              "enum": [
+                                "component-packing",
+                                "horizontal-directed-cluster",
+                                "vertical-directed-cluster"
+                              ],
+                              "maxLength": 27,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [],
+                          "type": "object"
+                        },
+                        "type": {
+                          "const": "canvas.auto-layout"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "maxItems": 256,
+                "minItems": 1,
+                "type": "array"
+              },
+              "expectedRevision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "canvasId",
+                  "projectId"
+                ],
+                "type": "object"
+              },
+              "transactionId": {
+                "controlCharacters": false,
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "commands",
+              "expectedRevision",
+              "ref",
+              "transactionId"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 2097152,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "affectedNodeIds": {
+                "items": {
+                  "controlCharacters": false,
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "minItems": 0,
+                "type": "array"
+              },
+              "changed": {
+                "type": "boolean"
+              },
+              "createdNodeIds": {
+                "items": {
+                  "controlCharacters": false,
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "minItems": 0,
+                "type": "array"
+              },
+              "ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "canvasId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectId": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "canvasId",
+                  "projectId"
+                ],
+                "type": "object"
+              },
+              "revision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "storageVersion": {
+                "controlCharacters": false,
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summaryTruncated": {
+                "type": "boolean"
+              },
+              "warnings": {
+                "items": {
+                  "controlCharacters": false,
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "minItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "affectedNodeIds",
+              "changed",
+              "createdNodeIds",
+              "ref",
+              "revision",
+              "storageVersion",
+              "warnings"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Validates bounded commands against one authoritative revision and persists the accepted transaction atomically.",
+        "request": "`{ ref, expectedRevision, commands, transactionId }` with a bounded non-empty command list.",
+        "response": "The committed authoritative revision and bounded command results.",
+        "summary": "Commit one non-empty revision-bound Canvas transaction."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "canvas.document.write",
+      "id": "canvas.transaction.execute",
+      "scope": "canvas",
+      "sideEffect": "write",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "commit-preserving",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:e7dc879471006dd29b8cd969fc3fdb5d0473e21e3b67ca16ebca1f5f4c857285",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "output": {
+                "controlCharacters": false,
+                "enum": [
+                  "text",
+                  "image",
+                  "video",
+                  "audio"
+                ],
+                "maxLength": 5,
+                "minLength": 1,
+                "type": "string"
+              },
+              "prompt": {
+                "controlCharacters": false,
+                "maxLength": 20000,
+                "minLength": 1,
+                "refinement": "trimmed",
+                "type": "string"
+              },
+              "references": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "nodeId": {
+                      "controlCharacters": false,
+                      "maxLength": 2048,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "role": {
+                      "controlCharacters": false,
+                      "enum": [
+                        "text",
+                        "reference_image",
+                        "reference_video",
+                        "first_frame",
+                        "last_frame",
+                        "audio"
+                      ],
+                      "maxLength": 15,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "nodeId",
+                    "role"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "minItems": 0,
+                "type": "array"
+              },
+              "resultMode": {
+                "controlCharacters": false,
+                "enum": [
+                  "create-pending-node",
+                  "return"
+                ],
+                "maxLength": 19,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolId": {
+                "controlCharacters": false,
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "prompt"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 262144,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "createdNodeIds": {
+                "items": {
+                  "controlCharacters": false,
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 0,
+                "type": "array"
+              },
+              "outputText": {
+                "controlCharacters": false,
+                "maxLength": 65536,
+                "minLength": 0,
+                "type": "string"
+              },
+              "revision": {
+                "finite": true,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "toolId": {
+                "controlCharacters": false,
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "warnings": {
+                "items": {
+                  "controlCharacters": false,
+                  "maxLength": 2048,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "createdNodeIds",
+              "revision",
+              "toolId",
+              "warnings"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Revalidates the active Plugin, authorized executable, inputs, cancellation, and live resource guards immediately before execution.",
+        "request": "`{ output?, prompt, references?, resultMode?, toolId? }`, validated against the selected tool.",
+        "response": "The bounded selected tool result, created node ids, authoritative revision, and warnings.",
+        "summary": "Execute one selected generation tool through the shared host executor."
+      },
+      "errors": [
+        {
+          "code": "partial-success",
+          "description": "A user-visible Project file was published, but the requested Canvas commit did not complete; retry is unsafe.",
+          "recoverable": false
+        },
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "resource-unavailable",
+          "description": "The authoritative Project resource is missing, changed, or cannot be read safely.",
+          "recoverable": true
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "generation.execute",
+      "id": "generation.execute",
+      "scope": "plugin",
+      "sideEffect": "execute",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:c5e782539e7f59e97cb06fc77fda95d06d5562332d50b7f3a15551b9d327bc38",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "oneOf": [
+              {
+                "type": "none"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "output": {
+                    "controlCharacters": false,
+                    "enum": [
+                      "text",
+                      "image",
+                      "video",
+                      "audio"
+                    ],
+                    "maxLength": 5,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "result": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "tools": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptedInputs": {
+                      "items": {
+                        "controlCharacters": false,
+                        "enum": [
+                          "text",
+                          "reference_image",
+                          "reference_video",
+                          "first_frame",
+                          "last_frame",
+                          "audio"
+                        ],
+                        "maxLength": 15,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 6,
+                      "minItems": 0,
+                      "type": "array"
+                    },
+                    "description": {
+                      "controlCharacters": false,
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "id": {
+                      "controlCharacters": false,
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "controlCharacters": false,
+                      "enum": [
+                        "model",
+                        "operation"
+                      ],
+                      "maxLength": 9,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "output": {
+                      "controlCharacters": false,
+                      "enum": [
+                        "text",
+                        "image",
+                        "video",
+                        "audio"
+                      ],
+                      "maxLength": 5,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "title": {
+                      "controlCharacters": false,
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "acceptedInputs",
+                    "description",
+                    "id",
+                    "kind",
+                    "output",
+                    "title"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 256,
+                "minItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "tools"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Returns normalized tool metadata derived from active verified contributions without exposing executable paths or credentials.",
+        "request": "Optional `{ output }` modality filter; omitting params lists every admitted modality.",
+        "response": "A bounded list of available generation tools and their public input contracts.",
+        "summary": "List generation tools available to the installed Plugin principal."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        }
+      ],
+      "grant": "generation.execute",
+      "id": "generation.tools.list",
+      "scope": "plugin",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:79240e19aeb4cea55f38cbe5bab5ed67c121095865949c0379919c57a74fe2c6",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "type": "none"
+          }
+        },
+        "result": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "canvas": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "controlCharacters": false,
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "hostApi": {
+                "additionalProperties": false,
+                "properties": {
+                  "availability": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "available": {
+                              "const": true
+                            },
+                            "catalogVersion": {
+                              "controlCharacters": false,
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "since": {
+                              "controlCharacters": false,
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "catalogVersion",
+                            "id",
+                            "since"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "available": {
+                              "const": false
+                            },
+                            "id": {
+                              "controlCharacters": false,
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "reason": {
+                              "controlCharacters": false,
+                              "enum": [
+                                "unsupported-host",
+                                "not-declared",
+                                "permission-denied",
+                                "wrong-surface",
+                                "missing-context",
+                                "setup-required",
+                                "disabled",
+                                "recovering"
+                              ],
+                              "maxLength": 17,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "recoverable": {
+                              "type": "boolean"
+                            },
+                            "since": {
+                              "controlCharacters": false,
+                              "maxLength": 64,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "available",
+                            "id",
+                            "reason",
+                            "recoverable"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 256,
+                    "minItems": 0,
+                    "type": "array",
+                    "uniqueBy": "id"
+                  },
+                  "catalogVersion": {
+                    "controlCharacters": false,
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "availability",
+                  "catalogVersion"
+                ],
+                "type": "object"
+              },
+              "node": {
+                "additionalProperties": false,
+                "properties": {
+                  "data": {
+                    "keyMaxLength": 128,
+                    "maxBytes": 1048576,
+                    "maxDepth": 32,
+                    "type": "json-object"
+                  },
+                  "id": {
+                    "controlCharacters": false,
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "parentId": {
+                    "controlCharacters": false,
+                    "maxLength": 2048,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "position": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": {
+                        "finite": true,
+                        "type": "number"
+                      },
+                      "y": {
+                        "finite": true,
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "y"
+                    ],
+                    "type": "object"
+                  },
+                  "revision": {
+                    "finite": true,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "style": {
+                    "keyMaxLength": 128,
+                    "maxBytes": 1048576,
+                    "maxDepth": 32,
+                    "type": "json-object"
+                  },
+                  "type": {
+                    "controlCharacters": false,
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "data",
+                  "id",
+                  "position",
+                  "revision",
+                  "type"
+                ],
+                "type": "object"
+              },
+              "plugin": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "controlCharacters": false,
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "controlCharacters": false,
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "controlCharacters": false,
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "project": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "controlCharacters": false,
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "name": {
+                    "controlCharacters": false,
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "canvas",
+              "hostApi",
+              "node",
+              "plugin",
+              "project"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Returns only renderer-safe identifiers and feature metadata for the exact live connection; it grants no additional authority.",
+        "request": "No parameters.",
+        "response": "The current Plugin, Project, Canvas, node, and negotiated Host API context when present.",
+        "summary": "Read the bounded context attached to the current Plugin connection."
+      },
+      "errors": [
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": null,
+      "id": "host.context.get",
+      "scope": "connection",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:8cd96f9457b9fc4e825bbe9189d08258bcd0a0eba644d4b4576d8d412a073cca",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "controlCharacters": false,
+                "maxLength": 1024,
+                "minLength": 1,
+                "refinement": "portable-project-relative-path",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "result": {
+          "maxBytes": 1052672,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "controlCharacters": false,
+                "maxLength": 1048576,
+                "minLength": 0,
+                "type": "string"
+              },
+              "exists": {
+                "type": "boolean"
+              },
+              "path": {
+                "controlCharacters": false,
+                "maxLength": 1024,
+                "minLength": 1,
+                "refinement": "portable-project-relative-path",
+                "type": "string"
+              }
+            },
+            "required": [
+              "content",
+              "exists",
+              "path"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Reads through the scoped Project Files capability using a normalized Project-relative path and never exposes a native path.",
+        "request": "`{ path }`, using a normalized Project-relative portable path.",
+        "response": "The bounded UTF-8 file text.",
+        "summary": "Read one bounded UTF-8 Project file."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        },
+        {
+          "code": "stale-context",
+          "description": "The bound Project, Canvas, node, or connection changed before the call completed.",
+          "recoverable": true
+        }
+      ],
+      "grant": "project.files.read",
+      "id": "project.file.text.read",
+      "scope": "project",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    },
+    {
+      "audience": ["companion", "web-plugin"],
+      "completion": "cancelable",
+      "contract": {
+        "dialect": "convax.plugin-api-wire-schema/2",
+        "digest": "sha256:6372b9584a34b6a27bc2151b9f39bf7696ad3a435141fa51fdd227d7053e2567",
+        "request": {
+          "maxBytes": 65536,
+          "schema": {
+            "type": "none"
+          }
+        },
+        "result": {
+          "maxBytes": 1048576,
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "projects": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "controlCharacters": false,
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "controlCharacters": false,
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "available",
+                    "id",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 1000,
+                "minItems": 0,
+                "type": "array"
+              }
+            },
+            "required": [
+              "projects"
+            ],
+            "type": "object"
+          }
+        }
+      },
+      "docs": {
+        "description": "Returns portable Project identities and display metadata without native paths or private Project state.",
+        "request": "No parameters.",
+        "response": "A bounded list of renderer-safe Project summaries.",
+        "summary": "List Projects visible to the installed Plugin principal."
+      },
+      "errors": [
+        {
+          "code": "permission-denied",
+          "description": "The installed Plugin principal does not currently hold the required grant.",
+          "recoverable": false
+        }
+      ],
+      "grant": "projects.read",
+      "id": "projects.list",
+      "scope": "plugin",
+      "sideEffect": "read",
+      "since": "1.0.0"
+    }
+  ],
+  "schema": "convax.plugin-api-catalog/2",
+  "version": "1.0.0"
+}
