@@ -348,6 +348,58 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([beta])
   })
 
+  test("awaits an explicit renderer revalidation and returns the refreshed shared catalog", async () => {
+    const base = generationTool("remote-images")
+    const alpha = modelVariant(base, "a", "Alpha")
+    const beta = modelVariant(base, "b", "Beta")
+    let selected = alpha
+    const { inspectModelCatalog, subject } = setup({
+      inspectModelCatalog: async () => [{ description: { fields: [], toolId: selected.id }, summary: selected }],
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([alpha])
+    selected = beta
+    expect(await subject.listTools({ refresh: true })).toEqual([beta])
+    expect(inspectModelCatalog).toHaveBeenCalledTimes(2)
+  })
+
+  test("single-flights explicit revalidation while ordinary readers keep the last-good catalog", async () => {
+    const base = generationTool("remote-images")
+    const alpha = modelVariant(base, "a", "Alpha")
+    const beta = modelVariant(base, "b", "Beta")
+    let inspection = 0
+    let resolveRefresh!: () => void
+    let signalRefreshStarted!: () => void
+    const refreshStarted = new Promise<void>((resolve) => {
+      signalRefreshStarted = resolve
+    })
+    const { inspectModelCatalog, subject } = setup({
+      inspectModelCatalog: async () => {
+        inspection += 1
+        if (inspection === 1) return [{ description: { fields: [], toolId: alpha.id }, summary: alpha }]
+        signalRefreshStarted()
+        await new Promise<void>((resolve) => {
+          resolveRefresh = resolve
+        })
+        return [{ description: { fields: [], toolId: beta.id }, summary: beta }]
+      },
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([alpha])
+    const firstRefresh = subject.listTools({ refresh: true })
+    await refreshStarted
+    const joinedRefresh = subject.listTools({ refresh: true })
+    expect(await subject.listTools()).toEqual([alpha])
+    expect(inspectModelCatalog).toHaveBeenCalledTimes(2)
+
+    resolveRefresh()
+    expect(await firstRefresh).toEqual([beta])
+    expect(await joinedRefresh).toEqual([beta])
+    expect(inspectModelCatalog).toHaveBeenCalledTimes(2)
+  })
+
   test("ignores a late catalog refresh from an invalidated epoch", async () => {
     const base = generationTool("remote-images")
     const initial = modelVariant(base, "a", "Initial")

@@ -692,6 +692,12 @@ selection, and unmarked schema fields remain ordinary tool options.
 The Agent generation model is a user-global renderer preference. Agent and card
 pickers present concrete models in one selection layer; the contributing service is
 display metadata, not a provider choice that exposes a second model control.
+One window-scoped renderer projection is shared by those pickers: remounting either
+composer reads its ready values synchronously instead of starting another discovery
+request. Project or capability changes and a bounded age timer revalidate that
+projection through Main's single-flight catalog refresh. Ready values remain visible
+while revalidation runs, and the committed result notifies both pickers; the
+renderer snapshot never authorizes execution or persists model authority.
 Without an owning node override, a file card inherits that preference only when its
 output matches the card's intrinsic text/image/video/audio kind and accepts the
 current media references.

@@ -139,7 +139,10 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     return promise
   }
 
-  async listTools(options: { output?: GenerationOutputModality } = {}): Promise<readonly GenerationToolSummary[]> {
+  async listTools(
+    options: { output?: GenerationOutputModality; refresh?: boolean } = {},
+  ): Promise<readonly GenerationToolSummary[]> {
+    if (options.refresh) await this.refresh()
     const snapshot = await this.#readSnapshot()
     this.#refreshIfStale(snapshot)
     return options.output === undefined

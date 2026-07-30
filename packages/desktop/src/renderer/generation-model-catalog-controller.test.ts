@@ -48,6 +48,17 @@ function description(toolId: string, label = "Quality"): GenerationToolDescripti
 }
 
 describe("GenerationModelCatalogController", () => {
+  test("bounds the window catalog refresh age", () => {
+    const client = {
+      describeTool: mock(async ({ toolId }) => description(toolId)),
+      listTools: mock(async () => []),
+    }
+    expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 0 })).toThrow("refresh age is invalid")
+    expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
+      "refresh age is invalid",
+    )
+  })
+
   test("single-flights initial discovery and serves remounts from the full cached catalog", async () => {
     const pending = deferred<readonly GenerationToolSummary[]>()
     const listTools = mock(() => pending.promise)
@@ -75,6 +86,54 @@ describe("GenerationModelCatalogController", () => {
     expect(controller.peekTools()).toEqual([tool("image-one"), tool("video-one", "video")])
     expect(await controller.listTools("image")).toEqual([tool("image-one")])
     expect(listTools).toHaveBeenCalledTimes(1)
+    expect(listTools).toHaveBeenCalledWith({ refresh: true, scopeId: "project-a" })
+  })
+
+  test("keeps cached tools visible while a scheduled Main revalidation refreshes every consumer", async () => {
+    const refresh = deferred<readonly GenerationToolSummary[]>()
+    const listTools = mock()
+      .mockResolvedValueOnce([tool("model-v1")])
+      .mockImplementationOnce(() => refresh.promise)
+    let scheduledRefresh: (() => void) | undefined
+    const scheduleRefresh = mock((callback: () => void, delayMs: number) => {
+      expect(delayMs).toBe(10)
+      scheduledRefresh = callback
+      return () => {
+        scheduledRefresh = undefined
+      }
+    })
+    const controller = new GenerationModelCatalogController(
+      {
+        describeTool: mock(async ({ toolId }) => description(toolId)),
+        listTools,
+      },
+      { refreshAfterMs: 10, scheduleRefresh },
+    )
+
+    controller.setScope({ authorityVersion: "stable", scopeId: "project-a" })
+    await controller.listTools()
+    expect(await controller.listTools()).toEqual([tool("model-v1")])
+    expect(listTools).toHaveBeenCalledTimes(1)
+
+    scheduledRefresh?.()
+    await Promise.resolve()
+    expect(listTools).toHaveBeenCalledTimes(2)
+    expect(listTools).toHaveBeenLastCalledWith({ refresh: true, scopeId: "project-a" })
+    const explicitRefresh = controller.refresh()
+    expect(listTools).toHaveBeenCalledTimes(2)
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      ready: true,
+      refreshing: true,
+      tools: [tool("model-v1")],
+    })
+
+    refresh.resolve([tool("model-v2")])
+    expect(await explicitRefresh).toEqual([tool("model-v2")])
+    while (controller.getSnapshot().refreshing) await Promise.resolve()
+    expect(controller.peekTools()).toEqual([tool("model-v2")])
+    expect(scheduleRefresh).toHaveBeenCalledTimes(2)
+    controller.dispose()
   })
 
   test("keeps ready data during authority revalidation and retains it with an exposed error on failure", async () => {
@@ -141,6 +200,10 @@ describe("GenerationModelCatalogController", () => {
     expect(await listed).toEqual([tool("model-v2")])
     expect(controller.peekTools()).toEqual([tool("model-v2")])
     expect(listTools).toHaveBeenCalledTimes(2)
+    expect(listTools.mock.calls).toEqual([
+      [{ refresh: true, scopeId: "project-a" }],
+      [{ refresh: true, scopeId: "project-a" }],
+    ])
   })
 
   test("commits explicit send-time revalidation into the shared snapshot", async () => {

@@ -186,9 +186,15 @@ describe("generation IPC", () => {
     )
 
     expect(
-      await Promise.resolve(invoke(generationIpcChannels.listTools, { output: "image", scopeId: "project-1" })),
+      await Promise.resolve(
+        invoke(generationIpcChannels.listTools, {
+          output: "image",
+          refresh: true,
+          scopeId: "project-1",
+        }),
+      ),
     ).toEqual([tool])
-    expect(listTools).toHaveBeenCalledWith({ output: "image", scopeId: "project-1" })
+    expect(listTools).toHaveBeenCalledWith({ output: "image", refresh: true, scopeId: "project-1" })
 
     expect(
       await rejectionMessage(
@@ -202,6 +208,11 @@ describe("generation IPC", () => {
         Promise.resolve().then(() => invoke(generationIpcChannels.listTools, { scopeId: "/native/path" })),
       ),
     ).toContain("scope id is invalid")
+    expect(
+      await rejectionMessage(
+        Promise.resolve().then(() => invoke(generationIpcChannels.listTools, { refresh: "yes", scopeId: "project-1" })),
+      ),
+    ).toContain("tool list refresh is invalid")
     expect(
       await rejectionMessage(
         Promise.resolve().then(() =>

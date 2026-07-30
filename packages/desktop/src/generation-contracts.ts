@@ -181,6 +181,7 @@ export interface GenerationCanvasReconcileResult {
 
 export interface GenerationListToolsRequest {
   output?: GenerationOutputModality
+  refresh?: boolean
   scopeId: string
 }
 
