@@ -1,0 +1,330 @@
+name: Stage Plugin SDK npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New stable @convax/plugin-sdk version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-sdk-npm-stage-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify protected source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          test "$COMMIT" = "$GITHUB_SHA"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          git fetch --no-tags origin refs/heads/convax-next:refs/remotes/origin/convax-next
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/convax-next
+          test "$(jq -r '.name' packages/plugin-sdk/package.json)" = "@convax/plugin-sdk"
+          test "$(jq -r '.version' packages/plugin-sdk/package.json)" = "$VERSION"
+          test "$(jq -r '.name' packages/plugin-api/package.json)" = "@convax/plugin-api"
+          api_version="$(jq -r '.version' packages/plugin-api/package.json)"
+          [[ "$api_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - name: Require an existing package and an unused version
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm view "@convax/plugin-sdk" version \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent >/dev/null
+          output="$RUNNER_TEMP/npm-view-sdk-version.json"
+          if npm view "@convax/plugin-sdk@$VERSION" version \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent >"$output" 2>&1; then
+            echo "@convax/plugin-sdk@$VERSION already exists and cannot be reused" >&2
+            exit 1
+          fi
+          jq -e '.error.code == "E404"' "$output" >/dev/null
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Run the exact SDK release conformance profile
+        run: bun scripts/plugin-sdk-release-conformance.ts --output "$RUNNER_TEMP/plugin-sdk-check-results.json"
+      - name: Build and verify exact staged bytes
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-sdk-npm-stage"
+          inspection="$RUNNER_TEMP/plugin-sdk-npm-stage-inspection"
+          mkdir "$evidence" "$inspection"
+          api_version="$(jq -r '.version' packages/plugin-api/package.json)"
+
+          npm view "@convax/plugin-api@$api_version" dist \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent > "$inspection/api-npm-dist.json"
+          api_tarball_url="$(jq -r '.tarball' "$inspection/api-npm-dist.json")"
+          api_integrity="$(jq -r '.integrity' "$inspection/api-npm-dist.json")"
+          test "${api_tarball_url#https://registry.npmjs.org/}" != "$api_tarball_url"
+          [[ "$api_integrity" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          api_tarball="$evidence/convax-plugin-api-$api_version.tgz"
+          curl --fail --location --silent --show-error \
+            --max-filesize 33554432 \
+            "$api_tarball_url" \
+            --output "$api_tarball"
+          test "$(stat -c '%s' "$api_tarball")" -le 33554432
+          test "sha512-$(openssl dgst -sha512 -binary "$api_tarball" | base64 -w0)" = "$api_integrity"
+
+          (
+            cd packages/plugin-sdk
+            bun pm pack \
+              --ignore-scripts \
+              --destination "$evidence" \
+              --quiet
+          )
+          sdk_tarball="$evidence/convax-plugin-sdk-$VERSION.tgz"
+          test -f "$sdk_tarball"
+          test "$(stat -c '%s' "$sdk_tarball")" -le 33554432
+          tar -tzf "$sdk_tarball" > "$inspection/sdk-inventory.txt"
+          tar -tzf "$api_tarball" > "$inspection/api-inventory.txt"
+          test "$(awk '$0 == "package/package.json" { count += 1 } END { print count + 0 }' "$inspection/sdk-inventory.txt")" -eq 1
+          test "$(awk '$0 == "package/package.json" { count += 1 } END { print count + 0 }' "$inspection/api-inventory.txt")" -eq 1
+          test "$(awk '$0 == "package/dist/generated/plugin-api.json" { count += 1 } END { print count + 0 }' "$inspection/api-inventory.txt")" -eq 1
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' "$inspection/sdk-inventory.txt" ||
+            grep -Fq '\' "$inspection/sdk-inventory.txt" ||
+            grep -Eq '(^/|(^|/)\.\.(/|$))' "$inspection/api-inventory.txt" ||
+            grep -Fq '\' "$inspection/api-inventory.txt"; then
+            echo "package tarball contains an unsafe path" >&2
+            exit 1
+          fi
+          tar -xOzf "$sdk_tarball" package/package.json |
+            head -c 131073 > "$inspection/sdk-package.json"
+          tar -xOzf "$api_tarball" package/package.json |
+            head -c 131073 > "$inspection/api-package.json"
+          tar -xOzf "$api_tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$inspection/api-package-catalog.json"
+          test "$(stat -c '%s' "$inspection/sdk-package.json")" -le 131072
+          test "$(stat -c '%s' "$inspection/api-package.json")" -le 131072
+          test "$(stat -c '%s' "$inspection/api-package-catalog.json")" -le 16777216
+          ! grep -Eq 'workspace:|catalog:' "$inspection/sdk-package.json"
+          cp packages/plugin-api/generated/plugin-api.json "$evidence/plugin-api.json"
+          sdk_integrity="sha512-$(openssl dgst -sha512 -binary "$sdk_tarball" | base64 -w0)"
+
+          bun scripts/plugin-sdk-release-evidence.ts \
+            --api-catalog "$evidence/plugin-api.json" \
+            --api-package-catalog "$inspection/api-package-catalog.json" \
+            --api-package-json "$inspection/api-package.json" \
+            --api-tarball "$api_tarball" \
+            --api-tarball-integrity "$api_integrity" \
+            --api-version "$api_version" \
+            --check-results "$RUNNER_TEMP/plugin-sdk-check-results.json" \
+            --commit "$COMMIT" \
+            --output "$evidence/host-package-release.json" \
+            --repository "$REPOSITORY" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-id "$GITHUB_RUN_ID" \
+            --sdk-package-json "$inspection/sdk-package.json" \
+            --sdk-tarball "$sdk_tarball" \
+            --sdk-tarball-integrity "$sdk_integrity" \
+            --sdk-version "$VERSION" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF"
+          (
+            cd "$evidence"
+            sha256sum \
+              "convax-plugin-sdk-$VERSION.tgz" \
+              "convax-plugin-api-$api_version.tgz" \
+              plugin-api.json \
+              host-package-release.json > SHA256SUMS
+            sha512sum "convax-plugin-sdk-$VERSION.tgz" > SHA512SUMS
+          )
+          echo "directory=$evidence" >> "$GITHUB_OUTPUT"
+      - name: Upload unprivileged staged candidate
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: plugin-sdk-npm-stage-candidate
+          path: ${{ steps.evidence.outputs.directory }}
+          if-no-files-found: error
+          retention-days: 14
+
+  stage:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: plugin-sdk-npm-stage
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+    steps:
+      - name: Verify protected staging identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          test "$COMMIT" = "$GITHUB_SHA"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - name: Select the admitted npm provenance mode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRIVATE_ATTESTATIONS_ACK: ${{ vars.CONVAX_PRIVATE_ATTESTATIONS_ENABLED }}
+          PRIVATE_PUBLISHING_ACK: ${{ vars.CONVAX_PRIVATE_NPM_PUBLISHING_ENABLED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          visibility="$(gh api "repos/$REPOSITORY" --jq '.visibility')"
+          case "$visibility" in
+            public)
+              echo "NPM_CONFIG_PROVENANCE=true" >> "$GITHUB_ENV"
+              ;;
+            private | internal)
+              test "$PRIVATE_ATTESTATIONS_ACK" = true
+              test "$PRIVATE_PUBLISHING_ACK" = true
+              echo "NPM_CONFIG_PROVENANCE=false" >> "$GITHUB_ENV"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: plugin-sdk-npm-stage-candidate
+          path: ${{ runner.temp }}/plugin-sdk-npm-stage
+      - name: Verify candidate without executing repository code
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-sdk-npm-stage"
+          test "$(stat -c '%s' "$evidence/host-package-release.json")" -le 262144
+          test "$(stat -c '%s' "$evidence/plugin-api.json")" -le 16777216
+          test "$(stat -c '%s' "$evidence/SHA256SUMS")" -le 65536
+          test "$(stat -c '%s' "$evidence/SHA512SUMS")" -le 65536
+          api_version="$(jq -r '.dependencies[0].resolvedVersion' "$evidence/host-package-release.json")"
+          [[ "$api_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          sdk_tarball="$evidence/convax-plugin-sdk-$VERSION.tgz"
+          api_tarball="$evidence/convax-plugin-api-$api_version.tgz"
+          test "$(stat -c '%s' "$sdk_tarball")" -le 33554432
+          test "$(stat -c '%s' "$api_tarball")" -le 33554432
+          (
+            cd "$evidence"
+            sha256sum --check SHA256SUMS
+            sha512sum --check SHA512SUMS
+          )
+          sdk_package="$RUNNER_TEMP/plugin-sdk-package.json"
+          api_package="$RUNNER_TEMP/plugin-api-package.json"
+          api_catalog="$RUNNER_TEMP/plugin-api-catalog.json"
+          tar -xOzf "$sdk_tarball" package/package.json |
+            head -c 131073 > "$sdk_package"
+          tar -xOzf "$api_tarball" package/package.json |
+            head -c 131073 > "$api_package"
+          tar -xOzf "$api_tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$api_catalog"
+          test "$(stat -c '%s' "$sdk_package")" -le 131072
+          test "$(stat -c '%s' "$api_package")" -le 131072
+          test "$(stat -c '%s' "$api_catalog")" -le 16777216
+          ! grep -Eq 'workspace:|catalog:' "$sdk_package"
+          jq -e \
+            --arg api_version "$api_version" \
+            --arg version "$VERSION" \
+            '
+              .name == "@convax/plugin-sdk" and
+              .version == $version and
+              .dependencies == { "@convax/plugin-api": ("^" + $api_version) }
+            ' "$sdk_package" >/dev/null
+          jq -e \
+            --arg api_version "$api_version" \
+            '.name == "@convax/plugin-api" and .version == $api_version' \
+            "$api_package" >/dev/null
+          cmp "$api_catalog" "$evidence/plugin-api.json"
+          sdk_sha256="$(sha256sum "$sdk_tarball" | awk '{ print $1 }')"
+          api_sha256="$(sha256sum "$api_tarball" | awk '{ print $1 }')"
+          catalog_sha256="$(sha256sum "$evidence/plugin-api.json" | awk '{ print $1 }')"
+          sdk_integrity="sha512-$(openssl dgst -sha512 -binary "$sdk_tarball" | base64 -w0)"
+          api_integrity="sha512-$(openssl dgst -sha512 -binary "$api_tarball" | base64 -w0)"
+          jq -e \
+            --arg api_integrity "$api_integrity" \
+            --arg api_sha256 "$api_sha256" \
+            --arg api_version "$api_version" \
+            --arg catalog_sha256 "$catalog_sha256" \
+            --arg commit "$COMMIT" \
+            --arg sdk_integrity "$sdk_integrity" \
+            --arg sdk_sha256 "$sdk_sha256" \
+            --arg version "$VERSION" \
+            --arg workflow "$GITHUB_WORKFLOW_REF" \
+            '
+              .schema == "convax.host-package-release/1" and
+              .profile == "convax.plugin-sdk-authoring-package/1" and
+              keys == ["checks", "dependencies", "host", "package", "profile", "schema", "workflow"] and
+              (.host | keys) == ["commit", "repository"] and
+              (.workflow | keys) == ["ref", "runAttempt", "runId"] and
+              (.package | keys) == ["name", "tarballIntegrity", "tarballSha256", "version"] and
+              .host == { repository: "microvoid/convax", commit: $commit } and
+              .workflow.ref == $workflow and
+              .package.name == "@convax/plugin-sdk" and
+              .package.version == $version and
+              .package.tarballSha256 == $sdk_sha256 and
+              .package.tarballIntegrity == $sdk_integrity and
+              (.dependencies | length) == 1 and
+              (.dependencies[0] | keys) == ["catalogSchema", "catalogSha256", "catalogVersion", "declaredRange", "name", "resolvedVersion", "tarballIntegrity", "tarballSha256"] and
+              .dependencies[0].name == "@convax/plugin-api" and
+              .dependencies[0].declaredRange == ("^" + $api_version) and
+              .dependencies[0].resolvedVersion == $api_version and
+              .dependencies[0].tarballSha256 == $api_sha256 and
+              .dependencies[0].tarballIntegrity == $api_integrity and
+              .dependencies[0].catalogSchema == "convax.plugin-api-catalog/3" and
+              .dependencies[0].catalogVersion == $api_version and
+              .dependencies[0].catalogSha256 == $catalog_sha256 and
+              [.checks[].id] == ["plugin-api-release-dependency-build", "plugin-sdk-typecheck", "plugin-sdk-test", "plugin-sdk-pack-check", "package-boundaries", "release-evidence-policy"] and
+              all(.checks[]; (keys == ["command", "id", "status"]) and .status == "passed")
+            ' "$evidence/host-package-release.json" >/dev/null
+      - name: Attest staged candidate
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          create-storage-record: false
+          subject-path: |
+            ${{ runner.temp }}/plugin-sdk-npm-stage/convax-plugin-sdk-${{ inputs.version }}.tgz
+            ${{ runner.temp }}/plugin-sdk-npm-stage/convax-plugin-api-*.tgz
+            ${{ runner.temp }}/plugin-sdk-npm-stage/plugin-api.json
+            ${{ runner.temp }}/plugin-sdk-npm-stage/host-package-release.json
+            ${{ runner.temp }}/plugin-sdk-npm-stage/SHA256SUMS
+            ${{ runner.temp }}/plugin-sdk-npm-stage/SHA512SUMS
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.18.0
+      - name: Submit candidate to npm staged publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm stage publish \
+            "$RUNNER_TEMP/plugin-sdk-npm-stage/convax-plugin-sdk-$VERSION.tgz" \
+            --access public \
+            --registry=https://registry.npmjs.org

@@ -30,6 +30,8 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bun run plugin-api:history-policy --base "${{ github.event.pull_request.base.sha }}"
       - run: bun run package:boundaries
+      - name: Test Plugin SDK release evidence and workflow policy
+        run: bun test scripts/plugin-sdk-release-evidence.test.ts scripts/plugin-sdk-release-workflows.test.ts
 
   quality:
     name: quality (linux)

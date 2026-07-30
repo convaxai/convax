@@ -35,6 +35,15 @@ Electron, Node, browser globals, native paths, credentials, and concrete Plugin 
 `convax.plugin-capability/3` is Host-internal and must never be exported as an
 authoring transport or accepted from an iframe.
 
+SDK publication owns authoring-package provenance, not Host capability approval.
+Protected publication must emit the independent
+`convax.host-package-release/1` manifest described in
+[`../../docs/plugin-sdk-release.md`](../../docs/plugin-sdk-release.md), binding the
+exact SDK npm tarball and release-time Plugin API tarball/Catalog identity. It must
+not absorb, replace, or reinterpret a Plugin API runtime-conformance or capability
+decision receipt. Concrete Plugin bundle provenance remains a frozen-lock and
+attestation responsibility in `convax-plugins`.
+
 A concrete Plugin task may propose a missing contribution or inter-Plugin contract
 but must not edit this package. Only a separate human-approved Host task may change
 the SDK. Reject concrete Plugin ids, vendors, product-specific commands, direct
