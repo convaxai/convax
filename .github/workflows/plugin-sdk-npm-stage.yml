@@ -23,6 +23,8 @@ jobs:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
       REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -34,6 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
           test "$GITHUB_REF" = refs/heads/convax-next
           [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
           test "$COMMIT" = "$GITHUB_SHA"
@@ -143,6 +147,8 @@ jobs:
             --commit "$COMMIT" \
             --output "$evidence/host-package-release.json" \
             --repository "$REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --run-id "$GITHUB_RUN_ID" \
             --sdk-package-json "$inspection/sdk-package.json" \
@@ -173,46 +179,27 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: plugin-sdk-npm-stage
     permissions:
-      attestations: write
       contents: read
       id-token: write
     env:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
       REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
+      NPM_CONFIG_PROVENANCE: "false"
     steps:
       - name: Verify protected staging identity
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
           test "$GITHUB_REF" = refs/heads/convax-next
           test "$COMMIT" = "$GITHUB_SHA"
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-      - name: Select the admitted npm provenance mode
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRIVATE_ATTESTATIONS_ACK: ${{ vars.CONVAX_PRIVATE_ATTESTATIONS_ENABLED }}
-          PRIVATE_PUBLISHING_ACK: ${{ vars.CONVAX_PRIVATE_NPM_PUBLISHING_ENABLED }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          visibility="$(gh api "repos/$REPOSITORY" --jq '.visibility')"
-          case "$visibility" in
-            public)
-              echo "NPM_CONFIG_PROVENANCE=true" >> "$GITHUB_ENV"
-              ;;
-            private | internal)
-              test "$PRIVATE_ATTESTATIONS_ACK" = true
-              test "$PRIVATE_PUBLISHING_ACK" = true
-              echo "NPM_CONFIG_PROVENANCE=false" >> "$GITHUB_ENV"
-              ;;
-            *)
-              exit 1
-              ;;
-          esac
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with:
           name: plugin-sdk-npm-stage-candidate
@@ -278,15 +265,38 @@ jobs:
             --arg sdk_sha256 "$sdk_sha256" \
             --arg version "$VERSION" \
             --arg workflow "$GITHUB_WORKFLOW_REF" \
+            --arg repository_id "$REPOSITORY_ID" \
+            --arg repository_owner_id "$REPOSITORY_OWNER_ID" \
             '
               .schema == "convax.host-package-release/1" and
               .profile == "convax.plugin-sdk-authoring-package/1" and
-              keys == ["checks", "dependencies", "host", "package", "profile", "schema", "workflow"] and
-              (.host | keys) == ["commit", "repository"] and
+              keys == ["checks", "dependencies", "host", "package", "profile", "schema", "sigstore", "workflow"] and
+              (.host | keys) == ["commit", "repository", "repositoryId", "repositoryOwnerId"] and
               (.workflow | keys) == ["ref", "runAttempt", "runId"] and
               (.package | keys) == ["name", "tarballIntegrity", "tarballSha256", "version"] and
-              .host == { repository: "microvoid/convax", commit: $commit } and
+              .host == {
+                repository: "microvoid/convax",
+                repositoryId: $repository_id,
+                repositoryOwnerId: $repository_owner_id,
+                commit: $commit
+              } and
               .workflow.ref == $workflow and
+              .sigstore == {
+                bundle: {
+                  mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+                  suffix: ".sigstore.json"
+                },
+                certificate: {
+                  identity: ("https://github.com/" + $workflow),
+                  oidcIssuer: "https://token.actions.githubusercontent.com",
+                  workflowName: "Stage Plugin SDK npm package",
+                  workflowRef: "refs/heads/convax-next",
+                  repository: "microvoid/convax",
+                  sourceSha: $commit,
+                  trigger: "workflow_dispatch"
+                },
+                transparencyLog: { inclusionRequired: true }
+              } and
               .package.name == "@convax/plugin-sdk" and
               .package.version == $version and
               .package.tarballSha256 == $sdk_sha256 and
@@ -304,17 +314,52 @@ jobs:
               [.checks[].id] == ["plugin-api-release-dependency-build", "plugin-sdk-typecheck", "plugin-sdk-test", "plugin-sdk-pack-check", "package-boundaries", "release-evidence-policy"] and
               all(.checks[]; (keys == ["command", "id", "status"]) and .status == "passed")
             ' "$evidence/host-package-release.json" >/dev/null
-      - name: Attest staged candidate
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
         with:
-          create-storage-record: false
-          subject-path: |
-            ${{ runner.temp }}/plugin-sdk-npm-stage/convax-plugin-sdk-${{ inputs.version }}.tgz
-            ${{ runner.temp }}/plugin-sdk-npm-stage/convax-plugin-api-*.tgz
-            ${{ runner.temp }}/plugin-sdk-npm-stage/plugin-api.json
-            ${{ runner.temp }}/plugin-sdk-npm-stage/host-package-release.json
-            ${{ runner.temp }}/plugin-sdk-npm-stage/SHA256SUMS
-            ${{ runner.temp }}/plugin-sdk-npm-stage/SHA512SUMS
+          cosign-release: v3.0.6
+      - name: Sign and verify the staged candidate through public Rekor
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-sdk-npm-stage"
+          api_version="$(jq -r '.dependencies[0].resolvedVersion' "$evidence/host-package-release.json")"
+          identity="$(jq -r '.sigstore.certificate.identity' "$evidence/host-package-release.json")"
+          issuer="$(jq -r '.sigstore.certificate.oidcIssuer' "$evidence/host-package-release.json")"
+          for artifact in \
+            "convax-plugin-sdk-$VERSION.tgz" \
+            "convax-plugin-api-$api_version.tgz" \
+            plugin-api.json \
+            host-package-release.json \
+            SHA256SUMS \
+            SHA512SUMS; do
+            bundle="$evidence/$artifact.sigstore.json"
+            cosign sign-blob --yes --bundle "$bundle" "$evidence/$artifact"
+            test "$(stat -c '%s' "$bundle")" -le 1048576
+            jq -e '
+              .mediaType == "application/vnd.dev.sigstore.bundle.v0.3+json" and
+              (.verificationMaterial.certificate.rawBytes | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries | length == 1) and
+              (.verificationMaterial.tlogEntries[0].inclusionPromise.signedEntryTimestamp | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries[0].inclusionProof.rootHash | type == "string" and length > 0)
+            ' "$bundle" >/dev/null
+            cosign verify-blob \
+              --bundle "$bundle" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer "$issuer" \
+              --certificate-github-workflow-name "Stage Plugin SDK npm package" \
+              --certificate-github-workflow-ref refs/heads/convax-next \
+              --certificate-github-workflow-repository "$REPOSITORY" \
+              --certificate-github-workflow-sha "$COMMIT" \
+              --certificate-github-workflow-trigger workflow_dispatch \
+              "$evidence/$artifact" >/dev/null
+          done
+      - name: Upload signed staging evidence for human review
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: plugin-sdk-npm-stage-signed-evidence
+          path: ${{ runner.temp }}/plugin-sdk-npm-stage
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24
@@ -328,4 +373,5 @@ jobs:
           npm stage publish \
             "$RUNNER_TEMP/plugin-sdk-npm-stage/convax-plugin-sdk-$VERSION.tgz" \
             --access public \
+            --provenance=false \
             --registry=https://registry.npmjs.org

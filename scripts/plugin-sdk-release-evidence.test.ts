@@ -30,6 +30,8 @@ function input(overrides: Record<string, unknown> = {}) {
     },
     commit: "a".repeat(40),
     repository: "microvoid/convax",
+    repositoryId: "1293264965",
+    repositoryOwnerId: "125447777",
     runAttempt: "1",
     runId: "123",
     sdkPackageJson: {
@@ -53,12 +55,33 @@ describe("Plugin SDK Host package release evidence", () => {
       profile: "convax.plugin-sdk-authoring-package/1",
       host: {
         repository: "microvoid/convax",
+        repositoryId: "1293264965",
+        repositoryOwnerId: "125447777",
         commit: "a".repeat(40),
       },
       workflow: {
         ref: "microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
         runId: "123",
         runAttempt: "1",
+      },
+      sigstore: {
+        bundle: {
+          mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+          suffix: ".sigstore.json",
+        },
+        certificate: {
+          identity:
+            "https://github.com/microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
+          oidcIssuer: "https://token.actions.githubusercontent.com",
+          workflowName: "Publish Plugin SDK immutable evidence",
+          workflowRef: "refs/heads/convax-next",
+          repository: "microvoid/convax",
+          sourceSha: "a".repeat(40),
+          trigger: "workflow_dispatch",
+        },
+        transparencyLog: {
+          inclusionRequired: true,
+        },
       },
       package: {
         name: "@convax/plugin-sdk",
@@ -119,6 +142,11 @@ describe("Plugin SDK Host package release evidence", () => {
         }),
       ),
     ).toThrow("protected Plugin SDK publication workflow")
+  })
+
+  test("rejects mutable repository-name reuse through immutable repository identifiers", () => {
+    expect(() => buildPluginSdkReleaseEvidence(input({ repositoryId: "1" }))).toThrow("immutable Convax repository id")
+    expect(() => buildPluginSdkReleaseEvidence(input({ repositoryOwnerId: "1" }))).toThrow("immutable Convax owner id")
   })
 
   test("rejects an npm SDK tarball that cannot be reproduced from the Host commit", () => {

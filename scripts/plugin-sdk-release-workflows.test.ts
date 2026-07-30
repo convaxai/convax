@@ -28,24 +28,21 @@ const repositoryRoot = resolve(import.meta.dir, "..")
 const policies = [
   {
     path: ".github/workflows/plugin-sdk-bootstrap.yml",
-    privilegedJob: "attest",
+    privilegedJob: "sign",
     needs: "build",
-    environment: "plugin-sdk-bootstrap",
-    permissions: { attestations: "write", contents: "read", "id-token": "write" },
+    permissions: { contents: "read", "id-token": "write" },
   },
   {
     path: ".github/workflows/plugin-sdk-npm-stage.yml",
     privilegedJob: "stage",
     needs: "build",
-    environment: "plugin-sdk-npm-stage",
-    permissions: { attestations: "write", contents: "read", "id-token": "write" },
+    permissions: { contents: "read", "id-token": "write" },
   },
   {
     path: ".github/workflows/plugin-sdk-release.yml",
     privilegedJob: "publish",
     needs: "verify",
-    environment: "plugin-sdk-release",
-    permissions: { attestations: "write", contents: "write", "id-token": "write" },
+    permissions: { contents: "write", "id-token": "write" },
   },
 ] as const
 
@@ -79,7 +76,7 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
       expect(unprivilegedJob).toBeDefined()
       expect(unprivilegedJob?.permissions).toBeUndefined()
       expect(job?.needs).toBe(policy.needs)
-      expect(job?.environment).toBe(policy.environment)
+      expect(job?.environment).toBeUndefined()
       exactObject(job?.permissions, policy.permissions)
 
       for (const candidateJob of Object.values(workflow.jobs ?? {})) {
@@ -95,9 +92,10 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
 
       const steps = job?.steps ?? []
       expect(steps.length).toBeGreaterThan(0)
-      const attestationStep = steps.find((step) => step.uses?.startsWith("actions/attest@"))
-      expect(attestationStep).toBeDefined()
-      expect(attestationStep?.with?.["create-storage-record"]).toBe(false)
+      const cosignInstaller = steps.find((step) => step.uses?.startsWith("sigstore/cosign-installer@"))
+      expect(cosignInstaller?.uses).toBe("sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6")
+      expect(cosignInstaller?.with?.["cosign-release"]).toBe("v3.0.6")
+      expect(steps.some((step) => step.uses?.startsWith("actions/attest@"))).toBe(false)
       const privilegedShell = steps
         .map((step) => step.run ?? "")
         .filter(Boolean)
@@ -107,8 +105,30 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
       expect(privilegedShell).toContain("sha256sum")
       expect(privilegedShell).toContain("openssl dgst -sha512")
       expect(privilegedShell).toContain(
-        'keys == ["checks", "dependencies", "host", "package", "profile", "schema", "workflow"]',
+        'keys == ["checks", "dependencies", "host", "package", "profile", "schema", "sigstore", "workflow"]',
       )
+      expect(privilegedShell).toContain("cosign sign-blob")
+      expect(privilegedShell).toContain("cosign verify-blob")
+      expect(privilegedShell).toContain("--bundle")
+      expect(privilegedShell).toContain("--certificate-identity")
+      expect(privilegedShell).toContain("--certificate-oidc-issuer")
+      expect(privilegedShell).toContain("--certificate-github-workflow-name")
+      expect(privilegedShell).toContain("--certificate-github-workflow-ref")
+      expect(privilegedShell).toContain("--certificate-github-workflow-repository")
+      expect(privilegedShell).toContain("--certificate-github-workflow-sha")
+      expect(privilegedShell).toContain("--certificate-github-workflow-trigger")
+      expect(privilegedShell).toContain("application/vnd.dev.sigstore.bundle.v0.3+json")
+      expect(privilegedShell).toContain("inclusionPromise.signedEntryTimestamp")
+      expect(privilegedShell).toContain("inclusionProof.rootHash")
+      expect(privilegedShell).not.toMatch(
+        /--(?:insecure-ignore-sct|insecure-ignore-tlog|private-infrastructure|skip-confirmation|use-signed-timestamps)/u,
+      )
+      expect(privilegedShell).toContain('test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"')
+      expect(privilegedShell).toContain('test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"')
+      expect(source).toContain('--repository-id "$GITHUB_REPOSITORY_ID"')
+      expect(source).toContain('--repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID"')
+      expect(source).not.toContain("attestations: write")
+      expect(source).not.toContain("CONVAX_PRIVATE_ATTESTATIONS_ENABLED")
       for (const step of steps) {
         expect(step["working-directory"]).toBeUndefined()
         if (step.uses) {
@@ -131,5 +151,26 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
     expect(source).toContain("bun pm pack")
     expect(source).toContain('cmp "$source_sdk_tarball" "${{ steps.npm.outputs.sdk_tarball }}"')
     expect(source).toContain('--sdk-source-tarball "$source_sdk_tarball"')
+  })
+
+  test("private-repository npm publication is stage-only and does not claim native npm provenance", async () => {
+    const source = await readFile(resolve(repositoryRoot, ".github/workflows/plugin-sdk-npm-stage.yml"), "utf8")
+    expect(source).toContain('NPM_CONFIG_PROVENANCE: "false"')
+    expect(source).toContain("npm stage publish")
+    expect(source).toContain("--provenance=false")
+    expect(source).not.toMatch(/\bnpm publish\b/u)
+    expect(source).not.toContain("CONVAX_PRIVATE_NPM_PUBLISHING_ENABLED")
+  })
+
+  test("the release combines immutable assets with Sigstore and re-verifies published bytes", async () => {
+    const source = await readFile(resolve(repositoryRoot, ".github/workflows/plugin-sdk-release.yml"), "utf8")
+    expect(source).toContain('verify_bundle "$existing/$asset" "$existing/$asset.sigstore.json"')
+    expect(source).toContain('verify_bundle "$published/$asset" "$published/$asset.sigstore.json"')
+    expect(source).toContain('cmp "$published/$asset" "$evidence/$asset"')
+    expect(source).toContain("expected_assets=")
+    expect(source).toContain("CONVAX_IMMUTABLE_RELEASES_ENABLED")
+    expect(source).toContain("repos/$REPOSITORY/immutable-releases")
+    expect(source).toContain("gh release verify")
+    expect(source).toContain("gh release verify-asset")
   })
 })

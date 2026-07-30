@@ -8,6 +8,12 @@ const CATALOG_SCHEMA = "convax.plugin-api-catalog/3"
 export const HOST_PACKAGE_RELEASE_SCHEMA = "convax.host-package-release/1" as const
 export const PLUGIN_SDK_RELEASE_PROFILE = "convax.plugin-sdk-authoring-package/1" as const
 export const PLUGIN_SDK_CHECK_RESULTS_SCHEMA = "convax.plugin-sdk-check-results/1" as const
+export const SIGSTORE_BUNDLE_MEDIA_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json" as const
+export const SIGSTORE_BUNDLE_SUFFIX = ".sigstore.json" as const
+export const SIGSTORE_OIDC_ISSUER = "https://token.actions.githubusercontent.com" as const
+export const CONVAX_REPOSITORY_ID = "1293264965" as const
+export const CONVAX_REPOSITORY_OWNER_ID = "125447777" as const
+const PROTECTED_WORKFLOW_REF = "refs/heads/convax-next"
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024
 const MAX_PACKAGE_JSON_BYTES = 128 * 1024
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
@@ -63,6 +69,8 @@ type EvidenceInput = {
   readonly checkResults: unknown
   readonly commit: string
   readonly repository: string
+  readonly repositoryId: string
+  readonly repositoryOwnerId: string
   readonly runAttempt: string
   readonly runId: string
   readonly sdkPackageJson: unknown
@@ -145,6 +153,10 @@ function assertPassedCheckResults(value: unknown): void {
 
 export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<string, unknown> {
   if (input.repository !== "microvoid/convax") fail("repository must be microvoid/convax")
+  if (input.repositoryId !== CONVAX_REPOSITORY_ID) fail("repository id must match the immutable Convax repository id")
+  if (input.repositoryOwnerId !== CONVAX_REPOSITORY_OWNER_ID) {
+    fail("repository owner id must match the immutable Convax owner id")
+  }
   if (!COMMIT.test(input.commit)) fail("commit must be one lowercase full SHA")
   if (!STABLE_VERSION.test(input.sdkVersion) || !STABLE_VERSION.test(input.apiVersion)) {
     fail("package versions must be stable SemVer")
@@ -152,12 +164,22 @@ export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<stri
   if (!POSITIVE_INTEGER.test(input.runId) || !POSITIVE_INTEGER.test(input.runAttempt)) {
     fail("workflow run id and attempt must be positive integers")
   }
-  const allowedWorkflowRefs = new Set([
-    `${input.repository}/.github/workflows/plugin-sdk-bootstrap.yml@refs/heads/convax-next`,
-    `${input.repository}/.github/workflows/plugin-sdk-npm-stage.yml@refs/heads/convax-next`,
-    `${input.repository}/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next`,
+  const allowedWorkflows = new Map([
+    [
+      `${input.repository}/.github/workflows/plugin-sdk-bootstrap.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Prepare Plugin SDK bootstrap",
+    ],
+    [
+      `${input.repository}/.github/workflows/plugin-sdk-npm-stage.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Stage Plugin SDK npm package",
+    ],
+    [
+      `${input.repository}/.github/workflows/plugin-sdk-release.yml@${PROTECTED_WORKFLOW_REF}`,
+      "Publish Plugin SDK immutable evidence",
+    ],
   ])
-  if (!allowedWorkflowRefs.has(input.workflowRef)) {
+  const workflowName = allowedWorkflows.get(input.workflowRef)
+  if (!workflowName) {
     fail("workflow ref must identify a protected Plugin SDK publication workflow")
   }
   assertTarball(input.sdkTarballBytes, input.sdkTarballIntegrity, "Plugin SDK")
@@ -204,12 +226,32 @@ export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<stri
     profile: PLUGIN_SDK_RELEASE_PROFILE,
     host: {
       repository: input.repository,
+      repositoryId: input.repositoryId,
+      repositoryOwnerId: input.repositoryOwnerId,
       commit: input.commit,
     },
     workflow: {
       ref: input.workflowRef,
       runId: input.runId,
       runAttempt: input.runAttempt,
+    },
+    sigstore: {
+      bundle: {
+        mediaType: SIGSTORE_BUNDLE_MEDIA_TYPE,
+        suffix: SIGSTORE_BUNDLE_SUFFIX,
+      },
+      certificate: {
+        identity: `https://github.com/${input.workflowRef}`,
+        oidcIssuer: SIGSTORE_OIDC_ISSUER,
+        workflowName,
+        workflowRef: PROTECTED_WORKFLOW_REF,
+        repository: input.repository,
+        sourceSha: input.commit,
+        trigger: "workflow_dispatch",
+      },
+      transparencyLog: {
+        inclusionRequired: true,
+      },
     },
     package: {
       name: SDK_PACKAGE_NAME,
@@ -247,6 +289,8 @@ type Arguments = {
   readonly commit: string
   readonly output: string
   readonly repository: string
+  readonly repositoryId: string
+  readonly repositoryOwnerId: string
   readonly runAttempt: string
   readonly runId: string
   readonly sdkPackageJson: string
@@ -269,6 +313,8 @@ function parseArguments(argv: readonly string[]): Arguments {
     "--commit",
     "--output",
     "--repository",
+    "--repository-id",
+    "--repository-owner-id",
     "--run-attempt",
     "--run-id",
     "--sdk-package-json",
@@ -299,6 +345,8 @@ function parseArguments(argv: readonly string[]): Arguments {
     commit: values.get("--commit")!,
     output: values.get("--output")!,
     repository: values.get("--repository")!,
+    repositoryId: values.get("--repository-id")!,
+    repositoryOwnerId: values.get("--repository-owner-id")!,
     runAttempt: values.get("--run-attempt")!,
     runId: values.get("--run-id")!,
     sdkPackageJson: values.get("--sdk-package-json")!,
@@ -341,6 +389,8 @@ async function main(): Promise<void> {
     checkResults: parseJson(checkResultsBytes, "check results"),
     commit: args.commit,
     repository: args.repository,
+    repositoryId: args.repositoryId,
+    repositoryOwnerId: args.repositoryOwnerId,
     runAttempt: args.runAttempt,
     runId: args.runId,
     sdkPackageJson: parseJson(sdkPackageJsonBytes, "Plugin SDK package.json"),
