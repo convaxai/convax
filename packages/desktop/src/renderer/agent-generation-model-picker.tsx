@@ -218,23 +218,19 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
           </div>
         )}
       </div>
-      {activeOutput && props.selected?.output === activeOutput ? (
+      {activeOutput &&
+      props.selected?.output === activeOutput &&
+      (props.descriptionError ||
+        (props.description?.toolId === props.selected.id && props.description.fields.length > 0)) ? (
         <div className="mt-2 max-h-52 overflow-y-auto border-t border-border/60 px-1 pt-2">
-          {props.descriptionLoading ? (
-            <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
-              <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-              Loading model options…
-            </div>
-          ) : props.descriptionError ? (
+          {props.descriptionError ? (
             <div className="py-2 text-xs text-destructive">{props.descriptionError}</div>
-          ) : props.description?.toolId === props.selected.id && props.description.fields.length > 0 ? (
+          ) : props.description?.toolId === props.selected.id ? (
             <ToolInputForm
               fields={props.description.fields}
               onValuesChange={(values) => props.onToolInputChange(values)}
               values={props.toolInput}
             />
-          ) : props.description?.toolId === props.selected.id ? (
-            <div className="py-1 text-[10px] text-muted-foreground">This model has no additional options.</div>
           ) : null}
         </div>
       ) : null}

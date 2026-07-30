@@ -5,6 +5,7 @@ import {
   defaultAgentLlmModelSelection,
   findAgentLlmModel,
   reconcileAgentLlmModelSelection,
+  reconcileAgentLlmModelSelectionFromReadyCatalog,
 } from "./agent-llm-models"
 
 const catalog: AgentModelCatalog = {
@@ -42,6 +43,16 @@ describe("Agent LLM models", () => {
       ),
     ).toEqual(expected)
     expect(reconcileAgentLlmModelSelection(undefined, catalog)).toEqual(expected)
+  })
+
+  test("preserves a saved choice while the shared catalog loads, then reconciles the ready result", () => {
+    const saved = { modelId: "remembered", providerId: "remembered-service" }
+    expect(reconcileAgentLlmModelSelectionFromReadyCatalog(saved, undefined)).toEqual(saved)
+    expect(reconcileAgentLlmModelSelectionFromReadyCatalog(saved, catalog)).toEqual({
+      modelId: "main",
+      providerId: "plugin-xiaoyunque-generation-pippit-glm",
+    })
+    expect(reconcileAgentLlmModelSelectionFromReadyCatalog(saved, { providers: [] })).toBeUndefined()
   })
 
   test("uses the first available service's default before falling back to its first model", () => {

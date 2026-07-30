@@ -35,13 +35,14 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
 import { createAgentCanvasInstructions, createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary, type WebPluginManifest } from "../plugin-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
 import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
+import { AgentModelCatalogProvider } from "./agent-model-catalog"
 import { isGenerationModelTool } from "./agent-generation-models"
 import { resolveAgentCompactStatus, type AgentCompactStatus } from "./agent-panel-state"
 import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
@@ -130,7 +131,12 @@ import {
 } from "./project-home-model"
 import { ProjectSidebarShell } from "./project-sidebar-shell"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
-import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
+import { GenerationModelCatalogController } from "./generation-model-catalog-controller"
+import {
+  ServiceCatalogController,
+  serviceCatalogAgentModelsForScope,
+  serviceGenerationAvailabilityVersion,
+} from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
@@ -276,6 +282,10 @@ function App() {
     () => new ServiceCatalogController(window.convax.pluginServices, window.convax.agent),
     [],
   )
+  const generationModelCatalogController = useMemo(
+    () => new GenerationModelCatalogController(window.convax.generation),
+    [],
+  )
   const [initialLayoutPreferences] = useState(() =>
     readWorkbenchLayoutPreferences(localStorage, {
       primarySidebar: primarySidebarBounds,
@@ -350,6 +360,7 @@ function App() {
   })
   const effectivePrimaryDesktopSurface = projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
+  const activeProjectId = activeProject?.id
   const projectCanvasSnapshot = useSyncExternalStore(
     projectCanvasController.subscribe,
     projectCanvasController.getSnapshot,
@@ -370,6 +381,7 @@ function App() {
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
   )
+  const agentModelCatalog = serviceCatalogAgentModelsForScope(serviceCatalogSnapshot, activeProjectId)
   const generationPlugins = installedPlugins.flatMap((plugin) =>
     plugin.contributes.generation
       ? [
@@ -391,6 +403,12 @@ function App() {
     ),
   ])
   generationToolCatalogVersionRef.current = generationToolCatalogVersion
+  useLayoutEffect(() => {
+    generationModelCatalogController.setScope({
+      authorityVersion: generationToolCatalogVersion,
+      scopeId: activeProjectId,
+    })
+  }, [activeProjectId, generationModelCatalogController, generationToolCatalogVersion])
   useEffect(
     () => () => {
       workbenchResizeSessionRef.current?.cancel()
@@ -420,6 +438,12 @@ function App() {
     serviceCatalogController.start()
     return () => serviceCatalogController.dispose()
   }, [serviceCatalogController])
+  useEffect(
+    () => () => {
+      generationModelCatalogController.dispose()
+    },
+    [generationModelCatalogController],
+  )
   useEffect(() => window.convax.pluginServices.onDidChange(() => setModelCatalogEpoch((current) => current + 1)), [])
   useEffect(() => {
     const refreshServicesAfterBrowserReturn = () => void serviceCatalogController.refresh()
@@ -564,8 +588,7 @@ function App() {
     startupRecoveryPending,
     workspaceEntryCoordinator,
   ])
-  const activeProjectId = activeProject?.id
-  useEffect(() => {
+  useLayoutEffect(() => {
     serviceCatalogController.setScopeId(activeProjectId)
   }, [activeProjectId, serviceCatalogController])
   const activeCanvasId =
@@ -1015,25 +1038,41 @@ function App() {
       get catalogVersion() {
         return generationToolCatalogVersionRef.current
       },
+      getCachedDescription(toolId) {
+        if (!activeProjectId || !activeCanvasId) return undefined
+        return generationModelCatalogController.peekDescription(toolId)
+      },
+      getCachedTools(query) {
+        if (!activeProjectId || !activeCanvasId) return undefined
+        const tools = generationModelCatalogController.peekTools(query.output)
+        if (!tools) return undefined
+        return tools.filter(isGenerationModelTool).map((tool) => ({
+          acceptedInputs: tool.acceptedInputs,
+          description: tool.description,
+          id: tool.id,
+          ...(tool.modelName ? { modelName: tool.modelName } : {}),
+          output: tool.output,
+          serviceId: tool.pluginId,
+          serviceName: tool.pluginName,
+          title: tool.title,
+        }))
+      },
+      subscribeCatalog(listener) {
+        return generationModelCatalogController.subscribe(listener)
+      },
       async describeTool(toolId, signal) {
         if (!activeProjectId || !activeCanvasId) {
           throw new Error("Open a Project Canvas before configuring a generation model")
         }
         if (signal?.aborted) throw signal.reason
-        const description = await window.convax.generation.describeTool({
-          scopeId: activeProjectId,
-          toolId,
-        })
+        const description = await generationModelCatalogController.describeTool(toolId)
         if (signal?.aborted) throw signal.reason
         return description
       },
       async listTools(query, signal) {
         if (!activeProjectId || !activeCanvasId) return []
         if (signal?.aborted) throw signal.reason
-        const tools = await window.convax.generation.listTools({
-          ...(query.output ? { output: query.output } : {}),
-          scopeId: activeProjectId,
-        })
+        const tools = await generationModelCatalogController.listTools(query.output)
         if (signal?.aborted) throw signal.reason
         return tools.filter(isGenerationModelTool).map((tool) => ({
           acceptedInputs: tool.acceptedInputs,
@@ -1245,7 +1284,13 @@ function App() {
       },
       textResources: window.convax.canvas.textResources,
     })
-  }, [activeCanvasId, activeProjectId, flushAuthoritativeCanvas, generationToolCatalogVersion])
+  }, [
+    activeCanvasId,
+    activeProjectId,
+    flushAuthoritativeCanvas,
+    generationModelCatalogController,
+    generationToolCatalogVersion,
+  ])
 
   const runMediaOperation = useCallback(
     async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {
@@ -2045,7 +2090,12 @@ function App() {
 
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
-      <div className="relative flex size-full flex-col overflow-hidden">
+      <AgentModelCatalogProvider
+        generationController={generationModelCatalogController}
+        llm={agentModelCatalog}
+        refreshLlmModels={serviceCatalogController.refreshAgentModels}
+      >
+        <div className="relative flex size-full flex-col overflow-hidden">
         <ApplicationTitlebar
           centerAction={
             effectivePrimaryDesktopSurface === "workspace" && activeCanvas ? (
@@ -2395,7 +2445,8 @@ function App() {
             />
           ) : null}
         </div>
-      </div>
+        </div>
+      </AgentModelCatalogProvider>
     </AgentGenerationPreferenceProvider>
   )
 }

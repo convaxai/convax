@@ -54,34 +54,49 @@ export interface BuiltinServiceCatalogEntry extends ServiceCatalogEntryBase {
 
 export type ServiceCatalogEntry = PluginServiceCatalogEntry | BuiltinServiceCatalogEntry
 
+export interface ServiceCatalogAgentModelState {
+  catalog?: AgentModelCatalog
+  error?: string
+  loading: boolean
+  scopeId?: string
+}
+
 export interface ServiceCatalogSnapshot {
   action?: { action: WebPluginServiceAction; pluginId: string }
+  agentModels?: ServiceCatalogAgentModelState
   error?: string
   loading: boolean
   services: readonly ServiceCatalogEntry[]
 }
 
+export function serviceCatalogAgentModelsForScope(
+  snapshot: ServiceCatalogSnapshot,
+  scopeId?: string,
+): ServiceCatalogAgentModelState {
+  const current = snapshot.agentModels
+  return current && current.scopeId === scopeId ? current : { loading: Boolean(scopeId), scopeId }
+}
+
 /**
  * Generation model discovery is stricter than the display catalog: Main exposes
- * models only after the owning service reports connected. Keep a small, stable
- * renderer invalidation key so an initial unknown/loading result is retried when
- * that live availability settles, without coupling UI code to a concrete service.
+ * models only after the owning service reports connected. Keep a small renderer
+ * invalidation key that changes with settled authority availability, not with
+ * transient refresh/loading presentation state.
  */
 export function serviceGenerationAvailabilityVersion(
   snapshot: ServiceCatalogSnapshot,
   generationPluginIds: readonly string[],
 ) {
   const included = new Set(generationPluginIds)
-  return JSON.stringify({
-    loading: snapshot.loading,
-    services: snapshot.services
+  return JSON.stringify(
+    snapshot.services
       .flatMap((service) =>
         service.kind === "plugin" && included.has(service.pluginId)
-          ? [{ loading: service.loading, pluginId: service.pluginId, state: service.state }]
+          ? [{ pluginId: service.pluginId, state: service.state }]
           : [],
       )
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)),
-  })
+  )
 }
 
 function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentication {
@@ -105,7 +120,11 @@ function pluginProviderPrefix(pluginId: string) {
   return `plugin-${pluginId}-`
 }
 
-function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalog): PluginServiceCatalogEntry {
+function pluginEntry(
+  service: PluginServiceViewEntry,
+  catalog?: AgentModelCatalog,
+  stableState?: PluginServiceState,
+): PluginServiceCatalogEntry {
   const connectedLlmProviders =
     catalog?.providers.filter(
       (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
@@ -137,7 +156,7 @@ function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalo
     name: service.pluginName,
     pluginId: service.pluginId,
     serviceId: `plugin:${service.pluginId}`,
-    state: service.status?.state ?? "unknown",
+    state: service.status?.state ?? stableState ?? "unknown",
     status: service.status,
     version: service.version,
   }
@@ -191,11 +210,14 @@ export class ServiceCatalogController {
   #agentCatalog?: AgentModelCatalog
   #agentError?: string
   #agentLoading = false
+  #agentRefreshQueued = false
+  #agentRequest?: { promise: Promise<AgentModelCatalog | undefined>; scopeId: string }
   #disposed = false
   #modelGeneration = 0
   #pluginSnapshot: PluginServicesSnapshot
   #scopeId?: string
   #snapshot: ServiceCatalogSnapshot
+  readonly #stablePluginStates = new Map<string, PluginServiceState>()
   #started = false
   #unsubscribeModelChanges?: () => void
   #unsubscribePlugins?: () => void
@@ -221,13 +243,14 @@ export class ServiceCatalogController {
     this.#started = true
     this.#unsubscribePlugins = this.#plugins.subscribe(() => {
       this.#pluginSnapshot = this.#plugins.getSnapshot()
+      this.#rememberStablePluginStates()
       this.#publish()
     })
     this.#unsubscribeModelChanges = this.pluginClient.onDidChange(() => {
-      void this.#refreshModels()
+      this.#refreshModelsAfterInFlight()
     })
     this.#plugins.start()
-    void this.#refreshModels()
+    void this.#refreshModels().catch(() => undefined)
   }
 
   setScopeId(scopeId?: string) {
@@ -235,19 +258,23 @@ export class ServiceCatalogController {
     this.#scopeId = scopeId
     this.#agentCatalog = undefined
     this.#agentError = undefined
+    this.#agentRefreshQueued = false
+    this.#agentRequest = undefined
     this.#modelGeneration += 1
-    if (this.#started) void this.#refreshModels()
+    if (this.#started) void this.#refreshModels().catch(() => undefined)
     else this.#publish()
   }
 
   async refresh() {
     if (this.#disposed) return
-    await Promise.all([this.#plugins.refresh(), this.#refreshModels()])
+    await Promise.all([this.#plugins.refresh(), this.#refreshModelsIncludingQueued().catch(() => undefined)])
   }
+
+  readonly refreshAgentModels = () => this.#refreshModelsIncludingQueued()
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
     await this.#plugins.perform(pluginId, action)
-    await this.#refreshModels()
+    await this.#refreshModelsIncludingQueued().catch(() => undefined)
   }
 
   async checkout(pluginId: string, planKey: string) {
@@ -258,6 +285,8 @@ export class ServiceCatalogController {
     if (this.#disposed) return
     this.#disposed = true
     this.#modelGeneration += 1
+    this.#agentRefreshQueued = false
+    this.#agentRequest = undefined
     this.#unsubscribePlugins?.()
     this.#unsubscribePlugins = undefined
     this.#unsubscribeModelChanges?.()
@@ -266,44 +295,119 @@ export class ServiceCatalogController {
     this.#listeners.clear()
   }
 
-  async #refreshModels() {
-    if (this.#disposed) return
+  #refreshModels(): Promise<AgentModelCatalog | undefined> {
+    if (this.#disposed) return Promise.resolve(undefined)
     const scopeId = this.#scopeId
-    const generation = ++this.#modelGeneration
     if (!scopeId) {
+      this.#modelGeneration += 1
+      this.#agentRefreshQueued = false
+      this.#agentRequest = undefined
       this.#agentCatalog = undefined
       this.#agentError = undefined
       this.#agentLoading = false
       this.#publish()
-      return
+      return Promise.resolve(undefined)
     }
+    if (this.#agentRequest?.scopeId === scopeId) return this.#agentRequest.promise
+    const generation = ++this.#modelGeneration
     this.#agentLoading = true
     this.#agentError = undefined
     this.#publish()
-    try {
-      const catalog = await this.agentClient.listModels({ scopeId })
-      if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return
-      this.#agentCatalog = catalog
-      this.#agentLoading = false
-      this.#publish()
-    } catch (error) {
-      if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return
-      this.#agentCatalog = undefined
-      this.#agentError = errorMessage(error)
-      this.#agentLoading = false
-      this.#publish()
+    const request = this.agentClient
+      .listModels({ scopeId })
+      .then((catalog) => {
+        if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return undefined
+        this.#agentCatalog = catalog
+        this.#agentLoading = false
+        this.#publish()
+        return catalog
+      })
+      .catch((error: unknown) => {
+        if (!this.#disposed && generation === this.#modelGeneration && scopeId === this.#scopeId) {
+          this.#agentError = errorMessage(error)
+          this.#agentLoading = false
+          this.#publish()
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this.#agentRequest?.promise !== request) return
+        this.#agentRequest = undefined
+        const refreshAgain = this.#agentRefreshQueued && !this.#disposed && scopeId === this.#scopeId
+        this.#agentRefreshQueued = false
+        if (refreshAgain) void this.#refreshModels().catch(() => undefined)
+      })
+    this.#agentRequest = { promise: request, scopeId }
+    return request
+  }
+
+  async #refreshModelsIncludingQueued(): Promise<AgentModelCatalog | undefined> {
+    const scopeId = this.#scopeId
+    let request = this.#refreshModels()
+    for (;;) {
+      let failed = false
+      let failure: unknown
+      let result: AgentModelCatalog | undefined
+      try {
+        result = await request
+      } catch (error) {
+        failed = true
+        failure = error
+      }
+      const trailing =
+        scopeId && this.#agentRequest?.scopeId === scopeId && this.#agentRequest.promise !== request
+          ? this.#agentRequest.promise
+          : undefined
+      if (trailing) {
+        request = trailing
+        continue
+      }
+      if (failed) throw failure
+      return result
     }
+  }
+
+  #refreshModelsAfterInFlight() {
+    if (this.#disposed) return
+    const scopeId = this.#scopeId
+    if (scopeId && this.#agentRequest?.scopeId === scopeId) {
+      this.#agentRefreshQueued = true
+      return
+    }
+    void this.#refreshModels().catch(() => undefined)
   }
 
   #compose(): ServiceCatalogSnapshot {
     return {
       action: this.#pluginSnapshot.action,
+      agentModels: {
+        catalog: this.#agentCatalog,
+        error: this.#agentError,
+        loading: this.#agentLoading,
+        scopeId: this.#scopeId,
+      },
       error: this.#pluginSnapshot.error,
       loading: this.#pluginSnapshot.loading || this.#agentLoading,
       services: [
         openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
-        ...this.#pluginSnapshot.services.map((service) => pluginEntry(service, this.#agentCatalog)),
+        ...this.#pluginSnapshot.services.map((service) =>
+          pluginEntry(service, this.#agentCatalog, this.#stablePluginStates.get(service.pluginId)),
+        ),
       ],
+    }
+  }
+
+  #rememberStablePluginStates() {
+    if (!this.#pluginSnapshot.loading) {
+      const presentPluginIds = new Set(this.#pluginSnapshot.services.map((service) => service.pluginId))
+      for (const pluginId of this.#stablePluginStates.keys()) {
+        if (!presentPluginIds.has(pluginId)) this.#stablePluginStates.delete(pluginId)
+      }
+    }
+    for (const service of this.#pluginSnapshot.services) {
+      if (!service.loading && service.status) {
+        this.#stablePluginStates.set(service.pluginId, service.status.state)
+      }
     }
   }
 
