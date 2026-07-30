@@ -38,7 +38,9 @@ export function createRendererCanvasPersistence(options: {
           if (!authoritativeDocument) throw new Error("Canvas document was not found")
           const target = options.dehydrate(document)
           const command = createCanvasDocumentPatchCommand(authoritativeDocument, target)
-          if (isEmptyCanvasDocumentPatch(command)) return options.hydrate(authoritativeDocument)
+          if (isEmptyCanvasDocumentPatch(command)) {
+            return options.hydrate(restoreRendererRuntimeState(authoritativeDocument, document))
+          }
           const result = await options.client.execute({
             command,
             commandId: options.commandId(),
@@ -53,6 +55,30 @@ export function createRendererCanvasPersistence(options: {
       return save
     },
   }
+}
+
+/**
+ * An empty durable patch still collapses the renderer-only revision to Main's
+ * authoritative revision. Keep the current runtime resource projection while
+ * doing so: the cached authoritative document is deliberately dehydrated and
+ * therefore cannot be exposed to the renderer as-is.
+ */
+function restoreRendererRuntimeState(authoritative: CanvasDocument, projection: CanvasDocument): CanvasDocument {
+  const projectedNodes = new Map(projection.nodes.map((node) => [node.id, node]))
+  let changed = false
+  const nodes = authoritative.nodes.map((node) => {
+    const projected = projectedNodes.get(node.id)
+    if (!projected || !Object.hasOwn(projected.data, "resourceState")) return node
+    changed = true
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        resourceState: projected.data.resourceState,
+      },
+    }
+  })
+  return changed ? { ...authoritative, nodes } : authoritative
 }
 
 function isEmptyCanvasDocumentPatch(command: CanvasDocumentPatchCommand) {
