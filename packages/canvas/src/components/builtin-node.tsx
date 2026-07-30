@@ -2008,19 +2008,316 @@ function EmptyMedia(props: {
   )
 }
 
+const cutoutSourceUrlByNodeId = new Map<string, string>()
+const cutoutDissolveDurationMs = 1_740
+
+export function shouldUpdateCutoutMediaSize(resultUrl: string) {
+  return resultUrl.trim().length > 0
+}
+
+function cutoutParticleNoise(x: number, y: number, seed: number) {
+  let value = Math.imul(x + 1_013 * seed, 0x165667b1)
+  value = Math.imul(value ^ Math.imul(y + 1_619 * seed, 0x27d4eb2f), 0x4bf19f61)
+  return ((value ^ (value >>> 16)) >>> 0) / 0xffffffff
+}
+
+function drawCutoutImage(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+  fit: "contain" | "cover",
+) {
+  const imageRatio = image.naturalWidth / image.naturalHeight
+  const frameRatio = width / height
+  const scale =
+    fit === "cover"
+      ? imageRatio > frameRatio
+        ? height / image.naturalHeight
+        : width / image.naturalWidth
+      : imageRatio > frameRatio
+        ? width / image.naturalWidth
+        : height / image.naturalHeight
+  const drawWidth = image.naturalWidth * scale
+  const drawHeight = image.naturalHeight * scale
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = "high"
+  context.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight)
+}
+
+function CutoutImageBody(props: {
+  cutoutPresentation: "idle" | "scanning" | "result"
+  data: CanvasMediaNodeData
+  nodeId: string
+  onMediaLoad?: (size: { height: number; width: number }) => void
+  sourceUrl?: string
+}) {
+  const fit = props.data.fit ?? "contain"
+  const resultUrl = props.data.resourceState?.url ?? ""
+  const hasResultMedia = shouldUpdateCutoutMediaSize(resultUrl)
+  const url = resultUrl || props.sourceUrl || ""
+  const sourceImageRef = useRef<HTMLImageElement>(null)
+  const resultImageRef = useRef<HTMLImageElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const onMediaLoadRef = useRef(props.onMediaLoad)
+  onMediaLoadRef.current = props.onMediaLoad
+  const previousUrl = props.sourceUrl || cutoutSourceUrlByNodeId.get(props.nodeId)
+  if (props.cutoutPresentation !== "result" && url) cutoutSourceUrlByNodeId.set(props.nodeId, url)
+  const candidate =
+    props.cutoutPresentation === "result" && previousUrl && previousUrl !== url
+      ? { fromUrl: previousUrl, signature: `${previousUrl}\u0000${url}` }
+      : undefined
+  const [transition, setTransition] = useState<{
+    fromUrl: string
+    phase: "dissolving" | "done" | "waiting"
+    signature: string
+  } | null>(null)
+  const activeTransition =
+    candidate && transition?.signature === candidate.signature
+      ? transition
+      : candidate
+        ? { ...candidate, phase: "waiting" as const }
+        : null
+
+  useEffect(() => {
+    if (!candidate) {
+      if (url) cutoutSourceUrlByNodeId.set(props.nodeId, url)
+      if (transition) setTransition(null)
+      return
+    }
+    if (transition?.signature !== candidate.signature) {
+      setTransition({ ...candidate, phase: "waiting" })
+    }
+  }, [candidate?.signature, props.nodeId, transition, url])
+
+  const beginDissolve = useCallback(() => {
+    if (!candidate || transition?.phase === "dissolving" || transition?.phase === "done") return
+    if (!sourceImageRef.current?.complete || !resultImageRef.current?.complete) return
+    if (!sourceImageRef.current.naturalWidth || !resultImageRef.current.naturalWidth) return
+    setTransition({ ...candidate, phase: "dissolving" })
+  }, [candidate, transition?.phase])
+
+  useLayoutEffect(() => {
+    if (!hasResultMedia) return
+    const image = resultImageRef.current
+    if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return
+    onMediaLoadRef.current?.({ height: image.naturalHeight, width: image.naturalWidth })
+  }, [hasResultMedia, resultUrl])
+
+  useLayoutEffect(() => {
+    if (activeTransition?.phase !== "dissolving") return
+    const canvas = canvasRef.current
+    const sourceImage = sourceImageRef.current
+    const resultImage = resultImageRef.current
+    if (!canvas || !sourceImage || !resultImage) return
+    const bounds = canvas.getBoundingClientRect()
+    const width = Math.max(1, Math.round(bounds.width))
+    const height = Math.max(1, Math.round(bounds.height))
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext("2d", { alpha: true })
+    if (!context) return
+    const sampleCanvas = document.createElement("canvas")
+    sampleCanvas.width = width
+    sampleCanvas.height = height
+    const sampleContext = sampleCanvas.getContext("2d", { alpha: true, willReadFrequently: true })
+    if (!sampleContext) return
+    drawCutoutImage(sampleContext, sourceImage, width, height, fit)
+    const sourcePixels = sampleContext.getImageData(0, 0, width, height).data
+    sampleContext.clearRect(0, 0, width, height)
+    drawCutoutImage(sampleContext, resultImage, width, height, fit)
+    const resultPixels = sampleContext.getImageData(0, 0, width, height).data
+
+    const capacity = width * height
+    const sourceX = new Float32Array(capacity)
+    const sourceY = new Float32Array(capacity)
+    const colors = new Uint8ClampedArray(capacity * 4)
+    const delays = new Float32Array(capacity)
+    const travels = new Float32Array(capacity)
+    const directionOffsets = new Float32Array(capacity)
+    const phases = new Float32Array(capacity)
+    const speeds = new Float32Array(capacity)
+    const lifetimes = new Float32Array(capacity)
+    const swayAmplitudes = new Float32Array(capacity)
+    const swayFrequencies = new Float32Array(capacity)
+    let count = 0
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const pixel = (y * width + x) * 4
+        const resultAlpha = resultPixels[pixel + 3]
+        // Keep the dissolve on the removed-background side of the matte.
+        // U²-Net intentionally leaves soft foreground alpha; sampling every
+        // source/result delta would put visible grain across skin and clothing.
+        const removedAlpha =
+          resultAlpha < 128 ? Math.max(0, sourcePixels[pixel + 3] - resultAlpha) : 0
+        if (removedAlpha === 0) continue
+        const color = count * 4
+        sourceX[count] = x
+        sourceY[count] = y
+        colors[color] = sourcePixels[pixel]
+        colors[color + 1] = sourcePixels[pixel + 1]
+        colors[color + 2] = sourcePixels[pixel + 2]
+        colors[color + 3] = removedAlpha
+        delays[count] = (x / Math.max(1, width - 1)) * 0.18 + 0.22 * cutoutParticleNoise(x, y, 1)
+        travels[count] = 125 + 225 * cutoutParticleNoise(x, y, 2)
+        directionOffsets[count] = cutoutParticleNoise(x, y, 3) - 0.5
+        phases[count] = cutoutParticleNoise(x, y, 4) * Math.PI * 2
+        speeds[count] = 0.25 + 2.1 * cutoutParticleNoise(x, y, 5)
+        lifetimes[count] = 300 + 1_340 * cutoutParticleNoise(x, y, 6)
+        swayAmplitudes[count] = 0.65 + 0.7 * cutoutParticleNoise(x, y, 7)
+        swayFrequencies[count] = 0.72 + 0.68 * cutoutParticleNoise(x, y, 8)
+        count += 1
+      }
+    }
+
+    const frame = context.createImageData(width, height)
+    const pixels = frame.data
+    const rowStride = width * 4
+    const writeParticle = (offset: number, color: number, alpha: number) => {
+      if (resultPixels[offset + 3] >= 128) return
+      if (alpha <= pixels[offset + 3]) return
+      pixels[offset] = colors[color]
+      pixels[offset + 1] = colors[color + 1]
+      pixels[offset + 2] = colors[color + 2]
+      pixels[offset + 3] = alpha
+    }
+    const startedAt = performance.now()
+    let animationFrame = 0
+    const drawFrame = (now: number) => {
+      const elapsed = now - startedAt
+      pixels.fill(0)
+      const baseAngle = -0.22 * Math.PI
+      for (let index = 0; index < count; index += 1) {
+        const lifetime = lifetimes[index]
+        if (elapsed >= lifetime) continue
+        const delay = Math.min(1_000 * delays[index], 0.35 * lifetime)
+        const rawProgress = Math.min(1, Math.max(0, elapsed - delay) / Math.max(1, lifetime - delay))
+        const eased =
+          ((1 - Math.exp(-8 * rawProgress * rawProgress)) / (1 - Math.exp(-8))) * 0.92 +
+          rawProgress * rawProgress * rawProgress * 0.08
+        const swayRamp = Math.min(1, 2.4 * rawProgress)
+        const angle = baseAngle + 0.99 * directionOffsets[index]
+        const travelX = Math.cos(angle) * 0.7 * travels[index] * speeds[index]
+        const travelY = (Math.sin(angle) * travels[index] - 18) * 0.7 * speeds[index]
+        const sway =
+          29 *
+          Math.sin(phases[index] + 1.6 * eased * swayFrequencies[index] * Math.PI) *
+          swayAmplitudes[index] *
+          swayRamp
+        const x = Math.round(sourceX[index] + travelX * eased - Math.sin(angle) * sway)
+        const y = Math.round(sourceY[index] + travelY * eased + Math.cos(angle) * sway + 8.4 * eased)
+        if (x < 0 || x >= width || y < 0 || y >= height) continue
+        const fade = Math.max(0, Math.min(1, (elapsed - Math.max(0, lifetime - 50)) / 50))
+        const size = 2.5 * (1 - fade * fade * (3 - 2 * fade))
+        if (size <= 0.15) continue
+        const color = index * 4
+        const offset = (y * width + x) * 4
+        const alpha = Math.round(colors[color + 3] * (1 - rawProgress))
+        if (alpha <= 0) continue
+        writeParticle(offset, color, alpha)
+        const radius = Math.ceil(Math.max(0, size - 1))
+        for (let distance = 1; distance <= radius; distance += 1) {
+          const neighborAlpha = Math.round(
+            alpha * Math.min(0.48, 1.35 * rawProgress) * Math.max(0, Math.min(1, size - distance)),
+          )
+          if (neighborAlpha <= 0) continue
+          if (x - distance >= 0) writeParticle(offset - 4 * distance, color, neighborAlpha)
+          if (x + distance < width) writeParticle(offset + 4 * distance, color, neighborAlpha)
+          if (y - distance >= 0) writeParticle(offset - rowStride * distance, color, neighborAlpha)
+          if (y + distance < height) writeParticle(offset + rowStride * distance, color, neighborAlpha)
+        }
+      }
+      context.putImageData(frame, 0, 0)
+      sourceImage.style.visibility = "hidden"
+      canvas.style.visibility = "visible"
+      if (elapsed < cutoutDissolveDurationMs) {
+        animationFrame = window.requestAnimationFrame(drawFrame)
+        return
+      }
+      canvas.style.visibility = "hidden"
+      cutoutSourceUrlByNodeId.set(props.nodeId, url)
+      setTransition((current) =>
+        current?.signature === activeTransition.signature ? { ...current, phase: "done" } : current,
+      )
+    }
+    drawFrame(startedAt)
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      sourceImage.style.visibility = ""
+      canvas.style.visibility = "hidden"
+    }
+  }, [activeTransition?.phase, activeTransition?.signature, fit, props.nodeId, url])
+
+  const imageClassName = cn(
+    "convax-cutout-media__image relative z-[1] size-full",
+    fit === "cover" ? "object-cover" : "object-contain",
+  )
+  return (
+    <div className="convax-cutout-media relative size-full" data-canvas-cutout-presentation={props.cutoutPresentation}>
+      {activeTransition && activeTransition.phase !== "done" ? (
+        <canvas aria-hidden className="convax-cutout-media__dissolve-canvas" ref={canvasRef} />
+      ) : null}
+      <img
+        alt={props.data.label}
+        className={imageClassName}
+        crossOrigin="anonymous"
+        decoding="async"
+        draggable={false}
+        loading="lazy"
+        onLoad={(event) => {
+          if (hasResultMedia) {
+            onMediaLoadRef.current?.({
+              height: event.currentTarget.naturalHeight,
+              width: event.currentTarget.naturalWidth,
+            })
+          }
+          beginDissolve()
+        }}
+        ref={resultImageRef}
+        src={url}
+      />
+      {activeTransition && activeTransition.phase !== "done" ? (
+        <img
+          alt=""
+          aria-hidden
+          className={cn(imageClassName, "convax-cutout-media__dissolve-source")}
+          crossOrigin="anonymous"
+          decoding="async"
+          draggable={false}
+          onLoad={beginDissolve}
+          ref={sourceImageRef}
+          src={activeTransition.fromUrl}
+        />
+      ) : null}
+      {props.cutoutPresentation === "scanning" ? (
+        <div aria-hidden className="convax-cutout-media__scan">
+          <span className="convax-cutout-media__scan-tint" />
+          <span className="convax-cutout-media__scan-beam" />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function MediaBody(props: {
+  cutoutPresentation: "idle" | "scanning" | "result"
+  cutoutSourceUrl?: string
+  data: CanvasMediaNodeData
   emptyImageActions?: {
     generateDisabled: boolean
     onGenerate: () => void
     onUpload: () => void
     uploadDisabled: boolean
   }
-  data: CanvasMediaNodeData
+  nodeId: string
   onMediaLoad?: (size: { height: number; width: number }) => void
   selected: boolean
 }) {
   const fit = props.data.fit ?? "contain"
-  const url = props.data.resourceState?.url ?? ""
+  const url =
+    props.data.resourceState?.url ||
+    (props.data.kind === "image" && props.cutoutPresentation === "scanning" ? props.cutoutSourceUrl : "") ||
+    ""
   if (!url.trim()) {
     return (
       <EmptyMedia
@@ -2032,19 +2329,12 @@ function MediaBody(props: {
   }
   if (props.data.kind === "image") {
     return (
-      <img
-        alt={props.data.label}
-        className={cn("size-full", fit === "cover" ? "object-cover" : "object-contain")}
-        decoding="async"
-        draggable={false}
-        loading="lazy"
-        onLoad={(event) => {
-          props.onMediaLoad?.({
-            height: event.currentTarget.naturalHeight,
-            width: event.currentTarget.naturalWidth,
-          })
-        }}
-        src={url}
+      <CutoutImageBody
+        cutoutPresentation={props.cutoutPresentation}
+        data={props.data}
+        nodeId={props.nodeId}
+        onMediaLoad={props.onMediaLoad}
+        sourceUrl={props.cutoutSourceUrl}
       />
     )
   }
@@ -2077,10 +2367,42 @@ function downloadMedia(data: CanvasMediaNodeData) {
   anchor.click()
 }
 
+function connectedImageSourceUrl(
+  document: {
+    edges: readonly { source: string; target: string }[]
+    nodes: readonly CanvasNode[]
+  },
+  targetNodeId: string,
+) {
+  for (const edge of document.edges) {
+    if (edge.target !== targetNodeId) continue
+    const source = document.nodes.find((node) => node.id === edge.source)
+    if (source?.type !== "file" || source.data.kind !== "image") continue
+    const url = (source.data as CanvasMediaNodeData).resourceState?.url
+    if (url) return url
+  }
+  return undefined
+}
+
 export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
   const assistant = useCanvasService("assistant")
   const data = props.data as CanvasMediaNodeData
+  const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
+  const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
+  const cutoutGeneration = generationRun?.toolId === "cutout-studio/background.remove" ? generationRun : undefined
+  const cutoutSourceUrl = cutoutGeneration
+    ? connectedImageSourceUrl(editor.document, props.id)
+    : undefined
+  const cutoutScanRequested = Boolean(
+    cutoutGeneration && isCanvasNodeGenerationRunActive(cutoutGeneration),
+  )
+  const cutoutPresentation =
+    cutoutGeneration?.status === "succeeded"
+      ? "result"
+      : cutoutScanRequested
+        ? "scanning"
+        : "idle"
   const url = data.resourceState?.url
   const supportsFit = data.kind === "image" || data.kind === "video"
   const emptyImage = isCanvasEmptyImageNodeData(data)
@@ -2133,6 +2455,8 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
       toolbar={toolbar}
     >
       <MediaBody
+        cutoutPresentation={cutoutPresentation}
+        cutoutSourceUrl={cutoutSourceUrl}
         data={data}
         emptyImageActions={
           emptyImage
@@ -2144,6 +2468,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
               }
             : undefined
         }
+        nodeId={props.id}
         onMediaLoad={
           supportsFit
             ? (size) => {
@@ -2151,6 +2476,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
                   fitCanvasMediaNodeToIntrinsicSize(document, {
                     ...size,
                     nodeId: props.id,
+                    preserveFrame: cutoutPresentation !== "idle",
                     sourceUrl: url ?? "",
                   }),
                 )
@@ -2561,6 +2887,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
     submissionMode: NonNullable<CanvasAssistantGenerationCapability["submissionMode"]>
   }>()
   const activeGeneration = Boolean(generationRun && isCanvasNodeGenerationRunActive(generationRun))
+  const activeCutoutGeneration = activeGeneration && generationRun?.toolId === "cutout-studio/background.remove"
   const dismissedTerminal = Boolean(
     generationRun &&
       !activeGeneration &&
@@ -2645,7 +2972,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           }
         />
       ) : null}
-      {generationRun && generationRun.status !== "succeeded" && !dismissedTerminal ? (
+      {generationRun && generationRun.status !== "succeeded" && !dismissedTerminal && !activeCutoutGeneration ? (
         <FileGenerationActivityOverlay
           onCancel={() => generation?.cancel?.(generationRun.operationId)}
           onRecover={(submissionMode) => {

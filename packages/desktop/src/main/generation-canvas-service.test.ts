@@ -1490,6 +1490,50 @@ describe("GenerationCanvasService", () => {
     expect(harness.reloadRevisions).toEqual([1, 3])
   })
 
+  test("keeps pending replacement valid when persistence removes its empty runtime resource placeholder", async () => {
+    let markStarted!: () => void
+    let release!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = await setupPendingGeneration(async () => {
+      markStarted()
+      await gate
+      return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+    })
+    const generation = harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "text" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    await started
+    harness.mutateDocument((document) => ({
+      ...document,
+      nodes: document.nodes.map((node) => {
+        if (node.id !== harness.pendingNodeId) return node
+        const { resourceState: _resourceState, ...data } = node.data
+        return { ...node, data }
+      }),
+      revision: document.revision + 1,
+    }))
+    release()
+
+    await expect(generation).resolves.toMatchObject({
+      createdNodeIds: [harness.pendingNodeId],
+      toolId: "creative-tools/draw",
+    })
+    expect(harness.replacementRequests).toHaveLength(1)
+  })
+
   test("connects a constrained Plugin owner to its pending generation node", async () => {
     let markStarted!: () => void
     let release!: () => void

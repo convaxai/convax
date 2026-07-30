@@ -31,6 +31,7 @@ export function fitCanvasMediaNodeToIntrinsicSize(
   input: {
     height: number
     nodeId: string
+    preserveFrame?: boolean
     sourceUrl: string
     width: number
   },
@@ -45,7 +46,7 @@ export function fitCanvasMediaNodeToIntrinsicSize(
   if (!positiveDimension(input.width) || !positiveDimension(input.height)) return document
 
   const nextData = { ...data, height: input.height, width: input.width }
-  if (data.fit === "cover") {
+  if (data.fit === "cover" || input.preserveFrame) {
     return {
       ...document,
       nodes: document.nodes.map((candidate) =>

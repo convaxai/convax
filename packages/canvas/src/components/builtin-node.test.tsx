@@ -3,7 +3,7 @@ import type { Editor } from "@tiptap/core"
 import type { NodeProps } from "@xyflow/react"
 import type { ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { createAgentNode, createCanvasDocument, createGroupNode, createTextNode } from "../document"
+import { createAgentNode, createCanvasDocument, createGroupNode, createMediaNode, createTextNode } from "../document"
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
@@ -79,6 +79,7 @@ const {
   resolveCanvasTextHandleTarget,
   runCanvasTextInlineCommand,
   saveCanvasTextDraft,
+  shouldUpdateCutoutMediaSize,
   shouldShowCanvasTextInlineMenu,
   startCanvasSelectionDragFromNode,
   updateCanvasTextDraft,
@@ -679,6 +680,90 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).toContain('src="asset://portrait"')
     expect(videoMarkup).toContain("convax-node__surface--media")
     expect(videoMarkup).toContain('src="asset://clip"')
+  })
+
+  test("runs cutout scan and dissolve on the adjacent generated image node", () => {
+    const source = createMediaNode({
+      id: "cutout-source",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "cutout-source-resource",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "convax-asset://cutout-source" },
+      },
+    })
+    const pendingBase = createMediaNode({
+      id: "cutout-result",
+      position: { x: 384, y: 0 },
+      resource: {
+        id: "cutout-result-resource",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "" },
+      },
+    })
+    const pending = { ...pendingBase, data: { ...pendingBase.data, status: "pending" as const } }
+    const document = {
+      ...createCanvasDocument({ id: "cutout-canvas", nodes: [source, pending] }),
+      edges: [{ id: "cutout-edge", source: source.id, target: pending.id, type: "canvas" as const }],
+    }
+    const running = markCanvasNodeGenerationRunRunning(
+      startCanvasNodeGenerationRun(document, pending.id, {
+        operationId: "cutout-operation",
+        prompt: "Remove the image background",
+        toolId: "cutout-studio/background.remove",
+      }),
+      pending.id,
+      "cutout-operation",
+      "cutout-task",
+    )
+    const runningNode = running.nodes.find((candidate) => candidate.id === pending.id)!
+    const runningMarkup = renderWithEditor(
+      selection([pending.id]),
+      false,
+      (props) => <BuiltinMediaFileNode {...props} />,
+      false,
+      { document: running, node: runningNode },
+    )
+    expect(runningMarkup).toContain('data-canvas-cutout-presentation="scanning"')
+    expect(runningMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(runningMarkup).toContain("convax-cutout-media__scan-beam")
+
+    const withResult = {
+      ...running,
+      nodes: running.nodes.map((candidate) =>
+        candidate.id === pending.id
+          ? {
+              ...candidate,
+              data: {
+                ...candidate.data,
+                resourceState: { status: "ready" as const, url: "convax-asset://cutout-result" },
+                status: "idle" as const,
+              },
+            }
+          : candidate,
+      ),
+    }
+    const succeeded = succeedCanvasNodeGenerationRun(withResult, pending.id, "cutout-operation")
+    const succeededNode = succeeded.nodes.find((candidate) => candidate.id === pending.id)!
+    const succeededMarkup = renderWithEditor(
+      selection([pending.id]),
+      false,
+      (props) => <BuiltinMediaFileNode {...props} />,
+      false,
+      { document: succeeded, node: succeededNode },
+    )
+    expect(succeededMarkup).toContain('data-canvas-cutout-presentation="result"')
+    expect(succeededMarkup).toContain('src="convax-asset://cutout-result"')
+    expect(succeededMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(succeededMarkup).toContain('crossorigin="anonymous"')
+  })
+
+  test("does not resize the pending cutout node from its source-image scan preview", () => {
+    expect(shouldUpdateCutoutMediaSize("")).toBe(false)
+    expect(shouldUpdateCutoutMediaSize("   ")).toBe(false)
+    expect(shouldUpdateCutoutMediaSize("convax-asset://cutout-result")).toBe(true)
   })
 
   test("gives a newly created empty image a clear upload-or-generate choice", () => {

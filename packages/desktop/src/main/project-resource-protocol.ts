@@ -13,6 +13,24 @@ export interface ProjectResourceProtocolInput {
   reference: ProtocolReference
 }
 
+export function projectResourceAccessControlAllowOrigin(request: Request, trustedRendererUrl: string) {
+  const expected = new URL(trustedRendererUrl)
+  const requestOrigin = request.headers.get("origin")
+  if (expected.origin !== "null") return requestOrigin === expected.origin ? expected.origin : undefined
+  const requestReferrer = request.referrer || request.headers.get("referer")
+  if (requestOrigin !== "null" || !requestReferrer) return undefined
+  try {
+    const referrer = new URL(requestReferrer)
+    return referrer.protocol === expected.protocol &&
+      referrer.host === expected.host &&
+      referrer.pathname === expected.pathname
+      ? "null"
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function createProjectResourceUrl(input: ProjectResourceProtocolInput) {
   const projectId = requireProjectId(input.projectId)
   const reference = requireProtocolReference(input.reference)
@@ -87,6 +105,7 @@ export async function resolveProjectResourceProtocolPath(
 }
 
 export function createProjectResourceProtocolResponse(input: {
+  accessControlAllowOrigin?: string
   cacheControl: string
   request: Request
   response: Response
@@ -108,6 +127,10 @@ export function createProjectResourceProtocolResponse(input: {
   }
   const headers = new Headers(input.response.headers)
   headers.set("Accept-Ranges", "bytes")
+  if (input.accessControlAllowOrigin) {
+    headers.set("Access-Control-Allow-Origin", input.accessControlAllowOrigin)
+    headers.set("Vary", "Origin")
+  }
   headers.set("Cache-Control", input.cacheControl)
   if (range) {
     headers.set("Content-Length", String(range.end - range.start + 1))

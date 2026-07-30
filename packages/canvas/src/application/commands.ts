@@ -1130,7 +1130,8 @@ function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGeneratio
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
-  const withoutRun = omitCanvasNodeGenerationRunFromData(data)
+  const durableData = normalizePendingGenerationData(structuredClone(data))
+  const withoutRun = omitCanvasNodeGenerationRunFromData(durableData as CanvasNode["data"])
   const metadata = withoutRun.metadata
   if (!isRecord(metadata)) return withoutRun
   const nextMetadata = { ...structuredClone(metadata) }
@@ -1140,6 +1141,26 @@ function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): Ca
     return withoutMetadata as CanvasNode["data"]
   }
   return { ...withoutRun, metadata: nextMetadata }
+}
+
+function normalizePendingGenerationData(data: CanvasNode["data"]): CanvasNode["data"] {
+  if (data.status !== "pending") return data
+  const normalized = { ...data } as CanvasNode["data"] & Record<string, unknown>
+  if (normalized.resourceState === undefined || isEmptyPendingResourceState(normalized.resourceState)) {
+    delete normalized.resourceState
+  }
+  for (const key of ["durationMs", "height", "mimeType", "name", "width"] as const) {
+    if (normalized[key] === null || normalized[key] === undefined) delete normalized[key]
+  }
+  return normalized
+}
+
+function isEmptyPendingResourceState(value: unknown) {
+  if (!isRecord(value) || value.status !== "ready") return false
+  if (Object.keys(value).some((key) => key !== "status" && key !== "text" && key !== "url")) return false
+  if ("text" in value && value.text !== "") return false
+  if ("url" in value && value.url !== "") return false
+  return true
 }
 
 function applyGenerationRunMutation(

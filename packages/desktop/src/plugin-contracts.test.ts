@@ -928,6 +928,117 @@ describe("versioned Plugin manifest generation declarations", () => {
     ).toThrow("must accept reference_image")
   })
 
+  test("admits one v7 immediate image operation that creates an adjacent Canvas result", () => {
+    const manifest = {
+      capabilities: [],
+      contributes: {
+        canvas: {
+          selectionActions: [
+            {
+              description: { default: "Create a transparent PNG beside the selected image." },
+              editor: "immediate",
+              id: "remove-background",
+              presentation: "cutout-scan",
+              steps: [{ tool: "background.remove" }],
+              target: "image",
+              title: { default: "Remove background", "zh-CN": "抠图" },
+            },
+          ],
+        },
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: ["reference_image"],
+              description: "Remove the image background.",
+              id: "background.remove",
+              output: "image",
+              title: "Remove background",
+            },
+          ],
+        },
+      },
+      description: "Local cutout",
+      id: "cutout-studio",
+      name: "Cutout Studio",
+      runtime: { command: "convax-cutout-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/7",
+      version: "0.2.0",
+    }
+
+    expect(parseWebPluginManifest(manifest).contributes.canvas?.selectionActions?.[0]).toMatchObject({
+      editor: "immediate",
+      presentation: "cutout-scan",
+      steps: [{ tool: "background.remove" }],
+      target: "image",
+    })
+    expect(() => parseWebPluginManifest({ ...manifest, schema: "convax.plugin/6" })).toThrow("unsupported field")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest,
+        contributes: {
+          ...manifest.contributes,
+          generation: {
+            models: [],
+            tools: [{ ...manifest.contributes.generation.tools[0], output: "video" }],
+          },
+        },
+      }),
+    ).toThrow("immediate image operation")
+  })
+
+  test("keeps a retired v7 in-place action parseable only for installed-package lifecycle", () => {
+    const parsed = parseWebPluginManifest({
+      capabilities: ["generation.execute", "ui.fullscreen"],
+      contributes: {
+        canvas: {
+          renderer: { create: true, height: 720, width: 1080 },
+          selectionActions: [
+            {
+              action: {
+                presentation: "cutout-scan",
+                tool: "background.remove",
+                type: "replace-selection-with-generation",
+              },
+              description: { default: "Remove the selected image background in place." },
+              id: "remove-background",
+              target: "image",
+              title: { default: "Remove background" },
+            },
+          ],
+        },
+        generation: {
+          models: [],
+          tools: [
+            {
+              acceptedInputs: ["reference_image"],
+              description: "Remove the image background.",
+              id: "background.remove",
+              output: "image",
+              title: "Remove background",
+            },
+          ],
+        },
+      },
+      description: "Legacy local cutout",
+      entry: "index.html",
+      id: "cutout-studio",
+      name: "Cutout Studio",
+      runtime: { command: "convax-cutout-mcp", type: "mcp-stdio" },
+      schema: "convax.plugin/7",
+      version: "0.1.10",
+    })
+
+    expect(parsed.contributes.canvas?.selectionActions?.[0]).toMatchObject({
+      action: {
+        presentation: "cutout-scan",
+        tool: "background.remove",
+        type: "replace-selection-with-generation",
+      },
+      target: "image",
+    })
+  })
+
   test("allows prompt-only tools with no optional Canvas reference roles", () => {
     const manifest = executableManifest()
     const parsed = parseWebPluginManifest({
