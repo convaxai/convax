@@ -35,6 +35,7 @@ export interface ProjectLifecycleClient {
   listProjects(): Promise<{ projects: ProjectRecord[] }>
   openProject(): Promise<ProjectSelectionResult>
   renameProject(input: { name: string; projectId: string }): Promise<{ project: ProjectRecord; projects: ProjectRecord[] }>
+  touchProject(input: { projectId: string }): Promise<{ project: ProjectRecord; projects: ProjectRecord[] }>
 }
 
 /** @deprecated Inject ProjectLifecycleClient and ProjectFilesClient as separate capabilities. */

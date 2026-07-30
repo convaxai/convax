@@ -1,78 +1,86 @@
-import type { ProjectController, ProjectControllerSnapshot, ProjectRecord } from "@convax/project"
+import type { ProjectController, ProjectControllerSnapshot } from "@convax/project"
 
-export interface ProjectHomeProject extends ProjectRecord {
-  available: boolean
-  hasValidRecency: boolean
-}
-
-export interface ProjectHomeModel {
-  continueProject: ProjectHomeProject | null
-  empty: boolean
-  initialized: boolean
-  projects: ProjectHomeProject[]
-}
+export type ProjectStartupRoute =
+  | { kind: "loading" }
+  | { kind: "onboarding" }
+  | {
+      kind: "restore"
+      projectId: string
+      projectName: string
+    }
+  | {
+      kind: "recovery"
+      reason: "projects-unavailable" | "registry-error"
+    }
 
 export type ProjectHomeEntryResult =
   | { status: "canceled" }
   | { status: "entered" }
   | { message: string; status: "failed" }
 
-export function buildProjectHomeModel(snapshot: ProjectControllerSnapshot): ProjectHomeModel {
-  const projects = snapshot.projects
-    .map((project): ProjectHomeProject => ({
-      ...project,
-      available: project.missing !== true,
-      hasValidRecency: isValidTimestamp(project.lastOpenedAt),
-    }))
-    .sort(compareProjectRecency)
-  const continueProject =
-    projects.find(
-      (project) => project.id === snapshot.activeProjectId && project.available,
-    ) ?? null
+export type ProjectBootstrapView =
+  | { kind: "registry-loading" }
+  | { kind: "onboarding" }
+  | { error: string | null; kind: "recovery" }
+  | { kind: "opening"; projectName: string }
 
-  return {
-    continueProject,
-    empty: projects.length === 0,
-    initialized: snapshot.initialized,
-    projects,
+/**
+ * Resolves Desktop's startup surface without taking ownership of Project state.
+ *
+ * ProjectController chooses the persisted most-recent available Project. Desktop
+ * only decides whether that Project should be restored or whether the user truly
+ * has no registered Projects yet.
+ */
+export function resolveProjectStartup(snapshot: ProjectControllerSnapshot): ProjectStartupRoute {
+  if (!snapshot.initialized) return { kind: "loading" }
+  if (snapshot.projects.length === 0) {
+    return snapshot.error
+      ? { kind: "recovery", reason: "registry-error" }
+      : { kind: "onboarding" }
   }
+
+  const activeProject = snapshot.projects.find(
+    (project) => project.id === snapshot.activeProjectId && project.missing !== true,
+  )
+  if (snapshot.error && !activeProject) {
+    return { kind: "recovery", reason: "registry-error" }
+  }
+  const project = activeProject ?? snapshot.projects.find((candidate) => candidate.missing !== true)
+  return project
+    ? {
+        kind: "restore",
+        projectId: project.id,
+        projectName: project.name,
+      }
+    : {
+        kind: "recovery",
+        reason: snapshot.error ? "registry-error" : "projects-unavailable",
+      }
 }
 
-export async function enterProjectFromHome(
-  controller: ProjectController,
-  projectId: string,
-  onEnterProject: (projectId: string) => Promise<boolean | void>,
-): Promise<ProjectHomeEntryResult> {
-  const before = controller.getSnapshot()
-  const project = before.projects.find((candidate) => candidate.id === projectId)
-  if (!project) return { message: "This Project is no longer registered.", status: "failed" }
-  if (project.missing) {
-    return { message: `Project folder is unavailable: ${project.rootPath}`, status: "failed" }
-  }
-
-  await controller.activate(projectId)
-  const activated = controller.getSnapshot()
-  if (activated.activeProjectId !== projectId) {
+export function resolveProjectBootstrapView(input: {
+  entryFailure?: string | null
+  recoveryError?: string | null
+  registryError?: string | null
+  route: ProjectStartupRoute
+}): ProjectBootstrapView {
+  if (input.route.kind === "loading") return { kind: "registry-loading" }
+  if (input.route.kind === "onboarding") return { kind: "onboarding" }
+  if (input.route.kind === "recovery" || input.entryFailure || input.recoveryError) {
     return {
-      message: activated.error ?? "Convax could not activate this Project. Try opening it again.",
-      status: "failed",
+      error: input.recoveryError ?? input.entryFailure ?? input.registryError ?? null,
+      kind: "recovery",
     }
   }
+  return { kind: "opening", projectName: input.route.projectName }
+}
 
-  try {
-    const entered = await onEnterProject(projectId)
-    return entered === false
-      ? {
-          message: "Convax could not restore this Project. Try opening it again.",
-          status: "failed",
-        }
-      : { status: "entered" }
-  } catch (error) {
-    return {
-      message: error instanceof Error ? error.message : String(error),
-      status: "failed",
-    }
-  }
+export function recoveryErrorAfterProjectSelection(
+  result: ProjectHomeEntryResult,
+  previousError: string | null,
+) {
+  if (result.status === "failed") return result.message
+  return result.status === "canceled" ? previousError : null
 }
 
 export async function enterSelectedProjectFromHome(
@@ -108,20 +116,4 @@ export async function enterSelectedProjectFromHome(
       status: "failed",
     }
   }
-}
-
-function compareProjectRecency(left: ProjectHomeProject, right: ProjectHomeProject) {
-  if (left.hasValidRecency !== right.hasValidRecency) return left.hasValidRecency ? -1 : 1
-  if (left.hasValidRecency && right.hasValidRecency && left.lastOpenedAt !== right.lastOpenedAt) {
-    return right.lastOpenedAt - left.lastOpenedAt
-  }
-  return compareStableText(left.id, right.id)
-}
-
-function compareStableText(left: string, right: string) {
-  return left < right ? -1 : left > right ? 1 : 0
-}
-
-function isValidTimestamp(value: number) {
-  return Number.isFinite(value) && !Number.isNaN(new Date(value).getTime())
 }
