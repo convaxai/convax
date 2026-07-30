@@ -37,6 +37,7 @@ function input(overrides: Record<string, unknown> = {}) {
       version: "0.1.0",
       dependencies: { "@convax/plugin-api": "^1.0.0" },
     },
+    sdkSourceTarballBytes: sdkTarballBytes,
     sdkTarballBytes,
     sdkTarballIntegrity: sdkIntegrity,
     sdkVersion: "0.1.0",
@@ -118,6 +119,16 @@ describe("Plugin SDK Host package release evidence", () => {
         }),
       ),
     ).toThrow("protected Plugin SDK publication workflow")
+  })
+
+  test("rejects an npm SDK tarball that cannot be reproduced from the Host commit", () => {
+    expect(() =>
+      buildPluginSdkReleaseEvidence(
+        input({
+          sdkSourceTarballBytes: new TextEncoder().encode("different source package bytes"),
+        }),
+      ),
+    ).toThrow("not byte-identical to the package reproduced from the Host commit")
   })
 
   test("rejects incomplete or reordered release checks", () => {

@@ -66,6 +66,7 @@ type EvidenceInput = {
   readonly runAttempt: string
   readonly runId: string
   readonly sdkPackageJson: unknown
+  readonly sdkSourceTarballBytes: Uint8Array
   readonly sdkTarballBytes: Uint8Array
   readonly sdkTarballIntegrity: string
   readonly sdkVersion: string
@@ -160,6 +161,9 @@ export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<stri
     fail("workflow ref must identify a protected Plugin SDK publication workflow")
   }
   assertTarball(input.sdkTarballBytes, input.sdkTarballIntegrity, "Plugin SDK")
+  if (!exactBytes(input.sdkSourceTarballBytes, input.sdkTarballBytes)) {
+    fail("published Plugin SDK tarball is not byte-identical to the package reproduced from the Host commit")
+  }
   assertTarball(input.apiTarballBytes, input.apiTarballIntegrity, "Plugin API")
   assertPassedCheckResults(input.checkResults)
 
@@ -246,6 +250,7 @@ type Arguments = {
   readonly runAttempt: string
   readonly runId: string
   readonly sdkPackageJson: string
+  readonly sdkSourceTarball: string
   readonly sdkTarball: string
   readonly sdkTarballIntegrity: string
   readonly sdkVersion: string
@@ -267,6 +272,7 @@ function parseArguments(argv: readonly string[]): Arguments {
     "--run-attempt",
     "--run-id",
     "--sdk-package-json",
+    "--sdk-source-tarball",
     "--sdk-tarball",
     "--sdk-tarball-integrity",
     "--sdk-version",
@@ -296,6 +302,7 @@ function parseArguments(argv: readonly string[]): Arguments {
     runAttempt: values.get("--run-attempt")!,
     runId: values.get("--run-id")!,
     sdkPackageJson: values.get("--sdk-package-json")!,
+    sdkSourceTarball: values.get("--sdk-source-tarball")!,
     sdkTarball: values.get("--sdk-tarball")!,
     sdkTarballIntegrity: values.get("--sdk-tarball-integrity")!,
     sdkVersion: values.get("--sdk-version")!,
@@ -321,6 +328,7 @@ async function main(): Promise<void> {
   const apiTarballBytes = await readBounded(args.apiTarball, MAX_TARBALL_BYTES, "Plugin API tarball")
   const checkResultsBytes = await readBounded(args.checkResults, 128 * 1024, "check results")
   const sdkPackageJsonBytes = await readBounded(args.sdkPackageJson, MAX_PACKAGE_JSON_BYTES, "Plugin SDK package.json")
+  const sdkSourceTarballBytes = await readBounded(args.sdkSourceTarball, MAX_TARBALL_BYTES, "source Plugin SDK tarball")
   const sdkTarballBytes = await readBounded(args.sdkTarball, MAX_TARBALL_BYTES, "Plugin SDK tarball")
 
   const evidence = buildPluginSdkReleaseEvidence({
@@ -336,6 +344,7 @@ async function main(): Promise<void> {
     runAttempt: args.runAttempt,
     runId: args.runId,
     sdkPackageJson: parseJson(sdkPackageJsonBytes, "Plugin SDK package.json"),
+    sdkSourceTarballBytes,
     sdkTarballBytes,
     sdkTarballIntegrity: args.sdkTarballIntegrity,
     sdkVersion: args.sdkVersion,

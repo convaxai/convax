@@ -94,13 +94,18 @@ A maintainer reviews and approves the staged package with 2FA.
 
 After npm exposes the version, `plugin-sdk-release.yml` downloads the exact npm SDK
 tarball and the release-time Plugin API tarball, verifies both registry SHA-512 SRI
-values, and checks that:
+values, deterministically repacks the SDK from the protected Host commit, requires
+that source package to be byte-identical to the npm tarball, and checks that:
 
 - the packed SDK identity is `@convax/plugin-sdk@<version>`;
 - its sole Convax dependency is the packed `@convax/plugin-api` range
   `^<release-time-api-version>` with no `workspace:` or `catalog:` placeholder;
 - the Plugin API tarball identity matches that version; and
 - its embedded `/3` Catalog is byte-identical to the Catalog at the Host commit.
+
+The source-pack equality is mandatory: passing current-source tests beside a
+different npm tarball would create false provenance even when both package manifests
+declare the same name, version, and Plugin API range.
 
 It emits `host-package-release.json`, attests the complete evidence set, publishes
 it under `plugin-sdk-v<version>-<commit>`, and requires GitHub Release and asset

@@ -144,6 +144,7 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --run-id "$GITHUB_RUN_ID" \
             --sdk-package-json "$inspection/sdk-package.json" \
+            --sdk-source-tarball "$sdk_tarball" \
             --sdk-tarball "$sdk_tarball" \
             --sdk-tarball-integrity "$sdk_integrity" \
             --sdk-version "$VERSION" \

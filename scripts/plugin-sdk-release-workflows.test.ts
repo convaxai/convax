@@ -124,4 +124,12 @@ describe("Plugin SDK publication workflow privilege boundary", () => {
       }
     })
   }
+
+  test("the final release binds npm SDK bytes to a source-reproduced package", async () => {
+    const source = await readFile(resolve(repositoryRoot, ".github/workflows/plugin-sdk-release.yml"), "utf8")
+    expect(source).toContain('source_pack="$RUNNER_TEMP/plugin-sdk-release-source-pack"')
+    expect(source).toContain("bun pm pack")
+    expect(source).toContain('cmp "$source_sdk_tarball" "${{ steps.npm.outputs.sdk_tarball }}"')
+    expect(source).toContain('--sdk-source-tarball "$source_sdk_tarball"')
+  })
 })

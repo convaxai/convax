@@ -135,6 +135,18 @@ jobs:
         run: |
           set -euo pipefail
           evidence="${{ steps.npm.outputs.directory }}"
+          source_pack="$RUNNER_TEMP/plugin-sdk-release-source-pack"
+          mkdir "$source_pack"
+          (
+            cd packages/plugin-sdk
+            bun pm pack \
+              --ignore-scripts \
+              --destination "$source_pack" \
+              --quiet
+          )
+          source_sdk_tarball="$source_pack/convax-plugin-sdk-$VERSION.tgz"
+          test -f "$source_sdk_tarball"
+          cmp "$source_sdk_tarball" "${{ steps.npm.outputs.sdk_tarball }}"
           bun scripts/plugin-sdk-release-evidence.ts \
             --api-catalog "$evidence/plugin-api.json" \
             --api-package-catalog "${{ steps.npm.outputs.api_package_catalog }}" \
@@ -149,6 +161,7 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --run-id "$GITHUB_RUN_ID" \
             --sdk-package-json "${{ steps.npm.outputs.sdk_package_json }}" \
+            --sdk-source-tarball "$source_sdk_tarball" \
             --sdk-tarball "${{ steps.npm.outputs.sdk_tarball }}" \
             --sdk-tarball-integrity "${{ steps.npm.outputs.sdk_integrity }}" \
             --sdk-version "$VERSION" \
